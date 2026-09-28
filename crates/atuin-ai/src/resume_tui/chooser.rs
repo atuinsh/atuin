@@ -27,7 +27,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::render::{harness_style, style};
+use super::render::{harness_style, is_live, style};
 use super::resumer::NotResumable;
 use super::source::{harness_badge, harness_label};
 use super::state::{InputAction, Pending, State};
@@ -85,6 +85,16 @@ pub fn flattened_detail(flattened: &Flattened) -> String {
     parts.join(", ")
 }
 
+/// What resuming a session that is still running (see [`is_live`]) does, briefly. Claude Code
+/// turns a `--resume` of a running session into a fork (a new session id, grouped under the
+/// original); the others open the same session again, and both processes append to it.
+fn concurrent(harness: HarnessKind) -> &'static str {
+    match harness {
+        HarnessKind::ClaudeCode => "resuming forks it",
+        _ => "both will append to it",
+    }
+}
+
 /// Why a session can't resume in its own harness, briefly.
 fn short_reason(why: &NotResumable) -> String {
     match why {
@@ -139,6 +149,10 @@ impl State {
             return Vec::new();
         };
         let session = &chooser.session;
+        let live = self
+            .selected()
+            .filter(|r| r.handle == *session)
+            .is_some_and(|r| is_live((self.now)(), r));
         let original = match self.plans.get(session) {
             Some(Err(why)) => Choice {
                 harness: session.harness,
@@ -147,12 +161,20 @@ impl State {
             },
             Some(Ok(resume)) if resume.restore.is_some() => Choice {
                 harness: session.harness,
-                detail: "original, from sync".to_owned(),
+                detail: if live {
+                    "original, from sync · still running — this resumes a copy".to_owned()
+                } else {
+                    "original, from sync".to_owned()
+                },
                 unavailable: None,
             },
             _ => Choice {
                 harness: session.harness,
-                detail: "original".to_owned(),
+                detail: if live {
+                    format!("original · running elsewhere — {}", concurrent(session.harness))
+                } else {
+                    "original".to_owned()
+                },
                 unavailable: None,
             },
         };
@@ -219,11 +241,14 @@ impl State {
         let session = chooser.session.clone();
         if target.is_none()
             && pick != Pending::Copy
-            && let Some(why) = self.original_unavailable(&session)
+            && self.original_unavailable(&session).is_some()
         {
+            // Its line already says why.
             let label = harness_label(session.harness);
-            let why = short_reason(why);
-            self.status = Some((format!("can't resume in {label}: {why}"), Meaning::AlertError));
+            self.status = Some((
+                format!("{label} can't resume it here: pick another line"),
+                Meaning::AlertError,
+            ));
             return InputAction::Continue;
         }
         self.accept = pick == Pending::Resume;

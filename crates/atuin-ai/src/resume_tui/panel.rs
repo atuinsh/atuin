@@ -10,13 +10,13 @@ use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{EllipsizeExt as _, Measure};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
-use super::markdown;
-use super::render::{ago, harness_style, is_live, repo_name, style};
+use super::render::{harness_style, is_live, repo_name, shown_branch, style};
 use super::source::{Relation, SessionRow, harness_label};
 use super::state::State;
+use super::{clock, markdown};
 
 /// Terminals at least this wide show the detail pane beside the list instead of the preview
 /// strip under it.
@@ -37,17 +37,78 @@ pub fn human(n: u64) -> String {
     }
 }
 
-/// `in 327k · out 58k · cache 2.7M`, or `None` when nothing was reported.
-pub fn tokens(usage: &Usage) -> Option<String> {
-    let parts: Vec<String> = [
-        ("in", usage.input),
-        ("out", usage.output),
-        ("cache", usage.cache_read.map(|r| r + usage.cache_write.unwrap_or(0))),
-    ]
-    .into_iter()
-    .filter_map(|(label, n)| n.filter(|n| *n > 0).map(|n| format!("{label} {}", human(n))))
-    .collect();
+/// `in 327k · out 58k`, with ` · cache 2.7M` when `cache`, or `None` when nothing was reported.
+/// Cache reads dwarf the rest in long sessions and mean little at a glance, so only Inspect
+/// shows them.
+pub fn tokens(usage: &Usage, cache: bool) -> Option<String> {
+    let cached = usage.cache_read.map(|r| r + usage.cache_write.unwrap_or(0));
+    let parts: Vec<String> =
+        [("in", usage.input), ("out", usage.output), ("cache", cached.filter(|_| cache))]
+            .into_iter()
+            .filter_map(|(label, n)| n.filter(|n| *n > 0).map(|n| format!("{label} {}", human(n))))
+            .collect();
     (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// What is grouped under a root, by kind: `17 subagents · 2 forks`. `total` is the root's count;
+/// until its `children` are read, `18 grouped`. The list may leave subagents out
+/// (`show_subagents = false`), which the total still counts.
+pub fn grouped(total: u32, children: Option<&[SessionRow]>) -> String {
+    let total = usize::try_from(total).unwrap_or(usize::MAX);
+    let Some(children) = children else {
+        return if total == 0 {
+            String::new()
+        } else {
+            format!("{total} grouped")
+        };
+    };
+    let count = |relation| children.iter().filter(|c| c.relation == relation).count();
+    let forks = count(Relation::Fork);
+    let other = count(Relation::Child) + count(Relation::Root);
+    let subagents = count(Relation::Subagent).max(total.saturating_sub(forks + other));
+    [(subagents, "subagent", "subagents"), (forks, "fork", "forks"), (other, "child", "children")]
+        .into_iter()
+        .filter(|(n, ..)| *n > 0)
+        .map(|(n, one, many)| {
+            format!(
+                "{n} {}",
+                if n == 1 {
+                    one
+                } else {
+                    many
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// How long a session ran, for its activity sparkline's scale: `40m`, `5h`, `2d`.
+pub fn span(start: OffsetDateTime, end: OffsetDateTime) -> String {
+    let span = end - start;
+    if span < time::Duration::hours(1) {
+        format!("{}m", span.whole_minutes().max(1))
+    } else if span < time::Duration::days(2) {
+        format!("{}h", span.whole_hours())
+    } else {
+        format!("{}d", span.whole_days())
+    }
+}
+
+/// The activity sparkline, `width` columns in all, with its scale after it: `▁▃█ ▂  over 5h`.
+pub fn activity_line(
+    times: &[OffsetDateTime],
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+    width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let label = format!("  over {}", span(start, end));
+    let spark = sparkline(times, start, end, width.saturating_sub(label.width()));
+    Line::from(vec![
+        Span::styled(spark, style(theme, Meaning::Guidance)),
+        Span::styled(label, style(theme, Meaning::Annotation)),
+    ])
 }
 
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -88,7 +149,13 @@ pub fn sparkline(
 impl State {
     /// The detail pane for the selected session: what it is, where and when it ran, how busy it
     /// was, and the conversation's first prompt, match and last reply, wrapped.
-    pub fn detail_lines(&self, width: usize, height: usize, theme: &Theme) -> Vec<Line<'static>> {
+    pub fn detail_lines(
+        &self,
+        width: usize,
+        height: usize,
+        tz: UtcOffset,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
         let Some(row) = self.selected() else {
             return Vec::new();
         };
@@ -116,40 +183,32 @@ impl State {
         meta.push(Line::from(who));
 
         let mut place = vec![Span::styled(repo_name(row), muted)];
-        if let Some(branch) = &row.branch {
-            place.extend([sep(), Span::styled(branch.clone(), style(theme, Meaning::Guidance))]);
+        if let Some(branch) = shown_branch(row) {
+            place.extend([sep(), Span::styled(branch.to_owned(), style(theme, Meaning::Guidance))]);
         }
-        place.extend([sep(), Span::styled(format!("@{}", row.hostname), muted)]);
+        if row.host_id != self.context.host_id {
+            place.extend([sep(), Span::styled(format!("@{}", row.hostname), muted)]);
+        }
         meta.push(Line::from(place));
 
         let mut when = Vec::new();
         if is_live(now, row) {
             when.extend([Span::styled("● live", style(theme, Meaning::AlertInfo)), sep()]);
         }
-        when.push(Span::styled(
-            format!(
-                "{} messages{}",
-                row.message_count,
-                if row.children > 0 {
-                    format!(" · +{} grouped", row.children)
-                } else {
-                    String::new()
-                }
-            ),
-            muted,
-        ));
-        when.extend([
-            sep(),
-            Span::styled(format!("started {} ago", ago(now, row.started_at)), muted),
-        ]);
+        when.push(Span::styled(format!("{} messages", row.message_count), muted));
+        let grouped = grouped(row.children, self.children.get(&row.handle).map(Vec::as_slice));
+        if !grouped.is_empty() {
+            when.extend([sep(), Span::styled(grouped, muted)]);
+        }
+        let started = clock::When::of(now, row.started_at, tz).phrase();
+        when.extend([sep(), Span::styled(format!("started {started}"), muted)]);
         meta.push(Line::from(when));
 
         let preview = self.previews.get(&row.handle);
         if let Some(p) = preview.filter(|p| !p.activity.is_empty()) {
-            let spark = sparkline(&p.activity, row.started_at, row.updated_at, width);
-            meta.push(Line::from(Span::styled(spark, style(theme, Meaning::Guidance))));
+            meta.push(activity_line(&p.activity, row.started_at, row.updated_at, width, theme));
         }
-        if let Some(t) = tokens(&row.usage) {
+        if let Some(t) = tokens(&row.usage, false) {
             meta.push(Line::from(Span::styled(format!("{t} tokens"), muted)));
         }
         for line in meta {
@@ -184,7 +243,7 @@ impl State {
         let base = style(theme, Meaning::Base);
         let muted = style(theme, Meaning::Annotation);
         let styles = markdown::Styles::new(theme, base);
-        let parts: Vec<(&'static str, &str, &[Range<usize>])> = [
+        let mut parts: Vec<(&'static str, &str, &[Range<usize>])> = [
             ("First prompt", preview.first_prompt.as_deref(), &[][..]),
             (
                 "Match",
@@ -196,6 +255,12 @@ impl State {
         .into_iter()
         .filter_map(|(title, text, hl)| Some((title, text?, hl)))
         .collect();
+        // Each part needs a blank line, its heading and a line of text. Short of that, the match
+        // goes first, then the first prompt: where it left off matters most for resuming.
+        while parts.len() > 1 && height < 3 * parts.len() {
+            let drop = parts.iter().position(|(t, ..)| *t == "Match").unwrap_or(0);
+            parts.remove(drop);
+        }
 
         // Each part costs a blank line and its heading besides its text.
         let text_lines = height.saturating_sub(2 * parts.len());
@@ -235,6 +300,7 @@ pub fn tree_lines(
     root: &HarnessSession,
     children: &[SessionRow],
     now: OffsetDateTime,
+    tz: UtcOffset,
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
@@ -297,9 +363,10 @@ pub fn tree_lines(
                 Relation::Root => ("session", Meaning::Base),
             };
             let tail = format!(
-                "{:>5} msgs  {:>9}",
+                "{:>5} msgs  {:>width$}",
                 child.message_count,
-                format!("{} ago", ago(now, child.updated_at))
+                clock::When::of(now, child.updated_at, tz).short(),
+                width = clock::WIDTH,
             );
             let lead = branch.width() + 10;
             let title_w = width.saturating_sub(lead + 2 + tail.width());
@@ -346,7 +413,7 @@ mod tests {
 
     #[rstest]
     fn tokens_skip_what_was_not_reported() {
-        assert_eq!(tokens(&Usage::default()), None);
+        assert_eq!(tokens(&Usage::default(), true), None);
         let usage = Usage {
             input: Some(327_000),
             output: Some(58_000),
@@ -354,7 +421,51 @@ mod tests {
             cache_write: Some(200_000),
             reasoning: None,
         };
-        assert_eq!(tokens(&usage).unwrap(), "in 327k · out 58k · cache 2.7M");
+        assert_eq!(tokens(&usage, true).unwrap(), "in 327k · out 58k · cache 2.7M");
+        assert_eq!(tokens(&usage, false).unwrap(), "in 327k · out 58k");
+        let only_cache = Usage {
+            cache_read: Some(10),
+            ..Usage::default()
+        };
+        assert_eq!(tokens(&only_cache, false), None);
+    }
+
+    fn child(relation: Relation) -> SessionRow {
+        let mut row = super::super::fake::row(
+            atuin_client::ai_session::HarnessKind::ClaudeCode,
+            &format!("{relation:?}"),
+            "t",
+        );
+        row.relation = relation;
+        row
+    }
+
+    #[rstest]
+    #[case::not_read(3, None, "3 grouped")]
+    #[case::none(0, None, "")]
+    #[case::kinds(3, Some(vec![Relation::Subagent, Relation::Subagent, Relation::Fork]), "2 subagents · 1 fork")]
+    #[case::one_each(2, Some(vec![Relation::Subagent, Relation::Child]), "1 subagent · 1 child")]
+    // Subagents left out of the list still count.
+    #[case::subagents_hidden(19, Some(vec![Relation::Fork, Relation::Fork]), "17 subagents · 2 forks")]
+    fn grouped_says_what_kind(
+        #[case] total: u32,
+        #[case] children: Option<Vec<Relation>>,
+        #[case] want: &str,
+    ) {
+        let children: Option<Vec<SessionRow>> =
+            children.map(|c| c.into_iter().map(child).collect());
+        assert_eq!(grouped(total, children.as_deref()), want);
+    }
+
+    #[rstest]
+    #[case(Duration::seconds(20), "1m")]
+    #[case(Duration::minutes(40), "40m")]
+    #[case(Duration::hours(5), "5h")]
+    #[case(Duration::hours(41), "41h")]
+    #[case(Duration::days(3), "3d")]
+    fn spans(#[case] d: Duration, #[case] want: &str) {
+        let start = OffsetDateTime::UNIX_EPOCH;
+        assert_eq!(span(start, start + d), want);
     }
 
     #[rstest]

@@ -29,8 +29,8 @@ use parking_lot::Mutex;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
-use super::ResumeContext;
 use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
+use super::{ResumeContext, title};
 
 /// Where host names are read from: the record store and the key its history is encrypted with.
 /// Both are only read: the store is opened read-only (no migrations), and a missing key is not
@@ -211,7 +211,8 @@ impl SidecarSource {
         let host_id = s.host.map_or_else(|| self.host_id.clone(), |h| h.0.as_simple().to_string());
         let hostname = self.hostname_of(&host_id);
         let git_root = s.cwd.as_deref().and_then(|cwd| self.git_root(cwd));
-        let title = s.title.clone().or_else(|| s.preview.clone()).unwrap_or_default();
+        let title = titled(&s)
+            .map_or_else(|| title::derive(s.preview.as_deref().unwrap_or_default()), str::to_owned);
         SessionRow {
             handle: s.handle,
             parent: s.parent,
@@ -231,6 +232,11 @@ impl SidecarSource {
             matched: None,
         }
     }
+}
+
+/// The title the harness (or the user) gave `s`, if any.
+fn titled(s: &Session) -> Option<&str> {
+    s.title.as_deref().filter(|t| !t.trim().is_empty())
 }
 
 /// A host id's short form, for a host whose name isn't known.
@@ -277,11 +283,15 @@ impl SessionSource for SidecarSource {
         let has_text = !filter.text.trim().is_empty();
         let mut rows = Vec::with_capacity(matches.len());
         for m in matches {
+            let has_title = titled(&m.session).is_some();
             let mut row = self.row(m.session);
             if has_text {
+                // The search highlights stored titles; a derived one is highlighted here.
                 let title = snippet(&m.title);
-                if !title.text.is_empty() {
+                if has_title && !title.text.is_empty() {
                     row.title = title;
+                } else {
+                    row.title.highlights = title::highlights(&row.title.text, &filter.text);
                 }
                 let preview = snippet(&m.preview);
                 row.matched = (!preview.text.is_empty()).then_some(preview);
@@ -427,6 +437,48 @@ mod tests {
         let matched = rows[0].matched.as_ref().expect("a matched snippet");
         let hl = &matched.highlights[0];
         assert_eq!(&matched.text[hl.clone()], "wall");
+    }
+
+    /// A session without a title is titled from its first prompt, highlighted when the query
+    /// matches it; a harness's title wins, with the search's own highlights.
+    #[rstest]
+    #[tokio::test]
+    async fn untitled_sessions_are_titled_from_their_first_prompt(#[future] source: SidecarSource) {
+        use atuin_common::harnesstools::session::{TitleChange, TitleSource};
+
+        let source = source.await;
+        let brief = message(
+            "brief",
+            None,
+            Role::User,
+            "You're working on the sync code. Please **rewrite** the `sync_down` loop.",
+            5,
+        );
+        source.db.append(&brief).await.unwrap();
+        let mut titled = message("titled", None, Role::User, "rewrite the flaky test", 6);
+        titled.session_title = Some("Flaky rewrite".to_owned());
+        titled.session_title_source = Some(TitleSource::Generated);
+        titled.title_change = Some(TitleChange::new(TitleSource::Generated, "Flaky rewrite"));
+        source.db.append(&titled).await.unwrap();
+
+        let rows = source.search(&roots("")).await.unwrap();
+        let title = |id: &str| {
+            rows.iter().find(|r| r.handle == handle(id)).map(|r| r.title.text.clone()).unwrap()
+        };
+        assert_eq!(title("root"), "fix the flaky sync test");
+        assert_eq!(title("brief"), "Rewrite the sync_down loop");
+        assert_eq!(title("titled"), "Flaky rewrite");
+
+        let rows = source.search(&roots("rewrite")).await.unwrap();
+        for row in &rows {
+            let hl: Vec<&str> =
+                row.title.highlights.iter().map(|r| &row.title.text[r.clone()]).collect();
+            assert_eq!(hl, [if row.handle == handle("brief") {
+                "Rewrite"
+            } else {
+                "rewrite"
+            }]);
+        }
     }
 
     #[rstest]

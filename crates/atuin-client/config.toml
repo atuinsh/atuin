@@ -349,8 +349,8 @@ enter_accept = true
 ## not in a git repository or when the workspace has no sessions.
 # filter_mode = "workspace"
 
-## The filter modes ctrl-r cycles through, in order.
-# filters = ["global", "host", "workspace", "directory", "branch"]
+## The filter modes ctrl-r cycles through, in order, wrapping around.
+# filters = ["workspace", "global", "host", "directory", "branch"]
 
 ## Row columns, left to right: time, harness, children, title, repo, branch, messages.
 # columns = ["time", "harness", "children", "title", "repo", "branch", "messages"]

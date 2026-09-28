@@ -49,17 +49,20 @@ impl AiSessionFilterMode {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiSessionColumn {
-    /// Relative time since the session was last updated (e.g. "5m ago").
+    /// When the session was last updated: `12m` or `3h` while recent, then a clock time
+    /// (`14:02`, `yest 09:40`, `Mon 09:40`, `Sep 27`, `2025-09-27`).
     Time,
     /// The harness badge: CC, CX, OC or PI.
     Harness,
     /// `+N` when forks or subagents are grouped under the session.
     Children,
-    /// The session title (falls back to the first prompt). Expands to fill the row.
+    /// The session title (falls back to one derived from the first prompt). Expands to fill
+    /// the row, followed by `@host` for another host's session.
     Title,
-    /// The repository (or directory) name the session ran in.
+    /// The repository (or directory) name the session ran in. Hidden in the filter modes that
+    /// keep to one repository (workspace, directory and branch).
     Repo,
-    /// The git branch the session ran on.
+    /// The git branch the session ran on; blank when detached.
     Branch,
     /// The message count.
     Messages,
@@ -70,7 +73,7 @@ impl AiSessionColumn {
     #[must_use]
     pub fn width(&self) -> u16 {
         match self {
-            Self::Time => 8,
+            Self::Time => 10,
             Self::Harness => 2,
             Self::Children => 3,
             Self::Title => 0,
@@ -134,8 +137,9 @@ pub struct AiSessions {
     /// repository or when the workspace has no sessions.
     pub filter_mode: Option<AiSessionFilterMode>,
 
-    /// The filter modes ctrl-r cycles through, in order. Modes that need a git repository are
-    /// skipped outside one.
+    /// The filter modes ctrl-r cycles through, in order, wrapping around. Modes that need a git
+    /// repository are skipped outside one. The default goes from the workspace (where the
+    /// picker opens) straight to every session.
     pub filters: Vec<AiSessionFilterMode>,
 
     /// Row columns, left to right.
@@ -167,9 +171,9 @@ impl Default for AiSessions {
         Self {
             filter_mode: None,
             filters: vec![
+                AiSessionFilterMode::Workspace,
                 AiSessionFilterMode::Global,
                 AiSessionFilterMode::Host,
-                AiSessionFilterMode::Workspace,
                 AiSessionFilterMode::Directory,
                 AiSessionFilterMode::Branch,
             ],

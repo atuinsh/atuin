@@ -10,6 +10,7 @@
 //! - [`Resumer`] turns a session into a resume command, or says why it can't be resumed.
 
 pub mod chooser;
+pub mod clock;
 pub mod fake;
 pub mod keymap;
 mod markdown;
@@ -21,6 +22,7 @@ pub mod sidecar;
 pub mod source;
 pub mod state;
 mod terminal;
+pub mod title;
 pub mod worker;
 
 use std::io::{IsTerminal, stdout};
@@ -169,15 +171,18 @@ fn request_details(state: &mut State, requests: &Requests, settle: &mut Settle, 
     if !state.previews.contains_key(&handle) && state.requested.insert((handle.clone(), PREVIEW)) {
         requests.send(Request::Preview(handle.clone()));
     }
+    // Inspect lists the children; the detail pane says what kind they are.
+    let wants_children = state.tab_index == 1 || (state.pane_shown && row.children > 0);
+    if wants_children
+        && !state.children.contains_key(&handle)
+        && state.requested.insert((handle.clone(), CHILDREN))
+    {
+        requests.send(Request::Children {
+            session: handle,
+            include_subagents: subagents,
+        });
+    }
     if state.tab_index == 1 {
-        if !state.children.contains_key(&handle)
-            && state.requested.insert((handle.clone(), CHILDREN))
-        {
-            requests.send(Request::Children {
-                session: handle,
-                include_subagents: subagents,
-            });
-        }
         request_plan(state, requests, &row);
     }
 }
@@ -336,6 +341,8 @@ fn resume_original(
         let targets = resumer.continue_targets(&row);
         if !targets.is_empty() {
             open_chooser(state, &row, targets, action, requests);
+            // The chooser's own line says why, dimmed.
+            state.status = None;
         }
     }
     outcome
