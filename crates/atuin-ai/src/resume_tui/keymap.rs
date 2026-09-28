@@ -53,6 +53,8 @@ pub enum Action {
     CycleFilterMode,
     CycleHarness,
     ToggleTab,
+    /// Inspect: expand the list of grouped sessions and move in it, or collapse it again.
+    ToggleChildren,
 
     // Mode changes
     VimEnterNormal,
@@ -213,13 +215,18 @@ pub fn vim_insert(settings: &Settings) -> Keymap {
     km
 }
 
-/// The Inspect tab has no text input: esc goes back to the list, and vim users get j/k.
+/// The Inspect tab has no text input: esc goes back to the list, and vim users get j/k. `c`
+/// expands the grouped sessions; while it is, up/down (and page up/down, home/end) move in that
+/// list instead of between sessions, and esc or `c` collapses it.
 pub fn inspector(settings: &Settings) -> Keymap {
     let mut km = Keymap::new();
     add_common(&mut km, settings);
     km.bind(key("esc"), Action::Exit);
     km.bind(key("ctrl-["), Action::Exit);
     km.bind(key("q"), Action::Exit);
+    km.bind(key("c"), Action::ToggleChildren);
+    km.bind(key("home"), Action::ScrollToTop);
+    km.bind(key("end"), Action::ScrollToBottom);
     if matches!(settings.keymap_mode, KeymapMode::VimNormal | KeymapMode::VimInsert) {
         km.bind(key("j"), Action::SelectNext);
         km.bind(key("k"), Action::SelectPrevious);

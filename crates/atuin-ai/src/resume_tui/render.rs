@@ -7,12 +7,13 @@ use std::path::Path;
 
 use atuin_client::ai_session::HarnessKind;
 use atuin_client::settings::{
-    AiSessionColumn, KeymapMode, PreviewStrategy, Settings, Style as UiStyle,
+    AiSessionColumn, AiSessionFilterMode as FilterMode, KeymapMode, PreviewStrategy, Settings,
+    Style as UiStyle,
 };
 use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{Alignment as Align, EllipsizeExt as _, Measure};
-use atuin_common::time::{DurationExt as _, OffsetDateTimeExt as _};
+use atuin_common::time::OffsetDateTimeExt as _;
 use ratatui::Frame;
 use ratatui::backend::FromCrossterm;
 use ratatui::buffer::Buffer;
@@ -27,12 +28,12 @@ use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
 use super::chooser::ListAnchor;
-use super::markdown;
 use super::panel::{self, SPLIT_MIN_WIDTH};
 use super::query::{TokenKind, TokenState};
 use super::resumer::shell_line;
 use super::source::{SessionRow, Snippet, harness_badge, harness_label};
-use super::state::{LIVE_SECS, ListState, State, TAB_TITLES};
+use super::state::{LIVE_SECS, ListState, SEARCH_LIMIT, State, TAB_TITLES};
+use super::{clock, markdown};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -159,8 +160,129 @@ pub(super) fn is_live(now: OffsetDateTime, row: &SessionRow) -> bool {
     now.saturating_duration_since(row.updated_at).as_secs() < LIVE_SECS
 }
 
-pub(super) fn ago(now: OffsetDateTime, ts: OffsetDateTime) -> String {
-    now.saturating_duration_since(ts).display().largest_unit().to_string()
+/// A host's name as rows show it: without its domain (`MacBook-Pro.local` is `MacBook-Pro`).
+pub(super) fn short_host(name: &str) -> &str {
+    if name.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return name;
+    }
+    name.split('.').next().filter(|n| !n.is_empty()).unwrap_or(name)
+}
+
+/// The branch a row shows: none when detached (`HEAD`).
+pub(super) fn shown_branch(row: &SessionRow) -> Option<&str> {
+    row.branch.as_deref().filter(|b| !b.is_empty() && *b != "HEAD")
+}
+
+/// `1234`, or `12k` once it no longer fits the messages column.
+fn message_count(n: u64) -> String {
+    if n < 10_000 {
+        n.to_string()
+    } else {
+        panel::human(n)
+    }
+}
+
+// --- the row layout --------------------------------------------------------------------------
+
+/// A cell of a session row: a configured column, or the `@host` after the title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cell {
+    Time,
+    Harness,
+    Children,
+    Title,
+    Host,
+    Repo,
+    Branch,
+    Messages,
+}
+
+/// What the list on screen shows besides the configured columns, and what it can leave out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RowNeeds {
+    /// The widest `@host` among the rows (0 when they are all this host's).
+    pub host: u16,
+    /// Whether the repository says anything: not in a mode that keeps to one repository, nor
+    /// beside the detail pane (which shows it).
+    pub repo: bool,
+    /// Whether any row has a branch to show, and it isn't in the detail pane.
+    pub branch: bool,
+}
+
+/// The title keeps at least this many columns while there are others to give up instead.
+pub const TITLE_MIN: u16 = 30;
+/// The widest the `@host` cell gets.
+pub const HOST_MAX: u16 = 16;
+/// What goes first when the title is short of room: the message count, the branch, the
+/// repository, then the host.
+const DROP_ORDER: [Cell; 4] = [Cell::Messages, Cell::Branch, Cell::Repo, Cell::Host];
+
+impl Cell {
+    fn width(self, needs: RowNeeds) -> u16 {
+        match self {
+            Self::Time => AiSessionColumn::Time.width(),
+            Self::Harness => AiSessionColumn::Harness.width(),
+            Self::Children => AiSessionColumn::Children.width(),
+            Self::Title => 0,
+            Self::Host => needs.host,
+            Self::Repo => AiSessionColumn::Repo.width(),
+            Self::Branch => AiSessionColumn::Branch.width(),
+            Self::Messages => AiSessionColumn::Messages.width(),
+        }
+    }
+}
+
+/// The cells of rows `width` columns wide (the selection indicator included), each with its
+/// width: the configured columns, with `@host` after the title, less what says nothing here
+/// (see [`RowNeeds`]). The title takes what's left; while that is under [`TITLE_MIN`], cells
+/// go in [`DROP_ORDER`].
+pub fn row_layout(columns: &[AiSessionColumn], width: u16, needs: RowNeeds) -> Vec<(Cell, u16)> {
+    let mut cells = Vec::new();
+    for column in columns {
+        match column {
+            AiSessionColumn::Time => cells.push(Cell::Time),
+            AiSessionColumn::Harness => cells.push(Cell::Harness),
+            AiSessionColumn::Children => cells.push(Cell::Children),
+            AiSessionColumn::Title => {
+                cells.push(Cell::Title);
+                if needs.host > 0 {
+                    cells.push(Cell::Host);
+                }
+            }
+            AiSessionColumn::Repo if needs.repo => cells.push(Cell::Repo),
+            AiSessionColumn::Branch if needs.branch => cells.push(Cell::Branch),
+            AiSessionColumn::Repo | AiSessionColumn::Branch => {}
+            AiSessionColumn::Messages => cells.push(Cell::Messages),
+        }
+    }
+    // Past the indicator, and a space between cells.
+    let title_width = |cells: &[Cell]| {
+        let others: u16 = cells.iter().map(|c| c.width(needs)).sum();
+        let gaps = u16::try_from(cells.len().saturating_sub(1)).unwrap_or(u16::MAX);
+        width.saturating_sub(3).saturating_sub(others).saturating_sub(gaps)
+    };
+    if cells.contains(&Cell::Title) {
+        for drop in DROP_ORDER {
+            if title_width(&cells) >= TITLE_MIN {
+                break;
+            }
+            cells.retain(|c| *c != drop);
+        }
+    }
+    let title = title_width(&cells);
+    cells
+        .into_iter()
+        .map(|c| {
+            (
+                c,
+                if c == Cell::Title {
+                    title
+                } else {
+                    c.width(needs)
+                },
+            )
+        })
+        .collect()
 }
 
 pub(super) fn harness_style(theme: &Theme, harness: HarnessKind) -> Style {
@@ -182,9 +304,10 @@ pub struct SessionList<'a> {
     inverted: bool,
     alternate_highlight: bool,
     now: OffsetDateTime,
+    tz: UtcOffset,
     indicator: &'a str,
     theme: &'a Theme,
-    columns: &'a [AiSessionColumn],
+    cells: &'a [(Cell, u16)],
     host_id: &'a str,
 }
 
@@ -248,7 +371,7 @@ impl StatefulWidget for SessionList<'_> {
                     m
                 },
             };
-            self.render_row(&mut line, row, selected, list_area.width);
+            self.render_row(&mut line, row, selected);
         }
     }
 }
@@ -287,7 +410,7 @@ impl RowWriter<'_> {
 }
 
 impl SessionList<'_> {
-    fn render_row(&self, w: &mut RowWriter<'_>, row: &SessionRow, selected: bool, width: u16) {
+    fn render_row(&self, w: &mut RowWriter<'_>, row: &SessionRow, selected: bool) {
         let theme = self.theme;
         w.put(
             if selected {
@@ -298,42 +421,33 @@ impl SessionList<'_> {
             Style::default(),
         );
 
-        let fixed: u16 = self.columns.iter().filter(|c| !c.expands()).map(|c| c.width() + 1).sum();
-        let expand = width.saturating_sub(3 + fixed);
-
-        for (idx, column) in self.columns.iter().enumerate() {
+        let pad = |text: &str, cw: usize, align: Align| {
+            text.pad_ellipsize(Measure::Columns(cw), Pos::End, Indicator::UNICODE, align)
+                .into_owned()
+        };
+        for (idx, &(cell, col_width)) in self.cells.iter().enumerate() {
             if idx != 0 {
                 w.put(" ", Style::default());
             }
-            let col_width = if column.expands() {
-                expand
-            } else {
-                column.width()
-            };
             let end = w.x.saturating_add(col_width);
             let cw = usize::from(col_width);
-            match column {
-                AiSessionColumn::Time => {
+            match cell {
+                Cell::Time => {
+                    let when = clock::When::of(self.now, row.updated_at, self.tz);
                     let (text, meaning) = if is_live(self.now, row) {
-                        (format!("● {}", ago(self.now, row.updated_at)), Meaning::AlertInfo)
+                        (format!("● {}", when.short()), Meaning::AlertInfo)
                     } else {
-                        (format!("{} ago", ago(self.now, row.updated_at)), Meaning::Guidance)
+                        (when.short().to_owned(), Meaning::Guidance)
                     };
-                    let text = text.pad_ellipsize(
-                        Measure::Columns(cw),
-                        Pos::End,
-                        Indicator::UNICODE,
-                        Align::End,
-                    );
-                    w.put(&text, style(theme, meaning));
+                    w.put(&pad(&text, cw, Align::End), style(theme, meaning));
                 }
-                AiSessionColumn::Harness => {
+                Cell::Harness => {
                     w.put(
                         harness_badge(row.handle.harness),
                         harness_style(theme, row.handle.harness),
                     );
                 }
-                AiSessionColumn::Children => {
+                Cell::Children => {
                     let text = if row.children > 0 {
                         format!("+{}", row.children)
                     } else {
@@ -341,7 +455,7 @@ impl SessionList<'_> {
                     };
                     w.put(&format!("{text:>cw$}"), style(theme, Meaning::Annotation));
                 }
-                AiSessionColumn::Title => {
+                Cell::Title => {
                     let (base, hl) = if selected && !self.alternate_highlight {
                         let base = style(theme, Meaning::AlertError).add_modifier(Modifier::BOLD);
                         (base, style(theme, Meaning::AlertWarn).add_modifier(Modifier::BOLD))
@@ -349,44 +463,29 @@ impl SessionList<'_> {
                         let base = style(theme, Meaning::Base);
                         (base, base.add_modifier(Modifier::BOLD))
                     };
-                    let host = (row.host_id != self.host_id).then(|| format!(" @{}", row.hostname));
-                    let host_w = host.as_deref().map_or(0, UnicodeWidthStr::width);
-                    let title_w = cw.saturating_sub(host_w).max(cw.min(8));
                     let spans =
-                        highlighted_line(&row.title.text, &row.title.highlights, title_w, base, hl);
+                        highlighted_line(&row.title.text, &row.title.highlights, cw, base, hl);
                     w.put_spans(&spans);
-                    if let Some(host) = host {
-                        w.put(&host, style(theme, Meaning::Annotation));
+                }
+                Cell::Host => {
+                    if row.host_id != self.host_id {
+                        let host = format!("@{}", short_host(&row.hostname));
+                        w.put(&pad(&host, cw, Align::Start), style(theme, Meaning::Annotation));
                     }
                 }
-                AiSessionColumn::Repo => {
-                    let text = repo_name(row)
-                        .pad_ellipsize(
-                            Measure::Columns(cw),
-                            Pos::End,
-                            Indicator::UNICODE,
-                            Align::Start,
-                        )
-                        .into_owned();
-                    w.put(&text, style(theme, Meaning::Annotation));
-                }
-                AiSessionColumn::Branch => {
-                    let text = row
-                        .branch
-                        .as_deref()
-                        .unwrap_or("")
-                        .pad_ellipsize(
-                            Measure::Columns(cw),
-                            Pos::End,
-                            Indicator::UNICODE,
-                            Align::Start,
-                        )
-                        .into_owned();
-                    w.put(&text, style(theme, Meaning::Guidance));
-                }
-                AiSessionColumn::Messages => {
+                Cell::Repo => {
                     w.put(
-                        &format!("{:>cw$}", row.message_count),
+                        &pad(&repo_name(row), cw, Align::Start),
+                        style(theme, Meaning::Annotation),
+                    );
+                }
+                Cell::Branch => {
+                    let branch = shown_branch(row).unwrap_or_default();
+                    w.put(&pad(branch, cw, Align::Start), style(theme, Meaning::Guidance));
+                }
+                Cell::Messages => {
+                    w.put(
+                        &format!("{:>cw$}", message_count(row.message_count)),
                         style(theme, Meaning::Annotation),
                     );
                 }
@@ -578,7 +677,7 @@ impl State {
     }
 
     /// Where the selected row of the list in `area` is, for the chooser to open against.
-    fn anchor(&self, area: Rect, columns: &[AiSessionColumn], invert: bool) -> Option<ListAnchor> {
+    fn anchor(&self, area: Rect, cells: &[(Cell, u16)], invert: bool) -> Option<ListAnchor> {
         if self.results.is_empty() || area.height == 0 {
             return None;
         }
@@ -589,10 +688,10 @@ impl State {
             area.bottom().checked_sub(from_top + 1)?
         };
         // Past the indicator, and the columns before the badge (or the title, without one).
-        let before: u16 = columns
+        let before: u16 = cells
             .iter()
-            .take_while(|c| !matches!(c, AiSessionColumn::Harness | AiSessionColumn::Title))
-            .map(|c| c.width() + 1)
+            .take_while(|(c, _)| !matches!(c, Cell::Harness | Cell::Title))
+            .map(|(_, w)| w + 1)
             .sum();
         Some(ListAnchor {
             list: area,
@@ -621,6 +720,7 @@ impl State {
             && settings.show_preview
             && compactness != Compactness::Ultracompact
             && area.width >= SPLIT_MIN_WIDTH;
+        self.pane_shown = split;
         let preview_height = if split {
             border_size
         } else {
@@ -725,20 +825,32 @@ impl State {
 
         if self.tab_index == 1 {
             self.draw_inspect(f, list_chunk, st, settings, theme);
-            let guide = Line::from(vec![
-                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": back  "),
-                Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(if settings.enter_accept {
-                    ": resume  "
-                } else {
-                    ": edit  "
-                }),
-                Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": edit  "),
-                Span::styled("<ctrl-y>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": copy"),
-            ]);
+            let bold = Style::default().add_modifier(Modifier::BOLD);
+            let guide = if self.expanded_children().is_some() {
+                Line::from(vec![
+                    Span::styled("<↑/↓>", bold),
+                    Span::raw(": move  "),
+                    Span::styled("<c>", bold),
+                    Span::raw("/"),
+                    Span::styled("<esc>", bold),
+                    Span::raw(": collapse"),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("<esc>", bold),
+                    Span::raw(": back  "),
+                    Span::styled("<enter>", bold),
+                    Span::raw(if settings.enter_accept {
+                        ": resume  "
+                    } else {
+                        ": edit  "
+                    }),
+                    Span::styled("<tab>", bold),
+                    Span::raw(": edit  "),
+                    Span::styled("<ctrl-y>", bold),
+                    Span::raw(": copy"),
+                ])
+            };
             let guide = Paragraph::new(guide).style(style(theme, Meaning::Annotation));
             f.render_widget(input_block(guide, st), input_chunk);
             return;
@@ -774,28 +886,22 @@ impl State {
             (inner, None, None)
         };
 
-        // The pane shows the repository and branch, so the split list gives their room to titles.
-        let columns: Vec<AiSessionColumn> = settings
-            .ai
-            .sessions
-            .columns
-            .iter()
-            .copied()
-            .filter(|c| !split || !matches!(c, AiSessionColumn::Repo | AiSessionColumn::Branch))
-            .collect();
+        let cells =
+            row_layout(&settings.ai.sessions.columns, list_area.width, self.row_needs(split));
         let list = SessionList {
             rows: &self.results,
             block: None,
             inverted: invert,
             alternate_highlight: self.keymap_mode == KeymapMode::VimNormal,
             now: (self.now)(),
+            tz: settings.timezone.0,
             indicator: &indicator,
             theme,
-            columns: &columns,
+            cells: &cells,
             host_id: &self.context.host_id,
         };
         f.render_stateful_widget(list, list_area, &mut self.list);
-        self.list_anchor = self.anchor(list_area, &columns, invert);
+        self.list_anchor = self.anchor(list_area, &cells, invert);
 
         // A scrollbar on the right border (or the divider) once the list overflows.
         let visible = usize::from(list_area.height);
@@ -831,7 +937,8 @@ impl State {
 
         if let Some(pane) = pane {
             let pane = pane.inner(ratatui::layout::Margin::new(1, 0));
-            let lines = self.detail_lines(usize::from(pane.width), usize::from(pane.height), theme);
+            let (width, height) = (usize::from(pane.width), usize::from(pane.height));
+            let lines = self.detail_lines(width, height, settings.timezone.0, theme);
             // Already wrapped (markdown keeps its indents, which the paragraph's wrap would trim).
             f.render_widget(Paragraph::new(Text::from(lines)), pane);
         }
@@ -921,19 +1028,54 @@ impl State {
     }
 
     fn build_stats(&self, theme: &Theme) -> Paragraph<'static> {
-        let n = self.results.len();
-        let text = if self.applied == 0 {
-            String::new()
-        } else if n == 1 {
-            "1 session".to_owned()
-        } else {
-            format!("{n} sessions")
+        let text = match self.result_count() {
+            None => String::new(),
+            Some(n) if n == "1" => "1 session".to_owned(),
+            Some(n) => format!("{n} sessions"),
         };
         Paragraph::new(text).style(style(theme, Meaning::Annotation)).alignment(Alignment::Right)
     }
 
+    /// What the list holds, for the header and the mode prefix: `105`, or `500+` when the search
+    /// stopped at its limit. `None` before the first results.
+    fn result_count(&self) -> Option<String> {
+        let n = self.results.len();
+        (self.applied != 0).then(|| {
+            if n >= SEARCH_LIMIT {
+                format!("{SEARCH_LIMIT}+")
+            } else {
+                n.to_string()
+            }
+        })
+    }
+
+    /// What the list's rows need room for (see [`RowNeeds`]). Beside the detail pane (`split`),
+    /// the pane shows the repository and branch.
+    fn row_needs(&self, split: bool) -> RowNeeds {
+        let here = &self.context.host_id;
+        let host = self
+            .results
+            .iter()
+            .filter(|r| &r.host_id != here)
+            .map(|r| 1 + short_host(&r.hostname).width())
+            .max()
+            .unwrap_or(0);
+        let one_repo =
+            matches!(self.mode, FilterMode::Workspace | FilterMode::Directory | FilterMode::Branch);
+        RowNeeds {
+            host: u16::try_from(host).unwrap_or(u16::MAX).min(HOST_MAX),
+            repo: !split && !one_repo,
+            branch: !split
+                && self.mode != FilterMode::Branch
+                && self.results.iter().any(|r| shown_branch(r).is_some()),
+        }
+    }
+
     fn build_input(&self, st: StyleState, prefix_width: u16, theme: &Theme) -> Paragraph<'static> {
-        let mode = self.mode_label();
+        let mode = match self.result_count() {
+            Some(n) => format!("{} {n}", self.mode_label()),
+            None => self.mode_label().to_owned(),
+        };
         // 3: the surrounding "[" and "] ".
         let mode_width = usize::from(prefix_width) - 3;
         let mut spans = vec![Span::raw(format!("[{mode:^mode_width$}] "))];
@@ -967,12 +1109,28 @@ impl State {
             spans.push(Span::raw(input[at..].to_owned()));
         }
 
+        // Where ctrl-r goes next, at the right while the query leaves room.
+        if let Some(next) = self.next_mode() {
+            let hint = format!("ctrl-r: {}", next.as_str().to_lowercase());
+            let borders = if st.compactness == Compactness::Full {
+                2
+            } else {
+                0
+            };
+            let room = st.inner_width.saturating_sub(borders);
+            let used = usize::from(prefix_width) + input.width();
+            if let Some(gap) = room.checked_sub(used + hint.width()).filter(|g| *g >= 2) {
+                spans.push(Span::raw(" ".repeat(gap)));
+                spans.push(Span::styled(hint, style(theme, Meaning::Annotation)));
+            }
+        }
+
         input_block(Paragraph::new(Line::from(spans)), st)
     }
 
     #[allow(clippy::too_many_lines)]
     fn draw_inspect(
-        &self,
+        &mut self,
         f: &mut Frame,
         chunk: Rect,
         st: StyleState,
@@ -992,7 +1150,7 @@ impl State {
         let inner = block.inner(chunk);
         f.render_widget(block, chunk);
 
-        let Some(row) = self.selected() else {
+        let Some(row) = self.selected().cloned() else {
             f.render_widget(
                 Paragraph::new("Nothing to inspect").alignment(Alignment::Center),
                 inner,
@@ -1044,23 +1202,31 @@ impl State {
             field("Started", text(when(row.started_at))),
             field("Updated", {
                 let mut spans = text(when(row.updated_at));
-                if is_live(now, row) {
+                if is_live(now, &row) {
                     spans.push(Span::styled("  ● live", style(theme, Meaning::AlertInfo)));
                 }
                 spans
             }),
-            field("Messages", text(row.message_count.to_string())),
+            // The token counts share the message count's line, for the conversation's room.
+            field("Messages", {
+                let mut spans = text(row.message_count.to_string());
+                if let Some(t) = panel::tokens(&row.usage, true) {
+                    spans.push(Span::styled(format!("  ·  {t} tokens"), key));
+                }
+                spans
+            }),
         ];
-        if let Some(t) = panel::tokens(&row.usage) {
-            lines.push(field("Tokens", text(t)));
-        }
         if let Some(p) = self.previews.get(&row.handle).filter(|p| !p.activity.is_empty()) {
-            let spark =
-                panel::sparkline(&p.activity, row.started_at, row.updated_at, width.min(60));
-            lines.push(field("Activity", vec![Span::styled(
-                spark,
-                style(theme, Meaning::Guidance),
-            )]));
+            let mut spans = vec![Span::styled(format!(" {:<10}", "Activity"), key)];
+            let line = panel::activity_line(
+                &p.activity,
+                row.started_at,
+                row.updated_at,
+                width.min(60),
+                theme,
+            );
+            spans.extend(line.spans);
+            lines.push(Line::from(spans));
         }
         lines.push(match self.plans.get(&row.handle) {
             None => field("Resume", vec![Span::styled("…", key)]),
@@ -1085,36 +1251,128 @@ impl State {
             )]),
         });
 
-        let children = self.children.get(&row.handle);
-        if row.children > 0 || children.is_some_and(|c| !c.is_empty()) {
-            lines.push(Line::default());
-            let count = children.map_or(row.children as usize, Vec::len);
-            lines.push(Line::from(Span::styled(
-                format!(" Children ({count})"),
-                key.add_modifier(Modifier::BOLD),
-            )));
-            match children {
-                None => lines.push(Line::from(Span::styled("   …", key))),
-                Some(children) => lines.extend(panel::tree_lines(
-                    &row.handle,
-                    children,
-                    now,
-                    usize::from(inner.width),
-                    theme,
-                )),
-            }
+        let children = self.children.get(&row.handle).cloned();
+        if row.children > 0 || children.as_ref().is_some_and(|c| !c.is_empty()) {
+            let left = usize::from(inner.height).saturating_sub(lines.len());
+            lines.extend(self.children_lines(
+                &row,
+                children.as_deref(),
+                left,
+                inner.width,
+                tz,
+                theme,
+            ));
         }
 
         // The conversation, in whatever room is left.
         let left = usize::from(inner.height).saturating_sub(lines.len());
-        lines.extend(self.conversation(row, usize::from(inner.width), left, 1, theme));
+        lines.extend(self.conversation(&row, usize::from(inner.width), left, 1, theme));
 
         f.render_widget(Paragraph::new(Text::from(lines)), inner);
     }
+
+    /// Inspect's list of the sessions grouped under `row`, in at most `room` lines: a blank line,
+    /// a heading saying what they are, and the tree. Collapsed, it shows the first few with a
+    /// line saying how many more (`c` expands it), leaving the rest of the room to the
+    /// conversation; expanded, it takes most of the room, scrolls, and has a cursor.
+    fn children_lines(
+        &mut self,
+        row: &SessionRow,
+        children: Option<&[SessionRow]>,
+        room: usize,
+        width: u16,
+        tz: UtcOffset,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let key = style(theme, Meaning::Annotation);
+        let heading = panel::grouped(row.children, children);
+        let mut lines = vec![Line::default()];
+        let Some(children) = children else {
+            lines.push(Line::from(Span::styled(
+                format!(" {heading}"),
+                key.add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled("   …", key)));
+            return lines;
+        };
+        let tree =
+            panel::tree_lines(&row.handle, children, (self.now)(), tz, usize::from(width), theme);
+        let room = room.saturating_sub(2);
+        let expanded = self.expanded_children().is_some();
+        let mut heading =
+            vec![Span::styled(format!(" {heading}"), key.add_modifier(Modifier::BOLD))];
+
+        let shown: Vec<Line<'static>> =
+            if let Some(view) = self.children_view.as_mut().filter(|_| expanded) {
+                // Most of the room, leaving the conversation a few lines.
+                let height = tree
+                    .len()
+                    .min(room.saturating_sub(INSPECT_CONVERSATION_MIN).max(CHILDREN_COLLAPSED));
+                view.cursor = view.cursor.min(tree.len().saturating_sub(1));
+                view.height = height.max(1);
+                if view.cursor < view.offset {
+                    view.offset = view.cursor;
+                } else if view.cursor >= view.offset + view.height {
+                    view.offset = view.cursor + 1 - view.height;
+                }
+                view.offset = view.offset.min(tree.len().saturating_sub(view.height));
+                if tree.len() > height {
+                    heading.push(Span::styled(
+                        format!("  {}–{} of {}", view.offset + 1, view.offset + height, tree.len()),
+                        key,
+                    ));
+                }
+                let cursor = view.cursor;
+                tree.into_iter()
+                    .enumerate()
+                    .skip(view.offset)
+                    .take(height)
+                    .map(|(i, line)| {
+                        if i == cursor {
+                            line.patch_style(Style::default().add_modifier(Modifier::REVERSED))
+                        } else {
+                            line
+                        }
+                    })
+                    .collect()
+            } else {
+                // A few, with a line for the rest, keeping at least half the room for the
+                // conversation.
+                let fit = (room / 2).saturating_sub(1).clamp(1, CHILDREN_COLLAPSED);
+                let n = if tree.len() <= fit + 1 {
+                    tree.len().min(room)
+                } else {
+                    fit
+                };
+                let more = tree.len() - n;
+                let mut shown: Vec<Line<'static>> = tree.into_iter().take(n).collect();
+                if more > 0 {
+                    shown.push(Line::from(Span::styled(
+                        format!("   … and {more} more (c to expand)"),
+                        key,
+                    )));
+                }
+                shown
+            };
+        lines.push(Line::from(heading));
+        lines.extend(shown);
+        lines
+    }
 }
 
+/// How many children Inspect shows before `… and N more`.
+const CHILDREN_COLLAPSED: usize = 3;
+/// The lines Inspect keeps for the conversation while the children list is expanded.
+const INSPECT_CONVERSATION_MIN: usize = 4;
+
+/// A full date and time, with what it doesn't already say beside it: `(12m ago)`,
+/// `(yesterday)`, `(Monday)`.
 fn format_when(ts: OffsetDateTime, now: OffsetDateTime, tz: UtcOffset) -> String {
-    format!("{}  ({} ago)", ts.to_offset(tz).display().ymd_hm(), ago(now, ts))
+    let at = ts.to_offset(tz).display().ymd_hm();
+    match clock::beside_date(now, ts, tz) {
+        Some(when) => format!("{at}  ({when})"),
+        None => at.to_string(),
+    }
 }
 
 /// The input box's borders, as in the history search.
@@ -1132,5 +1390,108 @@ fn input_block(p: Paragraph<'static>, st: StyleState) -> Paragraph<'static> {
                 .title(format!("{:─>width$}", "", width = st.inner_width - 2)),
         ),
         _ => p,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    fn default_columns() -> Vec<AiSessionColumn> {
+        atuin_client::settings::AiSessions::default().columns
+    }
+
+    fn cells(width: u16, needs: RowNeeds) -> Vec<Cell> {
+        row_layout(&default_columns(), width, needs).into_iter().map(|(c, _)| c).collect()
+    }
+
+    const EVERYTHING: RowNeeds = RowNeeds {
+        host: 16,
+        repo: true,
+        branch: true,
+    };
+
+    #[rstest]
+    #[case::wide(200, EVERYTHING, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Host, Cell::Repo, Cell::Branch, Cell::Messages])]
+    // Global in a 100-column terminal (96 inside the box): the count goes.
+    #[case::global_100(96, EVERYTHING, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Host, Cell::Repo, Cell::Branch])]
+    #[case::global_80(76, EVERYTHING, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Host])]
+    #[case::global_60(56, EVERYTHING, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title])]
+    // The workspace, all on this host: branch and count fit.
+    #[case::workspace_80(76, RowNeeds { host: 0, repo: false, branch: true }, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Branch, Cell::Messages])]
+    #[case::nothing_to_show(76, RowNeeds::default(), &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Messages])]
+    fn cells_go_before_the_title_does(
+        #[case] width: u16,
+        #[case] needs: RowNeeds,
+        #[case] want: &[Cell],
+    ) {
+        assert_eq!(cells(width, needs), want);
+    }
+
+    /// At every width the row fills it exactly, and the title keeps [`TITLE_MIN`] while there's
+    /// anything left to give up; what goes, goes in [`DROP_ORDER`].
+    #[rstest]
+    fn every_width_fills_the_row_title_first(
+        #[values(
+            EVERYTHING,
+            RowNeeds { host: 9, repo: false, branch: true },
+            RowNeeds { host: 0, repo: true, branch: false },
+            RowNeeds::default()
+        )]
+        needs: RowNeeds,
+    ) {
+        for width in 40..=200u16 {
+            let layout = row_layout(&default_columns(), width, needs);
+            let used: u16 = layout.iter().map(|(_, w)| w).sum::<u16>()
+                + u16::try_from(layout.len() - 1).unwrap()
+                + 3;
+            let (_, title) = layout.iter().find(|(c, _)| *c == Cell::Title).copied().unwrap();
+            if title > 0 {
+                assert_eq!(used, width, "{width}: {layout:?}");
+            }
+            let dropped: Vec<usize> = DROP_ORDER
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| {
+                    let wanted = match c {
+                        Cell::Host => needs.host > 0,
+                        Cell::Repo => needs.repo,
+                        Cell::Branch => needs.branch,
+                        _ => true,
+                    };
+                    wanted && !layout.iter().any(|(l, _)| l == *c)
+                })
+                .map(|(i, _)| i)
+                .collect();
+            if let Some(&last) = dropped.last() {
+                assert!(title < TITLE_MIN + layout_gain(last, needs), "{width}: {layout:?}");
+            } else {
+                assert!(title >= TITLE_MIN || width < 60, "{width}: {layout:?}");
+            }
+        }
+    }
+
+    /// What dropping [`DROP_ORDER`]`[i]` gave the title.
+    fn layout_gain(i: usize, needs: RowNeeds) -> u16 {
+        DROP_ORDER[i].width(needs) + 1
+    }
+
+    #[rstest]
+    #[case("MacBook-Pro-3.local", "MacBook-Pro-3")]
+    #[case("buildbox", "buildbox")]
+    #[case("10.0.0.7", "10.0.0.7")]
+    #[case(".weird", ".weird")]
+    fn hosts_show_without_their_domain(#[case] name: &str, #[case] want: &str) {
+        assert_eq!(short_host(name), want);
+    }
+
+    #[rstest]
+    #[case(9_999, "9999")]
+    #[case(12_345, "12k")]
+    fn message_counts_fit_their_column(#[case] n: u64, #[case] want: &str) {
+        assert_eq!(message_count(n), want);
+        assert!(want.len() <= usize::from(AiSessionColumn::Messages.width()));
     }
 }

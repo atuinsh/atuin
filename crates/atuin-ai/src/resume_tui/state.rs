@@ -37,7 +37,7 @@ pub const RESTORE: u8 = 3;
 pub const FLATTEN: u8 = 4;
 
 /// How many rows a search asks for.
-const SEARCH_LIMIT: usize = 500;
+pub const SEARCH_LIMIT: usize = 500;
 
 /// What the event loop should do after an input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +72,19 @@ pub enum Widened {
     NoRepo,
     /// The workspace had no sessions (matching the query).
     NoMatches,
+}
+
+/// Inspect's list of the sessions grouped under the one inspected, once expanded (`c`): it has
+/// the arrow keys, with a cursor, and scrolls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildrenView {
+    /// The session whose children these are: selecting another collapses the list.
+    pub session: HarnessSession,
+    pub cursor: usize,
+    /// The first row shown.
+    pub offset: usize,
+    /// How many rows showed last time it was drawn (a page).
+    pub height: usize,
 }
 
 /// The selection and scroll position of the session list.
@@ -111,6 +124,11 @@ pub struct State {
 
     pub previews: HashMap<HarnessSession, SessionPreview>,
     pub children: HashMap<HarnessSession, Vec<SessionRow>>,
+    /// Inspect's children list, while it's expanded.
+    pub children_view: Option<ChildrenView>,
+    /// Whether the detail pane showed beside the list last time it was drawn (it says what is
+    /// grouped under the selected session, so it wants the children too).
+    pub pane_shown: bool,
     /// Details asked of the worker and not answered yet. The worker drops a request superseded by
     /// a newer one of its kind, so only the selected session's entries are kept (see
     /// [`Self::forget_unanswered`]).
@@ -175,6 +193,8 @@ impl State {
             refreshing: None,
             previews: HashMap::new(),
             children: HashMap::new(),
+            children_view: None,
+            pane_shown: false,
             requested: HashSet::new(),
             pinned: None,
             host_names: HashMap::new(),
@@ -224,17 +244,21 @@ impl State {
         }
     }
 
+    /// The mode ctrl-r goes to next: the next available one in `[ai.sessions] filters`, wrapping
+    /// around. `None` when there is no other.
+    pub fn next_mode(&self) -> Option<FilterMode> {
+        let len = self.filters.len();
+        let at = self.filters.iter().position(|m| *m == self.mode).unwrap_or(len - 1);
+        (1..=len)
+            .map(|step| self.filters[(at + step) % len])
+            .find(|mode| self.mode_available(*mode))
+            .filter(|mode| *mode != self.mode)
+    }
+
     /// ctrl-r: the next available mode in `[ai.sessions] filters`.
     pub fn cycle_filter_mode(&mut self) {
-        let len = self.filters.len();
-        let mut i = self.filters.iter().position(|m| *m == self.mode).unwrap_or(len - 1);
-        for _ in 0..len {
-            i = (i + 1) % len;
-            let mode = self.filters[i];
-            if self.mode_available(mode) {
-                self.mode = mode;
-                break;
-            }
+        if let Some(mode) = self.next_mode() {
+            self.mode = mode;
         }
         self.widened = None;
         self.auto_widen = false;
@@ -531,9 +555,64 @@ impl State {
         self.keymap_mode = mode;
     }
 
+    /// The expanded children list, if it is the selected session's.
+    pub fn expanded_children(&self) -> Option<&ChildrenView> {
+        let selected = self.selected()?;
+        self.children_view.as_ref().filter(|v| v.session == selected.handle && self.tab_index == 1)
+    }
+
+    /// `c` in Inspect: expand the selected session's children, or collapse them.
+    fn toggle_children(&mut self) {
+        if self.expanded_children().is_some() {
+            self.children_view = None;
+            return;
+        }
+        let Some(row) = self.selected() else {
+            return;
+        };
+        let known = self.children.get(&row.handle).map(Vec::len);
+        if row.children == 0 && known.unwrap_or(0) == 0 {
+            return;
+        }
+        self.children_view = Some(ChildrenView {
+            session: row.handle.clone(),
+            cursor: 0,
+            offset: 0,
+            height: 1,
+        });
+    }
+
+    /// A key while Inspect's children list is expanded: moving keys move in it, and esc
+    /// collapses it. `None` for the keys it leaves alone.
+    fn children_action(&mut self, action: Action) -> Option<InputAction> {
+        let len = self
+            .expanded_children()
+            .map(|v| &v.session)
+            .map(|s| self.children.get(s).map_or(0, Vec::len))?;
+        let view = self.children_view.as_mut()?;
+        let page = view.height.max(1);
+        let last = len.saturating_sub(1);
+        match action {
+            Action::SelectNext => view.cursor = (view.cursor + 1).min(last),
+            Action::SelectPrevious => view.cursor = view.cursor.saturating_sub(1),
+            Action::ScrollPageDown => view.cursor = (view.cursor + page).min(last),
+            Action::ScrollPageUp => view.cursor = view.cursor.saturating_sub(page),
+            Action::ScrollHalfPageDown => view.cursor = (view.cursor + page / 2).min(last),
+            Action::ScrollHalfPageUp => view.cursor = view.cursor.saturating_sub(page / 2),
+            Action::ScrollToTop => view.cursor = 0,
+            Action::ScrollToBottom => view.cursor = last,
+            Action::Exit => self.children_view = None,
+            _ => return None,
+        }
+        Some(InputAction::Continue)
+    }
+
     #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn execute_action(&mut self, action: Action, settings: &Settings) -> InputAction {
+        if let Some(outcome) = self.children_action(action) {
+            return outcome;
+        }
         let invert = settings.invert;
         let page = self.list.max_entries.saturating_sub(settings.scroll_context_lines).max(1);
         let words = (settings.word_chars.as_str(), settings.word_jump_mode);
@@ -609,8 +688,10 @@ impl State {
             }
             Action::ToggleTab => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
+                self.children_view = None;
                 return InputAction::Redraw;
             }
+            Action::ToggleChildren => self.toggle_children(),
 
             Action::VimEnterNormal => self.set_vim_mode(KeymapMode::VimNormal),
             Action::VimEnterInsert => self.set_vim_mode(KeymapMode::VimInsert),
@@ -762,11 +843,12 @@ mod tests {
                 state.mode
             })
             .collect();
+        // From the workspace straight to every session.
         assert_eq!(seen, vec![
-            FilterMode::Directory,
-            FilterMode::Branch,
             FilterMode::Global,
             FilterMode::Host,
+            FilterMode::Directory,
+            FilterMode::Branch,
             FilterMode::Workspace,
         ]);
 

@@ -122,12 +122,19 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
         None
     };
     let updated_at = now() - spec.age;
+    // An untitled session is titled from its first prompt, as the sidecar source does.
+    let title = if spec.title.is_empty() {
+        let first = spec.messages.iter().find(|(role, _)| *role == Role::User);
+        super::title::derive(first.map_or("", |(_, text)| text))
+    } else {
+        spec.title.to_owned()
+    };
     FakeSession {
         row: SessionRow {
             handle: handle(spec.harness, spec.id),
             parent: parent.map(|p| p.handle.clone()),
             relation,
-            title: Snippet::plain(spec.title),
+            title: Snippet::plain(title),
             cwd: Some(cwd),
             git_root,
             branch: spec.branch.map(str::to_owned),
@@ -250,7 +257,8 @@ impl FakeSource {
             Spec {
                 harness: ClaudeCode,
                 id: "agent-e5f6a7b8",
-                title: "Review the resume picker diff for regressions",
+                // Untitled, as subagents are: the title comes from the brief.
+                title: "",
                 cwd: REPO,
                 branch: Some("ai-resume"),
                 model: "claude-sonnet-4-5",
@@ -259,7 +267,13 @@ impl FakeSource {
                 duration: m(6),
                 msgs: 9,
                 messages: vec![
-                    (U, "Review the diff for history search regressions."),
+                    (
+                        U,
+                        "You're working on `atuin ai resume` in a git worktree of \
+                         /home/ellie/src/atuin. Repo: /home/ellie/src/atuin (Rust). Review the \
+                         resume picker diff for **history search** regressions. Report back \
+                         briefly.",
+                    ),
                     (A, "No behaviour changes in history search; all 297 tests still pass."),
                 ],
             },
