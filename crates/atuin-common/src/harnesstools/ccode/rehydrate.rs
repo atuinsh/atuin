@@ -141,16 +141,8 @@ fn timestamp(at: OffsetDateTime) -> String {
 
 /// The whole transcript, one JSON line per written row.
 fn transcript(session: &RehydrateSession) -> String {
-    let session = &RehydrateSession {
-        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
-        ..session.clone()
-    };
-    let mut writer = Writer::new(session);
-    for message in &session.messages {
-        writer.push(message);
-    }
     let mut out = String::new();
-    for line in writer.lines {
+    for line in lines(session, None, None) {
         out.push_str(&line.to_string());
         out.push('\n');
     }
@@ -162,9 +154,32 @@ fn transcript(session: &RehydrateSession) -> String {
     out
 }
 
+/// The lines for `session`'s rows, calls captured without their input flattened into notes
+/// ([`Flatten::Runs`]): for a whole transcript, or, given the lines a transcript already holds
+/// (`present`) and the one it ends on (`after`), for rows appended to it, which then hang from
+/// the lines already there.
+pub(crate) fn lines(
+    session: &RehydrateSession,
+    present: Option<&HashSet<String>>,
+    after: Option<&str>,
+) -> Vec<Value> {
+    let session = &RehydrateSession {
+        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
+        ..session.clone()
+    };
+    let mut writer = Writer::new(session, present, after);
+    for message in &session.messages {
+        writer.push(message);
+    }
+    writer.lines
+}
+
 struct Writer<'a> {
     session: &'a RehydrateSession,
     lines: Vec<Value>,
+    /// The lines the transcript already holds, when appending to one: a row hangs from them as
+    /// from a written row.
+    present: Option<&'a HashSet<String>>,
     /// Every row, by source id.
     by_id: HashMap<&'a str, &'a RehydrateMessage>,
     /// The rows that are written (the rest have nothing a line can carry).
@@ -178,7 +193,11 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(session: &'a RehydrateSession) -> Self {
+    fn new(
+        session: &'a RehydrateSession,
+        present: Option<&'a HashSet<String>>,
+        after: Option<&'a str>,
+    ) -> Self {
         let by_id: HashMap<&'a str, &'a RehydrateMessage> =
             session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect();
         let boundaries = session
@@ -205,9 +224,10 @@ impl<'a> Writer<'a> {
         let mut writer = Self {
             session,
             lines: Vec::new(),
+            present,
             by_id,
             writable: HashSet::new(),
-            last: None,
+            last: after,
             boundaries,
             server_tools,
         };
@@ -227,7 +247,8 @@ impl<'a> Writer<'a> {
         // At most one step per row: a cycle ends it.
         for _ in 0..=self.by_id.len() {
             let p = parent?;
-            if self.writable.contains(p) {
+            if self.writable.contains(p) || self.present.is_some_and(|present| present.contains(p))
+            {
                 return Some(p);
             }
             match self.by_id.get(p) {
