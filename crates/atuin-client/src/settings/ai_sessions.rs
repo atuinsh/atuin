@@ -54,17 +54,11 @@ pub enum AiSessionColumn {
     Time,
     /// The harness badge: CC, CX, OC or PI.
     Harness,
-    /// `+N` when forks or subagents are grouped under the session.
-    Children,
     /// The session title (falls back to one derived from the first prompt). Expands to fill
-    /// the row, followed by `@host` for another host's session.
+    /// the row.
     Title,
-    /// The repository (or directory) name the session ran in. Hidden in the filter modes that
-    /// keep to one repository (workspace, directory and branch).
-    Repo,
-    /// The git branch the session ran on; blank when detached.
-    Branch,
-    /// The message count.
+    /// The message count, left out when the title would be short of room. (The repository,
+    /// branch and host are in the preview.)
     Messages,
 }
 
@@ -75,10 +69,7 @@ impl AiSessionColumn {
         match self {
             Self::Time => 10,
             Self::Harness => 2,
-            Self::Children => 3,
             Self::Title => 0,
-            Self::Repo => 12,
-            Self::Branch => 12,
             Self::Messages => 4,
         }
     }
@@ -145,13 +136,11 @@ pub struct AiSessions {
     /// Row columns, left to right.
     pub columns: Vec<AiSessionColumn>,
 
-    /// List subagent sessions among a root session's children in the Inspect tab. (They always
-    /// count toward the root's `+N`.)
-    pub show_subagents: bool,
-
-    /// Group forks (including Claude Code `--resume` forks) and subagents under their root
-    /// session, so only the root shows as a row, with `+N`; a child's match finds its root. When
-    /// false, every session gets a row of its own.
+    /// Group forks (including Claude Code `--resume` forks and continuations in another harness)
+    /// under their root session, so only the root shows as a row; a fork's match finds its root.
+    /// When false, every fork gets a row of its own. Subagents never get a row either way: they
+    /// can't be resumed, so the picker leaves them out (grouped, a match in one still finds its
+    /// root).
     pub group_forks: bool,
 
     /// Height of the inline picker. Unset: the top-level `inline_height`.
@@ -180,13 +169,9 @@ impl Default for AiSessions {
             columns: vec![
                 AiSessionColumn::Time,
                 AiSessionColumn::Harness,
-                AiSessionColumn::Children,
                 AiSessionColumn::Title,
-                AiSessionColumn::Repo,
-                AiSessionColumn::Branch,
                 AiSessionColumn::Messages,
             ],
-            show_subagents: true,
             group_forks: true,
             inline_height: None,
             resume_chooser: true,
@@ -214,7 +199,6 @@ mod tests {
             filter_mode = "global"
             filters = ["workspace", "global"]
             columns = ["harness", "title"]
-            show_subagents = false
             group_forks = false
             inline_height = 20
             resume_chooser = false
@@ -231,7 +215,6 @@ mod tests {
             AiSessionFilterMode::Global
         ]);
         assert_eq!(parsed.columns, vec![AiSessionColumn::Harness, AiSessionColumn::Title]);
-        assert!(!parsed.show_subagents);
         assert!(!parsed.group_forks);
         assert_eq!(parsed.inline_height, Some(20));
         assert!(!parsed.resume_chooser);

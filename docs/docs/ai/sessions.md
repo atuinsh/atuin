@@ -29,6 +29,34 @@ atuin ai session search "flaky test"
 your sessions. It works like the history search: type to search, ++ctrl+o++
 inspects the selected session, and ++esc++ leaves.
 
+Each row shows when the session was last active, its agent, its title and its
+message count (when there's room). The preview under the list starts with where
+the session ran, its repository, branch and, for a session recorded on
+another machine, that machine, and how many forks it has:
+
+```
+       atuin · feat/ai-sessions · @MacBook-Pro-3 · 2 forks
+first  …
+last   …
+```
+
+- Forks of a session (including Claude Code `--resume` copies, and
+  continuations in another agent) are grouped under it. Inspect
+  (++ctrl+o++) lists them, and ++c++ there expands the list. To give each fork
+  a row of its own instead:
+
+  ```toml
+  [ai.sessions]
+  group_forks = false
+  ```
+
+- Subagents aren't listed at all, as they can't be resumed. A search that
+  matches something a subagent said still finds the session it worked for, and
+  `atuin ai resume <subagent-id>` resumes that session. Codex and opencode
+  don't record whether a child session is a subagent or a fork; nearly all of
+  them are subagents, so the picker treats them as such (they still resume by
+  id).
+
 Once you choose a session, with ++enter++ (or ++tab++ to edit the command
 first), Atuin asks where to resume it:
 
@@ -51,8 +79,8 @@ first), Atuin asks where to resume it:
   text, and reasoning is dropped. The line says how much. Agents that aren't
   installed aren't listed, and with no other agent installed there is nothing
   to choose, so ++enter++ resumes straight away.
-- If the session's own agent can't resume it here (a subagent, a Copilot
-  session, a directory that's gone, an agent that isn't installed), its line is
+- If the session's own agent can't resume it here (a Copilot session, a
+  directory that's gone, an agent that isn't installed), its line is
   dimmed with the reason, and the next one is selected instead.
 
 In the chooser, ++up++ / ++down++ (or ++k++ / ++j++) move, a digit picks that

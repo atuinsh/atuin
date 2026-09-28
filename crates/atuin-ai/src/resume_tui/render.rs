@@ -7,8 +7,7 @@ use std::path::Path;
 
 use atuin_client::ai_session::HarnessKind;
 use atuin_client::settings::{
-    AiSessionColumn, AiSessionFilterMode as FilterMode, KeymapMode, PreviewStrategy, Settings,
-    Style as UiStyle,
+    AiSessionColumn, KeymapMode, PreviewStrategy, Settings, Style as UiStyle,
 };
 use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::ellipsis::{Indicator, Pos};
@@ -184,90 +183,22 @@ fn message_count(n: u64) -> String {
 
 // --- the row layout --------------------------------------------------------------------------
 
-/// A cell of a session row: a configured column, or the `@host` after the title.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cell {
-    Time,
-    Harness,
-    Children,
-    Title,
-    Host,
-    Repo,
-    Branch,
-    Messages,
-}
-
-/// What the list on screen shows besides the configured columns, and what it can leave out.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RowNeeds {
-    /// The widest `@host` among the rows (0 when they are all this host's).
-    pub host: u16,
-    /// Whether the repository says anything: not in a mode that keeps to one repository, nor
-    /// beside the detail pane (which shows it).
-    pub repo: bool,
-    /// Whether any row has a branch to show, and it isn't in the detail pane.
-    pub branch: bool,
-}
-
-/// The title keeps at least this many columns while there are others to give up instead.
+/// The title keeps at least this many columns while the message count can give them up.
 pub const TITLE_MIN: u16 = 30;
-/// The widest the `@host` cell gets.
-pub const HOST_MAX: u16 = 16;
-/// What goes first when the title is short of room: the message count, the branch, the
-/// repository, then the host.
-const DROP_ORDER: [Cell; 4] = [Cell::Messages, Cell::Branch, Cell::Repo, Cell::Host];
 
-impl Cell {
-    fn width(self, needs: RowNeeds) -> u16 {
-        match self {
-            Self::Time => AiSessionColumn::Time.width(),
-            Self::Harness => AiSessionColumn::Harness.width(),
-            Self::Children => AiSessionColumn::Children.width(),
-            Self::Title => 0,
-            Self::Host => needs.host,
-            Self::Repo => AiSessionColumn::Repo.width(),
-            Self::Branch => AiSessionColumn::Branch.width(),
-            Self::Messages => AiSessionColumn::Messages.width(),
-        }
-    }
-}
-
-/// The cells of rows `width` columns wide (the selection indicator included), each with its
-/// width: the configured columns, with `@host` after the title, less what says nothing here
-/// (see [`RowNeeds`]). The title takes what's left; while that is under [`TITLE_MIN`], cells
-/// go in [`DROP_ORDER`].
-pub fn row_layout(columns: &[AiSessionColumn], width: u16, needs: RowNeeds) -> Vec<(Cell, u16)> {
-    let mut cells = Vec::new();
-    for column in columns {
-        match column {
-            AiSessionColumn::Time => cells.push(Cell::Time),
-            AiSessionColumn::Harness => cells.push(Cell::Harness),
-            AiSessionColumn::Children => cells.push(Cell::Children),
-            AiSessionColumn::Title => {
-                cells.push(Cell::Title);
-                if needs.host > 0 {
-                    cells.push(Cell::Host);
-                }
-            }
-            AiSessionColumn::Repo if needs.repo => cells.push(Cell::Repo),
-            AiSessionColumn::Branch if needs.branch => cells.push(Cell::Branch),
-            AiSessionColumn::Repo | AiSessionColumn::Branch => {}
-            AiSessionColumn::Messages => cells.push(Cell::Messages),
-        }
-    }
+/// The columns of rows `width` columns wide (the selection indicator included), each with its
+/// width. The title takes what's left, and the message count goes when that would leave the
+/// title under [`TITLE_MIN`].
+pub fn row_layout(columns: &[AiSessionColumn], width: u16) -> Vec<(AiSessionColumn, u16)> {
+    let mut cells = columns.to_vec();
     // Past the indicator, and a space between cells.
-    let title_width = |cells: &[Cell]| {
-        let others: u16 = cells.iter().map(|c| c.width(needs)).sum();
+    let title_width = |cells: &[AiSessionColumn]| {
+        let others: u16 = cells.iter().map(AiSessionColumn::width).sum();
         let gaps = u16::try_from(cells.len().saturating_sub(1)).unwrap_or(u16::MAX);
         width.saturating_sub(3).saturating_sub(others).saturating_sub(gaps)
     };
-    if cells.contains(&Cell::Title) {
-        for drop in DROP_ORDER {
-            if title_width(&cells) >= TITLE_MIN {
-                break;
-            }
-            cells.retain(|c| *c != drop);
-        }
+    if cells.iter().any(AiSessionColumn::expands) && title_width(&cells) < TITLE_MIN {
+        cells.retain(|c| *c != AiSessionColumn::Messages);
     }
     let title = title_width(&cells);
     cells
@@ -275,10 +206,10 @@ pub fn row_layout(columns: &[AiSessionColumn], width: u16, needs: RowNeeds) -> V
         .map(|c| {
             (
                 c,
-                if c == Cell::Title {
+                if c.expands() {
                     title
                 } else {
-                    c.width(needs)
+                    c.width()
                 },
             )
         })
@@ -307,8 +238,7 @@ pub struct SessionList<'a> {
     tz: UtcOffset,
     indicator: &'a str,
     theme: &'a Theme,
-    cells: &'a [(Cell, u16)],
-    host_id: &'a str,
+    cells: &'a [(AiSessionColumn, u16)],
 }
 
 impl SessionList<'_> {
@@ -358,17 +288,12 @@ impl StatefulWidget for SessionList<'_> {
                 x: list_area.left(),
                 right: list_area.right(),
                 y: cy,
-                row_modifier: {
-                    let mut m = Modifier::empty();
-                    // Another host's session resumes by restoring it from sync (or continuing it
-                    // elsewhere), when atuin can resume its harness at all.
-                    if row.host_id != self.host_id && row.handle.harness.harness().is_none() {
-                        m |= Modifier::DIM;
-                    }
-                    if self.alternate_highlight && selected {
-                        m |= Modifier::REVERSED;
-                    }
-                    m
+                // Another host's session looks like any other: it resumes by being restored
+                // from sync, behind the scenes.
+                row_modifier: if self.alternate_highlight && selected {
+                    Modifier::REVERSED
+                } else {
+                    Modifier::empty()
                 },
             };
             self.render_row(&mut line, row, selected);
@@ -432,7 +357,7 @@ impl SessionList<'_> {
             let end = w.x.saturating_add(col_width);
             let cw = usize::from(col_width);
             match cell {
-                Cell::Time => {
+                AiSessionColumn::Time => {
                     let when = clock::When::of(self.now, row.updated_at, self.tz);
                     let (text, meaning) = if is_live(self.now, row) {
                         (format!("● {}", when.short()), Meaning::AlertInfo)
@@ -441,21 +366,13 @@ impl SessionList<'_> {
                     };
                     w.put(&pad(&text, cw, Align::End), style(theme, meaning));
                 }
-                Cell::Harness => {
+                AiSessionColumn::Harness => {
                     w.put(
                         harness_badge(row.handle.harness),
                         harness_style(theme, row.handle.harness),
                     );
                 }
-                Cell::Children => {
-                    let text = if row.children > 0 {
-                        format!("+{}", row.children)
-                    } else {
-                        String::new()
-                    };
-                    w.put(&format!("{text:>cw$}"), style(theme, Meaning::Annotation));
-                }
-                Cell::Title => {
+                AiSessionColumn::Title => {
                     let (base, hl) = if selected && !self.alternate_highlight {
                         let base = style(theme, Meaning::AlertError).add_modifier(Modifier::BOLD);
                         (base, style(theme, Meaning::AlertWarn).add_modifier(Modifier::BOLD))
@@ -467,23 +384,7 @@ impl SessionList<'_> {
                         highlighted_line(&row.title.text, &row.title.highlights, cw, base, hl);
                     w.put_spans(&spans);
                 }
-                Cell::Host => {
-                    if row.host_id != self.host_id {
-                        let host = format!("@{}", short_host(&row.hostname));
-                        w.put(&pad(&host, cw, Align::Start), style(theme, Meaning::Annotation));
-                    }
-                }
-                Cell::Repo => {
-                    w.put(
-                        &pad(&repo_name(row), cw, Align::Start),
-                        style(theme, Meaning::Annotation),
-                    );
-                }
-                Cell::Branch => {
-                    let branch = shown_branch(row).unwrap_or_default();
-                    w.put(&pad(branch, cw, Align::Start), style(theme, Meaning::Guidance));
-                }
-                Cell::Messages => {
+                AiSessionColumn::Messages => {
                     w.put(
                         &format!("{:>cw$}", message_count(row.message_count)),
                         style(theme, Meaning::Annotation),
@@ -609,18 +510,45 @@ impl State {
         sources.iter().map(|s| markdown::render(&s.text, &s.highlights, opts, &s.styles)).collect()
     }
 
+    /// The preview's line saying where the selected session ran and what forked off it, in the
+    /// text column: `atuin · feat/ai-sessions · @MacBook-Pro-3 · 2 forks`. `None` when there is
+    /// nothing to say, or no room beside the text (`height` under 2).
+    fn preview_meta(&self, height: usize, theme: &Theme) -> Option<Line<'static>> {
+        if height < 2 {
+            return None;
+        }
+        let row = self.selected()?;
+        let muted = style(theme, Meaning::Annotation);
+        let mut spans = panel::place(row, &self.context.host_id, theme);
+        if let Some(forks) = panel::forks(self.children.get(&row.handle).map(Vec::as_slice)) {
+            if !spans.is_empty() {
+                spans.push(Span::styled(" · ", muted));
+            }
+            spans.push(Span::styled(forks, muted));
+        }
+        if spans.is_empty() {
+            return None;
+        }
+        spans.insert(0, Span::raw(" ".repeat(PREVIEW_LABEL_WIDTH)));
+        Some(Line::from(spans))
+    }
+
     /// The preview's lines for the selected session, in `height` lines of `width` columns: the
-    /// parts share the lines, and a part with only one gets its markdown run onto that line.
+    /// metadata line (see [`Self::preview_meta`]), then the parts, which share the lines left;
+    /// a part with only one gets its markdown run onto that line.
     fn preview_lines(&self, width: usize, height: usize, theme: &Theme) -> Vec<Line<'static>> {
         let Some((loaded, sources)) = self.preview_sources(theme) else {
             return Vec::new();
         };
+        let meta = self.preview_meta(height, theme);
+        let meta_shown = meta.is_some();
+        let height = height - usize::from(meta_shown);
         let label = |s: &'static str| Span::styled(s, style(theme, Meaning::Annotation));
         let inner = width.saturating_sub(PREVIEW_LABEL_WIDTH);
         let rendered = Self::preview_rendered(&sources, width, height);
         let wants: Vec<usize> = rendered.iter().map(Vec::len).collect();
         let budgets = markdown::allocate(&wants, height);
-        let mut lines = Vec::new();
+        let mut lines: Vec<Line<'static>> = meta.into_iter().collect();
 
         for ((source, rendered), n) in sources.iter().zip(&rendered).zip(budgets) {
             let body = match n {
@@ -643,7 +571,7 @@ impl State {
                 lines.push(Line::from(spans));
             }
         }
-        if !loaded && lines.is_empty() {
+        if !loaded && lines.len() == usize::from(meta_shown) {
             lines.push(Line::from(label("…")));
         }
         lines
@@ -663,9 +591,14 @@ impl State {
                 PreviewStrategy::Static => 3,
                 PreviewStrategy::Auto => self.preview_sources(theme).map_or(1, |(_, sources)| {
                     let max = usize::from(settings.max_preview_height);
-                    let lines: usize =
-                        Self::preview_rendered(&sources, width, max).iter().map(Vec::len).sum();
-                    u16::try_from(lines).unwrap_or(u16::MAX)
+                    // The metadata line takes the place of one of the text's.
+                    let meta = usize::from(self.preview_meta(max, theme).is_some());
+                    let lines: usize = Self::preview_rendered(&sources, width, max - meta)
+                        .iter()
+                        .map(Vec::len)
+                        .sum();
+                    // The text gets a line even before it is read (for its `…`).
+                    u16::try_from(lines.max(1) + meta).unwrap_or(u16::MAX)
                 }),
             };
             wanted.min(settings.max_preview_height).max(1) + border_size * 2
@@ -677,7 +610,12 @@ impl State {
     }
 
     /// Where the selected row of the list in `area` is, for the chooser to open against.
-    fn anchor(&self, area: Rect, cells: &[(Cell, u16)], invert: bool) -> Option<ListAnchor> {
+    fn anchor(
+        &self,
+        area: Rect,
+        cells: &[(AiSessionColumn, u16)],
+        invert: bool,
+    ) -> Option<ListAnchor> {
         if self.results.is_empty() || area.height == 0 {
             return None;
         }
@@ -690,7 +628,7 @@ impl State {
         // Past the indicator, and the columns before the badge (or the title, without one).
         let before: u16 = cells
             .iter()
-            .take_while(|(c, _)| !matches!(c, Cell::Harness | Cell::Title))
+            .take_while(|(c, _)| !matches!(c, AiSessionColumn::Harness | AiSessionColumn::Title))
             .map(|(_, w)| w + 1)
             .sum();
         Some(ListAnchor {
@@ -720,7 +658,6 @@ impl State {
             && settings.show_preview
             && compactness != Compactness::Ultracompact
             && area.width >= SPLIT_MIN_WIDTH;
-        self.pane_shown = split;
         let preview_height = if split {
             border_size
         } else {
@@ -886,8 +823,7 @@ impl State {
             (inner, None, None)
         };
 
-        let cells =
-            row_layout(&settings.ai.sessions.columns, list_area.width, self.row_needs(split));
+        let cells = row_layout(&settings.ai.sessions.columns, list_area.width);
         let list = SessionList {
             rows: &self.results,
             block: None,
@@ -898,7 +834,6 @@ impl State {
             indicator: &indicator,
             theme,
             cells: &cells,
-            host_id: &self.context.host_id,
         };
         f.render_stateful_widget(list, list_area, &mut self.list);
         self.list_anchor = self.anchor(list_area, &cells, invert);
@@ -948,7 +883,7 @@ impl State {
         }
 
         // Line the query up with the title column, as the history search lines it up with the
-        // command.
+        // command, while the widest mode and count fit.
         let prefix_width = settings
             .ai
             .sessions
@@ -959,7 +894,7 @@ impl State {
             .sum::<u16>()
             + 3;
         let prefix_width =
-            prefix_width.max(u16::try_from("[ SRCH: FULLTXT ] ".len()).unwrap_or(18));
+            prefix_width.max(u16::try_from("[ WORKSPACE 500+ ] ".len()).unwrap_or(19));
         f.render_widget(self.build_input(st, prefix_width, theme), input_chunk);
 
         let preview_width = usize::from(preview_chunk.width.saturating_sub(2 * border_size));
@@ -1047,28 +982,6 @@ impl State {
                 n.to_string()
             }
         })
-    }
-
-    /// What the list's rows need room for (see [`RowNeeds`]). Beside the detail pane (`split`),
-    /// the pane shows the repository and branch.
-    fn row_needs(&self, split: bool) -> RowNeeds {
-        let here = &self.context.host_id;
-        let host = self
-            .results
-            .iter()
-            .filter(|r| &r.host_id != here)
-            .map(|r| 1 + short_host(&r.hostname).width())
-            .max()
-            .unwrap_or(0);
-        let one_repo =
-            matches!(self.mode, FilterMode::Workspace | FilterMode::Directory | FilterMode::Branch);
-        RowNeeds {
-            host: u16::try_from(host).unwrap_or(u16::MAX).min(HOST_MAX),
-            repo: !split && !one_repo,
-            branch: !split
-                && self.mode != FilterMode::Branch
-                && self.results.iter().any(|r| shown_branch(r).is_some()),
-        }
     }
 
     fn build_input(&self, st: StyleState, prefix_width: u16, theme: &Theme) -> Paragraph<'static> {
@@ -1251,17 +1164,10 @@ impl State {
             )]),
         });
 
-        let children = self.children.get(&row.handle).cloned();
-        if row.children > 0 || children.as_ref().is_some_and(|c| !c.is_empty()) {
+        // The forks, once read (a row with only subagents grouped under it has none).
+        if let Some(forks) = self.children.get(&row.handle).filter(|c| !c.is_empty()).cloned() {
             let left = usize::from(inner.height).saturating_sub(lines.len());
-            lines.extend(self.children_lines(
-                &row,
-                children.as_deref(),
-                left,
-                inner.width,
-                tz,
-                theme,
-            ));
+            lines.extend(self.children_lines(&row, &forks, left, inner.width, tz, theme));
         }
 
         // The conversation, in whatever room is left.
@@ -1271,30 +1177,22 @@ impl State {
         f.render_widget(Paragraph::new(Text::from(lines)), inner);
     }
 
-    /// Inspect's list of the sessions grouped under `row`, in at most `room` lines: a blank line,
-    /// a heading saying what they are, and the tree. Collapsed, it shows the first few with a
-    /// line saying how many more (`c` expands it), leaving the rest of the room to the
-    /// conversation; expanded, it takes most of the room, scrolls, and has a cursor.
+    /// Inspect's list of the forks grouped under `row`, in at most `room` lines: a blank line, a
+    /// heading saying how many, and the tree. Collapsed, it shows the first few with a line
+    /// saying how many more (`c` expands it), leaving the rest of the room to the conversation;
+    /// expanded, it takes most of the room, scrolls, and has a cursor.
     fn children_lines(
         &mut self,
         row: &SessionRow,
-        children: Option<&[SessionRow]>,
+        children: &[SessionRow],
         room: usize,
         width: u16,
         tz: UtcOffset,
         theme: &Theme,
     ) -> Vec<Line<'static>> {
         let key = style(theme, Meaning::Annotation);
-        let heading = panel::grouped(row.children, children);
+        let heading = panel::forks(Some(children)).unwrap_or_default();
         let mut lines = vec![Line::default()];
-        let Some(children) = children else {
-            lines.push(Line::from(Span::styled(
-                format!(" {heading}"),
-                key.add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(Span::styled("   …", key)));
-            return lines;
-        };
         let tree =
             panel::tree_lines(&row.handle, children, (self.now)(), tz, usize::from(width), theme);
         let room = room.saturating_sub(2);
@@ -1403,79 +1301,44 @@ mod tests {
         atuin_client::settings::AiSessions::default().columns
     }
 
-    fn cells(width: u16, needs: RowNeeds) -> Vec<Cell> {
-        row_layout(&default_columns(), width, needs).into_iter().map(|(c, _)| c).collect()
+    use AiSessionColumn::{Harness, Messages, Time, Title};
+
+    /// The title takes the rest of the row, whatever the width: 80 columns is 76 inside the box,
+    /// and a split 120 leaves the list 69.
+    #[rstest]
+    #[case::wide(196, 174)]
+    #[case::full_80(76, 54)]
+    #[case::split_120(69, 47)]
+    fn the_title_takes_the_rest(#[case] width: u16, #[case] title: u16) {
+        assert_eq!(row_layout(&default_columns(), width), [
+            (Time, 10),
+            (Harness, 2),
+            (Title, title),
+            (Messages, 4)
+        ]);
     }
 
-    const EVERYTHING: RowNeeds = RowNeeds {
-        host: 16,
-        repo: true,
-        branch: true,
-    };
-
+    /// At every width the row fills it exactly, and the message count goes only when the title
+    /// would otherwise be under [`TITLE_MIN`].
     #[rstest]
-    #[case::wide(200, EVERYTHING, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Host, Cell::Repo, Cell::Branch, Cell::Messages])]
-    // Global in a 100-column terminal (96 inside the box): the count goes.
-    #[case::global_100(96, EVERYTHING, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Host, Cell::Repo, Cell::Branch])]
-    #[case::global_80(76, EVERYTHING, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Host])]
-    #[case::global_60(56, EVERYTHING, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title])]
-    // The workspace, all on this host: branch and count fit.
-    #[case::workspace_80(76, RowNeeds { host: 0, repo: false, branch: true }, &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Branch, Cell::Messages])]
-    #[case::nothing_to_show(76, RowNeeds::default(), &[Cell::Time, Cell::Harness, Cell::Children, Cell::Title, Cell::Messages])]
-    fn cells_go_before_the_title_does(
-        #[case] width: u16,
-        #[case] needs: RowNeeds,
-        #[case] want: &[Cell],
-    ) {
-        assert_eq!(cells(width, needs), want);
-    }
-
-    /// At every width the row fills it exactly, and the title keeps [`TITLE_MIN`] while there's
-    /// anything left to give up; what goes, goes in [`DROP_ORDER`].
-    #[rstest]
-    fn every_width_fills_the_row_title_first(
-        #[values(
-            EVERYTHING,
-            RowNeeds { host: 9, repo: false, branch: true },
-            RowNeeds { host: 0, repo: true, branch: false },
-            RowNeeds::default()
-        )]
-        needs: RowNeeds,
-    ) {
-        for width in 40..=200u16 {
-            let layout = row_layout(&default_columns(), width, needs);
+    fn every_width_fills_the_row_title_first() {
+        for width in 30..=200u16 {
+            let layout = row_layout(&default_columns(), width);
             let used: u16 = layout.iter().map(|(_, w)| w).sum::<u16>()
                 + u16::try_from(layout.len() - 1).unwrap()
                 + 3;
-            let (_, title) = layout.iter().find(|(c, _)| *c == Cell::Title).copied().unwrap();
+            let (_, title) = layout.iter().find(|(c, _)| *c == Title).copied().unwrap();
             if title > 0 {
                 assert_eq!(used, width, "{width}: {layout:?}");
             }
-            let dropped: Vec<usize> = DROP_ORDER
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| {
-                    let wanted = match c {
-                        Cell::Host => needs.host > 0,
-                        Cell::Repo => needs.repo,
-                        Cell::Branch => needs.branch,
-                        _ => true,
-                    };
-                    wanted && !layout.iter().any(|(l, _)| l == *c)
-                })
-                .map(|(i, _)| i)
-                .collect();
-            if let Some(&last) = dropped.last() {
-                assert!(title < TITLE_MIN + layout_gain(last, needs), "{width}: {layout:?}");
+            let counted = layout.iter().any(|(c, _)| *c == Messages);
+            let gain = Messages.width() + 1;
+            if counted {
+                assert!(title >= TITLE_MIN, "{width}: {layout:?}");
             } else {
-                assert!(title >= TITLE_MIN || width < 60, "{width}: {layout:?}");
+                assert!(title < TITLE_MIN + gain, "{width}: {layout:?}");
             }
         }
-    }
-
-    /// What dropping [`DROP_ORDER`]`[i]` gave the title.
-    fn layout_gain(i: usize, needs: RowNeeds) -> u16 {
-        DROP_ORDER[i].width(needs) + 1
     }
 
     #[rstest]

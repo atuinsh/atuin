@@ -1,5 +1,5 @@
 //! The richer views sessions earn over one-line commands: the detail pane beside the list on wide
-//! terminals, activity sparklines, token counts, and the fork/subagent tree.
+//! terminals, activity sparklines, token counts, and the tree of forks.
 
 use std::ops::Range;
 
@@ -13,8 +13,8 @@ use ratatui::text::{Line, Span};
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
-use super::render::{harness_style, is_live, repo_name, shown_branch, style};
-use super::source::{Relation, SessionRow, harness_label};
+use super::render::{harness_style, is_live, repo_name, short_host, shown_branch, style};
+use super::source::{SessionRow, harness_label};
 use super::state::State;
 use super::{clock, markdown};
 
@@ -50,37 +50,35 @@ pub fn tokens(usage: &Usage, cache: bool) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-/// What is grouped under a root, by kind: `17 subagents · 2 forks`. `total` is the root's count;
-/// until its `children` are read, `18 grouped`. The list may leave subagents out
-/// (`show_subagents = false`), which the total still counts.
-pub fn grouped(total: u32, children: Option<&[SessionRow]>) -> String {
-    let total = usize::try_from(total).unwrap_or(usize::MAX);
-    let Some(children) = children else {
-        return if total == 0 {
-            String::new()
-        } else {
-            format!("{total} grouped")
-        };
-    };
-    let count = |relation| children.iter().filter(|c| c.relation == relation).count();
-    let forks = count(Relation::Fork);
-    let other = count(Relation::Child) + count(Relation::Root);
-    let subagents = count(Relation::Subagent).max(total.saturating_sub(forks + other));
-    [(subagents, "subagent", "subagents"), (forks, "fork", "forks"), (other, "child", "children")]
-        .into_iter()
-        .filter(|(n, ..)| *n > 0)
-        .map(|(n, one, many)| {
-            format!(
-                "{n} {}",
-                if n == 1 {
-                    one
-                } else {
-                    many
-                }
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" · ")
+/// The forks grouped under a root, as [`super::source::SessionSource::children`] reads them:
+/// `2 forks`. `None` until they are read, and when there are none.
+pub fn forks(children: Option<&[SessionRow]>) -> Option<String> {
+    match children?.len() {
+        0 => None,
+        1 => Some("1 fork".to_owned()),
+        n => Some(format!("{n} forks")),
+    }
+}
+
+/// Where a session ran, muted: `atuin · feat/ai-sessions · @MacBook-Pro-3`. The branch is left
+/// out when detached, and the host when it is this one (`here`).
+pub fn place(row: &SessionRow, here: &str, theme: &Theme) -> Vec<Span<'static>> {
+    let muted = style(theme, Meaning::Annotation);
+    let mut parts = vec![Span::styled(repo_name(row), muted)];
+    if let Some(branch) = shown_branch(row) {
+        parts.push(Span::styled(branch.to_owned(), style(theme, Meaning::Guidance)));
+    }
+    if row.host_id != here {
+        parts.push(Span::styled(format!("@{}", short_host(&row.hostname)), muted));
+    }
+    let mut spans = Vec::new();
+    for part in parts.into_iter().filter(|p| !p.content.is_empty()) {
+        if !spans.is_empty() {
+            spans.push(Span::styled(" · ", muted));
+        }
+        spans.push(part);
+    }
+    spans
 }
 
 /// How long a session ran, for its activity sparkline's scale: `40m`, `5h`, `2d`.
@@ -182,23 +180,18 @@ impl State {
         }
         meta.push(Line::from(who));
 
-        let mut place = vec![Span::styled(repo_name(row), muted)];
-        if let Some(branch) = shown_branch(row) {
-            place.extend([sep(), Span::styled(branch.to_owned(), style(theme, Meaning::Guidance))]);
+        let place = place(row, &self.context.host_id, theme);
+        if !place.is_empty() {
+            meta.push(Line::from(place));
         }
-        if row.host_id != self.context.host_id {
-            place.extend([sep(), Span::styled(format!("@{}", row.hostname), muted)]);
-        }
-        meta.push(Line::from(place));
 
         let mut when = Vec::new();
         if is_live(now, row) {
             when.extend([Span::styled("● live", style(theme, Meaning::AlertInfo)), sep()]);
         }
         when.push(Span::styled(format!("{} messages", row.message_count), muted));
-        let grouped = grouped(row.children, self.children.get(&row.handle).map(Vec::as_slice));
-        if !grouped.is_empty() {
-            when.extend([sep(), Span::styled(grouped, muted)]);
+        if let Some(forks) = forks(self.children.get(&row.handle).map(Vec::as_slice)) {
+            when.extend([sep(), Span::styled(forks, muted)]);
         }
         let started = clock::When::of(now, row.started_at, tz).phrase();
         when.extend([sep(), Span::styled(format!("started {started}"), muted)]);
@@ -294,8 +287,8 @@ impl State {
     }
 }
 
-/// The sessions grouped under `root`, as a tree by parent: forks under what they forked,
-/// subagents under what spawned them.
+/// The forks grouped under `root`, as a tree by parent: each under what it forked from (one
+/// whose parent isn't listed, such as a subagent, hangs off the root).
 pub fn tree_lines(
     root: &HarnessSession,
     children: &[SessionRow],
@@ -356,19 +349,13 @@ pub fn tree_lines(
         .into_iter()
         .map(|(branch, i)| {
             let child = &children[i];
-            let (tag, meaning) = match child.relation {
-                Relation::Fork => ("fork", Meaning::Guidance),
-                Relation::Subagent => ("subagent", Meaning::Important),
-                Relation::Child => ("child", Meaning::Guidance),
-                Relation::Root => ("session", Meaning::Base),
-            };
             let tail = format!(
                 "{:>5} msgs  {:>width$}",
                 child.message_count,
                 clock::When::of(now, child.updated_at, tz).short(),
                 width = clock::WIDTH,
             );
-            let lead = branch.width() + 10;
+            let lead = branch.width();
             let title_w = width.saturating_sub(lead + 2 + tail.width());
             let mut title = child.title.text.split_whitespace().collect::<Vec<_>>().join(" ");
             // A continuation in another harness (`atuin ai resume --in`) says where it went on.
@@ -385,7 +372,6 @@ pub fn tree_lines(
                 .into_owned();
             Line::from(vec![
                 Span::styled(branch, muted),
-                Span::styled(format!("{tag:<10}"), style(theme, meaning)),
                 Span::styled(title, base),
                 Span::raw("  "),
                 Span::styled(tail, muted),
@@ -430,31 +416,40 @@ mod tests {
         assert_eq!(tokens(&only_cache, false), None);
     }
 
-    fn child(relation: Relation) -> SessionRow {
-        let mut row = super::super::fake::row(
-            atuin_client::ai_session::HarnessKind::ClaudeCode,
-            &format!("{relation:?}"),
-            "t",
-        );
-        row.relation = relation;
-        row
+    fn row() -> SessionRow {
+        super::super::fake::row(atuin_client::ai_session::HarnessKind::ClaudeCode, "s", "t")
     }
 
     #[rstest]
-    #[case::not_read(3, None, "3 grouped")]
-    #[case::none(0, None, "")]
-    #[case::kinds(3, Some(vec![Relation::Subagent, Relation::Subagent, Relation::Fork]), "2 subagents · 1 fork")]
-    #[case::one_each(2, Some(vec![Relation::Subagent, Relation::Child]), "1 subagent · 1 child")]
-    // Subagents left out of the list still count.
-    #[case::subagents_hidden(19, Some(vec![Relation::Fork, Relation::Fork]), "17 subagents · 2 forks")]
-    fn grouped_says_what_kind(
-        #[case] total: u32,
-        #[case] children: Option<Vec<Relation>>,
+    #[case::not_read(None, None)]
+    #[case::none(Some(0), None)]
+    #[case::one(Some(1), Some("1 fork"))]
+    #[case::two(Some(2), Some("2 forks"))]
+    fn forks_are_counted_once_read(#[case] n: Option<usize>, #[case] want: Option<&str>) {
+        let children = n.map(|n| vec![row(); n]);
+        assert_eq!(forks(children.as_deref()).as_deref(), want);
+    }
+
+    #[rstest]
+    #[case::here(Some("feat/ai-sessions"), "here", "atuin · feat/ai-sessions")]
+    #[case::detached(Some("HEAD"), "here", "atuin")]
+    #[case::elsewhere(Some("main"), "there", "atuin · main · @MacBook-Pro-3")]
+    #[case::no_branch(None, "there", "atuin · @MacBook-Pro-3")]
+    fn place_leaves_out_what_goes_without_saying(
+        #[case] branch: Option<&str>,
+        #[case] host_id: &str,
         #[case] want: &str,
     ) {
-        let children: Option<Vec<SessionRow>> =
-            children.map(|c| c.into_iter().map(child).collect());
-        assert_eq!(grouped(total, children.as_deref()), want);
+        let mut themes = atuin_client::theme::ThemeManager::new(None, None);
+        let theme = themes.load_theme("default", None);
+        let mut row = row();
+        row.git_root = Some("/src/atuin".into());
+        row.branch = branch.map(str::to_owned);
+        row.host_id = host_id.to_owned();
+        row.hostname = "MacBook-Pro-3.local".to_owned();
+        let spans = place(&row, "here", theme);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, want);
     }
 
     #[rstest]

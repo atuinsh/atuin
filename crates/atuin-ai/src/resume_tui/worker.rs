@@ -31,10 +31,8 @@ pub enum Request {
         filter: SessionFilter,
     },
     Preview(HarnessSession),
-    Children {
-        session: HarnessSession,
-        include_subagents: bool,
-    },
+    /// The forks grouped under a root.
+    Children(HarnessSession),
     /// Plan resuming a session (may walk the harness's session directories).
     Plan(Box<SessionRow>),
     /// Write out the transcript of a session planned with a restore, and plan resuming it.
@@ -157,7 +155,7 @@ impl Latest {
     fn put(&mut self, request: Request) {
         let slot = match request {
             Request::Preview(_) => &mut self.preview,
-            Request::Children { .. } => &mut self.children,
+            Request::Children(_) => &mut self.children,
             Request::Plan(_) => &mut self.plan,
             Request::Restore(..) => &mut self.restore,
             Request::Flatten(..) => &mut self.flatten,
@@ -207,15 +205,11 @@ async fn details(
                 });
                 Response::Preview(session, preview)
             }
-            Request::Children {
-                session,
-                include_subagents,
-            } => {
-                let children =
-                    source.children(&session, include_subagents).await.unwrap_or_else(|e| {
-                        tracing::warn!("failed to load the children of {session:?}: {e:#}");
-                        Vec::new()
-                    });
+            Request::Children(session) => {
+                let children = source.children(&session).await.unwrap_or_else(|e| {
+                    tracing::warn!("failed to load the children of {session:?}: {e:#}");
+                    Vec::new()
+                });
                 Response::Children(session, children)
             }
             Request::Plan(row) => Response::Plan(row.handle.clone(), resumer.plan(&row).await),
@@ -282,14 +276,11 @@ mod tests {
         let rows = rows.unwrap();
         let root = rows.iter().find(|r| r.children == 4).expect("a grouped root");
 
-        tx.send(Request::Children {
-            session: root.handle.clone(),
-            include_subagents: true,
-        });
+        tx.send(Request::Children(root.handle.clone()));
         let Some(Response::Children(_, children)) = rx.recv().await else {
             panic!("expected children");
         };
-        assert_eq!(children.len(), 4);
+        assert_eq!(children.len(), 1, "the fork, not the subagents");
 
         tx.send(Request::Preview(root.handle.clone()));
         let Some(Response::Preview(_, preview)) = rx.recv().await else {
@@ -322,7 +313,7 @@ mod tests {
             Ok(SessionPreview::default())
         }
 
-        async fn children(&self, _: &HarnessSession, _: bool) -> eyre::Result<Vec<SessionRow>> {
+        async fn children(&self, _: &HarnessSession) -> eyre::Result<Vec<SessionRow>> {
             Ok(Vec::new())
         }
 
@@ -375,7 +366,7 @@ mod tests {
             Ok(SessionPreview::default())
         }
 
-        async fn children(&self, _: &HarnessSession, _: bool) -> eyre::Result<Vec<SessionRow>> {
+        async fn children(&self, _: &HarnessSession) -> eyre::Result<Vec<SessionRow>> {
             Ok(Vec::new())
         }
     }

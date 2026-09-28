@@ -74,7 +74,7 @@ pub enum Widened {
     NoMatches,
 }
 
-/// Inspect's list of the sessions grouped under the one inspected, once expanded (`c`): it has
+/// Inspect's list of the forks grouped under the session inspected, once expanded (`c`): it has
 /// the arrow keys, with a cursor, and scrolls.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildrenView {
@@ -123,12 +123,11 @@ pub struct State {
     refreshing: Option<u64>,
 
     pub previews: HashMap<HarnessSession, SessionPreview>,
+    /// The forks grouped under each session, once read (see
+    /// [`super::source::SessionSource::children`]).
     pub children: HashMap<HarnessSession, Vec<SessionRow>>,
-    /// Inspect's children list, while it's expanded.
+    /// Inspect's list of forks, while it's expanded.
     pub children_view: Option<ChildrenView>,
-    /// Whether the detail pane showed beside the list last time it was drawn (it says what is
-    /// grouped under the selected session, so it wants the children too).
-    pub pane_shown: bool,
     /// Details asked of the worker and not answered yet. The worker drops a request superseded by
     /// a newer one of its kind, so only the selected session's entries are kept (see
     /// [`Self::forget_unanswered`]).
@@ -194,7 +193,6 @@ impl State {
             previews: HashMap::new(),
             children: HashMap::new(),
             children_view: None,
-            pane_shown: false,
             requested: HashSet::new(),
             pinned: None,
             host_names: HashMap::new(),
@@ -570,8 +568,12 @@ impl State {
         let Some(row) = self.selected() else {
             return;
         };
-        let known = self.children.get(&row.handle).map(Vec::len);
-        if row.children == 0 && known.unwrap_or(0) == 0 {
+        // Until the forks are read, a row with anything grouped under it may have some.
+        let forks = self
+            .children
+            .get(&row.handle)
+            .map_or(usize::try_from(row.children).unwrap_or(1), Vec::len);
+        if forks == 0 {
             return;
         }
         self.children_view = Some(ChildrenView {

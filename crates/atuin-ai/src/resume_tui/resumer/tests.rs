@@ -65,7 +65,7 @@ impl SessionSource for Synced {
         Ok(SessionPreview::default())
     }
 
-    async fn children(&self, _: &HarnessSession, _: bool) -> eyre::Result<Vec<SessionRow>> {
+    async fn children(&self, _: &HarnessSession) -> eyre::Result<Vec<SessionRow>> {
         Ok(Vec::new())
     }
 
@@ -338,7 +338,7 @@ impl SessionSource for Worked {
         Ok(SessionPreview::default())
     }
 
-    async fn children(&self, _: &HarnessSession, _: bool) -> eyre::Result<Vec<SessionRow>> {
+    async fn children(&self, _: &HarnessSession) -> eyre::Result<Vec<SessionRow>> {
         Ok(Vec::new())
     }
 
