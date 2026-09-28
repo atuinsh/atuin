@@ -53,17 +53,152 @@ pub fn split_common_prefix<'a>(
     None
 }
 
-/// Skip flag-like words (`-x`, `--xxx`) leading a command remainder, so a
-/// stripped common prefix's own flags are not mistaken for the command.
-fn strip_leading_flags(mut command: &str) -> &str {
-    while let Some(word) = command.split_ascii_whitespace().next() {
-        if word.len() > 1 && word.starts_with('-') {
+/// Short flags for sudo/doas that take a separate value word (`-u nobody`).
+/// Anything not listed here or in the boolean sets below is unknown to us.
+fn flag_takes_value(tool: &str, short: char) -> bool {
+    match tool {
+        "sudo" => matches!(short, 'C' | 'D' | 'g' | 'p' | 'R' | 'r' | 'T' | 't' | 'U' | 'u'),
+        "doas" => matches!(short, 'C' | 'a' | 'u'),
+        _ => false,
+    }
+}
+
+/// Short flags for sudo/doas that take no value (`-E`, `-s`).
+fn is_boolean_short(tool: &str, short: char) -> bool {
+    match tool {
+        "sudo" => matches!(
+            short,
+            'A' | 'b'
+                | 'B'
+                | 'E'
+                | 'e'
+                | 'H'
+                | 'h'
+                | 'i'
+                | 'K'
+                | 'k'
+                | 'l'
+                | 'n'
+                | 'P'
+                | 'S'
+                | 's'
+                | 'V'
+                | 'v'
+        ),
+        "doas" => matches!(short, 'L' | 'n' | 's'),
+        _ => false,
+    }
+}
+
+/// Long flags that take a value (`--user nobody`, `--user=nobody`).
+fn long_flag_takes_value(tool: &str, name: &str) -> bool {
+    match tool {
+        "sudo" => matches!(
+            name,
+            "close-from"
+                | "chdir"
+                | "group"
+                | "prompt"
+                | "chroot"
+                | "role"
+                | "command-timeout"
+                | "type"
+                | "other-user"
+                | "user"
+        ),
+        // doas has no long options
+        _ => false,
+    }
+}
+
+/// Long flags that take no value (`--background`).
+fn is_boolean_long(tool: &str, name: &str) -> bool {
+    match tool {
+        "sudo" => matches!(
+            name,
+            "askpass"
+                | "background"
+                | "bell"
+                | "edit"
+                | "preserve-env"
+                | "set-home"
+                | "help"
+                | "remove-timestamp"
+                | "reset-timestamp"
+                | "list"
+                | "login"
+                | "non-interactive"
+                | "preserve-groups"
+                | "stdin"
+                | "shell"
+                | "version"
+                | "validate"
+        ),
+        _ => false,
+    }
+}
+
+/// Skip a stripped common prefix's own flags so they are not mistaken for
+/// the command. Only known boolean flags are skipped outright, known
+/// value-taking flags are skipped together with their value. Stops at the
+/// first non-flag word (the command). Returns None when it hits a flag it
+/// does not know, or when nothing but flags follows the prefix, so callers
+/// can fall back to the prefix instead of counting a flag or a flag value
+/// (like a username after `-u`) as a command.
+fn strip_prefix_flags<'a>(tool: &str, mut command: &'a str) -> Option<&'a str> {
+    loop {
+        let word = command.split_ascii_whitespace().next()?;
+        if word == "--" {
+            // end of flags, the command follows verbatim
             command = command[word.len()..].trim_start();
+            return if command.is_empty() {
+                None
+            } else {
+                Some(command)
+            };
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            if long.is_empty() {
+                return None;
+            }
+            let name = long.split('=').next().unwrap_or(long);
+            if is_boolean_long(tool, name) {
+                command = command[word.len()..].trim_start();
+            } else if long_flag_takes_value(tool, name) {
+                command = command[word.len()..].trim_start();
+                if !long.contains('=') {
+                    // value is the next word, skip it too
+                    let value = command.split_ascii_whitespace().next()?;
+                    command = command[value.len()..].trim_start();
+                }
+            } else {
+                return None;
+            }
+        } else if word.len() > 1 && word.starts_with('-') {
+            let shorts: Vec<char> = word[1..].chars().collect();
+            if shorts.iter().all(|c| is_boolean_short(tool, *c)) {
+                command = command[word.len()..].trim_start();
+            } else if shorts.len() == 1 && flag_takes_value(tool, shorts[0]) {
+                // value is the next word, skip it too
+                command = command[word.len()..].trim_start();
+                let value = command.split_ascii_whitespace().next()?;
+                command = command[value.len()..].trim_start();
+            } else if shorts.len() > 1
+                && flag_takes_value(tool, shorts[0])
+                && !is_boolean_short(tool, shorts[0])
+            {
+                // attached value (`-unobody`), the whole word is flag + value
+                command = command[word.len()..].trim_start();
+            } else {
+                return None;
+            }
         } else {
-            break;
+            return Some(command);
+        }
+        if command.is_empty() {
+            return None;
         }
     }
-    command
 }
 
 fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
@@ -72,10 +207,12 @@ fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str
             // no commands following, just use the prefix
             return prefix;
         }
-        command = strip_leading_flags(remainder);
-        if command.is_empty() {
-            // only flags followed the prefix
-            return prefix;
+        // the tool is the first word of the prefix (`sudo` in `sudo test`)
+        let tool = prefix.split_ascii_whitespace().next().unwrap_or(prefix);
+        match strip_prefix_flags(tool, remainder) {
+            Some(rest) => command = rest,
+            // only flags, or flags we do not understand, followed the prefix
+            None => return prefix,
         }
     }
 
@@ -406,8 +543,16 @@ mod tests {
     #[case::prefix_only("sudo", "sudo")]
     #[case::prefix_flag("sudo -E make install", "make")]
     #[case::prefix_long_flag("sudo --background updatedb", "updatedb")]
-    #[case::prefix_flag_with_arg("sudo -u nobody iperf3 -s", "nobody")]
+    #[case::prefix_flag_with_arg("sudo -u nobody iperf3 -s", "iperf3")]
+    #[case::prefix_long_flag_with_arg("sudo --user=nobody iperf3 -s", "iperf3")]
+    #[case::prefix_long_flag_split_arg("sudo --user nobody iperf3 -s", "iperf3")]
+    #[case::prefix_flag_value_and_bool("sudo -u nobody -E iperf3 -s", "iperf3")]
+    #[case::prefix_combined_bools("sudo -En make install", "make")]
+    #[case::prefix_end_of_flags("sudo -- iperf3 -s", "iperf3")]
+    #[case::prefix_unknown_flag("sudo --unknown-thing foo", "sudo")]
     #[case::prefix_flags_only("sudo -E", "sudo")]
+    #[case::prefix_flag_value_only("sudo -u nobody", "sudo")]
+    #[case::doas_flag_with_arg("doas -u nobody iperf3", "iperf3")]
     fn interesting_commands(#[case] input: &str, #[case] expected: &str) {
         let settings = Settings::utc();
         assert_eq!(interesting_command(&settings, input), expected);
