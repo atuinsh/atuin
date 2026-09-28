@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c1cab50387aa19de2d2a835f20306397c9ba07d28ad7829b26199c2c9fd37762 # shrinks to nodes = [Node { source_id: "n00", parent: None, host: Some("00000000-0000-0000-0000-000000000002"), at: 0, seq: Some(0), substantive: true, assistant: false, header: false }, Node { source_id: "n01", parent: Some("n00"), host: Some("00000000-0000-0000-0000-000000000001"), at: 4, seq: Some(0), substantive: false, assistant: false, header: false }, Node { source_id: "n02", parent: Some("n01"), host: Some("00000000-0000-0000-0000-000000000003"), at: 8, seq: Some(1), substantive: true, assistant: false, header: false }, Node { source_id: "n03", parent: Some("n02"), host: Some("00000000-0000-0000-0000-000000000003"), at: 12, seq: Some(1), substantive: false, assistant: false, header: false }], harness = Codex
+cc 5bbe86c2025bc058f25c245f9d8455bd757c4d095f752a4a08e3b85bbff50869 # shrinks to nodes = [Node { source_id: "n00", parent: None, host: Some("00000000-0000-0000-0000-000000000001"), at: 0, seq: Some(0), substantive: false, assistant: false, header: false }], harness = ClaudeCode, seed = 0, deferred = false

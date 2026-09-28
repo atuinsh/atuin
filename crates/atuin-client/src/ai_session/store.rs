@@ -190,18 +190,40 @@ impl AiSessionStore {
             tracing::info!("ai-session watermarks were not made with this key: replaying all");
         }
 
+        // A session's heads are worked out once it is replayed, not once per row of it.
+        let deferral = db.defer_heads();
         let mut stats = Reprojected::default();
+        let mut result = None;
         for _ in 0..REPROJECT_PASSES {
-            match self.reproject_pass(db, &mut stats).await? {
-                Pass::Done => return Ok(stats),
-                Pass::Invalidated => {
+            match self.reproject_pass(db, &mut stats).await {
+                Ok(Pass::Done) => {
+                    result = Some(Ok(()));
+                    break;
+                }
+                Ok(Pass::Invalidated) => {
                     warn!("ai-session projection invalidated under reproject, starting over");
+                }
+                Err(err) => {
+                    result = Some(Err(err));
+                    break;
                 }
             }
         }
+        drop(deferral);
+        // Whatever was replayed, even if not all of it: the marks would wait for the next open.
+        db.refresh_heads().await?;
 
-        warn!("ai-session projection kept being invalidated, leaving the rest for the next one");
-        Ok(stats)
+        match result {
+            Some(Err(err)) => Err(err),
+            Some(Ok(())) => Ok(stats),
+            None => {
+                warn!(
+                    "ai-session projection kept being invalidated, leaving the rest for the next \
+                     one"
+                );
+                Ok(stats)
+            }
+        }
     }
 
     async fn reproject_pass(
@@ -351,6 +373,15 @@ impl AiSessionStore {
     }
 
     pub async fn incremental_build(&self, db: &AiSessionDatabase, ids: &[RecordId]) {
+        let deferral = db.defer_heads();
+        self.append_records(db, ids).await;
+        drop(deferral);
+        if let Err(err) = db.refresh_heads().await {
+            warn!(?err, "failed to work out ai-session heads; they are computed on the next open");
+        }
+    }
+
+    async fn append_records(&self, db: &AiSessionDatabase, ids: &[RecordId]) {
         for id in ids {
             let record = match self.store.get(*id).await {
                 Ok(record) => record,

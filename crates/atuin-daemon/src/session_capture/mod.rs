@@ -83,6 +83,13 @@ impl Sink {
         if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
             return Ok(Appended::Duplicate);
         }
+        // A content-addressed row may be stored under its alias instead: the id its line had
+        // before a rehydrated transcript stamped it (see `Message::alias`).
+        if let Some(alias) = &msg.alias
+            && self.sidecar.contains_message(&msg.session, alias).await?
+        {
+            return Ok(Appended::Duplicate);
+        }
 
         // Write the record store first: it is the synced source of truth and the sidecar is a
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
@@ -1266,5 +1273,84 @@ mod pipeline_tests {
         assert_eq!(row.updated_at.year(), 2020, "updated_at = {}", row.updated_at);
         assert_eq!(row.started_at, row.updated_at);
         assert_eq!(row.title.as_deref(), Some("Old work"));
+    }
+
+    /// Serializes the tests that point `CODEX_HOME` somewhere: the variable is process-wide, and
+    /// a rehydrate that found it unset would write to the real `~/.codex`.
+    static CODEX_HOME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Write `session` out as Codex would find it, under a temporary `CODEX_HOME`.
+    async fn rehydrate_codex(
+        session: &atuin_common::harnesstools::rehydrate::RehydrateSession,
+        home: &std::path::Path,
+    ) -> std::path::PathBuf {
+        let _env = CODEX_HOME.lock().await;
+        // SAFETY: no other thread of these tests reads or writes the environment meanwhile.
+        unsafe { std::env::set_var("CODEX_HOME", home) };
+        let written = atuin_common::harnesstools::codex::rehydrate::rehydrate(session).await;
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("CODEX_HOME") };
+        let path = written.unwrap();
+        assert!(path.starts_with(home), "{} is outside the test's CODEX_HOME", path.display());
+        path
+    }
+
+    /// A Codex rollout's lines, read as capture reads them.
+    async fn codex_rollout(id: &str, path: std::path::PathBuf) -> Vec<AnyMessage> {
+        use atuin_common::harnesstools::codex::session::CodexSession;
+        use atuin_common::harnesstools::session::Session as _;
+        use futures::TryStreamExt;
+        CodexSession::open(sid(id), path, BlockingPool::new(NonZeroUsize::MIN))
+            .read()
+            .map_ok(AnyMessage::from)
+            .try_collect()
+            .await
+            .unwrap()
+    }
+
+    /// A Codex session written back out from its synced rows (rehydrated, to be resumed on
+    /// another machine) and captured again there pushes no record: every line resolves to a row
+    /// already synced. That includes the id-less lines of a rollout from before Codex 0.32,
+    /// which stamped none of them, where a rehydrated rollout stamps every line.
+    #[rstest]
+    #[case::legacy_unstamped("legacy-bare.jsonl")]
+    #[case::legacy_forked_subagent("legacy-forked-subagent.jsonl")]
+    #[case::paginated_with_compaction("paginated-compacted.jsonl")]
+    #[case::custom_tools_and_records("session1.jsonl")]
+    #[tokio::test]
+    async fn a_rehydrated_codex_session_recaptures_as_nothing_new(
+        #[future] sink: Sink,
+        #[case] name: &str,
+    ) {
+        let sink = sink.await;
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../atuin-common/tests/fixtures/codex")
+            .join(name);
+        let first: serde_json::Value = serde_json::from_str(
+            std::fs::read_to_string(&fixture).unwrap().lines().next().unwrap(),
+        )
+        .unwrap();
+        let id = first["payload"]["id"].as_str().or(first["id"].as_str()).unwrap().to_owned();
+
+        let lines = codex_rollout(&id, fixture).await;
+        let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+        let captured = capture_all(&sink, &mut enricher, &sid(&id), &lines).await;
+        assert!(captured.contains(&Appended::New));
+
+        let handle = handle(HarnessKind::Codex, &id);
+        let session = sink
+            .sidecar
+            .rehydrate_session(&handle, std::path::PathBuf::from("/elsewhere"))
+            .await
+            .unwrap()
+            .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let path = rehydrate_codex(&session, home.path()).await;
+
+        let again = codex_rollout(&id, path).await;
+        let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+        let outcomes = capture_all(&sink, &mut enricher, &sid(&id), &again).await;
+        let new = outcomes.iter().filter(|o| **o == Appended::New).count();
+        assert_eq!(new, 0, "re-capturing the rehydrated rollout pushed {new} records");
     }
 }

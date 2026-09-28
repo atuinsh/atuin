@@ -118,6 +118,31 @@ pub struct Message {
     #[builder(default)]
     #[serde(skip)]
     pub host: Option<HostId>,
+    /// The line's position in its transcript, when the harness numbers its lines (a Codex
+    /// rollout line's `ordinal`). Two hosts continuing the same transcript number their new lines
+    /// alike, which is how a Codex session that went two ways is told from one that went on.
+    /// `None` for harnesses that number nothing, and in records from before it was captured.
+    #[builder(default)]
+    #[serde(default)]
+    pub seq: Option<u64>,
+    /// The stored row [`Self::parent_source_id`] names, as the sidecar resolved it; never part of
+    /// the record body. The same id for most harnesses, but opencode's rows are parts while their
+    /// parent pointer names a message, whose first part this is (see
+    /// [`crate::ai_session::AiSessionDatabase::heads`]). `None` when the parent is not stored,
+    /// or not resolved yet.
+    #[builder(default)]
+    #[serde(skip)]
+    pub parent_row: Option<SourceId>,
+    /// Another id this row may already be stored under, which capture checks besides
+    /// [`Self::source_id`] before pushing it. Never part of the record body.
+    ///
+    /// Set on a content-addressed row whose line carries a timestamp: its id as it would be had
+    /// the line none. That is how a line of a transcript written back out from synced rows (see
+    /// [`Session::rehydrate`]) was keyed when it was first captured from an older transcript that
+    /// did not stamp it.
+    #[builder(default)]
+    #[serde(skip)]
+    pub alias: Option<SourceId>,
 }
 
 impl From<Message> for RehydrateMessage {
@@ -186,6 +211,57 @@ pub struct Session {
     /// what roots-only queries order by. Only set by roots-only queries.
     #[builder(default)]
     pub group_updated_at: Option<OffsetDateTime>,
+    /// The tips of the session's branches, newest first (see
+    /// [`crate::ai_session::AiSessionDatabase::heads`]). One for a session that went one way;
+    /// several when it was rewound or interrupted and continued (all on one host), or went on
+    /// separately on several hosts ([`Self::diverged`]). Empty until computed.
+    #[builder(default)]
+    #[serde(default)]
+    pub heads: Vec<Head>,
+    /// Where the [heads](Self::heads) part: the last row they all share. `None` for a single
+    /// head, or heads sharing no row.
+    #[builder(default)]
+    #[serde(default)]
+    pub branch_point: Option<SourceId>,
+    /// Whether the session went on separately on more than one host: its heads were captured on
+    /// different hosts. Never merge such a session; each head is a branch of it.
+    #[builder(default)]
+    #[serde(default)]
+    pub diverged: bool,
+}
+
+/// The tip of one branch of a session: a row nothing continues. See
+/// [`crate::ai_session::AiSessionDatabase::heads`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Head {
+    /// The branch's last row.
+    pub source_id: SourceId,
+    /// The host that captured that row, when known.
+    pub host: Option<HostId>,
+    /// When that row was written.
+    pub last_at: OffsetDateTime,
+    /// How many rows the branch holds past the [branch point](Session::branch_point), its tip
+    /// included; for a head that parts from no other, every row on its path.
+    pub rows: u64,
+}
+
+/// A session's branches, as [`crate::ai_session::AiSessionDatabase::heads`] reports them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionHeads {
+    /// Newest first.
+    pub heads: Vec<Head>,
+    /// The last row every head's path shares, when there are several and they share one.
+    pub branch_point: Option<SourceId>,
+    /// The heads were captured on more than one host.
+    pub diverged: bool,
+}
+
+impl SessionHeads {
+    /// The newest head: what a session that is not [diverged](Self::diverged) resumes from.
+    #[must_use]
+    pub fn latest(&self) -> Option<&Head> {
+        self.heads.first()
+    }
 }
 
 /// How a session relates to its parent, as far as its identity tells.
@@ -396,10 +472,58 @@ mod tests {
             .role(Role::User)
             .content(vec![])
             .turn_id(Some("msg_1".to_owned()))
+            .seq(Some(42))
             .build();
         let record = crate::ai_session::AiSessionRecord::Message(msg).serialize();
         let old = rmp_serde::from_slice::<OldMessage>(&record[1..]);
         assert!(old.is_ok(), "older host cannot decode: {:?}", old.err());
+    }
+
+    /// A record from a host whose build predates `seq` decodes here with none.
+    #[rstest]
+    fn a_record_from_before_seq_decodes_without_one() {
+        #[derive(Serialize)]
+        struct OldMessage {
+            id: RecordId,
+            session: HarnessSession,
+            source_id: SourceId,
+            parent: Option<HarnessSession>,
+            parent_source_id: Option<SourceId>,
+            timestamp: OffsetDateTime,
+            role: Role,
+            content: Vec<Content>,
+            cwd: Option<PathBuf>,
+            git_branch: Option<String>,
+            model: Option<String>,
+            usage: Option<Usage>,
+            stop_reason: Option<StopReason>,
+            turn_id: Option<String>,
+        }
+        let old = OldMessage {
+            id: RecordId(atuin_common::utils::uuid_v7()),
+            session: HarnessSession {
+                harness: HarnessKind::Codex,
+                session: NativeSessionId::from("s".to_owned()),
+            },
+            source_id: SourceId::from("x".to_owned()),
+            parent: None,
+            parent_source_id: None,
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            role: Role::User,
+            content: vec![],
+            cwd: None,
+            git_branch: None,
+            model: None,
+            usage: None,
+            stop_reason: None,
+            turn_id: None,
+        };
+        let mut record = vec![0];
+        record.extend(rmp_serde::to_vec_named(&old).unwrap());
+        let crate::ai_session::AiSessionRecord::Message(msg) =
+            crate::ai_session::AiSessionRecord::deserialize(&record).unwrap();
+        assert_eq!(msg.seq, None);
+        assert_eq!((msg.parent_row, msg.alias), (None, None));
     }
 
     #[rstest]
