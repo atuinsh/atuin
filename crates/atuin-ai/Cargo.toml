@@ -67,6 +67,7 @@ tree-sitter-bash = { workspace = true, optional = true }
 tree-sitter-fish = { workspace = true, optional = true }
 tui-textarea-2 = { workspace = true }
 typed-builder = { workspace = true }
+unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
@@ -83,6 +84,7 @@ arboard = { workspace = true, optional = true, features = ["wayland-data-control
 
 [dev-dependencies]
 eye_declare_engine = { workspace = true }
+proptest = { workspace = true }
 rstest = { workspace = true }
 
 [lints]

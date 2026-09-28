@@ -1,6 +1,8 @@
 //! The richer views sessions earn over one-line commands: the detail pane beside the list on wide
 //! terminals, activity sparklines, token counts, and the fork/subagent tree.
 
+use std::ops::Range;
+
 use atuin_client::ai_session::HarnessSession;
 use atuin_client::theme::{Meaning, Theme};
 use atuin_common::harnesstools::session::Usage;
@@ -11,7 +13,8 @@ use ratatui::text::{Line, Span};
 use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
-use super::render::{ago, harness_style, highlighted_spans, is_live, repo_name, style};
+use super::markdown;
+use super::render::{ago, harness_style, is_live, repo_name, style};
 use super::source::{Relation, SessionRow, harness_label};
 use super::state::State;
 
@@ -82,14 +85,6 @@ pub fn sparkline(
         .collect()
 }
 
-/// Fit `text` (flattened to one paragraph) into at most `lines` lines of `width` columns.
-fn clamp_lines(text: &str, width: usize, lines: usize) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    // Wrapping breaks at spaces, so leave a little slack per line.
-    let budget = (width.saturating_sub(4)) * lines;
-    flat.ellipsize(Measure::Columns(budget), Pos::End, Indicator::UNICODE).to_string()
-}
-
 impl State {
     /// The detail pane for the selected session: what it is, where and when it ran, how busy it
     /// was, and the conversation's first prompt, match and last reply, wrapped.
@@ -100,14 +95,16 @@ impl State {
         let now = (self.now)();
         let base = style(theme, Meaning::Base);
         let muted = style(theme, Meaning::Annotation);
-        let heading = muted.add_modifier(Modifier::BOLD);
-        let hl = style(theme, Meaning::AlertWarn).add_modifier(Modifier::BOLD);
         let sep = || Span::styled(" · ", muted);
 
-        let mut lines = vec![Line::from(Span::styled(
-            clamp_lines(&row.title.text, width, 2),
-            base.add_modifier(Modifier::BOLD),
-        ))];
+        let mut lines = markdown::wrap_plain(
+            &[Span::styled(row.title.text.clone(), base.add_modifier(Modifier::BOLD))],
+            width,
+            2,
+            muted,
+        );
+        // Everything else here is one short line; wrap them all the same (the pane doesn't).
+        let mut meta = Vec::new();
 
         let mut who = vec![Span::styled(
             harness_label(row.handle.harness),
@@ -116,14 +113,14 @@ impl State {
         if let Some(model) = &row.model {
             who.extend([sep(), Span::styled(model.clone(), muted)]);
         }
-        lines.push(Line::from(who));
+        meta.push(Line::from(who));
 
         let mut place = vec![Span::styled(repo_name(row), muted)];
         if let Some(branch) = &row.branch {
             place.extend([sep(), Span::styled(branch.clone(), style(theme, Meaning::Guidance))]);
         }
         place.extend([sep(), Span::styled(format!("@{}", row.hostname), muted)]);
-        lines.push(Line::from(place));
+        meta.push(Line::from(place));
 
         let mut when = Vec::new();
         if is_live(now, row) {
@@ -145,47 +142,88 @@ impl State {
             sep(),
             Span::styled(format!("started {} ago", ago(now, row.started_at)), muted),
         ]);
-        lines.push(Line::from(when));
+        meta.push(Line::from(when));
 
         let preview = self.previews.get(&row.handle);
         if let Some(p) = preview.filter(|p| !p.activity.is_empty()) {
             let spark = sparkline(&p.activity, row.started_at, row.updated_at, width);
-            lines.push(Line::from(Span::styled(spark, style(theme, Meaning::Guidance))));
+            meta.push(Line::from(Span::styled(spark, style(theme, Meaning::Guidance))));
         }
         if let Some(t) = tokens(&row.usage) {
-            lines.push(Line::from(Span::styled(format!("{t} tokens"), muted)));
+            meta.push(Line::from(Span::styled(format!("{t} tokens"), muted)));
+        }
+        for line in meta {
+            lines.extend(markdown::wrap_plain(&line.spans, width, 0, muted));
         }
 
-        // The conversation, in the space that's left: the last reply gets whatever the first
-        // prompt and the match don't use.
+        // The conversation, in the space that's left.
         let left = height.saturating_sub(lines.len());
-        let section =
-            |lines: &mut Vec<Line<'static>>, title: &'static str, spans: Vec<Span<'static>>| {
-                lines.push(Line::default());
-                lines.push(Line::from(Span::styled(title, heading)));
-                lines.push(Line::from(spans));
-            };
-        let Some(p) = preview else {
+        if preview.is_none() {
             lines.push(Line::default());
             lines.push(Line::from(Span::styled("…", muted)));
             return lines;
+        }
+        lines.extend(self.conversation(row, width, left, 0, theme));
+        lines
+    }
+
+    /// The selected session's first prompt, match and last reply, as markdown under their
+    /// headings, in at most `height` lines of `width` columns, indented by `indent`. The parts
+    /// share the lines (see [`markdown::allocate`]); a part that gets none is left out.
+    pub(super) fn conversation(
+        &self,
+        row: &SessionRow,
+        width: usize,
+        height: usize,
+        indent: usize,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let Some(preview) = self.previews.get(&row.handle) else {
+            return Vec::new();
         };
-        let parts_budget = left.saturating_sub(6);
-        if let Some(first) = &p.first_prompt {
-            let text = clamp_lines(first, width, (parts_budget / 3).max(1));
-            section(&mut lines, "First prompt", vec![Span::styled(text, base)]);
-        }
-        if let Some(m) = &row.matched {
-            // Highlights index the unclamped text, so show the match whole; it is short.
-            section(&mut lines, "Match", highlighted_spans(&m.text, &m.highlights, base, hl));
-        }
-        if let Some(last) = &p.last_assistant {
-            let used = lines.len();
-            let rest = height.saturating_sub(used + 2).max(1);
-            section(&mut lines, "Last reply", vec![Span::styled(
-                clamp_lines(last, width, rest),
-                muted,
-            )]);
+        let base = style(theme, Meaning::Base);
+        let muted = style(theme, Meaning::Annotation);
+        let styles = markdown::Styles::new(theme, base);
+        let parts: Vec<(&'static str, &str, &[Range<usize>])> = [
+            ("First prompt", preview.first_prompt.as_deref(), &[][..]),
+            (
+                "Match",
+                row.matched.as_ref().map(|m| m.text.as_str()),
+                row.matched.as_ref().map_or(&[][..], |m| &m.highlights[..]),
+            ),
+            ("Last reply", preview.last_assistant.as_deref(), &[][..]),
+        ]
+        .into_iter()
+        .filter_map(|(title, text, hl)| Some((title, text?, hl)))
+        .collect();
+
+        // Each part costs a blank line and its heading besides its text.
+        let text_lines = height.saturating_sub(2 * parts.len());
+        let opts = markdown::Opts {
+            width: width.saturating_sub(indent),
+            max_lines: text_lines,
+            spacing: true,
+            urls: true,
+        };
+        let rendered: Vec<Vec<Line<'static>>> =
+            parts.iter().map(|(_, text, hl)| markdown::render(text, hl, opts, &styles)).collect();
+        let wants: Vec<usize> = rendered.iter().map(Vec::len).collect();
+        let budgets = markdown::allocate(&wants, text_lines);
+
+        let pad = " ".repeat(indent);
+        let heading = muted.add_modifier(Modifier::BOLD);
+        let mut lines = Vec::new();
+        for (((title, _, _), rendered), n) in parts.iter().zip(&rendered).zip(budgets) {
+            if n == 0 {
+                continue;
+            }
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled(format!("{pad}{title}"), heading)));
+            for line in markdown::fit(rendered, n, opts.width, muted) {
+                let mut spans = vec![Span::raw(pad.clone())];
+                spans.extend(line.spans);
+                lines.push(Line::from(spans));
+            }
         }
         lines
     }
