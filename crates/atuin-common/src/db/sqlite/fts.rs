@@ -167,6 +167,7 @@ mod tests {
         assert_eq!(got.as_slice(), hits.as_slice());
     }
 
+    #[rstest]
     #[tokio::test]
     async fn highlight_of_an_unmatched_column_yields_no_ranges() {
         let h = TextHighlighter::default();
@@ -215,6 +216,7 @@ mod tests {
         assert_eq!(match_expression(input).as_deref(), expected);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn bind_match_query_neutralizes_fts5_operators() {
         // `refused:` is a column filter to raw FTS5 (a hard error); bound as a MATCH query it must

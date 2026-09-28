@@ -7,6 +7,7 @@ use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{
     Checkpoint, Content, Role, TitleChange, TitleSource, Usage,
 };
+use atuin_common::string::TruncateCharsExt;
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
 use sqlx::SqliteConnection;
@@ -201,7 +202,14 @@ impl AiSessionDatabase {
         let db = Self { db };
         db.migrate().await?;
         db.reindex().await?;
-        db.backfill_last_reply().await?;
+        // Off the startup path: it scans every session once after upgrading, and nothing needs
+        // `last_reply` before it lands.
+        let backfill = db.clone();
+        tokio::spawn(async move {
+            if let Err(err) = backfill.backfill_last_reply().await {
+                warn!(?err, "failed to backfill ai-session last replies");
+            }
+        });
         Ok(db)
     }
 
@@ -347,12 +355,10 @@ impl AiSessionDatabase {
                 title_source = CASE WHEN excluded.updated_at >= sessions.updated_at THEN \
              excluded.title_source ELSE sessions.title_source END,
                 preview = COALESCE(sessions.preview, excluded.preview),
-                last_reply = CASE WHEN excluded.last_reply IS NOT NULL AND (sessions.last_reply_at \
-             IS NULL OR excluded.last_reply_at >= sessions.last_reply_at) THEN \
-             excluded.last_reply ELSE sessions.last_reply END,
-                last_reply_at = CASE WHEN excluded.last_reply IS NOT NULL AND \
-             (sessions.last_reply_at IS NULL OR excluded.last_reply_at >= sessions.last_reply_at) \
-             THEN excluded.last_reply_at ELSE sessions.last_reply_at END",
+                last_reply = CASE WHEN excluded.last_reply_at >= COALESCE(sessions.last_reply_at, \
+             excluded.last_reply_at) THEN excluded.last_reply ELSE sessions.last_reply END,
+                last_reply_at = MAX(COALESCE(sessions.last_reply_at, excluded.last_reply_at), \
+             COALESCE(excluded.last_reply_at, sessions.last_reply_at))",
         )
         .bind(harness)
         .bind(session_id)
@@ -670,7 +676,7 @@ impl AiSessionDatabase {
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
         let pool = self.db.pool().clone();
         let query = query.to_owned();
-        let cwd = cwd.map(|c| c.trim_end_matches('/').to_owned());
+        let cwd = cwd.map(|c| c.trim_end_matches(['/', '\\']).to_owned());
 
         async_stream::try_stream! {
             let expr = if any_term { match_any_expression(&query) } else { match_expression(&query) };
@@ -680,8 +686,10 @@ impl AiSessionDatabase {
 
             let harness_clause = if harness.is_some() { " AND m.harness = ?" } else { "" };
             let cwd_clause = if cwd.is_some() {
-                " AND EXISTS (SELECT 1 FROM sessions cs WHERE cs.id = m.session \
-                 AND (cs.cwd = ? OR substr(cs.cwd, 1, length(?) + 1) = ? || '/'))"
+                // The directory itself or anything beneath it, whichever separator the recording
+                // machine used (`\` on Windows).
+                " AND m.session IN (SELECT id FROM sessions \
+                 WHERE cwd = ? OR substr(cwd, 1, length(?) + 1) IN (? || '/', ? || '\\'))"
             } else {
                 ""
             };
@@ -718,7 +726,7 @@ impl AiSessionDatabase {
                 stmt = stmt.bind(harness as i64);
             }
             if let Some(cwd) = cwd {
-                stmt = stmt.bind(cwd.clone()).bind(cwd.clone()).bind(cwd);
+                stmt = stmt.bind(cwd.clone()).bind(cwd.clone()).bind(cwd.clone()).bind(cwd);
             }
             if limit != 0 {
                 stmt = stmt.bind(i64::from(limit));
@@ -735,7 +743,7 @@ impl AiSessionDatabase {
                     warn!(?err, "failed to decode matched ai-session message; empty preview");
                     String::new()
                 });
-                let preview = Self::preview_snippet(&body, &query, SNIPPET_TOKENS);
+                let preview = Self::preview_snippet(&body, &query, SNIPPET_TOKENS, any_term);
 
                 // No highlight spans are produced: consumers only render the plain text, so the
                 // marker machinery isn't worth its keep. sanitize() strips any stray marker
@@ -839,7 +847,9 @@ impl AiSessionDatabase {
     /// matched it: each term is a phrase of folded tokens that must appear consecutively in the
     /// body's token stream (so `app` matches the token `app`, not the word `apple`, and `foo-bar`
     /// matches `foo bar` across words).
-    fn preview_hit(words: &[&str], query: &str) -> Option<usize> {
+    /// With `prefix`, each term's last token matches any token it starts, as the any-term
+    /// fallback's `"term"*` does in FTS5, so the window lands on `deployment` for `deploy`.
+    fn preview_hit(words: &[&str], query: &str, prefix: bool) -> Option<usize> {
         let phrases: Vec<Vec<String>> = query
             .split_whitespace()
             .map(|term| Self::fts_tokens(term).collect())
@@ -859,8 +869,12 @@ impl AiSessionDatabase {
         phrases
             .iter()
             .filter_map(|phrase| {
-                (0..tokens.len().saturating_sub(phrase.len() - 1))
-                    .find(|&i| phrase.iter().zip(&tokens[i..]).all(|(p, (_, t))| p == t))
+                let last = phrase.len() - 1;
+                (0..tokens.len().saturating_sub(last)).find(|&i| {
+                    phrase.iter().zip(&tokens[i..]).enumerate().all(|(k, (p, (_, t)))| {
+                        p == t || (prefix && k == last && t.starts_with(p.as_str()))
+                    })
+                })
             })
             .min()
             .map(|i| tokens[i].0)
@@ -880,7 +894,7 @@ impl AiSessionDatabase {
     /// truncation. Bounded by a char budget so whitespace-free blobs (minified output) cannot
     /// blow up the preview. The replacement for FTS5's `snippet()`, which the contentless index
     /// cannot render.
-    fn preview_snippet(body: &str, query: &str, max_tokens: usize) -> String {
+    fn preview_snippet(body: &str, query: &str, max_tokens: usize, prefix: bool) -> String {
         const MAX_CHARS: usize = 400;
         const LEAD_CHARS: usize = 80;
 
@@ -889,7 +903,7 @@ impl AiSessionDatabase {
             return String::new();
         }
 
-        let hit = Self::preview_hit(&words, query).unwrap_or(0);
+        let hit = Self::preview_hit(&words, query, prefix).unwrap_or(0);
 
         // Lead-in: a little context before the match, capped in words and chars so a giant
         // preceding blob cannot push the match itself out of the char budget.
@@ -963,41 +977,51 @@ impl AiSessionDatabase {
 
     /// Fill `last_reply` for sessions projected before the column existed: appends skip messages
     /// already present, so a replay alone never reaches them. Each session is scanned once;
-    /// `last_reply_at = 0` marks one with no assistant text so it is not rescanned.
-    async fn backfill_last_reply(&self) -> Result<(), DbError> {
+    /// `last_reply_at = 0` marks one with no assistant text so it is not rescanned. Runs in short
+    /// batched transactions, since capture writes alongside it, and only fills sessions still
+    /// unset, so a reply an append recorded meanwhile is never overwritten.
+    pub async fn backfill_last_reply(&self) -> Result<(), DbError> {
+        const BATCH: usize = 200;
         let pool = self.db.pool();
         let pending: Vec<i64> =
             db::query_scalar("SELECT id FROM sessions WHERE last_reply_at IS NULL")
                 .fetch_all(pool)
                 .await?;
         let assistant = serde_json::to_string(&Role::Assistant)?;
-        for session in pending {
-            let mut found = None;
-            {
-                let mut rows = db::query_as::<_, (String, Option<Vec<u8>>, i64)>(
-                    "SELECT content, content_z, timestamp FROM messages WHERE session = ? AND \
-                     role = ? ORDER BY timestamp DESC, id DESC",
-                )
-                .bind(session)
-                .bind(&assistant)
-                .fetch(pool);
-                while let Some((content, content_z, timestamp)) = rows.try_next().await? {
-                    let Ok(contents) = Self::read_content(content, content_z) else {
-                        continue;
-                    };
-                    if let Some(reply) = Self::reply_from(&contents) {
-                        found = Some((reply, timestamp));
-                        break;
+        for batch in pending.chunks(BATCH) {
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+            for &session in batch {
+                let mut found = None;
+                {
+                    let mut rows = db::query_as::<_, (String, Option<Vec<u8>>, i64)>(
+                        "SELECT content, content_z, timestamp FROM messages WHERE session = ? AND \
+                         role = ? ORDER BY timestamp DESC, id DESC",
+                    )
+                    .bind(session)
+                    .bind(&assistant)
+                    .fetch(&mut *tx);
+                    while let Some((content, content_z, timestamp)) = rows.try_next().await? {
+                        let Ok(contents) = Self::read_content(content, content_z) else {
+                            continue;
+                        };
+                        if let Some(reply) = Self::reply_from(&contents) {
+                            found = Some((reply, timestamp));
+                            break;
+                        }
                     }
                 }
-            }
-            let (reply, at) = found.map_or((None, 0), |(reply, at)| (Some(reply), at));
-            db::query("UPDATE sessions SET last_reply = ?, last_reply_at = ? WHERE id = ?")
+                let (reply, at) = found.map_or((None, 0), |(reply, at)| (Some(reply), at));
+                db::query(
+                    "UPDATE sessions SET last_reply = ?, last_reply_at = ? WHERE id = ? AND \
+                     last_reply_at IS NULL",
+                )
                 .bind(reply)
                 .bind(at)
                 .bind(session)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
+            }
+            tx.commit().await?;
         }
         Ok(())
     }
@@ -1024,9 +1048,11 @@ impl AiSessionDatabase {
         if text.is_empty() {
             return None;
         }
-        Some(match text.char_indices().nth(MAX_CHARS) {
-            Some((at, _)) => format!("{}…", &text[..at]),
-            None => text,
+        let head = text.truncate_chars(MAX_CHARS);
+        Some(if head.len() < text.len() {
+            format!("{head}…")
+        } else {
+            text
         })
     }
 
@@ -1036,7 +1062,7 @@ impl AiSessionDatabase {
         }
 
         msg.content.iter().find_map(|content| match content {
-            Content::Text(text) => super::human_prompt(text),
+            Content::Text(text) => Some(text.clone()),
             _ => None,
         })
     }
@@ -2031,7 +2057,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn open_backfills_last_reply_for_sessions_projected_before_it_existed() {
+    async fn backfill_fills_last_reply_for_sessions_projected_before_it_existed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ai.db");
         let session = sample_handle();
@@ -2047,8 +2073,24 @@ mod tests {
         }
 
         let db = AiSessionDatabase::open(&path).await.unwrap();
+        // `open` starts the same backfill in the background; run it here to observe the result.
+        db.backfill_last_reply().await.unwrap();
         let s = db.get_session(&session).await.unwrap().unwrap();
         assert_eq!(s.last_reply.as_deref(), Some("the fix is in"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn any_term_preview_windows_around_a_late_prefix_match() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let filler = "lorem ".repeat(200);
+        db.append(&message_in(&sample_handle(), 0, &format!("{filler}the deployment failed")))
+            .await
+            .unwrap();
+
+        let hits: Vec<_> = db.search_in("deploy", None, None, true, 0).try_collect().await.unwrap();
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("deployment failed"), "{preview}");
     }
 
     #[rstest]
@@ -2090,6 +2132,25 @@ mod tests {
             .unwrap();
         found.sort();
         assert_eq!(found, ["child", "root"]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_in_matches_windows_subdirectories() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for (id, cwd) in [("sub", r"C:\work\atuin\crates"), ("sibling", r"C:\work\atuin.sh")] {
+            let mut msg = message_in(&handle(HarnessKind::Codex, id), 0, "shared keyword");
+            msg.cwd = Some(std::path::PathBuf::from(cwd));
+            db.append(&msg).await.unwrap();
+        }
+
+        let found: Vec<String> = db
+            .search_in("shared", None, Some(r"C:\work\atuin\"), false, 0)
+            .map_ok(|m| m.session.handle.session.as_ref().to_owned())
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(found, ["sub"]);
     }
 
     #[rstest]

@@ -859,7 +859,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
 /// Collapse all whitespace (including embedded newlines) to single spaces and truncate to `max`
 /// characters with an ellipsis. Session titles/previews are captured from multi-line prompts, so the
 /// human table and `tail` views must flatten them or a single entry spills across many rows.
-fn one_line(text: &str, max: usize) -> String {
+pub fn one_line(text: &str, max: usize) -> String {
     // Whitespace-fold, then drop any control chars left over (ESC, BEL, C1): captured session
     // content is untrusted and must not emit terminal escape sequences into the compact views.
     let collapsed: String = text

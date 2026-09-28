@@ -281,7 +281,7 @@ impl ClientToolCall {
 ///
 /// Tool call paths arrive as raw strings from the API without shell
 /// expansion. Uses `shellexpand` (same as `atuin-client`).
-fn expand_path(path: &str) -> PathBuf {
+pub fn expand_path(path: &str) -> PathBuf {
     PathBuf::from(shellexpand::tilde(path).into_owned())
 }
 

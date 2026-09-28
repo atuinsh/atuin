@@ -393,7 +393,7 @@ const HARNESS_TAGS: [&str; 8] = [
 /// Prefixes of user-role text that Claude Code wrote itself (its own `Dre` / `W_e`
 /// classification in CC 2.1.281): command output, background task notifications and teammate
 /// messages, the local-command caveat, the interrupt marker.
-const INJECTED_PREFIXES: [&str; 9] = [
+const INJECTED_PREFIXES: [&str; 10] = [
     "<local-command-stdout>",
     "<local-command-stderr>",
     "<bash-stdout>",
@@ -403,6 +403,8 @@ const INJECTED_PREFIXES: [&str; 9] = [
     "<teammate-message",
     "<tick>",
     "[Request interrupted by user",
+    // The directive a forked worker is started with.
+    "<fork-boilerplate>",
 ];
 
 /// The sentence Claude Code puts before the model's summary on a compaction summary line: the
@@ -1559,6 +1561,8 @@ mod tests {
         "message": {"role": "user", "content": "<local-command-stdout>ok</local-command-stdout>"}}))]
     #[case::interrupt(serde_json::json!({
         "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}))]
+    #[case::fork_directive(serde_json::json!({
+        "message": {"role": "user", "content": "<fork-boilerplate>\nYou are a worker fork."}}))]
     fn injected_user_line_is_system(#[case] extra: serde_json::Value) {
         let mut raw = serde_json::json!({"type": "user", "uuid": "m1"});
         raw.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());

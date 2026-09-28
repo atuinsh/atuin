@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 
 use atuin_client::ai_session::{HarnessKind, Session};
 use atuin_client::settings::Settings;
+use atuin_common::time::OffsetDateTimeExt;
 use atuin_daemon::AiClient;
 use futures::{StreamExt, TryStreamExt};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::commands::session::harness_name;
+use crate::commands::session::{harness_name, one_line};
 use crate::tools::ToolOutcome;
 
 // Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
@@ -77,18 +78,11 @@ async fn list_sessions(
 /// the project. A client that launches it from the home directory (or `/`) has not said where the
 /// project is, and `.` would silently match nearly everything, so that is an error.
 fn resolve_cwd(cwd: &str) -> Result<PathBuf, ToolOutcome> {
-    let cwd = cwd.trim();
-    let home = std::env::home_dir();
-    let expanded = match (cwd.strip_prefix('~'), &home) {
-        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
-            home.join(rest.trim_start_matches('/'))
-        }
-        _ => PathBuf::from(cwd),
-    };
-    let path = expanded.as_path();
+    let path = crate::tools::expand_path(cwd.trim());
     let joined = if path.is_absolute() {
-        path.to_path_buf()
+        path
     } else {
+        let home = std::env::home_dir();
         let dir = std::env::current_dir()
             .ok()
             .filter(|dir| dir.parent().is_some() && home.as_ref().is_none_or(|home| dir != home));
@@ -122,16 +116,18 @@ fn normalise(path: &Path) -> PathBuf {
 /// What a `cwd` filter left out: the directories of matching sessions outside `root`, busiest
 /// first, with directories sharing the project's name first of all (the same repository checked
 /// out elsewhere, often on another machine whose sessions arrived by sync). `None` when nothing
-/// was left out. With `same_name_only` other directories are not mentioned.
+/// was left out. With `same_name_only` other directories are not mentioned; `partial` says
+/// `others` was cut off, so the counts are lower bounds.
 fn elsewhere_note<'a>(
     root: &Path,
     others: impl IntoIterator<Item = &'a Session>,
     same_name_only: bool,
+    partial: bool,
 ) -> Option<String> {
     let name = root.file_name();
     let mut dirs: Vec<(&Path, usize, bool)> = Vec::new();
     for s in others {
-        let Some(cwd) = s.cwd.as_deref().filter(|c| !is_under(Some(c), root)) else {
+        let Some(cwd) = s.cwd.as_deref().filter(|c| !is_under(c, root)) else {
             continue;
         };
         let same = name.is_some() && cwd.file_name() == name;
@@ -161,20 +157,25 @@ fn elsewhere_note<'a>(
         })
         .collect::<Vec<_>>()
         .join(", ");
+    let at_least = if partial {
+        "at least "
+    } else {
+        ""
+    };
     let more = if dirs.len() > 3 {
         ", …"
     } else {
         ""
     };
     Some(format!(
-        "{total} more outside {}: {shown}{more}. Pass one of those as cwd, or omit cwd, to \
-         include them.",
+        "{at_least}{total} more outside {}: {shown}{more}. Pass one of those as cwd, or omit cwd, \
+         to include them.",
         root.display()
     ))
 }
 
-fn is_under(cwd: Option<&Path>, root: &Path) -> bool {
-    cwd.is_some_and(|cwd| cwd.starts_with(root))
+fn is_under(cwd: &Path, root: &Path) -> bool {
+    cwd.starts_with(root)
 }
 
 /// A session spawned by another one (a Claude Code subagent, say): only meaningful as part of
@@ -192,23 +193,9 @@ fn label(s: &Session) -> String {
         .map_or_else(String::new, |text| one_line(text, 120))
 }
 
-fn one_line(text: &str, max: usize) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate(&collapsed, max)
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    match text.char_indices().nth(max) {
-        Some((at, _)) => format!("{}…", &text[..at]),
-        None => text.to_owned(),
-    }
-}
-
 fn timestamp(ts: time::OffsetDateTime, offset: time::UtcOffset) -> String {
-    match ts.checked_to_offset(offset) {
-        Some(local) => format!("{} {:02}:{:02}", local.date(), local.hour(), local.minute()),
-        None => "unknown time".to_owned(),
-    }
+    ts.checked_to_offset(offset)
+        .map_or_else(|| "unknown time".to_owned(), |local| local.display().ymd_hm().to_string())
 }
 
 /// The compact per-session line shared by list and search results:
@@ -227,14 +214,9 @@ fn render_session_summary(out: &mut String, index: usize, s: &Session, offset: t
         let _ = writeln!(out, "   {label}");
     }
     if let Some(cwd) = s.cwd.as_deref().map(Path::display) {
-        match s.git_branch.as_deref().filter(|b| !b.is_empty() && *b != "HEAD") {
-            Some(branch) => {
-                let _ = writeln!(out, "   in {cwd} ({branch})");
-            }
-            None => {
-                let _ = writeln!(out, "   in {cwd}");
-            }
-        }
+        let branch = s.git_branch.as_deref().filter(|b| !b.is_empty() && *b != "HEAD");
+        let _ =
+            writeln!(out, "   in {cwd}{}", branch.map(|b| format!(" ({b})")).unwrap_or_default());
     }
     if let Some(parent) = &s.parent {
         let _ = writeln!(out, "   subagent of {}", parent.session);
@@ -295,10 +277,9 @@ mod tests {
     #[rstest]
     fn is_under_matches_whole_components() {
         let root = Path::new("/work/atuin");
-        assert!(is_under(Some(Path::new("/work/atuin")), root));
-        assert!(is_under(Some(Path::new("/work/atuin/crates")), root));
-        assert!(!is_under(Some(Path::new("/work/atuin.sh")), root));
-        assert!(!is_under(None, root));
+        assert!(is_under(Path::new("/work/atuin"), root));
+        assert!(is_under(Path::new("/work/atuin/crates"), root));
+        assert!(!is_under(Path::new("/work/atuin.sh"), root));
     }
 
     #[rstest]
@@ -311,7 +292,7 @@ mod tests {
             at("/Users/e/workspace/atuin"),
         ];
         let root = Path::new("/work/atuin");
-        let note = elsewhere_note(root, &others, false).unwrap();
+        let note = elsewhere_note(root, &others, false, false).unwrap();
         assert!(
             note.starts_with(
                 "3 more outside /work/atuin: /Users/e/workspace/atuin (1, same project name), \
@@ -319,14 +300,10 @@ mod tests {
             ),
             "{note}"
         );
-        let same = elsewhere_note(root, &others, true).unwrap();
+        let same = elsewhere_note(root, &others, true, false).unwrap();
         assert!(same.starts_with("1 more outside"), "{same}");
-        assert!(elsewhere_note(root, &others[..1], false).is_none());
-    }
-
-    #[rstest]
-    fn truncate_is_char_safe() {
-        assert_eq!(truncate("héllo", 2), "hé…");
-        assert_eq!(truncate("hi", 5), "hi");
+        assert!(elsewhere_note(root, &others[..1], false, false).is_none());
+        let partial = elsewhere_note(root, &others, false, true).unwrap();
+        assert!(partial.starts_with("at least 3 more outside"), "{partial}");
     }
 }

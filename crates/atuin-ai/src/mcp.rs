@@ -340,8 +340,9 @@ fn tool_definitions() -> Vec<Tool> {
              the conversation, not tool arguments or output, so runs of tool calls appear as one \
              line of tool names. Messages are numbered; page with start (negative counts from the \
              end, e.g. -10 for how the session ended) and limit. Pages abridge long messages; \
-             read one message (limit: 1) to see it whole. Takes a session id or unique prefix \
-             from atuin_ai_session_list or atuin_ai_session_search, or 'latest'.",
+             read one message (limit: 1) to see it in full, up to 20,000 characters per part. \
+             Takes a session id or unique prefix from atuin_ai_session_list or \
+             atuin_ai_session_search, or 'latest'.",
             schema_for_type::<AtuinAiSessionReadToolCall>(),
         )
         .annotate(ToolAnnotations::with_title("Read an AI agent session").read_only(true)),

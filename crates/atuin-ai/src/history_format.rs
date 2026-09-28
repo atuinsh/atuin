@@ -1,4 +1,5 @@
 use atuin_client::history::History;
+use atuin_common::string::TruncateCharsExt;
 use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use time::UtcOffset;
 
@@ -31,13 +32,11 @@ pub fn format_history_search_result(
 }
 
 fn clip_command(command: &str) -> std::borrow::Cow<'_, str> {
-    match command.char_indices().nth(SEARCH_RESULT_COMMAND_CHARS) {
-        Some((at, _)) => {
-            let rest = command[at..].chars().count();
-            format!("{}… [+{rest} chars]", &command[..at]).into()
-        }
-        None => command.into(),
+    let head = command.truncate_chars(SEARCH_RESULT_COMMAND_CHARS);
+    if head.len() == command.len() {
+        return command.into();
     }
+    format!("{head}… [+{} chars]", command[head.len()..].chars().count()).into()
 }
 
 fn format_history_metadata(history: &History, local_offset: UtcOffset) -> String {
@@ -106,7 +105,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn search_results_clip_long_commands() {
         let mut long = history(0);
         long.command = format!("cat <<'EOF'\n{}\nEOF", "x".repeat(5_000));
@@ -118,7 +117,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn formats_last_command() {
         assert_eq!(
             format_last_command(&history(1_234_000_000), UtcOffset::UTC),
@@ -127,7 +126,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn formats_history_search_result() {
         assert_eq!(
             format_history_search_result(3, &history(0), UtcOffset::UTC),

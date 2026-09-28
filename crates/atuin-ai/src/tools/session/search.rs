@@ -19,6 +19,10 @@ use super::{
 };
 use crate::tools::ToolOutcome;
 
+/// How many sessions matching anywhere a cwd-filtered search scans to say what the filter left
+/// out.
+const NOTE_SCAN: u32 = 100;
+
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct AtuinAiSessionSearchToolCall {
@@ -43,101 +47,93 @@ pub struct AtuinAiSessionSearchToolCall {
 
 impl AtuinAiSessionSearchToolCall {
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
-        let mut client = match connect(settings).await {
-            Ok(client) => client,
-            Err(outcome) => return outcome,
-        };
+        self.run(settings, caller).await.map_or_else(|outcome| outcome, ToolOutcome::Success)
+    }
 
+    async fn run(&self, settings: &Settings, caller: &Caller<'_>) -> Result<String, ToolOutcome> {
+        let mut client = connect(settings).await?;
         let harness = self.harness.map(HarnessKind::from);
-        let cwd = match cwd_filter(self.cwd.as_deref()).map(resolve_cwd).transpose() {
-            Ok(cwd) => cwd,
-            Err(outcome) => return outcome,
-        };
+        let cwd = cwd_filter(self.cwd.as_deref()).map(resolve_cwd).transpose()?;
         let cwd_str = cwd.as_ref().map(|c| c.to_string_lossy());
         let own = caller.own_session_id(&mut client).await;
         let limit = self.limit.get();
+        // One extra, so the page stays full after the caller's own session is dropped.
+        let fetch = limit + 1;
+        let query = self.query.as_str();
+        let visible = |found: &[SessionMatch]| visible(found, own.as_deref(), limit as usize);
 
         // Every term, as whole words, first; when no message anywhere has them all, any term as a
         // prefix, so a near-miss query still finds something instead of costing the model a
         // retry. Two things keep the looser search from answering a question nobody asked: what
-        // counts is what matched before the caller's own session is set aside, and a strict match
-        // outside the cwd filter (the same project checked out elsewhere) wins over loose matches
-        // inside it; the note below then points at it.
-        // One extra, so the page stays full after the caller's own session is dropped.
-        let fetch = limit + 1;
+        // counts is what matched before the caller's own session is set aside, and a strict
+        // match outside the cwd filter (the same project checked out elsewhere) wins over loose
+        // matches inside it; the note below then points at it.
         let strict =
-            match search(&mut client, &self.query, harness, cwd_str.as_deref(), false, fetch).await
-            {
-                Ok(found) => visible(found, own.as_deref(), limit as usize),
-                Err(e) => return ToolOutcome::Error(e),
-            };
-        let strict_elsewhere = match (&strict, cwd_str.as_deref()) {
-            (Found::Nothing, Some(_)) => {
-                match search(&mut client, &self.query, harness, None, false, fetch).await {
-                    Ok(found) => Some(visible(found, own.as_deref(), limit as usize)),
-                    Err(e) => return ToolOutcome::Error(e),
-                }
+            visible(&search(&mut client, query, harness, cwd_str.as_deref(), false, fetch).await?);
+        // With a cwd filter, one unscoped strict search serves both that decision and the note.
+        let unscoped = match cwd_str {
+            Some(_) => {
+                Some(search(&mut client, query, harness, None, false, fetch.max(NOTE_SCAN)).await?)
             }
-            _ => None,
+            None => None,
         };
-        let any_term = should_loosen(&strict, strict_elsewhere.as_ref());
-        let (hits, only_own) = if any_term {
-            match search(&mut client, &self.query, harness, cwd_str.as_deref(), true, fetch).await {
-                Ok(found) => match visible(found, own.as_deref(), limit as usize) {
-                    Found::Hits(hits) => (hits, false),
-                    Found::OnlyOwn => (Vec::new(), true),
-                    Found::Nothing => (Vec::new(), false),
-                },
-                Err(e) => return ToolOutcome::Error(e),
-            }
+        let any_term = should_loosen(&strict, unscoped.as_deref().map(visible).as_ref());
+        let found = if any_term {
+            visible(&search(&mut client, query, harness, cwd_str.as_deref(), true, fetch).await?)
         } else {
-            match strict {
-                Found::Hits(hits) => (hits, false),
-                Found::OnlyOwn => (Vec::new(), true),
-                Found::Nothing => (Vec::new(), false),
-            }
+            strict
+        };
+        let (hits, only_own) = match found {
+            Found::Hits(hits) => (hits, false),
+            Found::OnlyOwn => (Vec::new(), true),
+            Found::Nothing => (Vec::new(), false),
         };
 
         // A cwd filter can hide the answer (the same project checked out elsewhere, or synced
         // from another machine), so say what it left out.
         let note = match cwd.as_deref() {
-            Some(root) => search(&mut client, &self.query, harness, None, any_term, 20)
-                .await
-                .ok()
-                .and_then(|all| {
+            Some(root) => {
+                let all = if any_term {
+                    search(&mut client, query, harness, None, true, NOTE_SCAN).await.ok()
+                } else {
+                    unscoped
+                };
+                all.and_then(|all| {
+                    // The top hits overall, so in-directory ones take some slots and a common
+                    // query can match more sessions than are scanned: a full scan says so.
+                    let partial = all.len() >= NOTE_SCAN as usize;
                     let others = all
                         .iter()
                         .map(|hit| &hit.session)
                         .filter(|s| !is_own(s, own.as_deref()))
                         .collect::<Vec<_>>();
-                    elsewhere_note(root, others, false)
-                }),
+                    elsewhere_note(root, others, false, partial)
+                })
+            }
             None => None,
         };
 
         if hits.is_empty() {
             let scope = cwd.map_or_else(String::new, |c| format!(" under {}", c.display()));
             let note = note.map_or_else(String::new, |n| format!(" {n}"));
-            if only_own {
-                return ToolOutcome::Success(format!(
-                    "The only captured AI session{scope} matching {:?} is this one (the session \
-                     calling this tool).{note}",
-                    self.query.trim()
-                ));
-            }
-            if !any_term {
-                return ToolOutcome::Success(format!(
+            let query = self.query.trim();
+            return Ok(if only_own {
+                format!(
+                    "The only captured AI session{scope} matching {query:?} is this one (the \
+                     session calling this tool).{note}"
+                )
+            } else if !any_term {
+                format!(
                     "No captured AI session{scope} has a message containing every word of \
-                     {:?}.{note}",
-                    self.query.trim()
-                ));
-            }
-            return ToolOutcome::Success(format!(
-                "No captured AI sessions{scope} matched any word of {:?}, even as a prefix.{note} \
-                 Try other words, or atuin_ai_session_list to browse sessions by recency and \
-                 directory.",
-                self.query.trim()
-            ));
+                     {query:?}.{note}"
+                )
+            } else {
+                format!(
+                    "No captured AI sessions{scope} matched any word of {query:?}, even as a \
+                     prefix.{note} Try other words, or atuin_ai_session_list to browse sessions \
+                     by recency and directory."
+                )
+            });
         }
 
         let offset = time::UtcOffset::local_or_utc();
@@ -160,7 +156,7 @@ impl AtuinAiSessionSearchToolCall {
             "\nRead around a match with atuin_ai_session_read, e.g. start a few messages before \
              the matched message number."
         );
-        ToolOutcome::Success(out)
+        Ok(out)
     }
 }
 
@@ -171,11 +167,11 @@ async fn search(
     cwd: Option<&str>,
     any_term: bool,
     limit: u32,
-) -> Result<Vec<SessionMatch>, String> {
+) -> Result<Vec<SessionMatch>, ToolOutcome> {
     client
         .search_sessions(query, harness, cwd, any_term, limit)
         .await
-        .map_err(|e| format!("AI session search failed: {e}"))?
+        .map_err(|e| ToolOutcome::Error(format!("AI session search failed: {e}")))?
         .map(|hit| {
             hit.map_err(|e| format!("AI session search failed: {e}")).and_then(|hit| {
                 SessionMatch::try_from(hit)
@@ -184,6 +180,7 @@ async fn search(
         })
         .try_collect()
         .await
+        .map_err(ToolOutcome::Error)
 }
 
 /// What a search found once the caller's own session is set aside.
@@ -201,12 +198,12 @@ fn should_loosen(in_scope: &Found, everywhere: Option<&Found>) -> bool {
     matches!(in_scope, Found::Nothing) && everywhere.is_none_or(|f| matches!(f, Found::Nothing))
 }
 
-fn visible(found: Vec<SessionMatch>, own: Option<&str>, limit: usize) -> Found {
+fn visible(found: &[SessionMatch], own: Option<&str>, limit: usize) -> Found {
     if found.is_empty() {
         return Found::Nothing;
     }
     let hits: Vec<_> =
-        found.into_iter().filter(|hit| !is_own(&hit.session, own)).take(limit).collect();
+        found.iter().filter(|hit| !is_own(&hit.session, own)).take(limit).cloned().collect();
     if hits.is_empty() {
         Found::OnlyOwn
     } else {
@@ -279,9 +276,9 @@ mod tests {
     fn a_match_on_only_the_callers_own_session_is_not_a_miss() {
         // A strict miss falls back to a looser search; a strict hit on the caller's own session
         // must not, or the model is told no message had every word when one did.
-        assert!(matches!(visible(vec![hit("me")], Some("me"), 5), Found::OnlyOwn));
-        assert!(matches!(visible(vec![], Some("me"), 5), Found::Nothing));
-        let Found::Hits(hits) = visible(vec![hit("me"), hit("a"), hit("b")], Some("me"), 1) else {
+        assert!(matches!(visible(&[hit("me")], Some("me"), 5), Found::OnlyOwn));
+        assert!(matches!(visible(&[], Some("me"), 5), Found::Nothing));
+        let Found::Hits(hits) = visible(&[hit("me"), hit("a"), hit("b")], Some("me"), 1) else {
             panic!("other sessions matched");
         };
         assert_eq!(hits.len(), 1);

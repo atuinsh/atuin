@@ -62,22 +62,38 @@ impl Caller<'_> {
     /// lone candidate. Remembering that pick would hide the other agent's session for the life of
     /// the server; re-deciding lets the next call, once both sessions exist, see the ambiguity.
     pub async fn own_session_id(&self, client: &mut AiClient) -> Option<String> {
-        let harness = self.harness()?;
-        if harness == HarnessKind::ClaudeCode
-            && let Some(id) =
-                std::env::var("CLAUDE_CODE_SESSION_ID").ok().filter(|id| !id.is_empty())
-        {
+        if let Some(id) = self.env_session_id() {
             return Some(id);
         }
-        let cwd = self.own.cwd.as_deref()?;
-        let sessions = super::list_sessions(client, Some(harness)).await.ok()?;
-        self.pick(&sessions, cwd)
+        let sessions = super::list_sessions(client, Some(self.harness()?)).await.ok()?;
+        self.own_in(&sessions)
+    }
+
+    /// [`Self::own_session_id`] for a caller that already holds the session list.
+    pub fn own_in(&self, sessions: &[Session]) -> Option<String> {
+        self.env_session_id().or_else(|| self.pick(sessions, self.own.cwd.as_deref()?))
+    }
+
+    fn env_session_id(&self) -> Option<String> {
+        (self.harness()? == HarnessKind::ClaudeCode)
+            .then(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok())
+            .flatten()
+            .filter(|id| !id.is_empty())
     }
 
     fn pick(&self, sessions: &[Session], cwd: &Path) -> Option<String> {
+        let harness = self.harness()?;
+        let started = OffsetDateTime::from(self.own.started);
         let earliest = OffsetDateTime::from(self.own.started.checked_sub(START_SLACK)?);
+        // Still active since this server started: a run that finished just before it (the
+        // previous session, which a "continue" is looking for) started in the window too, but
+        // recorded nothing after.
         let mut candidates = sessions.iter().filter(|s| {
-            s.parent.is_none() && s.cwd.as_deref() == Some(cwd) && s.started_at >= earliest
+            s.handle.harness == harness
+                && s.parent.is_none()
+                && s.cwd.as_deref() == Some(cwd)
+                && s.started_at >= earliest
+                && s.updated_at >= started
         });
         let only = candidates.next()?;
         candidates.next().is_none().then(|| only.handle.session.to_string())
@@ -95,7 +111,9 @@ mod tests {
     use super::*;
 
     fn session(id: &str, cwd: &str, started: SystemTime) -> Session {
-        super::super::fixtures::session(id, Some(cwd), OffsetDateTime::from(started))
+        let mut s = super::super::fixtures::session(id, Some(cwd), OffsetDateTime::from(started));
+        s.handle.harness = HarnessKind::Codex;
+        s
     }
 
     fn server(started: SystemTime) -> OwnSession {
@@ -127,7 +145,7 @@ mod tests {
         let now = SystemTime::now();
         let own = server(now);
         let caller = Caller {
-            client: Some("opencode"),
+            client: Some("codex-mcp-client"),
             own: &own,
         };
         let sessions = [
@@ -154,6 +172,22 @@ mod tests {
         );
         let mine = session("mine", "/work/p", now + Duration::from_secs(1));
         assert_eq!(caller.pick(&[other, mine], Path::new("/work/p")), None);
+    }
+
+    #[rstest]
+    fn a_run_that_finished_just_before_the_server_started_is_not_the_callers() {
+        let now = SystemTime::now();
+        let own = server(now);
+        let caller = Caller {
+            client: Some("codex-mcp-client"),
+            own: &own,
+        };
+        let mut previous = session("previous", "/work/p", now - Duration::from_secs(5));
+        previous.updated_at = OffsetDateTime::from(now - Duration::from_secs(2));
+        // The caller's own session is not captured yet: nothing is its, so nothing is hidden.
+        assert_eq!(caller.pick(std::slice::from_ref(&previous), Path::new("/work/p")), None);
+        let mine = session("mine", "/work/p", now + Duration::from_secs(1));
+        assert_eq!(caller.pick(&[previous, mine], Path::new("/work/p")).as_deref(), Some("mine"));
     }
 
     #[rstest]

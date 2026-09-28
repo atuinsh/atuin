@@ -47,23 +47,22 @@ impl AtuinAiSessionListToolCall {
             Err(outcome) => return outcome,
         };
         let limit = self.limit.get() as usize;
-        let own = caller.own_session_id(&mut client).await;
 
-        // The whole listing, not just a page: with a cwd filter, the sessions outside it say
-        // whether the same project also lives somewhere else.
-        let candidates = match super::list_sessions(&mut client, harness).await {
-            Ok(all) => all
-                .into_iter()
-                .filter(|s| {
-                    !is_own(s, own.as_deref()) && (self.include_subagents || !is_subagent(s))
-                })
-                .collect::<Vec<_>>(),
+        // The whole listing, not just a page: it also identifies the caller's own session, and
+        // with a cwd filter, the sessions outside it say whether the project lives elsewhere too.
+        let all = match super::list_sessions(&mut client, harness).await {
+            Ok(all) => all,
             Err(e) => return ToolOutcome::Error(format!("Listing AI sessions failed: {e}")),
         };
-        let (sessions, elsewhere): (Vec<_>, Vec<_>) = candidates
-            .iter()
-            .partition(|s| root.as_deref().is_none_or(|root| is_under(s.cwd.as_deref(), root)));
-        let note = root.as_deref().and_then(|root| elsewhere_note(root, elsewhere, true));
+        let own = caller.own_in(&all);
+        let candidates: Vec<_> = all
+            .into_iter()
+            .filter(|s| !is_own(s, own.as_deref()) && (self.include_subagents || !is_subagent(s)))
+            .collect();
+        let (sessions, elsewhere): (Vec<_>, Vec<_>) = candidates.iter().partition(|s| {
+            root.as_deref().is_none_or(|root| s.cwd.as_deref().is_some_and(|c| is_under(c, root)))
+        });
+        let note = root.as_deref().and_then(|root| elsewhere_note(root, elsewhere, true, false));
         let sessions: Vec<_> = sessions.into_iter().take(limit).collect();
 
         if sessions.is_empty() {

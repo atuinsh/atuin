@@ -2,11 +2,11 @@
 
 use std::fmt::Write as _;
 
-use atuin_client::ai_session::{HarnessSession, Message, Session, human_prompt};
+use atuin_client::ai_session::{HarnessSession, Message, Session};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::{Content, Role};
 use atuin_common::range::Clamped;
-use atuin_common::string::NonBlankString;
+use atuin_common::string::{NonBlankString, TruncateCharsExt};
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::get_session_event::Event;
@@ -16,21 +16,50 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::caller::{Caller, is_own};
-use super::{connect, is_subagent, label, one_line, timestamp, truncate};
-use crate::commands::session::{harness_name, select_session};
+use super::{connect, is_subagent, label, timestamp};
+use crate::commands::session::{harness_name, one_line, select_session};
 use crate::tools::ToolOutcome;
 
-/// Per-block character budgets in the default (abridged) view. Tool output dominates transcripts
-/// by volume, and a model reading back a session mostly needs what was asked, said and decided.
-const TEXT_CHARS: usize = 2_000;
-const THINKING_CHARS: usize = 600;
-const TOOL_INPUT_CHARS: usize = 300;
-const TOOL_RESULT_CHARS: usize = 400;
-/// The per-block budget for a single-message read; still bounded so one giant tool result
-/// cannot flood the context.
-const FULL_CHARS: usize = 20_000;
 /// Roughly how much a multi-message page may hold (about 4k tokens) before it ends early.
 const PAGE_CHARS: usize = 16_000;
+
+/// Per-block character budgets. A page abridges: tool output dominates transcripts by volume,
+/// and a reader mostly needs what was asked, said and decided. A single-message read is the way
+/// to see one message in full, so it gets generous budgets and shows harness-injected context
+/// too. Still bounded, so one giant pasted blob cannot flood the context: anything cut says how
+/// much was left out, and the schema and tool description state the limit.
+struct Budgets {
+    text: usize,
+    thinking: usize,
+    tool_input: usize,
+    tool_result: usize,
+    whole: bool,
+}
+
+impl Budgets {
+    const WHOLE_CHARS: usize = 20_000;
+
+    fn for_limit(limit: u32) -> Self {
+        if limit == 1 {
+            let n = Self::WHOLE_CHARS;
+            Self {
+                text: n,
+                thinking: n,
+                tool_input: n,
+                tool_result: n,
+                whole: true,
+            }
+        } else {
+            Self {
+                text: 2_000,
+                thinking: 600,
+                tool_input: 300,
+                tool_result: 400,
+                whole: false,
+            }
+        }
+    }
+}
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -45,17 +74,13 @@ pub struct AtuinAiSessionReadToolCall {
     #[serde(default)]
     pub start: i64,
     /// Maximum number of messages to show. Long messages and harness-injected context are
-    /// abridged on a multi-message page; read a single message (limit: 1) to see it whole.
+    /// abridged on a multi-message page; read a single message (limit: 1) to see it in full, up
+    /// to 20,000 characters per part.
     #[serde(default)]
     pub limit: Clamped<u32, 1, 200, 40>,
 }
 
 impl AtuinAiSessionReadToolCall {
-    /// A single-message read is the way to see one message whole, so it is never abridged.
-    fn full(&self) -> bool {
-        self.limit.get() == 1
-    }
-
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
         let mut client = match connect(settings).await {
             Ok(client) => client,
@@ -70,7 +95,7 @@ impl AtuinAiSessionReadToolCall {
         // `latest` means the last session a person ran before this one: not the caller's own
         // live session, and not a subagent fragment.
         let sessions = if selector.eq_ignore_ascii_case("latest") {
-            let own = caller.own_session_id(&mut client).await;
+            let own = caller.own_in(&sessions);
             sessions.into_iter().filter(|s| !is_own(s, own.as_deref()) && !is_subagent(s)).collect()
         } else {
             sessions
@@ -84,35 +109,52 @@ impl AtuinAiSessionReadToolCall {
             }
         };
 
-        let (session, messages) = match read_session(&mut client, handle).await {
+        // A forward page needs the messages up to it plus one with content beyond (to know more
+        // follows), not the rest of a possibly huge transcript; a negative start counts back
+        // from the end, so it needs them all.
+        let page = u64::try_from(self.start).ok().map(|start| Page {
+            start: usize::try_from(start).unwrap_or(usize::MAX),
+            content: self.limit.get() as usize + 1,
+        });
+        let (session, messages, complete) = match read_session(&mut client, handle, page).await {
             Ok(read) => read,
             Err(e) => return ToolOutcome::Error(format!("Reading the AI session failed: {e}")),
         };
-        ToolOutcome::Success(self.render(&session, &messages, time::UtcOffset::local_or_utc()))
+        ToolOutcome::Success(self.render(
+            &session,
+            &messages,
+            complete,
+            time::UtcOffset::local_or_utc(),
+        ))
     }
 
-    fn render(&self, s: &Session, messages: &[Message], offset: time::UtcOffset) -> String {
+    /// Render a page of `messages`: the whole transcript when `complete`, otherwise at least
+    /// everything up to the page and one message with content past it.
+    fn render(
+        &self,
+        s: &Session,
+        messages: &[Message],
+        complete: bool,
+        offset: time::UtcOffset,
+    ) -> String {
         let total = messages.len();
+        let limit = self.limit.get() as usize;
+        let budgets = Budgets::for_limit(self.limit.get());
         // Out-of-range starts (either sign) clamp to the ends of the transcript. A negative start
         // counts back over messages with something to read: sessions often end in metadata-only
         // rows (Codex), and `-1` landing on one would show an empty page.
         let magnitude = usize::try_from(self.start.unsigned_abs()).unwrap_or(usize::MAX);
         let start = if self.start < 0 {
-            let readable: Vec<usize> = messages
+            messages
                 .iter()
                 .enumerate()
+                .rev()
                 .filter(|(_, m)| has_content(m))
-                .map(|(i, _)| i)
-                .collect();
-            readable.len().checked_sub(magnitude).map_or(0, |k| readable[k])
+                .nth(magnitude.saturating_sub(1))
+                .map_or(0, |(i, _)| i)
         } else {
             magnitude.min(total)
         };
-        // `limit` counts messages with something to read, so a stretch of structural rows (a
-        // session's opening attachments, say) cannot fill a page with nothing.
-        let limit = self.limit.get() as usize;
-        let mut end = start;
-        let mut counted = 0;
 
         let mut out = String::new();
         let _ = writeln!(out, "session  {} [{}]", s.handle.session, harness_name(s.handle.harness));
@@ -140,9 +182,11 @@ impl AtuinAiSessionReadToolCall {
         );
         let _ = writeln!(out);
 
+        // `limit` counts messages with something to read, so a stretch of structural rows (a
+        // session's opening attachments, say) cannot fill a page with nothing.
+        let mut end = start;
+        let mut counted = 0;
         let mut shown = 0;
-        let mut repeats = 0;
-        let mut previous: Option<(String, String)> = None;
         let mut tools = ToolRun::default();
         for (index, message) in messages.iter().enumerate().skip(start) {
             if has_content(message) {
@@ -155,26 +199,17 @@ impl AtuinAiSessionReadToolCall {
             if tools.absorb(index, message) {
                 continue;
             }
-            let flushed = tools.flush(&mut out);
-            shown += flushed;
-            if flushed > 0 {
-                previous = None;
-            }
-            if let Some((role, body)) = self.render_message(message) {
-                // Codex records each agent message twice (an event and a response item); show
-                // a message identical to the one just before it once.
-                if previous.as_ref().is_some_and(|(r, b)| *r == role && *b == body) {
-                    repeats += 1;
-                } else {
-                    // `HH:MM` only: the header carries the date and sessions rarely cross
-                    // midnight.
-                    let when = timestamp(message.timestamp, offset);
-                    let time = when.split_once(' ').map_or(when.as_str(), |(_, t)| t);
-                    let _ = writeln!(out, "#{index} {role} {time}");
-                    out.push_str(&body);
-                    shown += 1;
-                    previous = Some((role, body));
-                }
+            shown += tools.flush(&mut out);
+            if let Some((role, body)) = render_message(message, &budgets) {
+                // `HH:MM` only: the header carries the date and sessions rarely cross midnight.
+                let time = message
+                    .timestamp
+                    .checked_to_offset(offset)
+                    .map(|t| format!(" {:02}:{:02}", t.hour(), t.minute()))
+                    .unwrap_or_default();
+                let _ = writeln!(out, "#{index} {role}{time}");
+                out.push_str(&body);
+                shown += 1;
             }
             // Stop at a message boundary once the page is big enough, whatever `limit` said:
             // the caller pages on with `start`, and a small-context model is not flooded.
@@ -186,13 +221,13 @@ impl AtuinAiSessionReadToolCall {
 
         // Numbering has gaps where harnesses recorded rows with nothing to read (attachments,
         // mode switches); say so, so a gap is not mistaken for a missing page.
-        let hidden = (end - start) - shown - repeats;
-        let _ = write!(out, "\n[messages {start}–{} of {total}", end.saturating_sub(1));
+        let hidden = (end - start) - shown;
+        let _ = write!(out, "\n[messages {start}–{}", end.saturating_sub(1));
+        if complete {
+            let _ = write!(out, " of {total}");
+        }
         if hidden > 0 {
             let _ = write!(out, "; {hidden} empty omitted");
-        }
-        if repeats > 0 {
-            let _ = write!(out, "; {repeats} repeated omitted");
         }
         let _ = write!(out, "]");
         if end < total {
@@ -204,197 +239,227 @@ impl AtuinAiSessionReadToolCall {
         out.push('\n');
         out
     }
-
-    /// A message's role label and rendered body, or `None` when it has no readable content:
-    /// harnesses record plenty of structural rows (attachments, mode switches, usage-only lines).
-    fn render_message(&self, m: &Message) -> Option<(String, String)> {
-        let mut body = String::new();
-        let mut injected = 0;
-        for block in &m.content {
-            match block {
-                Content::Text(text) => {
-                    let text = text.trim();
-                    if text.is_empty() {
-                        continue;
-                    }
-                    match self.prompt_text(m, text) {
-                        Some(text) => {
-                            let _ = writeln!(body, "{}", self.clip(&text, TEXT_CHARS));
-                        }
-                        None => injected += text.chars().count(),
-                    }
-                }
-                Content::Reasoning(text) => {
-                    let text = text.trim();
-                    if !text.is_empty() {
-                        let _ = writeln!(body, "(thinking) {}", self.clip(text, THINKING_CHARS));
-                    }
-                }
-                // A compaction summary stands in for the conversation before it, so it is often
-                // the best account of what an earlier stretch of a long session did.
-                Content::Summary(text) => {
-                    let text = text.trim();
-                    if !text.is_empty() {
-                        let _ = writeln!(
-                            body,
-                            "(summary of earlier conversation) {}",
-                            self.clip(text, TEXT_CHARS)
-                        );
-                    }
-                }
-                Content::Error(text) => {
-                    let _ = writeln!(body, "(model error) {}", one_line(text, TOOL_RESULT_CHARS));
-                }
-                Content::ToolUse(call) if call.input.is_null() => {
-                    let _ = writeln!(body, "→ {}", call.name);
-                }
-                Content::ToolUse(call) => {
-                    let _ = writeln!(body, "→ {}: {}", call.name, self.tool_input(&call.input));
-                }
-                Content::ToolResult(result) => match result_text(&result.output) {
-                    None if result.error => {
-                        let _ = writeln!(body, "← error");
-                    }
-                    None => {}
-                    Some(content) => {
-                        let mark = if result.error {
-                            "← error"
-                        } else {
-                            "←"
-                        };
-                        let content = if self.full() {
-                            self.clip(&content, FULL_CHARS)
-                        } else {
-                            one_line(&content, TOOL_RESULT_CHARS)
-                        };
-                        let _ = writeln!(body, "{mark} {content}");
-                    }
-                },
-                // Capture keeps only that reasoning happened, which says nothing to a reader.
-                Content::ReasoningSummary { .. } | Content::Other(_) => {}
-            }
-        }
-        if injected > 0 {
-            let _ = writeln!(
-                body,
-                "(harness-injected context, {injected} chars; read this message alone to see it)"
-            );
-        }
-        if body.is_empty() {
-            return None;
-        }
-
-        let is_tool_result = m.content.iter().all(|b| matches!(b, Content::ToolResult(_)));
-        let role = if is_tool_result {
-            "tool"
-        } else {
-            match &m.role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::System => "system",
-                Role::Tool => "tool",
-                Role::Other(label) => label.as_str(),
-            }
-        };
-        Some((role.to_owned(), body))
-    }
-
-    /// The text to show for a message's text block, or `None` when the harness wrote it rather
-    /// than a person or the model (Codex developer prompts and `<environment_context>`, Claude
-    /// Code `<system-reminder>`s): bulky, repeated every session, and never what a reader is
-    /// after. A single-message read shows everything.
-    fn prompt_text(&self, m: &Message, text: &str) -> Option<String> {
-        if self.full() {
-            return Some(text.to_owned());
-        }
-        match m.role {
-            Role::Assistant => Some(text.to_owned()),
-            Role::User => human_prompt(text),
-            _ => None,
-        }
-    }
-
-    fn clip(&self, text: &str, budget: usize) -> String {
-        let budget = if self.full() {
-            FULL_CHARS
-        } else {
-            budget
-        };
-        let chars = text.chars().count();
-        if chars <= budget {
-            return text.to_owned();
-        }
-        format!("{} […{} more chars]", truncate(text, budget).trim_end_matches('…'), chars - budget)
-    }
-
-    /// A tool call's input, led by the argument that says what it did (the command, file or
-    /// pattern) rather than raw JSON, which is mostly noise in the abridged view.
-    fn tool_input(&self, input: &Value) -> String {
-        const KEYS: [&str; 7] = ["command", "cmd", "file_path", "path", "pattern", "url", "query"];
-        let raw = match input {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        if self.full() {
-            return truncate(&raw, FULL_CHARS);
-        }
-        if let Value::Object(map) = input
-            && let Some(value) = KEYS.iter().find_map(|k| map.get(*k))
-        {
-            let text = match value {
-                Value::String(s) => s.clone(),
-                Value::Array(parts) => {
-                    parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")
-                }
-                other => other.to_string(),
-            };
-            return one_line(&text, TOOL_INPUT_CHARS);
-        }
-        one_line(&raw, TOOL_INPUT_CHARS)
-    }
 }
 
-/// Fetch a session and all its messages, decoded into domain types.
+/// A message's role label and rendered body, or `None` when it has nothing to read.
+fn render_message<'m>(m: &'m Message, budgets: &Budgets) -> Option<(&'m str, String)> {
+    let mut body = String::new();
+    let mut injected = 0;
+    for block in &m.content {
+        match (classify(block), block) {
+            (Block::Empty, _) => {}
+            (
+                Block::UncapturedTool {
+                    name: Some(name), ..
+                },
+                _,
+            ) => {
+                let _ = writeln!(body, "→ {name}");
+            }
+            (Block::UncapturedTool { name: None, error }, _) => {
+                if error {
+                    let _ = writeln!(body, "← error");
+                }
+            }
+            (Block::Readable, Content::Text(text)) => {
+                // Only people and the model write user and assistant text; the parsers file
+                // what a harness injects (Codex developer prompts, Claude Code reminders) under
+                // other roles. Bulky and repeated every session, it is left out of a page.
+                let text = text.trim();
+                if budgets.whole || matches!(m.role, Role::User | Role::Assistant) {
+                    let _ = writeln!(body, "{}", clip(text, budgets.text));
+                } else {
+                    injected += text.chars().count();
+                }
+            }
+            (Block::Readable, Content::Reasoning(text)) => {
+                let _ = writeln!(body, "(thinking) {}", clip(text.trim(), budgets.thinking));
+            }
+            // A compaction summary stands in for the conversation before it, so it is often the
+            // best account of what an earlier stretch of a long session did.
+            (Block::Readable, Content::Summary(text)) => {
+                let _ = writeln!(
+                    body,
+                    "(summary of earlier conversation) {}",
+                    clip(text.trim(), budgets.text)
+                );
+            }
+            (Block::Readable, Content::Error(text)) => {
+                let _ = writeln!(body, "(model error) {}", one_line(text, budgets.tool_result));
+            }
+            (Block::Readable, Content::ToolUse(call)) => {
+                let _ = writeln!(body, "→ {}: {}", call.name, tool_input(&call.input, budgets));
+            }
+            (Block::Readable, Content::ToolResult(result)) => {
+                let output = result.output_text().unwrap_or_default();
+                let output = output.trim();
+                let mark = if result.error {
+                    "← error"
+                } else {
+                    "←"
+                };
+                let output = if budgets.whole {
+                    clip(output, budgets.tool_result)
+                } else {
+                    one_line(output, budgets.tool_result)
+                };
+                let _ = writeln!(body, "{mark} {output}");
+            }
+            (Block::Readable, Content::ReasoningSummary { .. } | Content::Other(_)) => {}
+        }
+    }
+    if injected > 0 {
+        let _ = writeln!(
+            body,
+            "(harness-injected context, {injected} chars; read this message alone to see it)"
+        );
+    }
+    if body.is_empty() {
+        return None;
+    }
+
+    let role = if m.content.iter().all(|b| matches!(b, Content::ToolResult(_))) {
+        "tool"
+    } else {
+        match &m.role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::System => "system",
+            Role::Tool => "tool",
+            Role::Other(label) => label.as_str(),
+        }
+    };
+    Some((role, body))
+}
+
+/// `text` cut to `budget` chars, saying how much was left out.
+fn clip(text: &str, budget: usize) -> String {
+    let head = text.truncate_chars(budget);
+    if head.len() == text.len() {
+        return text.to_owned();
+    }
+    format!("{head} […{} more chars]", text.chars().count() - budget)
+}
+
+/// A tool call's input, led by the argument that says what it did (the command, file or
+/// pattern) rather than raw JSON, which is mostly noise in the abridged view.
+fn tool_input(input: &Value, budgets: &Budgets) -> String {
+    const KEYS: [&str; 7] = ["command", "cmd", "file_path", "path", "pattern", "url", "query"];
+    let raw = match input {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    if budgets.whole {
+        return clip(&raw, budgets.tool_input);
+    }
+    if let Value::Object(map) = input
+        && let Some(value) = KEYS.iter().find_map(|k| map.get(*k))
+    {
+        let text = match value {
+            Value::String(s) => s.clone(),
+            Value::Array(parts) => {
+                parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")
+            }
+            other => other.to_string(),
+        };
+        return one_line(&text, budgets.tool_input);
+    }
+    one_line(&raw, budgets.tool_input)
+}
+
+/// How much of a transcript a forward read needs: every message before `start`, then messages
+/// until `content` of them (from `start` on) have something to read.
+struct Page {
+    start: usize,
+    content: usize,
+}
+
+/// Fetch a session and its messages, decoded into domain types: all of them, or only as many as
+/// `page` needs, dropping the stream there so the daemon stops too. The flag says whether the
+/// transcript was read to its end.
 async fn read_session(
     client: &mut AiClient,
     handle: HarnessSession,
-) -> eyre::Result<(Session, Vec<Message>)> {
+    page: Option<Page>,
+) -> eyre::Result<(Session, Vec<Message>, bool)> {
     let mut stream = client.get_session(handle).await?;
     let mut session = None;
     let mut messages = Vec::new();
+    let mut content = 0;
     while let Some(event) = stream.next().await {
         match event?.event {
             Some(Event::Session(s)) => session = Some(Session::try_from(s)?),
-            Some(Event::Message(m)) => messages.push(Message::try_from(m)?),
+            Some(Event::Message(m)) => {
+                let m = Message::try_from(m)?;
+                let past_start = page.as_ref().is_some_and(|p| messages.len() >= p.start);
+                if past_start && has_content(&m) {
+                    content += 1;
+                }
+                messages.push(m);
+                if page.as_ref().is_some_and(|p| past_start && content >= p.content) {
+                    let session = session
+                        .ok_or_else(|| eyre::eyre!("the daemon returned no session header"))?;
+                    return Ok((session, messages, false));
+                }
+            }
             None => {}
         }
     }
     let session = session.ok_or_else(|| eyre::eyre!("the daemon returned no session header"))?;
-    Ok((session, messages))
+    Ok((session, messages, true))
 }
 
-/// A tool result's output as text, or `None` when capture did not keep it (a JSON null) or it is
-/// blank. A string output is the raw text; anything else is shown as JSON.
-fn result_text(output: &Value) -> Option<String> {
-    let text = match output {
-        Value::Null => return None,
-        Value::String(s) => s.trim().to_owned(),
-        other => other.to_string(),
-    };
-    (!text.is_empty()).then_some(text)
+/// What a content block contributes to a transcript page. The one place that decides it, for
+/// counting (`has_content`), folding (`ToolRun`) and rendering.
+enum Block<'a> {
+    /// Nothing to read: blank text, a reasoning placeholder, harness bookkeeping.
+    Empty,
+    /// A tool call or result whose arguments or output capture did not keep: a call is named, a
+    /// result says only whether it failed.
+    UncapturedTool {
+        name: Option<&'a str>,
+        error: bool,
+    },
+    Readable,
+}
+
+fn classify(block: &Content) -> Block<'_> {
+    match block {
+        Content::Text(text)
+        | Content::Reasoning(text)
+        | Content::Summary(text)
+        | Content::Error(text) => {
+            if text.trim().is_empty() {
+                Block::Empty
+            } else {
+                Block::Readable
+            }
+        }
+        Content::ToolUse(call) if call.input.is_null() => Block::UncapturedTool {
+            name: Some(&call.name),
+            error: false,
+        },
+        Content::ToolResult(result)
+            if result.output_text().is_none_or(|output| output.trim().is_empty()) =>
+        {
+            Block::UncapturedTool {
+                name: None,
+                error: result.error,
+            }
+        }
+        Content::ToolUse(_) | Content::ToolResult(_) => Block::Readable,
+        // Capture keeps only that reasoning happened, which says nothing to a reader.
+        Content::ReasoningSummary { .. } | Content::Other(_) => Block::Empty,
+    }
 }
 
 /// Whether a message renders as anything: harnesses record plenty of structural rows
 /// (attachments, mode switches, usage-only lines) with nothing to read.
 fn has_content(m: &Message) -> bool {
-    m.content.iter().any(|block| match block {
-        Content::Text(text)
-        | Content::Reasoning(text)
-        | Content::Summary(text)
-        | Content::Error(text) => !text.trim().is_empty(),
-        Content::ToolUse(_) => true,
-        Content::ToolResult(result) => result.error || result_text(&result.output).is_some(),
-        Content::ReasoningSummary { .. } | Content::Other(_) => false,
+    m.content.iter().any(|block| match classify(block) {
+        Block::Readable => true,
+        Block::UncapturedTool { name, error } => name.is_some() || error,
+        Block::Empty => false,
     })
 }
 
@@ -405,32 +470,26 @@ fn has_content(m: &Message) -> bool {
 struct ToolRun {
     first: Option<usize>,
     last: usize,
-    /// Messages folded into the run, including empty structural rows between tool calls.
-    messages: usize,
     names: Vec<String>,
     errors: usize,
 }
 
 impl ToolRun {
-    /// Fold `m` into the run if it carries nothing but uncaptured tool activity (reasoning
-    /// placeholders included), or nothing at all while a run is open; `false` leaves it for
-    /// normal rendering.
+    /// Fold `m` into the run if it carries nothing but uncaptured tool activity, or nothing at
+    /// all while a run is open; `false` leaves it for normal rendering.
     fn absorb(&mut self, index: usize, m: &Message) -> bool {
         let mut names = Vec::new();
         let mut errors = 0;
         let mut any_tool = false;
         for block in &m.content {
-            match block {
-                Content::ToolUse(call) if call.input.is_null() => {
+            match classify(block) {
+                Block::Readable => return false,
+                Block::UncapturedTool { name, error } => {
                     any_tool = true;
-                    names.push(call.name.clone());
+                    names.extend(name.map(str::to_owned));
+                    errors += usize::from(error);
                 }
-                Content::ToolResult(result) if result_text(&result.output).is_none() => {
-                    any_tool = true;
-                    errors += usize::from(result.error);
-                }
-                Content::ReasoningSummary { .. } | Content::Other(_) => {}
-                _ => return false,
+                Block::Empty => {}
             }
         }
         if !any_tool && self.first.is_none() {
@@ -438,13 +497,13 @@ impl ToolRun {
         }
         self.first.get_or_insert(index);
         self.last = index;
-        self.messages += 1;
         self.names.extend(names);
         self.errors += errors;
         true
     }
 
-    /// Write the pending run, if any, and reset. Returns how many messages it covered.
+    /// Write the pending run, if any, and reset. Returns how many messages it covered: a run is
+    /// contiguous, since any message it does not absorb flushes it first.
     fn flush(&mut self, out: &mut String) -> usize {
         let Some(first) = self.first.take() else {
             return 0;
@@ -463,7 +522,7 @@ impl ToolRun {
             }
         }
         out.push('\n');
-        let messages = self.messages;
+        let messages = self.last - first + 1;
         *self = Self::default();
         messages
     }
@@ -548,7 +607,7 @@ mod tests {
     }
 
     fn render(args: Value, msgs: &[Message]) -> String {
-        call(args).render(&session(), msgs, time::UtcOffset::UTC)
+        call(args).render(&session(), msgs, true, time::UtcOffset::UTC)
     }
 
     #[rstest]
@@ -622,7 +681,8 @@ mod tests {
     fn harness_injected_text_collapses_unless_full() {
         let msgs = vec![
             text(Role::Other("developer".to_owned()), "<permissions instructions>sandbox rules"),
-            text(Role::User, "<environment_context><cwd>/x</cwd></environment_context>"),
+            // The Codex parser files `<environment_context>` under the system role.
+            text(Role::System, "<environment_context><cwd>/x</cwd></environment_context>"),
             text(Role::User, "fix this"),
         ];
         let abridged = render(json!({"session_id": "abc"}), &msgs);
@@ -639,11 +699,11 @@ mod tests {
     #[rstest]
     fn a_page_ends_early_at_its_character_budget() {
         let msgs: Vec<_> =
-            (0..20).map(|i| text(Role::User, &format!("{i}{}", "x".repeat(TEXT_CHARS)))).collect();
+            (0..20).map(|i| text(Role::User, &format!("{i}{}", "x".repeat(2_000)))).collect();
         let out = render(json!({"session_id": "abc"}), &msgs);
         let shown = out.matches(" user ").count();
         assert!((1..20).contains(&shown), "{shown} messages shown");
-        assert!(out.len() < PAGE_CHARS + TEXT_CHARS + 500, "{}", out.len());
+        assert!(out.len() < PAGE_CHARS + 2_500, "{}", out.len());
         assert!(
             out.contains(&format!("of 20] More follows: read again with start: {shown}.")),
             "{out}"
@@ -659,19 +719,6 @@ mod tests {
     }
 
     #[rstest]
-    fn a_message_repeating_the_previous_one_is_shown_once() {
-        let msgs = vec![
-            text(Role::Assistant, "removing the dead helper"),
-            text(Role::Assistant, "removing the dead helper"),
-            text(Role::User, "removing the dead helper"),
-        ];
-        let out = render(json!({"session_id": "abc"}), &msgs);
-        assert_eq!(out.matches("removing the dead helper").count(), 2, "{out}");
-        assert!(out.contains("#0 assistant") && !out.contains("#1 ") && out.contains("#2 user"));
-        assert!(out.contains("[messages 0–2 of 3; 1 repeated omitted]"), "{out}");
-    }
-
-    #[rstest]
     fn empty_rows_do_not_use_up_the_limit() {
         let mut msgs: Vec<_> = (0..8).map(|_| empty()).collect();
         msgs.push(text(Role::User, "the real prompt"));
@@ -684,6 +731,18 @@ mod tests {
             ),
             "{out}"
         );
+    }
+
+    #[rstest]
+    fn a_partial_transcript_omits_the_total() {
+        let msgs = vec![text(Role::User, "a"), text(Role::User, "b"), text(Role::User, "c")];
+        let out = call(json!({"session_id": "abc", "limit": 2})).render(
+            &session(),
+            &msgs,
+            false,
+            time::UtcOffset::UTC,
+        );
+        assert!(out.contains("[messages 0–1] More follows: read again with start: 2."), "{out}");
     }
 
     #[rstest]
@@ -709,15 +768,16 @@ mod tests {
     #[case::codex_argv(json!({"cmd": ["bash", "-lc", "ls"]}), "bash -lc ls")]
     #[case::other(json!({"x": 1}), r#"{"x":1}"#)]
     fn tool_input_leads_with_what_it_did(#[case] input: Value, #[case] want: &str) {
-        assert_eq!(call(json!({"session_id": "abc"})).tool_input(&input), want);
+        assert_eq!(tool_input(&input, &Budgets::for_limit(40)), want);
     }
 
     #[rstest]
     fn long_text_is_clipped_unless_full() {
-        let long = "x".repeat(TEXT_CHARS + 10);
-        let abridged = call(json!({"session_id": "abc"})).clip(&long, TEXT_CHARS);
-        assert!(abridged.ends_with("[…10 more chars]"));
-        let full = call(json!({"session_id": "abc", "limit": 1})).clip(&long, TEXT_CHARS);
-        assert_eq!(full, long);
+        let long = "é".repeat(2_010);
+        let page = Budgets::for_limit(40);
+        let abridged = clip(&long, page.text);
+        assert!(abridged.ends_with("[…10 more chars]"), "{abridged}");
+        let whole = Budgets::for_limit(1);
+        assert_eq!(clip(&long, whole.text), long);
     }
 }
