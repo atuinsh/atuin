@@ -262,16 +262,19 @@ impl<'a> Writer<'a> {
     }
 
     /// The directory a line ran in, moved from the original directory to the resumed one: a
-    /// subdirectory keeps its place when it exists here.
+    /// subdirectory keeps its place when it exists here. Always without a trailing separator, as
+    /// Claude Code writes it (`Path::join("")` would add one for the directory itself).
     fn cwd(&self, m: &RehydrateMessage) -> PathBuf {
         let session = self.session;
-        m.cwd
+        let cwd = m
+            .cwd
             .as_deref()
             .zip(session.original_cwd.as_deref())
             .and_then(|(cwd, original)| cwd.strip_prefix(original).ok())
             .map(|rest| session.cwd.join(rest))
             .filter(|cwd| cwd.is_dir())
-            .unwrap_or_else(|| session.cwd.clone())
+            .unwrap_or_else(|| session.cwd.clone());
+        cwd.components().collect()
     }
 
     /// The line for `m` without its common fields, or `None` when nothing of it can be written.

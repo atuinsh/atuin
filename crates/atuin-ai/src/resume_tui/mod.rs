@@ -28,9 +28,7 @@ use std::time::{Duration, Instant};
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
-use crossterm::event::EventStream;
 use eyre::Result;
-use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
@@ -66,7 +64,9 @@ impl ResumeContext {
         let git_root = ctx.git_root;
         let branch = git_root.as_deref().and_then(current_branch);
         Ok(Self {
-            cwd: PathBuf::from(ctx.cwd),
+            // `$PWD` as it is set, which may end in a separator: rebuilt from its components, so
+            // a session restored or continued here isn't written with `…/dir/` as its directory.
+            cwd: Path::new(&ctx.cwd).components().collect(),
             git_root,
             branch,
             host_id: ctx.host_id,
@@ -411,7 +411,7 @@ impl Picker<'_> {
         terminal.draw(|f| state.draw(f, settings, self.theme))?;
         send_search(&mut state, &requests);
 
-        let mut events = EventStream::new();
+        let mut events = terminal::Events::new();
         // Ticks keep relative times and live dots current, and refresh the list now and then so
         // running sessions move and their previews catch up.
         let mut tick = tokio::time::interval(TICK);
@@ -505,10 +505,18 @@ impl Picker<'_> {
             send_search(&mut state, &requests);
         };
 
+        // Stop reading input before the terminal is handed back.
+        drop(events);
         if inline_height > 0 {
-            terminal.clear()?;
+            // Clear from the viewport's origin down and leave the cursor there. Not with
+            // `Terminal::clear`, which first asks the terminal where the cursor is: nothing here
+            // needs the answer, and a late one would fail a picker that has already finished.
             let origin = terminal.get_frame().area().as_position();
             terminal.set_cursor_position(origin)?;
+            crossterm::execute!(
+                terminal.backend_mut(),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+            )?;
         }
         Ok((outcome, note))
     }

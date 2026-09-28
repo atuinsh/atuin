@@ -384,6 +384,37 @@ fn a_compaction_starts_a_new_tree(projects: TempDir) {
     assert_eq!(lines[2]["parentUuid"], "b1");
 }
 
+/// Each line's `cwd` is where the session resumes, or the same subdirectory of it, never with a
+/// trailing separator (a line recorded in the original directory itself once came out as
+/// `…/dir/`, and so did a session resumed in a `$PWD` ending in one).
+#[rstest]
+#[case::same_directory("/elsewhere/proj", "")]
+#[case::subdirectory("/elsewhere/proj/sub", "sub")]
+#[case::elsewhere("/unrelated", "")]
+fn line_directories_have_no_trailing_separator(
+    projects: TempDir,
+    #[case] recorded: &str,
+    #[case] expected_sub: &str,
+    #[values(false, true)] pwd_with_slash: bool,
+) {
+    std::fs::create_dir_all(projects.path().join("here/sub")).unwrap();
+    let here = projects.path().join("here");
+    let mut resumed_in = here.clone().into_os_string();
+    if pwd_with_slash {
+        resumed_in.push("/");
+    }
+    let mut m = message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]);
+    m.cwd = Some(PathBuf::from(recorded));
+    let session = session("s-cwd", Path::new(&resumed_in), vec![m]);
+    let path = rehydrate_into(projects.path(), &session).unwrap();
+    let expected = if expected_sub.is_empty() {
+        here
+    } else {
+        here.join(expected_sub)
+    };
+    assert_eq!(lines(&path)[0]["cwd"], expected.to_string_lossy().as_ref());
+}
+
 /// A transcript is never replaced, wherever Claude Code keeps it.
 #[rstest]
 fn never_overwrites_a_transcript(projects: TempDir) {
