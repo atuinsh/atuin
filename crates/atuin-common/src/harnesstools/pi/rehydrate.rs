@@ -90,7 +90,7 @@ pub(crate) fn rehydrate_into(
 }
 
 /// A timestamp as pi writes one (`Date.toISOString`): UTC, to the millisecond.
-fn timestamp(at: OffsetDateTime) -> String {
+pub(crate) fn timestamp(at: OffsetDateTime) -> String {
     let format =
         format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
     at.to_offset(time::UtcOffset::UTC).format(&format).unwrap_or_default()
@@ -109,27 +109,55 @@ fn transcript(session: &RehydrateSession) -> String {
         "timestamp": timestamp(session.started_at),
         "cwd": session.cwd,
     });
-    let session = &RehydrateSession {
-        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
-        ..session.clone()
-    };
-    let mut writer = Writer::new(session);
-    for message in &session.messages {
-        writer.push(message);
-    }
-    writer.title();
     let mut out = header.to_string();
     out.push('\n');
-    for line in writer.lines {
+    for line in lines(session, &Continuing::default(), true) {
         out.push_str(&line.to_string());
         out.push('\n');
     }
     out
 }
 
+/// A session file rows are appended to: what [`lines`] needs to know of it.
+#[derive(Default)]
+pub(crate) struct Continuing<'a> {
+    /// The ids of the entries the file already holds: a row hangs from them as from a written
+    /// row.
+    pub present: Option<&'a HashSet<String>>,
+    /// The entry the file ends on.
+    pub after: Option<&'a str>,
+    /// The first entry since the last compaction on the path the rows continue: a compaction
+    /// among them keeps from it.
+    pub kept_from: Option<&'a str>,
+}
+
+/// The entries for `session`'s rows, calls captured without their input flattened into notes
+/// ([`Flatten::Runs`]), and its title when `title`: for a whole session, or for rows appended to
+/// the file `continuing` describes.
+pub(crate) fn lines(
+    session: &RehydrateSession,
+    continuing: &Continuing<'_>,
+    title: bool,
+) -> Vec<Value> {
+    let session = &RehydrateSession {
+        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
+        ..session.clone()
+    };
+    let mut writer = Writer::new(session, continuing);
+    for message in &session.messages {
+        writer.push(message);
+    }
+    if title {
+        writer.title();
+    }
+    writer.lines
+}
+
 struct Writer<'a> {
     session: &'a RehydrateSession,
     lines: Vec<Value>,
+    /// The entries the file already holds, when appending to one.
+    present: Option<&'a HashSet<String>>,
     /// Every row, by source id.
     by_id: HashMap<&'a str, &'a RehydrateMessage>,
     /// The rows that are written (the rest have nothing an entry can carry).
@@ -143,7 +171,7 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(session: &'a RehydrateSession) -> Self {
+    fn new(session: &'a RehydrateSession, continuing: &Continuing<'a>) -> Self {
         let tools = session
             .messages
             .iter()
@@ -156,10 +184,11 @@ impl<'a> Writer<'a> {
         let mut writer = Self {
             session,
             lines: Vec::new(),
+            present: continuing.present,
             by_id: session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect(),
             writable: HashSet::new(),
-            last: None,
-            kept_from: None,
+            last: continuing.after,
+            kept_from: continuing.kept_from,
             tools,
         };
         writer.writable = session
@@ -178,7 +207,8 @@ impl<'a> Writer<'a> {
         // At most one step per row: a cycle ends it.
         for _ in 0..=self.by_id.len() {
             let p = parent?;
-            if self.writable.contains(p) {
+            if self.writable.contains(p) || self.present.is_some_and(|present| present.contains(p))
+            {
                 return Some(p);
             }
             match self.by_id.get(p) {
