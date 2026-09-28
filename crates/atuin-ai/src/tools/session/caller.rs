@@ -1,7 +1,7 @@
 //! Identifying the calling agent's own session, so list, search and `latest` can leave it out:
 //! it is live, already in the caller's context, and otherwise tops every recency-ordered result.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use atuin_client::ai_session::{HarnessKind, Session};
@@ -65,13 +65,12 @@ impl Caller<'_> {
         if let Some(id) = self.env_session_id() {
             return Some(id);
         }
-        let sessions = super::list_sessions(client, Some(self.harness()?)).await.ok()?;
-        self.own_in(&sessions)
+        self.pick(&super::list_sessions(client, Some(self.harness()?)).await.ok()?)
     }
 
     /// [`Self::own_session_id`] for a caller that already holds the session list.
     pub fn own_in(&self, sessions: &[Session]) -> Option<String> {
-        self.env_session_id().or_else(|| self.pick(sessions, self.own.cwd.as_deref()?))
+        self.env_session_id().or_else(|| self.pick(sessions))
     }
 
     fn env_session_id(&self) -> Option<String> {
@@ -81,8 +80,9 @@ impl Caller<'_> {
             .filter(|id| !id.is_empty())
     }
 
-    fn pick(&self, sessions: &[Session], cwd: &Path) -> Option<String> {
+    fn pick(&self, sessions: &[Session]) -> Option<String> {
         let harness = self.harness()?;
+        let cwd = self.own.cwd.as_deref()?;
         let started = OffsetDateTime::from(self.own.started);
         let earliest = OffsetDateTime::from(self.own.started.checked_sub(START_SLACK)?);
         // Still active since this server started: a run that finished just before it (the
@@ -90,7 +90,7 @@ impl Caller<'_> {
         // recorded nothing after.
         let mut candidates = sessions.iter().filter(|s| {
             s.handle.harness == harness
-                && s.parent.is_none()
+                && !super::is_subagent(s)
                 && s.cwd.as_deref() == Some(cwd)
                 && s.started_at >= earliest
                 && s.updated_at >= started
@@ -137,7 +137,7 @@ mod tests {
             session("elsewhere", "/work/q", now),
             session("mine", "/work/p", now + Duration::from_secs(30)),
         ];
-        assert_eq!(caller.pick(&sessions, Path::new("/work/p")).as_deref(), Some("mine"));
+        assert_eq!(caller.pick(&sessions).as_deref(), Some("mine"));
     }
 
     #[rstest]
@@ -152,7 +152,7 @@ mod tests {
             session("previous", "/work/p", now - Duration::from_secs(25)),
             session("mine", "/work/p", now + Duration::from_secs(1)),
         ];
-        assert_eq!(caller.pick(&sessions, Path::new("/work/p")).as_deref(), Some("mine"));
+        assert_eq!(caller.pick(&sessions).as_deref(), Some("mine"));
     }
 
     #[rstest]
@@ -166,12 +166,9 @@ mod tests {
         let other = session("other", "/work/p", now + Duration::from_secs(2));
         // The caller's own session is not captured yet, so the other agent's is the lone
         // candidate; nothing may carry that mistake into the next call.
-        assert_eq!(
-            caller.pick(std::slice::from_ref(&other), Path::new("/work/p")).as_deref(),
-            Some("other")
-        );
+        assert_eq!(caller.pick(std::slice::from_ref(&other)).as_deref(), Some("other"));
         let mine = session("mine", "/work/p", now + Duration::from_secs(1));
-        assert_eq!(caller.pick(&[other, mine], Path::new("/work/p")), None);
+        assert_eq!(caller.pick(&[other, mine]), None);
     }
 
     #[rstest]
@@ -185,9 +182,9 @@ mod tests {
         let mut previous = session("previous", "/work/p", now - Duration::from_secs(5));
         previous.updated_at = OffsetDateTime::from(now - Duration::from_secs(2));
         // The caller's own session is not captured yet: nothing is its, so nothing is hidden.
-        assert_eq!(caller.pick(std::slice::from_ref(&previous), Path::new("/work/p")), None);
+        assert_eq!(caller.pick(std::slice::from_ref(&previous)), None);
         let mine = session("mine", "/work/p", now + Duration::from_secs(1));
-        assert_eq!(caller.pick(&[previous, mine], Path::new("/work/p")).as_deref(), Some("mine"));
+        assert_eq!(caller.pick(&[previous, mine]).as_deref(), Some("mine"));
     }
 
     #[rstest]
@@ -199,7 +196,7 @@ mod tests {
             own: &own,
         };
         let sessions = [session("a", "/work/p", now), session("b", "/work/p", now)];
-        assert_eq!(caller.pick(&sessions, Path::new("/work/p")), None);
+        assert_eq!(caller.pick(&sessions), None);
     }
 
     #[rstest]

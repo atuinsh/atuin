@@ -13,10 +13,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::caller::{Caller, is_own};
-use super::{
-    HarnessFilter, connect, cwd_filter, elsewhere_note, one_line, render_session_summary,
-    resolve_cwd,
-};
+use super::{connect, elsewhere_note, one_line, render_session_summary, resolve_cwd};
+use crate::commands::session::HarnessArg;
 use crate::tools::ToolOutcome;
 
 /// How many sessions matching anywhere a cwd-filtered search scans to say what the filter left
@@ -37,7 +35,7 @@ pub struct AtuinAiSessionSearchToolCall {
     pub limit: Clamped<u32, 1, 20, 5>,
     /// Restrict the search to sessions from one AI harness. Omit to search every harness.
     #[serde(default)]
-    pub harness: Option<HarnessFilter>,
+    pub harness: Option<HarnessArg>,
     /// Only sessions whose working directory is this path or inside it. Relative paths,
     /// including '.', resolve against the current project directory. The result says how many
     /// matches the filter left out, and where.
@@ -53,23 +51,19 @@ impl AtuinAiSessionSearchToolCall {
     async fn run(&self, settings: &Settings, caller: &Caller<'_>) -> Result<String, ToolOutcome> {
         let mut client = connect(settings).await?;
         let harness = self.harness.map(HarnessKind::from);
-        let cwd = cwd_filter(self.cwd.as_deref()).map(resolve_cwd).transpose()?;
+        let cwd = resolve_cwd(self.cwd.as_deref())?;
         let cwd_str = cwd.as_ref().map(|c| c.to_string_lossy());
         let own = caller.own_session_id(&mut client).await;
         let limit = self.limit.get();
         // One extra, so the page stays full after the caller's own session is dropped.
         let fetch = limit + 1;
         let query = self.query.as_str();
-        let visible = |found: &[SessionMatch]| visible(found, own.as_deref(), limit as usize);
 
         // Every term, as whole words, first; when no message anywhere has them all, any term as a
         // prefix, so a near-miss query still finds something instead of costing the model a
-        // retry. Two things keep the looser search from answering a question nobody asked: what
-        // counts is what matched before the caller's own session is set aside, and a strict
-        // match outside the cwd filter (the same project checked out elsewhere) wins over loose
-        // matches inside it; the note below then points at it.
-        let strict =
-            visible(&search(&mut client, query, harness, cwd_str.as_deref(), false, fetch).await?);
+        // retry. See `should_loosen` for what keeps the looser search from answering a question
+        // nobody asked.
+        let strict = search(&mut client, query, harness, cwd_str.as_deref(), false, fetch).await?;
         // With a cwd filter, one unscoped strict search serves both that decision and the note.
         let unscoped = match cwd_str {
             Some(_) => {
@@ -77,17 +71,18 @@ impl AtuinAiSessionSearchToolCall {
             }
             None => None,
         };
-        let any_term = should_loosen(&strict, unscoped.as_deref().map(visible).as_ref());
+        let any_term = should_loosen(&strict, unscoped.as_deref());
         let found = if any_term {
-            visible(&search(&mut client, query, harness, cwd_str.as_deref(), true, fetch).await?)
+            search(&mut client, query, harness, cwd_str.as_deref(), true, fetch).await?
         } else {
             strict
         };
-        let (hits, only_own) = match found {
-            Found::Hits(hits) => (hits, false),
-            Found::OnlyOwn => (Vec::new(), true),
-            Found::Nothing => (Vec::new(), false),
-        };
+        let hits: Vec<&SessionMatch> = found
+            .iter()
+            .filter(|hit| !is_own(&hit.session, own.as_deref()))
+            .take(limit as usize)
+            .collect();
+        let only_own = hits.is_empty() && !found.is_empty();
 
         // A cwd filter can hide the answer (the same project checked out elsewhere, or synced
         // from another machine), so say what it left out.
@@ -183,32 +178,12 @@ async fn search(
         .map_err(ToolOutcome::Error)
 }
 
-/// What a search found once the caller's own session is set aside.
-#[derive(Debug)]
-enum Found {
-    Hits(Vec<SessionMatch>),
-    /// Something matched, but only the caller's own session.
-    OnlyOwn,
-    Nothing,
-}
-
-/// Whether to fall back to any-term matching: only when the strict search matched nothing in the
-/// requested scope and, when that scope is a directory, nothing outside it either.
-fn should_loosen(in_scope: &Found, everywhere: Option<&Found>) -> bool {
-    matches!(in_scope, Found::Nothing) && everywhere.is_none_or(|f| matches!(f, Found::Nothing))
-}
-
-fn visible(found: &[SessionMatch], own: Option<&str>, limit: usize) -> Found {
-    if found.is_empty() {
-        return Found::Nothing;
-    }
-    let hits: Vec<_> =
-        found.iter().filter(|hit| !is_own(&hit.session, own)).take(limit).cloned().collect();
-    if hits.is_empty() {
-        Found::OnlyOwn
-    } else {
-        Found::Hits(hits)
-    }
+/// Whether to fall back to any-term matching: only when no message has every word, neither in
+/// the requested scope nor, when that scope is a directory, outside it. Counted before the
+/// caller's own session is set aside (its match is still a match), and a strict match elsewhere
+/// wins over loose ones in the directory; the note then points at it.
+fn should_loosen(strict: &[SessionMatch], unscoped: Option<&[SessionMatch]>) -> bool {
+    strict.is_empty() && unscoped.is_none_or(<[SessionMatch]>::is_empty)
 }
 
 struct SessionHit<'a>(&'a SessionMatch);
@@ -273,27 +248,12 @@ mod tests {
     }
 
     #[rstest]
-    fn a_match_on_only_the_callers_own_session_is_not_a_miss() {
-        // A strict miss falls back to a looser search; a strict hit on the caller's own session
-        // must not, or the model is told no message had every word when one did.
-        assert!(matches!(visible(&[hit("me")], Some("me"), 5), Found::OnlyOwn));
-        assert!(matches!(visible(&[], Some("me"), 5), Found::Nothing));
-        let Found::Hits(hits) = visible(&[hit("me"), hit("a"), hit("b")], Some("me"), 1) else {
-            panic!("other sessions matched");
-        };
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].session.handle.session.as_ref(), "a");
-    }
-
-    #[rstest]
-    fn a_strict_match_outside_the_directory_beats_loose_matches_inside_it() {
-        let exact_elsewhere = Found::Hits(vec![hit("elsewhere")]);
-        assert!(!should_loosen(&Found::Nothing, Some(&exact_elsewhere)));
-        assert!(!should_loosen(&Found::Nothing, Some(&Found::OnlyOwn)));
-        assert!(should_loosen(&Found::Nothing, Some(&Found::Nothing)));
-        assert!(should_loosen(&Found::Nothing, None), "no cwd filter: nothing anywhere");
-        assert!(!should_loosen(&Found::OnlyOwn, None));
-        assert!(!should_loosen(&Found::Hits(vec![hit("a")]), None));
+    fn loosens_only_when_no_message_anywhere_has_every_word() {
+        let some = [hit("a")];
+        assert!(should_loosen(&[], None));
+        assert!(should_loosen(&[], Some(&[])));
+        assert!(!should_loosen(&some, None), "a strict hit, even the caller's own, is a hit");
+        assert!(!should_loosen(&[], Some(&some)), "a strict hit elsewhere wins over loose ones");
     }
 
     #[rstest]

@@ -438,7 +438,10 @@ mod tests {
             "the parser enforces the advertised minLength"
         );
 
-        for harness in schema["$defs"]["HarnessFilter"]["enum"].as_array().unwrap() {
+        // Follow the property's `$ref` rather than naming the type, so a rename cannot hide it.
+        let reference = schema["properties"]["harness"]["anyOf"][0]["$ref"].as_str().unwrap();
+        let name = reference.rsplit('/').next().unwrap();
+        for harness in schema["$defs"][name]["enum"].as_array().unwrap() {
             let name = harness.as_str().unwrap();
             assert!(
                 parse(json!({"query": "x", "harness": name})).is_ok(),

@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use super::caller::{Caller, is_own};
 use super::{connect, is_subagent, label, timestamp};
-use crate::commands::session::{harness_name, one_line, select_session};
+use crate::commands::session::{SelectError, harness_name, message_role, one_line, select_session};
 use crate::tools::ToolOutcome;
 
 /// Roughly how much a multi-message page may hold (about 4k tokens) before it ends early.
@@ -28,40 +28,16 @@ const PAGE_CHARS: usize = 16_000;
 /// and nothing is out of reach.
 const WINDOW_CHARS: usize = 20_000;
 
-/// Per-block character budgets. A page abridges: tool output dominates transcripts by volume,
-/// and a reader mostly needs what was asked, said and decided. A single-message read is the way
-/// to see one message in full: nothing is cut per part (it is windowed as a whole instead) and
-/// harness-injected context is shown too.
-struct Budgets {
-    text: usize,
-    thinking: usize,
-    tool_input: usize,
-    tool_result: usize,
-    whole: bool,
-}
-
-impl Budgets {
-    fn for_limit(limit: u32) -> Self {
-        if limit == 1 {
-            let n = usize::MAX;
-            Self {
-                text: n,
-                thinking: n,
-                tool_input: n,
-                tool_result: n,
-                whole: true,
-            }
-        } else {
-            Self {
-                text: 2_000,
-                thinking: 600,
-                tool_input: 300,
-                tool_result: 400,
-                whole: false,
-            }
-        }
-    }
-}
+/// Per-part character budgets on a multi-message page: tool output dominates transcripts by
+/// volume, and a reader mostly needs what was asked, said and decided. A single-message read
+/// (`full`) cuts nothing per part; it is windowed as a whole instead.
+const TEXT_CHARS: usize = 2_000;
+const THINKING_CHARS: usize = 600;
+const TOOL_INPUT_CHARS: usize = 300;
+const TOOL_RESULT_CHARS: usize = 400;
+/// Text a harness wrote into the conversation (standing context such as AGENTS.md or a sandbox
+/// policy, but also one-off notes like a subagent's report) gets a line, not its bulk, on a page.
+const HARNESS_CHARS: usize = 200;
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -108,18 +84,19 @@ impl AtuinAiSessionReadToolCall {
         };
         let handle = match select_session(sessions, selector) {
             Ok(handle) => handle,
-            Err(e) => {
-                return ToolOutcome::Error(
-                    e.to_string().replace("atuin ai session list", "atuin_ai_session_list"),
-                );
+            Err(e @ SelectError::NotFound(_)) => {
+                return ToolOutcome::Error(format!(
+                    "{e}. Find one with atuin_ai_session_list or atuin_ai_session_search."
+                ));
             }
+            Err(e) => return ToolOutcome::Error(e.to_string()),
         };
 
         // A forward page needs the messages up to it plus one with content beyond (to know more
         // follows), not the rest of a possibly huge transcript; a negative start counts back
         // from the end, so it needs them all.
-        let page = u64::try_from(self.start).ok().map(|start| Page {
-            start: usize::try_from(start).unwrap_or(usize::MAX),
+        let page = usize::try_from(self.start).ok().map(|start| Page {
+            start,
             content: self.limit.get() as usize + 1,
         });
         let (session, messages, complete) = match read_session(&mut client, handle, page).await {
@@ -145,7 +122,7 @@ impl AtuinAiSessionReadToolCall {
     ) -> String {
         let total = messages.len();
         let limit = self.limit.get() as usize;
-        let budgets = Budgets::for_limit(self.limit.get());
+        let full = self.limit.get() == 1;
         // Out-of-range starts (either sign) clamp to the ends of the transcript. A negative start
         // counts back over messages with something to read: sessions often end in metadata-only
         // rows (Codex), and `-1` landing on one would show an empty page.
@@ -206,8 +183,8 @@ impl AtuinAiSessionReadToolCall {
                 continue;
             }
             shown += tools.flush(&mut out);
-            if let Some((role, body)) = render_message(message, &budgets) {
-                let body = if budgets.whole {
+            if let Some((role, body)) = render_message(message, full) {
+                let body = if full {
                     self.window(&body)
                 } else {
                     body
@@ -282,9 +259,8 @@ impl AtuinAiSessionReadToolCall {
 }
 
 /// A message's role label and rendered body, or `None` when it has nothing to read.
-fn render_message<'m>(m: &'m Message, budgets: &Budgets) -> Option<(&'m str, String)> {
+fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
     let mut body = String::new();
-    let mut injected = 0;
     for block in &m.content {
         match (classify(block), block) {
             (Block::Empty, _) => {}
@@ -303,17 +279,18 @@ fn render_message<'m>(m: &'m Message, budgets: &Budgets) -> Option<(&'m str, Str
             }
             (Block::Readable, Content::Text(text)) => {
                 // Only people and the model write user and assistant text; the parsers file
-                // what a harness injects (Codex developer prompts, Claude Code reminders) under
-                // other roles. Bulky and repeated every session, it is left out of a page.
+                // what a harness wrote (Codex developer prompts, Claude Code reminders, subagent
+                // reports) under other roles. Often bulky and repeated every session, it gets a
+                // line on a page.
                 let text = text.trim();
-                if budgets.whole || matches!(m.role, Role::User | Role::Assistant) {
-                    let _ = writeln!(body, "{}", clip(text, budgets.text));
+                if full || matches!(m.role, Role::User | Role::Assistant) {
+                    let _ = writeln!(body, "{}", clip(text, TEXT_CHARS, full));
                 } else {
-                    injected += text.chars().count();
+                    let _ = writeln!(body, "(harness) {}", one_line(text, HARNESS_CHARS));
                 }
             }
             (Block::Readable, Content::Reasoning(text)) => {
-                let _ = writeln!(body, "(thinking) {}", clip(text.trim(), budgets.thinking));
+                let _ = writeln!(body, "(thinking) {}", clip(text.trim(), THINKING_CHARS, full));
             }
             // A compaction summary stands in for the conversation before it, so it is often the
             // best account of what an earlier stretch of a long session did.
@@ -321,14 +298,14 @@ fn render_message<'m>(m: &'m Message, budgets: &Budgets) -> Option<(&'m str, Str
                 let _ = writeln!(
                     body,
                     "(summary of earlier conversation) {}",
-                    clip(text.trim(), budgets.text)
+                    clip(text.trim(), TEXT_CHARS, full)
                 );
             }
             (Block::Readable, Content::Error(text)) => {
-                let _ = writeln!(body, "(model error) {}", one_line(text, budgets.tool_result));
+                let _ = writeln!(body, "(model error) {}", one_line(text, TOOL_RESULT_CHARS));
             }
             (Block::Readable, Content::ToolUse(call)) => {
-                let _ = writeln!(body, "→ {}: {}", call.name, tool_input(&call.input, budgets));
+                let _ = writeln!(body, "→ {}: {}", call.name, tool_input(&call.input, full));
             }
             (Block::Readable, Content::ToolResult(result)) => {
                 let output = result.output_text().unwrap_or_default();
@@ -338,43 +315,37 @@ fn render_message<'m>(m: &'m Message, budgets: &Budgets) -> Option<(&'m str, Str
                 } else {
                     "←"
                 };
-                let output = if budgets.whole {
-                    clip(output, budgets.tool_result)
+                let output = if full {
+                    output.to_owned()
                 } else {
-                    one_line(output, budgets.tool_result)
+                    one_line(output, TOOL_RESULT_CHARS)
                 };
                 let _ = writeln!(body, "{mark} {output}");
             }
             (Block::Readable, Content::ReasoningSummary { .. } | Content::Other(_)) => {}
         }
     }
-    if injected > 0 {
-        let _ = writeln!(
-            body,
-            "(harness-injected context, {injected} chars; read this message alone to see it)"
-        );
-    }
     if body.is_empty() {
         return None;
     }
 
+    // A tool result is labelled `tool` whatever the envelope role: some harnesses model tool
+    // output as a user turn.
     let role = if m.content.iter().all(|b| matches!(b, Content::ToolResult(_))) {
-        "tool"
+        "tool".to_owned()
     } else {
-        match &m.role {
-            Role::User => "user",
-            Role::Assistant => "assistant",
-            Role::System => "system",
-            Role::Tool => "tool",
-            Role::Other(label) => label.as_str(),
-        }
+        message_role(m)
     };
     Some((role, body))
 }
 
-/// `text` cut to `budget` chars, saying how much was left out.
-fn clip(text: &str, budget: usize) -> String {
-    let head = text.truncate_chars(budget);
+/// `text` cut to `budget` chars, saying how much was left out; whole when `full`.
+fn clip(text: &str, budget: usize, full: bool) -> String {
+    let head = if full {
+        text
+    } else {
+        text.truncate_chars(budget)
+    };
     if head.len() == text.len() {
         return text.to_owned();
     }
@@ -383,14 +354,14 @@ fn clip(text: &str, budget: usize) -> String {
 
 /// A tool call's input, led by the argument that says what it did (the command, file or
 /// pattern) rather than raw JSON, which is mostly noise in the abridged view.
-fn tool_input(input: &Value, budgets: &Budgets) -> String {
+fn tool_input(input: &Value, full: bool) -> String {
     const KEYS: [&str; 7] = ["command", "cmd", "file_path", "path", "pattern", "url", "query"];
     let raw = match input {
         Value::String(s) => s.clone(),
         other => other.to_string(),
     };
-    if budgets.whole {
-        return clip(&raw, budgets.tool_input);
+    if full {
+        return raw;
     }
     if let Value::Object(map) = input
         && let Some(value) = KEYS.iter().find_map(|k| map.get(*k))
@@ -402,14 +373,14 @@ fn tool_input(input: &Value, budgets: &Budgets) -> String {
             }
             other => other.to_string(),
         };
-        return one_line(&text, budgets.tool_input);
+        return one_line(&text, TOOL_INPUT_CHARS);
     }
-    one_line(&raw, budgets.tool_input)
+    one_line(&raw, TOOL_INPUT_CHARS)
 }
 
 /// How much of a transcript a forward read needs: every message before `start`, then messages
 /// until `content` of them (from `start` on) have something to read.
-struct Page {
+pub struct Page {
     start: usize,
     content: usize,
 }
@@ -417,7 +388,7 @@ struct Page {
 /// Fetch a session and its messages, decoded into domain types: all of them, or only as many as
 /// `page` needs, dropping the stream there so the daemon stops too. The flag says whether the
 /// transcript was read to its end.
-async fn read_session(
+pub async fn read_session(
     client: &mut AiClient,
     handle: HarnessSession,
     page: Option<Page>,
@@ -426,6 +397,7 @@ async fn read_session(
     let mut session = None;
     let mut messages = Vec::new();
     let mut content = 0;
+    let mut complete = true;
     while let Some(event) = stream.next().await {
         match event?.event {
             Some(Event::Session(s)) => session = Some(Session::try_from(s)?),
@@ -437,16 +409,15 @@ async fn read_session(
                 }
                 messages.push(m);
                 if page.as_ref().is_some_and(|p| past_start && content >= p.content) {
-                    let session = session
-                        .ok_or_else(|| eyre::eyre!("the daemon returned no session header"))?;
-                    return Ok((session, messages, false));
+                    complete = false;
+                    break;
                 }
             }
             None => {}
         }
     }
     let session = session.ok_or_else(|| eyre::eyre!("the daemon returned no session header"))?;
-    Ok((session, messages, true))
+    Ok((session, messages, complete))
 }
 
 /// What a content block contributes to a transcript page. The one place that decides it, for
@@ -718,22 +689,27 @@ mod tests {
     }
 
     #[rstest]
-    fn harness_injected_text_collapses_unless_full() {
+    fn harness_text_gets_a_line_unless_full() {
         let msgs = vec![
-            text(Role::Other("developer".to_owned()), "<permissions instructions>sandbox rules"),
+            text(
+                Role::Other("developer".to_owned()),
+                &format!("<permissions instructions>sandbox rules{}", " policy".repeat(2_000)),
+            ),
             // The Codex parser files `<environment_context>` under the system role.
             text(Role::System, "<environment_context><cwd>/x</cwd></environment_context>"),
             text(Role::User, "fix this"),
         ];
         let abridged = render(json!({"session_id": "abc"}), &msgs);
-        assert!(!abridged.contains("sandbox rules"), "{abridged}");
-        assert!(!abridged.contains("<cwd>"), "{abridged}");
         assert!(abridged.contains("#0 developer"), "{abridged}");
-        assert!(abridged.contains("harness-injected context"), "{abridged}");
+        assert!(
+            abridged.contains("(harness) <permissions instructions>sandbox rules"),
+            "{abridged}"
+        );
+        assert!(abridged.len() < 2_000, "a long harness blob is one line: {}", abridged.len());
         assert!(abridged.contains("#2 user 00:00\nfix this"), "{abridged}");
 
         let full = render(json!({"session_id": "abc", "limit": 1}), &msgs);
-        assert!(full.contains("sandbox rules"));
+        assert!(full.matches(" policy").count() >= 2_000, "a single-message read shows it all");
     }
 
     #[rstest]
@@ -808,7 +784,7 @@ mod tests {
     #[case::codex_argv(json!({"cmd": ["bash", "-lc", "ls"]}), "bash -lc ls")]
     #[case::other(json!({"x": 1}), r#"{"x":1}"#)]
     fn tool_input_leads_with_what_it_did(#[case] input: Value, #[case] want: &str) {
-        assert_eq!(tool_input(&input, &Budgets::for_limit(40)), want);
+        assert_eq!(tool_input(&input, false), want);
     }
 
     #[rstest]
@@ -828,10 +804,8 @@ mod tests {
     #[rstest]
     fn long_text_is_clipped_unless_full() {
         let long = "é".repeat(2_010);
-        let page = Budgets::for_limit(40);
-        let abridged = clip(&long, page.text);
+        let abridged = clip(&long, TEXT_CHARS, false);
         assert!(abridged.ends_with("[…10 more chars]"), "{abridged}");
-        let whole = Budgets::for_limit(1);
-        assert_eq!(clip(&long, whole.text), long);
+        assert_eq!(clip(&long, TEXT_CHARS, true), long);
     }
 }

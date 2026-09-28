@@ -14,33 +14,9 @@ use atuin_client::settings::Settings;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_daemon::AiClient;
 use futures::{StreamExt, TryStreamExt};
-use schemars::JsonSchema;
-use serde::Deserialize;
 
 use crate::commands::session::{harness_name, one_line};
 use crate::tools::ToolOutcome;
-
-// Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
-// Copilot has no capture source yet, so advertising it would return empty for every query.
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum HarnessFilter {
-    ClaudeCode,
-    Codex,
-    Opencode,
-    Pi,
-}
-
-impl From<HarnessFilter> for HarnessKind {
-    fn from(value: HarnessFilter) -> Self {
-        match value {
-            HarnessFilter::ClaudeCode => Self::ClaudeCode,
-            HarnessFilter::Codex => Self::Codex,
-            HarnessFilter::Opencode => Self::Opencode,
-            HarnessFilter::Pi => Self::Pi,
-        }
-    }
-}
 
 async fn connect(settings: &Settings) -> Result<AiClient, ToolOutcome> {
     AiClient::from_settings(settings).await.map_err(|e| {
@@ -51,13 +27,8 @@ async fn connect(settings: &Settings) -> Result<AiClient, ToolOutcome> {
     })
 }
 
-/// A `cwd` argument that says anything: models often pass `""` for "no filter".
-fn cwd_filter(cwd: Option<&str>) -> Option<&str> {
-    cwd.filter(|c| !c.trim().is_empty())
-}
-
 /// Every captured session (of `harness`, if given), newest first, decoded into domain types.
-async fn list_sessions(
+pub async fn list_sessions(
     client: &mut AiClient,
     harness: Option<HarnessKind>,
 ) -> Result<Vec<Session>, String> {
@@ -77,8 +48,13 @@ async fn list_sessions(
 /// the directory the MCP server was launched in, which Claude Code, Codex and opencode all set to
 /// the project. A client that launches it from the home directory (or `/`) has not said where the
 /// project is, and `.` would silently match nearly everything, so that is an error.
-fn resolve_cwd(cwd: &str) -> Result<PathBuf, ToolOutcome> {
-    let path = crate::tools::expand_path(cwd.trim());
+///
+/// `None`, or a blank string (models often pass `""` for "no filter"), is no filter.
+fn resolve_cwd(cwd: Option<&str>) -> Result<Option<PathBuf>, ToolOutcome> {
+    let Some(cwd) = cwd.map(str::trim).filter(|c| !c.is_empty()) else {
+        return Ok(None);
+    };
+    let path = crate::tools::expand_path(cwd);
     let joined = if path.is_absolute() {
         path
     } else {
@@ -94,7 +70,7 @@ fn resolve_cwd(cwd: &str) -> Result<PathBuf, ToolOutcome> {
         };
         dir.join(path)
     };
-    Ok(normalise(&joined))
+    Ok(Some(normalise(&joined)))
 }
 
 /// Normalise `.`/`..` lexically; the session may be from another machine, so the path need not
@@ -127,7 +103,7 @@ fn elsewhere_note<'a>(
     let name = root.file_name();
     let mut dirs: Vec<(&Path, usize, bool)> = Vec::new();
     for s in others {
-        let Some(cwd) = s.cwd.as_deref().filter(|c| !is_under(c, root)) else {
+        let Some(cwd) = s.cwd.as_deref().filter(|c| !c.starts_with(root)) else {
             continue;
         };
         let same = name.is_some() && cwd.file_name() == name;
@@ -174,14 +150,12 @@ fn elsewhere_note<'a>(
     ))
 }
 
-fn is_under(cwd: &Path, root: &Path) -> bool {
-    cwd.starts_with(root)
-}
-
-/// A session spawned by another one (a Claude Code subagent, say): only meaningful as part of
-/// its parent.
+/// A Claude Code subagent: a fragment of the session that spawned it, only meaningful as part of
+/// it. Not any session with a parent: forks, branches and continuations have one too, and those
+/// are sessions a person ran. (Only Claude Code subagents are told apart today, by their
+/// `agent-` transcript names; the parsers do not record what kind of link a parent is.)
 fn is_subagent(s: &Session) -> bool {
-    s.parent.is_some()
+    s.parent.is_some() && s.handle.session.as_ref().starts_with("agent-")
 }
 
 /// The session's title, falling back to its opening prompt.
@@ -219,7 +193,12 @@ fn render_session_summary(out: &mut String, index: usize, s: &Session, offset: t
             writeln!(out, "   in {cwd}{}", branch.map(|b| format!(" ({b})")).unwrap_or_default());
     }
     if let Some(parent) = &s.parent {
-        let _ = writeln!(out, "   subagent of {}", parent.session);
+        let relation = if is_subagent(s) {
+            "subagent of"
+        } else {
+            "continues from"
+        };
+        let _ = writeln!(out, "   {relation} {}", parent.session);
     }
     // How it ended, so a reader can tell which session holds the answer without opening each.
     if let Some(reply) = s.last_reply.as_deref().map(|r| one_line(r, 240)).filter(|r| !r.is_empty())
@@ -249,6 +228,7 @@ pub(super) mod fixtures {
 
 #[cfg(test)]
 mod tests {
+    use atuin_client::ai_session::{HarnessSession, NativeSessionId};
     use rstest::rstest;
 
     use super::*;
@@ -258,28 +238,36 @@ mod tests {
     #[case::trailing_dot("/a/./b", "/a/b")]
     #[case::whitespace("  /a/b  ", "/a/b")]
     fn resolve_cwd_normalises(#[case] input: &str, #[case] want: &str) {
-        assert_eq!(resolve_cwd(input).ok().unwrap(), PathBuf::from(want));
+        assert_eq!(resolve_cwd(Some(input)).ok().unwrap(), Some(PathBuf::from(want)));
     }
 
     #[rstest]
     fn resolve_cwd_expands_home() {
         let home = std::env::home_dir().unwrap();
-        assert_eq!(resolve_cwd("~").ok().unwrap(), home);
-        assert_eq!(resolve_cwd("~/src/x").ok().unwrap(), home.join("src/x"));
+        assert_eq!(resolve_cwd(Some("~")).ok().unwrap(), Some(home.clone()));
+        assert_eq!(resolve_cwd(Some("~/src/x")).ok().unwrap(), Some(home.join("src/x")));
     }
 
     #[rstest]
     fn blank_cwd_is_no_filter() {
-        assert_eq!(cwd_filter(Some("  ")), None);
-        assert_eq!(cwd_filter(Some(".")), Some("."));
+        assert_eq!(resolve_cwd(None).ok().unwrap(), None);
+        assert_eq!(resolve_cwd(Some("  ")).ok().unwrap(), None);
     }
 
     #[rstest]
-    fn is_under_matches_whole_components() {
-        let root = Path::new("/work/atuin");
-        assert!(is_under(Path::new("/work/atuin"), root));
-        assert!(is_under(Path::new("/work/atuin/crates"), root));
-        assert!(!is_under(Path::new("/work/atuin.sh"), root));
+    fn only_claude_code_agent_children_are_subagents() {
+        let parent = HarnessSession {
+            harness: HarnessKind::ClaudeCode,
+            session: NativeSessionId::from("p".to_owned()),
+        };
+        let with = |id: &str, parent: Option<HarnessSession>| {
+            let mut s = fixtures::session(id, None, time::OffsetDateTime::UNIX_EPOCH);
+            s.parent = parent;
+            s
+        };
+        assert!(is_subagent(&with("agent-a1", Some(parent.clone()))));
+        assert!(!is_subagent(&with("fork-uuid", Some(parent))), "a fork is a session of its own");
+        assert!(!is_subagent(&with("agent-a1", None)));
     }
 
     #[rstest]

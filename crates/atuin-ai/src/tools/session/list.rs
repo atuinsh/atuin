@@ -9,10 +9,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::caller::{Caller, is_own};
-use super::{
-    HarnessFilter, connect, cwd_filter, elsewhere_note, is_subagent, is_under,
-    render_session_summary, resolve_cwd,
-};
+use super::{connect, elsewhere_note, is_subagent, render_session_summary, resolve_cwd};
+use crate::commands::session::HarnessArg;
 use crate::tools::ToolOutcome;
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
@@ -25,12 +23,13 @@ pub struct AtuinAiSessionListToolCall {
     pub cwd: Option<String>,
     /// Only sessions from this AI harness. Omit for every harness.
     #[serde(default)]
-    pub harness: Option<HarnessFilter>,
+    pub harness: Option<HarnessArg>,
     /// Maximum number of sessions to return, newest first.
     #[serde(default)]
     pub limit: Clamped<u32, 1, 50, 10>,
-    /// Include subagent sessions (spawned by another agent session). Off by default: they are
-    /// fragments of a parent session and usually crowd out the sessions a person ran.
+    /// Include subagent sessions (spawned by another agent session to do part of its work). Off
+    /// by default: they are fragments of their parent and usually crowd out the sessions a person
+    /// ran. Forks and continuations of a session are always listed.
     #[serde(default)]
     pub include_subagents: bool,
 }
@@ -42,7 +41,7 @@ impl AtuinAiSessionListToolCall {
             Err(outcome) => return outcome,
         };
         let harness = self.harness.map(Into::into);
-        let root = match cwd_filter(self.cwd.as_deref()).map(resolve_cwd).transpose() {
+        let root = match resolve_cwd(self.cwd.as_deref()) {
             Ok(root) => root,
             Err(outcome) => return outcome,
         };
@@ -55,15 +54,15 @@ impl AtuinAiSessionListToolCall {
             Err(e) => return ToolOutcome::Error(format!("Listing AI sessions failed: {e}")),
         };
         let own = caller.own_in(&all);
-        let candidates: Vec<_> = all
+        let (mut sessions, elsewhere): (Vec<_>, Vec<_>) = all
             .into_iter()
             .filter(|s| !is_own(s, own.as_deref()) && (self.include_subagents || !is_subagent(s)))
-            .collect();
-        let (sessions, elsewhere): (Vec<_>, Vec<_>) = candidates.iter().partition(|s| {
-            root.as_deref().is_none_or(|root| s.cwd.as_deref().is_some_and(|c| is_under(c, root)))
-        });
-        let note = root.as_deref().and_then(|root| elsewhere_note(root, elsewhere, true, false));
-        let sessions: Vec<_> = sessions.into_iter().take(limit).collect();
+            .partition(|s| {
+                root.as_deref()
+                    .is_none_or(|root| s.cwd.as_deref().is_some_and(|c| c.starts_with(root)))
+            });
+        let note = root.as_deref().and_then(|root| elsewhere_note(root, &elsewhere, true, false));
+        sessions.truncate(limit);
 
         if sessions.is_empty() {
             let scope = root.map_or_else(String::new, |r| format!(" under {}", r.display()));

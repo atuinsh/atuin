@@ -14,13 +14,11 @@ use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::{Content, Role, StopReason, Usage};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_daemon::AiClient;
-use atuin_daemon::grpc::ai::session::pb::{
-    get_session_event, import_sessions_event, tail_sessions_event,
-};
+use atuin_daemon::grpc::ai::session::pb::{import_sessions_event, tail_sessions_event};
 use chrono::{DateTime, Utc};
 use chrono_humanize::HumanTime;
 use clap::{Args, Subcommand, ValueEnum};
-use eyre::{Result, bail, eyre};
+use eyre::{Result, eyre};
 use futures::{StreamExt, TryStreamExt};
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -83,21 +81,23 @@ enum SubCmd {
 
 // Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
 // Copilot has no capture source yet, so advertising it would return empty for every query.
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum HarnessArg {
+// Also the MCP tools' harness filter, so the CLI and the tools accept the same names.
+#[derive(Copy, Clone, Debug, ValueEnum, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessArg {
     ClaudeCode,
     Codex,
     Opencode,
     Pi,
 }
 
-impl HarnessArg {
-    fn to_pb(self) -> HarnessKind {
-        match self {
-            Self::ClaudeCode => HarnessKind::ClaudeCode,
-            Self::Codex => HarnessKind::Codex,
-            Self::Opencode => HarnessKind::Opencode,
-            Self::Pi => HarnessKind::Pi,
+impl From<HarnessArg> for HarnessKind {
+    fn from(value: HarnessArg) -> Self {
+        match value {
+            HarnessArg::ClaudeCode => Self::ClaudeCode,
+            HarnessArg::Codex => Self::Codex,
+            HarnessArg::Opencode => Self::Opencode,
+            HarnessArg::Pi => Self::Pi,
         }
     }
 }
@@ -149,7 +149,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
             query,
             harness,
             limit,
-        } => search(&mut client, &query, harness.map(HarnessArg::to_pb), limit, style).await,
+        } => search(&mut client, &query, harness.map(HarnessKind::from), limit, style).await,
         SubCmd::Tail => tail(&mut client, style).await,
         SubCmd::Import { harness } => import(&mut client, harness, style).await,
     };
@@ -180,12 +180,8 @@ fn is_broken_pipe(err: &eyre::Report) -> bool {
 // --- subcommands --------------------------------------------------------------------------------
 
 async fn list(client: &mut AiClient, style: Style) -> Result<()> {
-    let sessions: Vec<Session> = client
-        .list_sessions(None)
-        .await?
-        .map(|session| Ok::<_, eyre::Report>(Session::try_from(session?)?))
-        .try_collect()
-        .await?;
+    let sessions =
+        crate::tools::session::list_sessions(client, None).await.map_err(|e| eyre!(e))?;
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -232,18 +228,8 @@ async fn list(client: &mut AiClient, style: Style) -> Result<()> {
 async fn show(client: &mut AiClient, selector: &str, style: Style) -> Result<()> {
     let handle = resolve(client, selector).await?;
 
-    // Drain the stream first: the leading event is the session, the rest are messages.
-    let mut stream = client.get_session(handle).await?;
-    let mut session: Option<Session> = None;
-    let mut messages: Vec<Message> = Vec::new();
-    while let Some(event) = stream.next().await {
-        match event?.event {
-            Some(get_session_event::Event::Session(s)) => session = Some(s.try_into()?),
-            Some(get_session_event::Event::Message(m)) => messages.push(m.try_into()?),
-            None => {}
-        }
-    }
-    let session = session.ok_or_else(|| eyre!("the daemon returned no session"))?;
+    let (session, messages, _) =
+        crate::tools::session::read::read_session(client, handle, None).await?;
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -558,26 +544,40 @@ async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession
     } else {
         stream.try_collect().await?
     };
-    select_session(sessions, selector)
+    select_session(sessions, selector).map_err(|e| match e {
+        SelectError::NotFound(_) => eyre!("{e}. Run `atuin ai session list`."),
+        e => eyre!(e),
+    })
+}
+
+/// Why a selector matched no single session. Callers word the next step themselves: the CLI
+/// points at `atuin ai session list`, the MCP tool at its own list tool.
+#[derive(Debug, thiserror::Error)]
+pub enum SelectError {
+    #[error("no sessions captured yet")]
+    NoSessions,
+    #[error("no session with id `{0}`")]
+    NotFound(String),
+    #[error("id `{0}` matches more than one session; use a longer or full id")]
+    Ambiguous(String),
 }
 
 /// Pure selector logic, split out from the RPC so it can be tested directly.
-pub fn select_session(sessions: Vec<Session>, selector: &str) -> Result<HarnessSession> {
+pub fn select_session(
+    sessions: Vec<Session>,
+    selector: &str,
+) -> std::result::Result<HarnessSession, SelectError> {
     if selector.eq_ignore_ascii_case("latest") {
         // The daemon lists newest-first, so the first entry is the most recent.
-        let latest =
-            sessions.into_iter().next().ok_or_else(|| eyre!("no sessions captured yet"))?;
-        return Ok(latest.handle);
+        return sessions.into_iter().next().map(|s| s.handle).ok_or(SelectError::NoSessions);
     }
 
     // `list` prints ids truncated to 12 chars, so accept a unique id prefix as well as a full id.
     let mut matches =
         sessions.into_iter().filter(|s| s.handle.session.as_ref().starts_with(selector));
-    let first = matches
-        .next()
-        .ok_or_else(|| eyre!("no session with id `{selector}`. Run `atuin ai session list`."))?;
+    let first = matches.next().ok_or_else(|| SelectError::NotFound(selector.to_owned()))?;
     if matches.next().is_some() {
-        bail!("id `{selector}` matches more than one session; use a longer or full id");
+        return Err(SelectError::Ambiguous(selector.to_owned()));
     }
     Ok(first.handle)
 }
@@ -755,7 +755,7 @@ fn message_summary(m: &Message) -> Option<Summary> {
 
 /// The role label to display: the harness's own string when the enum cannot name it (e.g. codex
 /// `developer`), otherwise the standard role name.
-fn message_role(m: &Message) -> String {
+pub fn message_role(m: &Message) -> String {
     // The harness's own role is free-form captured text, so strip any control chars before it
     // reaches the `tail` view; the fixed names (role_name) need no such care.
     match &m.role {
@@ -1460,7 +1460,7 @@ mod tests {
     #[case(HarnessArg::Opencode, HarnessKind::Opencode)]
     #[case(HarnessArg::Pi, HarnessKind::Pi)]
     fn harness_arg_maps_to_pb(#[case] arg: HarnessArg, #[case] expected: HarnessKind) {
-        assert_eq!(arg.to_pb(), expected);
+        assert_eq!(HarnessKind::from(arg), expected);
     }
 
     #[rstest]
