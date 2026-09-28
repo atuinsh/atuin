@@ -25,9 +25,10 @@ use ratatui::widgets::{
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
+use super::chooser::ListAnchor;
 use super::panel::{self, SPLIT_MIN_WIDTH};
 use super::query::{TokenKind, TokenState};
-use super::resumer::{Resume, shell_line};
+use super::resumer::shell_line;
 use super::source::{SessionRow, Snippet, harness_badge, harness_label};
 use super::state::{LIVE_SECS, ListState, State, TAB_TITLES};
 
@@ -195,8 +196,6 @@ pub struct SessionList<'a> {
     theme: &'a Theme,
     columns: &'a [AiSessionColumn],
     host_id: &'a str,
-    /// Whether the selected session is restored from sync to resume, once its plan says.
-    selected_restores: Option<bool>,
 }
 
 impl SessionList<'_> {
@@ -248,8 +247,8 @@ impl StatefulWidget for SessionList<'_> {
                 y: cy,
                 row_modifier: {
                     let mut m = Modifier::empty();
-                    // Another host's session resumes by restoring it from sync, when atuin can
-                    // resume its harness at all.
+                    // Another host's session resumes by restoring it from sync (or continuing it
+                    // elsewhere), when atuin can resume its harness at all.
                     if row.host_id != self.host_id && row.handle.harness.harness().is_none() {
                         m |= Modifier::DIM;
                     }
@@ -360,17 +359,7 @@ impl SessionList<'_> {
                         let base = style(theme, Meaning::Base);
                         (base, base.add_modifier(Modifier::BOLD))
                     };
-                    let remote = row.host_id != self.host_id;
-                    let restores = selected
-                        && self
-                            .selected_restores
-                            .unwrap_or_else(|| remote && row.handle.harness.harness().is_some());
-                    let host = match (remote, restores) {
-                        (true, true) => Some(format!(" @{} · restores from sync", row.hostname)),
-                        (true, false) => Some(format!(" @{}", row.hostname)),
-                        (false, true) => Some(" · restores from sync".to_owned()),
-                        (false, false) => None,
-                    };
+                    let host = (row.host_id != self.host_id).then(|| format!(" @{}", row.hostname));
                     let host_w = host.as_deref().map_or(0, UnicodeWidthStr::width);
                     let title_w = cw.saturating_sub(host_w).max(cw.min(8));
                     let spans =
@@ -534,6 +523,30 @@ impl State {
         }
     }
 
+    /// Where the selected row of the list in `area` is, for the chooser to open against.
+    fn anchor(&self, area: Rect, columns: &[AiSessionColumn], invert: bool) -> Option<ListAnchor> {
+        if self.results.is_empty() || area.height == 0 {
+            return None;
+        }
+        let from_top = u16::try_from(self.list.selected.checked_sub(self.list.offset)?).ok()?;
+        let row = if invert {
+            area.top() + from_top
+        } else {
+            area.bottom().checked_sub(from_top + 1)?
+        };
+        // Past the indicator, and the columns before the badge (or the title, without one).
+        let before: u16 = columns
+            .iter()
+            .take_while(|c| !matches!(c, AiSessionColumn::Harness | AiSessionColumn::Title))
+            .map(|c| c.width() + 1)
+            .sum();
+        Some(ListAnchor {
+            list: area,
+            row,
+            badge_x: area.x + 3 + before,
+        })
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn draw(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
         self.draw_main(f, settings, theme);
@@ -542,92 +555,9 @@ impl State {
         }
     }
 
-    /// The "continue in…" chooser, over the middle of the picker: the harnesses to continue the
-    /// session in, what continuing it flattens, and the keys.
-    fn draw_chooser(&self, f: &mut Frame, settings: &Settings, theme: &Theme) {
-        let Some(chooser) = &self.chooser else {
-            return;
-        };
-        let bold = Style::default().add_modifier(Modifier::BOLD);
-        let muted = style(theme, Meaning::Annotation);
-        let mut lines: Vec<Line<'static>> = chooser
-            .targets
-            .iter()
-            .enumerate()
-            .map(|(n, target)| {
-                let selected = n == chooser.selected;
-                let marker = if selected {
-                    "▶ "
-                } else {
-                    "  "
-                };
-                let label = Span::styled(
-                    harness_label(*target).to_owned(),
-                    if selected {
-                        harness_style(theme, *target).add_modifier(Modifier::BOLD)
-                    } else {
-                        style(theme, Meaning::Base)
-                    },
-                );
-                Line::from(vec![
-                    Span::styled(format!("{marker}{} ", n + 1), muted),
-                    Span::styled(
-                        format!("{:<3}", harness_badge(*target)),
-                        harness_style(theme, *target),
-                    ),
-                    label,
-                ])
-            })
-            .collect();
-        lines.push(Line::default());
-        let what = match self.flattened.get(&chooser.session) {
-            None => "reading the session…".to_owned(),
-            Some(Err(e)) => format!("can't read it: {e}"),
-            Some(Ok(flattened)) => match flattened.summary() {
-                summary if summary.is_empty() => "carried over as it is".to_owned(),
-                summary => summary,
-            },
-        };
-        lines.push(Line::from(Span::styled(what, muted)));
-        lines.push(Line::from(vec![
-            Span::styled("<enter>", bold),
-            Span::raw(if settings.enter_accept {
-                ": continue  "
-            } else {
-                ": edit  "
-            }),
-            Span::styled("<tab>", bold),
-            Span::raw(": edit  "),
-            Span::styled("<esc>", bold),
-            Span::raw(": cancel"),
-        ]));
-
-        let title =
-            format!(" Continue this {} session in ", harness_label(chooser.session.harness));
-        let area = f.area();
-        let widest = lines.iter().map(Line::width).chain([title.width()]).max().unwrap_or(0);
-        let width = u16::try_from(widest + 4).unwrap_or(u16::MAX).min(area.width);
-        let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX).min(area.height);
-        let popup = Rect {
-            x: area.x + (area.width - width) / 2,
-            y: area.y + (area.height - height) / 2,
-            width,
-            height,
-        };
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .padding(ratatui::widgets::Padding::horizontal(1))
-            .title(Span::styled(title, bold));
-        f.render_widget(Clear, popup);
-        f.render_widget(
-            Paragraph::new(Text::from(lines)).block(block).style(style(theme, Meaning::Base)),
-            popup,
-        );
-    }
-
     fn draw_main(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
         let area = f.area();
+        self.list_anchor = None;
         f.render_widget(Clear, area);
         let compactness = to_compactness(area, settings);
         let invert = settings.invert;
@@ -752,9 +682,7 @@ impl State {
                 Span::styled("<tab>", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": edit  "),
                 Span::styled("<ctrl-y>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": copy  "),
-                Span::styled("<c>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": continue in…"),
+                Span::raw(": copy"),
             ]);
             let guide = Paragraph::new(guide).style(style(theme, Meaning::Annotation));
             f.render_widget(input_block(guide, st), input_chunk);
@@ -810,13 +738,9 @@ impl State {
             theme,
             columns: &columns,
             host_id: &self.context.host_id,
-            selected_restores: self.selected().and_then(|row| match self.plans.get(&row.handle) {
-                Some(Ok(resume)) => Some(resume.restore.is_some()),
-                Some(Err(_)) => Some(false),
-                None => None,
-            }),
         };
         f.render_stateful_widget(list, list_area, &mut self.list);
+        self.list_anchor = self.anchor(list_area, &columns, invert);
 
         // A scrollbar on the right border (or the divider) once the list overflows.
         let visible = usize::from(list_area.height);
@@ -1081,23 +1005,23 @@ impl State {
                 style(theme, Meaning::Guidance),
             )]));
         }
-        if let Some(Ok(Resume {
-            restore: Some(restore),
-            ..
-        })) = self.plans.get(&row.handle)
-        {
-            let why = restore.note.as_deref().unwrap_or("its transcript isn't on this machine");
-            lines.push(field("Restore", vec![Span::styled(
-                format!("from sync, when resumed: {why}"),
-                key,
-            )]));
-        }
         lines.push(match self.plans.get(&row.handle) {
             None => field("Resume", vec![Span::styled("…", key)]),
-            Some(Ok(resume)) => field("Resume", vec![Span::styled(
-                shell_line(&resume.plan),
-                style(theme, Meaning::Important).add_modifier(Modifier::BOLD),
-            )]),
+            Some(Ok(resume)) => field("Resume", vec![
+                Span::styled(
+                    shell_line(&resume.plan),
+                    style(theme, Meaning::Important).add_modifier(Modifier::BOLD),
+                ),
+                // Its transcript is written from the synced messages first.
+                Span::styled(
+                    if resume.restore.is_some() {
+                        "  from sync"
+                    } else {
+                        ""
+                    },
+                    key,
+                ),
+            ]),
             Some(Err(why)) => field("Resume", vec![Span::styled(
                 format!("not resumable: {why}"),
                 style(theme, Meaning::AlertError),

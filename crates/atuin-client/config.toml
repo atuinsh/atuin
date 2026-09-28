@@ -365,6 +365,12 @@ enter_accept = true
 ## Height of the inline picker. Defaults to the top-level inline_height.
 # inline_height = 40
 
+## Ask where to resume a session once it's chosen: in its own harness (the default
+## choice, so enter-enter resumes it), or continued in another harness installed here.
+## When false, enter and tab resume in its own harness straight away; the chooser still
+## opens for a session that can't be resumed there.
+# resume_chooser = true
+
 ## Per-harness resume commands, in place of the built-in ones (run after `cd -- <cwd> &&`).
 ## {id} is the native session id, {path} its transcript on this machine and {cwd} its
 ## working directory. Each is substituted within its word, unquoted, so don't quote them.

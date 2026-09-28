@@ -95,8 +95,7 @@ impl SidecarSource {
         context: &ResumeContext,
         host_names_from: Option<HostNameSource>,
     ) -> Self {
-        let host_id = Uuid::try_parse(&context.host_id)
-            .map_or_else(|_| context.host_id.clone(), |id| id.as_simple().to_string());
+        let host_id = super::simple_host_id(&context.host_id);
         Self {
             db,
             host_id,

@@ -10,8 +10,10 @@
 //!   shell widget, so the command the widget puts on the command line works as it stands.
 //! - `--in <harness>` continues the session the id names in another harness instead: it is
 //!   written out there as a new session (its tool calls flattened into notes; see
-//!   [`atuin_common::harnesstools::continuation`]) and that is resumed, the same way. The picker
-//!   does the same from its "continue in…" chooser (`c` in the Inspect tab, alt-c anywhere).
+//!   [`atuin_common::harnesstools::continuation`]) and that is resumed, the same way. In the
+//!   picker, accepting a session asks where to resume it: its own harness first, then the others
+//!   installed here (see [`crate::resume_tui::chooser`]; `[ai.sessions] resume_chooser = false`
+//!   skips that).
 //! - From the shell widget (`--shell-widget`), the result goes to stderr using the history
 //!   search's protocol: `__atuin_accept__:<cmd>` to run it, plain `<cmd>` to edit it, nothing to
 //!   leave the command line alone.
