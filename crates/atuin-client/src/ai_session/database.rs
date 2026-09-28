@@ -202,14 +202,6 @@ impl AiSessionDatabase {
         let db = Self { db };
         db.migrate().await?;
         db.reindex().await?;
-        // Off the startup path: it scans every session once after upgrading, and nothing needs
-        // `last_reply` before it lands.
-        let backfill = db.clone();
-        tokio::spawn(async move {
-            if let Err(err) = backfill.backfill_last_reply().await {
-                warn!(?err, "failed to backfill ai-session last replies");
-            }
-        });
         Ok(db)
     }
 
@@ -975,68 +967,14 @@ impl AiSessionDatabase {
         Ok((String::new(), Some(compressed)))
     }
 
-    /// Fill `last_reply` for sessions projected before the column existed: appends skip messages
-    /// already present, so a replay alone never reaches them. Each session is scanned once;
-    /// `last_reply_at = 0` marks one with no assistant text so it is not rescanned. Runs in short
-    /// batched transactions, since capture writes alongside it, and only fills sessions still
-    /// unset, so a reply an append recorded meanwhile is never overwritten.
-    pub async fn backfill_last_reply(&self) -> Result<(), DbError> {
-        const BATCH: usize = 200;
-        let pool = self.db.pool();
-        let pending: Vec<i64> =
-            db::query_scalar("SELECT id FROM sessions WHERE last_reply_at IS NULL")
-                .fetch_all(pool)
-                .await?;
-        let assistant = serde_json::to_string(&Role::Assistant)?;
-        for batch in pending.chunks(BATCH) {
-            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-            for &session in batch {
-                let mut found = None;
-                {
-                    let mut rows = db::query_as::<_, (String, Option<Vec<u8>>, i64)>(
-                        "SELECT content, content_z, timestamp FROM messages WHERE session = ? AND \
-                         role = ? ORDER BY timestamp DESC, id DESC",
-                    )
-                    .bind(session)
-                    .bind(&assistant)
-                    .fetch(&mut *tx);
-                    while let Some((content, content_z, timestamp)) = rows.try_next().await? {
-                        let Ok(contents) = Self::read_content(content, content_z) else {
-                            continue;
-                        };
-                        if let Some(reply) = Self::reply_from(&contents) {
-                            found = Some((reply, timestamp));
-                            break;
-                        }
-                    }
-                }
-                let (reply, at) = found.map_or((None, 0), |(reply, at)| (Some(reply), at));
-                db::query(
-                    "UPDATE sessions SET last_reply = ?, last_reply_at = ? WHERE id = ? AND \
-                     last_reply_at IS NULL",
-                )
-                .bind(reply)
-                .bind(at)
-                .bind(session)
-                .execute(&mut *tx)
-                .await?;
-            }
-            tx.commit().await?;
-        }
-        Ok(())
-    }
-
     /// The text of an assistant message, clipped for storage, or `None` for any other message.
     fn reply_text(msg: &Message) -> Option<String> {
+        const MAX_CHARS: usize = 600;
         if msg.role != Role::Assistant {
             return None;
         }
-        Self::reply_from(&msg.content)
-    }
-
-    fn reply_from(content: &[Content]) -> Option<String> {
-        const MAX_CHARS: usize = 600;
-        let text = content
+        let text = msg
+            .content
             .iter()
             .filter_map(|content| match content {
                 Content::Text(text) => Some(text.trim()),
@@ -2053,30 +1991,6 @@ mod tests {
 
         let s = db.get_session(&session).await.unwrap().unwrap();
         assert_eq!(s.last_reply.as_deref(), Some("all tests pass now"));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn backfill_fills_last_reply_for_sessions_projected_before_it_existed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ai.db");
-        let session = sample_handle();
-        {
-            let db = AiSessionDatabase::open(&path).await.unwrap();
-            db.append(&reply_in(&session, 1, "the fix is in")).await.unwrap();
-            db.append(&message_in(&session, 2, "great")).await.unwrap();
-            db::query("UPDATE sessions SET last_reply = NULL, last_reply_at = NULL")
-                .execute(db.db.pool())
-                .await
-                .unwrap();
-            db.db.pool().close().await;
-        }
-
-        let db = AiSessionDatabase::open(&path).await.unwrap();
-        // `open` starts the same backfill in the background; run it here to observe the result.
-        db.backfill_last_reply().await.unwrap();
-        let s = db.get_session(&session).await.unwrap().unwrap();
-        assert_eq!(s.last_reply.as_deref(), Some("the fix is in"));
     }
 
     #[rstest]

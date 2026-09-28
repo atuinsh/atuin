@@ -23,11 +23,15 @@ use crate::tools::ToolOutcome;
 /// Roughly how much a multi-message page may hold (about 4k tokens) before it ends early.
 const PAGE_CHARS: usize = 16_000;
 
+/// How much of one message a single-message read returns at a time: a long message (a pasted
+/// blob, say) comes in windows the reader walks with `offset`, so no response floods the context
+/// and nothing is out of reach.
+const WINDOW_CHARS: usize = 20_000;
+
 /// Per-block character budgets. A page abridges: tool output dominates transcripts by volume,
 /// and a reader mostly needs what was asked, said and decided. A single-message read is the way
-/// to see one message in full, so it gets generous budgets and shows harness-injected context
-/// too. Still bounded, so one giant pasted blob cannot flood the context: anything cut says how
-/// much was left out, and the schema and tool description state the limit.
+/// to see one message in full: nothing is cut per part (it is windowed as a whole instead) and
+/// harness-injected context is shown too.
 struct Budgets {
     text: usize,
     thinking: usize,
@@ -37,11 +41,9 @@ struct Budgets {
 }
 
 impl Budgets {
-    const WHOLE_CHARS: usize = 20_000;
-
     fn for_limit(limit: u32) -> Self {
         if limit == 1 {
-            let n = Self::WHOLE_CHARS;
+            let n = usize::MAX;
             Self {
                 text: n,
                 thinking: n,
@@ -74,10 +76,14 @@ pub struct AtuinAiSessionReadToolCall {
     #[serde(default)]
     pub start: i64,
     /// Maximum number of messages to show. Long messages and harness-injected context are
-    /// abridged on a multi-message page; read a single message (limit: 1) to see it in full, up
-    /// to 20,000 characters per part.
+    /// abridged on a multi-message page; read a single message (limit: 1) to see it in full.
     #[serde(default)]
     pub limit: Clamped<u32, 1, 200, 40>,
+    /// With limit: 1, where to start within the message, in characters. A message longer than
+    /// 20,000 characters comes in parts, each ending with the offset to read the next from.
+    /// Ignored on multi-message pages.
+    #[serde(default)]
+    pub offset: usize,
 }
 
 impl AtuinAiSessionReadToolCall {
@@ -201,6 +207,11 @@ impl AtuinAiSessionReadToolCall {
             }
             shown += tools.flush(&mut out);
             if let Some((role, body)) = render_message(message, &budgets) {
+                let body = if budgets.whole {
+                    self.window(&body)
+                } else {
+                    body
+                };
                 // `HH:MM` only: the header carries the date and sessions rarely cross midnight.
                 let time = message
                     .timestamp
@@ -238,6 +249,35 @@ impl AtuinAiSessionReadToolCall {
         }
         out.push('\n');
         out
+    }
+}
+
+impl AtuinAiSessionReadToolCall {
+    /// The part of a single message's rendered `body` starting at `offset`, saying where the
+    /// next part starts when there is more.
+    fn window(&self, body: &str) -> String {
+        let total = body.chars().count();
+        if self.offset == 0 && total <= WINDOW_CHARS {
+            return body.to_owned();
+        }
+        if self.offset >= total {
+            return format!(
+                "(offset {} is past the end of this message: {total} chars)\n",
+                self.offset
+            );
+        }
+        let end = (self.offset + WINDOW_CHARS).min(total);
+        let mut part: String = body.chars().skip(self.offset).take(end - self.offset).collect();
+        if !part.ends_with('\n') {
+            part.push('\n');
+        }
+        let more = if end < total {
+            format!(" Read the rest with offset: {end}.")
+        } else {
+            String::new()
+        };
+        let _ = writeln!(part, "[chars {}–{end} of {total}.{more}]", self.offset);
+        part
     }
 }
 
@@ -769,6 +809,20 @@ mod tests {
     #[case::other(json!({"x": 1}), r#"{"x":1}"#)]
     fn tool_input_leads_with_what_it_did(#[case] input: Value, #[case] want: &str) {
         assert_eq!(tool_input(&input, &Budgets::for_limit(40)), want);
+    }
+
+    #[rstest]
+    fn a_long_single_message_comes_in_windows() {
+        let long = format!("start{}end", "x".repeat(45_000));
+        let msgs = vec![text(Role::User, &long)];
+        let first = render(json!({"session_id": "abc", "limit": 1}), &msgs);
+        assert!(first.contains("start") && !first.contains("end\n"), "the first window is cut");
+        assert!(first.contains("Read the rest with offset: 20000."), "{first}");
+        let last = render(json!({"session_id": "abc", "limit": 1, "offset": 40_000}), &msgs);
+        assert!(last.contains("end\n") && !last.contains("start"), "{last}");
+        assert!(!last.contains("Read the rest"), "{last}");
+        let past = render(json!({"session_id": "abc", "limit": 1, "offset": 90_000}), &msgs);
+        assert!(past.contains("past the end of this message"), "{past}");
     }
 
     #[rstest]
