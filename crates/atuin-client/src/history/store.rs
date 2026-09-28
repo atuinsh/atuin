@@ -133,6 +133,42 @@ const BUILD_BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(5000).unwrap();
 /// wait on the lock and how much work a lost race throws away.
 const APPEND_BATCH_SIZE: usize = 1000;
 
+/// Below this many records, [`encrypt_records`] encrypts inline rather than fanning out.
+const PARALLEL_ENCRYPT_MIN: usize = 64;
+
+/// Encrypt `records`, in order, spread across the blocking pool. Every record gets its own content
+/// key and key wrap, so encrypting a large batch one record at a time is CPU-bound on a single
+/// core: it was most of the time a 200k-entry delete spent writing tombstones.
+async fn encrypt_records(
+    records: Vec<Record<DecryptedData>>,
+    key: &paseto_v4::Key,
+) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+    if records.len() < PARALLEL_ENCRYPT_MIN {
+        return Ok(records.iter().map(|record| record.encrypt(key)).collect());
+    }
+
+    let tasks = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    let per_task = records.len().div_ceil(tasks);
+    let mut records = records.into_iter();
+    let mut handles = Vec::with_capacity(tasks);
+    loop {
+        let part: Vec<_> = records.by_ref().take(per_task).collect();
+        if part.is_empty() {
+            break;
+        }
+        let key = key.clone();
+        handles.push(tokio::task::spawn_blocking(move || {
+            part.iter().map(|record| record.encrypt(&key)).collect::<Vec<_>>()
+        }));
+    }
+
+    let mut encrypted = Vec::with_capacity(per_task * handles.len());
+    for handle in handles {
+        encrypted.extend(handle.await?);
+    }
+    Ok(encrypted)
+}
+
 /// How many records `incremental_build` decodes concurrently. Decoding is read-then-decrypt per
 /// record; overlapping the reads keeps the record store's pool busy without unbounded fan-out.
 /// Kept under the store's connection pool size so decodes don't starve other readers.
@@ -192,7 +228,7 @@ impl HistoryStore {
             loop {
                 let idx = self.store.last(&series).await?.map_or(0, |p| p.idx + 1);
 
-                let encrypted: Vec<_> = chunk
+                let unencrypted: Vec<_> = chunk
                     .iter()
                     .enumerate()
                     .map(|(n, bytes)| {
@@ -203,9 +239,9 @@ impl HistoryStore {
                             .idx(idx + u64::conv(n))
                             .data(bytes.clone())
                             .build()
-                            .encrypt(&self.encryption_key)
                     })
                     .collect();
+                let encrypted = encrypt_records(unencrypted, &self.encryption_key).await?;
 
                 if self.store.push_batch_unique(encrypted.iter()).await? {
                     ids.extend(encrypted.into_iter().map(|r| r.id));

@@ -1,0 +1,122 @@
+name: Windows
+
+# The rest of CI runs on Buildkite (.buildkite/pipeline.yml). Windows stays
+# here until Buildkite's hosted Windows agents are generally available.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "ui/**"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "ui/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  unit-test:
+    strategy:
+      matrix:
+        os: [depot-windows-2025-16]
+    runs-on: ${{ matrix.os }}
+
+    env:
+      # sccache serves compiled objects from Depot's managed WebDAV cache; keep
+      # incremental off (sccache can't cache incremental compilations).
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+
+      - uses: taiki-e/install-action@v2
+        name: Install nextest
+        with:
+          tool: cargo-nextest
+
+      # rust-cache (warm target skip) + sccache (serves compiled crates from
+      # Depot's cross-branch cache).
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: unit-test
+
+      - name: Run cargo test
+        run: cargo nextest run --lib --bins
+
+      - name: sccache stats
+        if: ${{ always() }}
+        run: sccache --show-stats
+
+      - name: Show new proptest regressions
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          echo "::group::proptest regression files changed by this run"
+          echo "A proptest failure appends a 'cc <seed>' line to a regression file."
+          echo "New/changed regression files (download the artifact below to reproduce):"
+          git add -N -- '*proptest-regressions*' || true
+          git status --porcelain
+          git --no-pager diff
+          echo "::endgroup::"
+
+      - name: Upload proptest regressions
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: proptest-regressions-unit-${{ matrix.os }}
+          path: |
+            **/proptest-regressions/**
+            **/*.proptest-regressions
+          if-no-files-found: ignore
+          retention-days: 14
+
+  check:
+    strategy:
+      matrix:
+        os: [depot-windows-2025-16]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+
+      # rust-cache, not sccache: check emits metadata only (no link), which
+      # sccache refuses to cache.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: check
+
+      - name: Run cargo check (all features)
+        run: cargo check --all-features --workspace
+
+      - name: Run cargo check (no features)
+        run: cargo check --no-default-features --workspace
+
+      - name: Run cargo check (sync)
+        run: cargo check --no-default-features --features sync --workspace
+
+      - name: Run cargo check (server)
+        run: cargo check -p atuin-server
+
+      - name: Run cargo check (client only)
+        run: cargo check --no-default-features --features client --workspace
+
+      - name: Run cargo check (release profile)
+        run: cargo check --workspace --locked --release
