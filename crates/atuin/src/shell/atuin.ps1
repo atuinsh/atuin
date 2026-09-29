@@ -117,9 +117,12 @@ New-Module -Name Atuin -ScriptBlock {
         # This makes it unreliable, so we go through an environment variable, which should always be consistent across versions.
         $prevCommandLine = $env:ATUIN_COMMAND_LINE
         $prevShell = $env:ATUIN_SHELL
+        $prevPwd = $env:PWD
         try {
             $env:ATUIN_COMMAND_LINE = $line
             $env:ATUIN_SHELL = "powershell"
+            # Atuin reads the directory from $env:PWD, which Set-Location (cd) never updates.
+            $env:PWD = (Get-Location -PSProvider FileSystem).ProviderPath
             $script:atuinHistoryId = atuin history start --hook --command-from-env
         }
         catch {
@@ -128,6 +131,7 @@ New-Module -Name Atuin -ScriptBlock {
         finally {
             $env:ATUIN_COMMAND_LINE = $prevCommandLine
             $env:ATUIN_SHELL = $prevShell
+            $env:PWD = $prevPwd
         }
 
         $global:LASTEXITCODE = $lastNativeExitCode
@@ -156,6 +160,8 @@ New-Module -Name Atuin -ScriptBlock {
             $process.StartInfo.EnvironmentVariables["ATUIN_QUERY"] = Get-CommandLine
             # PowerShell's Set-Location (cd) doesn't update the process-level working directory, set it explicitly
             $process.StartInfo.WorkingDirectory = (Get-Location -PSProvider FileSystem).ProviderPath
+            # Nor $env:PWD, which Atuin reads first
+            $process.StartInfo.EnvironmentVariables["PWD"] = $process.StartInfo.WorkingDirectory
 
             try {
                 $process.Start() | Out-Null
