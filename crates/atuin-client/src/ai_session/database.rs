@@ -589,9 +589,11 @@ impl AiSessionDatabase {
         row.map(Self::session_from_row).transpose()
     }
 
+    /// Sessions newest first, of `harness` and active at or after `updated_since` when given.
     pub async fn list_sessions(
         &self,
         harness: Option<HarnessKind>,
+        updated_since: Option<OffsetDateTime>,
     ) -> Result<Vec<Session>, DbError> {
         let mut sql = String::from(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
@@ -603,11 +605,17 @@ impl AiSessionDatabase {
         if harness.is_some() {
             sql.push_str(" AND harness = ?");
         }
+        if updated_since.is_some() {
+            sql.push_str(" AND updated_at >= ?");
+        }
         sql.push_str(" ORDER BY updated_at DESC");
 
         let mut query = db::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(sql));
         if let Some(harness) = harness {
             query = query.bind(harness as i64);
+        }
+        if let Some(since) = updated_since {
+            query = query.bind(Self::millis(since));
         }
 
         let rows: Vec<SessionRow> = query.fetch_all(self.db.pool()).await?;
@@ -1615,9 +1623,26 @@ mod tests {
             db.append(&m).await.unwrap();
         }
 
-        let sessions = db.list_sessions(None).await.unwrap();
+        let sessions = db.list_sessions(None, None).await.unwrap();
         assert_eq!(sessions.len(), 3);
         assert!(sessions.windows(2).all(|w| w[0].updated_at >= w[1].updated_at));
+    }
+
+    #[rstest]
+    #[case::all(0, &["session-2", "session-1", "session-0"])]
+    #[case::inclusive(1, &["session-2", "session-1"])]
+    #[case::none(3, &[])]
+    #[tokio::test]
+    async fn list_filters_by_activity_since(#[case] since: i64, #[case] want: &[&str]) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in three_sessions_oldest_first() {
+            db.append(&m).await.unwrap();
+        }
+
+        let since = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(since);
+        let sessions = db.list_sessions(None, Some(since)).await.unwrap();
+        let ids: Vec<_> = sessions.iter().map(|s| s.handle.session.as_ref()).collect();
+        assert_eq!(ids, want);
     }
 
     #[rstest]
@@ -2036,7 +2061,7 @@ mod tests {
 
         let s = db.get_session(&session).await.unwrap().unwrap();
         assert_eq!(s.parent_kind, Some(ParentKind::Fork));
-        let listed = db.list_sessions(None).await.unwrap();
+        let listed = db.list_sessions(None, None).await.unwrap();
         assert_eq!(listed[0].parent_kind, Some(ParentKind::Fork));
     }
 

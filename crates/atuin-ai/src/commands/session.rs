@@ -181,7 +181,7 @@ fn is_broken_pipe(err: &eyre::Report) -> bool {
 
 async fn list(client: &mut AiClient, style: Style) -> Result<()> {
     let sessions =
-        crate::tools::session::list_sessions(client, None).await.map_err(|e| eyre!(e))?;
+        crate::tools::session::list_sessions(client, None, None).await.map_err(|e| eyre!(e))?;
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -533,7 +533,7 @@ async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Styl
 /// (the harness is only known from the listing, so an id alone cannot address a session).
 async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession> {
     let mut stream = client
-        .list_sessions(None)
+        .list_sessions(None, None)
         .await?
         .map(|session| Ok::<_, eyre::Report>(Session::try_from(session?)?));
     // `latest` only needs the newest session, which the daemon streams first, so take a single

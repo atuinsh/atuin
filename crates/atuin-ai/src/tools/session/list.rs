@@ -50,14 +50,14 @@ impl AtuinAiSessionListToolCall {
 
         // The whole listing, not just a page: it also identifies the caller's own session, and
         // with a cwd filter, the sessions outside it say whether the project lives elsewhere too.
-        let all = match super::list_sessions(&mut client, harness).await {
+        let all = match super::list_sessions(&mut client, harness, None).await {
             Ok(all) => all,
             Err(e) => return ToolOutcome::Error(format!("Listing AI sessions failed: {e}")),
         };
         let own = caller.own_in(&all);
         let (mut sessions, elsewhere): (Vec<_>, Vec<_>) = all
             .into_iter()
-            .filter(|s| !is_own(s, own.as_deref()) && (self.include_subagents || !is_subagent(s)))
+            .filter(|s| !is_own(s, own.as_ref()) && (self.include_subagents || !is_subagent(s)))
             .partition(|s| {
                 root.as_deref()
                     .is_none_or(|root| s.cwd.as_deref().is_some_and(|c| c.starts_with(root)))

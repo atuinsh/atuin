@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use atuin_client::ai_session::{HarnessKind, Session};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId, Session};
 use atuin_daemon::AiClient;
 use time::OffsetDateTime;
 
@@ -46,7 +46,7 @@ impl Caller<'_> {
         }
     }
 
-    /// The caller's session id, if it can be identified.
+    /// The caller's session, if it can be identified.
     ///
     /// Claude Code exports `CLAUDE_CODE_SESSION_ID` to MCP servers; it is only trusted when the
     /// client says it is Claude Code, because other harnesses (opencode) pass their whole
@@ -61,26 +61,30 @@ impl Caller<'_> {
     /// caller's own session, another agent's session started just after this server can be the
     /// lone candidate. Remembering that pick would hide the other agent's session for the life of
     /// the server; re-deciding lets the next call, once both sessions exist, see the ambiguity.
-    pub async fn own_session_id(&self, client: &mut AiClient) -> Option<String> {
-        if let Some(id) = self.env_session_id() {
-            return Some(id);
+    pub async fn own_session(&self, client: &mut AiClient) -> Option<HarnessSession> {
+        if let Some(own) = self.env_session() {
+            return Some(own);
         }
-        self.pick(&super::list_sessions(client, Some(self.harness()?)).await.ok()?)
+        // Only a session active since the server started can be the caller's; don't fetch the rest.
+        let since = Some(OffsetDateTime::from(self.own.started));
+        self.pick(&super::list_sessions(client, Some(self.harness()?), since).await.ok()?)
     }
 
-    /// [`Self::own_session_id`] for a caller that already holds the session list.
-    pub fn own_in(&self, sessions: &[Session]) -> Option<String> {
-        self.env_session_id().or_else(|| self.pick(sessions))
+    /// [`Self::own_session`] for a caller that already holds the session list.
+    pub fn own_in(&self, sessions: &[Session]) -> Option<HarnessSession> {
+        self.env_session().or_else(|| self.pick(sessions))
     }
 
-    fn env_session_id(&self) -> Option<String> {
-        (self.harness()? == HarnessKind::ClaudeCode)
-            .then(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok())
-            .flatten()
-            .filter(|id| !id.is_empty())
+    fn env_session(&self) -> Option<HarnessSession> {
+        let harness = self.harness().filter(|h| *h == HarnessKind::ClaudeCode)?;
+        let id = std::env::var("CLAUDE_CODE_SESSION_ID").ok().filter(|id| !id.is_empty())?;
+        Some(HarnessSession {
+            harness,
+            session: NativeSessionId::from(id),
+        })
     }
 
-    fn pick(&self, sessions: &[Session]) -> Option<String> {
+    fn pick(&self, sessions: &[Session]) -> Option<HarnessSession> {
         let harness = self.harness()?;
         let cwd = self.own.cwd.as_deref()?;
         let started = OffsetDateTime::from(self.own.started);
@@ -96,12 +100,12 @@ impl Caller<'_> {
                 && s.updated_at >= started
         });
         let only = candidates.next()?;
-        candidates.next().is_none().then(|| only.handle.session.to_string())
+        candidates.next().is_none().then(|| only.handle.clone())
     }
 }
 
-pub(super) fn is_own(s: &Session, own: Option<&str>) -> bool {
-    own.is_some_and(|own| s.handle.session.as_ref() == own)
+pub(super) fn is_own(s: &Session, own: Option<&HarnessSession>) -> bool {
+    own == Some(&s.handle)
 }
 
 #[cfg(test)]
@@ -114,6 +118,10 @@ mod tests {
         let mut s = super::super::fixtures::session(id, Some(cwd), OffsetDateTime::from(started));
         s.handle.harness = HarnessKind::Codex;
         s
+    }
+
+    fn id(own: &HarnessSession) -> String {
+        own.session.to_string()
     }
 
     fn server(started: SystemTime) -> OwnSession {
@@ -137,7 +145,7 @@ mod tests {
             session("elsewhere", "/work/q", now),
             session("mine", "/work/p", now + Duration::from_secs(30)),
         ];
-        assert_eq!(caller.pick(&sessions).as_deref(), Some("mine"));
+        assert_eq!(caller.pick(&sessions).as_ref().map(id).as_deref(), Some("mine"));
     }
 
     #[rstest]
@@ -152,7 +160,7 @@ mod tests {
             session("previous", "/work/p", now - Duration::from_secs(25)),
             session("mine", "/work/p", now + Duration::from_secs(1)),
         ];
-        assert_eq!(caller.pick(&sessions).as_deref(), Some("mine"));
+        assert_eq!(caller.pick(&sessions).as_ref().map(id).as_deref(), Some("mine"));
     }
 
     #[rstest]
@@ -166,7 +174,10 @@ mod tests {
         let other = session("other", "/work/p", now + Duration::from_secs(2));
         // The caller's own session is not captured yet, so the other agent's is the lone
         // candidate; nothing may carry that mistake into the next call.
-        assert_eq!(caller.pick(std::slice::from_ref(&other)).as_deref(), Some("other"));
+        assert_eq!(
+            caller.pick(std::slice::from_ref(&other)).as_ref().map(id).as_deref(),
+            Some("other")
+        );
         let mine = session("mine", "/work/p", now + Duration::from_secs(1));
         assert_eq!(caller.pick(&[other, mine]), None);
     }
@@ -184,7 +195,7 @@ mod tests {
         // The caller's own session is not captured yet: nothing is its, so nothing is hidden.
         assert_eq!(caller.pick(std::slice::from_ref(&previous)), None);
         let mine = session("mine", "/work/p", now + Duration::from_secs(1));
-        assert_eq!(caller.pick(&[previous, mine]).as_deref(), Some("mine"));
+        assert_eq!(caller.pick(&[previous, mine]).as_ref().map(id).as_deref(), Some("mine"));
     }
 
     #[rstest]
@@ -214,5 +225,23 @@ mod tests {
             .harness(),
             want
         );
+    }
+
+    #[rstest]
+    #[case::same_session(HarnessKind::Codex, "mine", true)]
+    #[case::same_id_other_harness(HarnessKind::ClaudeCode, "mine", false)]
+    #[case::other_id(HarnessKind::Codex, "other", false)]
+    fn own_session_matches_harness_and_id(
+        #[case] harness: HarnessKind,
+        #[case] id: &str,
+        #[case] own: bool,
+    ) {
+        let mine = session("mine", "/work/p", SystemTime::now());
+        let candidate = HarnessSession {
+            harness,
+            session: NativeSessionId::from(id.to_owned()),
+        };
+        assert_eq!(is_own(&mine, Some(&candidate)), own);
+        assert!(!is_own(&mine, None));
     }
 }

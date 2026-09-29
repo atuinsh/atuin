@@ -28,13 +28,15 @@ async fn connect(settings: &Settings) -> Result<AiClient, ToolOutcome> {
     })
 }
 
-/// Every captured session (of `harness`, if given), newest first, decoded into domain types.
+/// Every captured session (of `harness` and active since `updated_since`, if given), newest
+/// first, decoded into domain types.
 pub async fn list_sessions(
     client: &mut AiClient,
     harness: Option<HarnessKind>,
+    updated_since: Option<time::OffsetDateTime>,
 ) -> Result<Vec<Session>, String> {
     client
-        .list_sessions(harness)
+        .list_sessions(harness, updated_since)
         .await
         .map_err(|e| e.to_string())?
         .map(|s| {

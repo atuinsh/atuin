@@ -13,6 +13,7 @@ use eyre::{Context as EyreContext, Result};
 use futures::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use itertools::Itertools;
+use time::OffsetDateTime;
 #[cfg(windows)]
 use tokio::net::TcpStream;
 #[cfg(unix)]
@@ -526,16 +527,22 @@ impl AiClient {
         Self::new(settings.daemon.tcp_port).await
     }
 
-    /// Stream captured session summaries, newest first. `harness` filters to a single harness when
-    /// set. The daemon sends one session per message (so a long list never trips the gRPC
-    /// message-size limit); callers that want the whole set collect it with `try_collect`, and ones
-    /// that only want the newest can take the first item without draining the rest.
+    /// Stream captured session summaries, newest first. `harness` filters to a single harness and
+    /// `updated_since` to sessions active at or after that time, when set. The daemon sends one
+    /// session per message (so a long list never trips the gRPC message-size limit); callers that
+    /// want the whole set collect it with `try_collect`, and ones that only want the newest can
+    /// take the first item without draining the rest.
     pub async fn list_sessions(
         &mut self,
         harness: Option<HarnessKind>,
+        updated_since: Option<OffsetDateTime>,
     ) -> Result<tonic::Streaming<AiSession>> {
         let request = ListSessionsRequest {
             harness: harness.map(|h| h as i32),
+            updated_since: updated_since.map(|ts| prost_types::Timestamp {
+                seconds: ts.unix_timestamp(),
+                nanos: ts.nanosecond().cast_signed(),
+            }),
         };
         Ok(self.client.list_sessions(request).await?.into_inner())
     }

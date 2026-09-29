@@ -53,7 +53,7 @@ impl AtuinAiSessionSearchToolCall {
         let harness = self.harness.map(HarnessKind::from);
         let cwd = resolve_cwd(self.cwd.as_deref())?;
         let cwd_str = cwd.as_ref().map(|c| c.to_string_lossy());
-        let own = caller.own_session_id(&mut client).await;
+        let own = caller.own_session(&mut client).await;
         let limit = self.limit.get();
         // One extra, so the page stays full after the caller's own session is dropped.
         let fetch = limit + 1;
@@ -79,7 +79,7 @@ impl AtuinAiSessionSearchToolCall {
         };
         let hits: Vec<&SessionMatch> = found
             .iter()
-            .filter(|hit| !is_own(&hit.session, own.as_deref()))
+            .filter(|hit| !is_own(&hit.session, own.as_ref()))
             .take(limit as usize)
             .collect();
         let only_own = hits.is_empty() && !found.is_empty();
@@ -100,7 +100,7 @@ impl AtuinAiSessionSearchToolCall {
                     let others = all
                         .iter()
                         .map(|hit| &hit.session)
-                        .filter(|s| !is_own(s, own.as_deref()))
+                        .filter(|s| !is_own(s, own.as_ref()))
                         .collect::<Vec<_>>();
                     elsewhere_note(root, others, false, partial)
                 })

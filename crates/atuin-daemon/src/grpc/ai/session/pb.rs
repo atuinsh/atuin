@@ -8,7 +8,9 @@ mod codegen {
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, Session, SessionMatch};
 use atuin_common::string::highlighted::{HighlightedString, HighlightedTextProto};
+use atuin_common::time::OffsetDateTimeExt;
 pub use codegen::*;
+use time::OffsetDateTime;
 
 use crate::grpc::ai::agent::pb as agent;
 use crate::grpc::ai::agent::pb::ParseError;
@@ -26,6 +28,15 @@ pub(crate) trait HarnessFilterRequest {
 impl HarnessFilterRequest for ListSessionsRequest {
     fn harness_filter(&self) -> Option<i32> {
         self.harness
+    }
+}
+
+impl ListSessionsRequest {
+    pub(crate) fn updated_since_time(&self) -> Result<Option<OffsetDateTime>, ParseError> {
+        self.updated_since
+            .map(|ts| OffsetDateTime::from_timespec(ts.seconds.into(), ts.nanos.into()))
+            .transpose()
+            .map_err(Into::into)
     }
 }
 

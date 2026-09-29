@@ -3,9 +3,12 @@ package ai.session;
 
 import "ai/agent.proto";
 import "common.proto";
+import "google/protobuf/timestamp.proto";
 
 message ListSessionsRequest {
   optional ai.agent.HarnessKind harness = 1;
+  // Only sessions active at or after this time.
+  google.protobuf.Timestamp updated_since = 2;
 }
 
 message GetSessionRequest {

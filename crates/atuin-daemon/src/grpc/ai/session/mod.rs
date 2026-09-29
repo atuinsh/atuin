@@ -49,11 +49,13 @@ impl GrpcService for Service {
         &self,
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<Self::ListSessionsStream>, Status> {
-        let harness = HarnessFilterRequest::harness(&request.into_inner())?;
+        let request = request.into_inner();
+        let harness = HarnessFilterRequest::harness(&request)?;
+        let updated_since = request.updated_since_time()?;
 
         let sessions = self
             .capture
-            .list_sessions(harness)
+            .list_sessions(harness, updated_since)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 

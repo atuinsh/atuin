@@ -70,7 +70,7 @@ impl AtuinAiSessionReadToolCall {
         };
 
         let selector = self.session_id.trim();
-        let sessions = match super::list_sessions(&mut client, None).await {
+        let sessions = match super::list_sessions(&mut client, None, None).await {
             Ok(sessions) => sessions,
             Err(e) => return ToolOutcome::Error(format!("Listing AI sessions failed: {e}")),
         };
@@ -78,7 +78,7 @@ impl AtuinAiSessionReadToolCall {
         // live session, and not a subagent fragment.
         let sessions = if selector.eq_ignore_ascii_case("latest") {
             let own = caller.own_in(&sessions);
-            sessions.into_iter().filter(|s| !is_own(s, own.as_deref()) && !is_subagent(s)).collect()
+            sessions.into_iter().filter(|s| !is_own(s, own.as_ref()) && !is_subagent(s)).collect()
         } else {
             sessions
         };
