@@ -197,6 +197,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `accept-N` | Accept the Nth entry below the selection and execute it (for example, `accept-1` through `accept-9`) |
 | `return-selection` | Return the selected entry to the command line **without executing** |
 | `return-selection-N` | Return the Nth entry below the selection without executing (for example, `return-selection-1` through `return-selection-9`) |
+| `accept-cd` | `cd` into the directory the selected entry ran in, **immediately** |
+| `return-cd` | Put a `cd` to the directory the selected entry ran in on the command line **without executing** |
 | `return-original` | Close the TUI and return the original command line text |
 | `return-query` | Close the TUI and return the current search query |
 | `copy` | Copy the selected entry to the clipboard |
@@ -211,6 +213,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `clear-context` | Return to the initial [context](../guide/advanced-usage.md#context-switch) |
 
 The difference between `accept` and `return-selection`: `accept` runs the command immediately when the TUI closes, while `return-selection` places it on your command line for further editing before you press enter. The `enter_accept` setting controls which of these the default `enter` key uses.
+
+`accept-cd` and `return-cd` have no default binding. They quote the path for the current shell. When the entry has no absolute directory, for example imported history recorded as `unknown`, they close the TUI like `return-original`.
 
 ### Mode changes
 

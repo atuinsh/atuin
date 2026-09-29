@@ -160,6 +160,8 @@ pub struct State {
     search_mode_state: SearchModeState,
     results_len: usize,
     accept: bool,
+    /// Return a `cd` to the selected entry's directory instead of its command.
+    cd: bool,
     keymap_mode: KeymapMode,
     prefix: bool,
     current_cursor: Option<CursorStyle>,
@@ -741,6 +743,14 @@ impl State {
             }
             Action::ReturnSelectionNth(n) => {
                 InputAction::Accept(self.results_state.selected() + usize::conv(*n))
+            }
+            Action::AcceptCd | Action::ReturnCd => {
+                self.cd = true;
+                self.accept = *action == Action::AcceptCd;
+                if self.tab_index == 1 {
+                    return InputAction::AcceptInspecting;
+                }
+                InputAction::Accept(self.results_state.selected())
             }
             Action::Copy => InputAction::Copy(self.results_state.selected()),
             Action::Delete if self.tab_index == 1 => InputAction::DeleteInspecting,
@@ -1958,6 +1968,7 @@ pub async fn history(
         search_mode_state,
         results_len: 0,
         accept: false,
+        cd: false,
         keymap_mode: match settings.keymap_mode {
             KeymapMode::Auto => KeymapMode::Emacs,
             value => value,
@@ -2220,19 +2231,30 @@ pub async fn history(
         terminal.set_cursor_position(origin)?;
     }
 
+    let shell = Shell::from_env();
     let accept = accept
         && matches!(
-            Shell::from_env(),
+            shell,
             Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh | Shell::Nu | Shell::Powershell
         );
 
     let accept_prefix = "__atuin_accept__:";
 
+    let selected = |entry: History| {
+        if app.cd {
+            cd_command(&entry.cwd, &shell)
+        } else {
+            Some(entry.command)
+        }
+    };
+
     match result {
         InputAction::AcceptInspecting => {
             match inspecting {
                 Some(result) => {
-                    let mut command = result.command;
+                    let Some(mut command) = selected(result) else {
+                        return Ok(String::new());
+                    };
 
                     if accept {
                         command = String::from(accept_prefix) + &command;
@@ -2245,7 +2267,9 @@ pub async fn history(
             }
         }
         InputAction::Accept(index) if index < results.len() => {
-            let mut command = results.swap_remove(index).command;
+            let Some(mut command) = selected(results.swap_remove(index)) else {
+                return Ok(String::new());
+            };
 
             if is_command_chaining {
                 command = format!("{} {}", original_query.trim_end(), command);
@@ -2285,6 +2309,59 @@ pub async fn history(
     }
 }
 
+/// Build a command that changes into `cwd` in `shell`, or `None` when `cwd` is not an absolute path
+/// (e.g. `"unknown"` on imported entries), since a relative `cd` would land somewhere arbitrary.
+fn cd_command(cwd: &str, shell: &Shell) -> Option<String> {
+    if !std::path::Path::new(cwd).is_absolute() {
+        return None;
+    }
+    Some(match shell {
+        Shell::Fish => format!("cd -- '{}'", cwd.replace('\\', "\\\\").replace('\'', "\\'")),
+        // Raw strings have no escapes; pick a `#` count the path cannot close early.
+        Shell::Nu => {
+            let hashes = (1..=cwd.len() + 1)
+                .map(|n| "#".repeat(n))
+                .find(|h| !cwd.contains(&format!("'{h}")))?;
+            format!("cd r{hashes}'{cwd}'{hashes}")
+        }
+        Shell::Powershell => {
+            // PowerShell also treats curly single quotes as string delimiters.
+            let mut quoted = String::with_capacity(cwd.len() + 2);
+            for c in cwd.chars() {
+                if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
+                    quoted.push(c);
+                }
+                quoted.push(c);
+            }
+            format!("Set-Location -LiteralPath '{quoted}'")
+        }
+        // xonsh parses quoted subprocess args as Python literals and its `cd` rejects `--`.
+        Shell::Xonsh => format!("cd {}", python_quote(cwd)),
+        // Single quotes only: double quotes still allow `!` history expansion in bash and zsh.
+        Shell::Sh | Shell::Bash | Shell::Zsh | Shell::Unknown => {
+            format!("cd -- '{}'", cwd.replace('\'', r"'\''"))
+        }
+    })
+}
+
+fn python_quote(s: &str) -> String {
+    let mut quoted = String::with_capacity(s.len() + 2);
+    quoted.push('\'');
+    for c in s.chars() {
+        match c {
+            '\\' | '\'' => {
+                quoted.push('\\');
+                quoted.push(c);
+            }
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
 // cli-clipboard only works on Windows, Mac, and Linux.
 
 #[cfg(all(
@@ -2315,6 +2392,7 @@ mod tests {
         FilterMode, KeymapMode, Preview, PreviewStrategy, RequestedSearchMode, SearchMode,
         Settings, Shells,
     };
+    use atuin_common::shell::Shell;
     use rstest::{fixture, rstest};
     use time::OffsetDateTime;
 
@@ -2351,6 +2429,7 @@ mod tests {
             },
             results_len,
             accept: false,
+            cd: false,
             keymap_mode,
             prefix: false,
             current_cursor: None,
@@ -2705,6 +2784,84 @@ mod tests {
         let result = state.execute_action(&Action::ReturnSelection, &settings);
         assert!(matches!(result, super::InputAction::Accept(5)));
         assert!(!state.accept);
+    }
+
+    #[rstest]
+    #[case::accept_cd(Action::AcceptCd, true)]
+    #[case::return_cd(Action::ReturnCd, false)]
+    fn execute_cd_selects_entry(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        settings: Settings,
+        #[case] action: Action,
+        #[case] accept: bool,
+        #[values(0, 1)] tab_index: usize,
+    ) {
+        state.tab_index = tab_index;
+        let result = state.execute_action(&action, &settings);
+        if tab_index == 1 {
+            assert!(matches!(result, InputAction::AcceptInspecting));
+        } else {
+            assert!(matches!(result, InputAction::Accept(5)));
+        }
+        assert!(state.cd);
+        assert_eq!(state.accept, accept);
+    }
+
+    #[rstest]
+    fn execute_accept_does_not_set_cd(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        settings: Settings,
+    ) {
+        let _ = state.execute_action(&Action::Accept, &settings);
+        assert!(!state.cd);
+    }
+
+    #[rstest]
+    #[case::bash(Shell::Bash, r#"cd -- '/a b'\''c"d\e$f!'"#)]
+    #[case::zsh(Shell::Zsh, r#"cd -- '/a b'\''c"d\e$f!'"#)]
+    #[case::unknown(Shell::Unknown, r#"cd -- '/a b'\''c"d\e$f!'"#)]
+    #[case::fish(Shell::Fish, r#"cd -- '/a b\'c"d\\e$f!'"#)]
+    #[case::nu(Shell::Nu, r#"cd r#'/a b'c"d\e$f!'#"#)]
+    #[case::xonsh(Shell::Xonsh, r#"cd '/a b\'c"d\\e$f!'"#)]
+    #[case::powershell(Shell::Powershell, r#"Set-Location -LiteralPath '/a b''c"d\e$f!'"#)]
+    fn cd_command_quotes_per_shell(#[case] shell: Shell, #[case] expected: &str) {
+        assert_eq!(super::cd_command(r#"/a b'c"d\e$f!"#, &shell).as_deref(), Some(expected));
+    }
+
+    #[rstest]
+    #[case::nu_raw_terminator(Shell::Nu, "/x'#y", "cd r##'/x'#y'##")]
+    #[case::powershell_curly_quotes(
+        Shell::Powershell,
+        "/a\u{2018}b\u{2019}",
+        "Set-Location -LiteralPath '/a\u{2018}\u{2018}b\u{2019}\u{2019}'"
+    )]
+    #[case::xonsh_newline(Shell::Xonsh, "/a\nb", r"cd '/a\nb'")]
+    fn cd_command_escapes_shell_specific_delimiters(
+        #[case] shell: Shell,
+        #[case] cwd: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(super::cd_command(cwd, &shell).as_deref(), Some(expected));
+    }
+
+    #[rstest]
+    #[case::unknown("unknown")]
+    #[case::empty("")]
+    #[case::relative("some/dir")]
+    fn cd_command_rejects_non_absolute_cwd(
+        #[case] cwd: &str,
+        #[values(Shell::Bash, Shell::Fish, Shell::Nu, Shell::Xonsh, Shell::Powershell)]
+        shell: Shell,
+    ) {
+        assert_eq!(super::cd_command(cwd, &shell), None);
+    }
+
+    proptest::proptest! {
+        #[rstest]
+        fn cd_command_posix_round_trips(path in "/[^\\x00]*") {
+            let command = super::cd_command(&path, &Shell::Bash).unwrap();
+            proptest::prop_assert_eq!(shlex::split(&command), Some(vec!["cd".into(), "--".into(), path]));
+        }
     }
 
     #[rstest]

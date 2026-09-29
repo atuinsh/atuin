@@ -287,3 +287,80 @@ fn ai_resume_widget_returns_while_a_process_it_left_runs(
     // Within the wait's timeout, well before the process left behind exits.
     pty.wait_for_line(&format!("{marker}-resumed"));
 }
+
+#[rstest]
+fn cd_action_changes_to_entry_directory(
+    #[files("tests/shells/*.toml")] setup: PathBuf,
+    #[values("accept-cd", "return-cd")] action: &str,
+) {
+    let config = format!(
+        "[keymap.emacs]\n\"ctrl-t\" = \"{action}\"\n[keymap.vim-insert]\n\"ctrl-t\" = \
+         \"{action}\"\n"
+    );
+    let Some(shell) = Shell::start(&setup, Some(&config)) else {
+        return;
+    };
+    let (env, pty) = (&shell.env, &shell.pty);
+    let marker = marker();
+    let dir = env.home().join(r#"a b'c"d\e!$x"#);
+    std::fs::create_dir(&dir).unwrap();
+    env.record(&format!("echo {marker}"), SESSION, &dir);
+
+    pty.send_ctrl_r();
+    pty.wait_for(": exit");
+    pty.send_str(&marker[marker.len() - 12..]);
+    pty.wait_for(&format!("echo {marker}"));
+    pty.send(b"\x14");
+    if action == "return-cd" {
+        pty.wait_for_screen("cd inserted at prompt", |s| {
+            !s.contains(": exit") && s.lines().any(|l| l.contains(PROMPT) && l.contains("cd "))
+        });
+        assert!(!executed_line(&pty.screen(), &marker));
+        pty.send_enter();
+    }
+    pty.wait_for_prompt();
+    // Relative path: the file lands in the entry's directory only if the `cd` ran.
+    pty.send_line("pwd > cwd.txt");
+    wait_until("shell moved to the entry's directory", || dir.join("cwd.txt").exists());
+    wait_until("cd recorded in history", || {
+        let mut command = env.atuin(&["history", "list", "--format", "{command}"]);
+        command.env("ATUIN_SESSION", SESSION);
+        output(command).lines().any(|l| l.starts_with("cd -- "))
+    });
+}
+
+#[rstest]
+fn cd_action_without_directory_returns_original(#[files("tests/shells/*.toml")] setup: PathBuf) {
+    // Imported entries are tagged `zsh`; `shells = "all"` keeps them visible from every shell.
+    let config = "[search]\nshells = \"all\"\n[keymap.emacs]\n\"ctrl-t\" = \
+                  \"accept-cd\"\n[keymap.vim-insert]\n\"ctrl-t\" = \"accept-cd\"\n";
+    let Some(shell) = Shell::start(&setup, Some(config)) else {
+        return;
+    };
+    let (env, pty) = (&shell.env, &shell.pty);
+    let marker = marker();
+    // Imported entries have no directory; atuin stores `unknown`.
+    let histfile = env.home().join("imported_history");
+    std::fs::write(&histfile, format!(": 1700000000:0;echo {marker}\n")).unwrap();
+    let mut import = env.atuin(&["import", "zsh"]);
+    import.env("HISTFILE", &histfile);
+    output(import);
+
+    pty.send_ctrl_r();
+    pty.wait_for(": exit");
+    pty.send_str(&marker[marker.len() - 12..]);
+    pty.wait_for(&format!("echo {marker}"));
+    pty.send(b"\x14");
+    pty.wait_for_prompt();
+    assert!(!executed_line(&pty.screen(), &marker), "entry ran instead of returning original");
+    // Runs only as typed if the command line came back empty.
+    run_echo_marker(pty, &format!("{marker}-after"));
+    wait_until("follow-up command recorded", || {
+        let mut command = env.atuin(&["history", "list", "--format", "{command}"]);
+        command.env("ATUIN_SESSION", SESSION);
+        output(command).lines().any(|l| l == format!("echo {marker}-after"))
+    });
+    let mut command = env.atuin(&["history", "list", "--format", "{command}"]);
+    command.env("ATUIN_SESSION", SESSION);
+    assert!(!output(command).lines().any(|l| l.starts_with("cd ")));
+}
