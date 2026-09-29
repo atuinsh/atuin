@@ -17,19 +17,26 @@ if not set -q __atuin_pty_proxy_owns_tty
     end
 end
 
-function _atuin_mark_output -a kind
+function _atuin_mark_output_start
     test "$__atuin_pty_proxy_owns_tty" = 1; or return
     test -n "$ATUIN_HISTORY_ID"; or return
 
-    printf '\033]18188735;%s;%s\a' $kind "$ATUIN_HISTORY_ID"
+    if test "$ATUIN_PTY_PROXY_ACTIVE" = 1
+        printf '\033]133;C\a'
+    else
+        printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"
+    end
 end
 
-function _atuin_mark_output_start
-    _atuin_mark_output C
-end
+function _atuin_mark_output_end --argument-names exit_code
+    test "$__atuin_pty_proxy_owns_tty" = 1; or return
+    test -n "$ATUIN_HISTORY_ID"; or return
 
-function _atuin_mark_output_end
-    _atuin_mark_output D
+    if test "$ATUIN_PTY_PROXY_ACTIVE" = 1
+        printf '\033]133;D;%s;history_id=%s\a' "$exit_code" "$ATUIN_HISTORY_ID"
+    else
+        printf '\033]18188735;D;%s\a' "$ATUIN_HISTORY_ID"
+    end
 end
 
 function _atuin_preexec --on-event fish_preexec

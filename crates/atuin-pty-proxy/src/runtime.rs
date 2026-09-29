@@ -11,6 +11,16 @@ use crate::debug::{MarkerDebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg, SocketServer};
 
+/// The current version of the pty-proxy protocol.
+///
+/// This enables the shell integration to be compatible with older pty-proxy versions.
+///
+/// # Version history
+///
+/// * 1: Initial version. Expects OSC 133 escape sequences.
+/// * 2: Switched from OSC 133 to OSC 18188735.
+const PROTOCOL_VERSION: &str = "2";
+
 pub fn main(options: RuntimeOptions) {
     if let Err(e) = run(options) {
         let _ = terminal::disable_raw_mode();
@@ -40,7 +50,7 @@ enum InitError {
 /// the server failed to initialize), this sets `ATUIN_PTY_PROXY_FAILED` to stop the child shell
 /// from endlessly trying to spawn additional PTY proxies.
 fn set_child_env(cmd: &mut CommandBuilder, socket_path: Option<&std::path::Path>) {
-    cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+    cmd.env("ATUIN_PTY_PROXY_ACTIVE", PROTOCOL_VERSION);
 
     if let Some(path) = socket_path {
         cmd.env("ATUIN_PTY_PROXY_SOCKET", path);

@@ -27,7 +27,7 @@ if '__atuin_pty_proxy' not-in $env {
     } else { false }) }
 }
 
-def _atuin_mark_output [kind: string] {
+def _atuin_mark_output_start [] {
     if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
         return
     }
@@ -35,15 +35,28 @@ def _atuin_mark_output [kind: string] {
         return
     }
 
-    print -n $"(char -u '1b')]18188735;($kind);($env.ATUIN_HISTORY_ID)(char bel)"
+    if $env.ATUIN_PTY_PROXY_ACTIVE? == 1 {
+        # Current pty-proxy is an older version that expects OSC 133; new
+        # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
+        print -n $"(char -u '1b')]133;C(char bel)"
+    } else {
+        print -n $"(char -u '1b')]18188735;C;($env.ATUIN_HISTORY_ID)(char bel)"
+    }
 }
 
-def _atuin_mark_output_start [] {
-    _atuin_mark_output C
-}
+def _atuin_mark_output_end [exit_code: int] {
+    if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
+        return
+    }
+    if 'ATUIN_HISTORY_ID' not-in $env or ($env.ATUIN_HISTORY_ID | is-empty) {
+        return
+    }
 
-def _atuin_mark_output_end [] {
-    _atuin_mark_output D
+    if $env.ATUIN_PTY_PROXY_ACTIVE? == 1 {
+        print -n $"(char -u '1b')]133;D;($exit_code);history_id=($env.ATUIN_HISTORY_ID)(char bel)"
+    } else {
+        print -n $"(char -u '1b')]18188735;D;($env.ATUIN_HISTORY_ID)(char bel)"
+    }
 }
 
 # Magic token to make sure we don't record commands run by keybindings
@@ -70,7 +83,7 @@ let _atuin_pre_prompt = {||
     if 'ATUIN_HISTORY_ID' not-in $env {
         return
     }
-    _atuin_mark_output_end
+    _atuin_mark_output_end $last_exit
     if (version).minor >= 104 or (version).major > 0 {
         job spawn {
             ^atuin history end --hook $'--exit=($env.LAST_EXIT_CODE)' -- $env.ATUIN_HISTORY_ID | complete

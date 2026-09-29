@@ -22,20 +22,28 @@ if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
     fi
 fi
 
-__atuin_mark_output() {
-    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
-    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return 0
-
-    local kind="$1"
-    printf '\033]18188735;%s;%s\a' "$kind" "$ATUIN_HISTORY_ID"
-}
-
 __atuin_mark_output_start() {
-    __atuin_mark_output C
+    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
+
+    if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
+        # Current pty-proxy is an older version that expects OSC 133; new
+        # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
+        printf '\033]133;C\a'
+    else
+        printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"
+    fi
 }
 
 __atuin_mark_output_end() {
-    __atuin_mark_output D
+    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
+
+    if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
+        printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
+    else
+        printf '\033]18188735;D;%s\a' "$ATUIN_HISTORY_ID"
+    fi
 }
 
 export ATUIN_PREEXEC_BACKEND=$SHLVL:none
@@ -127,7 +135,7 @@ __atuin_precmd() {
         fi
     fi
 
-    [[ -n ${__atuin_skip_output_markers:-} ]] || __atuin_mark_output_end
+    [[ -n ${__atuin_skip_output_markers:-} ]] || __atuin_mark_output_end "$EXIT"
     (atuin history end --hook --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" >/dev/null 2>&1 &)
     export ATUIN_HISTORY_ID=""
 }
