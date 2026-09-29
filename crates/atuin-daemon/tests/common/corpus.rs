@@ -161,7 +161,7 @@ impl HistoryGen {
         } else {
             0
         };
-        let duration = i64::conv(self.rng.below(5_000_000_000));
+        let duration = i64::conv(self.rng.below(4_000_000_000));
 
         History::from_db()
             .id(HistoryId::from(uuid_v7()))
