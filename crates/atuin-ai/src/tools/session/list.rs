@@ -29,7 +29,8 @@ pub struct AtuinAiSessionListToolCall {
     pub limit: Clamped<u32, 1, 50, 10>,
     /// Include subagent sessions (spawned by another agent session to do part of its work). Off
     /// by default: they are fragments of their parent and usually crowd out the sessions a person
-    /// ran. Forks and continuations of a session are always listed.
+    /// ran. Forks and continuations of a session are always listed, marked with where they came
+    /// from.
     #[serde(default)]
     pub include_subagents: bool,
 }

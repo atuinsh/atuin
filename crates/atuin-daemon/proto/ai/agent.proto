@@ -28,6 +28,16 @@ enum Role {
   ROLE_TOOL = 4;
 }
 
+// How a session relates to the one it names as its parent.
+enum ParentKind {
+  // Spawned by its parent to do part of its work: a fragment of the parent.
+  PARENT_KIND_SUBAGENT = 0;
+  // A copy of the parent's conversation that went its own way (a fork or branch).
+  PARENT_KIND_FORK = 1;
+  // The parent's conversation carried on under a new session (a Codex revert).
+  PARENT_KIND_CONTINUATION = 2;
+}
+
 enum StopReason {
   // A reason the harness named that is none of the below; Message.stop_reason_label carries it.
   STOP_REASON_OTHER = 0;
@@ -160,6 +170,8 @@ message Message {
   optional string role_label = 16;
   // The harness's own stop reason; set exactly when stop_reason is STOP_REASON_OTHER.
   optional string stop_reason_label = 17;
+  // How this message's session relates to `parent`, when known.
+  optional ParentKind parent_kind = 18;
 }
 
 message Session {
@@ -178,4 +190,6 @@ message Session {
   optional string preview = 12;
   // The most recent assistant reply, clipped: how the session ended, or where it is now.
   optional string last_reply = 13;
+  // How this session relates to `parent`, when known.
+  optional ParentKind parent_kind = 14;
 }

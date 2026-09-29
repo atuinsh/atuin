@@ -5,7 +5,7 @@ use atuin_common::db::sqlite::fts::{TextHighlighter, match_any_expression, match
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{
-    Checkpoint, Content, Role, TitleChange, TitleSource, Usage,
+    Checkpoint, Content, ParentKind, Role, TitleChange, TitleSource, Usage,
 };
 use atuin_common::string::TruncateCharsExt;
 use atuin_domain::record::RecordId;
@@ -79,6 +79,7 @@ struct SessionRow {
     title_source: Option<i64>,
     preview: Option<String>,
     last_reply: Option<String>,
+    parent_kind: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -330,12 +331,13 @@ impl AiSessionDatabase {
             "INSERT INTO sessions (
                 harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
                 started_at, updated_at, message_count, title, title_source, preview, last_reply,
-                last_reply_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                last_reply_at, parent_kind
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
                 parent_session_id = COALESCE(excluded.parent_session_id, \
              sessions.parent_session_id),
+                parent_kind = COALESCE(excluded.parent_kind, sessions.parent_kind),
                 cwd = COALESCE(excluded.cwd, sessions.cwd),
                 git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
                 model = COALESCE(excluded.model, sessions.model),
@@ -367,6 +369,7 @@ impl AiSessionDatabase {
         .bind(preview)
         .bind(last_reply.as_deref())
         .bind(last_reply.as_ref().map(|_| timestamp))
+        .bind(msg.parent.as_ref().and(msg.parent_kind).map(Self::parent_kind_repr))
         .execute(&mut *tx)
         .await?;
 
@@ -576,7 +579,7 @@ impl AiSessionDatabase {
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
              usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview, \
-             last_reply FROM sessions WHERE harness = ? AND session_id = ?",
+             last_reply, parent_kind FROM sessions WHERE harness = ? AND session_id = ?",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -594,7 +597,7 @@ impl AiSessionDatabase {
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
              usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview, \
-             last_reply FROM sessions WHERE 1 = 1",
+             last_reply, parent_kind FROM sessions WHERE 1 = 1",
         );
 
         if harness.is_some() {
@@ -702,7 +705,7 @@ impl AiSessionDatabase {
                  s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
                  s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, \
                  s.usage_reasoning, s.title, s.title_source, \
-                 s.preview, s.last_reply, \
+                 s.preview, s.last_reply, s.parent_kind, \
                  m.content AS match_content, m.content_z AS match_content_z, \
                  (SELECT count(*) FROM messages p WHERE p.session = m.session \
                  AND (p.timestamp < m.timestamp \
@@ -1355,6 +1358,23 @@ impl AiSessionDatabase {
         format!("{role}: {body}\n")
     }
 
+    const fn parent_kind_repr(kind: ParentKind) -> i64 {
+        match kind {
+            ParentKind::Subagent => 0,
+            ParentKind::Fork => 1,
+            ParentKind::Continuation => 2,
+        }
+    }
+
+    const fn parent_kind_from_repr(n: i64) -> Option<ParentKind> {
+        Some(match n {
+            0 => ParentKind::Subagent,
+            1 => ParentKind::Fork,
+            2 => ParentKind::Continuation,
+            _ => return None,
+        })
+    }
+
     const fn title_source_repr(source: TitleSource) -> i64 {
         match source {
             TitleSource::Summary => 0,
@@ -1401,6 +1421,7 @@ impl AiSessionDatabase {
             .title_source(row.title_source.and_then(Self::title_source_from_repr))
             .preview(row.preview)
             .last_reply(row.last_reply)
+            .parent_kind(row.parent_kind.and_then(Self::parent_kind_from_repr))
             .build())
     }
 }
@@ -1409,7 +1430,7 @@ impl AiSessionDatabase {
 mod tests {
     use atuin_common::db;
     use atuin_common::harnesstools::session::{
-        Checkpoint, Content, Role, ToolCallId, ToolResult, ToolUse, Usage,
+        Checkpoint, Content, ParentKind, Role, ToolCallId, ToolResult, ToolUse, Usage,
     };
     use atuin_domain::record::RecordId;
     use futures::TryStreamExt;
@@ -1474,6 +1495,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::raw_sql(include_str!("migrations/0003_last_reply.sql")).execute(pool).await.unwrap();
+        sqlx::raw_sql(include_str!("migrations/0004_parent_kind.sql")).execute(pool).await.unwrap();
 
         let db = AiSessionDatabase { db: sqlite };
         let hits: Vec<SessionMatch> = db.search("hello", None, 0).try_collect().await.unwrap();
@@ -1995,6 +2017,27 @@ mod tests {
 
         let s = db.get_session(&session).await.unwrap().unwrap();
         assert_eq!(s.last_reply.as_deref(), Some("all tests pass now"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_session_keeps_how_it_relates_to_its_parent() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let parent = handle(HarnessKind::ClaudeCode, "parent");
+        let mut first = message_in(&session, 0, "copied from the parent");
+        first.parent = Some(parent.clone());
+        first.parent_kind = Some(ParentKind::Fork);
+        db.append(&first).await.unwrap();
+        // A record from an older build carries the parent but not the kind: it must not erase it.
+        let mut older = message_in(&session, 1, "carried on");
+        older.parent = Some(parent);
+        db.append(&older).await.unwrap();
+
+        let s = db.get_session(&session).await.unwrap().unwrap();
+        assert_eq!(s.parent_kind, Some(ParentKind::Fork));
+        let listed = db.list_sessions(None).await.unwrap();
+        assert_eq!(listed[0].parent_kind, Some(ParentKind::Fork));
     }
 
     #[rstest]

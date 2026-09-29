@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use atuin_client::ai_session::{HarnessKind, Session};
 use atuin_client::settings::Settings;
+use atuin_common::harnesstools::session::ParentKind;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_daemon::AiClient;
 use futures::{StreamExt, TryStreamExt};
@@ -150,12 +151,13 @@ fn elsewhere_note<'a>(
     ))
 }
 
-/// A Claude Code subagent: a fragment of the session that spawned it, only meaningful as part of
-/// it. Not any session with a parent: forks, branches and continuations have one too, and those
-/// are sessions a person ran. (Only Claude Code subagents are told apart today, by their
-/// `agent-` transcript names; the parsers do not record what kind of link a parent is.)
+/// A subagent: a fragment of the session that spawned it, only meaningful as part of it. Not any
+/// session with a parent: forks and continuations have one too, and those are sessions a person
+/// ran. A parent of unknown kind (records captured before the kind was) counts as a subagent,
+/// the cautious reading, since most sessions with a parent are subagents.
 fn is_subagent(s: &Session) -> bool {
-    s.parent.is_some() && s.handle.session.as_ref().starts_with("agent-")
+    s.parent.is_some()
+        && !matches!(s.parent_kind, Some(ParentKind::Fork | ParentKind::Continuation))
 }
 
 /// The session's title, falling back to its opening prompt.
@@ -193,10 +195,11 @@ fn render_session_summary(out: &mut String, index: usize, s: &Session, offset: t
             writeln!(out, "   in {cwd}{}", branch.map(|b| format!(" ({b})")).unwrap_or_default());
     }
     if let Some(parent) = &s.parent {
-        let relation = if is_subagent(s) {
-            "subagent of"
-        } else {
-            "continues from"
+        let relation = match s.parent_kind {
+            Some(ParentKind::Subagent) => "subagent of",
+            Some(ParentKind::Fork) => "forked from",
+            Some(ParentKind::Continuation) => "continues from",
+            None => "started from",
         };
         let _ = writeln!(out, "   {relation} {}", parent.session);
     }
@@ -255,19 +258,23 @@ mod tests {
     }
 
     #[rstest]
-    fn only_claude_code_agent_children_are_subagents() {
-        let parent = HarnessSession {
-            harness: HarnessKind::ClaudeCode,
+    #[case::subagent(Some(ParentKind::Subagent), true)]
+    #[case::unknown_kind(None, true)]
+    #[case::fork(Some(ParentKind::Fork), false)]
+    #[case::continuation(Some(ParentKind::Continuation), false)]
+    fn subagents_are_children_not_known_to_be_forks(
+        #[case] kind: Option<ParentKind>,
+        #[case] subagent: bool,
+    ) {
+        let mut s = fixtures::session("child", None, time::OffsetDateTime::UNIX_EPOCH);
+        s.parent = Some(HarnessSession {
+            harness: HarnessKind::Codex,
             session: NativeSessionId::from("p".to_owned()),
-        };
-        let with = |id: &str, parent: Option<HarnessSession>| {
-            let mut s = fixtures::session(id, None, time::OffsetDateTime::UNIX_EPOCH);
-            s.parent = parent;
-            s
-        };
-        assert!(is_subagent(&with("agent-a1", Some(parent.clone()))));
-        assert!(!is_subagent(&with("fork-uuid", Some(parent))), "a fork is a session of its own");
-        assert!(!is_subagent(&with("agent-a1", None)));
+        });
+        s.parent_kind = kind;
+        assert_eq!(is_subagent(&s), subagent);
+        s.parent = None;
+        assert!(!is_subagent(&s), "no parent, no subagent");
     }
 
     #[rstest]

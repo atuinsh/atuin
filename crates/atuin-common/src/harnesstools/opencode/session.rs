@@ -108,8 +108,8 @@ use crate::db::sqlite::observe::{
 use crate::db::{query_as, query_scalar};
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
-    ToolUse, Usage,
+    Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
+    ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
@@ -2220,6 +2220,23 @@ impl OpencodeMessage {
     }
 }
 
+impl OpencodeMessage {
+    /// The session a session info names, and how it relates: `parentID` is a subagent's parent
+    /// (a `task` child); `forkedFrom`, which the 2.x reader sets from `fork_session_id`, the
+    /// session a fork copied.
+    fn parent(&self) -> Option<(SessionId, ParentKind)> {
+        let Body::Session(info) = &self.body else {
+            return None;
+        };
+        let (id, kind) = match (info["parentID"].as_str(), info["forkedFrom"].as_str()) {
+            (Some(parent), _) => (parent, ParentKind::Subagent),
+            (None, Some(fork)) => (fork, ParentKind::Fork),
+            (None, None) => return None,
+        };
+        Some((SessionId::from(id.to_owned()), kind))
+    }
+}
+
 impl Message for OpencodeMessage {
     /// A part's id; a failed message's id; for a session's info, its id and title, so that a
     /// title is delivered once however many rows repeat it -- and one of opencode 2.0's sessions
@@ -2305,12 +2322,11 @@ impl Message for OpencodeMessage {
     }
 
     fn parent_session(&self) -> Option<SessionId> {
-        match &self.body {
-            Body::Session(info) => {
-                info["parentID"].as_str().map(|id| SessionId::from(id.to_owned()))
-            }
-            _ => None,
-        }
+        self.parent().map(|(parent, _)| parent)
+    }
+
+    fn parent_kind(&self) -> Option<ParentKind> {
+        self.parent().map(|(_, kind)| kind)
     }
 
     /// The model call a row of an assistant message belongs to (see `MessageInfo::turn_of`).

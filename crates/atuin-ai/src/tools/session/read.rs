@@ -302,7 +302,12 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
                 );
             }
             (Block::Readable, Content::Error(text)) => {
-                let _ = writeln!(body, "(model error) {}", one_line(text, TOOL_RESULT_CHARS));
+                let text = if full {
+                    text.trim().to_owned()
+                } else {
+                    one_line(text, TOOL_RESULT_CHARS)
+                };
+                let _ = writeln!(body, "(model error) {text}");
             }
             (Block::Readable, Content::ToolUse(call)) => {
                 let _ = writeln!(body, "→ {}: {}", call.name, tool_input(&call.input, full));
@@ -686,6 +691,17 @@ mod tests {
         let out = render(json!({"session_id": "abc"}), &msgs);
         assert!(out.contains("(summary of earlier conversation) earlier we fixed the parser"));
         assert!(out.contains("(model error) rate limited"));
+    }
+
+    #[rstest]
+    fn a_single_message_read_shows_the_whole_error() {
+        let long = format!("overloaded\n{}", "detail ".repeat(200));
+        let msgs = vec![blocks(Role::Assistant, vec![Content::Error(long)])];
+        let page = render(json!({"session_id": "abc"}), &msgs);
+        assert!(page.matches("detail").count() < 200, "a page abridges it");
+        let one = render(json!({"session_id": "abc", "limit": 1}), &msgs);
+        assert!(one.matches("detail").count() == 200, "{one}");
+        assert!(one.contains("(model error) overloaded\ndetail"), "{one}");
     }
 
     #[rstest]
