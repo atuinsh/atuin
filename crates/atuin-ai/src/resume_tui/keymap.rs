@@ -41,6 +41,16 @@ pub enum Action {
     ScrollToTop,
     ScrollToBottom,
 
+    // The preview (the strip under the list, the pane beside it, or Inspect's conversation)
+    /// Scroll the preview's text up a line.
+    PreviewUp,
+    /// Scroll the preview's text down a line.
+    PreviewDown,
+    /// Scroll the preview's text up a page.
+    PreviewPageUp,
+    /// Scroll the preview's text down a page.
+    PreviewPageDown,
+
     /// Resume the selected session now.
     Resume,
     /// Put the resume command on the command line without running it.
@@ -124,6 +134,17 @@ fn add_common(km: &mut Keymap, settings: &Settings) {
     km.bind(key("down"), Action::SelectNext);
     km.bind(key("pageup"), Action::ScrollPageUp);
     km.bind(key("pagedown"), Action::ScrollPageDown);
+    // The preview scrolls with shift (or alt) on the keys that move the selection. Neither is
+    // bound in the history search, and terminals that don't send shift-up (some macOS ones take
+    // it for themselves) mostly send alt-up.
+    km.bind(key("shift-up"), Action::PreviewUp);
+    km.bind(key("shift-down"), Action::PreviewDown);
+    km.bind(key("alt-up"), Action::PreviewUp);
+    km.bind(key("alt-down"), Action::PreviewDown);
+    km.bind(key("shift-pageup"), Action::PreviewPageUp);
+    km.bind(key("shift-pagedown"), Action::PreviewPageDown);
+    km.bind(key("alt-pageup"), Action::PreviewPageUp);
+    km.bind(key("alt-pagedown"), Action::PreviewPageDown);
 }
 
 pub fn emacs(settings: &Settings) -> Keymap {
@@ -268,6 +289,31 @@ mod tests {
             assert_eq!(resolve(&km, "tab"), Some(Action::ReturnCommand));
             assert_eq!(resolve(&km, "ctrl-c"), Some(Action::ReturnOriginal));
             assert_eq!(resolve(&km, "ctrl-g"), Some(Action::ReturnOriginal));
+        }
+    }
+
+    /// The preview's keys are the same everywhere, Inspect included, and take nothing the
+    /// selection or the input uses.
+    #[rstest]
+    fn preview_keys_are_shared_and_free() {
+        let settings = Settings::utc();
+        for km in
+            [emacs(&settings), vim_normal(&settings), vim_insert(&settings), inspector(&settings)]
+        {
+            for (k, action) in [
+                ("shift-up", Action::PreviewUp),
+                ("alt-up", Action::PreviewUp),
+                ("shift-down", Action::PreviewDown),
+                ("alt-down", Action::PreviewDown),
+                ("shift-pageup", Action::PreviewPageUp),
+                ("shift-pagedown", Action::PreviewPageDown),
+                ("alt-pageup", Action::PreviewPageUp),
+                ("alt-pagedown", Action::PreviewPageDown),
+            ] {
+                assert_eq!(resolve(&km, k), Some(action), "{k}");
+            }
+            assert_eq!(resolve(&km, "up"), Some(Action::SelectPrevious));
+            assert_eq!(resolve(&km, "pagedown"), Some(Action::ScrollPageDown));
         }
     }
 

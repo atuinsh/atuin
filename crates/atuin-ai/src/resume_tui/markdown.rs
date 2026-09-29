@@ -73,7 +73,7 @@ pub fn render(
     opts: Opts,
     styles: &Styles,
 ) -> Vec<Line<'static>> {
-    let lines = cached(source, highlights, opts, false, styles, || {
+    let lines = cached(source, highlights, opts, Mode::Block, styles, || {
         if opts.max_lines > 0
             && let Some(head) = head(source, opts.max_lines, opts.width)
         {
@@ -104,7 +104,7 @@ pub fn render_flat(
         spacing: false,
         urls: false,
     };
-    let lines = cached(source, highlights, opts, true, styles, || {
+    let lines = cached(source, highlights, opts, Mode::Flat, styles, || {
         if let Some(head) = head(source, 3, width) {
             let mut r = Renderer::new(head, highlights, opts, true, *styles);
             r.run();
@@ -117,6 +117,45 @@ pub fn render_flat(
         vec![r.finish_flat()]
     });
     lines.first().cloned().unwrap_or_default()
+}
+
+/// The first `opts.max_lines` lines of `source` rendered as markdown, for a view that scrolls
+/// through it, and whether there are more. Unlike [`render`], the last line isn't cut short with
+/// a `…`: rendering more lines later only adds lines after these, so a view can ask for more as
+/// it scrolls without what it shows moving.
+pub fn render_window(
+    source: &str,
+    highlights: &[Range<usize>],
+    opts: Opts,
+    styles: &Styles,
+) -> (Vec<Line<'static>>, bool) {
+    let limit = opts.max_lines;
+    let lines = cached(source, highlights, opts, Mode::Window, styles, || {
+        let finish = |mut r: Renderer<'_>| {
+            // One line past the limit says there are more.
+            r.out.truncate(limit.saturating_add(1));
+            r.out
+        };
+        if limit > 0
+            && let Some(head) = head(source, limit, opts.width)
+        {
+            let mut r = Renderer::new(head, highlights, opts, false, *styles);
+            r.run();
+            if r.full {
+                return finish(r);
+            }
+        }
+        let mut r = Renderer::new(source, highlights, opts, false, *styles);
+        r.run();
+        finish(r)
+    });
+    let more = limit > 0 && lines.len() > limit;
+    let shown = if more {
+        limit
+    } else {
+        lines.len()
+    };
+    (lines[..shown].to_vec(), more)
 }
 
 /// A prefix of `source` that very likely holds more than `lines` lines of `width` columns, cut
@@ -220,9 +259,17 @@ pub fn allocate(wants: &[usize], budget: usize) -> Vec<usize> {
 // --- the cache -------------------------------------------------------------------------------
 
 /// Renderings kept, most recent first: the selected session's parts at the current width (a
-/// block and a one-line form for each), and a few recently selected ones for moving back and
-/// forth.
-const CACHE_SIZE: usize = 24;
+/// block, a one-line form and a scrolling window for each), and a few recently selected ones for
+/// moving back and forth.
+const CACHE_SIZE: usize = 36;
+
+/// Which rendering: [`render`], [`render_flat`] or [`render_window`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Block,
+    Flat,
+    Window,
+}
 
 /// What a rendering depends on. The source is kept whole and compared (a `memcmp`, cheaper than
 /// hashing it), so a preview that reloads with new text can never be served a stale rendering.
@@ -230,7 +277,7 @@ struct Key {
     source: Box<str>,
     highlights: Box<[Range<usize>]>,
     opts: Opts,
-    flat: bool,
+    mode: Mode,
     styles: Styles,
 }
 
@@ -240,11 +287,11 @@ impl Key {
         source: &str,
         highlights: &[Range<usize>],
         opts: Opts,
-        flat: bool,
+        mode: Mode,
         styles: &Styles,
     ) -> bool {
         self.opts == opts
-            && self.flat == flat
+            && self.mode == mode
             && self.styles == *styles
             && *self.highlights == *highlights
             && *self.source == *source
@@ -259,13 +306,13 @@ fn cached(
     source: &str,
     highlights: &[Range<usize>],
     opts: Opts,
-    flat: bool,
+    mode: Mode,
     styles: &Styles,
     make: impl FnOnce() -> Vec<Line<'static>>,
 ) -> Rc<Vec<Line<'static>>> {
     CACHE.with_borrow_mut(|cache| {
         if let Some(at) =
-            cache.iter().position(|(k, _)| k.is(source, highlights, opts, flat, styles))
+            cache.iter().position(|(k, _)| k.is(source, highlights, opts, mode, styles))
         {
             let entry = cache.remove(at);
             let lines = Rc::clone(&entry.1);
@@ -277,7 +324,7 @@ fn cached(
             source: source.into(),
             highlights: highlights.into(),
             opts,
-            flat,
+            mode,
             styles: *styles,
         };
         cache.insert(0, (key, Rc::clone(&lines)));
@@ -1379,6 +1426,30 @@ mod tests {
         let spans = [Span::raw("an interactive resume picker\nfor atuin ai")];
         let lines = wrap_plain(&spans, 14, 2, styles().muted);
         assert_eq!(plain(&lines), "an interactive\nresume picker…");
+    }
+
+    /// A window's lines are the start of any longer one, with nothing cut short, so a view that
+    /// scrolls on renders more without what it shows moving.
+    #[rstest]
+    fn windows_grow_without_moving() {
+        let source: String = (0..40)
+            .map(|i| format!("Paragraph {i} has **some** words in it.\n\n- one\n- two\n\n"))
+            .collect();
+        let opts = |max_lines| Opts {
+            width: 30,
+            max_lines,
+            spacing: true,
+            urls: false,
+        };
+        let (all, more) = render_window(&source, &[], opts(10_000), &styles());
+        assert!(!more);
+        for limit in [1, 7, 50, 128, all.len() - 1, all.len()] {
+            let (lines, more) = render_window(&source, &[], opts(limit), &styles());
+            assert_eq!(lines.len(), limit);
+            assert_eq!(more, limit < all.len(), "{limit}");
+            assert_eq!(plain(&lines), plain(&all[..limit]), "{limit}");
+            assert!(!plain(&lines).ends_with('…'));
+        }
     }
 
     #[rstest]

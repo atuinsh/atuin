@@ -171,7 +171,7 @@ fn request_details(state: &mut State, requests: &Requests, settle: &mut Settle) 
     if !settle.ready(&handle, Instant::now()) {
         return;
     }
-    if !state.previews.contains_key(&handle) && state.requested.insert((handle.clone(), PREVIEW)) {
+    if state.wants_preview(&handle) && state.requested.insert((handle.clone(), PREVIEW)) {
         requests.send(Request::Preview(handle.clone()));
     }
     // Inspect lists the forks; the detail pane and the preview count them. A row with nothing
@@ -242,9 +242,7 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
             }
             Err(_) => {}
         },
-        Response::Preview(handle, preview) => {
-            state.previews.insert(handle, preview);
-        }
+        Response::Preview(handle, preview) => state.apply_preview(handle, preview),
         Response::Children(handle, children) => {
             state.children.insert(handle, children);
         }
@@ -579,7 +577,8 @@ impl Picker<'_> {
             inline_height
         };
 
-        let out = terminal::TuiStdout::new(inline_height > 0, settings.no_mouse)?;
+        let mouse = sessions.mouse.unwrap_or(!settings.no_mouse);
+        let out = terminal::TuiStdout::new(inline_height > 0, !mouse)?;
         let mut terminal = Terminal::with_options(CrosstermBackend::new(out), TerminalOptions {
             viewport: if inline_height > 0 {
                 Viewport::Inline(inline_height)
@@ -616,6 +615,8 @@ impl Picker<'_> {
         let outcome = 'render: loop {
             request_details(&mut state, &requests, &mut settle);
             terminal.draw(|f| state.draw(f, settings, self.theme))?;
+            state.preview_drawn(Instant::now());
+            let hold_ends = state.hold_ends();
 
             tokio::select! {
                 event = events.next() => {
@@ -624,10 +625,9 @@ impl Picker<'_> {
                     let action = state.handle_input(settings, &event?);
                     let pending = match action {
                         InputAction::Continue => None,
+                        // ctrl-l, or the terminal resized: start from a blank screen.
                         InputAction::Redraw => {
-                            if state.tab_index != 1 {
-                                terminal.clear()?;
-                            }
+                            terminal.clear()?;
                             None
                         }
                         InputAction::Resume(_) => Some(Pending::Resume),
@@ -662,6 +662,9 @@ impl Picker<'_> {
                 // The selection settled: ask for its details (at the top of the loop).
                 () = tokio::time::sleep_until(settle.due.unwrap_or_else(Instant::now).into()),
                     if settle.due.is_some() => {}
+                // The preview held over from the last selection gives way to the new one's `…`.
+                () = tokio::time::sleep_until(hold_ends.unwrap_or_else(Instant::now).into()),
+                    if hold_ends.is_some() => {}
                 _ = tick.tick() => {
                     // Not while typing or browsing: the list shouldn't move under the cursor.
                     if last_input.elapsed() >= REFRESH_IDLE

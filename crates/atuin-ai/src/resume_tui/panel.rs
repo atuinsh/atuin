@@ -154,18 +154,15 @@ pub fn sparkline(
 }
 
 impl State {
-    /// The detail pane for the selected session: what it is, where and when it ran, how busy it
-    /// was, and the conversation's first prompt, match and last reply, wrapped.
-    pub fn detail_lines(
+    /// The top of the detail pane for `row`: what it is, where and when it ran, and how busy it
+    /// was, wrapped to `width`. The conversation goes under it (see [`Self::conversation`]).
+    pub fn detail_header(
         &self,
+        row: &SessionRow,
         width: usize,
-        height: usize,
         tz: UtcOffset,
         theme: &Theme,
     ) -> Vec<Line<'static>> {
-        let Some(row) = self.selected() else {
-            return Vec::new();
-        };
         let now = (self.now)();
         let base = style(theme, Meaning::Base);
         let muted = style(theme, Meaning::Annotation);
@@ -219,16 +216,66 @@ impl State {
         for line in meta {
             lines.extend(markdown::wrap_plain(&line.spans, width, 0, muted));
         }
-
-        // The conversation, in the space that's left.
-        let left = height.saturating_sub(lines.len());
-        if preview.is_none() {
-            lines.push(Line::default());
-            lines.push(Line::from(Span::styled("…", muted)));
-            return lines;
-        }
-        lines.extend(self.conversation(row, width, left, 0, theme));
         lines
+    }
+
+    /// `row`'s first prompt, match and last reply, whichever it has, with their headings.
+    fn conversation_parts<'a>(
+        &'a self,
+        row: &'a SessionRow,
+    ) -> Vec<(&'static str, &'a str, &'a [Range<usize>])> {
+        let Some(preview) = self.previews.get(&row.handle) else {
+            return Vec::new();
+        };
+        [
+            ("First prompt", preview.first_prompt.as_deref(), &[][..]),
+            (
+                "Match",
+                row.matched.as_ref().map(|m| m.text.as_str()),
+                row.matched.as_ref().map_or(&[][..], |m| &m.highlights[..]),
+            ),
+            ("Last reply", preview.last_assistant.as_deref(), &[][..]),
+        ]
+        .into_iter()
+        .filter_map(|(title, text, hl)| Some((title, text?, hl)))
+        .collect()
+    }
+
+    /// The conversation in full, as it scrolls: each part whole under its heading, one after
+    /// another, in lines of `width` columns indented by `indent`. Rendered up to `limit` lines a
+    /// part, stopping at the first with more (`true`), so asking for more later only adds lines.
+    pub(super) fn conversation_document(
+        &self,
+        row: &SessionRow,
+        width: usize,
+        indent: usize,
+        limit: usize,
+        theme: &Theme,
+    ) -> (Vec<Line<'static>>, bool) {
+        let styles = markdown::Styles::new(theme, style(theme, Meaning::Base));
+        let heading = style(theme, Meaning::Annotation).add_modifier(Modifier::BOLD);
+        let opts = markdown::Opts {
+            width: width.saturating_sub(indent),
+            max_lines: limit,
+            spacing: true,
+            urls: true,
+        };
+        let pad = " ".repeat(indent);
+        let mut lines = Vec::new();
+        for (title, text, hl) in self.conversation_parts(row) {
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled(format!("{pad}{title}"), heading)));
+            let (body, more) = markdown::render_window(text, hl, opts, &styles);
+            for line in body {
+                let mut spans = vec![Span::raw(pad.clone())];
+                spans.extend(line.spans);
+                lines.push(Line::from(spans));
+            }
+            if more {
+                return (lines, true);
+            }
+        }
+        (lines, false)
     }
 
     /// The selected session's first prompt, match and last reply, as markdown under their
@@ -242,24 +289,10 @@ impl State {
         indent: usize,
         theme: &Theme,
     ) -> Vec<Line<'static>> {
-        let Some(preview) = self.previews.get(&row.handle) else {
-            return Vec::new();
-        };
         let base = style(theme, Meaning::Base);
         let muted = style(theme, Meaning::Annotation);
         let styles = markdown::Styles::new(theme, base);
-        let mut parts: Vec<(&'static str, &str, &[Range<usize>])> = [
-            ("First prompt", preview.first_prompt.as_deref(), &[][..]),
-            (
-                "Match",
-                row.matched.as_ref().map(|m| m.text.as_str()),
-                row.matched.as_ref().map_or(&[][..], |m| &m.highlights[..]),
-            ),
-            ("Last reply", preview.last_assistant.as_deref(), &[][..]),
-        ]
-        .into_iter()
-        .filter_map(|(title, text, hl)| Some((title, text?, hl)))
-        .collect();
+        let mut parts = self.conversation_parts(row);
         // Each part needs a blank line, its heading and a line of text. Short of that, the match
         // goes first, then the first prompt: where it left off matters most for resuming.
         while parts.len() > 1 && height < 3 * parts.len() {
