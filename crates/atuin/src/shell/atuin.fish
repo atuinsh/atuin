@@ -19,14 +19,18 @@ end
 
 function _atuin_mark_output_start
     test "$__atuin_pty_proxy_owns_tty" = 1; or return
+
+    if test -n "$__atuin_needs_osc133_reset"
+        set -e __atuin_needs_osc133_reset
+        # Old pty-proxy will reset an in-progress capture on a `B` marker.
+        # Always reset, even if there's no history ID, to avoid capturing a
+        # filtered command.
+        printf '\033]133;B\a'
+    end
+
     test -n "$ATUIN_HISTORY_ID"; or return
 
     if test "$ATUIN_PTY_PROXY_ACTIVE" = 1
-        if test -n "$__atuin_needs_osc133_reset"
-            set -e __atuin_needs_osc133_reset
-            # Old pty-proxy will reset an in-progress capture on a `B` marker.
-            printf '\033]133;B\a'
-        end
         printf '\033]133;C\a'
     else
         printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"

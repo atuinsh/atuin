@@ -31,6 +31,15 @@ def _atuin_mark_output_start [] {
     if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
         return
     }
+
+    if $env.__atuin_pty_proxy.needs_osc133_reset? == true {
+        $env.__atuin_pty_proxy.needs_osc133_reset = false
+        # Old pty-proxy will reset an in-progress capture on a `B` marker.
+        # Always reset, even if there's no history ID, to avoid capturing a
+        # filtered command.
+        print -n $"(char -u '1b')]133;B(char bel)"
+    }
+
     if 'ATUIN_HISTORY_ID' not-in $env or ($env.ATUIN_HISTORY_ID | is-empty) {
         return
     }
@@ -38,11 +47,6 @@ def _atuin_mark_output_start [] {
     if $env.ATUIN_PTY_PROXY_ACTIVE? == 1 {
         # Current pty-proxy is an older version that expects OSC 133; new
         # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
-        if $env.__atuin_pty_proxy.needs_osc133_reset? == true {
-            $env.__atuin_pty_proxy.needs_osc133_reset = false
-            # Old pty-proxy will reset an in-progress capture on a `B` marker.
-            print -n $"(char -u '1b')]133;B(char bel)"
-        }
         print -n $"(char -u '1b')]133;C(char bel)"
     } else {
         print -n $"(char -u '1b')]18188735;C;($env.ATUIN_HISTORY_ID)(char bel)"

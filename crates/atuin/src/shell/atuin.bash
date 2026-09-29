@@ -24,16 +24,20 @@ fi
 
 __atuin_mark_output_start() {
     [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
+
+    if [[ -n ${__atuin_needs_osc133_reset-} ]]; then
+        unset -v __atuin_needs_osc133_reset
+        # Old pty-proxy will reset an in-progress capture on a `B` marker.
+        # Always reset, even if there's no history ID, to avoid capturing a
+        # filtered command.
+        printf '\033]133;B\a'
+    fi
+
     [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
 
     if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
         # Current pty-proxy is an older version that expects OSC 133; new
         # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
-        if [[ -n ${__atuin_needs_osc133_reset-} ]]; then
-            unset -v __atuin_needs_osc133_reset
-            # Old pty-proxy will reset an in-progress capture on a `B` marker.
-            printf '\033]133;B\a'
-        fi
         printf '\033]133;C\a'
     else
         printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"
