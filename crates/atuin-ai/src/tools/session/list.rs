@@ -72,8 +72,10 @@ impl AtuinAiSessionListToolCall {
         // The whole listing, not just a page: it also identifies the caller's own session, and
         // with a cwd filter, the sessions outside it say whether the project lives elsewhere too.
         // `since` is applied after identifying the caller: filtering first can drop the caller's
-        // idle session and leave a parallel agent's as the lone candidate, hiding it.
-        let all = match super::list_sessions(&mut client, harness, None).await {
+        // idle session and leave a parallel agent's as the lone candidate, hiding it. So fetch
+        // back to whichever is earlier, the cutoff or what identifying the caller needs.
+        let fetch_since = since.map(|since| since.min(caller.active_since()));
+        let all = match super::list_sessions(&mut client, harness, fetch_since).await {
             Ok(all) => all,
             Err(e) => return ToolOutcome::Error(format!("Listing AI sessions failed: {e}")),
         };
