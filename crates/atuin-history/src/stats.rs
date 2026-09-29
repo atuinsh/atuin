@@ -227,10 +227,37 @@ fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str
             if p.len() == command.len() {
                 return command;
             }
+            // Skip global flags with attached values between the base command
+            // and the subcommand, so `kubectl --kubecontext=ctx get` keeps the
+            // `get` subcommand instead of stopping at the flag. Only the
+            // `--flag=value` form is skipped: a bare `--flag` may take the
+            // next word as its value, and we cannot know without per-tool
+            // flag tables, so those are left alone.
+            let mut rest = &command[p.len()..];
+            loop {
+                let trimmed = rest.trim_start();
+                if trimmed.is_empty() {
+                    // only flags followed the base command
+                    return command[..p.len()].trim_end();
+                }
+                let end = first_whitespace(trimmed);
+                let word = &trimmed[..end];
+                if word == "--" {
+                    // end of flags, the subcommand follows verbatim
+                    rest = &trimmed[end..];
+                    break;
+                }
+                if word.len() > 1 && word.starts_with('-') && word.contains('=') {
+                    rest = &trimmed[end..];
+                } else {
+                    break;
+                }
+            }
             // otherwise we need to use the subcommand + the next word
-            let non_whitespace = first_non_whitespace(&command[p.len()..]).unwrap_or(0);
-            let j =
-                p.len() + non_whitespace + first_whitespace(&command[p.len() + non_whitespace..]);
+            let non_whitespace = first_non_whitespace(rest).unwrap_or(0);
+            let j = command.len() - rest.len()
+                + non_whitespace
+                + first_whitespace(&rest[non_whitespace..]);
             return &command[..j];
         }
     }
@@ -553,6 +580,13 @@ mod tests {
     #[case::prefix_flags_only("sudo -E", "sudo")]
     #[case::prefix_flag_value_only("sudo -u nobody", "sudo")]
     #[case::doas_flag_with_arg("doas -u nobody iperf3", "iperf3")]
+    #[case::subcommand_global_flag("kubectl --kubecontext=prod get pods", "kubectl --kubecontext=prod get")]
+    #[case::subcommand_short_flag("kubectl -n=kube-system get pods", "kubectl -n=kube-system get")]
+    #[case::subcommand_two_flags("kubectl --as=admin --kubecontext=prod get pods", "kubectl --as=admin --kubecontext=prod get")]
+    #[case::subcommand_only_flags("kubectl --kubecontext=prod", "kubectl")]
+    #[case::subcommand_plain("kubectl get pods", "kubectl get")]
+    #[case::subcommand_bare_flag_kept("kubectl --kubecontext prod get", "kubectl --kubecontext")]
+    #[case::prefix_subcommand_flag("sudo kubectl --kubecontext=prod get pods", "kubectl --kubecontext=prod get")]
     fn interesting_commands(#[case] input: &str, #[case] expected: &str) {
         let settings = Settings::utc();
         assert_eq!(interesting_command(&settings, input), expected);
