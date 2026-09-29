@@ -1,7 +1,8 @@
 use std::ops::Range;
 
-use atuin_client::settings::WordJumpMode;
 use itertools::Itertools;
+
+use crate::settings::WordJumpMode;
 
 /// Like [`str::char_indices`], but only yields characters whose byte positions
 /// are in `start..end`.
@@ -107,20 +108,24 @@ impl WordJumper<'_> {
 }
 
 impl Cursor {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         self.source.as_str()
     }
 
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.source
     }
 
     /// Returns the string before the cursor
+    #[must_use]
     pub fn substring(&self) -> &str {
         &self.source[..self.index]
     }
 
     /// Returns the currently selected [`char`]
+    #[must_use]
     pub fn char(&self) -> Option<char> {
         self.source[self.index..].chars().next()
     }
@@ -290,6 +295,7 @@ impl Cursor {
         self.index = 0;
     }
 
+    #[must_use]
     pub fn position(&self) -> usize {
         self.index
     }
@@ -311,7 +317,7 @@ mod cursor_tests {
         word_jump_mode: WordJumpMode::Subl,
     };
 
-    #[test]
+    #[rstest]
     fn right() {
         // ö is 2 bytes
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
@@ -322,7 +328,7 @@ mod cursor_tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn left() {
         // ö is 2 bytes
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
@@ -396,7 +402,7 @@ mod cursor_tests {
     fn subl_get_prev_word_pos(#[case] subject: &str, #[case] from: usize, #[case] to: usize) {
         assert_eq!(SUBL_WORD_JUMPER.get_prev_word_pos(subject, from), to);
     }
-    #[test]
+    #[rstest]
     fn pop() {
         let mut s = String::from("öaöböcödöeöfö");
         let mut c = Cursor::from(s.clone());
@@ -412,7 +418,7 @@ mod cursor_tests {
         assert_eq!(c1, c2);
     }
 
-    #[test]
+    #[rstest]
     fn back() {
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
         // move to                                 ^
@@ -428,7 +434,7 @@ mod cursor_tests {
         assert_eq!(c.as_str(), "öcödöeöfö");
     }
 
-    #[test]
+    #[rstest]
     fn insert() {
         let mut c = Cursor::from(String::from("öaöböcödöeöfö"));
         // move to                                 ^
