@@ -247,3 +247,13 @@ zle -N _atuin_search_widget _atuin_search
 zle -N _atuin_up_search_widget _atuin_up_search
 
 (ATUIN_SHELL=zsh atuin __internal prepare-search-index >/dev/null 2>&1 &)
+
+if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] && [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
+    # We're running in an old pty-proxy that expects OSC 133 markers. The outer
+    # shell may have already sent a `C` marker, causing the proxy to start
+    # capturing output. We need to clear this state, or else this subshell's
+    # first prompt and command will be erroneously included in the output of
+    # the first command itself. We can do this by sending an `A` marker;
+    # another `C` won't work.
+    printf '\033]133;A\a'
+fi

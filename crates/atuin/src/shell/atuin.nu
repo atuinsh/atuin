@@ -149,3 +149,13 @@ if (version).minor >= 104 or (version).major > 0 {
         } | ignore
     }
 }
+
+if $env.__atuin_pty_proxy?.owns_tty? == true and $env.ATUIN_PTY_PROXY_ACTIVE? == 1 {
+    # We're running in an old pty-proxy that expects OSC 133 markers. The outer
+    # shell may have already sent a `C` marker, causing the proxy to start
+    # capturing output. We need to clear this state, or else this subshell's
+    # first prompt and command will be erroneously included in the output of
+    # the first command itself. We can do this by sending an `A` marker;
+    # another `C` won't work.
+    print -n $"(char -u '1b')]133;A(char bel)"
+}

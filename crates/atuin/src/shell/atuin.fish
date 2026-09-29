@@ -200,3 +200,13 @@ end
 
 ATUIN_SHELL=fish atuin __internal prepare-search-index &>/dev/null &
 disown 2>/dev/null
+
+if test "$__atuin_pty_proxy_owns_tty" = 1 && test "$ATUIN_PTY_PROXY_ACTIVE" = 1
+    # We're running in an old pty-proxy that expects OSC 133 markers. The outer
+    # shell may have already sent a `C` marker, causing the proxy to start
+    # capturing output. We need to clear this state, or else this subshell's
+    # first prompt and command will be erroneously included in the output of
+    # the first command itself. We can do this by sending an `A` marker;
+    # another `C` won't work.
+    printf '\033]133;A\a'
+end
