@@ -47,72 +47,32 @@ if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
     fi
 fi
 
-__atuin_osc133_command_executed() {
+__atuin_mark_output() {
     [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
     [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
 
-    printf '\033]133;C\a'
+    local kind="$1"
+    printf '\033]18188735;%s;%s\a' "$kind" "$ATUIN_HISTORY_ID"
 }
 
-__atuin_osc133_command_finished() {
-    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
-    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
-
-    printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
+__atuin_mark_output_start() {
+    __atuin_mark_output C
 }
 
-__atuin_osc133_prompt_start=$'%{\033]133;A;cl=line\a%}'
-__atuin_osc133_prompt_end=$'%{\033]133;B\a%}'
-
-__atuin_osc133_wrap_prompt() {
-    if [[ -z ${ATUIN_PTY_PROXY_ACTIVE-} ]] && [[ ${__atuin_pty_proxy_owns_tty-} != 1 ]]; then
-        return
-    fi
-
-    # RPS1 and RPROMPT share a value buffer but track "assigned" separately
-    # (zsh 5.0.6+), so for a user who only ever set RPS1, RPROMPT expands as
-    # unset. Fall back to RPS1 so we don't clobber the shared value (#3758).
-    local __atuin_orig_prompt="${PROMPT-}"
-    local __atuin_orig_rprompt="${RPROMPT-${RPS1-}}"
-
-    local __atuin_prompt="$__atuin_orig_prompt"
-    local __atuin_rprompt="$__atuin_orig_rprompt"
-
-    # Remove existing Atuin OSC 133 markers, if present.
-    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
-    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
-    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_start/}"
-    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_end/}"
-
-    if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]]; then
-        PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
-        RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
-    elif ! [[ "$__atuin_prompt $__atuin_rprompt" = *$'\033]133;'* ]]; then
-        # Only replace the prompt if there are no remaining OSC 133 markers. If
-        # there are, they likely came from another program, and we don't want
-        # to risk half-removing those markers (e.g., maybe `__atuin_osc133_prompt_end`
-        # matched an existing end marker, but `__atuin_osc133_prompt_start`
-        # didn't match the start marker due to the `cl=line` param).
-
-        # Skip no-op writes: assigning RPROMPT marks it (and RPS1) as set,
-        # which we shouldn't do unless we have markers to strip.
-        [[ "$__atuin_orig_prompt" == "$__atuin_prompt" ]] || PROMPT="$__atuin_prompt"
-        [[ "$__atuin_orig_rprompt" == "$__atuin_rprompt" ]] || RPROMPT="$__atuin_rprompt"
-    fi
+__atuin_mark_output_end() {
+    __atuin_mark_output D
 }
 
 _atuin_preexec() {
     local id
     id=$(ATUIN_SHELL=zsh atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
-    __atuin_osc133_command_executed
+    __atuin_mark_output_start
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
 
 _atuin_precmd() {
     local EXIT="$?" __atuin_precmd_time=${EPOCHREALTIME-}
-
-    __atuin_osc133_wrap_prompt
 
     [[ -z "${ATUIN_HISTORY_ID:-}" ]] && return 0
 
@@ -122,7 +82,7 @@ _atuin_precmd() {
         ((duration < 0)) && duration=0
     fi
 
-    __atuin_osc133_command_finished "$EXIT"
+    __atuin_mark_output_end
     (atuin history end --hook --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID >/dev/null 2>&1 &)
     export ATUIN_HISTORY_ID=""
 }

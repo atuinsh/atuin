@@ -17,24 +17,25 @@ if not set -q __atuin_pty_proxy_owns_tty
     end
 end
 
-function _atuin_osc133_command_executed
+function _atuin_mark_output -a kind
     test "$__atuin_pty_proxy_owns_tty" = 1; or return
     test -n "$ATUIN_HISTORY_ID"; or return
 
-    printf '\033]133;C\a'
+    printf '\033]18188735;%s;%s\a' $kind "$ATUIN_HISTORY_ID"
 end
 
-function _atuin_osc133_command_finished --argument-names exit_code
-    test "$__atuin_pty_proxy_owns_tty" = 1; or return
-    test -n "$ATUIN_HISTORY_ID"; or return
+function _atuin_mark_output_start
+    _atuin_mark_output C
+end
 
-    printf '\033]133;D;%s;history_id=%s\a' "$exit_code" "$ATUIN_HISTORY_ID"
+function _atuin_mark_output_end
+    _atuin_mark_output D
 end
 
 function _atuin_preexec --on-event fish_preexec
     if not test -n "$fish_private_mode"
         set -g ATUIN_HISTORY_ID (ATUIN_SHELL=fish atuin history start --hook -- "$argv[1]" 2>/dev/null)
-        _atuin_osc133_command_executed
+        _atuin_mark_output_start
     end
 end
 
@@ -42,7 +43,7 @@ function _atuin_postexec --on-event fish_postexec
     set -l s $status
 
     if test -n "$ATUIN_HISTORY_ID"
-        _atuin_osc133_command_finished $s
+        _atuin_mark_output_end
         atuin history end --hook --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
         disown
     end

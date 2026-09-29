@@ -7,7 +7,7 @@ use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::cwd_updater::CwdUpdater;
-use crate::debug::{Osc133DebugHighlighter, RESET};
+use crate::debug::{MarkerDebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg, SocketServer};
 
@@ -107,7 +107,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
     let _parser_handle = screen::spawn_parser_thread(rows, cols, msg_rx, screen::ParserOptions {
         command_capture: options.command_capture,
-        debug_osc133: options.debug_osc133,
+        debug_markers: options.debug_markers,
     });
 
     let socket_path = if let Some((server, path)) = server_and_path {
@@ -158,7 +158,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     let stdout_thread = std::thread::spawn(move || {
         let stdout = rustix::stdio::stdout();
 
-        let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
+        let mut highlighter = options.debug_markers.then(MarkerDebugHighlighter::new);
         let mut buf = [0u8; 8192];
 
         loop {

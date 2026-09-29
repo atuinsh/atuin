@@ -3,7 +3,7 @@
 //!
 //! The two take different routes. A `history_filter` match is kept out of the store only because
 //! `atuin history start` returns no id for it, so `$ATUIN_HISTORY_ID` stays empty and the shell
-//! integration omits the OSC 133 markers the pty proxy needs to report a capture at all. A
+//! integration omits the output markers the pty proxy needs to report a capture at all. A
 //! `command_filter` match is recorded and captured as usual, and the daemon drops its output on
 //! arrival. Both span the CLI, the shell integration, the proxy and the daemon, so this drives all
 //! four and checks the property they exist to provide.
@@ -130,10 +130,6 @@ async fn filtered_commands_leave_no_captured_output(
         pty.send_line(&format!("echo {command}"));
         pty.wait_for_line(command);
     }
-    // A capture is only reported once the *next* prompt starts, so the last command needs one more
-    // round trip before every capture that will ever exist has been sent.
-    pty.send_line("true");
-
     let mut client = HistoryClient::new(env.socket()).await.unwrap();
 
     // Both the history entry and the capture reach the daemon asynchronously, so wait for the

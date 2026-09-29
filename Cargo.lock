@@ -688,6 +688,7 @@ dependencies = [
  "memchr",
  "parking_lot",
  "portable-pty",
+ "proptest",
  "regex",
  "rstest",
  "rustix",

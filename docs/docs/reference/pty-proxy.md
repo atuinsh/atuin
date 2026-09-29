@@ -22,11 +22,10 @@ With pty-proxy, the Atuin popup renders over the top of your previous output, bu
 ## Capturing command output
 
 Because pty-proxy sits between your terminal and your shell, it can also record
-what each command printed. It reads the [OSC 133](https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/prompts-data-model.md)
-prompt markers that your shell emits, using them to tell where one command's
-output ends and the next begins. It then hands each captured block to the
-[daemon](daemon.md), which stores it on disk, keyed by the command's Atuin
-history ID.
+what each command printed. It reads special escape sequences emitted by Atuin's
+shell integration to tell where one command's output ends and the next begins.
+It then hands each captured block to the [daemon](daemon.md), which holds it on
+disk, keyed by the command's Atuin history ID.
 
 That capture is what lets AI tools see what actually happened, rather than
 guessing from the command alone:

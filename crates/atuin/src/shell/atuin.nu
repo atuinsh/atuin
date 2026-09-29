@@ -27,7 +27,7 @@ if '__atuin_pty_proxy' not-in $env {
     } else { false }) }
 }
 
-def _atuin_osc133_command_executed [] {
+def _atuin_mark_output [kind: string] {
     if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
         return
     }
@@ -35,18 +35,15 @@ def _atuin_osc133_command_executed [] {
         return
     }
 
-    print -n $"(char -u '1b')]133;C(char bel)"
+    print -n $"(char -u '1b')]18188735;($kind);($env.ATUIN_HISTORY_ID)(char bel)"
 }
 
-def _atuin_osc133_command_finished [exit_code: int] {
-    if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
-        return
-    }
-    if 'ATUIN_HISTORY_ID' not-in $env or ($env.ATUIN_HISTORY_ID | is-empty) {
-        return
-    }
+def _atuin_mark_output_start [] {
+    _atuin_mark_output C
+}
 
-    print -n $"(char -u '1b')]133;D;($exit_code);history_id=($env.ATUIN_HISTORY_ID)(char bel)"
+def _atuin_mark_output_end [] {
+    _atuin_mark_output D
 }
 
 # Magic token to make sure we don't record commands run by keybindings
@@ -64,7 +61,7 @@ let _atuin_pre_execution = {||
         $env.ATUIN_HISTORY_ID = (with-env { ATUIN_SHELL: nu } {
             atuin history start --hook -- $cmd | complete | get stdout | str trim
         })
-        _atuin_osc133_command_executed
+        _atuin_mark_output_start
     }
 }
 
@@ -73,7 +70,7 @@ let _atuin_pre_prompt = {||
     if 'ATUIN_HISTORY_ID' not-in $env {
         return
     }
-    _atuin_osc133_command_finished $last_exit
+    _atuin_mark_output_end
     if (version).minor >= 104 or (version).major > 0 {
         job spawn {
             ^atuin history end --hook $'--exit=($env.LAST_EXIT_CODE)' -- $env.ATUIN_HISTORY_ID | complete
