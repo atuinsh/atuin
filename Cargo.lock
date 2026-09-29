@@ -345,6 +345,7 @@ dependencies = [
 name = "atuin-ai"
 version = "18.23.0"
 dependencies = [
+ "arboard",
  "async-stream",
  "async-trait",
  "atuin-client",
@@ -369,6 +370,7 @@ dependencies = [
  "glob-match",
  "imara-diff",
  "parking_lot",
+ "proptest",
  "pulldown-cmark",
  "ratatui",
  "ratatui-core",
@@ -397,6 +399,7 @@ dependencies = [
  "tree-sitter-fish",
  "tui-textarea-2",
  "typed-builder",
+ "unicode-segmentation",
  "unicode-width 0.2.2",
  "uuid",
  "xxhash-rust",

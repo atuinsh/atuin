@@ -207,6 +207,7 @@ cmd-import-xonsh-sqlite = Import history from xonsh sqlite db
 arg-init-disable-ctrl-r = Disable the binding of CTRL-R to atuin
 arg-init-disable-up-arrow = Disable the binding of the Up Arrow key to atuin
 arg-init-disable-ai = Disable the binding of ? to Atuin AI
+arg-init-disable-ai-resume = Disable the binding of CTRL-] to atuin ai resume
 value-init-shell-zsh = Zsh setup
 value-init-shell-bash = Bash setup
 value-init-shell-fish = Fish setup
