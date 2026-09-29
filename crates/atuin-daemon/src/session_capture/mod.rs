@@ -4,7 +4,7 @@ mod message_enricher;
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use atuin_client::ai_session::{
     AiSessionDatabase, AiSessionStore, Appended, DbError, HarnessKind, HarnessSession, Message,
@@ -16,10 +16,11 @@ use atuin_common::harnesstools::session::{Content, Role};
 use atuin_common::sync::BlockingPool;
 use atuin_domain::record::HostId;
 use engine::SessionCaptureEngine;
-use futures::{Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt};
 pub use import::ImportProgress;
 use import::SessionImporter;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast, watch};
+use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
 
 const NOP_STORE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -148,39 +149,85 @@ fn sanitize_message(msg: &mut Message) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoreState {
+    /// Startup recovery is reprojecting the sidecar; reads see what is projected so far.
+    Recovering,
+    /// Recovery succeeded: capture (when enabled) and import are running.
+    Ready,
+    /// Opening or recovering the store failed; capture and import stay off until restart.
+    Unavailable,
+}
+
 pub struct AiHarnessSessionCapture {
     sink: Arc<Sink>,
     /// Runs the harness session file reads of capture and import.
     pool: BlockingPool,
-    persistent: bool,
-    _engine: SessionCaptureEngine,
+    state: watch::Receiver<StoreState>,
+    /// Recovery, then the capture engine for the life of the facade; aborted on drop.
+    background: Option<JoinHandle<()>>,
+}
+
+impl Drop for AiHarnessSessionCapture {
+    fn drop(&mut self) {
+        if let Some(background) = &self.background {
+            background.abort();
+        }
+    }
 }
 
 impl AiHarnessSessionCapture {
+    /// Serve the sidecar immediately and recover it from the record store in the background.
+    ///
+    /// Capture and import wait for recovery: the dedup gate trusts the sidecar, so writing before
+    /// it holds every persisted message would push duplicate records. Failed recovery leaves
+    /// existing sessions readable but keeps both off until restart.
     #[must_use]
-    /// `recovered` must only be true after the record store has successfully rebuilt the sidecar.
-    /// Failed recovery leaves existing sessions readable, but disables capture and import until
-    /// restart so missing projections cannot cause duplicate records.
     pub fn open(
         records: AiSessionStore,
         sidecar: AiSessionDatabase,
         capture: bool,
-        recovered: bool,
         pool: BlockingPool,
     ) -> Self {
         let sink = Arc::new(Sink::new(records, sidecar));
-        // Capture is opt-in. When disabled we still open the sidecar and serve existing sessions,
-        // but never spawn the listeners that copy new transcripts into the synced record store.
-        let engine = if capture && recovered {
-            SessionCaptureEngine::spawn(&sink, &pool)
-        } else {
-            SessionCaptureEngine::nop()
-        };
+        let (state_tx, state) = watch::channel(StoreState::Recovering);
+
+        let background = tokio::spawn({
+            let sink = sink.clone();
+            let pool = pool.clone();
+            async move {
+                let started = Instant::now();
+                let state = match sink.records.build(&sink.sidecar).await {
+                    Ok(()) => {
+                        tracing::info!(elapsed = ?started.elapsed(), "ai-session sidecar recovered");
+                        StoreState::Ready
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            ?err,
+                            "failed to reproject ai-session sidecar; capture and import disabled \
+                             until restart"
+                        );
+                        StoreState::Unavailable
+                    }
+                };
+                // Capture is opt-in. When disabled we still serve existing sessions, but never
+                // spawn the listeners that copy new transcripts into the synced record store.
+                let _engine = if capture && state == StoreState::Ready {
+                    SessionCaptureEngine::spawn(&sink, &pool)
+                } else {
+                    SessionCaptureEngine::nop()
+                };
+                state_tx.send_replace(state);
+                std::future::pending::<()>().await;
+            }
+        });
+
         Self {
             sink,
             pool,
-            persistent: recovered,
-            _engine: engine,
+            state,
+            background: Some(background),
         }
     }
 
@@ -201,35 +248,49 @@ impl AiHarnessSessionCapture {
             sink: Arc::new(Sink::new(records, sidecar)),
             // Never runs anything: without a persistent store there is no capture or import.
             pool: BlockingPool::new(NonZeroUsize::MIN),
-            persistent: false,
-            _engine: SessionCaptureEngine::nop(),
+            state: watch::channel(StoreState::Unavailable).1,
+            background: None,
         }
     }
 
-    /// Whether the persistent session store is ready for capture and import. `false` means
-    /// opening or recovering the store failed; any available projected sessions remain readable.
-    #[must_use]
-    pub fn is_available(&self) -> bool {
-        self.persistent
+    /// Wait out startup recovery, then report whether the persistent session store is ready for
+    /// capture and import. `false` means opening or recovering the store failed; any projected
+    /// sessions remain readable.
+    pub async fn ready(&self) -> bool {
+        Self::wait_ready(self.state.clone()).await
+    }
+
+    async fn wait_ready(mut state: watch::Receiver<StoreState>) -> bool {
+        // A closed channel means recovery panicked or was aborted.
+        state
+            .wait_for(|state| *state != StoreState::Recovering)
+            .await
+            .is_ok_and(|state| *state == StoreState::Ready)
     }
 
     pub fn import(
         &self,
         harness: Option<HarnessKind>,
     ) -> impl Stream<Item = ImportProgress> + Send + 'static {
-        if self.persistent {
-            SessionImporter::new(self.sink.clone(), self.pool.clone()).run(harness).right_stream()
-        } else {
-            futures::stream::once(async {
-                ImportProgress::Finished {
-                    sessions: 0,
-                    imported: 0,
-                    skipped: 0,
-                    failed: 0,
-                }
-            })
-            .left_stream()
+        let state = self.state.clone();
+        let sink = self.sink.clone();
+        let pool = self.pool.clone();
+        async move {
+            if Self::wait_ready(state).await {
+                SessionImporter::new(sink, pool).run(harness).right_stream()
+            } else {
+                futures::stream::once(async {
+                    ImportProgress::Finished {
+                        sessions: 0,
+                        imported: 0,
+                        skipped: 0,
+                        failed: 0,
+                    }
+                })
+                .left_stream()
+            }
         }
+        .flatten_stream()
     }
 
     #[must_use]
@@ -547,16 +608,13 @@ mod tests {
         .execute(fault.pool())
         .await
         .unwrap();
-        let recovered = records.build(&sidecar).await.is_ok();
-        assert!(!recovered);
         let capture = AiHarnessSessionCapture::open(
             records.clone(),
             sidecar.clone(),
             false,
-            recovered,
             BlockingPool::new(NonZeroUsize::MIN),
         );
-        assert!(!capture.persistent);
+        assert!(!capture.ready().await);
         let mut import = Box::pin(capture.import(None));
         assert!(matches!(import.next().await.unwrap(), ImportProgress::Finished {
             imported: 0,
@@ -565,18 +623,37 @@ mod tests {
         assert!(import.next().await.is_none());
         drop(capture);
         atuin_common::db::query("DROP TRIGGER fail_write").execute(fault.pool()).await.unwrap();
-        records.build(&sidecar).await.unwrap();
         let capture = AiHarnessSessionCapture::open(
             records,
             sidecar.clone(),
             false,
-            true,
             BlockingPool::new(NonZeroUsize::MIN),
         );
+        assert!(capture.ready().await);
+        assert_eq!(charged(&sidecar).await, (100, 42), "recovery projects the stranded record");
         msg.id = RecordId(atuin_common::utils::uuid_v7());
         msg.source_id = "later".to_owned().into();
         capture.sink.append(msg.clone()).await.unwrap();
         assert_eq!(charged(&sidecar).await, (100, 42));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn ready_waits_for_background_recovery() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = call_message("first", "call", 100, Some(42));
+        records.push(&msg).await.unwrap();
+
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        // Capture and import hold on this, so the dedup gate sees every persisted message.
+        assert!(capture.ready().await);
+        assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
     }
 
     #[rstest]

@@ -175,11 +175,11 @@ impl GrpcService for Service {
         &self,
         request: Request<ImportSessionsRequest>,
     ) -> Result<Response<Self::ImportSessionsStream>, Status> {
-        // A degraded nop facade (the session store failed to open) would otherwise stream an
-        // all-zero "success" summary; refuse instead so the caller sees the store is unavailable.
-        if !self.capture.is_available() {
+        // Waits out startup recovery. A degraded store would otherwise stream an all-zero
+        // "success" summary; refuse instead so the caller sees it is unavailable.
+        if !self.capture.ready().await {
             return Err(Status::unavailable(
-                "AI session capture is unavailable: the session store failed to open",
+                "AI session capture is unavailable: the session store failed to open or recover",
             ));
         }
 
