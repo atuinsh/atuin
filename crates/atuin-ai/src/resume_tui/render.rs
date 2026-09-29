@@ -1336,18 +1336,6 @@ impl State {
                 spans,
             ));
         }
-        if let Some(p) = self.previews.get(&row.handle).filter(|p| !p.activity.is_empty()) {
-            let mut spans = vec![Span::styled(format!(" {:<10}", "Activity"), key)];
-            let line = panel::activity_line(
-                &p.activity,
-                row.started_at,
-                row.updated_at,
-                width.min(60),
-                theme,
-            );
-            spans.extend(line.spans);
-            lines.push(Line::from(spans));
-        }
         lines.push(match self.plans.get(&row.handle) {
             None => field("Resume", vec![Span::styled("…", key)]),
             Some(Ok(resume)) => field("Resume", vec![

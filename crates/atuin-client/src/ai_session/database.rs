@@ -1060,13 +1060,13 @@ impl AiSessionDatabase {
         Ok(Some(stored.rehydrate(messages, cwd)))
     }
 
-    /// What a session's preview shows: every message's time and role, and the content of only
-    /// the first user message and the last assistant message with conversation text. The rest of
-    /// the content is never read, so a long session previews as fast as a short one.
+    /// What a session's preview shows: the content of only the first user message and the last
+    /// assistant message with conversation text. The rest of the content is never read, so a
+    /// long session previews as fast as a short one.
     pub async fn preview_parts(&self, session: &HarnessSession) -> Result<PreviewParts, DbError> {
-        let rows: Vec<(i64, i64, String)> = db::query_as(
-            "SELECT m.rowid, m.timestamp, m.role FROM messages m WHERE m.session = (SELECT id \
-             FROM sessions WHERE harness = ? AND session_id = ?) ORDER BY m.timestamp, m.id",
+        let rows: Vec<(i64, String)> = db::query_as(
+            "SELECT m.rowid, m.role FROM messages m WHERE m.session = (SELECT id FROM sessions \
+             WHERE harness = ? AND session_id = ?) ORDER BY m.timestamp, m.id",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -1074,19 +1074,19 @@ impl AiSessionDatabase {
         .await?;
 
         let mut rowids = Vec::with_capacity(rows.len());
-        let mut activity = Vec::with_capacity(rows.len());
-        for (rowid, timestamp, role) in rows {
+        let mut roles = Vec::with_capacity(rows.len());
+        for (rowid, role) in rows {
             rowids.push(rowid);
-            activity.push((Self::time_from_millis(timestamp)?, serde_json::from_str(&role)?));
+            roles.push(serde_json::from_str::<Role>(&role)?);
         }
 
         let mut parts = PreviewParts::default();
-        if let Some(i) = activity.iter().position(|(_, role)| *role == Role::User) {
+        if let Some(i) = roles.iter().position(|role| *role == Role::User) {
             parts.first_user = Some(self.content_at(rowids[i]).await?);
         }
         // Newest first, reading each assistant message only until one has text: the tail of a
         // session is often tool calls and reasoning.
-        for (i, (_, role)) in activity.iter().enumerate().rev() {
+        for (i, role) in roles.iter().enumerate().rev() {
             if *role != Role::Assistant {
                 continue;
             }
@@ -1096,7 +1096,6 @@ impl AiSessionDatabase {
                 break;
             }
         }
-        parts.activity = activity;
         Ok(parts)
     }
 
@@ -4733,8 +4732,6 @@ mod tests {
         // Compressed, and with a tool call beside the text: the whole content, for the caller
         // to render.
         assert_eq!(parts.last_assistant, Some(vec![text(&long), tool_use()]));
-        let activity: Vec<_> = messages.iter().map(|m| (m.timestamp, m.role.clone())).collect();
-        assert_eq!(parts.activity, activity);
     }
 
     /// A stored session comes back as its harness can write it out: every message, in
@@ -4825,7 +4822,6 @@ mod tests {
         let parts = db.preview_parts(&s).await.unwrap();
         assert_eq!(parts.first_user, Some(vec![tool_use()]));
         assert_eq!(parts.last_assistant, None);
-        assert_eq!(parts.activity.len(), 3);
 
         let missing = handle(HarnessKind::Codex, "missing");
         assert_eq!(db.preview_parts(&missing).await.unwrap(), super::PreviewParts::default());

@@ -20,7 +20,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
-use atuin_common::harnesstools::session::{Content, Role};
+use atuin_common::harnesstools::session::Content;
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_common::utils::in_git_repo;
 use atuin_domain::record::HostId;
@@ -329,12 +329,6 @@ impl SessionSource for SidecarSource {
         Ok(SessionPreview {
             first_prompt: parts.first_user.as_deref().and_then(text_of),
             last_assistant: parts.last_assistant.as_deref().and_then(text_of),
-            activity: parts
-                .activity
-                .into_iter()
-                .filter(|(_, role)| matches!(role, Role::User | Role::Assistant))
-                .map(|(at, _)| at)
-                .collect(),
         })
     }
 
@@ -388,6 +382,7 @@ impl SessionSource for SidecarSource {
 #[cfg(test)]
 mod tests {
     use atuin_client::ai_session::{HarnessKind, Message, NativeSessionId, SourceId};
+    use atuin_common::harnesstools::session::Role;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::RecordId;
     use rstest::{fixture, rstest};
@@ -599,7 +594,6 @@ mod tests {
         let preview = source.preview(&handle("root")).await.unwrap();
         assert_eq!(preview.first_prompt.as_deref(), Some("fix the flaky sync test"));
         assert_eq!(preview.last_assistant.as_deref(), Some("switched to a fixed clock"));
-        assert_eq!(preview.activity.len(), 2);
         assert_eq!(source.find_by_id("ro").await.unwrap().len(), 1);
         assert!(source.find_by_id("r%").await.unwrap().is_empty());
     }
@@ -618,8 +612,6 @@ mod tests {
 
         let preview = source.preview(&handle("root")).await.unwrap();
         assert_eq!(preview.last_assistant.as_deref(), Some("switched to a fixed clock"));
-        // User and assistant messages only.
-        assert_eq!(preview.activity.len(), 3);
     }
 
     // --- hosts ----------------------------------------------------------------------------------
