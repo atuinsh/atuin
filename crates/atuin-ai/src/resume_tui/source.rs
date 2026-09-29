@@ -151,8 +151,6 @@ impl SessionRow {
 pub struct SessionPreview {
     pub first_prompt: Option<String>,
     pub last_assistant: Option<String>,
-    /// When each user and assistant message was sent, oldest first: the session's cadence.
-    pub activity: Vec<OffsetDateTime>,
 }
 
 /// Where the picker's sessions come from.

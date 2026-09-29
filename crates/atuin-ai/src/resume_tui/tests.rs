@@ -353,7 +353,7 @@ async fn inspect_tab_shows_metadata_command_and_children() {
     assert!(!out.contains("subagent  ") && !out.contains("Explore:"), "{out}");
     assert!(!out.contains("Review the resume picker diff"), "{out}");
     assert!(out.contains("Messages  142  ·  in 327k · out 58k · cache 2.9M tokens"), "{out}");
-    assert!(out.contains("Activity  "), "{out}");
+    assert!(!out.contains("Activity"), "no activity chart: {out}");
     assert!(out.contains("<esc>: back"));
 }
 
@@ -1066,14 +1066,14 @@ async fn the_chooser_says_a_live_session_is_running() {
     assert!(!out.contains("running elsewhere"), "{out}");
 }
 
-/// The detail pane counts the forks (not the subagents), and scales its sparkline; tokens
-/// leave out the cache.
+/// The detail pane counts the forks (not the subagents); tokens leave out the cache.
 #[rstest]
 #[tokio::test]
 async fn the_detail_pane_counts_the_forks() {
     let out = frame(&settings(), "", 0, 150, 40).await;
     assert!(out.contains("142 messages · 1 fork · started"), "{out}");
-    assert!(out.contains("over 3h"), "{out}");
+    // No activity chart.
+    assert!(!out.contains("over 3h") && !out.contains('█'), "{out}");
     assert!(out.contains("in 327k · out 58k tokens"), "{out}");
     assert!(!out.contains("cache"), "{out}");
     // This host goes without saying.

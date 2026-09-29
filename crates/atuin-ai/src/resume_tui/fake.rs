@@ -935,33 +935,6 @@ fn snippet(text: &str, terms: &[String]) -> Option<Snippet> {
     })
 }
 
-/// Message times for a fake session: bursts of work spread over its lifetime, the same every run.
-fn activity(row: &SessionRow) -> Vec<OffsetDateTime> {
-    let span = (row.updated_at - row.started_at).whole_seconds().max(1);
-    let mut seed = row
-        .handle
-        .session
-        .as_ref()
-        .bytes()
-        .fold(7u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(b)));
-    let mut next = move || {
-        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
-        seed >> 33
-    };
-    let bursts: Vec<i64> = (0..4).map(|_| i64::try_from(next() % 1000).unwrap_or(0)).collect();
-    let mut times: Vec<OffsetDateTime> = (0..row.messages)
-        .map(|i| {
-            let burst = bursts[usize::try_from(i % 4).unwrap_or(0)];
-            let jitter = i64::try_from(next() % 120).unwrap_or(0) - 60;
-            let at = (burst * span / 1000 + jitter * span / 1000).clamp(0, span);
-            row.started_at + Duration::seconds(at)
-        })
-        .collect();
-    times.push(row.updated_at);
-    times.sort();
-    times
-}
-
 #[async_trait]
 impl SessionSource for FakeSource {
     async fn search(&self, filter: &SessionFilter) -> eyre::Result<Vec<SessionRow>> {
@@ -1028,7 +1001,6 @@ impl SessionSource for FakeSource {
             return Ok(SessionPreview::default());
         };
         Ok(SessionPreview {
-            activity: activity(&s.row),
             first_prompt: s
                 .messages
                 .iter()

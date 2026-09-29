@@ -465,8 +465,6 @@ pub struct HostSet {
 /// [`crate::ai_session::AiSessionDatabase::preview_parts`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PreviewParts {
-    /// When each message was sent, and by whom, oldest first.
-    pub activity: Vec<(OffsetDateTime, Role)>,
     /// The content of the first user message.
     pub first_user: Option<Vec<Content>>,
     /// The content of the last assistant message with conversation text (text or a summary),
