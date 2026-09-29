@@ -2,8 +2,8 @@
 //!
 //! The wire is lossless: a domain value survives `domain -> wire -> domain` unchanged, so how to
 //! render it is the client's call. The exceptions are `Message::session_title`,
-//! `Message::session_title_source`, `Message::title_change`, `Message::turn_id` and
-//! `Session::title_source`, storage bookkeeping the wire never carries, and a non-UTF-8 `cwd`,
+//! `Message::session_title_source`, `Message::title_change`, `Message::turn_id`, `Message::alias`
+//! and `Session::title_source`, storage bookkeeping the wire never carries, and a non-UTF-8 `cwd`,
 //! which is sent lossily.
 mod codegen {
     #![allow(clippy::must_use_candidate)]
@@ -14,8 +14,8 @@ mod codegen {
 use std::path::PathBuf;
 
 use atuin_client::ai_session::{
-    HarnessKind, HarnessSession as DomainHarnessSession, Message as DomainMessage, NativeSessionId,
-    Session as DomainSession, SourceId,
+    HarnessKind, HarnessSession as DomainHarnessSession, Head as DomainHead,
+    Message as DomainMessage, NativeSessionId, Session as DomainSession, SourceId,
 };
 use atuin_common::harnesstools::session::{
     Content, ParentKind as DomainParentKind, Role as DomainRole, StopReason as DomainStopReason,
@@ -23,7 +23,7 @@ use atuin_common::harnesstools::session::{
 };
 use atuin_common::string::highlighted::FromHighlightedTextProtoError;
 use atuin_common::time::{OffsetDateTimeExt, TimespecOutOfRange};
-use atuin_domain::record::RecordId;
+use atuin_domain::record::{HostId, RecordId};
 pub use codegen::*;
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -218,8 +218,30 @@ impl From<DomainMessage> for Message {
             stop_reason: value.stop_reason.map(|reason| StopReason::from(reason) as i32),
             role_label,
             stop_reason_label,
+            host_id: value.host.map(host_repr),
+            seq: value.seq,
+            parent_row: value.parent_row.map(Into::into),
         }
     }
+}
+
+fn host_repr(host: HostId) -> String {
+    host.as_hyphenated().to_string()
+}
+
+fn host_from_repr(host: Option<String>) -> Result<Option<HostId>, ParseError> {
+    Ok(host.map(|host| uuid::Uuid::parse_str(&host)).transpose()?.map(HostId))
+}
+
+fn timestamp(at: OffsetDateTime) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: at.unix_timestamp(),
+        nanos: at.nanosecond().cast_signed(),
+    }
+}
+
+fn from_timestamp(at: prost_types::Timestamp) -> Result<OffsetDateTime, ParseError> {
+    Ok(OffsetDateTime::from_timespec(at.seconds.into(), at.nanos.into())?)
 }
 
 impl Message {
@@ -286,6 +308,10 @@ impl TryFrom<Message> for DomainMessage {
             session_title_source: None,
             title_change: None,
             turn_id: None,
+            host: host_from_repr(value.host_id)?,
+            seq: value.seq,
+            parent_row: value.parent_row.map(SourceId::from),
+            alias: None,
         })
     }
 }
@@ -312,6 +338,15 @@ impl From<DomainSession> for Session {
             preview: value.preview,
             last_reply: value.last_reply,
             parent_kind: value.parent_kind.map(|kind| ParentKind::from(kind) as i32),
+            host_id: value.host.map(host_repr),
+            root: value.root.map(Into::into),
+            copy_of: value.copy_of.map(Into::into),
+            child_count: value.child_count,
+            group_updated_at: value.group_updated_at.map(timestamp),
+            heads: value.heads.into_iter().map(Head::from).collect(),
+            branch_point: value.branch_point.map(Into::into),
+            diverged: value.diverged,
+            messages: value.messages,
         }
     }
 }
@@ -342,6 +377,41 @@ impl TryFrom<Session> for DomainSession {
             preview: value.preview,
             last_reply: value.last_reply,
             parent_kind: domain_parent_kind(value.parent_kind),
+            host: host_from_repr(value.host_id)?,
+            root: value.root.map(TryInto::try_into).transpose()?,
+            copy_of: value.copy_of.map(TryInto::try_into).transpose()?,
+            child_count: value.child_count,
+            group_updated_at: value.group_updated_at.map(from_timestamp).transpose()?,
+            heads: value.heads.into_iter().map(DomainHead::try_from).collect::<Result<_, _>>()?,
+            branch_point: value.branch_point.map(SourceId::from),
+            diverged: value.diverged,
+            messages: value.messages,
+        })
+    }
+}
+
+impl From<DomainHead> for Head {
+    fn from(value: DomainHead) -> Self {
+        Self {
+            source_id: value.source_id.into(),
+            host_id: value.host.map(host_repr),
+            last_at: Some(timestamp(value.last_at)),
+            rows: value.rows,
+            messages: value.messages,
+        }
+    }
+}
+
+impl TryFrom<Head> for DomainHead {
+    type Error = ParseError;
+
+    fn try_from(value: Head) -> Result<Self, Self::Error> {
+        Ok(Self {
+            source_id: SourceId::from(value.source_id),
+            host: host_from_repr(value.host_id)?,
+            last_at: from_timestamp(value.last_at.ok_or(ParseError::Missing("last_at"))?)?,
+            rows: value.rows,
+            messages: value.messages,
         })
     }
 }
@@ -393,6 +463,10 @@ mod tests {
                 reasoning,
             }
         })
+    }
+
+    fn arb_host() -> impl Strategy<Value = HostId> {
+        any::<u128>().prop_map(|id| HostId(uuid::Uuid::from_u128(id)))
     }
 
     fn arb_role() -> impl Strategy<Value = DomainRole> {
@@ -484,13 +558,19 @@ mod tests {
             prop::option::of("[a-z]{1,8}"),
             prop::option::of("[a-z]{1,8}"),
         );
-        let outcome =
-            (prop::option::of(arb_usage()), prop::option::of(arb_stop_reason()), arb_parent_kind());
+        let outcome = (
+            prop::option::of(arb_usage()),
+            prop::option::of(arb_stop_reason()),
+            arb_parent_kind(),
+            prop::option::of(arb_host()),
+            any::<Option<u64>>(),
+            prop::option::of("[a-z0-9]{1,8}"),
+        );
         (handles, body, outcome).prop_map(
             |(
                 (id, session, source_id, parent, parent_source_id),
                 (timestamp, role, content, cwd, git_branch, model),
-                (usage, stop_reason, parent_kind),
+                (usage, stop_reason, parent_kind, host, seq, parent_row),
             )| DomainMessage {
                 id: RecordId(uuid::Uuid::from_u128(id)),
                 session,
@@ -510,6 +590,10 @@ mod tests {
                 session_title_source: None,
                 title_change: None,
                 turn_id: None,
+                host,
+                seq,
+                parent_row: parent_row.map(SourceId::from),
+                alias: None,
             },
         )
     }
@@ -531,11 +615,26 @@ mod tests {
             prop::option::of(".{0,8}"),
             prop::option::of(".{0,8}"),
         );
-        (handles, summary, arb_parent_kind()).prop_map(
+        let grouping = (
+            prop::option::of(arb_host()),
+            prop::option::of(arb_harness_session()),
+            any::<u64>(),
+            prop::option::of(arb_timestamp()),
+            prop::option::of(arb_harness_session()),
+            arb_parent_kind(),
+        );
+        let branches = (
+            prop::collection::vec(arb_head(), 0..3),
+            prop::option::of("[a-z0-9]{1,8}"),
+            any::<bool>(),
+            prop::option::of(any::<u64>()),
+        );
+        (handles, summary, grouping, branches).prop_map(
             |(
                 (handle, parent, cwd, git_branch, model),
                 (started_at, updated_at, message_count, usage, title, preview, last_reply),
-                parent_kind,
+                (host, root, child_count, group_updated_at, copy_of, parent_kind),
+                (heads, branch_point, diverged, messages),
             )| DomainSession {
                 handle,
                 parent,
@@ -551,8 +650,28 @@ mod tests {
                 title_source: None,
                 preview,
                 last_reply,
+                host,
+                root,
+                copy_of,
+                child_count,
+                group_updated_at,
+                heads,
+                branch_point: branch_point.map(SourceId::from),
+                diverged,
+                messages,
             },
         )
+    }
+
+    fn arb_head() -> impl Strategy<Value = DomainHead> {
+        ("[a-z0-9]{1,8}", prop::option::of(arb_host()), arb_timestamp(), any::<u64>(), any::<u64>())
+            .prop_map(|(source_id, host, last_at, rows, messages)| DomainHead {
+                source_id: SourceId::from(source_id),
+                host,
+                last_at,
+                rows,
+                messages,
+            })
     }
 
     proptest! {

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use atuin_client::ai_session::{
     AiSessionDatabase, AiSessionStore, Appended, DbError, HarnessKind, HarnessSession, Message,
-    PushError, Session, SessionMatch,
+    PushError, SearchTerms, Session, SessionFilter, SessionMatch,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
@@ -68,7 +68,12 @@ impl Sink {
         // Apply capture policy before either persistence path or the live tail. Keep structural
         // rows (even with no content) so parent links and usage accounting remain intact.
         sanitize_message(&mut msg);
+        // Captured here, so on this host; a reproject reads the same from the record envelope.
+        msg.host = Some(self.records.host_id());
         let mut pending = self.pending_projection.lock().await;
+        // Keeps a reprojection of this host's records (after a sync) from projecting the record
+        // pushed below before this does. Taken after `pending`, never the other way round.
+        let local = self.sidecar.lock_local_projection().await;
         if let Some(previous) = pending.as_ref() {
             self.project_and_broadcast(previous).await?;
             *pending = None;
@@ -77,6 +82,13 @@ impl Sink {
         // store too, so there is nothing to do. Stable source ids (see MessageEnricher::source_id)
         // make this reliable across re-captures and keep the record store free of duplicates.
         if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
+            return Ok(Appended::Duplicate);
+        }
+        // A content-addressed row may be stored under its alias instead: the id its line had
+        // before a rehydrated transcript stamped it (see `Message::alias`).
+        if let Some(alias) = &msg.alias
+            && self.sidecar.contains_message(&msg.session, alias).await?
+        {
             return Ok(Appended::Duplicate);
         }
 
@@ -89,6 +101,7 @@ impl Sink {
         *pending = Some(msg.clone());
         let appended = self.project_and_broadcast(&msg).await?;
         *pending = None;
+        drop(local);
         drop(pending);
         Ok(appended)
     }
@@ -341,12 +354,8 @@ impl AiHarnessSessionCapture {
         self.sink.subscribe()
     }
 
-    pub async fn list_sessions(
-        &self,
-        harness: Option<HarnessKind>,
-        updated_since: Option<time::OffsetDateTime>,
-    ) -> Result<Vec<Session>, DbError> {
-        self.sink.sidecar.list_sessions(harness, updated_since).await
+    pub async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<Session>, DbError> {
+        self.sink.sidecar.list_sessions(filter).await
     }
 
     pub async fn get_session(&self, session: &HarnessSession) -> Result<Option<Session>, DbError> {
@@ -370,12 +379,11 @@ impl AiHarnessSessionCapture {
     pub fn search(
         &self,
         query: &str,
-        harness: Option<HarnessKind>,
-        cwd: Option<&str>,
-        any_term: bool,
+        terms: SearchTerms,
+        filter: &SessionFilter,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
-        self.sink.sidecar.search_in(query, harness, cwd, any_term, limit)
+        self.sink.sidecar.search(query, terms, filter, limit)
     }
 }
 
@@ -469,6 +477,8 @@ mod tests {
         ];
         sink.append(msg.clone()).await.unwrap();
         sanitize_message(&mut msg);
+        // Capture stamps the local host.
+        msg.host = Some(sink.records.host_id());
         assert_eq!(msg.content.len(), 4);
         assert_eq!(msg.content[3], Content::ReasoningSummary { tokens: None });
         assert_eq!(msg.content[0], Content::Text("AWS_SECRET_ACCESS_KEY=****".to_owned()));
@@ -510,7 +520,12 @@ mod tests {
             "PRIVATE_ATTACHMENT",
             "TEXTSECRET",
         ] {
-            let mut matches = Box::pin(sink.sidecar.search(query, None, 10));
+            let mut matches = Box::pin(sink.sidecar.search(
+                query,
+                SearchTerms::Typed,
+                &SessionFilter::default(),
+                10,
+            ));
             assert!(matches.next().await.is_none(), "sensitive content indexed: {query}");
         }
     }
@@ -841,6 +856,41 @@ mod tests {
         assert_eq!(sink.append(msg).await.unwrap(), Appended::Duplicate);
     }
 
+    /// A restored transcript writes a call captured without its input back as a note in its
+    /// row's text. Re-captured, that row comes back under the source id already synced, with
+    /// other content: it is a duplicate, never pushed again, and the synced row stands.
+    #[rstest]
+    #[tokio::test]
+    async fn a_row_back_with_other_content_is_a_duplicate() {
+        let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(raw.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sink = Sink::new(records, AiSessionDatabase::in_memory().await.unwrap());
+        let mut synced = sample_message();
+        synced.role = Role::Assistant;
+        synced.content = vec![Content::ToolUse(ToolUse {
+            id: ToolCallId::from("c1".to_owned()),
+            name: "Bash".to_owned(),
+            input: serde_json::json!({"command": "ls"}),
+        })];
+        let mut restored = synced.clone();
+        restored.id = RecordId(atuin_common::utils::uuid_v7());
+        restored.content = vec![Content::Text("Looking.\n\n[ran a shell command]".to_owned())];
+
+        assert_eq!(sink.append(synced).await.unwrap(), Appended::New);
+        assert_eq!(sink.append(restored).await.unwrap(), Appended::Duplicate);
+        assert_eq!(raw.all_tagged(&RecordTag::AiSession).await.unwrap().len(), 1);
+        let messages: Vec<Message> =
+            sink.sidecar.messages(&sample_handle()).map(Result::unwrap).collect().await;
+        assert_eq!(messages.len(), 1);
+        assert!(
+            matches!(messages[0].content.as_slice(), [Content::ToolUse(u)] if u.input.is_null())
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn append_without_subscriber_does_not_error() {
@@ -989,13 +1039,20 @@ mod pipeline_tests {
                 .map(|s| (s.handle.session.to_string(), s.usage.output.unwrap()))
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
-        let live = collect(sink.sidecar.list_sessions(None, None).await.unwrap());
+        let live = collect(sink.sidecar.list_sessions(&SessionFilter::default()).await.unwrap());
         let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
         sink.records.build(&rebuilt).await.unwrap();
         assert_eq!(
-            collect(rebuilt.list_sessions(None, None).await.unwrap()),
+            collect(rebuilt.list_sessions(&SessionFilter::default()).await.unwrap()),
             live,
             "rebuild agrees"
+        );
+        // So does a startup reprojection over the live sidecar, which replays what it holds.
+        sink.records.reproject(&sink.sidecar).await.unwrap();
+        assert_eq!(
+            collect(sink.sidecar.list_sessions(&SessionFilter::default()).await.unwrap()),
+            live,
+            "replay agrees"
         );
         live
     }
@@ -1306,6 +1363,28 @@ mod pipeline_tests {
         assert!(!msg.content.is_empty(), "summary text retained");
     }
 
+    /// A continuation's marker (`atuin ai resume --in`) is harness-injected text, which is not
+    /// synced; the link it makes is, as every row's parent, so it survives sync and reprojection.
+    #[rstest]
+    fn a_continuation_marker_is_dropped_but_its_parent_is_kept() {
+        use atuin_common::harnesstools::{AnyHarness, continuation};
+        let marker = continuation::marker_text(AnyHarness::from_name("pi").unwrap(), "0199-orig");
+        let m = ccode(serde_json::json!({
+            "type": "user", "uuid": "c1", "isMeta": true, "timestamp": "2026-09-18T10:00:00.000Z",
+            "message": {"role": "user", "content": marker},
+        }));
+        let mut msg =
+            MessageEnricher::new(HarnessKind::ClaudeCode).capture(&sid("s1"), &m).pop().unwrap();
+        sanitize_message(&mut msg);
+        assert!(msg.content.is_empty(), "{:?}", msg.content);
+        let parent = msg.parent.clone().expect("the marker names the parent");
+        assert_eq!(parent.harness, HarnessKind::Pi);
+        assert_eq!(parent.session.as_ref(), "0199-orig");
+        let record = atuin_client::ai_session::AiSessionRecord::Message(msg).serialize();
+        let back = atuin_client::ai_session::AiSessionRecord::deserialize(&record).unwrap();
+        assert!(format!("{back:?}").contains("0199-orig"), "the record carries the parent");
+    }
+
     /// Execution payloads that Claude Code records as user text (`<local-command-stdout>`) must
     /// not be synced. The parser strips them; capture policy stays harness-agnostic.
     #[rstest]
@@ -1340,5 +1419,104 @@ mod pipeline_tests {
         assert_eq!(row.updated_at.year(), 2020, "updated_at = {}", row.updated_at);
         assert_eq!(row.started_at, row.updated_at);
         assert_eq!(row.title.as_deref(), Some("Old work"));
+    }
+
+    /// Serializes the tests that point `CODEX_HOME` somewhere: the variable is process-wide, and
+    /// a rehydrate that found it unset would write to the real `~/.codex`.
+    static CODEX_HOME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Write `session` out as Codex would find it, under a temporary `CODEX_HOME`.
+    async fn rehydrate_codex(
+        session: &atuin_common::harnesstools::rehydrate::RehydrateSession,
+        home: &std::path::Path,
+    ) -> std::path::PathBuf {
+        let _env = CODEX_HOME.lock().await;
+        // SAFETY: no other thread of these tests reads or writes the environment meanwhile.
+        unsafe { std::env::set_var("CODEX_HOME", home) };
+        let written = atuin_common::harnesstools::codex::rehydrate::rehydrate(session).await;
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("CODEX_HOME") };
+        let path = written.unwrap();
+        assert!(path.starts_with(home), "{} is outside the test's CODEX_HOME", path.display());
+        path
+    }
+
+    /// A Codex rollout's lines, read as capture reads them.
+    async fn codex_rollout(id: &str, path: std::path::PathBuf) -> Vec<AnyMessage> {
+        use atuin_common::harnesstools::codex::session::CodexSession;
+        use atuin_common::harnesstools::session::Session as _;
+        use futures::TryStreamExt;
+        CodexSession::open(sid(id), path, BlockingPool::new(NonZeroUsize::MIN))
+            .read()
+            .map_ok(AnyMessage::from)
+            .try_collect()
+            .await
+            .unwrap()
+    }
+
+    /// A Codex session written back out from its synced rows (rehydrated, to be resumed on
+    /// another machine) and captured again there pushes no record: every line resolves to a row
+    /// already synced. That includes the id-less lines of a rollout from before Codex 0.32,
+    /// which stamped none of them, where a rehydrated rollout stamps every line.
+    #[rstest]
+    #[case::legacy_unstamped("legacy-bare.jsonl")]
+    #[case::legacy_forked_subagent("legacy-forked-subagent.jsonl")]
+    #[case::paginated_with_compaction("paginated-compacted.jsonl")]
+    #[case::custom_tools_and_records("session1.jsonl")]
+    #[tokio::test]
+    async fn a_rehydrated_codex_session_recaptures_as_nothing_new(
+        #[future] sink: Sink,
+        #[case] name: &str,
+    ) {
+        let sink = sink.await;
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../atuin-common/tests/fixtures/codex")
+            .join(name);
+        let first: serde_json::Value = serde_json::from_str(
+            std::fs::read_to_string(&fixture).unwrap().lines().next().unwrap(),
+        )
+        .unwrap();
+        let id = first["payload"]["id"].as_str().or(first["id"].as_str()).unwrap().to_owned();
+
+        let lines = codex_rollout(&id, fixture).await;
+        let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+        let captured = capture_all(&sink, &mut enricher, &sid(&id), &lines).await;
+        assert!(captured.contains(&Appended::New));
+
+        let handle = handle(HarnessKind::Codex, &id);
+        let session = sink
+            .sidecar
+            .rehydrate_session(&handle, std::path::PathBuf::from("/elsewhere"))
+            .await
+            .unwrap()
+            .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let path = rehydrate_codex(&session, home.path()).await;
+
+        // Written in Codex's paginated history mode, each row back at the number it was synced
+        // with, so Codex continues numbering where the synced rollout left off.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let header: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(header["payload"]["history_mode"], "paginated");
+        let stored: Vec<Message> =
+            futures::TryStreamExt::try_collect(sink.sidecar.messages(&handle)).await.unwrap();
+        let again = codex_rollout(&id, path).await;
+        for line in &again {
+            use atuin_common::harnesstools::session::Message as _;
+            let Some(row) = line
+                .id()
+                .map(String::from)
+                .and_then(|id| stored.iter().find(|m| m.source_id.as_ref() == id.as_str()))
+            else {
+                continue;
+            };
+            if row.seq.is_some() {
+                assert_eq!(line.seq(), row.seq, "{} moved", row.source_id.as_ref());
+            }
+        }
+        let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+        let outcomes = capture_all(&sink, &mut enricher, &sid(&id), &again).await;
+        let new = outcomes.iter().filter(|o| **o == Appended::New).count();
+        assert_eq!(new, 0, "re-capturing the rehydrated rollout pushed {new} records");
     }
 }

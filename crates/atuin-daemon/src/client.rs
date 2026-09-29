@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 #[cfg(unix)]
 use std::path::PathBuf;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
@@ -542,13 +542,10 @@ impl AiClient {
             // A listing filtered to the future matches nothing, so the probe costs little beyond
             // the rebuild check every read makes first.
             let future = OffsetDateTime::now_utc() + time::Duration::days(365);
-            let probe = ListSessionsRequest {
-                harness: None,
-                updated_since: Some(prost_types::Timestamp {
-                    seconds: future.unix_timestamp(),
-                    nanos: 0,
-                }),
-            };
+            let probe = list_sessions_request(&SessionFilter {
+                updated_since: Some(future),
+                ..SessionFilter::default()
+            });
             match self.client.list_sessions(probe).await {
                 Err(status) if crate::grpc::ai::session::is_rebuilding(&status) => {
                     if let Some(on_wait) = on_wait.take() {
@@ -563,23 +560,15 @@ impl AiClient {
         }
     }
 
-    /// Stream captured session summaries, newest first. `harness` filters to a single harness and
-    /// `updated_since` to sessions active at or after that time, when set. The daemon sends one
+    /// Stream captured session summaries passing `filter`, newest first. The daemon sends one
     /// session per message (so a long list never trips the gRPC message-size limit); callers that
     /// want the whole set collect it with `try_collect`, and ones that only want the newest can
     /// take the first item without draining the rest.
     pub async fn list_sessions(
         &mut self,
-        harness: Option<HarnessKind>,
-        updated_since: Option<OffsetDateTime>,
+        filter: &SessionFilter,
     ) -> Result<tonic::Streaming<AiSession>> {
-        let request = ListSessionsRequest {
-            harness: harness.map(|h| h as i32),
-            updated_since: updated_since.map(|ts| prost_types::Timestamp {
-                seconds: ts.unix_timestamp(),
-                nanos: ts.nanosecond().cast_signed(),
-            }),
-        };
+        let request = list_sessions_request(filter);
         Ok(self.client.list_sessions(request).await?.into_inner())
     }
 
@@ -616,21 +605,20 @@ impl AiClient {
         Ok(self.client.tail_sessions(request).await?.into_inner())
     }
 
+    /// Stream the sessions matching `query` (its terms matching as `terms` says) and passing
+    /// `filter`, most relevant first, at most `limit` (0 is unbounded). An empty query streams
+    /// them newest first.
+    ///
+    /// The daemon matches every term as a whole word, or with [`SearchTerms::Any`] any term as a
+    /// prefix; [`SearchTerms::Typed`] (search as you type) is searched as [`SearchTerms::All`].
     pub async fn search_sessions(
         &mut self,
         query: &str,
-        harness: Option<HarnessKind>,
-        cwd: Option<&str>,
-        any_term: bool,
+        terms: SearchTerms,
+        filter: &SessionFilter,
         limit: u32,
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
-        let request = SearchSessionsRequest {
-            query: query.to_owned(),
-            limit,
-            harness: harness.map(|h| h as i32),
-            cwd: cwd.map(str::to_owned),
-            any_term,
-        };
+        let request = search_sessions_request(query, terms, filter, limit);
         Ok(self.client.search_sessions(request).await?.into_inner())
     }
 
@@ -642,6 +630,69 @@ impl AiClient {
             harness: harness.map(|h| h as i32),
         };
         Ok(self.client.import_sessions(request).await?.into_inner())
+    }
+}
+
+/// A listing of the sessions passing `filter`. The harness and `updated_since` go in the bare
+/// fields as well as the filter, for a daemon from before `filter` (still running after an
+/// upgrade), which ignores it; a newer one reads the filter's first, so the two never disagree.
+fn list_sessions_request(filter: &SessionFilter) -> ListSessionsRequest {
+    ListSessionsRequest {
+        harness: filter.harness.map(|h| h as i32),
+        updated_since: filter.updated_since.map(|ts| prost_types::Timestamp {
+            seconds: ts.unix_timestamp(),
+            nanos: ts.nanosecond().cast_signed(),
+        }),
+        filter: Some(filter.into()),
+    }
+}
+
+/// A search for `query` over the sessions passing `filter`, with the harness and workspace in the
+/// bare fields too (see [`list_sessions_request`]).
+fn search_sessions_request(
+    query: &str,
+    terms: SearchTerms,
+    filter: &SessionFilter,
+    limit: u32,
+) -> SearchSessionsRequest {
+    SearchSessionsRequest {
+        query: query.to_owned(),
+        limit,
+        harness: filter.harness.map(|h| h as i32),
+        cwd: filter.workspace.as_ref().map(|w| w.to_string_lossy().into_owned()),
+        any_term: terms == SearchTerms::Any,
+        filter: Some(filter.into()),
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use atuin_client::ai_session::{HarnessKind, SearchTerms, SessionFilter};
+    use rstest::rstest;
+
+    use super::{list_sessions_request, search_sessions_request};
+
+    /// An older daemon reads only the legacy `harness` field, so it must carry the filter's.
+    #[rstest]
+    #[case::none(None)]
+    #[case::codex(Some(HarnessKind::Codex))]
+    fn requests_carry_the_harness_in_the_legacy_field(#[case] harness: Option<HarnessKind>) {
+        let filter = SessionFilter {
+            harness,
+            branch: Some("main".to_owned()),
+            ..SessionFilter::default()
+        };
+        let expected = harness.map(|h| h as i32);
+
+        let list = list_sessions_request(&filter);
+        assert_eq!(list.harness, expected);
+        assert_eq!(list.filter.as_ref().and_then(|f| f.harness), expected);
+        assert_eq!(list.filter.and_then(|f| f.branch).as_deref(), Some("main"));
+
+        let search = search_sessions_request("words", SearchTerms::All, &filter, 7);
+        assert_eq!(search.harness, expected);
+        assert_eq!(search.filter.as_ref().and_then(|f| f.harness), expected);
+        assert_eq!((search.query.as_str(), search.limit), ("words", 7));
     }
 }
 

@@ -1,8 +1,9 @@
 //! `atuin_ai_session_search`: full-text search across captured AI-agent session transcripts.
 
 use std::fmt::Write as _;
+use std::path::PathBuf;
 
-use atuin_client::ai_session::{HarnessKind, SessionMatch};
+use atuin_client::ai_session::{HarnessKind, SearchTerms, SessionFilter, SessionMatch};
 use atuin_client::settings::Settings;
 use atuin_common::range::Clamped;
 use atuin_common::string::NonBlankString;
@@ -163,8 +164,18 @@ async fn search(
     any_term: bool,
     limit: u32,
 ) -> Result<Vec<SessionMatch>, ToolOutcome> {
+    let filter = SessionFilter {
+        harness,
+        workspace: cwd.map(PathBuf::from),
+        ..SessionFilter::default()
+    };
+    let terms = if any_term {
+        SearchTerms::Any
+    } else {
+        SearchTerms::All
+    };
     client
-        .search_sessions(query, harness, cwd, any_term, limit)
+        .search_sessions(query, terms, &filter, limit)
         .await
         .map_err(|e| ToolOutcome::Error(format!("AI session search failed: {e}")))?
         .map(|hit| {

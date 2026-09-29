@@ -172,6 +172,14 @@ message Message {
   optional string stop_reason_label = 17;
   // How this message's session relates to `parent`, when known.
   optional ParentKind parent_kind = 18;
+  // The host that captured the message (a hyphenated host id), when known.
+  optional string host_id = 19;
+  // The line's position in its transcript, when the harness numbers its lines (a Codex
+  // rollout line's ordinal).
+  optional uint64 seq = 20;
+  // The stored row parent_source_id resolves to, as the sidecar resolved it (opencode's
+  // pointer names a message, whose first part this is).
+  optional string parent_row = 21;
 }
 
 message Session {
@@ -192,4 +200,40 @@ message Session {
   optional string last_reply = 13;
   // How this session relates to `parent`, when known.
   optional ParentKind parent_kind = 14;
+  // The host that captured the session (a hyphenated host id), when known.
+  optional string host_id = 15;
+  // The top-most stored ancestor this session is grouped under; absent for a root.
+  optional HarnessSession root = 16;
+  // Sessions grouped under this one; only counted by roots-only queries.
+  uint64 child_count = 17;
+  // The newest updated_at across the group; only set by roots-only queries.
+  optional google.protobuf.Timestamp group_updated_at = 18;
+  // For a session with no parent, the session it was found to be a copy of (from the model
+  // calls they share); always of the same harness.
+  optional HarnessSession copy_of = 19;
+  // The tips of the session's branches, newest first. Several when it was rewound or
+  // interrupted and continued, or went on separately on several hosts (diverged).
+  repeated Head heads = 20;
+  // The last row every head's path shares, when there are several and they share one.
+  optional string branch_point = 21;
+  // Whether the heads were captured on different hosts: never merge such a session.
+  bool diverged = 22;
+  // Its messages (user prompts and assistant text) over every branch at once, counted as the
+  // heads count theirs; absent until the heads are first worked out.
+  optional uint64 messages = 23;
+}
+
+// The tip of one branch of a session.
+message Head {
+  // The branch's last row.
+  string source_id = 1;
+  // The host that captured it (a hyphenated host id), when known.
+  optional string host_id = 2;
+  // When that row was written.
+  google.protobuf.Timestamp last_at = 3;
+  // Rows on the branch past the branch point, the tip included; every row on its path for a
+  // head that parts from no other.
+  uint64 rows = 4;
+  // How many of those are messages: user prompts and assistant text.
+  uint64 messages = 5;
 }

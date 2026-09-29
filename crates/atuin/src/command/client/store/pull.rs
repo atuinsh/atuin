@@ -40,6 +40,7 @@ impl Pull {
             println!("Clearing local store");
 
             store.delete_all().await?;
+            super::invalidate_ai_sessions().await;
         }
 
         // We can actually just use the existing diff/etc to push
