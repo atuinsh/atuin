@@ -31,6 +31,17 @@ impl Service {
     pub fn new(capture: Arc<AiHarnessSessionCapture>) -> Self {
         Self { capture }
     }
+
+    /// Refuse while startup recovery is still restoring sessions: a read would succeed with
+    /// sessions or messages silently missing.
+    fn ensure_recovered(&self) -> Result<(), Status> {
+        if self.capture.is_recovering() {
+            return Err(Status::unavailable(
+                "AI sessions are being rebuilt after the daemon started; try again shortly",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[tonic::async_trait]
@@ -49,6 +60,7 @@ impl GrpcService for Service {
         &self,
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<Self::ListSessionsStream>, Status> {
+        self.ensure_recovered()?;
         let harness = HarnessFilterRequest::harness(&request.into_inner())?;
 
         let sessions = self
@@ -69,6 +81,7 @@ impl GrpcService for Service {
         &self,
         request: Request<GetSessionRequest>,
     ) -> Result<Response<Self::GetSessionStream>, Status> {
+        self.ensure_recovered()?;
         let handle = request.into_inner().session()?;
 
         let session = self
@@ -99,6 +112,7 @@ impl GrpcService for Service {
         &self,
         request: Request<GetTranscriptRequest>,
     ) -> Result<Response<Self::GetTranscriptStream>, Status> {
+        self.ensure_recovered()?;
         let handle = request.into_inner().session()?;
 
         let chunks = self.capture.transcript(&handle).map(|chunk| {
@@ -114,6 +128,7 @@ impl GrpcService for Service {
         &self,
         request: Request<SearchSessionsRequest>,
     ) -> Result<Response<Self::SearchSessionsStream>, Status> {
+        self.ensure_recovered()?;
         let request = request.into_inner();
         let harness = HarnessFilterRequest::harness(&request)?;
 
@@ -175,9 +190,10 @@ impl GrpcService for Service {
         &self,
         request: Request<ImportSessionsRequest>,
     ) -> Result<Response<Self::ImportSessionsStream>, Status> {
-        // Waits out startup recovery. A degraded store would otherwise stream an all-zero
-        // "success" summary; refuse instead so the caller sees it is unavailable.
-        if !self.capture.ready().await {
+        self.ensure_recovered()?;
+        // A degraded store would otherwise stream an all-zero "success" summary; refuse instead so
+        // the caller sees it is unavailable.
+        if !self.capture.is_available() {
             return Err(Status::unavailable(
                 "AI session capture is unavailable: the session store failed to open or recover",
             ));
@@ -225,6 +241,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::session_capture::StoreState;
 
     #[rstest]
     #[tokio::test]
@@ -271,6 +288,47 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(ref e) if e.code() == tonic::Code::InvalidArgument));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reads_are_refused_until_recovery_finishes() {
+        let (cap, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
+        let svc = Service::new(Arc::new(cap));
+        let list = || svc.list_sessions(Request::new(ListSessionsRequest { harness: None }));
+        let search = || {
+            svc.search_sessions(Request::new(SearchSessionsRequest {
+                query: "x".to_owned(),
+                limit: 0,
+                harness: None,
+            }))
+        };
+        let import = || svc.import_sessions(Request::new(ImportSessionsRequest { harness: None }));
+
+        let rebuilding = |code: Result<(), Status>| {
+            matches!(code, Err(ref e) if e.code() == tonic::Code::Unavailable
+                && e.message().contains("being rebuilt"))
+        };
+        assert!(rebuilding(list().await.map(drop)));
+        assert!(rebuilding(search().await.map(drop)));
+        assert!(rebuilding(import().await.map(drop)));
+
+        state.send_replace(StoreState::Ready);
+        assert!(list().await.is_ok());
+        assert!(search().await.is_ok());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_failed_recovery_still_serves_reads() {
+        let (cap, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
+        let svc = Service::new(Arc::new(cap));
+        // Recovery ending without reporting (a panic) must not leave reads refused forever.
+        drop(state);
+
+        assert!(
+            svc.list_sessions(Request::new(ListSessionsRequest { harness: None })).await.is_ok()
+        );
     }
 
     #[rstest]

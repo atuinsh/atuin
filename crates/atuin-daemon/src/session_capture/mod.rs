@@ -150,7 +150,7 @@ fn sanitize_message(msg: &mut Message) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StoreState {
+pub(crate) enum StoreState {
     /// Startup recovery is reprojecting the sidecar; reads see what is projected so far.
     Recovering,
     /// Recovery succeeded: capture (when enabled) and import are running.
@@ -232,6 +232,17 @@ impl AiHarnessSessionCapture {
     }
 
     pub async fn nop() -> Self {
+        Self::nop_in(watch::channel(StoreState::Unavailable).1).await
+    }
+
+    /// A nop facade whose recovery state the test drives.
+    #[cfg(test)]
+    pub(crate) async fn with_state(state: StoreState) -> (Self, watch::Sender<StoreState>) {
+        let (tx, rx) = watch::channel(state);
+        (Self::nop_in(rx).await, tx)
+    }
+
+    async fn nop_in(state: watch::Receiver<StoreState>) -> Self {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT)
             .await
             .expect("in-memory sqlite store must open for the nop ai-session capture facade");
@@ -248,9 +259,24 @@ impl AiHarnessSessionCapture {
             sink: Arc::new(Sink::new(records, sidecar)),
             // Never runs anything: without a persistent store there is no capture or import.
             pool: BlockingPool::new(NonZeroUsize::MIN),
-            state: watch::channel(StoreState::Unavailable).1,
+            state,
             background: None,
         }
+    }
+
+    /// Whether startup recovery is still projecting the sidecar, so reads may miss sessions and
+    /// messages it has not restored yet. A closed channel means recovery panicked or was aborted:
+    /// it is over, not in progress.
+    #[must_use]
+    pub fn is_recovering(&self) -> bool {
+        *self.state.borrow() == StoreState::Recovering && self.state.has_changed().is_ok()
+    }
+
+    /// Whether recovery succeeded and the persistent session store is ready for capture and
+    /// import. `false` while recovering, or after opening or recovering the store failed.
+    #[must_use]
+    pub fn is_available(&self) -> bool {
+        *self.state.borrow() == StoreState::Ready
     }
 
     /// Wait out startup recovery, then report whether the persistent session store is ready for
