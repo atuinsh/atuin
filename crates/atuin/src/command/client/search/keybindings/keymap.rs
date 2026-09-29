@@ -1,122 +1,17 @@
-use std::collections::HashMap;
+//! History search keymaps: the shared generic keymap bound to the search [`Action`].
 
 use super::actions::Action;
-use super::conditions::{ConditionExpr, EvalContext};
-use super::key::{KeyInput, SingleKey};
 
-/// A single rule within a keybinding: an optional condition and an action.
-/// If the condition is `None`, the rule always matches.
-#[derive(Debug, Clone)]
-pub struct KeyRule {
-    pub condition: Option<ConditionExpr>,
-    pub action: Action,
-}
-
-/// A keybinding is an ordered list of rules. The first rule whose condition
-/// matches (or has no condition) wins.
-#[derive(Debug, Clone)]
-pub struct KeyBinding {
-    pub rules: Vec<KeyRule>,
-}
-
-/// A keymap is a collection of keybindings indexed by key input.
-#[derive(Debug, Clone)]
-pub struct Keymap {
-    pub bindings: HashMap<KeyInput, KeyBinding>,
-}
-
-impl KeyRule {
-    /// Create an unconditional rule.
-    pub fn always(action: Action) -> Self {
-        KeyRule {
-            condition: None,
-            action,
-        }
-    }
-
-    /// Create a conditional rule. Accepts any type convertible to `ConditionExpr`,
-    /// including bare `ConditionAtom` values.
-    pub fn when(condition: impl Into<ConditionExpr>, action: Action) -> Self {
-        KeyRule {
-            condition: Some(condition.into()),
-            action,
-        }
-    }
-}
-
-impl KeyBinding {
-    /// Create a simple (unconditional) binding.
-    pub fn simple(action: Action) -> Self {
-        KeyBinding {
-            rules: vec![KeyRule::always(action)],
-        }
-    }
-
-    /// Create a conditional binding from a list of rules.
-    pub fn conditional(rules: Vec<KeyRule>) -> Self {
-        KeyBinding { rules }
-    }
-}
-
-impl Keymap {
-    /// Create an empty keymap.
-    pub fn new() -> Self {
-        Keymap {
-            bindings: HashMap::new(),
-        }
-    }
-
-    /// Bind a key input to a simple (unconditional) action.
-    pub fn bind(&mut self, key: KeyInput, action: Action) {
-        self.bindings.insert(key, KeyBinding::simple(action));
-    }
-
-    /// Bind a key input to a conditional set of rules.
-    pub fn bind_conditional(&mut self, key: KeyInput, rules: Vec<KeyRule>) {
-        self.bindings.insert(key, KeyBinding::conditional(rules));
-    }
-
-    /// Resolve a key input to an action given the current evaluation context.
-    /// Returns `None` if the key has no binding or no rule's condition matches.
-    pub fn resolve(&self, key: &KeyInput, ctx: &EvalContext) -> Option<Action> {
-        let binding = self.bindings.get(key)?;
-        for rule in &binding.rules {
-            match &rule.condition {
-                None => return Some(rule.action.clone()),
-                Some(cond) if cond.evaluate(ctx) => return Some(rule.action.clone()),
-                Some(_) => {}
-            }
-        }
-        None
-    }
-
-    /// Check if any binding starts with the given single key as the first key
-    /// of a multi-key sequence. Used to detect pending multi-key sequences.
-    pub fn has_sequence_starting_with(&self, prefix: &SingleKey) -> bool {
-        self.bindings.keys().any(|ki| match ki {
-            KeyInput::Sequence(keys) => keys.first() == Some(prefix),
-            KeyInput::Single(_) => false,
-        })
-    }
-
-    /// Merge another keymap into this one. Keys from `other` override keys in `self`.
-    #[allow(dead_code)]
-    pub fn merge(&mut self, other: &Keymap) {
-        for (key, binding) in &other.bindings {
-            self.bindings.insert(key.clone(), binding.clone());
-        }
-    }
-}
-
-impl Default for Keymap {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub type KeyRule = atuin_client::tui::keymap::KeyRule<Action>;
+pub type KeyBinding = atuin_client::tui::keymap::KeyBinding<Action>;
+pub type Keymap = atuin_client::tui::keymap::Keymap<Action>;
 
 #[cfg(test)]
 mod tests {
-    use super::super::conditions::ConditionAtom;
+    use rstest::rstest;
+
+    use super::super::conditions::{ConditionAtom, EvalContext};
+    use super::super::key::{KeyInput, SingleKey};
     use super::*;
 
     fn make_ctx(cursor: usize, width: usize, selected: usize, len: usize) -> EvalContext {
@@ -131,7 +26,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn simple_binding_resolves() {
         let mut keymap = Keymap::new();
         let key = KeyInput::parse("ctrl-c").unwrap();
@@ -141,7 +36,7 @@ mod tests {
         assert_eq!(keymap.resolve(&key, &ctx), Some(Action::ReturnOriginal));
     }
 
-    #[test]
+    #[rstest]
     fn conditional_first_match_wins() {
         let mut keymap = Keymap::new();
         let key = KeyInput::parse("left").unwrap();
@@ -159,7 +54,7 @@ mod tests {
         assert_eq!(keymap.resolve(&key, &ctx), Some(Action::CursorLeft));
     }
 
-    #[test]
+    #[rstest]
     fn no_match_returns_none() {
         let keymap = Keymap::new();
         let key = KeyInput::parse("ctrl-c").unwrap();
@@ -167,7 +62,7 @@ mod tests {
         assert_eq!(keymap.resolve(&key, &ctx), None);
     }
 
-    #[test]
+    #[rstest]
     fn conditional_no_condition_matches_returns_none() {
         let mut keymap = Keymap::new();
         let key = KeyInput::parse("left").unwrap();
@@ -182,7 +77,7 @@ mod tests {
         assert_eq!(keymap.resolve(&key, &ctx), None);
     }
 
-    #[test]
+    #[rstest]
     fn has_sequence_starting_with() {
         let mut keymap = Keymap::new();
         let seq = KeyInput::parse("g g").unwrap();
@@ -195,7 +90,7 @@ mod tests {
         assert!(!keymap.has_sequence_starting_with(&h));
     }
 
-    #[test]
+    #[rstest]
     fn merge_overrides() {
         let mut base = Keymap::new();
         let key = KeyInput::parse("ctrl-c").unwrap();
@@ -210,7 +105,7 @@ mod tests {
         assert_eq!(base.resolve(&key, &ctx), Some(Action::Exit));
     }
 
-    #[test]
+    #[rstest]
     fn merge_preserves_unoverridden() {
         let mut base = Keymap::new();
         let key1 = KeyInput::parse("ctrl-c").unwrap();

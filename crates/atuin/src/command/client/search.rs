@@ -17,7 +17,9 @@ use tracing::instrument;
 
 use super::history::ListMode;
 
-mod cursor;
+mod cursor {
+    pub use atuin_client::tui::cursor::*;
+}
 mod engines;
 mod history_list;
 mod inspector;
