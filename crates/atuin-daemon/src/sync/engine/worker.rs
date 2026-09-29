@@ -17,6 +17,7 @@ use tokio::time;
 
 use crate::daemon::DaemonHandle;
 use crate::search::SearchIndex;
+use crate::session_capture::Recovery;
 
 /// Cap on the exponential backoff between failed sync attempts. Once a failing sync has ramped to
 /// this interval it keeps retrying at that cadence until it succeeds -- it is never abandoned, and
@@ -36,6 +37,7 @@ pub struct Worker {
     history_store: HistoryStore,
     ai_session_store: AiSessionStore,
     ai_session_db: Option<AiSessionDatabase>,
+    ai_session_recovery: Recovery,
 }
 
 /// Errors that prevent the sync worker from starting.
@@ -83,6 +85,7 @@ impl Worker {
         handle: DaemonHandle,
         index: Arc<RwLock<SearchIndex>>,
         ai_session_db: Option<AiSessionDatabase>,
+        ai_session_recovery: Recovery,
     ) -> Result<Self, StartError> {
         let host_id = Settings::host_id().await.map_err(StartError::HostId)?;
 
@@ -103,6 +106,7 @@ impl Worker {
             history_store,
             ai_session_store,
             ai_session_db,
+            ai_session_recovery,
         })
     }
 
@@ -189,6 +193,10 @@ impl Worker {
             let Some(ai_session_db) = &self.ai_session_db else {
                 return;
             };
+            // Startup recovery replays the record store into the sidecar. Projecting freshly
+            // downloaded messages alongside it would let a session's newer rows land before its
+            // older ones, and some session fields (the preview) keep whichever arrives first.
+            self.ai_session_recovery.finished().await;
             self.ai_session_store.incremental_build(ai_session_db, &downloaded_records).await;
         };
 

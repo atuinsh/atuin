@@ -328,7 +328,12 @@ pub async fn boot(
         None => AiHarnessSessionCapture::nop().await,
     });
 
-    let _sync_engine = sync::SyncEngine::spawn(handle.clone(), search_index.clone(), ai_session_db);
+    let _sync_engine = sync::SyncEngine::spawn(
+        handle.clone(),
+        search_index.clone(),
+        ai_session_db,
+        ai_session_capture.recovery(),
+    );
 
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());

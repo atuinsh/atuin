@@ -159,6 +159,17 @@ pub(crate) enum StoreState {
     Unavailable,
 }
 
+/// Resolves once startup recovery is over, whether it succeeded or not.
+#[derive(Debug, Clone)]
+pub struct Recovery(watch::Receiver<StoreState>);
+
+impl Recovery {
+    pub async fn finished(&self) {
+        // A closed channel means recovery panicked or was aborted: over either way.
+        let _ = self.0.clone().wait_for(|state| *state != StoreState::Recovering).await;
+    }
+}
+
 pub struct AiHarnessSessionCapture {
     sink: Arc<Sink>,
     /// Runs the harness session file reads of capture and import.
@@ -262,6 +273,12 @@ impl AiHarnessSessionCapture {
             state,
             background: None,
         }
+    }
+
+    /// A handle for waiting out startup recovery.
+    #[must_use]
+    pub fn recovery(&self) -> Recovery {
+        Recovery(self.state.clone())
     }
 
     /// Whether startup recovery is still projecting the sidecar, so reads may miss sessions and
@@ -664,6 +681,26 @@ mod tests {
         msg.source_id = "later".to_owned().into();
         capture.sink.append(msg.clone()).await.unwrap();
         assert_eq!(charged(&sidecar).await, (100, 42));
+    }
+
+    #[rstest]
+    #[case::ready(Some(StoreState::Ready))]
+    #[case::failed(Some(StoreState::Unavailable))]
+    #[case::aborted(None)]
+    #[tokio::test]
+    async fn recovery_finishes_however_it_ends(#[case] end: Option<StoreState>) {
+        let (capture, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
+        let recovery = capture.recovery();
+        let wait = Duration::from_millis(50);
+        assert!(tokio::time::timeout(wait, recovery.finished()).await.is_err());
+
+        match end {
+            Some(end) => {
+                state.send_replace(end);
+            }
+            None => drop(state),
+        }
+        assert!(tokio::time::timeout(wait, recovery.finished()).await.is_ok());
     }
 
     #[rstest]
