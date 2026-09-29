@@ -20,8 +20,9 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
 
 - **Hooks** that record each command, its exit code, and its duration. See
   [Shell Integration](../guide/shell-integration.md).
-- **Key bindings** for ++ctrl+r++ and the ++up++ arrow, and ++question++ for
-  [Atuin AI](../ai/introduction.md).
+- **Key bindings** for ++ctrl+r++ and the ++up++ arrow, ++question++ for
+  [Atuin AI](../ai/introduction.md), and ++ctrl+bracket-right++ for `atuin ai resume`
+  (zsh, bash and fish).
 
 ## Flags
 
@@ -30,6 +31,22 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
 | `--disable-up-arrow` | Don't bind the ++up++ arrow key |
 | `--disable-ctrl-r` | Don't bind ++ctrl+r++ |
 | `--disable-ai` | Don't bind ++question++ to [Atuin AI](../ai/introduction.md) |
+| `--disable-ai-resume` | Don't bind ++ctrl+bracket-right++ to `atuin ai resume` |
+
+!!! note "++ctrl+bracket-right++ replaces a shell binding"
+    By default ++ctrl+bracket-right++ is zsh's `vi-find-next-char` (emacs keymap) and
+    bash's `character-search`: jump to the next occurrence of the character you type next.
+    `atuin init` rebinds it in the emacs, vi-insert and vi-command keymaps. To keep the
+    shell's binding, pass `--disable-ai-resume`, or set `ATUIN_NOBIND` and bind the resume
+    widget to a key of your choice, for example in zsh:
+
+    ```shell
+    eval "$(atuin init zsh --disable-ai-resume)"
+    bindkey '^x^r' atuin-ai-resume
+    ```
+
+    In bash, use `atuin-bind '\C-x\C-r' atuin-ai-resume` (see
+    [Key Binding](../configuration/key-binding.md)).
 
 For example, to keep ++ctrl+r++ but leave the up arrow alone:
 

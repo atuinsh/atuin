@@ -14,6 +14,7 @@ version.workspace = true
 [features]
 default = []
 daemon = []
+clipboard = ["dep:arboard"]
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
@@ -67,6 +68,7 @@ tree-sitter-bash = { workspace = true, optional = true }
 tree-sitter-fish = { workspace = true, optional = true }
 tui-textarea-2 = { workspace = true }
 typed-builder = { workspace = true }
+unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
@@ -75,8 +77,15 @@ yaml-rust2 = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+arboard = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { workspace = true, optional = true, features = ["wayland-data-control"] }
+
 [dev-dependencies]
 eye_declare_engine = { workspace = true }
+proptest = { workspace = true }
 rstest = { workspace = true }
 
 [lints]

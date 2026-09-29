@@ -340,6 +340,49 @@ enter_accept = true
 ##   commands that have no recorded shell
 # shells = "auto"
 
+[ai.sessions]
+## Settings for `atuin ai resume`, the picker over captured AI coding-agent sessions.
+## It follows the history search's style, invert, show_preview, max_preview_height,
+## enter_accept, keymap_mode and theme settings.
+
+## The filter the picker opens in. Unset: "workspace", widening to "global" when
+## not in a git repository or when the workspace has no sessions.
+# filter_mode = "workspace"
+
+## The filter modes ctrl-r cycles through, in order, wrapping around.
+# filters = ["workspace", "global", "host", "directory", "branch"]
+
+## Row columns, left to right: time, harness, title, messages. The title takes the
+## rest of the row; the message count goes when there isn't room for it. The
+## repository, branch and host are in the preview.
+# columns = ["time", "harness", "title", "messages"]
+
+## Group forks under their root session, so only the root shows as a row. When
+## false, every fork gets its own row. Subagents are never listed: they can't be
+## resumed (a search matching one still finds its root session).
+# group_forks = true
+
+## Height of the inline picker. Defaults to the top-level inline_height.
+# inline_height = 40
+
+## Ask where to resume a session once it's chosen: in its own harness (the default
+## choice, so enter-enter resumes it), or continued in another harness installed here.
+## When false, enter and tab resume in its own harness straight away; the chooser still
+## opens for a session that can't be resumed there.
+# resume_chooser = true
+
+## Per-harness resume commands, in place of the built-in ones (run after `cd -- <cwd> &&`).
+## {id} is the native session id, {path} its transcript on this machine and {cwd} its
+## working directory. Each is substituted within its word, unquoted, so don't quote them.
+## Don't pass them through another shell either (e.g. `sh -c "cd {cwd} && ..."`): that
+## shell would split and expand them, so a directory with a space or `;` in it breaks the
+## command or runs part of it as a separate one.
+# [ai.sessions.resume]
+# claude = "claude --resume {id}"
+# codex = "codex resume {id}"
+# opencode = "opencode --session {id}"
+# pi = "pi --session {id}"
+
 [tmux]
 ## Enable using atuin with tmux popup (requires tmux >= 3.2)
 ## When enabled and running inside tmux, Atuin will use a popup window for interactive search.
