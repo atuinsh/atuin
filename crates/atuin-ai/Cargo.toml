@@ -40,6 +40,7 @@ fs-err = { workspace = true }
 futures = { workspace = true }
 glob-match = { workspace = true }
 imara-diff = { workspace = true }
+interim = { workspace = true }
 parking_lot = { workspace = true }
 pulldown-cmark = { workspace = true }
 ratatui = { workspace = true }

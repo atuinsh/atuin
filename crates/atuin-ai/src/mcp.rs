@@ -17,7 +17,7 @@ use atuin_client::settings::Settings;
 use eyre::Result;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
     Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
     ServerInfo, Tool, ToolAnnotations,
 };
@@ -94,7 +94,9 @@ impl ServerHandler for AtuinMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(TOOLS.clone()))
+        Ok(ListToolsResult::with_all_items(TOOLS.clone())
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn call_tool(
@@ -325,11 +327,11 @@ fn tool_definitions() -> Vec<Tool> {
             "atuin_ai_session_list",
             "List captured AI coding-agent sessions (Claude Code, Codex, opencode, pi), most \
              recently active first, optionally only those in a directory (cwd: '.' for this \
-             project). Use it to pick up where the previous session on this project left off \
-             ('continue', 'last time') or to see what agents worked on recently, when you have no \
-             specific words to search for. Each entry gives the session id, harness, last-active \
-             time, message count, title, and directory. Requires the Atuin daemon with AI session \
-             capture enabled.",
+             project) or active since a time (since: 'today'). Use it to pick up where the \
+             previous session on this project left off ('continue', 'last time') or to see what \
+             agents worked on recently, when you have no specific words to search for. Each entry \
+             gives the session id, harness, last-active time, message count, title, and \
+             directory. Requires the Atuin daemon with AI session capture enabled.",
             schema_for_type::<AtuinAiSessionListToolCall>(),
         )
         .annotate(ToolAnnotations::with_title("List AI agent sessions").read_only(true)),

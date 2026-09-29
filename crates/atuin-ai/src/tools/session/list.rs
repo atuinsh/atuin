@@ -24,6 +24,10 @@ pub struct AtuinAiSessionListToolCall {
     /// Only sessions from this AI harness. Omit for every harness.
     #[serde(default)]
     pub harness: Option<HarnessArg>,
+    /// Only sessions active at or after this time, e.g. 'today', 'yesterday', '3 days ago',
+    /// '2026-09-01'. Relative dates are in the user's local time.
+    #[serde(default)]
+    pub since: Option<String>,
     /// Maximum number of sessions to return, newest first.
     #[serde(default)]
     pub limit: Clamped<u32, 1, 50, 10>,
@@ -47,17 +51,42 @@ impl AtuinAiSessionListToolCall {
             Err(outcome) => return outcome,
         };
         let limit = self.limit.get() as usize;
+        let offset = time::UtcOffset::local_or_utc();
+
+        let since = match self.since.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            None => None,
+            Some(since) => {
+                let now = time::OffsetDateTime::now_utc().to_offset(offset);
+                match interim::parse_date_string(since, now, settings.dialect.into()) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        return ToolOutcome::Error(format!(
+                            "Could not parse since {since:?} ({e}). Try 'today', '2 days ago' or \
+                             a date like '2026-09-01'."
+                        ));
+                    }
+                }
+            }
+        };
 
         // The whole listing, not just a page: it also identifies the caller's own session, and
         // with a cwd filter, the sessions outside it say whether the project lives elsewhere too.
-        let all = match super::list_sessions(&mut client, harness, None).await {
+        // `since` is applied after identifying the caller: filtering first can drop the caller's
+        // idle session and leave a parallel agent's as the lone candidate, hiding it. So fetch
+        // back to whichever is earlier, the cutoff or what identifying the caller needs.
+        let fetch_since = since.map(|since| since.min(caller.active_since()));
+        let all = match super::list_sessions(&mut client, harness, fetch_since).await {
             Ok(all) => all,
             Err(e) => return ToolOutcome::Error(format!("Listing AI sessions failed: {e}")),
         };
         let own = caller.own_in(&all);
         let (mut sessions, elsewhere): (Vec<_>, Vec<_>) = all
             .into_iter()
-            .filter(|s| !is_own(s, own.as_ref()) && (self.include_subagents || !is_subagent(s)))
+            .filter(|s| {
+                !is_own(s, own.as_ref())
+                    && (self.include_subagents || !is_subagent(s))
+                    && since.is_none_or(|since| s.updated_at >= since)
+            })
             .partition(|s| {
                 root.as_deref()
                     .is_none_or(|root| s.cwd.as_deref().is_some_and(|c| c.starts_with(root)))
@@ -66,7 +95,10 @@ impl AtuinAiSessionListToolCall {
         sessions.truncate(limit);
 
         if sessions.is_empty() {
-            let scope = root.map_or_else(String::new, |r| format!(" under {}", r.display()));
+            let mut scope = root.map_or_else(String::new, |r| format!(" under {}", r.display()));
+            if let Some(since) = since {
+                let _ = write!(scope, " active since {}", super::timestamp(since, offset));
+            }
             let note = note.map_or_else(String::new, |n| format!(" {n}"));
             return ToolOutcome::Success(format!(
                 "No captured AI sessions{scope}.{note} Only sessions recorded while AI session \
@@ -74,7 +106,6 @@ impl AtuinAiSessionListToolCall {
             ));
         }
 
-        let offset = time::UtcOffset::local_or_utc();
         let mut out = String::new();
         for (index, session) in sessions.iter().enumerate() {
             render_session_summary(&mut out, index + 1, session, offset);
@@ -100,5 +131,6 @@ mod tests {
         assert_eq!(call.limit.get(), 10);
         assert!(!call.include_subagents);
         assert!(call.cwd.is_none());
+        assert!(call.since.is_none());
     }
 }

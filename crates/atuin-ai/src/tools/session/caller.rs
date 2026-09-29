@@ -70,6 +70,11 @@ impl Caller<'_> {
         self.pick(&super::list_sessions(client, Some(self.harness()?), since).await.ok()?)
     }
 
+    /// The earliest activity a listing needs for [`Self::own_in`] to find the caller's session.
+    pub fn active_since(&self) -> OffsetDateTime {
+        OffsetDateTime::from(self.own.started)
+    }
+
     /// [`Self::own_session`] for a caller that already holds the session list.
     pub fn own_in(&self, sessions: &[Session]) -> Option<HarnessSession> {
         self.env_session().or_else(|| self.pick(sessions))
