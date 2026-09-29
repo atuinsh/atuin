@@ -151,6 +151,12 @@ pub struct AiSessions {
     /// straight away; the chooser still opens for one that can't.
     pub resume_chooser: bool,
 
+    /// Take the mouse: the wheel scrolls the preview under it, or moves the selection over the
+    /// list. While the picker has the mouse, most terminals still select text with shift held
+    /// while dragging (option in iTerm2, fn in macOS Terminal). Unset: as the top-level
+    /// `no_mouse` says (on, by default).
+    pub mouse: Option<bool>,
+
     /// Per-harness resume command templates.
     pub resume: AiSessionResume,
 }
@@ -175,6 +181,7 @@ impl Default for AiSessions {
             group_forks: true,
             inline_height: None,
             resume_chooser: true,
+            mouse: None,
             resume: AiSessionResume::default(),
         }
     }
@@ -202,6 +209,7 @@ mod tests {
             group_forks = false
             inline_height = 20
             resume_chooser = false
+            mouse = false
 
             [resume]
             claude = "claude --resume {id} --permission-mode plan"
@@ -218,6 +226,7 @@ mod tests {
         assert!(!parsed.group_forks);
         assert_eq!(parsed.inline_height, Some(20));
         assert!(!parsed.resume_chooser);
+        assert_eq!(parsed.mouse, Some(false));
         assert_eq!(
             parsed.resume.template(HarnessKind::ClaudeCode),
             Some("claude --resume {id} --permission-mode plan")

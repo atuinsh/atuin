@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 use std::path::Path;
 
-use atuin_client::ai_session::HarnessKind;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::{
     AiSessionColumn, KeymapMode, PreviewStrategy, Settings, Style as UiStyle,
 };
@@ -31,7 +31,7 @@ use super::panel::{self, SPLIT_MIN_WIDTH};
 use super::query::{TokenKind, TokenState};
 use super::resumer::shell_line;
 use super::source::{SessionRow, Snippet, harness_badge, harness_label};
-use super::state::{LIVE_SECS, ListState, SEARCH_LIMIT, State, TAB_TITLES};
+use super::state::{LIVE_SECS, ListState, Pane, SEARCH_LIMIT, State, TAB_TITLES};
 use super::{clock, markdown};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -437,6 +437,79 @@ fn shift(ranges: &[Range<usize>], by: usize) -> Vec<Range<usize>> {
     ranges.iter().map(|r| r.start + by..r.end + by).collect()
 }
 
+/// How many lines of a pane's text in full are rendered at a time as it scrolls: the rendering
+/// grows by this much as the view nears its end, so a long reply is never rendered whole just to
+/// show its first screen.
+const WINDOW_CHUNK: usize = 128;
+
+/// What a scrolling pane shows.
+pub(super) struct Body {
+    pub lines: Vec<Line<'static>>,
+    /// The first line shown of the text in full; 0 shows the overview.
+    pub offset: usize,
+    /// The lines of the text in full rendered.
+    pub len: usize,
+    /// More lines than `len`, not rendered yet.
+    pub more: bool,
+}
+
+impl Body {
+    fn overflows(&self, height: usize) -> bool {
+        self.more || self.len > height
+    }
+}
+
+/// `height` lines of a pane's text, scrolled to `want`: the `overview` at the top, else the text
+/// in full from there (`document`, asked for enough lines to fill the view and more), stopping at
+/// its end.
+pub(super) fn scroll_body(
+    want: usize,
+    height: usize,
+    overview: impl FnOnce() -> Vec<Line<'static>>,
+    document: impl FnOnce(usize) -> (Vec<Line<'static>>, bool),
+) -> Body {
+    let limit = (want + 2 * height).max(1).div_ceil(WINDOW_CHUNK) * WINDOW_CHUNK;
+    let (doc, more) = document(limit);
+    let len = doc.len();
+    let offset = want.min(len.saturating_sub(height));
+    let lines = if offset == 0 {
+        overview()
+    } else {
+        doc.into_iter().skip(offset).take(height).collect()
+    };
+    Body {
+        lines,
+        offset,
+        len,
+        more,
+    }
+}
+
+/// A scrollbar in `track` (a border, or a column kept for it) for `body` shown `height` lines at
+/// a time, once it has more than fits.
+fn draw_scrollbar(f: &mut Frame, track: Rect, body: &Body, height: usize, theme: &Theme) {
+    if !body.overflows(height) || track.height == 0 {
+        return;
+    }
+    // The text not rendered yet counts for a screen more, so the thumb never says it's at the end.
+    let len = body.len
+        + if body.more {
+            height
+        } else {
+            0
+        };
+    let mut state = ScrollbarState::new(len.saturating_sub(height))
+        .position(body.offset)
+        .viewport_content_length(height);
+    let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(Some("│"))
+        .thumb_symbol("┃")
+        .style(style(theme, Meaning::Annotation));
+    f.render_stateful_widget(bar, track, &mut state);
+}
+
 #[derive(Clone, Copy)]
 struct StyleState {
     compactness: Compactness,
@@ -448,7 +521,7 @@ impl State {
     /// The selected session's preview parts: the first prompt, the match (unless it lies inside
     /// the first prompt or the last reply, which then carry its highlights), and the last reply.
     fn preview_parts(&self) -> Option<PreviewParts<'_>> {
-        let row = self.selected()?;
+        let row = self.preview_row()?;
         let preview = self.previews.get(&row.handle);
         let mut matched = row.matched.as_ref();
         let first = locate(preview.and_then(|p| p.first_prompt.as_deref()), &mut matched);
@@ -510,7 +583,7 @@ impl State {
         sources.iter().map(|s| markdown::render(&s.text, &s.highlights, opts, &s.styles)).collect()
     }
 
-    /// The preview's line saying where the selected session ran, what forked off it and how
+    /// The preview's line saying where the session previewed ran, what forked off it and how
     /// many branches it went on in, in the text column: `atuin · feat/ai-sessions ·
     /// @MacBook-Pro-3 · 2 forks · 2 branches`. `None` when there is
     /// nothing to say, or no room beside the text (`height` under 2).
@@ -518,7 +591,7 @@ impl State {
         if height < 2 {
             return None;
         }
-        let row = self.selected()?;
+        let row = self.preview_row()?;
         let muted = style(theme, Meaning::Annotation);
         let mut spans = panel::place(row, &self.context.host_id, theme);
         let forks = panel::forks(self.children.get(&row.handle).map(Vec::as_slice));
@@ -535,22 +608,20 @@ impl State {
         Some(Line::from(spans))
     }
 
-    /// The preview's lines for the selected session, in `height` lines of `width` columns: the
-    /// metadata line (see [`Self::preview_meta`]), then the parts, which share the lines left;
-    /// a part with only one gets its markdown run onto that line.
-    fn preview_lines(&self, width: usize, height: usize, theme: &Theme) -> Vec<Line<'static>> {
-        let Some((loaded, sources)) = self.preview_sources(theme) else {
-            return Vec::new();
-        };
-        let meta = self.preview_meta(height, theme);
-        let meta_shown = meta.is_some();
-        let height = height - usize::from(meta_shown);
+    /// The strip's overview of the parts, in `height` lines of `width` columns: they share the
+    /// lines, and a part with only one gets its markdown run onto that line.
+    fn preview_overview(
+        sources: &[PreviewSource<'_>],
+        width: usize,
+        height: usize,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
         let label = |s: &'static str| Span::styled(s, style(theme, Meaning::Annotation));
         let inner = width.saturating_sub(PREVIEW_LABEL_WIDTH);
-        let rendered = Self::preview_rendered(&sources, width, height);
+        let rendered = Self::preview_rendered(sources, width, height);
         let wants: Vec<usize> = rendered.iter().map(Vec::len).collect();
         let budgets = markdown::allocate(&wants, height);
-        let mut lines: Vec<Line<'static>> = meta.into_iter().collect();
+        let mut lines: Vec<Line<'static>> = Vec::new();
 
         for ((source, rendered), n) in sources.iter().zip(&rendered).zip(budgets) {
             let body = match n {
@@ -573,10 +644,92 @@ impl State {
                 lines.push(Line::from(spans));
             }
         }
-        if !loaded && lines.len() == usize::from(meta_shown) {
-            lines.push(Line::from(label("…")));
-        }
         lines
+    }
+
+    /// The strip's parts in full, one after another under their labels, as it scrolls: up to
+    /// `limit` lines a part, stopping at the first with more (`true`).
+    fn preview_document(
+        sources: &[PreviewSource<'_>],
+        width: usize,
+        limit: usize,
+        theme: &Theme,
+    ) -> (Vec<Line<'static>>, bool) {
+        let opts = markdown::Opts {
+            width: width.saturating_sub(PREVIEW_LABEL_WIDTH),
+            max_lines: limit,
+            spacing: false,
+            urls: false,
+        };
+        let mut lines = Vec::new();
+        for source in sources {
+            let (body, more) =
+                markdown::render_window(&source.text, &source.highlights, opts, &source.styles);
+            for (i, line) in body.into_iter().enumerate() {
+                let mut spans = vec![if i == 0 {
+                    Span::styled(source.label, style(theme, Meaning::Annotation))
+                } else {
+                    Span::raw(" ".repeat(PREVIEW_LABEL_WIDTH))
+                }];
+                spans.extend(line.spans);
+                lines.push(Line::from(spans));
+            }
+            if more {
+                return (lines, true);
+            }
+        }
+        (lines, false)
+    }
+
+    /// The strip's lines, in `height` lines of `width` columns: the metadata line (see
+    /// [`Self::preview_meta`]), then the parts, scrolled (see [`scroll_body`]). Also the session
+    /// shown, where the parts start and what scrolling them shows, for the caller to note.
+    fn strip_lines(
+        &self,
+        width: usize,
+        height: usize,
+        theme: &Theme,
+    ) -> (Vec<Line<'static>>, Option<(HarnessSession, usize, Body)>) {
+        let (Some(row), Some((loaded, sources))) =
+            (self.preview_row(), self.preview_sources(theme))
+        else {
+            return (Vec::new(), None);
+        };
+        let meta = self.preview_meta(height, theme);
+        let top = usize::from(meta.is_some());
+        let height = height - top;
+        let want = self.scrolls[Pane::Strip as usize].offset_for(&row.handle);
+        let body = scroll_body(
+            want,
+            height,
+            || Self::preview_overview(&sources, width, height, theme),
+            |limit| Self::preview_document(&sources, width, limit, theme),
+        );
+        let mut lines: Vec<Line<'static>> = meta.into_iter().collect();
+        lines.extend(body.lines.iter().cloned());
+        if !loaded && lines.len() == top {
+            lines.push(Line::from(Span::styled("…", style(theme, Meaning::Annotation))));
+        }
+        (lines, Some((row.handle.clone(), top, body)))
+    }
+
+    /// Note how `pane` was drawn: for `session`, in `area` (what the mouse wheel scrolls), with
+    /// `height` lines of text showing `body`.
+    fn drawn(
+        &mut self,
+        pane: Pane,
+        session: HarnessSession,
+        area: Rect,
+        height: usize,
+        body: &Body,
+    ) {
+        let scroll = &mut self.scrolls[pane as usize];
+        scroll.session = Some(session);
+        scroll.offset = body.offset;
+        scroll.area = Some(area);
+        scroll.height = height;
+        scroll.len = body.len;
+        scroll.more = body.more;
     }
 
     fn calc_preview_height(
@@ -654,6 +807,9 @@ impl State {
     fn draw_main(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
         let area = f.area();
         self.list_anchor = None;
+        for scroll in &mut self.scrolls {
+            scroll.area = None;
+        }
         f.render_widget(Clear, area);
         let compactness = to_compactness(area, settings);
         let invert = settings.invert;
@@ -666,8 +822,21 @@ impl State {
         let preview_height = if split {
             border_size
         } else {
-            let width = area.width.saturating_sub(2 + 2 * border_size);
-            self.calc_preview_height(settings, compactness, border_size, width.into(), theme)
+            // Less a column for the scrollbar, without a border to draw it on.
+            let width = area.width.saturating_sub(2 + 2 * border_size + 1 - border_size);
+            let height =
+                self.calc_preview_height(settings, compactness, border_size, width.into(), theme);
+            // An automatic height only grows: were it to follow each session's text (or shrink
+            // while one is read), the list would jump as the selection moves.
+            if settings.show_preview
+                && self.tab_index == 0
+                && settings.preview.strategy == PreviewStrategy::Auto
+            {
+                self.strip_height = self.strip_height.max(height);
+                self.strip_height
+            } else {
+                height
+            }
         };
 
         let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
@@ -876,11 +1045,7 @@ impl State {
         }
 
         if let Some(pane) = pane {
-            let pane = pane.inner(ratatui::layout::Margin::new(1, 0));
-            let (width, height) = (usize::from(pane.width), usize::from(pane.height));
-            let lines = self.detail_lines(width, height, settings.timezone.0, theme);
-            // Already wrapped (markdown keeps its indents, which the paragraph's wrap would trim).
-            f.render_widget(Paragraph::new(Text::from(lines)), pane);
+            self.draw_side(f, pane, settings.timezone.0, theme);
         }
 
         if compactness == Compactness::Ultracompact {
@@ -902,9 +1067,19 @@ impl State {
             prefix_width.max(u16::try_from("[ WORKSPACE 500+ ] ".len()).unwrap_or(19));
         f.render_widget(self.build_input(st, prefix_width, theme), input_chunk);
 
-        let preview_width = usize::from(preview_chunk.width.saturating_sub(2 * border_size));
-        let preview_lines = usize::from(preview_chunk.height.saturating_sub(2 * border_size));
-        let lines = self.preview_lines(preview_width, preview_lines, theme);
+        // The text, and a column for the scrollbar: the right border, or one kept for it.
+        let strip = Rect {
+            x: preview_chunk.x + border_size,
+            y: preview_chunk.y + border_size,
+            width: preview_chunk.width.saturating_sub(2 * border_size + 1 - border_size),
+            height: preview_chunk.height.saturating_sub(2 * border_size),
+        };
+        // Beside the pane (or with no room), the strip is only the box's bottom border.
+        let (lines, scrolled) = if split || strip.height == 0 {
+            (Vec::new(), None)
+        } else {
+            self.strip_lines(usize::from(strip.width), usize::from(strip.height), theme)
+        };
         let preview = match compactness {
             Compactness::Full => Paragraph::new(Text::from(lines)).block(
                 Block::default()
@@ -919,6 +1094,18 @@ impl State {
             _ => Paragraph::new(Text::from(lines)).style(style(theme, Meaning::Annotation)),
         };
         f.render_widget(preview, preview_chunk);
+        if let Some((session, top, body)) = scrolled {
+            let top = u16::try_from(top).unwrap_or(0);
+            let height = strip.height.saturating_sub(top);
+            let track = Rect {
+                x: preview_chunk.right().saturating_sub(1),
+                y: strip.y + top,
+                width: 1,
+                height,
+            };
+            draw_scrollbar(f, track, &body, usize::from(height), theme);
+            self.drawn(Pane::Strip, session, preview_chunk, usize::from(height), &body);
+        }
 
         // Join the divider to the box's top and bottom borders.
         if let Some(divider) = divider
@@ -1190,11 +1377,73 @@ impl State {
             lines.extend(self.children_lines(&row, &forks, left, inner.width, tz, theme));
         }
 
-        // The conversation, in whatever room is left.
-        let left = usize::from(inner.height).saturating_sub(lines.len());
-        lines.extend(self.conversation(&row, usize::from(inner.width), left, 1, theme));
-
+        // The conversation, in whatever room is left, scrolling. Its scrollbar goes on the right
+        // border, or in a column kept for it.
+        let top = u16::try_from(lines.len()).unwrap_or(u16::MAX).min(inner.height);
+        let left = usize::from(inner.height - top);
+        let border = u16::from(st.compactness == Compactness::Full);
+        let width = usize::from((inner.width + border).saturating_sub(1));
+        let want = self.scrolls[Pane::Inspect as usize].offset_for(&row.handle);
+        let body = scroll_body(
+            want,
+            left,
+            || self.conversation(&row, width, left, 1, theme),
+            |limit| self.conversation_document(&row, width, 1, limit, theme),
+        );
+        lines.extend(body.lines.iter().cloned());
         f.render_widget(Paragraph::new(Text::from(lines)), inner);
+
+        let area = Rect {
+            y: inner.y + top,
+            height: inner.height - top,
+            ..inner
+        };
+        let track = Rect {
+            x: (inner.right() + border).saturating_sub(1),
+            width: 1,
+            ..area
+        };
+        draw_scrollbar(f, track, &body, left, theme);
+        self.drawn(Pane::Inspect, row.handle.clone(), area, left, &body);
+    }
+
+    /// The detail pane beside the list, in `pane`: the session previewed (see
+    /// [`State::preview_row`]), its conversation scrolling under what it is, with a scrollbar in
+    /// the pane's right margin.
+    fn draw_side(&mut self, f: &mut Frame, pane: Rect, tz: UtcOffset, theme: &Theme) {
+        let text = pane.inner(ratatui::layout::Margin::new(1, 0));
+        let Some(row) = self.preview_row().cloned() else {
+            return;
+        };
+        let width = usize::from(text.width);
+        let mut lines = self.detail_header(&row, width, tz, theme);
+        let top = u16::try_from(lines.len()).unwrap_or(u16::MAX).min(text.height);
+        let left = usize::from(text.height - top);
+        if !self.previews.contains_key(&row.handle) {
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled("…", style(theme, Meaning::Annotation))));
+            // Already wrapped (markdown keeps its indents, which the paragraph's wrap would trim).
+            f.render_widget(Paragraph::new(Text::from(lines)), text);
+            return;
+        }
+        let want = self.scrolls[Pane::Side as usize].offset_for(&row.handle);
+        let body = scroll_body(
+            want,
+            left,
+            || self.conversation(&row, width, left, 0, theme),
+            |limit| self.conversation_document(&row, width, 0, limit, theme),
+        );
+        lines.extend(body.lines.iter().cloned());
+        f.render_widget(Paragraph::new(Text::from(lines)), text);
+
+        let track = Rect {
+            x: pane.right().saturating_sub(1),
+            y: text.y + top,
+            width: 1,
+            height: text.height - top,
+        };
+        draw_scrollbar(f, track, &body, left, theme);
+        self.drawn(Pane::Side, row.handle, pane, left, &body);
     }
 
     /// Inspect's list of the forks grouped under `row`, in at most `room` lines: a blank line, a

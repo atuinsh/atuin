@@ -371,6 +371,11 @@ enter_accept = true
 ## opens for a session that can't be resumed there.
 # resume_chooser = true
 
+## Take the mouse: the wheel scrolls the preview under it, or moves the selection over the
+## list. While the picker has it, most terminals select text with shift held while dragging.
+## Defaults to the top-level no_mouse (so on, unless that is set).
+# mouse = true
+
 ## Per-harness resume commands, in place of the built-in ones (run after `cd -- <cwd> &&`).
 ## {id} is the native session id, {path} its transcript on this machine and {cwd} its
 ## working directory. Each is substituted within its word, unquoted, so don't quote them.

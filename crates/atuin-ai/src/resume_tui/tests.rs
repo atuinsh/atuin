@@ -216,7 +216,13 @@ fn section(out: &str, from: &str, to: &str) -> Vec<String> {
     out.lines()
         .map(|l| {
             let l = l.trim_start();
-            l.strip_prefix('│').unwrap_or(l).trim_end().trim_end_matches('│').trim_end().to_owned()
+            // The right border, or a scrollbar's track and thumb on it.
+            l.strip_prefix('│')
+                .unwrap_or(l)
+                .trim_end()
+                .trim_end_matches(['│', '┃'])
+                .trim_end()
+                .to_owned()
         })
         .skip_while(|l| !l.trim_start().starts_with(from))
         .take_while(|l| !l.trim_start().starts_with(to) || l.trim_start().starts_with(from))
@@ -573,7 +579,11 @@ fn press(state: &mut State, settings: &Settings, key: &str) -> super::state::Inp
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let KeyInput::Single(SingleKey {
-        code, ctrl, alt, ..
+        code,
+        ctrl,
+        alt,
+        shift,
+        ..
     }) = KeyInput::parse(key).unwrap()
     else {
         panic!("one key: {key}");
@@ -585,6 +595,8 @@ fn press(state: &mut State, settings: &Settings, key: &str) -> super::state::Inp
         KeyCodeValue::Tab => KeyCode::Tab,
         KeyCodeValue::Up => KeyCode::Up,
         KeyCodeValue::Down => KeyCode::Down,
+        KeyCodeValue::PageUp => KeyCode::PageUp,
+        KeyCodeValue::PageDown => KeyCode::PageDown,
         other => panic!("{other:?}"),
     };
     let mut modifiers = KeyModifiers::NONE;
@@ -593,6 +605,9 @@ fn press(state: &mut State, settings: &Settings, key: &str) -> super::state::Inp
     }
     if alt {
         modifiers |= KeyModifiers::ALT;
+    }
+    if shift {
+        modifiers |= KeyModifiers::SHIFT;
     }
     state.handle_key_input(settings, &KeyEvent::new(code, modifiers))
 }
@@ -1498,4 +1513,229 @@ async fn a_held_catch_up_stays_open_and_then_resumes_as_it_is() {
     let outcome = finish_sync(&mut state, &row, Ok(caught), Pending::Edit);
     assert_eq!(outcome, Some(Outcome::Edit(plan)));
     assert_eq!(state.note.as_deref(), Some("caught up 136 messages from @buildbox"));
+}
+
+// --- scrolling the preview, and keeping it steady -------------------------------------------------
+
+fn wheel(state: &mut State, settings: &Settings, down: bool, column: u16, row: u16) {
+    use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+    let kind = if down {
+        MouseEventKind::ScrollDown
+    } else {
+        MouseEventKind::ScrollUp
+    };
+    let event = Event::Mouse(MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+    let _ = state.handle_input(settings, &event);
+}
+
+/// The strip's lines, borders and scrollbar stripped.
+fn strip(out: &str) -> String {
+    section(out, "atuin · ai-resume", "╰").join("\n")
+}
+
+/// At the top the strip is the overview (each part a line or two); scrolled, it is the parts in
+/// full, one after another, with a scrollbar, down to the end of the last reply and no further.
+#[rstest]
+#[tokio::test]
+async fn the_strip_scrolls_through_the_parts_in_full() {
+    use super::state::Pane;
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let top = text(&render(&mut state, &s, 100, 30));
+    assert!(strip(&top).contains("first  Build atuin ai resume"), "{top}");
+    assert!(strip(&top).contains("last   Grouping done"), "{top}");
+    assert!(top.contains('┃'), "a scrollbar, the text being longer: {top}");
+
+    state.scroll_pane(Pane::Strip, 3);
+    let out = text(&render(&mut state, &s, 100, 30));
+    let scrolled = strip(&out);
+    assert!(scrolled.contains("• resume on enter, edit on tab"), "{scrolled}");
+    assert!(!scrolled.contains("first  Build"), "{scrolled}");
+    // The metadata line stays put.
+    assert!(out.contains("atuin · ai-resume · 1 fork"), "{out}");
+
+    state.scroll_pane(Pane::Strip, 10_000);
+    let out = text(&render(&mut state, &s, 100, 30));
+    let end = strip(&out);
+    assert!(end.contains("Tool calls and reasoning stay out of the preview."), "{end}");
+    let scroll = &state.scrolls[Pane::Strip as usize];
+    assert!(!scroll.more);
+    assert_eq!(scroll.offset, scroll.len - scroll.height, "clamped to the end");
+
+    // Another session starts at the top.
+    state.list.selected = 1;
+    let out = text(&render(&mut state, &s, 100, 30));
+    assert!(out.contains("first  "), "{out}");
+    state.list.selected = 0;
+    let out = text(&render(&mut state, &s, 100, 30));
+    assert_eq!(strip(&out), strip(&top));
+}
+
+/// The wheel scrolls the preview it is over, and moves the selection over the list. The mouse
+/// reports screen rows, which an inline viewport's panes are drawn at.
+#[rstest]
+#[case::fullscreen(0)]
+#[case::inline(12)]
+#[tokio::test]
+async fn the_wheel_scrolls_the_pane_under_it(#[case] origin: u16) {
+    use ratatui::backend::Backend as _;
+    use ratatui::{TerminalOptions, Viewport};
+
+    use super::state::Pane;
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let mut themes = ThemeManager::new(None, None);
+    let theme = themes.load_theme("default", None);
+    let mut backend = TestBackend::new(100, 42);
+    backend.set_cursor_position((0, origin)).unwrap();
+    let viewport = if origin == 0 {
+        Viewport::Fullscreen
+    } else {
+        Viewport::Inline(30)
+    };
+    let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
+    let mut draw = |state: &mut State| {
+        terminal.draw(|f| state.draw(f, &s, theme)).unwrap();
+    };
+    draw(&mut state);
+
+    let area = state.scrolls[Pane::Strip as usize].area.unwrap();
+    assert!(area.y >= origin, "{area:?}");
+    wheel(&mut state, &s, true, area.x + 5, area.y + 1);
+    assert_eq!(state.scrolls[Pane::Strip as usize].offset, super::state::WHEEL_LINES);
+    assert_eq!(state.list.selected, 0, "the selection stays");
+    draw(&mut state);
+    wheel(&mut state, &s, false, area.x + 5, area.bottom() - 1);
+    assert_eq!(state.scrolls[Pane::Strip as usize].offset, 0);
+
+    // Over the list (a few rows above the strip): the selection moves up, as it looks.
+    wheel(&mut state, &s, false, area.x + 5, area.y - 4);
+    assert_eq!(state.list.selected, 1);
+    wheel(&mut state, &s, true, area.x + 5, area.y - 4);
+    assert_eq!(state.list.selected, 0);
+    // The row above the viewport is the shell's, not the picker's.
+    if origin > 0 {
+        let above = state.scrolls[Pane::Strip as usize].area.unwrap().y - origin;
+        assert!(above > 0);
+    }
+}
+
+/// The keys scroll whichever preview is showing: the strip, the pane beside the list, or
+/// Inspect's conversation (whose fields stay put).
+#[rstest]
+#[case::strip(0, 100, "atuin · ai-resume · 1 fork")]
+#[case::side(0, 150, "Claude Code · claude-opus-4-5")]
+#[case::inspect(1, 100, "Session   7f3c9a12")]
+#[tokio::test]
+async fn the_keys_scroll_the_preview_showing(
+    #[case] tab: usize,
+    #[case] width: u16,
+    #[case] fixed: &str,
+) {
+    let s = settings();
+    let mut state = loaded(&s, "", tab).await;
+    let top = text(&render(&mut state, &s, width, 30));
+    let _ = press(&mut state, &s, "shift-down");
+    let _ = press(&mut state, &s, "alt-down");
+    let _ = press(&mut state, &s, "shift-pagedown");
+    let out = text(&render(&mut state, &s, width, 30));
+    assert_ne!(out, top);
+    assert!(out.contains(fixed), "{out}");
+    assert!(!out.contains("First prompt") || tab == 0, "scrolled past its heading: {out}");
+    assert_eq!(state.list.selected, 0, "the selection stays");
+    let _ = press(&mut state, &s, "shift-pageup");
+    let _ = press(&mut state, &s, "alt-up");
+    let _ = press(&mut state, &s, "shift-up");
+    let _ = press(&mut state, &s, "shift-up");
+    assert_eq!(text(&render(&mut state, &s, width, 30)), top);
+}
+
+/// Moving to a session whose preview isn't read yet keeps showing the last one (not an empty
+/// preview, which also shrank the strip and moved the list) until it is, or [`HOLD`] passes.
+///
+/// [`HOLD`]: super::state::HOLD
+#[rstest]
+#[tokio::test]
+async fn the_preview_never_blanks_between_selections() {
+    use std::time::{Duration, Instant};
+
+    use super::state::HOLD;
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let before = text(&render(&mut state, &s, 100, 30));
+    state.preview_drawn(Instant::now());
+    let input_row = |out: &str| out.lines().position(|l| l.contains("[  WORKSPACE")).unwrap();
+
+    let next = state.results[1].clone();
+    let preview = state.previews.remove(&next.handle).unwrap();
+    state.list.selected = 1;
+    let held = text(&render(&mut state, &s, 100, 30));
+    state.preview_drawn(Instant::now());
+    assert!(strip(&held).contains("first  Build atuin ai resume"), "{held}");
+    assert!(!held.contains('…') || held.contains("search.…"), "no placeholder: {held}");
+    assert_eq!(input_row(&held), input_row(&before), "the list doesn't move");
+    assert!(state.hold_ends().is_some());
+
+    // Past the hold, the session selected, waiting; the strip keeps its height.
+    let later = Instant::now() + HOLD + Duration::from_millis(1);
+    assert_eq!(state.preview_row_at(later).unwrap().handle, next.handle);
+
+    state.apply_preview(next.handle.clone(), preview);
+    assert_eq!(state.preview_row().unwrap().handle, next.handle);
+    let after = text(&render(&mut state, &s, 100, 30));
+    assert!(!strip(&after).contains("Build atuin ai resume"), "{after}");
+    assert_eq!(input_row(&after), input_row(&before));
+    assert_eq!(state.hold_ends(), None);
+}
+
+/// A live refresh reads the selected session's preview again: until the new one comes, the
+/// frame is exactly what it was.
+#[rstest]
+#[tokio::test]
+async fn a_refresh_keeps_the_frame_as_it_was() {
+    for width in [100, 150] {
+        let s = settings();
+        let mut state = loaded(&s, "", 0).await;
+        let before = text(&render(&mut state, &s, width, 30));
+        let (generation, mode, filter) = state.refresh().unwrap();
+        let selected = state.selected().unwrap().handle.clone();
+        assert!(state.wants_preview(&selected), "the live session's preview is read again");
+        assert_eq!(text(&render(&mut state, &s, width, 30)), before);
+        let rows = FakeSource::new().search(&filter).await.unwrap();
+        state.apply_results(generation, mode, rows);
+        assert_eq!(text(&render(&mut state, &s, width, 30)), before);
+    }
+}
+
+/// With `preview.strategy = "auto"`, the strip grows to fit a session's text but doesn't shrink
+/// for a shorter one, so the list stays where it is as the selection moves.
+#[rstest]
+#[tokio::test]
+async fn the_automatic_strip_height_only_grows() {
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let input_row = |out: &str| out.lines().position(|l| l.contains("[  WORKSPACE")).unwrap();
+    let tall = input_row(&text(&render(&mut state, &s, 100, 30)));
+    let short = state
+        .results
+        .iter()
+        .position(|r| r.title.text.starts_with("Prototype a live theme preview"))
+        .unwrap();
+    state.list.selected = short;
+    assert_eq!(input_row(&text(&render(&mut state, &s, 100, 30))), tall);
+
+    // Opened on the short one, it is short; the tall one grows it.
+    let mut state = loaded(&s, "", 0).await;
+    state.list.selected = short;
+    let first = input_row(&text(&render(&mut state, &s, 100, 30)));
+    state.list.selected = 0;
+    assert!(input_row(&text(&render(&mut state, &s, 100, 30))) < first);
 }

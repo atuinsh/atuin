@@ -45,6 +45,27 @@ first  …
 last   …
 ```
 
+At first the preview shows a line or two of the first prompt, the match and the
+last reply. Scroll it to read them in full, one after another: with the mouse
+wheel over it, or with ++shift+down++ and ++shift+up++ (a line) and
+++shift+page-down++ and ++shift+page-up++ (a page). ++alt++ works in place of
+++shift++, for terminals that keep shift and the arrows for themselves. Scroll
+back to the top for the overview again. On a wide terminal the same goes for the
+pane beside the list, and in Inspect for the conversation. The wheel over the
+list moves the selection, as in the history search, and a scrollbar shows when
+there's more than fits.
+
+While the picker has the mouse, your terminal can't select text the usual way.
+Most terminals still select with ++shift++ held while you drag (++option++ in
+iTerm2, ++fn++ in macOS Terminal). To leave the mouse to the terminal (the
+top-level `no_mouse = true` does the same for both the picker and the history
+search):
+
+```toml
+[ai.sessions]
+mouse = false
+```
+
 - Forks of a session (including Claude Code `--resume` copies, and
   continuations in another agent) are grouped under it. Inspect
   (++ctrl+o++) lists them, and ++c++ there expands the list. To give each fork

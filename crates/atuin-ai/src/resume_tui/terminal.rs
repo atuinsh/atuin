@@ -1,5 +1,6 @@
 //! Terminal setup for the picker: raw mode, alternate screen (unless inline), mouse, bracketed
-//! paste and keyboard enhancement, restored on drop. Mirrors the history search's `Stdout`.
+//! paste and keyboard enhancement, restored on drop, and on a panic before the panic is reported.
+//! Mirrors the history search's `Stdout`.
 //!
 //! Also the picker's input: [`Events`] reads terminal events on a thread of its own.
 
@@ -14,6 +15,7 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::{event, execute, terminal};
+use parking_lot::{Mutex, Once};
 use tokio::sync::mpsc;
 
 /// How long [`Events`] waits for input before letting go of crossterm's input lock, so a cursor
@@ -109,6 +111,44 @@ impl Write for Writer {
     }
 }
 
+/// How the terminal was set up, while it is: what a panic has to undo.
+static SETUP: Mutex<Option<(bool, bool)>> = Mutex::new(None);
+
+fn take_setup() -> Option<(bool, bool)> {
+    SETUP.lock().take()
+}
+
+/// Put the terminal back as [`TuiStdout::new`] found it, before a panic is reported, so the report
+/// is readable and the shell isn't left in raw mode with the mouse captured. Once per process;
+/// it does nothing while no picker is open.
+fn restore_on_panic() {
+    static HOOK: Once = Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Some((inline_mode, no_mouse)) = take_setup()
+                && let Ok(mut writer) = Writer::new()
+            {
+                restore(&mut writer, inline_mode, no_mouse);
+            }
+            previous(info);
+        }));
+    });
+}
+
+fn restore(writer: &mut Writer, inline_mode: bool, no_mouse: bool) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = execute!(writer, PopKeyboardEnhancementFlags);
+    if !inline_mode {
+        let _ = execute!(writer, terminal::LeaveAlternateScreen);
+    }
+    if !no_mouse {
+        let _ = execute!(writer, event::DisableMouseCapture);
+    }
+    let _ = execute!(writer, event::DisableBracketedPaste);
+    let _ = terminal::disable_raw_mode();
+}
+
 pub struct TuiStdout {
     writer: Writer,
     inline_mode: bool,
@@ -117,6 +157,8 @@ pub struct TuiStdout {
 
 impl TuiStdout {
     pub fn new(inline_mode: bool, no_mouse: bool) -> io::Result<Self> {
+        restore_on_panic();
+        *SETUP.lock() = Some((inline_mode, no_mouse));
         terminal::enable_raw_mode()?;
         let mut writer = Writer::new()?;
         if !inline_mode {
@@ -145,16 +187,10 @@ impl TuiStdout {
 
 impl Drop for TuiStdout {
     fn drop(&mut self) {
-        #[cfg(not(target_os = "windows"))]
-        let _ = execute!(self.writer, PopKeyboardEnhancementFlags);
-        if !self.inline_mode {
-            let _ = execute!(self.writer, terminal::LeaveAlternateScreen);
+        // Already undone when a panic's hook got here first.
+        if take_setup().is_some() {
+            restore(&mut self.writer, self.inline_mode, self.no_mouse);
         }
-        if !self.no_mouse {
-            let _ = execute!(self.writer, event::DisableMouseCapture);
-        }
-        let _ = execute!(self.writer, event::DisableBracketedPaste);
-        let _ = terminal::disable_raw_mode();
     }
 }
 

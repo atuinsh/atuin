@@ -4,6 +4,7 @@
 //! parts that only make sense for history (search modes, contexts, deletion).
 
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SourceId};
 use atuin_client::settings::{AiSessionFilterMode as FilterMode, KeymapMode, Settings};
@@ -12,6 +13,7 @@ use atuin_client::tui::{Cursor, EvalContext, KeyCodeValue, KeyInput, SingleKey};
 use atuin_common::harnesstools::continuation::Flattened;
 use atuin_common::time::OffsetDateTimeExt as _;
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
+use ratatui::layout::{Position, Rect};
 use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
@@ -40,6 +42,74 @@ pub const HEADS: u8 = 4;
 
 /// How many rows a search asks for.
 pub const SEARCH_LIMIT: usize = 500;
+
+/// How long the preview keeps showing the session it showed after the selection moves to one
+/// whose preview isn't read yet: long enough to cover the read (and a held arrow key), so the
+/// preview never blanks between two sessions, but short enough never to pass for the new one's.
+pub const HOLD: Duration = Duration::from_millis(300);
+
+/// How many lines a turn of the mouse wheel scrolls a preview.
+pub const WHEEL_LINES: usize = 3;
+
+/// The panes whose text scrolls: the preview strip under the list, the detail pane beside it on
+/// wide terminals, and Inspect's conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    Strip = 0,
+    Side = 1,
+    Inspect = 2,
+}
+
+const PANES: [Pane; 3] = [Pane::Strip, Pane::Side, Pane::Inspect];
+
+/// A pane's scroll position, and where and how it was drawn last.
+///
+/// The position is the session's: moving to another session starts it at the top again. At the
+/// top, a pane shows its overview (the first prompt, match and last reply sharing the lines);
+/// scrolled, it shows the parts in full, one after another.
+#[derive(Debug, Default, Clone)]
+pub struct PaneScroll {
+    /// The session scrolled.
+    pub session: Option<HarnessSession>,
+    /// The first line shown of the parts in full; 0 is the overview.
+    pub offset: usize,
+    /// Where the pane was drawn this frame (screen coordinates, so an inline viewport's rows are
+    /// as the mouse reports them), or `None` when it wasn't.
+    pub area: Option<Rect>,
+    /// How many lines of text it had room for.
+    pub height: usize,
+    /// The lines of the parts in full rendered so far.
+    pub len: usize,
+    /// More lines than `len`, not rendered yet (they are as it scrolls down).
+    pub more: bool,
+}
+
+impl PaneScroll {
+    /// Where `session`'s text starts: 0 for a session other than the one scrolled.
+    pub fn offset_for(&self, session: &HarnessSession) -> usize {
+        if self.session.as_ref() == Some(session) {
+            self.offset
+        } else {
+            0
+        }
+    }
+
+    /// The furthest the pane can scroll, as far as it was rendered: past the end is let through
+    /// while there's more to render.
+    pub fn max_offset(&self) -> usize {
+        if self.more {
+            self.len
+        } else {
+            self.len.saturating_sub(self.height)
+        }
+    }
+
+    /// Scroll by `by` lines (up when negative), within the text.
+    fn scroll(&mut self, by: isize) {
+        let offset = self.offset.saturating_add_signed(by);
+        self.offset = offset.min(self.max_offset());
+    }
+}
 
 /// What the event loop should do after an input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +195,18 @@ pub struct State {
     refreshing: Option<u64>,
 
     pub previews: HashMap<HarnessSession, SessionPreview>,
+    /// Previews read again on a refresh (their sessions are live): shown as they are until the
+    /// new ones come.
+    pub stale: HashSet<HarnessSession>,
+    /// The session whose preview was shown last, and when a frame was first drawn with another
+    /// selected: the preview keeps showing it for [`HOLD`] after the selection moves to one not
+    /// read yet.
+    pub shown: Option<(SessionRow, Option<Instant>)>,
+    /// The tallest the preview strip has been (with `preview.strategy = "auto"`): it doesn't
+    /// shrink again, so the list doesn't jump as the selection moves.
+    pub strip_height: u16,
+    /// Each scrolling pane's position, by [`Pane`].
+    pub scrolls: [PaneScroll; 3],
     /// The forks grouped under each session, once read (see
     /// [`super::source::SessionSource::children`]).
     pub children: HashMap<HarnessSession, Vec<SessionRow>>,
@@ -216,6 +298,10 @@ impl State {
             last_filter: None,
             refreshing: None,
             previews: HashMap::new(),
+            stale: HashSet::new(),
+            shown: None,
+            strip_height: 0,
+            scrolls: Default::default(),
             children: HashMap::new(),
             children_view: None,
             requested: HashSet::new(),
@@ -402,11 +488,89 @@ impl State {
             .filter(|r| now.saturating_duration_since(r.updated_at).as_secs() < LIVE_SECS)
             .map(|r| r.handle.clone())
             .collect();
+        // Read again, and shown as they are meanwhile: dropping them blanked the preview (and
+        // shrank it, moving the list) until the new ones came.
         for handle in live {
-            self.previews.remove(&handle);
-            self.requested.remove(&(handle, PREVIEW));
+            self.requested.remove(&(handle.clone(), PREVIEW));
+            if self.previews.contains_key(&handle) {
+                self.stale.insert(handle);
+            }
         }
         Some(next)
+    }
+
+    /// Whether `session`'s preview is to be read: it isn't yet, or a refresh wants it again.
+    pub fn wants_preview(&self, session: &HarnessSession) -> bool {
+        !self.previews.contains_key(session) || self.stale.contains(session)
+    }
+
+    /// A preview read.
+    pub fn apply_preview(&mut self, session: HarnessSession, preview: SessionPreview) {
+        self.stale.remove(&session);
+        self.previews.insert(session, preview);
+    }
+
+    /// The session the preview shows at `now`: the selected one once its preview is read. Until
+    /// then, the one it showed before, for up to [`HOLD`] after the selection left it, rather
+    /// than nothing; past that, the selected one, waiting (`…`).
+    pub fn preview_row_at(&self, now: Instant) -> Option<&SessionRow> {
+        let selected = self.selected()?;
+        if self.previews.contains_key(&selected.handle) {
+            return Some(selected);
+        }
+        match &self.shown {
+            Some((row, left))
+                if left.is_none_or(|at| now.saturating_duration_since(at) < HOLD)
+                    && self.previews.contains_key(&row.handle) =>
+            {
+                Some(row)
+            }
+            _ => Some(selected),
+        }
+    }
+
+    /// The session the preview shows now (see [`Self::preview_row_at`]).
+    pub fn preview_row(&self) -> Option<&SessionRow> {
+        self.preview_row_at(Instant::now())
+    }
+
+    /// Note a frame drawn at `now`: while the selected session's preview is read, it is the one
+    /// to hold when the selection moves on; once it has, the hold runs from the first frame
+    /// drawn without it.
+    pub fn preview_drawn(&mut self, now: Instant) {
+        let Some(selected) = self.selected().cloned() else {
+            return;
+        };
+        if self.previews.contains_key(&selected.handle) {
+            // The row as it is now: a refresh may have changed it.
+            self.shown = Some((selected, None));
+        } else if let Some((row, left @ None)) = &mut self.shown
+            && row.handle != selected.handle
+        {
+            *left = Some(now);
+        }
+    }
+
+    /// When a preview held for a selection not read yet gives way to it (`…`): the picker draws
+    /// again then.
+    pub fn hold_ends(&self) -> Option<Instant> {
+        let selected = self.selected()?;
+        if self.previews.contains_key(&selected.handle) {
+            return None;
+        }
+        let (row, left) = self.shown.as_ref()?;
+        let ends = (*left)? + HOLD;
+        (row.handle != selected.handle && ends > Instant::now()).then_some(ends)
+    }
+
+    /// The scrolling pane drawn last: the one the preview keys move.
+    fn drawn_pane(&self) -> Option<Pane> {
+        PANES.into_iter().find(|p| self.scrolls[*p as usize].area.is_some())
+    }
+
+    /// Scroll `pane` by `by` lines (up when negative), within what it was drawn with.
+    pub fn scroll_pane(&mut self, pane: Pane, by: isize) {
+        self.scrolls[pane as usize].scroll(by);
     }
 
     /// Name other hosts' rows, which showed a short id until the names were read.
@@ -484,15 +648,39 @@ impl State {
         }
     }
 
+    /// The wheel over a preview scrolls it; anywhere else (the list, the input) it moves the
+    /// selection, as in the history search. The mouse reports screen positions, which is what
+    /// the panes' areas are, inline or not.
     fn handle_mouse_input(&mut self, settings: &Settings, event: MouseEvent) -> InputAction {
         // The chooser is for the session it opened on.
         if self.chooser.is_some() || self.warning.is_some() {
             return InputAction::Continue;
         }
-        let action = match event.kind {
-            MouseEventKind::ScrollDown => Action::SelectNext,
-            MouseEventKind::ScrollUp => Action::SelectPrevious,
+        let down = match event.kind {
+            MouseEventKind::ScrollDown => true,
+            MouseEventKind::ScrollUp => false,
             _ => return InputAction::Continue,
+        };
+        let at = Position::new(event.column, event.row);
+        let over = PANES
+            .into_iter()
+            .find(|p| self.scrolls[*p as usize].area.is_some_and(|a| a.contains(at)));
+        if let Some(pane) = over {
+            let lines = isize::try_from(WHEEL_LINES).unwrap_or(1);
+            self.scroll_pane(
+                pane,
+                if down {
+                    lines
+                } else {
+                    -lines
+                },
+            );
+            return InputAction::Continue;
+        }
+        let action = if down {
+            Action::SelectNext
+        } else {
+            Action::SelectPrevious
         };
         self.execute_action(action, settings)
     }
@@ -707,6 +895,23 @@ impl State {
             }
             Action::ScrollToBottom => self.list.selected = 0,
 
+            Action::PreviewUp
+            | Action::PreviewDown
+            | Action::PreviewPageUp
+            | Action::PreviewPageDown => {
+                if let Some(pane) = self.drawn_pane() {
+                    let page = self.scrolls[pane as usize].height.saturating_sub(1).max(1);
+                    let page = isize::try_from(page).unwrap_or(1);
+                    let by = match action {
+                        Action::PreviewUp => -1,
+                        Action::PreviewDown => 1,
+                        Action::PreviewPageUp => -page,
+                        _ => page,
+                    };
+                    self.scroll_pane(pane, by);
+                }
+            }
+
             Action::Resume => {
                 self.accept = true;
                 return InputAction::Resume(selected);
@@ -714,10 +919,9 @@ impl State {
             Action::ReturnCommand => return InputAction::ReturnCommand(selected),
             Action::Copy => return InputAction::Copy(selected),
             Action::ReturnOriginal => return InputAction::ReturnOriginal,
-            Action::Exit if self.tab_index == 1 => {
-                self.tab_index = 0;
-                return InputAction::Redraw;
-            }
+            // Nothing to clear: every frame is drawn whole, and clearing the terminal first only
+            // flashed it blank.
+            Action::Exit if self.tab_index == 1 => self.tab_index = 0,
             Action::Exit => return InputAction::Exit,
             Action::Redraw => return InputAction::Redraw,
             Action::CycleFilterMode => self.cycle_filter_mode(),
@@ -728,7 +932,6 @@ impl State {
             Action::ToggleTab => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
                 self.children_view = None;
-                return InputAction::Redraw;
             }
             Action::ToggleChildren => self.toggle_children(),
 
@@ -955,8 +1158,17 @@ mod tests {
 
         let (g, mode, _) = state.refresh().unwrap();
         assert!(state.refresh().is_none(), "one refresh at a time");
-        assert!(!state.previews.contains_key(&rs[2].handle), "the live preview reloads");
-        assert!(state.previews.contains_key(&rs[0].handle));
+        // The live preview is read again, and shown as it was meanwhile.
+        assert!(state.wants_preview(&rs[2].handle), "the live preview reloads");
+        assert!(state.previews.contains_key(&rs[2].handle), "and is kept until it has");
+        assert!(!state.wants_preview(&rs[0].handle));
+        let fresh = SessionPreview {
+            first_prompt: Some("new".to_owned()),
+            ..SessionPreview::default()
+        };
+        state.apply_preview(rs[2].handle.clone(), fresh.clone());
+        assert!(!state.wants_preview(&rs[2].handle));
+        assert_eq!(state.previews[&rs[2].handle], fresh);
         // The list reorders; the selection follows its session.
         rs.swap(0, 1);
         state.apply_results(g, mode, rs.clone());
@@ -994,6 +1206,55 @@ mod tests {
         state.apply_results(generation, mode, rows(2));
         assert!(!state.results.contains(&pinned));
         assert_eq!(state.status, None);
+    }
+
+    /// Moving to a session not read yet holds the last preview shown, from the first frame drawn
+    /// without it, until the new one is read or [`HOLD`] passes; never an empty preview between.
+    #[rstest]
+    fn the_last_preview_is_held_until_the_next_is_read() {
+        let mut state = state_in(fake::context());
+        state.results = rows(3);
+        let [a, b, c] = [0, 1, 2].map(|i| state.results[i].handle.clone());
+        let t0 = Instant::now();
+        state.apply_preview(a.clone(), SessionPreview::default());
+        state.preview_drawn(t0);
+
+        state.list.selected = 1;
+        // Long after the last frame drawn with it selected: the hold starts with the move.
+        let t1 = t0 + 10 * HOLD;
+        assert_eq!(state.preview_row_at(t1).unwrap().handle, a);
+        state.preview_drawn(t1);
+        state.list.selected = 2;
+        state.preview_drawn(t1 + HOLD / 2);
+        assert_eq!(state.preview_row_at(t1 + HOLD / 2).unwrap().handle, a);
+        assert_eq!(state.preview_row_at(t1 + HOLD).unwrap().handle, c, "then the selected");
+
+        state.apply_preview(b.clone(), SessionPreview::default());
+        state.list.selected = 1;
+        assert_eq!(state.preview_row_at(t1 + HOLD).unwrap().handle, b);
+        state.preview_drawn(t1 + HOLD);
+        state.list.selected = 2;
+        assert_eq!(state.preview_row_at(t1 + 2 * HOLD).unwrap().handle, b);
+    }
+
+    /// The wheel scrolls within the text drawn: not above its top, nor past its end once all of
+    /// it is rendered; while more is, past what was rendered, for the next frame to render it.
+    #[rstest]
+    fn panes_scroll_within_their_text() {
+        let mut scroll = PaneScroll {
+            session: Some(rows(1)[0].handle.clone()),
+            height: 4,
+            len: 10,
+            ..PaneScroll::default()
+        };
+        scroll.scroll(-3);
+        assert_eq!(scroll.offset, 0);
+        scroll.scroll(100);
+        assert_eq!(scroll.offset, 6);
+        scroll.more = true;
+        scroll.scroll(100);
+        assert_eq!(scroll.offset, 10);
+        assert_eq!(scroll.offset_for(&rows(2)[1].handle), 0, "another session's is the top");
     }
 
     #[rstest]
@@ -1059,14 +1320,19 @@ mod tests {
         );
         assert_eq!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE), InputAction::Exit);
 
-        // ctrl-o opens Inspect; esc there goes back instead of exiting.
+        // ctrl-o opens Inspect; esc there goes back instead of exiting. Neither clears the
+        // terminal (a blank frame, then the whole screen drawn again).
         assert_eq!(
             press(&mut state, KeyCode::Char('o'), KeyModifiers::CONTROL),
-            InputAction::Redraw
+            InputAction::Continue
         );
         assert_eq!(state.tab_index, 1);
-        assert_eq!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE), InputAction::Redraw);
+        assert_eq!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE), InputAction::Continue);
         assert_eq!(state.tab_index, 0);
+        assert_eq!(
+            press(&mut state, KeyCode::Char('l'), KeyModifiers::CONTROL),
+            InputAction::Redraw
+        );
     }
 
     #[rstest]
