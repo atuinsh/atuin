@@ -103,6 +103,46 @@ agent directly (an id prefix works too), and `atuin ai resume <id> --in codex`
 continues it in another (`claude`, `codex`, `opencode` or `pi`). `--print`
 prints the command instead of running it.
 
+### Across machines
+
+A session keeps one id on every machine. Each machine's copy of the transcript
+is a branch of it, and the synced messages are the shared history, the way
+git has a remote. Resuming never merges branches, and never writes the history
+out again under a new id.
+
+- **Fast-forward.** If the copy on this machine is behind (the session went
+  on elsewhere since), Atuin appends the messages it's missing and resumes it
+  in place. The status line says so: `caught up 136 messages from
+  @MacBook-Pro-3`. With no copy here, it writes one out from sync.
+- **Branches.** If the session went on separately on two machines, it has two
+  branches. The preview and Inspect say `2 branches`, and the chooser lists
+  them, newest first and already selected:
+
+  ```
+  ╭ Resume in ──────────────────────────────────────────────────╮
+  │ 2 branches: it went on separately on several machines       │
+  │ > 1 CC Claude Code  @MacBook-Pro-3 · 2h · 136 msgs (latest) │
+  │   2 CC Claude Code  this machine · yest · 47 msgs           │
+  │   3 CX Codex        continue                                │
+  │ <enter>: resume  <tab>: edit  <esc>: back                   │
+  ╰─────────────────────────────────────────────────────────────╯
+  ```
+
+  Picking a branch makes it the one the agent continues from, in the same
+  session. The other branch stays in the transcript, untouched. opencode keeps
+  a session as a single line, so a branch it can't take in place is continued
+  as a new session linked to the original instead, and the status line says
+  so. `atuin ai resume <id>` resumes the newest branch and names the others.
+- **Still active elsewhere.** If another machine wrote to the branch in the
+  last five minutes, it may still be running there, and resuming here would
+  branch the session. Atuin asks first (`atuin ai resume <id>` asks on a
+  terminal, and otherwise prints a note). Sync takes a little while to deliver
+  messages, so a session active on another machine very recently may not show
+  up as active yet.
+- **Running here.** Atuin never writes to a transcript that an agent on this
+  machine has open. If the copy here needs catching up, close the agent first.
+  Pressing ++enter++ again resumes the copy as it is.
+
 ## Rebuilding the index
 
 The index is derived entirely from the record store. If it ever looks wrong or

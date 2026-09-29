@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, SourceId};
 use atuin_client::settings::{AiSessionFilterMode as FilterMode, KeymapMode, Settings};
 use atuin_client::theme::Meaning;
 use atuin_client::tui::{Cursor, EvalContext, KeyCodeValue, KeyInput, SingleKey};
@@ -16,7 +16,8 @@ use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
 use super::ResumeContext;
-use super::chooser::{Chooser, ListAnchor};
+use super::catchup::Synced;
+use super::chooser::{Chooser, ListAnchor, Warning};
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
 use super::resumer::{NotResumable, Resume};
@@ -31,8 +32,9 @@ pub const LIVE_SECS: u64 = 120;
 pub const PREVIEW: u8 = 0;
 pub const CHILDREN: u8 = 1;
 pub const PLAN: u8 = 2;
-/// Restoring the session's transcript from sync, once an action is waiting on it.
-pub const RESTORE: u8 = 3;
+/// Catching the session's transcript up with sync (or restoring it), once an action is waiting
+/// on it.
+pub const SYNC: u8 = 3;
 /// Reading what continuing the session in another harness would flatten, for the chooser.
 pub const FLATTEN: u8 = 4;
 
@@ -139,7 +141,7 @@ pub struct State {
     /// plan to restore the session from sync is replaced by the plain one once it is restored.
     pub plans: HashMap<HarnessSession, Result<Resume, NotResumable>>,
     /// Other hosts' names by host id, once the source has read them.
-    host_names: HashMap<String, String>,
+    pub(super) host_names: HashMap<String, String>,
     /// An enter/tab/ctrl-y waiting for its session's plan.
     pub pending: Option<(HarnessSession, Pending)>,
     /// The "Resume in" chooser, while it's open.
@@ -151,6 +153,20 @@ pub struct State {
     pub flattened: HashMap<HarnessSession, Result<Flattened, String>>,
     /// A continuation being written, and what to do once it is.
     pub continuing: Option<(HarnessSession, HarnessKind, Pending)>,
+    /// Sessions caught up with sync to a head (or not), waiting for the action that asked.
+    pub synced: HashMap<HarnessSession, (Option<SourceId>, Result<Synced, NotResumable>)>,
+    /// Sessions whose copy here couldn't be caught up (see [`Synced::holds`]): the next accept
+    /// resumes them as they are.
+    pub as_is: HashSet<HarnessSession>,
+    /// The branch picked in the chooser, for a session with several.
+    pub picked: HashMap<HarnessSession, SourceId>,
+    /// The warning that resuming will branch a session another host is working on, while it's
+    /// open.
+    pub warning: Option<Warning>,
+    /// Sessions the user was warned about and resumes anyway.
+    pub confirmed: HashSet<HarnessSession>,
+    /// What to tell the user once the picker is gone.
+    pub note: Option<String>,
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
@@ -202,6 +218,12 @@ impl State {
             list_anchor: None,
             flattened: HashMap::new(),
             continuing: None,
+            synced: HashMap::new(),
+            as_is: HashSet::new(),
+            picked: HashMap::new(),
+            warning: None,
+            confirmed: HashSet::new(),
+            note: None,
             status: None,
             original_input_empty: query.is_empty(),
             accept: false,
@@ -452,7 +474,7 @@ impl State {
 
     fn handle_mouse_input(&mut self, settings: &Settings, event: MouseEvent) -> InputAction {
         // The chooser is for the session it opened on.
-        if self.chooser.is_some() {
+        if self.chooser.is_some() || self.warning.is_some() {
             return InputAction::Continue;
         }
         let action = match event.kind {
@@ -495,6 +517,9 @@ impl State {
         let Some(single) = SingleKey::from_event(input) else {
             return InputAction::Continue;
         };
+        if self.warning.is_some() {
+            return self.warning_key(&single);
+        }
         if self.chooser.is_some() {
             return self.chooser_key(&single);
         }

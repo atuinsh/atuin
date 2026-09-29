@@ -510,8 +510,9 @@ impl State {
         sources.iter().map(|s| markdown::render(&s.text, &s.highlights, opts, &s.styles)).collect()
     }
 
-    /// The preview's line saying where the selected session ran and what forked off it, in the
-    /// text column: `atuin · feat/ai-sessions · @MacBook-Pro-3 · 2 forks`. `None` when there is
+    /// The preview's line saying where the selected session ran, what forked off it and how
+    /// many branches it went on in, in the text column: `atuin · feat/ai-sessions ·
+    /// @MacBook-Pro-3 · 2 forks · 2 branches`. `None` when there is
     /// nothing to say, or no room beside the text (`height` under 2).
     fn preview_meta(&self, height: usize, theme: &Theme) -> Option<Line<'static>> {
         if height < 2 {
@@ -520,11 +521,12 @@ impl State {
         let row = self.selected()?;
         let muted = style(theme, Meaning::Annotation);
         let mut spans = panel::place(row, &self.context.host_id, theme);
-        if let Some(forks) = panel::forks(self.children.get(&row.handle).map(Vec::as_slice)) {
+        let forks = panel::forks(self.children.get(&row.handle).map(Vec::as_slice));
+        for part in forks.into_iter().chain(panel::branches(row)) {
             if !spans.is_empty() {
                 spans.push(Span::styled(" · ", muted));
             }
-            spans.push(Span::styled(forks, muted));
+            spans.push(Span::styled(part, muted));
         }
         if spans.is_empty() {
             return None;
@@ -643,6 +645,9 @@ impl State {
         self.draw_main(f, settings, theme);
         if self.chooser.is_some() {
             self.draw_chooser(f, settings, theme);
+        }
+        if self.warning.is_some() {
+            self.draw_warning(f, theme);
         }
     }
 
@@ -1129,6 +1134,21 @@ impl State {
                 spans
             }),
         ];
+        // A session that went on separately on several machines: its branches, newest first.
+        for (n, head) in row.branches().iter().enumerate() {
+            let mut spans = text(self.describe_head(head));
+            if n == 0 {
+                spans.push(Span::styled("  (latest)", key));
+            }
+            lines.push(field(
+                if n == 0 {
+                    "Branches"
+                } else {
+                    ""
+                },
+                spans,
+            ));
+        }
         if let Some(p) = self.previews.get(&row.handle).filter(|p| !p.activity.is_empty()) {
             let mut spans = vec![Span::styled(format!(" {:<10}", "Activity"), key)];
             let line = panel::activity_line(
