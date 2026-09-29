@@ -11,7 +11,7 @@ use std::io::{self, IsTerminal, Write};
 use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, Session, SessionMatch};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
-use atuin_common::harnesstools::session::{Content, Role, StopReason, Usage};
+use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::{import_sessions_event, tail_sessions_event};
@@ -976,6 +976,8 @@ struct SessionJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     parent: Option<HandleJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    parent_kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     git_branch: Option<String>,
@@ -991,6 +993,8 @@ struct SessionJson {
     title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_reply: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1120,6 +1124,11 @@ fn session_json(s: &Session) -> SessionJson {
         harness: harness_name(s.handle.harness).to_owned(),
         session_id: s.handle.session.to_string(),
         parent: s.parent.as_ref().map(handle_json),
+        parent_kind: s.parent_kind.map(|kind| match kind {
+            ParentKind::Subagent => "subagent",
+            ParentKind::Fork => "fork",
+            ParentKind::Continuation => "continuation",
+        }),
         cwd: s.cwd.as_ref().map(|cwd| cwd.to_string_lossy().into_owned()),
         git_branch: s.git_branch.clone(),
         model: s.model.clone(),
@@ -1129,6 +1138,7 @@ fn session_json(s: &Session) -> SessionJson {
         tokens: s.usage,
         title: s.title.clone(),
         preview: s.preview.clone(),
+        last_reply: s.last_reply.clone(),
     }
 }
 
@@ -1306,6 +1316,24 @@ mod tests {
         assert_eq!(v["title"], "hello");
         // Absent optionals are omitted rather than serialized as null.
         assert!(v.get("cwd").is_none());
+        assert!(v.get("parent_kind").is_none());
+        assert!(v.get("last_reply").is_none());
+    }
+
+    #[rstest]
+    #[case::subagent(ParentKind::Subagent, "subagent")]
+    #[case::fork(ParentKind::Fork, "fork")]
+    #[case::continuation(ParentKind::Continuation, "continuation")]
+    fn session_json_carries_the_parent_relation(#[case] kind: ParentKind, #[case] want: &str) {
+        let mut s = session(HarnessKind::Codex, "child");
+        s.parent = Some(handle(HarnessKind::Codex, "parent"));
+        s.parent_kind = Some(kind);
+        s.last_reply = Some("done".to_owned());
+
+        let v = serde_json::to_value(session_json(&s)).unwrap();
+        assert_eq!(v["parent"]["session_id"], "parent");
+        assert_eq!(v["parent_kind"], want);
+        assert_eq!(v["last_reply"], "done");
     }
 
     #[rstest]

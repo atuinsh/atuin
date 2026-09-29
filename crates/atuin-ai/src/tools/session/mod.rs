@@ -160,6 +160,16 @@ fn is_subagent(s: &Session) -> bool {
         && !matches!(s.parent_kind, Some(ParentKind::Fork | ParentKind::Continuation))
 }
 
+/// How a session relates to its parent, phrased to precede the parent's id.
+const fn relation(kind: Option<ParentKind>) -> &'static str {
+    match kind {
+        Some(ParentKind::Subagent) => "subagent of",
+        Some(ParentKind::Fork) => "forked from",
+        Some(ParentKind::Continuation) => "continues from",
+        None => "started from",
+    }
+}
+
 /// The session's title, falling back to its opening prompt.
 fn label(s: &Session) -> String {
     s.title
@@ -195,13 +205,7 @@ fn render_session_summary(out: &mut String, index: usize, s: &Session, offset: t
             writeln!(out, "   in {cwd}{}", branch.map(|b| format!(" ({b})")).unwrap_or_default());
     }
     if let Some(parent) = &s.parent {
-        let relation = match s.parent_kind {
-            Some(ParentKind::Subagent) => "subagent of",
-            Some(ParentKind::Fork) => "forked from",
-            Some(ParentKind::Continuation) => "continues from",
-            None => "started from",
-        };
-        let _ = writeln!(out, "   {relation} {}", parent.session);
+        let _ = writeln!(out, "   {} {}", relation(s.parent_kind), parent.session);
     }
     // How it ended, so a reader can tell which session holds the answer without opening each.
     if let Some(reply) = s.last_reply.as_deref().map(|r| one_line(r, 240)).filter(|r| !r.is_empty())
@@ -275,6 +279,15 @@ mod tests {
         assert_eq!(is_subagent(&s), subagent);
         s.parent = None;
         assert!(!is_subagent(&s), "no parent, no subagent");
+    }
+
+    #[rstest]
+    #[case::subagent(Some(ParentKind::Subagent), "subagent of")]
+    #[case::fork(Some(ParentKind::Fork), "forked from")]
+    #[case::continuation(Some(ParentKind::Continuation), "continues from")]
+    #[case::unknown_kind(None, "started from")]
+    fn relation_names_the_parent_kind(#[case] kind: Option<ParentKind>, #[case] want: &str) {
+        assert_eq!(relation(kind), want);
     }
 
     #[rstest]

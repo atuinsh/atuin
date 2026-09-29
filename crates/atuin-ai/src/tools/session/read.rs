@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::caller::{Caller, is_own};
-use super::{connect, is_subagent, label, timestamp};
+use super::{connect, is_subagent, label, relation, timestamp};
 use crate::commands::session::{SelectError, harness_name, message_role, one_line, select_session};
 use crate::tools::ToolOutcome;
 
@@ -155,7 +155,7 @@ impl AtuinAiSessionReadToolCall {
             let _ = writeln!(out, "model    {model}");
         }
         if let Some(parent) = &s.parent {
-            let _ = writeln!(out, "parent   {} (this is a subagent session)", parent.session);
+            let _ = writeln!(out, "parent   {} {}", relation(s.parent_kind), parent.session);
         }
         let _ = writeln!(
             out,
