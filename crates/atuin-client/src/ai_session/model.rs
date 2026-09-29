@@ -159,6 +159,7 @@ impl From<Message> for RehydrateMessage {
             turn_id: m.turn_id,
             cwd: m.cwd,
             git_branch: m.git_branch,
+            seq: m.seq,
         }
     }
 }
@@ -524,6 +525,27 @@ mod tests {
             crate::ai_session::AiSessionRecord::deserialize(&record).unwrap();
         assert_eq!(msg.seq, None);
         assert_eq!((msg.parent_row, msg.alias), (None, None));
+    }
+
+    /// A row written back out keeps its line's number, which a harness that numbers its lines
+    /// (Codex) writes it back at.
+    #[rstest]
+    #[case::numbered(Some(42))]
+    #[case::unnumbered(None)]
+    fn a_rehydrated_row_keeps_its_number(#[case] seq: Option<u64>) {
+        let msg = Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(HarnessSession {
+                harness: HarnessKind::Codex,
+                session: NativeSessionId::from("s".to_owned()),
+            })
+            .source_id(SourceId::from("x".to_owned()))
+            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .role(Role::User)
+            .content(vec![])
+            .seq(seq)
+            .build();
+        assert_eq!(RehydrateMessage::from(msg).seq, seq);
     }
 
     #[rstest]

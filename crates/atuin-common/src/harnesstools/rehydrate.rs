@@ -25,6 +25,11 @@ pub struct RehydrateMessage {
     pub turn_id: Option<String>,
     pub cwd: Option<PathBuf>,
     pub git_branch: Option<String>,
+    /// The line's position in its transcript, for a harness that numbers its lines (a Codex
+    /// rollout line's `ordinal`, capture's `Message::seq`); `None` where it numbers none, and for
+    /// rows captured before numbers were. A writer that numbers its lines writes the row back at
+    /// this number, so the harness continues from where the synced transcript left off.
+    pub seq: Option<u64>,
 }
 
 /// A session to write back out.

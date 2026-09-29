@@ -44,6 +44,7 @@ fn row_of<M: Message>(n: usize, m: &M) -> RehydrateMessage {
         turn_id: m.turn_id(),
         cwd: m.cwd(),
         git_branch: m.git_branch(),
+        seq: None,
     }
 }
 
@@ -395,6 +396,7 @@ fn msg(role: Role, content: Vec<Content>, at: i64) -> RehydrateMessage {
         turn_id: None,
         cwd: None,
         git_branch: None,
+        seq: None,
     }
 }
 

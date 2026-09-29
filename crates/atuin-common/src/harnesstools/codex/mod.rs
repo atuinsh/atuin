@@ -7,6 +7,7 @@ use crate::utils::home_dir;
 
 pub mod rehydrate;
 pub mod session;
+pub(crate) mod state_db;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Codex;

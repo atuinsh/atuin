@@ -394,6 +394,7 @@ mod tests {
             turn_id: None,
             cwd: None,
             git_branch: None,
+            seq: None,
         }
     }
 

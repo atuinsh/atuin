@@ -190,6 +190,7 @@ fn captured(jsonl: &[u8]) -> Vec<RehydrateMessage> {
                 turn_id: m.turn_id(),
                 cwd: m.cwd(),
                 git_branch: m.git_branch(),
+                seq: None,
             })
         })
         .collect();
@@ -278,6 +279,7 @@ fn row(id: &str, parent: &str, role: Role, text: &str) -> RehydrateMessage {
         turn_id: None,
         cwd: Some(PathBuf::from("/Users/someone/proj")),
         git_branch: None,
+        seq: None,
     }
 }
 

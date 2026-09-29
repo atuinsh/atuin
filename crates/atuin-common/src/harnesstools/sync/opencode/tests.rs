@@ -181,6 +181,7 @@ fn prompt(id: &str, at: i64) -> RehydrateMessage {
         turn_id: None,
         cwd: None,
         git_branch: None,
+        seq: None,
     }
 }
 

@@ -36,6 +36,7 @@ fn captured(jsonl: &str) -> Vec<RehydrateMessage> {
                 turn_id: m.turn_id(),
                 cwd: m.cwd(),
                 git_branch: m.git_branch(),
+                seq: None,
             })
         })
         .collect();
@@ -136,6 +137,7 @@ fn a_compaction_appended_keeps_what_its_path_kept(dir: TempDir) {
         turn_id: None,
         cwd: None,
         git_branch: None,
+        seq: None,
     };
     append_to(&base, &[summary], &AppendOptions::default()).unwrap();
     let last = lines_of(&path).pop().unwrap();
@@ -203,6 +205,7 @@ fn user_row(id: &str, parent: &str) -> RehydrateMessage {
         turn_id: None,
         cwd: None,
         git_branch: None,
+        seq: None,
     }
 }
 

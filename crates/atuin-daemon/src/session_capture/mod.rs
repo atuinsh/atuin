@@ -1347,7 +1347,27 @@ mod pipeline_tests {
         let home = tempfile::tempdir().unwrap();
         let path = rehydrate_codex(&session, home.path()).await;
 
+        // Written in Codex's paginated history mode, each row back at the number it was synced
+        // with, so Codex continues numbering where the synced rollout left off.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let header: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(header["payload"]["history_mode"], "paginated");
+        let stored: Vec<Message> =
+            futures::TryStreamExt::try_collect(sink.sidecar.messages(&handle)).await.unwrap();
         let again = codex_rollout(&id, path).await;
+        for line in &again {
+            use atuin_common::harnesstools::session::Message as _;
+            let Some(row) = line
+                .id()
+                .map(String::from)
+                .and_then(|id| stored.iter().find(|m| m.source_id.as_ref() == id.as_str()))
+            else {
+                continue;
+            };
+            if row.seq.is_some() {
+                assert_eq!(line.seq(), row.seq, "{} moved", row.source_id.as_ref());
+            }
+        }
         let mut enricher = MessageEnricher::new(HarnessKind::Codex);
         let outcomes = capture_all(&sink, &mut enricher, &sid(&id), &again).await;
         let new = outcomes.iter().filter(|o| **o == Appended::New).count();

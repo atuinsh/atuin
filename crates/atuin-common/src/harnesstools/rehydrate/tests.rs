@@ -17,6 +17,7 @@ fn row(id: &str, role: Role, content: Vec<Content>) -> RehydrateMessage {
         turn_id: None,
         cwd: None,
         git_branch: None,
+        seq: None,
     }
 }
 
