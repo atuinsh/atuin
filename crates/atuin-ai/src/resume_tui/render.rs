@@ -1312,15 +1312,11 @@ impl State {
                 }
                 spans
             }),
-            // The token counts share the message count's line, for the conversation's room.
-            field("Messages", {
-                let mut spans = text(row.messages.to_string());
-                if let Some(t) = panel::tokens(&row.usage, true) {
-                    spans.push(Span::styled(format!("  ·  {t} tokens"), key));
-                }
-                spans
-            }),
+            field("Messages", text(row.messages.to_string())),
         ];
+        if let Some(t) = panel::token_breakdown(&row.usage) {
+            lines.push(field("Tokens", text(t)));
+        }
         // A session that went on separately on several machines: its branches, newest first.
         for (n, head) in row.branches().iter().enumerate() {
             let mut spans = text(self.describe_head(head));

@@ -37,16 +37,64 @@ pub fn human(n: u64) -> String {
     }
 }
 
-/// `in 327k · out 58k`, with ` · cache 2.7M` when `cache`, or `None` when nothing was reported.
-/// Cache reads dwarf the rest in long sessions and mean little at a glance, so only Inspect
-/// shows them.
-pub fn tokens(usage: &Usage, cache: bool) -> Option<String> {
-    let cached = usage.cache_read.map(|r| r + usage.cache_write.unwrap_or(0));
-    let parts: Vec<String> =
-        [("in", usage.input), ("out", usage.output), ("cache", cached.filter(|_| cache))]
-            .into_iter()
-            .filter_map(|(label, n)| n.filter(|n| *n > 0).map(|n| format!("{label} {}", human(n))))
-            .collect();
+/// The share of `usage`'s input read from the cache, in whole percent: rounded, but never 100
+/// while some wasn't, nor 0 while some was. `None` when none was.
+fn cached_percent(usage: &Usage) -> Option<u64> {
+    let read = usage.cache_read.filter(|n| *n > 0)?;
+    let total = usage.total_input()?;
+    let percent = (read.saturating_mul(100) + total / 2) / total;
+    Some(if read < total {
+        percent.clamp(1, 99)
+    } else {
+        100
+    })
+}
+
+/// A session's tokens at a glance: `in 56.0M (96% cached) · out 184k`, or `None` when nothing
+/// was reported. `in` is all the input the model processed ([`Usage::total_input`]), and the
+/// share cached is what was read from the prompt cache: in a long session nearly all of it is,
+/// and only the uncached input alone would make the session look far smaller than it was.
+pub fn tokens(usage: &Usage) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(input) = usage.total_input().filter(|n| *n > 0) {
+        parts.push(match cached_percent(usage) {
+            Some(percent) => format!("in {} ({percent}% cached)", human(input)),
+            None => format!("in {}", human(input)),
+        });
+    }
+    if let Some(output) = usage.output.filter(|n| *n > 0) {
+        parts.push(format!("out {}", human(output)));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// Inspect's breakdown of a session's tokens: `in 56.0M (544 uncached · 53.6M cache read ·
+/// 2.4M cache write) · out 184k (12k reasoning)`, leaving out what wasn't reported. `None`
+/// when nothing was.
+pub fn token_breakdown(usage: &Usage) -> Option<String> {
+    let reported = |n: Option<u64>| n.filter(|n| *n > 0);
+    let mut parts = Vec::new();
+    if let Some(input) = reported(usage.total_input()) {
+        let split: Vec<String> = [
+            ("uncached", usage.input),
+            ("cache read", usage.cache_read),
+            ("cache write", usage.cache_write),
+        ]
+        .into_iter()
+        .filter_map(|(label, n)| reported(n).map(|n| format!("{} {label}", human(n))))
+        .collect();
+        parts.push(if split.is_empty() {
+            format!("in {}", human(input))
+        } else {
+            format!("in {} ({})", human(input), split.join(" · "))
+        });
+    }
+    if let Some(output) = reported(usage.output) {
+        parts.push(match reported(usage.reasoning) {
+            Some(reasoning) => format!("out {} ({} reasoning)", human(output), human(reasoning)),
+            None => format!("out {}", human(output)),
+        });
+    }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
@@ -143,7 +191,7 @@ impl State {
         when.extend([sep(), Span::styled(format!("started {started}"), muted)]);
         meta.push(Line::from(when));
 
-        if let Some(t) = tokens(&row.usage, false) {
+        if let Some(t) = tokens(&row.usage) {
             meta.push(Line::from(Span::styled(format!("{t} tokens"), muted)));
         }
         for line in meta {
@@ -374,23 +422,71 @@ mod tests {
         assert_eq!(human(n), want);
     }
 
+    /// Session 2bbf2bb1 as Claude Code's transcript counts it: 544 uncached input tokens, the
+    /// rest of its 56M read from or written to the cache.
+    fn cached_session() -> Usage {
+        Usage {
+            input: Some(544),
+            output: Some(184_295),
+            cache_read: Some(53_600_000),
+            cache_write: Some(2_370_000),
+            reasoning: None,
+        }
+    }
+
+    #[rstest]
+    #[case::cached(cached_session(), "in 56.0M (96% cached) · out 184k")]
+    #[case::uncached(
+        Usage { input: Some(1_200), output: Some(300), ..Usage::default() },
+        "in 1.2k · out 300"
+    )]
+    // Written to the cache, never read: nothing was cached yet.
+    #[case::only_writes(
+        Usage { input: Some(10), cache_write: Some(990), output: Some(5), ..Usage::default() },
+        "in 1.0k · out 5"
+    )]
+    #[case::nearly_all(
+        Usage { input: Some(1), cache_read: Some(10_000), ..Usage::default() },
+        "in 10k (99% cached)"
+    )]
+    #[case::nearly_none(
+        Usage { input: Some(10_000), cache_read: Some(1), ..Usage::default() },
+        "in 10k (1% cached)"
+    )]
+    #[case::only_cache(
+        Usage { cache_read: Some(10), ..Usage::default() },
+        "in 10 (100% cached)"
+    )]
+    fn tokens_count_all_the_input(#[case] usage: Usage, #[case] want: &str) {
+        assert_eq!(tokens(&usage).unwrap(), want);
+    }
+
     #[rstest]
     fn tokens_skip_what_was_not_reported() {
-        assert_eq!(tokens(&Usage::default(), true), None);
-        let usage = Usage {
-            input: Some(327_000),
-            output: Some(58_000),
-            cache_read: Some(2_500_000),
-            cache_write: Some(200_000),
-            reasoning: None,
+        assert_eq!(tokens(&Usage::default()), None);
+        assert_eq!(token_breakdown(&Usage::default()), None);
+        let zeros = Usage {
+            input: Some(0),
+            output: Some(0),
+            cache_read: Some(0),
+            cache_write: Some(0),
+            reasoning: Some(0),
         };
-        assert_eq!(tokens(&usage, true).unwrap(), "in 327k · out 58k · cache 2.7M");
-        assert_eq!(tokens(&usage, false).unwrap(), "in 327k · out 58k");
-        let only_cache = Usage {
-            cache_read: Some(10),
-            ..Usage::default()
-        };
-        assert_eq!(tokens(&only_cache, false), None);
+        assert_eq!(tokens(&zeros), None);
+        assert_eq!(token_breakdown(&zeros), None);
+    }
+
+    #[rstest]
+    #[case::cached(
+        cached_session(),
+        "in 56.0M (544 uncached · 53.6M cache read · 2.4M cache write) · out 184k"
+    )]
+    #[case::reasoning(
+        Usage { input: Some(900), output: Some(20_000), reasoning: Some(12_000), ..Usage::default() },
+        "in 900 (900 uncached) · out 20k (12k reasoning)"
+    )]
+    fn inspect_breaks_the_tokens_down(#[case] usage: Usage, #[case] want: &str) {
+        assert_eq!(token_breakdown(&usage).unwrap(), want);
     }
 
     fn row() -> SessionRow {

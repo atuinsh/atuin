@@ -352,7 +352,14 @@ async fn inspect_tab_shows_metadata_command_and_children() {
     assert!(out.contains("   └─ Add an interactive resume picker to atuin ai (fork)"), "{out}");
     assert!(!out.contains("subagent  ") && !out.contains("Explore:"), "{out}");
     assert!(!out.contains("Review the resume picker diff"), "{out}");
-    assert!(out.contains("Messages  142  ·  in 327k · out 58k · cache 2.9M tokens"), "{out}");
+    assert!(out.lines().any(|l| l.trim_matches(['│', ' ']) == "Messages  142"), "{out}");
+    // All the input, and what it was made of.
+    assert!(
+        out.contains(
+            "Tokens    in 3.2M (327k uncached · 2.7M cache read · 170k cache write) · out 58k"
+        ),
+        "{out}"
+    );
     assert!(!out.contains("Activity"), "no activity chart: {out}");
     assert!(out.contains("<esc>: back"));
 }
@@ -1066,7 +1073,8 @@ async fn the_chooser_says_a_live_session_is_running() {
     assert!(!out.contains("running elsewhere"), "{out}");
 }
 
-/// The detail pane counts the forks (not the subagents); tokens leave out the cache.
+/// The detail pane counts the forks (not the subagents), and all the input tokens, with the
+/// share read from the cache.
 #[rstest]
 #[tokio::test]
 async fn the_detail_pane_counts_the_forks() {
@@ -1074,8 +1082,7 @@ async fn the_detail_pane_counts_the_forks() {
     assert!(out.contains("142 messages · 1 fork · started"), "{out}");
     // No activity chart.
     assert!(!out.contains("over 3h") && !out.contains('█'), "{out}");
-    assert!(out.contains("in 327k · out 58k tokens"), "{out}");
-    assert!(!out.contains("cache"), "{out}");
+    assert!(out.contains("in 3.2M (84% cached) · out 58k tokens"), "{out}");
     // This host goes without saying.
     assert!(!out.contains("@wintermute"), "{out}");
 }

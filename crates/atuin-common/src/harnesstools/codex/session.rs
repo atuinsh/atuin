@@ -1771,6 +1771,42 @@ mod tests {
         assert!(usage.iter().all(|m| m.kind == TOKEN_USAGE_RECORD && m.turn_id().is_some()));
     }
 
+    /// The usage counted per model call adds up to the thread's running total in the last
+    /// `token_count` snapshot, with all its input (`input_tokens` counts the cached input too)
+    /// split into [`Usage::input`] and the cache: nothing counted twice, nothing left out.
+    #[rstest]
+    #[case::recorded("session1.jsonl")]
+    #[case::compacted_with_empty_snapshots("paginated-compacted.jsonl")]
+    #[tokio::test]
+    async fn per_call_usage_adds_up_to_the_running_total(#[case] name: &str) {
+        let lines = read_session("s", fixture(name)).await;
+        let calls: Vec<Usage> = lines.iter().filter_map(CodexMessage::usage).collect();
+        let sum = |f: fn(&Usage) -> Option<u64>| calls.iter().filter_map(f).sum::<u64>();
+
+        let raw = std::fs::read_to_string(fixture(name)).unwrap();
+        let total = raw
+            .lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find_map(|v| {
+                let info = &v["payload"]["info"];
+                (v["payload"]["type"] == "token_count" && info.is_object())
+                    .then(|| info["total_token_usage"].clone())
+            })
+            .unwrap();
+        let field = |name: &str| total[name].as_u64().unwrap();
+
+        assert!(calls.len() > 1);
+        assert_eq!(sum(Usage::total_input), field("input_tokens"));
+        assert_eq!(sum(|u| u.cache_read), field("cached_input_tokens"));
+        assert_eq!(
+            sum(|u| u.input),
+            field("input_tokens") - field("cached_input_tokens"),
+            "uncached input"
+        );
+        assert_eq!(sum(|u| u.output), field("output_tokens"));
+    }
+
     #[rstest]
     #[case(include_str!("../../../tests/fixtures/codex/session1.jsonl"))]
     fn normalizes_a_real_redacted_session(#[case] jsonl: &str) {

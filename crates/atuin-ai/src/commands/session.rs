@@ -612,13 +612,16 @@ fn write_session_header(out: &mut dyn Write, s: &Session) -> io::Result<()> {
     writeln!(out, "started   {}", age(s.started_at))?;
     writeln!(out, "updated   {}", age(s.updated_at))?;
     writeln!(out, "messages  {}", s.message_count)?;
+    // All the input the model processed, then what it was made of: the uncached input alone
+    // is a small part of a long session's.
     writeln!(
         out,
-        "tokens    in {} / out {} / cache {}+{}",
+        "tokens    in {} ({} uncached, {} cache read, {} cache write) / out {}",
+        s.usage.total_input().unwrap_or_default(),
         s.usage.input.unwrap_or_default(),
-        s.usage.output.unwrap_or_default(),
         s.usage.cache_read.unwrap_or_default(),
-        s.usage.cache_write.unwrap_or_default()
+        s.usage.cache_write.unwrap_or_default(),
+        s.usage.output.unwrap_or_default(),
     )?;
     writeln!(out)
 }
