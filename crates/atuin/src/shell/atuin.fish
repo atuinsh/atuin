@@ -50,7 +50,7 @@ function _atuin_postexec --on-event fish_postexec
     set -l s $status
 
     if test -n "$ATUIN_HISTORY_ID"
-        _atuin_mark_output_end
+        _atuin_mark_output_end $s
         atuin history end --hook --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
         disown
     end
