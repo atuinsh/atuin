@@ -18,8 +18,8 @@ use atuin_client::ai_session::{
     Session as DomainSession, SourceId,
 };
 use atuin_common::harnesstools::session::{
-    Content, Role as DomainRole, StopReason as DomainStopReason, ToolCallId,
-    ToolResult as DomainToolResult, ToolUse,
+    Content, ParentKind as DomainParentKind, Role as DomainRole, StopReason as DomainStopReason,
+    ToolCallId, ToolResult as DomainToolResult, ToolUse,
 };
 use atuin_common::string::highlighted::FromHighlightedTextProtoError;
 use atuin_common::time::{OffsetDateTimeExt, TimespecOutOfRange};
@@ -85,6 +85,26 @@ impl From<DomainRole> for Role {
             DomainRole::Other(_) => Self::Other,
         }
     }
+}
+
+impl From<DomainParentKind> for ParentKind {
+    fn from(value: DomainParentKind) -> Self {
+        match value {
+            DomainParentKind::Subagent => Self::Subagent,
+            DomainParentKind::Fork => Self::Fork,
+            DomainParentKind::Continuation => Self::Continuation,
+        }
+    }
+}
+
+/// A wire `ParentKind`, or `None` for a value this build does not know (a newer daemon's): the
+/// relation is then unknown, not an error.
+fn domain_parent_kind(raw: Option<i32>) -> Option<DomainParentKind> {
+    Some(match ParentKind::try_from(raw?).ok()? {
+        ParentKind::Subagent => DomainParentKind::Subagent,
+        ParentKind::Fork => DomainParentKind::Fork,
+        ParentKind::Continuation => DomainParentKind::Continuation,
+    })
 }
 
 impl From<DomainStopReason> for StopReason {
@@ -182,6 +202,7 @@ impl From<DomainMessage> for Message {
             }),
             session: Some(value.session.into()),
             parent: value.parent.map(Into::into),
+            parent_kind: value.parent_kind.map(|kind| ParentKind::from(kind) as i32),
             source_id: value.source_id.into(),
             parent_source_id: value.parent_source_id.map(Into::into),
             timestamp: Some(prost_types::Timestamp {
@@ -248,6 +269,7 @@ impl TryFrom<Message> for DomainMessage {
             session: value.session.ok_or(ParseError::Missing("session"))?.try_into()?,
             source_id: SourceId::from(value.source_id),
             parent: value.parent.map(TryInto::try_into).transpose()?,
+            parent_kind: domain_parent_kind(value.parent_kind),
             parent_source_id: value.parent_source_id.map(SourceId::from),
             timestamp: OffsetDateTime::from_timespec(
                 timestamp.seconds.into(),
@@ -288,6 +310,8 @@ impl From<DomainSession> for Session {
             tokens: Some(value.usage),
             title: value.title,
             preview: value.preview,
+            last_reply: value.last_reply,
+            parent_kind: value.parent_kind.map(|kind| ParentKind::from(kind) as i32),
         }
     }
 }
@@ -316,6 +340,8 @@ impl TryFrom<Session> for DomainSession {
             title: value.title,
             title_source: None,
             preview: value.preview,
+            last_reply: value.last_reply,
+            parent_kind: domain_parent_kind(value.parent_kind),
         })
     }
 }
@@ -434,6 +460,14 @@ mod tests {
         ]
     }
 
+    fn arb_parent_kind() -> impl Strategy<Value = Option<DomainParentKind>> {
+        prop::option::of(prop_oneof![
+            Just(DomainParentKind::Subagent),
+            Just(DomainParentKind::Fork),
+            Just(DomainParentKind::Continuation),
+        ])
+    }
+
     fn arb_message() -> impl Strategy<Value = DomainMessage> {
         let handles = (
             any::<u128>(),
@@ -450,17 +484,19 @@ mod tests {
             prop::option::of("[a-z]{1,8}"),
             prop::option::of("[a-z]{1,8}"),
         );
-        let outcome = (prop::option::of(arb_usage()), prop::option::of(arb_stop_reason()));
+        let outcome =
+            (prop::option::of(arb_usage()), prop::option::of(arb_stop_reason()), arb_parent_kind());
         (handles, body, outcome).prop_map(
             |(
                 (id, session, source_id, parent, parent_source_id),
                 (timestamp, role, content, cwd, git_branch, model),
-                (usage, stop_reason),
+                (usage, stop_reason, parent_kind),
             )| DomainMessage {
                 id: RecordId(uuid::Uuid::from_u128(id)),
                 session,
                 source_id: SourceId::from(source_id),
                 parent,
+                parent_kind,
                 parent_source_id: parent_source_id.map(SourceId::from),
                 timestamp,
                 role,
@@ -493,14 +529,17 @@ mod tests {
             arb_usage(),
             prop::option::of(".{0,8}"),
             prop::option::of(".{0,8}"),
+            prop::option::of(".{0,8}"),
         );
-        (handles, summary).prop_map(
+        (handles, summary, arb_parent_kind()).prop_map(
             |(
                 (handle, parent, cwd, git_branch, model),
-                (started_at, updated_at, message_count, usage, title, preview),
+                (started_at, updated_at, message_count, usage, title, preview, last_reply),
+                parent_kind,
             )| DomainSession {
                 handle,
                 parent,
+                parent_kind,
                 cwd: cwd.map(PathBuf::from),
                 git_branch,
                 model,
@@ -511,6 +550,7 @@ mod tests {
                 title,
                 title_source: None,
                 preview,
+                last_reply,
             },
         )
     }

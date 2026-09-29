@@ -13,8 +13,8 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
-    ToolUse, Usage,
+    Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
+    ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
@@ -393,7 +393,7 @@ const HARNESS_TAGS: [&str; 8] = [
 /// Prefixes of user-role text that Claude Code wrote itself (its own `Dre` / `W_e`
 /// classification in CC 2.1.281): command output, background task notifications and teammate
 /// messages, the local-command caveat, the interrupt marker.
-const INJECTED_PREFIXES: [&str; 9] = [
+const INJECTED_PREFIXES: [&str; 10] = [
     "<local-command-stdout>",
     "<local-command-stderr>",
     "<bash-stdout>",
@@ -403,6 +403,8 @@ const INJECTED_PREFIXES: [&str; 9] = [
     "<teammate-message",
     "<tick>",
     "[Request interrupted by user",
+    // The directive a forked worker is started with.
+    "<fork-boilerplate>",
 ];
 
 /// The sentence Claude Code puts before the model's summary on a compaction summary line: the
@@ -553,6 +555,18 @@ impl CcodeMessage {
     }
 
     /// The line, as read from a transcript whose subagent `spawner` spawned it.
+    /// The session [`Message::parent_session`] names, and how this one relates to it. A main
+    /// session's own lines name it too; the enricher drops a parent equal to the session.
+    fn parent(&self) -> Option<(SessionId, ParentKind)> {
+        if let Some(id) = self.forked_from.as_ref().and_then(|f| f["sessionId"].as_str()) {
+            return Some((SessionId::from(id.to_owned()), ParentKind::Fork));
+        }
+        self.spawner
+            .clone()
+            .or_else(|| self.session_id.clone().map(SessionId::from))
+            .map(|parent| (parent, ParentKind::Subagent))
+    }
+
     fn with_spawner(self, spawner: Option<SessionId>) -> Self {
         Self { spawner, ..self }
     }
@@ -850,12 +864,11 @@ impl Message for CcodeMessage {
     /// The session a fork was copied from (`forkedFrom`), else the subagent that spawned a nested
     /// subagent, else the session the line names: a subagent's lines name the root session.
     fn parent_session(&self) -> Option<SessionId> {
-        self.forked_from
-            .as_ref()
-            .and_then(|f| f["sessionId"].as_str())
-            .map(|id| SessionId::from(id.to_owned()))
-            .or_else(|| self.spawner.clone())
-            .or_else(|| self.session_id.clone().map(SessionId::from))
+        self.parent().map(|(parent, _)| parent)
+    }
+
+    fn parent_kind(&self) -> Option<ParentKind> {
+        self.parent().map(|(_, kind)| kind)
     }
 
     /// The API message id: one per model call, shared by every line the response is split
@@ -1111,6 +1124,8 @@ mod tests {
         .unwrap();
         assert_eq!(m.parent_id(), Some(MessageId::from("aaaa".to_owned())));
         assert_eq!(m.parent_session(), Some(SessionId::from("p".to_owned())));
+        // A line naming another session is a subagent's (the enricher drops a session's own).
+        assert_eq!(m.parent_kind(), Some(ParentKind::Subagent));
         assert_eq!(m.turn_id().as_deref(), Some("msg_01"));
     }
 
@@ -1525,6 +1540,7 @@ mod tests {
             "message": {"role": "user", "content": "hi"},
         }));
         assert_eq!(m.parent_session(), Some(SessionId::from("old".to_owned())));
+        assert_eq!(m.parent_kind(), Some(ParentKind::Fork));
     }
 
     /// Synthetic API-error assistant lines (`isApiErrorMessage`, model `<synthetic>`,
@@ -1559,6 +1575,8 @@ mod tests {
         "message": {"role": "user", "content": "<local-command-stdout>ok</local-command-stdout>"}}))]
     #[case::interrupt(serde_json::json!({
         "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}))]
+    #[case::fork_directive(serde_json::json!({
+        "message": {"role": "user", "content": "<fork-boilerplate>\nYou are a worker fork."}}))]
     fn injected_user_line_is_system(#[case] extra: serde_json::Value) {
         let mut raw = serde_json::json!({"type": "user", "uuid": "m1"});
         raw.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());

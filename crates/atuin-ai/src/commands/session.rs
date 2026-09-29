@@ -11,16 +11,14 @@ use std::io::{self, IsTerminal, Write};
 use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, Session, SessionMatch};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
-use atuin_common::harnesstools::session::{Content, Role, StopReason, Usage};
+use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_daemon::AiClient;
-use atuin_daemon::grpc::ai::session::pb::{
-    get_session_event, import_sessions_event, tail_sessions_event,
-};
+use atuin_daemon::grpc::ai::session::pb::{import_sessions_event, tail_sessions_event};
 use chrono::{DateTime, Utc};
 use chrono_humanize::HumanTime;
 use clap::{Args, Subcommand, ValueEnum};
-use eyre::{Result, bail, eyre};
+use eyre::{Result, eyre};
 use futures::{StreamExt, TryStreamExt};
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -83,21 +81,23 @@ enum SubCmd {
 
 // Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
 // Copilot has no capture source yet, so advertising it would return empty for every query.
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum HarnessArg {
+// Also the MCP tools' harness filter, so the CLI and the tools accept the same names.
+#[derive(Copy, Clone, Debug, ValueEnum, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessArg {
     ClaudeCode,
     Codex,
     Opencode,
     Pi,
 }
 
-impl HarnessArg {
-    fn to_pb(self) -> HarnessKind {
-        match self {
-            Self::ClaudeCode => HarnessKind::ClaudeCode,
-            Self::Codex => HarnessKind::Codex,
-            Self::Opencode => HarnessKind::Opencode,
-            Self::Pi => HarnessKind::Pi,
+impl From<HarnessArg> for HarnessKind {
+    fn from(value: HarnessArg) -> Self {
+        match value {
+            HarnessArg::ClaudeCode => Self::ClaudeCode,
+            HarnessArg::Codex => Self::Codex,
+            HarnessArg::Opencode => Self::Opencode,
+            HarnessArg::Pi => Self::Pi,
         }
     }
 }
@@ -149,7 +149,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
             query,
             harness,
             limit,
-        } => search(&mut client, &query, harness.map(HarnessArg::to_pb), limit, style).await,
+        } => search(&mut client, &query, harness.map(HarnessKind::from), limit, style).await,
         SubCmd::Tail => tail(&mut client, style).await,
         SubCmd::Import { harness } => import(&mut client, harness, style).await,
     };
@@ -180,12 +180,8 @@ fn is_broken_pipe(err: &eyre::Report) -> bool {
 // --- subcommands --------------------------------------------------------------------------------
 
 async fn list(client: &mut AiClient, style: Style) -> Result<()> {
-    let sessions: Vec<Session> = client
-        .list_sessions(None)
-        .await?
-        .map(|session| Ok::<_, eyre::Report>(Session::try_from(session?)?))
-        .try_collect()
-        .await?;
+    let sessions =
+        crate::tools::session::list_sessions(client, None, None).await.map_err(|e| eyre!(e))?;
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -232,18 +228,8 @@ async fn list(client: &mut AiClient, style: Style) -> Result<()> {
 async fn show(client: &mut AiClient, selector: &str, style: Style) -> Result<()> {
     let handle = resolve(client, selector).await?;
 
-    // Drain the stream first: the leading event is the session, the rest are messages.
-    let mut stream = client.get_session(handle).await?;
-    let mut session: Option<Session> = None;
-    let mut messages: Vec<Message> = Vec::new();
-    while let Some(event) = stream.next().await {
-        match event?.event {
-            Some(get_session_event::Event::Session(s)) => session = Some(s.try_into()?),
-            Some(get_session_event::Event::Message(m)) => messages.push(m.try_into()?),
-            None => {}
-        }
-    }
-    let session = session.ok_or_else(|| eyre!("the daemon returned no session"))?;
+    let (session, messages, _) =
+        crate::tools::session::read::read_session(client, handle, None).await?;
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -314,7 +300,7 @@ async fn search(
     style: Style,
 ) -> Result<()> {
     let matches: Vec<SessionMatch> = client
-        .search_sessions(query, harness, limit)
+        .search_sessions(query, harness, None, false, limit)
         .await?
         .map(|m| Ok::<_, eyre::Report>(SessionMatch::try_from(m?)?))
         .try_collect()
@@ -547,7 +533,7 @@ async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Styl
 /// (the harness is only known from the listing, so an id alone cannot address a session).
 async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession> {
     let mut stream = client
-        .list_sessions(None)
+        .list_sessions(None, None)
         .await?
         .map(|session| Ok::<_, eyre::Report>(Session::try_from(session?)?));
     // `latest` only needs the newest session, which the daemon streams first, so take a single
@@ -558,26 +544,40 @@ async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession
     } else {
         stream.try_collect().await?
     };
-    select_session(sessions, selector)
+    select_session(sessions, selector).map_err(|e| match e {
+        SelectError::NotFound(_) => eyre!("{e}. Run `atuin ai session list`."),
+        e => eyre!(e),
+    })
+}
+
+/// Why a selector matched no single session. Callers word the next step themselves: the CLI
+/// points at `atuin ai session list`, the MCP tool at its own list tool.
+#[derive(Debug, thiserror::Error)]
+pub enum SelectError {
+    #[error("no sessions captured yet")]
+    NoSessions,
+    #[error("no session with id `{0}`")]
+    NotFound(String),
+    #[error("id `{0}` matches more than one session; use a longer or full id")]
+    Ambiguous(String),
 }
 
 /// Pure selector logic, split out from the RPC so it can be tested directly.
-fn select_session(sessions: Vec<Session>, selector: &str) -> Result<HarnessSession> {
+pub fn select_session(
+    sessions: Vec<Session>,
+    selector: &str,
+) -> std::result::Result<HarnessSession, SelectError> {
     if selector.eq_ignore_ascii_case("latest") {
         // The daemon lists newest-first, so the first entry is the most recent.
-        let latest =
-            sessions.into_iter().next().ok_or_else(|| eyre!("no sessions captured yet"))?;
-        return Ok(latest.handle);
+        return sessions.into_iter().next().map(|s| s.handle).ok_or(SelectError::NoSessions);
     }
 
     // `list` prints ids truncated to 12 chars, so accept a unique id prefix as well as a full id.
     let mut matches =
         sessions.into_iter().filter(|s| s.handle.session.as_ref().starts_with(selector));
-    let first = matches
-        .next()
-        .ok_or_else(|| eyre!("no session with id `{selector}`. Run `atuin ai session list`."))?;
+    let first = matches.next().ok_or_else(|| SelectError::NotFound(selector.to_owned()))?;
     if matches.next().is_some() {
-        bail!("id `{selector}` matches more than one session; use a longer or full id");
+        return Err(SelectError::Ambiguous(selector.to_owned()));
     }
     Ok(first.handle)
 }
@@ -755,7 +755,7 @@ fn message_summary(m: &Message) -> Option<Summary> {
 
 /// The role label to display: the harness's own string when the enum cannot name it (e.g. codex
 /// `developer`), otherwise the standard role name.
-fn message_role(m: &Message) -> String {
+pub fn message_role(m: &Message) -> String {
     // The harness's own role is free-form captured text, so strip any control chars before it
     // reaches the `tail` view; the fixed names (role_name) need no such care.
     match &m.role {
@@ -859,7 +859,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
 /// Collapse all whitespace (including embedded newlines) to single spaces and truncate to `max`
 /// characters with an ellipsis. Session titles/previews are captured from multi-line prompts, so the
 /// human table and `tail` views must flatten them or a single entry spills across many rows.
-fn one_line(text: &str, max: usize) -> String {
+pub fn one_line(text: &str, max: usize) -> String {
     // Whitespace-fold, then drop any control chars left over (ESC, BEL, C1): captured session
     // content is untrusted and must not emit terminal escape sequences into the compact views.
     let collapsed: String = text
@@ -976,6 +976,8 @@ struct SessionJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     parent: Option<HandleJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    parent_kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     git_branch: Option<String>,
@@ -991,6 +993,8 @@ struct SessionJson {
     title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_reply: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1082,6 +1086,8 @@ struct SearchMatchJson {
     score: f64,
     title: HighlightJson,
     preview: HighlightJson,
+    /// Position of the best-matching message in the session, as numbered by `show`.
+    message_index: u64,
 }
 
 impl From<&HighlightedString> for HighlightJson {
@@ -1101,6 +1107,7 @@ impl From<&SessionMatch> for SearchMatchJson {
             score: m.score,
             title: HighlightJson::from(&m.title),
             preview: HighlightJson::from(&m.preview),
+            message_index: m.message_index,
         }
     }
 }
@@ -1117,6 +1124,11 @@ fn session_json(s: &Session) -> SessionJson {
         harness: harness_name(s.handle.harness).to_owned(),
         session_id: s.handle.session.to_string(),
         parent: s.parent.as_ref().map(handle_json),
+        parent_kind: s.parent_kind.map(|kind| match kind {
+            ParentKind::Subagent => "subagent",
+            ParentKind::Fork => "fork",
+            ParentKind::Continuation => "continuation",
+        }),
         cwd: s.cwd.as_ref().map(|cwd| cwd.to_string_lossy().into_owned()),
         git_branch: s.git_branch.clone(),
         model: s.model.clone(),
@@ -1126,6 +1138,7 @@ fn session_json(s: &Session) -> SessionJson {
         tokens: s.usage,
         title: s.title.clone(),
         preview: s.preview.clone(),
+        last_reply: s.last_reply.clone(),
     }
 }
 
@@ -1303,6 +1316,24 @@ mod tests {
         assert_eq!(v["title"], "hello");
         // Absent optionals are omitted rather than serialized as null.
         assert!(v.get("cwd").is_none());
+        assert!(v.get("parent_kind").is_none());
+        assert!(v.get("last_reply").is_none());
+    }
+
+    #[rstest]
+    #[case::subagent(ParentKind::Subagent, "subagent")]
+    #[case::fork(ParentKind::Fork, "fork")]
+    #[case::continuation(ParentKind::Continuation, "continuation")]
+    fn session_json_carries_the_parent_relation(#[case] kind: ParentKind, #[case] want: &str) {
+        let mut s = session(HarnessKind::Codex, "child");
+        s.parent = Some(handle(HarnessKind::Codex, "parent"));
+        s.parent_kind = Some(kind);
+        s.last_reply = Some("done".to_owned());
+
+        let v = serde_json::to_value(session_json(&s)).unwrap();
+        assert_eq!(v["parent"]["session_id"], "parent");
+        assert_eq!(v["parent_kind"], want);
+        assert_eq!(v["last_reply"], "done");
     }
 
     #[rstest]
@@ -1457,7 +1488,7 @@ mod tests {
     #[case(HarnessArg::Opencode, HarnessKind::Opencode)]
     #[case(HarnessArg::Pi, HarnessKind::Pi)]
     fn harness_arg_maps_to_pb(#[case] arg: HarnessArg, #[case] expected: HarnessKind) {
-        assert_eq!(arg.to_pb(), expected);
+        assert_eq!(HarnessKind::from(arg), expected);
     }
 
     #[rstest]
@@ -1487,12 +1518,14 @@ mod tests {
             session: session(HarnessKind::ClaudeCode, "abc"),
             title: highlighter.as_highlighted("the \u{E000}build\u{E001}".to_owned()),
             preview: highlighter.as_highlighted(String::new()),
+            message_index: 4,
             score: 2.5,
         };
 
         let v = serde_json::to_value(SearchMatchJson::from(&m)).unwrap();
         assert_eq!(v["session"]["session_id"], "abc");
         assert_eq!(v["score"], 2.5);
+        assert_eq!(v["message_index"], 4);
         assert_eq!(v["title"]["text"], "the build");
         assert_eq!(v["title"]["matches"], json!([[4, 9]]));
         assert!(v["preview"].get("matches").is_none(), "no matches are omitted, not empty");

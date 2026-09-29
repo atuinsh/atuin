@@ -240,8 +240,9 @@ impl AiHarnessSessionCapture {
     pub async fn list_sessions(
         &self,
         harness: Option<HarnessKind>,
+        updated_since: Option<time::OffsetDateTime>,
     ) -> Result<Vec<Session>, DbError> {
-        self.sink.sidecar.list_sessions(harness).await
+        self.sink.sidecar.list_sessions(harness, updated_since).await
     }
 
     pub async fn get_session(&self, session: &HarnessSession) -> Result<Option<Session>, DbError> {
@@ -266,9 +267,11 @@ impl AiHarnessSessionCapture {
         &self,
         query: &str,
         harness: Option<HarnessKind>,
+        cwd: Option<&str>,
+        any_term: bool,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
-        self.sink.sidecar.search(query, harness, limit)
+        self.sink.sidecar.search_in(query, harness, cwd, any_term, limit)
     }
 }
 
@@ -846,10 +849,14 @@ mod pipeline_tests {
                 .map(|s| (s.handle.session.to_string(), s.usage.output.unwrap()))
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
-        let live = collect(sink.sidecar.list_sessions(None).await.unwrap());
+        let live = collect(sink.sidecar.list_sessions(None, None).await.unwrap());
         let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
         sink.records.build(&rebuilt).await.unwrap();
-        assert_eq!(collect(rebuilt.list_sessions(None).await.unwrap()), live, "rebuild agrees");
+        assert_eq!(
+            collect(rebuilt.list_sessions(None, None).await.unwrap()),
+            live,
+            "rebuild agrees"
+        );
         live
     }
 

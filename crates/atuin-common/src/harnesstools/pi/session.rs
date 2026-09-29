@@ -31,8 +31,8 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::pi::{Pi, agent_dir, expand_tilde};
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
-    ToolUse, Usage,
+    Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
+    ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
@@ -735,6 +735,12 @@ impl Message for PiMessage {
         self.resolved_parent.clone().or_else(|| file_name_id(Path::new(path)).map(SessionId::from))
     }
 
+    /// pi links a session only to the one it branched from (`/fork`, `/tree`): a person's own
+    /// continuation, not a subagent.
+    fn parent_kind(&self) -> Option<ParentKind> {
+        self.parent_session_path().map(|_| ParentKind::Fork)
+    }
+
     /// A `session_info` name, trimmed as pi reads it (session-manager.ts `getSessionName`). A
     /// blank name clears pi's title, which a line cannot express here: it assigns none.
     /// The session's name; a blank one clears it, as pi's `getSessionName` reads it.
@@ -1030,6 +1036,7 @@ mod tests {
     ) {
         let m: PiMessage = serde_json::from_str(&raw.to_string()).unwrap();
         assert_eq!(m.parent_session(), parent.map(|p| SessionId::from(p.to_owned())));
+        assert_eq!(m.parent_kind(), parent.map(|_| ParentKind::Fork), "pi links only branches");
     }
 
     /// Pi's own precedence (coding-agent `main.ts`): `PI_CODING_AGENT_SESSION_DIR`, then the

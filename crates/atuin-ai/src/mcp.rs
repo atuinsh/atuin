@@ -16,11 +16,10 @@ use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNO
 use atuin_client::settings::Settings;
 use eyre::Result;
 use rmcp::handler::server::common::schema_for_type;
-use rmcp::handler::server::tool::parse_json_object;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
-    Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
-    ToolAnnotations,
+    Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
+    ServerInfo, Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
@@ -28,6 +27,9 @@ use serde_json::{Value, json};
 use strum::IntoEnumIterator;
 
 use crate::tools::output::search::AtuinOutputSearchToolCall;
+use crate::tools::session::caller::{Caller, OwnSession};
+use crate::tools::session::list::AtuinAiSessionListToolCall;
+use crate::tools::session::read::AtuinAiSessionReadToolCall;
 use crate::tools::session::search::AtuinAiSessionSearchToolCall;
 use crate::tools::{
     AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
@@ -37,6 +39,7 @@ use crate::tools::{
 struct AtuinMcp {
     db: Sqlite,
     settings: Settings,
+    own_session: OwnSession,
 }
 
 /// Server-level instructions, surfaced by MCP clients (Claude Code injects
@@ -68,9 +71,10 @@ Do not use `history`, ~/.bash_history, or ~/.zsh_history: they are typically emp
      atuin_output over re-running an expensive or side-effectful command just to see its output \
      again.
 
-To recall what an AI coding agent did or discussed in an earlier session — which session touched a \
-     file, hit an error, or made a decision — search atuin_ai_session_search rather than guessing \
-     or asking the user to reconstruct it.";
+Atuin also records AI agent sessions. Use atuin_ai_session_search or atuin_ai_session_list, then \
+     atuin_ai_session_read, whenever a task points at earlier work: 'last time', 'again', \
+     'still', 'continue', what was decided, or whether something is a known issue. Otherwise do \
+     one quick search only when earlier sessions would clearly help; skip self-contained tasks.";
 
 /// The initialize result, separated from the handler so tests can assert on
 /// it without constructing a database-backed server.
@@ -96,32 +100,41 @@ impl ServerHandler for AtuinMcp {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let arguments = request.arguments.unwrap_or_default();
+        let peer = context.peer.peer_info();
+        let caller = Caller {
+            client: peer.as_deref().map(|p| p.client_info.name.as_str()),
+            own: &self.own_session,
+        };
+        // Bad arguments come back as a tool error, not a JSON-RPC one, so the model sees what was
+        // wrong and can retry (MCP SEP-1303); many clients never show protocol errors to it.
         let outcome = match request.name.as_ref() {
-            "atuin_history" => {
-                AtuinHistoryToolCall::try_from(&Value::Object(arguments))
-                    .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
-                    .execute(&self.db)
-                    .await
-            }
-            "atuin_output" => {
-                AtuinOutputToolCall::try_from(&Value::Object(arguments))
-                    .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?
-                    .execute()
-                    .await
-            }
-            "atuin_output_search" => {
-                parse_json_object::<AtuinOutputSearchToolCall>(arguments)?
-                    .execute(&self.db, &self.settings)
-                    .await
-            }
-            "atuin_ai_session_search" => {
-                parse_json_object::<AtuinAiSessionSearchToolCall>(arguments)?
-                    .execute(&self.settings)
-                    .await
-            }
+            "atuin_history" => match AtuinHistoryToolCall::try_from(&Value::Object(arguments)) {
+                Ok(call) => call.execute(&self.db).await,
+                Err(e) => invalid_arguments(e),
+            },
+            "atuin_output" => match AtuinOutputToolCall::try_from(&Value::Object(arguments)) {
+                Ok(call) => call.execute().await,
+                Err(e) => invalid_arguments(e),
+            },
+            "atuin_output_search" => match parse::<AtuinOutputSearchToolCall>(arguments) {
+                Ok(call) => call.execute(&self.db, &self.settings).await,
+                Err(outcome) => outcome,
+            },
+            "atuin_ai_session_search" => match parse::<AtuinAiSessionSearchToolCall>(arguments) {
+                Ok(call) => call.execute(&self.settings, &caller).await,
+                Err(outcome) => outcome,
+            },
+            "atuin_ai_session_list" => match parse::<AtuinAiSessionListToolCall>(arguments) {
+                Ok(call) => call.execute(&self.settings, &caller).await,
+                Err(outcome) => outcome,
+            },
+            "atuin_ai_session_read" => match parse::<AtuinAiSessionReadToolCall>(arguments) {
+                Ok(call) => call.execute(&self.settings, &caller).await,
+                Err(outcome) => outcome,
+            },
             name => {
                 return Err(ErrorData::invalid_params(format!("unknown tool: {name}"), None));
             }
@@ -140,6 +153,16 @@ impl ServerHandler for AtuinMcp {
     }
 }
 
+fn parse<T: serde::de::DeserializeOwned>(arguments: JsonObject) -> Result<T, ToolOutcome> {
+    serde_json::from_value(Value::Object(arguments)).map_err(invalid_arguments)
+}
+
+fn invalid_arguments(err: impl std::fmt::Display) -> ToolOutcome {
+    ToolOutcome::Error(format!(
+        "Invalid arguments: {err}. Check the tool's input schema and retry."
+    ))
+}
+
 /// Serve MCP over stdio until the client disconnects.
 ///
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
@@ -148,6 +171,7 @@ pub async fn run(db: &Sqlite, settings: &Settings) -> Result<()> {
     let server = AtuinMcp {
         db: db.clone(),
         settings: settings.clone(),
+        own_session: OwnSession::default(),
     }
     .serve(rmcp::transport::stdio())
     .await?;
@@ -247,36 +271,6 @@ fn tool_definitions() -> Vec<Tool> {
         unreachable!()
     };
 
-    let Value::Object(session_search_schema) = json!({
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Words to look for across captured AI-agent session transcripts \
-                    (message text, reasoning, tool calls and results, and session titles). Terms \
-                    are AND-ed and matched as whole words (case-insensitive; no regex or prefix \
-                    matching), so use a few distinctive words, not a sentence.",
-            },
-            "limit": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 20,
-                "default": 5,
-                "description": "Maximum number of sessions to return, most relevant first.",
-            },
-            "harness": {
-                "type": "string",
-                "enum": ["claude-code", "codex", "opencode", "pi"],
-                "description": "Restrict the search to sessions from one AI harness. Omit to \
-                    search every harness.",
-            },
-        },
-        "required": ["query"],
-    }) else {
-        unreachable!()
-    };
-
     vec![
         Tool::new(
             "atuin_history",
@@ -316,14 +310,42 @@ fn tool_definitions() -> Vec<Tool> {
         Tool::new(
             "atuin_ai_session_search",
             "Full-text search across the transcripts of AI coding-agent sessions Atuin has \
-             captured (Claude Code, Codex, opencode, pi). Use it to find which past agent session \
+             captured (Claude Code, Codex, opencode, pi). Reach for it when a task points at \
+             earlier work ('again', 'still', 'continue', a known issue, what was decided): a \
+             previous agent may already have diagnosed or decided it. Finds which session \
              discussed a topic, hit an error, touched a file, or made a decision — it searches \
-             message text, reasoning, tool calls and results, and session titles. Each result \
-             gives the session id, harness, last-active time, title, and a matching snippet. \
-             Requires the Atuin daemon with AI session capture enabled.",
-            session_search_schema,
+             what the user and agent wrote, tool names, and session titles. Each result gives the \
+             session id, harness, last-active time, title, directory, and the best matching \
+             message's number and snippet; pass the id to atuin_ai_session_read to read around \
+             the match. Requires the Atuin daemon with AI session capture enabled.",
+            schema_for_type::<AtuinAiSessionSearchToolCall>(),
         )
         .annotate(ToolAnnotations::with_title("Search AI agent sessions").read_only(true)),
+        Tool::new(
+            "atuin_ai_session_list",
+            "List captured AI coding-agent sessions (Claude Code, Codex, opencode, pi), most \
+             recently active first, optionally only those in a directory (cwd: '.' for this \
+             project). Use it to pick up where the previous session on this project left off \
+             ('continue', 'last time') or to see what agents worked on recently, when you have no \
+             specific words to search for. Each entry gives the session id, harness, last-active \
+             time, message count, title, and directory. Requires the Atuin daemon with AI session \
+             capture enabled.",
+            schema_for_type::<AtuinAiSessionListToolCall>(),
+        )
+        .annotate(ToolAnnotations::with_title("List AI agent sessions").read_only(true)),
+        Tool::new(
+            "atuin_ai_session_read",
+            "Read a captured AI coding-agent session's transcript, a page of messages at a time: \
+             what the user asked, what the agent replied, and which tools it used. Capture keeps \
+             the conversation, not tool arguments or output, so runs of tool calls appear as one \
+             line of tool names. Messages are numbered; page with start (negative counts from the \
+             end, e.g. -10 for how the session ended) and limit. Pages abridge long messages; \
+             read one message (limit: 1) to see it in full; one over 20,000 characters comes in \
+             parts, each giving the offset to read the next from. Takes a session id or unique \
+             prefix from atuin_ai_session_list or atuin_ai_session_search, or 'latest'.",
+            schema_for_type::<AtuinAiSessionReadToolCall>(),
+        )
+        .annotate(ToolAnnotations::with_title("Read an AI agent session").read_only(true)),
     ]
 }
 
@@ -346,11 +368,12 @@ mod tests {
             "atuin_output",
             "atuin_output_search",
             "atuin_ai_session_search",
+            "atuin_ai_session_list",
+            "atuin_ai_session_read",
         ]);
 
         for tool in &tools {
             assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
-            assert!(tool.input_schema.contains_key("required"));
         }
 
         // Everything except `query` is optional — see the filter_modes
@@ -415,7 +438,10 @@ mod tests {
             "the parser enforces the advertised minLength"
         );
 
-        for harness in schema["properties"]["harness"]["enum"].as_array().unwrap() {
+        // Follow the property's `$ref` rather than naming the type, so a rename cannot hide it.
+        let reference = schema["properties"]["harness"]["anyOf"][0]["$ref"].as_str().unwrap();
+        let name = reference.rsplit('/').next().unwrap();
+        for harness in schema["$defs"][name]["enum"].as_array().unwrap() {
             let name = harness.as_str().unwrap();
             assert!(
                 parse(json!({"query": "x", "harness": name})).is_ok(),
@@ -435,6 +461,8 @@ mod tests {
         assert!(instructions.contains("atuin_output"));
         assert!(instructions.contains("atuin_output_search"));
         assert!(instructions.contains("atuin_ai_session_search"));
+        assert!(instructions.contains("atuin_ai_session_list"));
+        assert!(instructions.contains("atuin_ai_session_read"));
         assert!(instructions.len() < MAX_INSTRUCTIONS_LEN, "instructions should stay concise");
     }
 }

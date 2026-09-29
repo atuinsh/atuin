@@ -10,8 +10,8 @@ use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt, TryStreamExt};
 pub use model::{
-    Content, MessageId, Role, SessionEvent, SessionId, StopReason, TitleChange, TitleSource,
-    ToolCallId, ToolResult, ToolUse, Usage,
+    Content, MessageId, ParentKind, Role, SessionEvent, SessionId, StopReason, TitleChange,
+    TitleSource, ToolCallId, ToolResult, ToolUse, Usage,
 };
 use time::OffsetDateTime;
 
@@ -89,6 +89,12 @@ pub trait Message: Send + 'static {
     /// The session this line says it belongs to, when the harness writes one per line. Differs
     /// from the file's session for a Claude Code subagent transcript, whose lines name the parent.
     fn parent_session(&self) -> Option<SessionId> {
+        None
+    }
+    /// How this line's session relates to [`Self::parent_session`], when the line names one.
+    /// `None` when the harness does not say (then readers should assume the cautious case, a
+    /// subagent).
+    fn parent_kind(&self) -> Option<ParentKind> {
         None
     }
     /// One model call: groups the rows a single API response is split into. Unique within the

@@ -509,8 +509,12 @@ impl SessionInfo {
             "directory": self.directory,
             "time": {"created": self.created, "updated": self.updated},
         });
-        if let Some(parent) = self.parent.as_ref().or(self.fork.as_ref()) {
+        // `parentID` is a subagent's parent, as in 1.x; a fork's source (no 1.x equivalent) goes
+        // under its own key so the two stay apart.
+        if let Some(parent) = &self.parent {
             info["parentID"] = Value::from(parent.as_str());
+        } else if let Some(fork) = &self.fork {
+            info["forkedFrom"] = Value::from(fork.as_str());
         }
         OpencodeMessage::session(serde_json::json!({ "info": info }))
             .expect("the info is an object")

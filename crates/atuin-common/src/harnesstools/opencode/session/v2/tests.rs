@@ -15,7 +15,7 @@ use super::super::{OpencodeSession, OpencodeSessions};
 use super::*;
 use crate::db::query;
 use crate::db::sqlite::Sqlite;
-use crate::harnesstools::session::model::{Content, Role, StopReason, Usage};
+use crate::harnesstools::session::model::{Content, ParentKind, Role, StopReason, Usage};
 use crate::harnesstools::session::{
     CaptureError, Checkpoint, Listener, Message, Session, SessionEvent, SessionId, Sessions,
 };
@@ -657,6 +657,7 @@ fn a_session_s_info_names_its_title_and_where_it_came_from() {
     assert_eq!(titled.id().map(String::from).as_deref(), Some("ses_1:title:Fix it"));
     assert_eq!(titled.title().and_then(|title| title.text).as_deref(), Some("Fix it"));
     assert_eq!(titled.parent_session().map(String::from).as_deref(), Some("ses_0"));
+    assert_eq!(titled.parent_kind(), Some(ParentKind::Fork));
     assert_eq!(titled.cwd(), Some(PathBuf::from("/work/proj")));
 }
 
@@ -853,6 +854,7 @@ async fn a_fork_s_copies_count_no_call_twice(#[future] db: Db) {
     assert_eq!(copy.id().map(String::from), Some(format!("msg_evt_{seq}")));
     let fork: Vec<_> = read.iter().filter(|(session, _)| session == "ses_f").collect();
     assert_eq!(fork[0].1.parent_session().map(String::from).as_deref(), Some("ses_p"));
+    assert_eq!(fork[0].1.parent_kind(), Some(ParentKind::Fork));
     assert_eq!(lines(&fork.into_iter().cloned().collect::<Vec<_>>()), [
         "System ses_f:title:Parent (fork #1): ",
         "User msg_evt_1: one",
@@ -1051,11 +1053,13 @@ async fn the_fixture_s_sessions_read_as_opencode_wrote_them(#[future] mixed: Db)
     // the subagent's session: its parent, and the prompt opencode wrote for it
     let subagent = of(SUBAGENT);
     assert_eq!(subagent[0].parent_session().map(String::from).as_deref(), Some(NATIVE));
+    assert_eq!(subagent[0].parent_kind(), Some(ParentKind::Subagent));
     assert_eq!(subagent[1].role(), Role::System);
 
     // the fork names what it copied, and its copied calls are the native session's
     let fork = of(FORK);
     assert_eq!(fork[0].parent_session().map(String::from).as_deref(), Some(NATIVE));
+    assert_eq!(fork[0].parent_kind(), Some(ParentKind::Fork));
     let turns = |messages: &[&OpencodeMessage]| -> HashSet<String> {
         messages.iter().filter(|m| m.usage().is_some()).filter_map(|m| m.turn_id()).collect()
     };

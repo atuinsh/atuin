@@ -13,8 +13,8 @@ use typed_builder::TypedBuilder;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
-    ToolUse, Usage,
+    Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
+    ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
@@ -403,6 +403,42 @@ impl Stamper {
 }
 
 /// Where a rollout's own history starts after the lines it inherited (codex-rs
+impl CodexMessage {
+    /// The session [`Message::parent_session`] names, and how this one relates to it. A spawned
+    /// thread is a subagent whatever else it records: one started with a copy of its parent's
+    /// history names that parent in `forked_from_id` too, like a fork does. codex-rs marks it in
+    /// `source` (`SessionSource::SubAgent`: `review`, `compact`, `thread_spawn`, ...).
+    fn parent(&self) -> Option<(SessionId, ParentKind)> {
+        let meta = self.own_meta()?;
+        if let Some(own) = self.context.session.as_ref()
+            && thread_of(own) != own.as_ref()
+            && let Some(base) = meta["history_base"]["thread_id"].as_str()
+        {
+            let thread = thread_of(own);
+            let parent = if base == thread {
+                thread.to_owned()
+            } else {
+                format!("{thread}_{base}")
+            };
+            return Some((SessionId::from(parent), ParentKind::Continuation));
+        }
+        let parent = [
+            &meta["forked_from_id"],
+            &meta["parent_thread_id"],
+            &meta["source"]["subagent"]["thread_spawn"]["parent_thread_id"],
+        ]
+        .into_iter()
+        .find_map(serde_json::Value::as_str)?;
+        let spawned = !meta["source"]["subagent"].is_null() || meta["parent_thread_id"].is_string();
+        let kind = if spawned {
+            ParentKind::Subagent
+        } else {
+            ParentKind::Fork
+        };
+        Some((SessionId::from(parent.to_owned()), kind))
+    }
+}
+
 /// `SessionMeta::subagent_history_start_ordinal`, set on a subagent forked with its parent's
 /// context: "earlier rollout records are inherited model context and stay out of child
 /// turn/item projection").
@@ -1092,26 +1128,11 @@ impl Message for CodexMessage {
     /// A rollout a thread was reverted into continues the rollout its `history_base` names
     /// (codex-rs `revert_thread.rs`), which is its parent here (see `session_id_of`).
     fn parent_session(&self) -> Option<SessionId> {
-        let meta = self.own_meta()?;
-        if let Some(own) = self.context.session.as_ref()
-            && thread_of(own) != own.as_ref()
-            && let Some(base) = meta["history_base"]["thread_id"].as_str()
-        {
-            let thread = thread_of(own);
-            return Some(SessionId::from(if base == thread {
-                thread.to_owned()
-            } else {
-                format!("{thread}_{base}")
-            }));
-        }
-        [
-            &meta["forked_from_id"],
-            &meta["parent_thread_id"],
-            &meta["source"]["subagent"]["thread_spawn"]["parent_thread_id"],
-        ]
-        .into_iter()
-        .find_map(serde_json::Value::as_str)
-        .map(|parent| SessionId::from(parent.to_owned()))
+        self.parent().map(|(parent, _)| parent)
+    }
+
+    fn parent_kind(&self) -> Option<ParentKind> {
+        self.parent().map(|(_, kind)| kind)
     }
 
     /// Only usage lines name their model call (see `usage_turn`): Codex items carry no
@@ -1745,15 +1766,29 @@ mod tests {
     /// `parent_thread_id` (codex-rs `SessionMeta`), or, in older rollouts, under
     /// `source.subagent.thread_spawn`.
     #[rstest]
-    #[case(serde_json::json!({"id": "child", "cwd": "/work", "forked_from_id": "parent"}))]
-    #[case(serde_json::json!({"id": "child", "cwd": "/work", "parent_thread_id": "parent"}))]
-    #[case(serde_json::json!({"id": "child", "cwd": "/work",
-        "source": {"subagent": {"thread_spawn": {"parent_thread_id": "parent", "depth": 1}}}}))]
-    fn session_meta_names_its_parent(#[case] payload: serde_json::Value) {
+    #[case::fork(
+        serde_json::json!({"id": "child", "cwd": "/work", "forked_from_id": "parent"}),
+        ParentKind::Fork
+    )]
+    #[case::spawned(
+        serde_json::json!({"id": "child", "cwd": "/work", "parent_thread_id": "parent"}),
+        ParentKind::Subagent
+    )]
+    #[case::legacy_spawn(serde_json::json!({"id": "child", "cwd": "/work",
+        "source": {"subagent": {"thread_spawn": {"parent_thread_id": "parent", "depth": 1}}}}),
+        ParentKind::Subagent
+    )]
+    // A subagent started with a copy of its parent's history names it as a fork does.
+    #[case::spawned_with_history(serde_json::json!({"id": "child", "cwd": "/work",
+        "forked_from_id": "parent", "source": {"subagent": "review"}}),
+        ParentKind::Subagent
+    )]
+    fn session_meta_names_its_parent(#[case] payload: serde_json::Value, #[case] kind: ParentKind) {
         let m = line(&serde_json::json!({
             "timestamp": "2026-09-18T10:00:00.000Z", "type": "session_meta", "payload": payload,
         }));
         assert_eq!(m.parent_session(), Some(SessionId::from("parent".to_owned())));
+        assert_eq!(m.parent_kind(), Some(kind));
     }
 
     /// A fork copies its parent's rollout, `session_meta` included, after its own
@@ -2224,6 +2259,7 @@ mod tests {
         assert_eq!(m.cwd(), Some(PathBuf::from("/work")));
         assert_eq!(m.git_branch().as_deref(), Some("main"));
         assert_eq!(m.parent_session(), Some(SessionId::from(parent.to_owned())));
+        assert_eq!(m.parent_kind(), Some(ParentKind::Continuation));
     }
 
     /// Before 0.32.0 (codex-rs 43809a454e) a rollout had no `type`/`payload` envelope: its first
