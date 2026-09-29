@@ -93,7 +93,7 @@ NIX_INSTALLER_VERSION=3.22.5
 NIX_INSTALLER_SHA256=9432d40ec1d0d4ebb6284848cc389bdb1bbf7aeb5c1cea11e7efc9daf0a1ec82
 
 install_shellcheck() {
-  fetch_verified "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.gz" \
+  fetch_verified "https://dl.tty0.dev/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.gz" \
     "$SHELLCHECK_SHA256" /tmp/shellcheck.tgz
   tar -xzf /tmp/shellcheck.tgz -C /tmp
   mv "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" "$TOOLS_BIN/"
@@ -101,7 +101,7 @@ install_shellcheck() {
 }
 
 install_vale() {
-  fetch_verified "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz" \
+  fetch_verified "https://dl.tty0.dev/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz" \
     "$VALE_SHA256" /tmp/vale.tgz
   tar -xzf /tmp/vale.tgz -C "$TOOLS_BIN" vale
   vale --version
@@ -123,7 +123,7 @@ install_codespell() {
 install_nix() {
   local sudo=""
   [ "$(id -u)" -eq 0 ] || sudo=sudo
-  fetch_verified "https://github.com/DeterminateSystems/nix-installer/releases/download/v${NIX_INSTALLER_VERSION}/nix-installer-x86_64-linux" \
+  fetch_verified "https://dl.tty0.dev/DeterminateSystems/nix-installer/releases/download/v${NIX_INSTALLER_VERSION}/nix-installer-x86_64-linux" \
     "$NIX_INSTALLER_SHA256" /tmp/nix-installer
   chmod +x /tmp/nix-installer
   $sudo /tmp/nix-installer install linux --no-confirm --init none --prefer-upstream-nix
