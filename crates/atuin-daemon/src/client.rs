@@ -35,9 +35,9 @@ use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
     CompactStoreReply, CompactStoreRequest, DeleteHistoryReply, DeleteHistoryRequest,
     EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest,
-    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
-    TailHistoryRequest,
+    ImportHistoryReply, ImportHistoryRequest, RebuildHistoryReply, RebuildHistoryRequest,
+    RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
+    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
@@ -230,6 +230,15 @@ impl HistoryClient {
 
     pub async fn rebuild_history(&mut self) -> Result<RebuildHistoryReply> {
         Ok(self.client.rebuild_history(RebuildHistoryRequest {}).await?.into_inner())
+    }
+
+    /// Import finished history (e.g. from a shell's history file), one entry per message so no
+    /// batch of long commands can exceed the daemon's message size limit.
+    pub async fn import_history(&mut self, histories: Vec<History>) -> Result<ImportHistoryReply> {
+        let requests = histories.into_iter().map(|h| ImportHistoryRequest {
+            entries: vec![h.into()],
+        });
+        Ok(self.client.import_history(futures::stream::iter(requests)).await?.into_inner())
     }
 
     pub async fn compact_store(&mut self) -> Result<CompactStoreReply> {

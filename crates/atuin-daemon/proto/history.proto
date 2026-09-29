@@ -83,6 +83,19 @@ message RebuildHistoryReply {
   uint32 protocol = 2;
 }
 
+// One chunk of client-streamed history from outside Atuin (e.g. a shell's history file). The daemon
+// adds entries it doesn't already have to the history db, the record store and its search index.
+message ImportHistoryRequest {
+  repeated HistoryEntry entries = 1;
+}
+
+message ImportHistoryReply {
+  // Number of entries imported; entries already in the history db are skipped.
+  uint64 imported = 1;
+  string version = 2;
+  uint32 protocol = 3;
+}
+
 // The daemon rewrites record store rows into the compact on-disk encoding and vacuums.
 message CompactStoreRequest {}
 
@@ -254,6 +267,8 @@ service History {
   rpc DeleteHistory(stream DeleteHistoryRequest) returns (DeleteHistoryReply);
 
   rpc RebuildHistory(RebuildHistoryRequest) returns (RebuildHistoryReply);
+
+  rpc ImportHistory(stream ImportHistoryRequest) returns (ImportHistoryReply);
 
   rpc CompactStore(CompactStoreRequest) returns (CompactStoreReply);
 

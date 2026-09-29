@@ -7,6 +7,7 @@ use atuin_client::history::{History, HistoryId};
 use atuin_common::time::OffsetDateTimeExt;
 use easy_cast::Cast;
 use futures::StreamExt;
+use prost::Message as _;
 use time::OffsetDateTime;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -20,10 +21,11 @@ use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, CompactStoreReply, CompactStoreRequest,
     DeleteHistoryReply, DeleteHistoryRequest, DeleteHistoryStreamExt, EndHistoryReply,
-    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, RebuildHistoryReply,
-    RebuildHistoryRequest, RegisterCommandOutputRequest, RegisterCommandOutputResponse,
-    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
-    StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
+    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, ImportHistoryReply,
+    ImportHistoryRequest, RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
+    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
+    TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -148,6 +150,51 @@ impl GrpcService for Service {
         self.journal.rebuild(&search_settings).await?;
 
         Ok(Response::new(RebuildHistoryReply {
+            version: crate::VERSION.to_string(),
+            protocol: crate::PROTOCOL_VERSION,
+        }))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn import_history(
+        &self,
+        request: Request<tonic::Streaming<ImportHistoryRequest>>,
+    ) -> Result<Response<ImportHistoryReply>, Status> {
+        // Import as the stream arrives, a bounded batch at a time, so no client can make the daemon
+        // buffer an unbounded amount before anything is saved.
+        const BATCH_ENTRIES: usize = 1000;
+        const BATCH_BYTES: usize = 1024 * 1024;
+
+        let mut stream = request.into_inner();
+        let journal = self.journal.clone();
+        // Spawned so a client disconnect cannot drop a batch half-way.
+        let imported = tokio::spawn(
+            async move {
+                let mut imported = 0;
+                let mut batch = Vec::new();
+                let mut batch_bytes = 0;
+
+                while let Some(chunk) = stream.message().await? {
+                    batch_bytes += chunk.encoded_len();
+                    for entry in chunk.entries {
+                        batch.push(History::try_from(entry)?);
+                    }
+                    if batch.len() >= BATCH_ENTRIES || batch_bytes >= BATCH_BYTES {
+                        imported += journal.import(std::mem::take(&mut batch)).await?;
+                        batch_bytes = 0;
+                    }
+                }
+                imported += journal.import(batch).await?;
+
+                Ok::<_, Status>(imported)
+            }
+            .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("import did not complete: {e}")))??;
+
+        Ok(Response::new(ImportHistoryReply {
+            imported: imported.cast(),
             version: crate::VERSION.to_string(),
             protocol: crate::PROTOCOL_VERSION,
         }))

@@ -35,8 +35,8 @@ pub use components::SearchComponent;
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
 pub use events::DaemonEvent;
 pub use history_journal::{
-    CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
-    GetCmdInFlightError, HistoryJournal, RegisterOutputError,
+    CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdImportError, CmdRebuildError,
+    FinishedCmd, GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
 pub use output_capture::{
     CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputLine, OutputMatch,
@@ -255,7 +255,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// **Note that you should never change the `Shutdown` and `Status` RPCs as they do not have the
 /// protocol version guards.** They are **assumed** to be stable and if you want to modify them, you
 /// **must** use the `reserved` keyword.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Boot the daemon using the new component-based architecture.
 ///

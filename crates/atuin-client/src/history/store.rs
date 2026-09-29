@@ -291,6 +291,35 @@ impl HistoryStore {
         self.delete_batch(entries.into_iter().map(|entry| entry.id)).await
     }
 
+    /// Add history from outside Atuin (e.g. a shell's history file) to `database` and the store,
+    /// returning the entries that were new.
+    ///
+    /// Importers mint fresh ids every run, so entries are matched by the database's
+    /// `(timestamp, cwd, command)` uniqueness. The rows are committed only after the store push:
+    /// committed first, a failed push would leave rows every retry skips, never to be synced.
+    ///
+    /// Entries go in chunks no larger than one store transaction, so each chunk lands in both or
+    /// neither. On error, earlier chunks stay imported.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, count = histories.len()), err)]
+    pub async fn import(&self, database: &Sqlite, histories: Vec<History>) -> Result<Vec<History>> {
+        let mut new = Vec::new();
+
+        for chunk in histories.chunks(APPEND_BATCH_SIZE) {
+            let pending = database.save_bulk_uncommitted(chunk).await?;
+            let inserted: HashSet<_> = pending.inserted.iter().collect();
+            let chunk_new: Vec<_> =
+                chunk.iter().filter(|h| inserted.contains(&h.id)).cloned().collect();
+
+            // Keep this order: if the push fails, returning early drops `pending`, which rolls the
+            // rows back so a retry imports them again.
+            self.push_batch(chunk_new.iter().cloned().map(HistoryRecord::Create)).await?;
+            pending.commit().await?;
+            new.extend(chunk_new);
+        }
+
+        Ok(new)
+    }
+
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn push(&self, history: History) -> Result<(RecordId, RecordIdx)> {
         // TODO(ellie): move the history store to its own file
@@ -930,5 +959,51 @@ mod tests {
         assert!(db.load(histories[1].id).await.unwrap().is_some());
         assert!(db.load(histories[2].id).await.unwrap().is_none());
         assert!(history_store.delete_batch([]).await.unwrap().is_empty());
+    }
+
+    /// A re-import mints fresh ids, but only entries new by `(timestamp, cwd, command)` land.
+    #[rstest]
+    #[tokio::test]
+    async fn import_skips_entries_the_db_already_has(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (store, _host_id, history_store) = parts;
+        let db = memory_db().await;
+
+        let first: Vec<_> = (0..3).map(history_n).collect();
+        assert_eq!(history_store.import(&db, first.clone()).await.unwrap(), first);
+
+        let reimport: Vec<_> = (0..4)
+            .map(|n| History {
+                id: format!("{:032x}", 100 + n).parse().unwrap(),
+                ..history_n(n)
+            })
+            .collect();
+        let imported = history_store.import(&db, reimport.clone()).await.unwrap();
+        assert_eq!(imported, vec![reimport[3].clone()]);
+
+        assert_eq!(db.history_count(true).await.unwrap(), 4);
+        assert_eq!(store.len_tag(&RecordTag::History).await.unwrap(), 4);
+    }
+
+    /// An import larger than one store transaction lands whole, chunk by chunk.
+    #[rstest]
+    #[tokio::test]
+    async fn import_spans_store_chunks(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (store, _host_id, history_store) = parts;
+        let db = memory_db().await;
+        let count = super::APPEND_BATCH_SIZE * 2 + 1;
+
+        let imported = history_store.import(&db, (0..count).map(history_n).collect()).await;
+
+        assert_eq!(imported.unwrap().len(), count);
+        assert_eq!(db.history_count(true).await.unwrap(), i64::conv(count));
+        assert_eq!(store.len_tag(&RecordTag::History).await.unwrap(), u64::conv(count));
     }
 }

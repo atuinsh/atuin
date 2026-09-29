@@ -257,7 +257,7 @@ impl Cmd {
 
         match self {
             Self::Setup => setup::run(&settings).await,
-            Self::Import(import) => import.run(&db).await,
+            Self::Import(import) => import.run(&settings, &db, sqlite_store).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
             Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
 
