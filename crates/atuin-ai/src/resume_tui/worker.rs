@@ -6,8 +6,8 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
-//!   Restoring a session from sync, or continuing it in another harness, which only an enter or
-//!   tab asks for, goes first.
+//!   Catching a session up with sync (or restoring it) to resume it, or continuing it in another
+//!   harness, which only an enter or tab asks for, goes first.
 //!
 //! Host names are read once beside them, so rows listed before they are known can be relabelled.
 
@@ -15,12 +15,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, SourceId};
 use atuin_client::settings::AiSessionFilterMode as FilterMode;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
-use super::resumer::{Continued, NotResumable, Restore, Resume, ResumePlan, Resumer};
+use super::catchup::Synced;
+use super::resumer::{Continued, NotResumable, Resume, Resumer};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -35,8 +36,9 @@ pub enum Request {
     Children(HarnessSession),
     /// Plan resuming a session (may walk the harness's session directories).
     Plan(Box<SessionRow>),
-    /// Write out the transcript of a session planned with a restore, and plan resuming it.
-    Restore(Box<SessionRow>, Restore),
+    /// Bring this machine's copy of a session to a head (the newest when `None`), restoring it
+    /// from sync when it isn't here, and plan resuming it ([`Resumer::sync`]).
+    Sync(Box<SessionRow>, Option<SourceId>),
     /// Count what continuing a session in another harness would flatten (reads all of it).
     Flatten(HarnessSession, PathBuf),
     /// Write a session out as a new session of another harness, and plan resuming that.
@@ -53,8 +55,9 @@ pub enum Response {
     Preview(HarnessSession, SessionPreview),
     Children(HarnessSession, Vec<SessionRow>),
     Plan(HarnessSession, Result<Resume, NotResumable>),
-    /// The session is restored (or couldn't be): the plan that resumes it.
-    Restored(HarnessSession, Result<ResumePlan, NotResumable>),
+    /// The session is caught up to a head (or couldn't be): the plan that resumes it, and what
+    /// was done.
+    Synced(HarnessSession, Option<SourceId>, Result<Synced, NotResumable>),
     Flattened(HarnessSession, Result<Flattened, String>),
     /// The session is continued in another harness (or couldn't be).
     Continued(HarnessSession, Result<Continued, NotResumable>),
@@ -146,7 +149,7 @@ struct Latest {
     preview: Option<Request>,
     children: Option<Request>,
     plan: Option<Request>,
-    restore: Option<Request>,
+    sync: Option<Request>,
     flatten: Option<Request>,
     continuation: Option<Request>,
 }
@@ -157,7 +160,7 @@ impl Latest {
             Request::Preview(_) => &mut self.preview,
             Request::Children(_) => &mut self.children,
             Request::Plan(_) => &mut self.plan,
-            Request::Restore(..) => &mut self.restore,
+            Request::Sync(..) => &mut self.sync,
             Request::Flatten(..) => &mut self.flatten,
             Request::Continue(..) => &mut self.continuation,
             Request::Search { .. } => return,
@@ -165,12 +168,12 @@ impl Latest {
         *slot = Some(request);
     }
 
-    /// The next to answer: a continuation, a restore or a plan first (an enter may be waiting
+    /// The next to answer: a continuation, a catch-up or a plan first (an enter may be waiting
     /// on it), then what the chooser shows, then children, then the preview.
     fn take(&mut self) -> Option<Request> {
         self.continuation
             .take()
-            .or_else(|| self.restore.take())
+            .or_else(|| self.sync.take())
             .or_else(|| self.plan.take())
             .or_else(|| self.flatten.take())
             .or_else(|| self.children.take())
@@ -213,10 +216,10 @@ async fn details(
                 Response::Children(session, children)
             }
             Request::Plan(row) => Response::Plan(row.handle.clone(), resumer.plan(&row).await),
-            Request::Restore(row, restore) => Response::Restored(
-                row.handle.clone(),
-                resumer.restore(source.as_ref(), &row, &restore).await,
-            ),
+            Request::Sync(row, head) => {
+                let synced = resumer.sync(source.as_ref(), &row, head.as_ref()).await;
+                Response::Synced(row.handle.clone(), head, synced)
+            }
             Request::Flatten(session, cwd) => {
                 let flattened = source
                     .rehydrate(&session, &cwd)
@@ -257,6 +260,16 @@ mod tests {
         }
     }
 
+    /// The next response but host names, which come whenever they are read.
+    async fn next(rx: &mut mpsc::UnboundedReceiver<Response>) -> Option<Response> {
+        loop {
+            match rx.recv().await {
+                Some(Response::HostNames(_)) => {}
+                other => return other,
+            }
+        }
+    }
+
     #[rstest]
     #[tokio::test]
     async fn answers_searches_previews_children_and_plans() {
@@ -268,7 +281,7 @@ mod tests {
         });
         let Some(Response::Results {
             generation, rows, ..
-        }) = rx.recv().await
+        }) = next(&mut rx).await
         else {
             panic!("expected results");
         };
@@ -277,19 +290,19 @@ mod tests {
         let root = rows.iter().find(|r| r.children == 4).expect("a grouped root");
 
         tx.send(Request::Children(root.handle.clone()));
-        let Some(Response::Children(_, children)) = rx.recv().await else {
+        let Some(Response::Children(_, children)) = next(&mut rx).await else {
             panic!("expected children");
         };
         assert_eq!(children.len(), 1, "the fork, not the subagents");
 
         tx.send(Request::Preview(root.handle.clone()));
-        let Some(Response::Preview(_, preview)) = rx.recv().await else {
+        let Some(Response::Preview(_, preview)) = next(&mut rx).await else {
             panic!("expected a preview");
         };
         assert!(preview.first_prompt.is_some() && preview.last_assistant.is_some());
 
         tx.send(Request::Plan(Box::new(root.clone())));
-        let Some(Response::Plan(handle, plan)) = rx.recv().await else {
+        let Some(Response::Plan(handle, plan)) = next(&mut rx).await else {
             panic!("expected a plan");
         };
         assert_eq!(handle, root.handle);

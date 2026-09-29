@@ -57,7 +57,9 @@ pub struct Stamp {
 }
 
 impl Stamp {
-    fn of(bytes: &[u8]) -> Self {
+    /// The stamp of a transcript whose content is `bytes`.
+    #[must_use]
+    pub fn of(bytes: &[u8]) -> Self {
         Self {
             len: bytes.len() as u64,
             digest: xxhash_rust::xxh3::xxh3_64(bytes),

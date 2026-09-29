@@ -8,6 +8,11 @@
 //!   resumed with the usual command. That happens only once a session is chosen (enter or tab in
 //!   the picker, or named by id), in this process, before the command is run or handed to the
 //!   shell widget, so the command the widget puts on the command line works as it stands.
+//! - A transcript that is here but behind is caught up with sync the same way, and a session
+//!   that went on separately on several machines resumes the branch picked in the chooser (the
+//!   newest, by id, with a note naming the others); see [`crate::resume_tui::catchup`]. A
+//!   session another host wrote to in the last few minutes asks first on a terminal (a note
+//!   otherwise): resuming it here branches it.
 //! - `--in <harness>` continues the session the id names in another harness instead: it is
 //!   written out there as a new session (its tool calls flattened into notes; see
 //!   [`atuin_common::harnesstools::continuation`]) and that is resumed, the same way. In the
@@ -22,17 +27,19 @@
 //!
 //! The picker reads the sidecar database directly and never waits for the daemon.
 
+use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 
-use atuin_client::ai_session::HarnessKind;
+use atuin_client::ai_session::{HarnessKind, Head, SessionHeads};
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
 use clap::Args;
 use eyre::{Result, bail};
 
+use crate::resume_tui::catchup::{self, Synced};
 use crate::resume_tui::fake::{FakeResumer, FakeSource};
-use crate::resume_tui::resumer::{HarnessResumer, Resume, shell_line};
+use crate::resume_tui::resumer::{HarnessResumer, shell_line};
 use crate::resume_tui::sidecar::{HostNameSource, SidecarSource};
 use crate::resume_tui::source::Relation;
 use crate::resume_tui::{
@@ -242,24 +249,18 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         {
             eprintln!("atuin: {note}");
         }
-        let plan = match resumer.plan(&row).await {
-            Ok(Resume {
-                plan,
-                restore: None,
-            }) => Ok(plan),
-            Ok(Resume {
-                restore: Some(restore),
-                ..
-            }) => {
-                let plan = resumer.restore(source.as_ref(), &row, &restore).await;
+        if !confirm_live_elsewhere(source.as_ref(), &row, &context, output).await? {
+            return Ok(());
+        }
+        let plan = match resumer.sync(source.as_ref(), &row, None).await {
+            Ok(synced) => {
                 // The widget reads stderr for the command: nothing else may go there.
-                if plan.is_ok()
-                    && output != Output::Widget
-                    && let Some(note) = &restore.note
-                {
-                    eprintln!("atuin: restored the session from sync; {note}");
+                if output != Output::Widget {
+                    for note in sync_notes(source.as_ref(), &row, &synced, &context).await {
+                        eprintln!("atuin: {note}");
+                    }
                 }
-                plan
+                Ok(synced.plan)
             }
             Err(why) => Err(why),
         };
@@ -290,6 +291,113 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         eprintln!("atuin: {note}");
     }
     finish(outcome, output)
+}
+
+/// Other hosts' names by id (simple form), for naming `heads`' hosts: read (which may be slow)
+/// only when one of them is another host's; `row`'s own host is always known.
+async fn head_host_names(
+    source: &dyn SessionSource,
+    row: &SessionRow,
+    context: &ResumeContext,
+    heads: &[&Head],
+) -> HashMap<String, String> {
+    let elsewhere = heads
+        .iter()
+        .any(|h| h.host.is_some_and(|host| host.0.as_simple().to_string() != context.host_id));
+    let mut names = if elsewhere {
+        source.host_names().await.unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+    names.entry(row.host_id.clone()).or_insert_with(|| row.hostname.clone());
+    names
+}
+
+/// `head`'s host as the picker names it: `this machine`, `@MacBook-Pro-3`.
+fn head_host(head: &Head, context: &ResumeContext, names: &HashMap<String, String>) -> String {
+    catchup::host_label(head, &context.host_id, &|id| names.get(id).cloned())
+}
+
+/// What to say before resuming a session whose newest branch another host wrote to in the last
+/// few minutes (see [`catchup::live_elsewhere`]); `None` when none did.
+fn live_elsewhere_note(
+    heads: &SessionHeads,
+    context: &ResumeContext,
+    now: time::OffsetDateTime,
+    names: &HashMap<String, String>,
+) -> Option<String> {
+    let head = heads.latest()?;
+    let ago = catchup::live_elsewhere(head, &context.host_id, now)?;
+    let ago = match ago.whole_minutes() {
+        0 => "just now".to_owned(),
+        n => format!("{n}m ago"),
+    };
+    Some(format!(
+        "still active on {} ({ago}): resuming here will branch the session",
+        head_host(head, context, names)
+    ))
+}
+
+/// Ask `question` on `out`, reading the answer from `input`: only yes is yes.
+fn ask(question: &str, input: &mut impl io::BufRead, out: &mut impl Write) -> io::Result<bool> {
+    write!(out, "{question} [y/N] ")?;
+    out.flush()?;
+    let mut answer = String::new();
+    input.read_line(&mut answer)?;
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
+}
+
+/// Before resuming `row` by id: when another host may still be working on it, say that resuming
+/// here will branch it, on a terminal as a question (`false` when the answer is no), else as a
+/// note on stderr. Not from the widget, which reads stderr for the command.
+async fn confirm_live_elsewhere(
+    source: &dyn SessionSource,
+    row: &SessionRow,
+    context: &ResumeContext,
+    output: Output,
+) -> Result<bool> {
+    if output == Output::Widget {
+        return Ok(true);
+    }
+    let Some(heads) = source.heads(&row.handle).await.ok().flatten() else {
+        return Ok(true);
+    };
+    let now = time::OffsetDateTime::now_utc();
+    let latest: Vec<&Head> = heads.latest().into_iter().collect();
+    if latest.first().is_none_or(|h| catchup::live_elsewhere(h, &context.host_id, now).is_none()) {
+        return Ok(true);
+    }
+    let names = head_host_names(source, row, context, &latest).await;
+    let Some(note) = live_elsewhere_note(&heads, context, now, &names) else {
+        return Ok(true);
+    };
+    if io::stdin().is_terminal() && io::stderr().is_terminal() {
+        let question = format!("atuin: {note}. Resume anyway?");
+        Ok(ask(&question, &mut io::stdin().lock(), &mut io::stderr())?)
+    } else {
+        eprintln!("atuin: {note}");
+        Ok(true)
+    }
+}
+
+/// What to tell the user about catching `row` up: what was done (`caught up 136 messages from
+/// @MacBook-Pro-3`), and for a session that went on separately on several machines, the
+/// branches not resumed.
+async fn sync_notes(
+    source: &dyn SessionSource,
+    row: &SessionRow,
+    synced: &Synced,
+    context: &ResumeContext,
+) -> Vec<String> {
+    let heads: Vec<&Head> = synced.head.iter().chain(&synced.others).collect();
+    let names = head_host_names(source, row, context, &heads).await;
+    let host = |h: &Head| head_host(h, context, &names);
+    let now = time::OffsetDateTime::now_utc();
+    synced
+        .status(row.handle.harness, &host)
+        .into_iter()
+        .chain(synced.other_branches(now, &host))
+        .collect()
 }
 
 /// `atuin ai resume <id> --in <harness>`: write the session `query` names out as a new session
@@ -382,6 +490,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::resume_tui::fake;
 
     #[derive(Parser)]
     struct Cli {
@@ -484,6 +593,77 @@ mod tests {
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "opencode"]).unwrap();
         assert_eq!(cli.cmd.continue_in, Some(ContinueIn::Opencode));
         assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "cursor"]).is_err());
+    }
+
+    /// Resuming by id a session another host wrote to minutes ago says it will branch it.
+    #[rstest]
+    #[case::minutes_ago(fake::OTHER_HOST_ID, 2, true)]
+    #[case::a_while_ago(fake::OTHER_HOST_ID, 10, false)]
+    #[case::this_host(fake::THIS_HOST_ID, 1, false)]
+    fn a_session_live_elsewhere_is_noted(
+        #[case] host: &str,
+        #[case] minutes: i64,
+        #[case] noted: bool,
+    ) {
+        let mut heads = fake::diverged_branches().heads;
+        heads.heads[0].host = Some(fake::host(host));
+        heads.heads[0].last_at = fake::now() - time::Duration::minutes(minutes);
+        let names = HashMap::from([(fake::OTHER_HOST_ID.to_owned(), "buildbox.lan".to_owned())]);
+        let note = live_elsewhere_note(&heads, &fake::context(), fake::now(), &names);
+        assert_eq!(note.is_some(), noted, "{note:?}");
+        if noted {
+            assert_eq!(
+                note.unwrap(),
+                "still active on @buildbox (2m ago): resuming here will branch the session"
+            );
+        }
+    }
+
+    /// On a terminal it asks, and only yes goes on.
+    #[rstest]
+    #[case("y\n", true)]
+    #[case("YES\n", true)]
+    #[case("\n", false)]
+    #[case("n\n", false)]
+    #[case("", false)]
+    fn asking_takes_only_yes(#[case] answer: &str, #[case] yes: bool) {
+        let mut out = Vec::new();
+        assert_eq!(ask("Resume anyway?", &mut answer.as_bytes(), &mut out).unwrap(), yes);
+        assert_eq!(String::from_utf8(out).unwrap(), "Resume anyway? [y/N] ");
+    }
+
+    /// A diverged session resumed by id resumes the latest branch, saying what was caught up
+    /// and naming the branches it didn't resume.
+    #[rstest]
+    #[tokio::test]
+    async fn resuming_a_diverged_session_by_id_names_the_other_branches() {
+        use crate::resume_tui::catchup::Caught;
+
+        let source = FakeSource::new();
+        let row = direct_match(&source, fake::DIVERGED).await.unwrap().unwrap();
+        let heads = fake::diverged_branches().heads.heads;
+        let plan = FakeResumer::default().plan(&row).await.unwrap().plan;
+        let synced = Synced {
+            plan,
+            caught: Caught::Switched { rows: 40 },
+            head: Some(heads[0].clone()),
+            others: vec![heads[1].clone()],
+        };
+        let notes = sync_notes(&source, &row, &synced, &fake::context()).await;
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert_eq!(
+            notes[0],
+            "switched to @buildbox's branch: 40 messages added beside this machine's"
+        );
+        assert!(
+            notes[1].starts_with(
+                "this session went on separately on several machines; resuming @buildbox's branch \
+                 (the latest). Not resumed: this machine · "
+            ),
+            "{}",
+            notes[1]
+        );
+        assert!(notes[1].ends_with(" · 24 msgs"), "{}", notes[1]);
     }
 
     #[rstest]

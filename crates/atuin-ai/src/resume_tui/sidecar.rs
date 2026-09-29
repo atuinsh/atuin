@@ -6,13 +6,14 @@
 //! picker first asks, and rows show a short form of the id until then, or for good when the store
 //! or key can't be read.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{
-    AiSessionDatabase, HarnessSession, HostSet, Session, SessionFilter as DbFilter, SessionRelation,
+    AiSessionDatabase, HarnessSession, HostSet, Session, SessionFilter as DbFilter, SessionHeads,
+    SessionRelation, SourceId,
 };
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -231,6 +232,8 @@ impl SidecarSource {
             usage: s.usage,
             children: u32::try_from(s.child_count).unwrap_or(u32::MAX),
             matched: None,
+            heads: s.heads,
+            diverged: s.diverged,
         }
     }
 }
@@ -345,6 +348,29 @@ impl SessionSource for SidecarSource {
             .ok_or_else(|| eyre::eyre!("the session isn't in the AI session database"))
     }
 
+    async fn heads(&self, session: &HarnessSession) -> Result<Option<SessionHeads>> {
+        Ok(self.db.heads(session).await?)
+    }
+
+    async fn branch(
+        &self,
+        session: &HarnessSession,
+        head: &SourceId,
+        cwd: &Path,
+    ) -> Result<RehydrateSession> {
+        let stored = self
+            .db
+            .get_session(session)
+            .await?
+            .ok_or_else(|| eyre::eyre!("the session isn't in the AI session database"))?;
+        let path = self.db.branch_path(session, head).await?;
+        Ok(stored.rehydrate(path, cwd.to_owned()))
+    }
+
+    async fn source_ids(&self, session: &HarnessSession) -> Result<HashSet<String>> {
+        Ok(self.db.messages(session).map_ok(|m| m.source_id.to_string()).try_collect().await?)
+    }
+
     async fn host_names(&self) -> Result<HashMap<String, String>> {
         Ok(self.names().await.clone())
     }
@@ -412,6 +438,39 @@ mod tests {
             limit: 50,
             ..SessionFilter::default()
         }
+    }
+
+    /// A session's heads, the rows down one of them, and every id it holds, for catching a copy
+    /// up; rows carry them too.
+    #[rstest]
+    #[tokio::test]
+    async fn reads_heads_and_branches() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let first = message("root", None, Role::User, "fix the flaky sync test", 0);
+        let mut reply = message("root", None, Role::Assistant, "switched to a fixed clock", 1);
+        reply.parent_source_id = Some(first.source_id.clone());
+        for m in [first, reply] {
+            db.append(&m).await.unwrap();
+        }
+        let source = SidecarSource::new(db, &context(), None);
+        let root = handle("root");
+        let heads = source.heads(&root).await.unwrap().unwrap();
+        assert_eq!(heads.heads.len(), 1);
+        assert!(!heads.diverged);
+        let head = heads.heads[0].source_id.clone();
+        assert_eq!(head.as_ref(), "root-1");
+
+        let branch = source.branch(&root, &head, Path::new("/here")).await.unwrap();
+        let ids: Vec<&str> = branch.messages.iter().map(|m| m.source_id.as_str()).collect();
+        assert_eq!(ids, ["root-0", "root-1"]);
+        assert_eq!(branch.cwd, Path::new("/here"));
+        let all = source.source_ids(&root).await.unwrap();
+        assert_eq!(all, HashSet::from(["root-0".to_owned(), "root-1".to_owned()]));
+
+        let rows = source.find_by_id("root").await.unwrap();
+        let row = rows.iter().find(|r| r.handle == root).unwrap();
+        assert_eq!(row.heads, heads.heads);
+        assert!(row.branches().is_empty(), "one way: no branches to pick");
     }
 
     #[rstest]

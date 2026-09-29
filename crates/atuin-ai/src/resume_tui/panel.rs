@@ -60,6 +60,15 @@ pub fn forks(children: Option<&[SessionRow]>) -> Option<String> {
     }
 }
 
+/// A session that went on separately on several machines: `2 branches`. `None` for one that
+/// went one way.
+pub fn branches(row: &SessionRow) -> Option<String> {
+    match row.branches().len() {
+        0 | 1 => None,
+        n => Some(format!("{n} branches")),
+    }
+}
+
 /// Where a session ran, muted: `atuin · feat/ai-sessions · @MacBook-Pro-3`. The branch is left
 /// out when detached, and the host when it is this one (`here`).
 pub fn place(row: &SessionRow, here: &str, theme: &Theme) -> Vec<Span<'static>> {
@@ -192,6 +201,9 @@ impl State {
         when.push(Span::styled(format!("{} messages", row.message_count), muted));
         if let Some(forks) = forks(self.children.get(&row.handle).map(Vec::as_slice)) {
             when.extend([sep(), Span::styled(forks, muted)]);
+        }
+        if let Some(branches) = branches(row) {
+            when.extend([sep(), Span::styled(branches, muted)]);
         }
         let started = clock::When::of(now, row.started_at, tz).phrase();
         when.extend([sep(), Span::styled(format!("started {started}"), muted)]);
