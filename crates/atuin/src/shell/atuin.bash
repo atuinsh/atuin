@@ -29,6 +29,11 @@ __atuin_mark_output_start() {
     if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
         # Current pty-proxy is an older version that expects OSC 133; new
         # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
+        if [[ -n ${__atuin_needs_osc133_reset-} ]]; then
+            unset -v __atuin_needs_osc133_reset
+            # Old pty-proxy will reset an in-progress capture on a `B` marker.
+            printf '\033]133;B\a'
+        fi
         printf '\033]133;C\a'
     else
         printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"
@@ -776,9 +781,8 @@ fi
 if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] && [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
     # We're running in an old pty-proxy that expects OSC 133 markers. The outer
     # shell may have already sent a `C` marker, causing the proxy to start
-    # capturing output. We need to clear this state, or else this subshell's
-    # first prompt and command will be erroneously included in the output of
-    # the first command itself. We can do this by sending an `A` marker;
-    # another `C` won't work.
-    printf '\033]133;A\a'
+    # capturing output. We need to clear this state before the first command's
+    # output starts, or else the prompt and command itself will be erroneously
+    # included in the output.
+    __atuin_needs_osc133_reset=1
 fi
