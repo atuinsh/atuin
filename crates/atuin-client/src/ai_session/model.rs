@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::session::{
-    Content, Role, StopReason, TitleChange, TitleSource, Usage,
+    Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage,
 };
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::RecordId;
@@ -55,6 +55,11 @@ pub struct Message {
     pub source_id: SourceId,
     #[builder(default)]
     pub parent: Option<HarnessSession>,
+    /// How this session relates to [`Self::parent`]. Absent in records written before it was
+    /// captured, and whenever the harness did not say.
+    #[builder(default)]
+    #[serde(default)]
+    pub parent_kind: Option<ParentKind>,
     #[builder(default)]
     pub parent_source_id: Option<SourceId>,
     pub timestamp: OffsetDateTime,
@@ -102,6 +107,9 @@ pub struct Session {
     pub handle: HarnessSession,
     #[builder(default)]
     pub parent: Option<HarnessSession>,
+    /// How this session relates to [`Self::parent`], when known.
+    #[builder(default)]
+    pub parent_kind: Option<ParentKind>,
     #[builder(default)]
     pub cwd: Option<PathBuf>,
     #[builder(default)]
@@ -123,6 +131,9 @@ pub struct Session {
     pub title_source: Option<TitleSource>,
     #[builder(default)]
     pub preview: Option<String>,
+    /// The session's most recent assistant reply, clipped: how it ended, or where it is now.
+    #[builder(default)]
+    pub last_reply: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -130,6 +141,8 @@ pub struct SessionMatch {
     pub session: Session,
     pub title: HighlightedString,
     pub preview: HighlightedString,
+    /// Position of the best-matching message within its session, in transcript order.
+    pub message_index: u64,
     pub score: f64,
 }
 

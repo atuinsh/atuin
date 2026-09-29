@@ -1,12 +1,13 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use atuin_common::db::sqlite::fts::{TextHighlighter, match_expression};
+use atuin_common::db::sqlite::fts::{TextHighlighter, match_any_expression, match_expression};
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::session::{
-    Checkpoint, Content, Role, TitleChange, TitleSource, Usage,
+    Checkpoint, Content, ParentKind, Role, TitleChange, TitleSource, Usage,
 };
+use atuin_common::string::TruncateCharsExt;
 use atuin_domain::record::RecordId;
 use futures::{Stream, StreamExt, TryStreamExt};
 use sqlx::SqliteConnection;
@@ -77,6 +78,8 @@ struct SessionRow {
     title: Option<String>,
     title_source: Option<i64>,
     preview: Option<String>,
+    last_reply: Option<String>,
+    parent_kind: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -182,9 +185,7 @@ struct SearchRow {
     session: SessionRow,
     match_content: String,
     match_content_z: Option<Vec<u8>>,
-    match_cwd: Option<String>,
-    match_git_branch: Option<String>,
-    match_model: Option<String>,
+    match_index: i64,
     score: f64,
 }
 
@@ -321,6 +322,7 @@ impl AiSessionDatabase {
         // cleared title clears; the capture pipeline stamps every row with the ranked title.
         let title = msg.session_title.as_deref();
         let preview = Self::preview_text(msg);
+        let last_reply = Self::reply_text(msg);
 
         // Usage is not folded in here: it is attributed per model call below. A structural row
         // (usage, title, session context, a tree node with nothing to show) is no message.
@@ -328,12 +330,14 @@ impl AiSessionDatabase {
         db::query(
             "INSERT INTO sessions (
                 harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
-                started_at, updated_at, message_count, title, title_source, preview
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, updated_at, message_count, title, title_source, preview, last_reply,
+                last_reply_at, parent_kind
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
                 parent_session_id = COALESCE(excluded.parent_session_id, \
              sessions.parent_session_id),
+                parent_kind = COALESCE(excluded.parent_kind, sessions.parent_kind),
                 cwd = COALESCE(excluded.cwd, sessions.cwd),
                 git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
                 model = COALESCE(excluded.model, sessions.model),
@@ -344,7 +348,11 @@ impl AiSessionDatabase {
              ELSE sessions.title END,
                 title_source = CASE WHEN excluded.updated_at >= sessions.updated_at THEN \
              excluded.title_source ELSE sessions.title_source END,
-                preview = COALESCE(sessions.preview, excluded.preview)",
+                preview = COALESCE(sessions.preview, excluded.preview),
+                last_reply = CASE WHEN excluded.last_reply_at >= COALESCE(sessions.last_reply_at, \
+             excluded.last_reply_at) THEN excluded.last_reply ELSE sessions.last_reply END,
+                last_reply_at = MAX(COALESCE(sessions.last_reply_at, excluded.last_reply_at), \
+             COALESCE(excluded.last_reply_at, sessions.last_reply_at))",
         )
         .bind(harness)
         .bind(session_id)
@@ -359,6 +367,9 @@ impl AiSessionDatabase {
         .bind(title)
         .bind(msg.session_title_source.map(Self::title_source_repr))
         .bind(preview)
+        .bind(last_reply.as_deref())
+        .bind(last_reply.as_ref().map(|_| timestamp))
+        .bind(msg.parent.as_ref().and(msg.parent_kind).map(Self::parent_kind_repr))
         .execute(&mut *tx)
         .await?;
 
@@ -567,8 +578,8 @@ impl AiSessionDatabase {
         let row: Option<SessionRow> = db::query_as(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
-             FROM sessions WHERE harness = ? AND session_id = ?",
+             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview, \
+             last_reply, parent_kind FROM sessions WHERE harness = ? AND session_id = ?",
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
@@ -578,25 +589,33 @@ impl AiSessionDatabase {
         row.map(Self::session_from_row).transpose()
     }
 
+    /// Sessions newest first, of `harness` and active at or after `updated_since` when given.
     pub async fn list_sessions(
         &self,
         harness: Option<HarnessKind>,
+        updated_since: Option<OffsetDateTime>,
     ) -> Result<Vec<Session>, DbError> {
         let mut sql = String::from(
             "SELECT harness, session_id, parent_harness, parent_session_id, cwd, git_branch, \
              model, started_at, updated_at, message_count, usage_input, usage_output, \
-             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview \
-             FROM sessions WHERE 1 = 1",
+             usage_cache_read, usage_cache_write, usage_reasoning, title, title_source, preview, \
+             last_reply, parent_kind FROM sessions WHERE 1 = 1",
         );
 
         if harness.is_some() {
             sql.push_str(" AND harness = ?");
+        }
+        if updated_since.is_some() {
+            sql.push_str(" AND updated_at >= ?");
         }
         sql.push_str(" ORDER BY updated_at DESC");
 
         let mut query = db::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(sql));
         if let Some(harness) = harness {
             query = query.bind(harness as i64);
+        }
+        if let Some(since) = updated_since {
+            query = query.bind(Self::millis(since));
         }
 
         let rows: Vec<SessionRow> = query.fetch_all(self.db.pool()).await?;
@@ -644,15 +663,39 @@ impl AiSessionDatabase {
         harness: Option<HarnessKind>,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
+        self.search_in(query, harness, None, false, limit)
+    }
+
+    /// [`Self::search`], optionally restricted to sessions whose directory is `cwd` or beneath it.
+    /// The session's directory, not each message's: some harnesses (Codex) record the cwd only on
+    /// metadata rows, never on the prompts and replies that actually match.
+    pub fn search_in(
+        &self,
+        query: &str,
+        harness: Option<HarnessKind>,
+        cwd: Option<&str>,
+        any_term: bool,
+        limit: u32,
+    ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
         let pool = self.db.pool().clone();
         let query = query.to_owned();
+        let cwd = cwd.map(|c| c.trim_end_matches(['/', '\\']).to_owned());
 
         async_stream::try_stream! {
-            let Some(expr) = match_expression(&query) else {
+            let expr = if any_term { match_any_expression(&query) } else { match_expression(&query) };
+            let Some(expr) = expr else {
                 return;
             };
 
             let harness_clause = if harness.is_some() { " AND m.harness = ?" } else { "" };
+            let cwd_clause = if cwd.is_some() {
+                // The directory itself or anything beneath it, whichever separator the recording
+                // machine used (`\` on Windows).
+                " AND m.session IN (SELECT id FROM sessions \
+                 WHERE cwd = ? OR substr(cwd, 1, length(?) + 1) IN (? || '/', ? || '\\'))"
+            } else {
+                ""
+            };
             let limit_clause = if limit == 0 { "" } else { " LIMIT ?" };
 
             // messages_fts is contentless: it can rank (bm25) but cannot render highlight() or
@@ -663,16 +706,18 @@ impl AiSessionDatabase {
                  SELECT messages_fts.rowid AS rowid, m.session AS sid, \
                  -bm25(messages_fts) AS score \
                  FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
-                 WHERE messages_fts MATCH ?{harness_clause}), \
+                 WHERE messages_fts MATCH ?{harness_clause}{cwd_clause}), \
                  best AS (SELECT rowid, max(score) AS score FROM ranked \
                  GROUP BY sid ORDER BY score DESC{limit_clause}) \
                  SELECT s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, \
                  s.git_branch, s.model, s.started_at, s.updated_at, s.message_count, \
                  s.usage_input, s.usage_output, s.usage_cache_read, s.usage_cache_write, \
                  s.usage_reasoning, s.title, s.title_source, \
-                 s.preview, \
-                 m.content AS match_content, m.content_z AS match_content_z, m.cwd AS match_cwd, \
-                 m.git_branch AS match_git_branch, m.model AS match_model, \
+                 s.preview, s.last_reply, s.parent_kind, \
+                 m.content AS match_content, m.content_z AS match_content_z, \
+                 (SELECT count(*) FROM messages p WHERE p.session = m.session \
+                 AND (p.timestamp < m.timestamp \
+                 OR (p.timestamp = m.timestamp AND p.id < m.id))) AS match_index, \
                  best.score AS score FROM best \
                  JOIN messages m ON m.rowid = best.rowid \
                  JOIN sessions s ON s.id = m.session \
@@ -683,6 +728,9 @@ impl AiSessionDatabase {
             if let Some(harness) = harness {
                 stmt = stmt.bind(harness as i64);
             }
+            if let Some(cwd) = cwd {
+                stmt = stmt.bind(cwd.clone()).bind(cwd.clone()).bind(cwd.clone()).bind(cwd);
+            }
             if limit != 0 {
                 stmt = stmt.bind(i64::from(limit));
             }
@@ -691,18 +739,14 @@ impl AiSessionDatabase {
             let mut rows = stmt.fetch(&pool);
             while let Some(row) = rows.try_next().await? {
                 let title = row.session.title.clone().unwrap_or_default();
-                let body = Self::body_from_parts(
-                    row.match_content,
-                    row.match_content_z,
-                    row.match_cwd.as_deref(),
-                    row.match_git_branch.as_deref(),
-                    row.match_model.as_deref(),
-                )
+                // Index the metadata (cwd, branch, model) but leave it out of the preview: callers
+                // show it separately, and appended it only reads as noise at the end of a snippet.
+                let body = Self::body_from_parts(row.match_content, row.match_content_z, None, None, None)
                 .unwrap_or_else(|err| {
                     warn!(?err, "failed to decode matched ai-session message; empty preview");
                     String::new()
                 });
-                let preview = Self::preview_snippet(&body, &query, SNIPPET_TOKENS);
+                let preview = Self::preview_snippet(&body, &query, SNIPPET_TOKENS, any_term);
 
                 // No highlight spans are produced: consumers only render the plain text, so the
                 // marker machinery isn't worth its keep. sanitize() strips any stray marker
@@ -712,6 +756,7 @@ impl AiSessionDatabase {
                     title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
                     preview: highlighter
                         .as_highlighted(highlighter.sanitize(&preview).into_owned()),
+                    message_index: u64::try_from(row.match_index).unwrap_or(0),
                     score: row.score,
                 };
             }
@@ -805,7 +850,9 @@ impl AiSessionDatabase {
     /// matched it: each term is a phrase of folded tokens that must appear consecutively in the
     /// body's token stream (so `app` matches the token `app`, not the word `apple`, and `foo-bar`
     /// matches `foo bar` across words).
-    fn preview_hit(words: &[&str], query: &str) -> Option<usize> {
+    /// With `prefix`, each term's last token matches any token it starts, as the any-term
+    /// fallback's `"term"*` does in FTS5, so the window lands on `deployment` for `deploy`.
+    fn preview_hit(words: &[&str], query: &str, prefix: bool) -> Option<usize> {
         let phrases: Vec<Vec<String>> = query
             .split_whitespace()
             .map(|term| Self::fts_tokens(term).collect())
@@ -825,8 +872,12 @@ impl AiSessionDatabase {
         phrases
             .iter()
             .filter_map(|phrase| {
-                (0..tokens.len().saturating_sub(phrase.len() - 1))
-                    .find(|&i| phrase.iter().zip(&tokens[i..]).all(|(p, (_, t))| p == t))
+                let last = phrase.len() - 1;
+                (0..tokens.len().saturating_sub(last)).find(|&i| {
+                    phrase.iter().zip(&tokens[i..]).enumerate().all(|(k, (p, (_, t)))| {
+                        p == t || (prefix && k == last && t.starts_with(p.as_str()))
+                    })
+                })
             })
             .min()
             .map(|i| tokens[i].0)
@@ -846,7 +897,7 @@ impl AiSessionDatabase {
     /// truncation. Bounded by a char budget so whitespace-free blobs (minified output) cannot
     /// blow up the preview. The replacement for FTS5's `snippet()`, which the contentless index
     /// cannot render.
-    fn preview_snippet(body: &str, query: &str, max_tokens: usize) -> String {
+    fn preview_snippet(body: &str, query: &str, max_tokens: usize, prefix: bool) -> String {
         const MAX_CHARS: usize = 400;
         const LEAD_CHARS: usize = 80;
 
@@ -855,7 +906,7 @@ impl AiSessionDatabase {
             return String::new();
         }
 
-        let hit = Self::preview_hit(&words, query).unwrap_or(0);
+        let hit = Self::preview_hit(&words, query, prefix).unwrap_or(0);
 
         // Lead-in: a little context before the match, capped in words and chars so a giant
         // preceding blob cannot push the match itself out of the char budget.
@@ -927,15 +978,46 @@ impl AiSessionDatabase {
         Ok((String::new(), Some(compressed)))
     }
 
+    /// The text of an assistant message, clipped for storage, or `None` for any other message.
+    fn reply_text(msg: &Message) -> Option<String> {
+        if msg.role != Role::Assistant {
+            return None;
+        }
+        let text = msg
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                Content::Text(text) => Some(text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.is_empty()).then(|| Self::clip_summary(&text))
+    }
+
     fn preview_text(msg: &Message) -> Option<String> {
         if msg.role != Role::User {
             return None;
         }
 
         msg.content.iter().find_map(|content| match content {
-            Content::Text(text) => Some(text.clone()),
+            Content::Text(text) => Some(Self::clip_summary(text)),
             _ => None,
         })
+    }
+
+    /// A session summary field (`preview`, `last_reply`) clipped for storage: every session
+    /// listing carries them, and displays show a line of each, so a pasted multi-kilobyte prompt
+    /// kept whole would only weigh down every list.
+    fn clip_summary(text: &str) -> String {
+        const MAX_CHARS: usize = 600;
+        let head = text.truncate_chars(MAX_CHARS);
+        if head.len() < text.len() {
+            format!("{head}…")
+        } else {
+            text.to_owned()
+        }
     }
 
     fn searchable_body(msg: &Message) -> String {
@@ -1284,6 +1366,23 @@ impl AiSessionDatabase {
         format!("{role}: {body}\n")
     }
 
+    const fn parent_kind_repr(kind: ParentKind) -> i64 {
+        match kind {
+            ParentKind::Subagent => 0,
+            ParentKind::Fork => 1,
+            ParentKind::Continuation => 2,
+        }
+    }
+
+    const fn parent_kind_from_repr(n: i64) -> Option<ParentKind> {
+        Some(match n {
+            0 => ParentKind::Subagent,
+            1 => ParentKind::Fork,
+            2 => ParentKind::Continuation,
+            _ => return None,
+        })
+    }
+
     const fn title_source_repr(source: TitleSource) -> i64 {
         match source {
             TitleSource::Summary => 0,
@@ -1329,6 +1428,8 @@ impl AiSessionDatabase {
             .title(row.title)
             .title_source(row.title_source.and_then(Self::title_source_from_repr))
             .preview(row.preview)
+            .last_reply(row.last_reply)
+            .parent_kind(row.parent_kind.and_then(Self::parent_kind_from_repr))
             .build())
     }
 }
@@ -1337,7 +1438,7 @@ impl AiSessionDatabase {
 mod tests {
     use atuin_common::db;
     use atuin_common::harnesstools::session::{
-        Checkpoint, Content, Role, ToolCallId, ToolResult, ToolUse, Usage,
+        Checkpoint, Content, ParentKind, Role, ToolCallId, ToolResult, ToolUse, Usage,
     };
     use atuin_domain::record::RecordId;
     use futures::TryStreamExt;
@@ -1401,6 +1502,8 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+        sqlx::raw_sql(include_str!("migrations/0003_last_reply.sql")).execute(pool).await.unwrap();
+        sqlx::raw_sql(include_str!("migrations/0004_parent_kind.sql")).execute(pool).await.unwrap();
 
         let db = AiSessionDatabase { db: sqlite };
         let hits: Vec<SessionMatch> = db.search("hello", None, 0).try_collect().await.unwrap();
@@ -1520,9 +1623,26 @@ mod tests {
             db.append(&m).await.unwrap();
         }
 
-        let sessions = db.list_sessions(None).await.unwrap();
+        let sessions = db.list_sessions(None, None).await.unwrap();
         assert_eq!(sessions.len(), 3);
         assert!(sessions.windows(2).all(|w| w[0].updated_at >= w[1].updated_at));
+    }
+
+    #[rstest]
+    #[case::all(0, &["session-2", "session-1", "session-0"])]
+    #[case::inclusive(1, &["session-2", "session-1"])]
+    #[case::none(3, &[])]
+    #[tokio::test]
+    async fn list_filters_by_activity_since(#[case] since: i64, #[case] want: &[&str]) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in three_sessions_oldest_first() {
+            db.append(&m).await.unwrap();
+        }
+
+        let since = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(since);
+        let sessions = db.list_sessions(None, Some(since)).await.unwrap();
+        let ids: Vec<_> = sessions.iter().map(|s| s.handle.session.as_ref()).collect();
+        assert_eq!(ids, want);
     }
 
     #[rstest]
@@ -1903,6 +2023,180 @@ mod tests {
             db.search("shared", Some(HarnessKind::Codex), 0).try_collect().await.unwrap();
         assert_eq!(only_codex.len(), 1);
         assert_eq!(only_codex[0].session.handle, codex);
+    }
+
+    fn reply_in(session: &HarnessSession, index: i64, text: &str) -> Message {
+        let mut msg = message_in(session, index, text);
+        msg.role = Role::Assistant;
+        msg
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn last_reply_is_the_newest_assistant_text_whatever_the_arrival_order() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&reply_in(&session, 2, "all tests pass now")).await.unwrap();
+        db.append(&reply_in(&session, 1, "looking into it")).await.unwrap();
+        db.append(&message_in(&session, 3, "thanks")).await.unwrap();
+
+        let s = db.get_session(&session).await.unwrap().unwrap();
+        assert_eq!(s.last_reply.as_deref(), Some("all tests pass now"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_session_keeps_how_it_relates_to_its_parent() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let parent = handle(HarnessKind::ClaudeCode, "parent");
+        let mut first = message_in(&session, 0, "copied from the parent");
+        first.parent = Some(parent.clone());
+        first.parent_kind = Some(ParentKind::Fork);
+        db.append(&first).await.unwrap();
+        // A record from an older build carries the parent but not the kind: it must not erase it.
+        let mut older = message_in(&session, 1, "carried on");
+        older.parent = Some(parent);
+        db.append(&older).await.unwrap();
+
+        let s = db.get_session(&session).await.unwrap().unwrap();
+        assert_eq!(s.parent_kind, Some(ParentKind::Fork));
+        let listed = db.list_sessions(None, None).await.unwrap();
+        assert_eq!(listed[0].parent_kind, Some(ParentKind::Fork));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn session_preview_and_last_reply_are_clipped() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&message_in(&session, 0, &"p".repeat(5_000))).await.unwrap();
+        db.append(&reply_in(&session, 1, &"r".repeat(5_000))).await.unwrap();
+
+        let s = db.get_session(&session).await.unwrap().unwrap();
+        assert_eq!(s.preview.unwrap(), format!("{}…", "p".repeat(600)));
+        assert_eq!(s.last_reply.unwrap(), format!("{}…", "r".repeat(600)));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn any_term_preview_windows_around_a_late_prefix_match() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let filler = "lorem ".repeat(200);
+        db.append(&message_in(&sample_handle(), 0, &format!("{filler}the deployment failed")))
+            .await
+            .unwrap();
+
+        let hits: Vec<_> = db.search_in("deploy", None, None, true, 0).try_collect().await.unwrap();
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(preview.contains("deployment failed"), "{preview}");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn any_term_search_matches_some_words_and_prefixes() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        db.append(&message_in(&sample_handle(), 0, "the deployment failed")).await.unwrap();
+
+        let strict: Vec<_> =
+            db.search_in("deploy broken", None, None, false, 0).try_collect().await.unwrap();
+        assert!(strict.is_empty(), "no message has both whole words");
+        let loose: Vec<_> =
+            db.search_in("deploy broken", None, None, true, 0).try_collect().await.unwrap();
+        assert_eq!(loose.len(), 1, "`deploy` matches `deployment` as a prefix");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_in_filters_by_directory_and_its_children_only() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let in_dir = |id: &str, cwd: &str| {
+            let mut msg = message_in(&handle(HarnessKind::ClaudeCode, id), 0, "shared keyword");
+            msg.cwd = Some(std::path::PathBuf::from(cwd));
+            msg
+        };
+        for msg in [
+            in_dir("root", "/work/atuin"),
+            in_dir("child", "/work/atuin/crates"),
+            in_dir("sibling", "/work/atuin.sh"),
+        ] {
+            db.append(&msg).await.unwrap();
+        }
+
+        let mut found: Vec<String> = db
+            .search_in("shared", None, Some("/work/atuin/"), false, 0)
+            .map_ok(|m| m.session.handle.session.as_ref().to_owned())
+            .try_collect()
+            .await
+            .unwrap();
+        found.sort();
+        assert_eq!(found, ["child", "root"]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_in_matches_windows_subdirectories() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for (id, cwd) in [("sub", r"C:\work\atuin\crates"), ("sibling", r"C:\work\atuin.sh")] {
+            let mut msg = message_in(&handle(HarnessKind::Codex, id), 0, "shared keyword");
+            msg.cwd = Some(std::path::PathBuf::from(cwd));
+            db.append(&msg).await.unwrap();
+        }
+
+        let found: Vec<String> = db
+            .search_in("shared", None, Some(r"C:\work\atuin\"), false, 0)
+            .map_ok(|m| m.session.handle.session.as_ref().to_owned())
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(found, ["sub"]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_in_uses_the_session_directory_not_the_message_one() {
+        // Codex records cwd on a metadata row; the prompt that matches carries none.
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = handle(HarnessKind::Codex, "codex");
+        let mut meta = message_in(&session, 0, "");
+        meta.cwd = Some(std::path::PathBuf::from("/work/terminal"));
+        db.append(&meta).await.unwrap();
+        db.append(&message_in(&session, 1, "osc hyperlink bug")).await.unwrap();
+
+        let hits: Vec<_> = db
+            .search_in("hyperlink", None, Some("/work/terminal"), false, 0)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_reports_the_matched_message_index() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = handle(HarnessKind::ClaudeCode, "s");
+        for (index, text) in (0..).zip(["first", "second", "needle here", "last"]) {
+            db.append(&message_in(&session, index, text)).await.unwrap();
+        }
+
+        let hits = search(&db, "needle").await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_index, 2);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_preview_leaves_out_message_metadata() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut msg = message_in(&sample_handle(), 0, "the needle");
+        msg.cwd = Some(std::path::PathBuf::from("/some/project"));
+        db.append(&msg).await.unwrap();
+
+        let hit = &search(&db, "needle").await[0];
+        assert!(!hit.preview.to_plain().text.contains("/some/project"));
+        // The metadata is still searchable.
+        assert_eq!(search(&db, "project").await.len(), 1);
     }
 
     #[rstest]

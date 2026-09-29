@@ -4,7 +4,7 @@ use atuin_client::ai_session::{
     HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
 use atuin_common::harnesstools::session::{
-    AnyMessage, Message as HarnessMessage, SessionId, TitleChange, TitleSource,
+    AnyMessage, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
 };
 use atuin_domain::record::RecordId;
 use time::OffsetDateTime;
@@ -79,6 +79,7 @@ impl MessageEnricher {
             titles: replayed,
             last_ts: last.map(|m| m.timestamp),
             parent: row.and_then(|r| r.parent.as_ref().map(|p| p.session.clone())),
+            parent_kind: row.and_then(|r| r.parent_kind),
             occurrences,
             untimed: Vec::new(),
         });
@@ -98,6 +99,7 @@ impl MessageEnricher {
         }
         if let Some(parent) = m.parent_session().filter(|p| p != session) {
             state.parent = Some(NativeSessionId::from(parent.to_string()));
+            state.parent_kind = m.parent_kind();
         }
 
         let row = build(handle, session, m, state);
@@ -196,6 +198,7 @@ fn build(
             .session(handle)
             .source_id(source_id)
             .parent(state.parent.clone().map(|session| HarnessSession { harness, session }))
+            .parent_kind(state.parent_kind)
             .parent_source_id(m.parent_id().map(|id| SourceId::from(String::from(id))))
             .turn_id(m.turn_id())
             .timestamp(state.last_ts.unwrap_or(OffsetDateTime::UNIX_EPOCH))
@@ -274,6 +277,8 @@ struct SessionState {
     last_ts: Option<OffsetDateTime>,
     /// Session this one was spawned from, when it has one (subagents, forks).
     parent: Option<NativeSessionId>,
+    /// How this session relates to [`Self::parent`], when the line naming it said.
+    parent_kind: Option<ParentKind>,
     /// How many rows each content hash has produced, so identical id-less lines (the same
     /// prompt twice in one millisecond) get distinct, re-read-stable ids.
     occurrences: HashMap<u64, u32>,
@@ -625,6 +630,7 @@ mod tests {
             msg.parent.map(|p| p.session),
             parent.map(|p| NativeSessionId::from(p.to_owned()))
         );
+        assert_eq!(msg.parent_kind, parent.map(|_| ParentKind::Subagent));
         assert_eq!(msg.turn_id.as_deref(), Some("msg_01"));
         assert_eq!(msg.role, Role::Assistant);
         assert_eq!(msg.content, vec![Content::Text("hi".into())]);

@@ -117,17 +117,15 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         None
     };
 
-    let mut cmd = match options.shell {
-        Some(ref path) => CommandBuilder::new(path),
-        None => CommandBuilder::new_default_prog(),
-    };
+    let shell = options.shell.first().cloned();
+    let mut cmd = CommandBuilder::from_argv(options.shell);
     cmd.cwd(std::env::current_dir()?);
     // Reflect the shell we actually spawn in `$SHELL` so the child — and
     // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
     // shell the user asked for instead of a stale value inherited from the
     // parent environment.
-    if let Some(ref path) = options.shell {
-        cmd.env("SHELL", path);
+    if let Some(shell) = shell {
+        cmd.env("SHELL", shell);
     }
     set_child_env(&mut cmd, socket_path.as_deref());
     // Atuin sets a restrictive process-wide umask on startup to protect the

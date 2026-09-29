@@ -61,11 +61,13 @@ impl GrpcService for Service {
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<Self::ListSessionsStream>, Status> {
         self.ensure_recovered()?;
-        let harness = HarnessFilterRequest::harness(&request.into_inner())?;
+        let request = request.into_inner();
+        let harness = HarnessFilterRequest::harness(&request)?;
+        let updated_since = request.updated_since_time()?;
 
         let sessions = self
             .capture
-            .list_sessions(harness)
+            .list_sessions(harness, updated_since)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -132,9 +134,18 @@ impl GrpcService for Service {
         let request = request.into_inner();
         let harness = HarnessFilterRequest::harness(&request)?;
 
-        let stream = self.capture.search(&request.query, harness, request.limit).map(|result| {
-            result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
-        });
+        let stream = self
+            .capture
+            .search(
+                &request.query,
+                harness,
+                request.cwd.as_deref(),
+                request.any_term,
+                request.limit,
+            )
+            .map(|result| {
+                result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
+            });
 
         Ok(Response::new(Box::pin(stream)))
     }
@@ -265,6 +276,8 @@ mod tests {
                 query: "anything".to_owned(),
                 limit: 0,
                 harness: None,
+                cwd: None,
+                any_term: false,
             }))
             .await
             .expect("search over an empty sidecar succeeds");
@@ -284,6 +297,8 @@ mod tests {
                 query: "x".to_owned(),
                 limit: 0,
                 harness: Some(9999),
+                cwd: None,
+                any_term: false,
             }))
             .await;
 
@@ -295,12 +310,19 @@ mod tests {
     async fn reads_are_refused_until_recovery_finishes() {
         let (cap, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
         let svc = Service::new(Arc::new(cap));
-        let list = || svc.list_sessions(Request::new(ListSessionsRequest { harness: None }));
+        let list = || {
+            svc.list_sessions(Request::new(ListSessionsRequest {
+                harness: None,
+                updated_since: None,
+            }))
+        };
         let search = || {
             svc.search_sessions(Request::new(SearchSessionsRequest {
                 query: "x".to_owned(),
                 limit: 0,
                 harness: None,
+                cwd: None,
+                any_term: false,
             }))
         };
         let import = || svc.import_sessions(Request::new(ImportSessionsRequest { harness: None }));
@@ -327,7 +349,12 @@ mod tests {
         drop(state);
 
         assert!(
-            svc.list_sessions(Request::new(ListSessionsRequest { harness: None })).await.is_ok()
+            svc.list_sessions(Request::new(ListSessionsRequest {
+                harness: None,
+                updated_since: None,
+            }))
+            .await
+            .is_ok()
         );
     }
 

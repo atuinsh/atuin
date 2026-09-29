@@ -99,6 +99,21 @@ pub struct Usage {
     pub reasoning: Option<u64>,
 }
 
+/// How a session relates to the one it names as its parent. Harnesses link several kinds of
+/// session to an earlier one, and readers treat them differently: a subagent is a fragment of
+/// its parent's work, while a fork or continuation is a conversation a person carried on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ParentKind {
+    /// Spawned by its parent to do part of its work (a Claude Code `Task` agent, a Codex
+    /// `spawn_agent` or reviewer thread, an opencode `@general` subagent).
+    Subagent,
+    /// A copy of the parent's conversation that went its own way (Claude Code
+    /// `--fork-session`, a Codex or opencode fork, a pi branch).
+    Fork,
+    /// The parent's conversation carried on under a new session (a Codex revert).
+    Continuation,
+}
+
 /// Where a session title came from. A higher source outranks a lower one whatever order they
 /// arrive in, the way Claude Code shows an agent name over a custom title over a generated one
 /// over a legacy summary; titles from one source replace each other, newest first.
