@@ -19,7 +19,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 section ":package: Install QEMU" \
   apt_install qemu-system-x86 qemu-utils zstd xz-utils rsync openssh-client
 section ":package: Fetch anyvm ${ANYVM_VERSION}" \
-  fetch_verified "https://github.com/anyvm-org/anyvm/releases/download/v${ANYVM_VERSION}/anyvm.py" \
+  fetch_verified "https://dl.tty0.dev/anyvm-org/anyvm/releases/download/v${ANYVM_VERSION}/anyvm.py" \
   "$ANYVM_SHA256" /tmp/anyvm.py
 
 # Run inside the VM: the same steps as the old job's prepare + run.

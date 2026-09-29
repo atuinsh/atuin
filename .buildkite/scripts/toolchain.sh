@@ -78,18 +78,18 @@ mkdir -p "$CARGO_HOME/bin"
 for tool in ${CARGO_TOOLS:-}; do
   case "$tool" in
     nextest)
-      fetch_verified "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${nextest_asset}.tar.gz" \
+      fetch_verified "https://dl.tty0.dev/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${nextest_asset}.tar.gz" \
         "$nextest_sha256" /tmp/nextest.tgz
       tar -xzf /tmp/nextest.tgz -C "$CARGO_HOME/bin"
       ;;
     deny)
-      fetch_verified "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+      fetch_verified "https://dl.tty0.dev/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
         "$CARGO_DENY_SHA256" /tmp/cargo-deny.tgz
       tar -xzf /tmp/cargo-deny.tgz -C /tmp
       mv "/tmp/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny" "$CARGO_HOME/bin/"
       ;;
     bktec)
-      fetch_verified "https://github.com/buildkite/test-engine-client/releases/download/v${BKTEC_VERSION}/bktec_${BKTEC_VERSION}_${bktec_asset}" \
+      fetch_verified "https://dl.tty0.dev/buildkite/test-engine-client/releases/download/v${BKTEC_VERSION}/bktec_${BKTEC_VERSION}_${bktec_asset}" \
         "$bktec_sha256" "$CARGO_HOME/bin/bktec"
       chmod +x "$CARGO_HOME/bin/bktec"
       ;;
