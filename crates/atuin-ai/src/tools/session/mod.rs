@@ -241,11 +241,18 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::absolute("/a/b/../c", "/a/c")]
-    #[case::trailing_dot("/a/./b", "/a/b")]
-    #[case::whitespace("  /a/b  ", "/a/b")]
+    #[case::absolute("{root}/a/b/../c", "{root}/a/c")]
+    #[case::trailing_dot("{root}/a/./b", "{root}/a/b")]
+    #[case::whitespace("  {root}/a/b  ", "{root}/a/b")]
     fn resolve_cwd_normalises(#[case] input: &str, #[case] want: &str) {
-        assert_eq!(resolve_cwd(Some(input)).ok().unwrap(), Some(PathBuf::from(want)));
+        // `/a` is only absolute on Unix; Windows needs a drive.
+        let root = if cfg!(windows) {
+            "C:"
+        } else {
+            ""
+        };
+        let (input, want) = (input.replace("{root}", root), want.replace("{root}", root));
+        assert_eq!(resolve_cwd(Some(&input)).ok().unwrap(), Some(PathBuf::from(want)));
     }
 
     #[rstest]
