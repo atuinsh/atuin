@@ -9,7 +9,7 @@ pub mod search;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use atuin_client::ai_session::{HarnessKind, Session};
+use atuin_client::ai_session::{HarnessKind, Session, SessionFilter};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::ParentKind;
 use atuin_common::time::OffsetDateTimeExt;
@@ -35,8 +35,13 @@ pub async fn list_sessions(
     harness: Option<HarnessKind>,
     updated_since: Option<time::OffsetDateTime>,
 ) -> Result<Vec<Session>, String> {
+    let filter = SessionFilter {
+        harness,
+        updated_since,
+        ..SessionFilter::default()
+    };
     client
-        .list_sessions(harness, updated_since)
+        .list_sessions(&filter)
         .await
         .map_err(|e| e.to_string())?
         .map(|s| {

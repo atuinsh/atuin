@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use atuin_client::ai_session::{
     HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
+use atuin_common::harnesstools::continuation;
 use atuin_common::harnesstools::session::{
     AnyMessage, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
 };
@@ -48,21 +49,38 @@ impl MessageEnricher {
     /// read from past its start: its row (parent, and the title when no title change is
     /// stored), every title change its lines made (replayed, so each source's title is known
     /// and a later clear falls back to the next), its newest stored message (the timestamp an
-    /// untimed line takes) and the source ids of its stored content-addressed rows (so
-    /// identical id-less lines keep counting where the earlier read left off).
+    /// untimed line takes) and the source ids of its stored content-addressed rows, each with
+    /// whether this host captured it (so identical id-less lines keep counting where the earlier
+    /// read left off).
+    ///
+    /// Only this host's rows (and rows of no recorded host, which predate hosts and so are this
+    /// host's) count toward a line's ordinal: the ids are what this host's reading of its own
+    /// transcript minted. Another host's rows may be ones this transcript never held (the other
+    /// host went on without it), and counting them would number this host's next identical line
+    /// past what a read from the start numbers it, so a later such read would push it again.
+    /// Every host's rows count toward the [alias](Message::alias) ordinals, which name ids
+    /// another host minted: an alias numbered too high merely misses.
     pub fn resume(
         &mut self,
         session: &SessionId,
         row: Option<&Session>,
         titles: &[TitleChange],
         last: Option<&Message>,
-        synthetic: &[SourceId],
+        synthetic: &[(SourceId, bool)],
     ) {
         let mut occurrences = HashMap::new();
-        for id in synthetic {
+        let mut bases = HashMap::new();
+        for (id, here) in synthetic {
             if let Some((hash, ordinal)) = parse_synthetic(id) {
-                let next = occurrences.entry(hash).or_insert(0);
-                *next = (*next).max(ordinal + 1);
+                let counts = if *here {
+                    vec![&mut occurrences, &mut bases]
+                } else {
+                    vec![&mut bases]
+                };
+                for counts in counts {
+                    let next = counts.entry(hash).or_insert(0);
+                    *next = (*next).max(ordinal + 1);
+                }
             }
         }
         let mut replayed = BTreeMap::new();
@@ -78,9 +96,10 @@ impl MessageEnricher {
         self.sessions.insert(session.to_string(), SessionState {
             titles: replayed,
             last_ts: last.map(|m| m.timestamp),
-            parent: row.and_then(|r| r.parent.as_ref().map(|p| p.session.clone())),
+            parent: row.and_then(|r| r.parent.clone()),
             parent_kind: row.and_then(|r| r.parent_kind),
             occurrences,
+            bases,
             untimed: Vec::new(),
         });
     }
@@ -98,8 +117,23 @@ impl MessageEnricher {
             apply(&mut state.titles, change);
         }
         if let Some(parent) = m.parent_session().filter(|p| p != session) {
-            state.parent = Some(NativeSessionId::from(parent.to_string()));
+            state.parent = Some(HarnessSession {
+                harness: handle.harness,
+                session: NativeSessionId::from(parent.to_string()),
+            });
             state.parent_kind = m.parent_kind();
+        }
+        // A session continued from another (`atuin ai resume --in`), maybe another harness's:
+        // its first line, which the harness wrote itself, names it.
+        if let Some((harness, parent)) = continuation::continued_from_message(m) {
+            let parent = HarnessSession {
+                harness: HarnessKind::from(&harness),
+                session: NativeSessionId::from(parent),
+            };
+            if parent != handle {
+                state.parent = Some(parent);
+                state.parent_kind = Some(ParentKind::Continuation);
+            }
         }
 
         let row = build(handle, session, m, state);
@@ -143,7 +177,7 @@ impl MessageEnricher {
     pub fn source_id(session: &SessionId, m: &AnyMessage) -> SourceId {
         match m.id() {
             Some(id) => SourceId::from(String::from(id)),
-            None => synthetic_id(content_hash(session, m), 0),
+            None => synthetic_id(content_hash(session, m, m.timestamp()), 0),
         }
     }
 }
@@ -181,23 +215,34 @@ fn build(
         return None;
     }
 
-    let source_id = match m.id() {
-        Some(id) => SourceId::from(String::from(id)),
+    let (source_id, alias) = match m.id() {
+        Some(id) => (SourceId::from(String::from(id)), None),
         None => {
-            let hash = content_hash(session, m);
+            let timestamp = m.timestamp();
+            let hash = content_hash(session, m, timestamp);
             let ordinal = state.occurrences.entry(hash).or_insert(0);
             let id = synthetic_id(hash, *ordinal);
             *ordinal += 1;
-            id
+            // Every id-less line is also counted by its hash without the timestamp, which is
+            // what it was keyed on if it was first captured from a transcript that did not stamp
+            // it (a Codex rollout from before 0.32) and has since been written back out stamped
+            // (a rehydrated rollout stamps every line). Untimed lines come first in any
+            // transcript, so the nth line of a timestamp-free hash is the nth there too.
+            let base = timestamp.map_or(hash, |_| content_hash(session, m, None));
+            let nth = state.bases.entry(base).or_insert(0);
+            let alias = timestamp.map(|_| synthetic_id(base, *nth));
+            *nth += 1;
+            (id, alias)
         }
     };
-    let harness = handle.harness;
     Some(
         Message::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(handle)
             .source_id(source_id)
-            .parent(state.parent.clone().map(|session| HarnessSession { harness, session }))
+            .alias(alias)
+            .seq(m.seq())
+            .parent(state.parent.clone())
             .parent_kind(state.parent_kind)
             .parent_source_id(m.parent_id().map(|id| SourceId::from(String::from(id))))
             .turn_id(m.turn_id())
@@ -225,11 +270,16 @@ fn apply(titles: &mut BTreeMap<TitleSource, String>, change: TitleChange) {
 }
 
 /// A hash of everything a row takes from an id-less line, so lines that differ in any of it
-/// (two usage records written in one millisecond) never share an id.
-fn content_hash(session: &SessionId, m: &AnyMessage) -> u64 {
+/// (two usage records written in one millisecond) never share an id. `timestamp` is the line's
+/// own, or `None` for the hash it would have without one.
+///
+/// Never extend this: every id-less row ever captured is keyed on it, and a line that hashed
+/// differently when read again would be pushed again. (`Message::seq`, captured since, is left
+/// out for that reason.)
+fn content_hash(session: &SessionId, m: &AnyMessage, timestamp: Option<OffsetDateTime>) -> u64 {
     let canonical = serde_json::json!([
         session.as_ref(),
-        m.timestamp().map(OffsetDateTime::unix_timestamp_nanos).map(|ns| ns.to_string()),
+        timestamp.map(OffsetDateTime::unix_timestamp_nanos).map(|ns| ns.to_string()),
         m.role(),
         m.content(),
         m.title(),
@@ -275,13 +325,18 @@ struct SessionState {
     /// Timestamp of the last line that had one. Lines without (Claude Code `ai-title` and
     /// friends) take it, so a replayed session is not stamped with capture time.
     last_ts: Option<OffsetDateTime>,
-    /// Session this one was spawned from, when it has one (subagents, forks).
-    parent: Option<NativeSessionId>,
-    /// How this session relates to [`Self::parent`], when the line naming it said.
+    /// Session this one was spawned from, when it has one (subagents, forks), or continues
+    /// (maybe another harness's).
+    parent: Option<HarnessSession>,
+    /// How this session relates to [`Self::parent`], when the line naming it said: always
+    /// [`ParentKind::Continuation`] for a continuation's marker.
     parent_kind: Option<ParentKind>,
     /// How many rows each content hash has produced, so identical id-less lines (the same
     /// prompt twice in one millisecond) get distinct, re-read-stable ids.
     occurrences: HashMap<u64, u32>,
+    /// How many id-less lines each timestamp-free hash has seen, timed or not: the ordinal of
+    /// each row's [alias](Message::alias).
+    bases: HashMap<u64, u32>,
     /// Rows from before the first timestamped line, waiting to take its timestamp: the session
     /// started no earlier, and capture time would make an old session look new.
     untimed: Vec<Message>,
@@ -686,7 +741,10 @@ mod tests {
         let untimed = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Renamed"}));
         let first = MessageEnricher::source_id(&session(), &untimed);
         let (hash, _) = parse_synthetic(&first).unwrap();
-        n.resume(&session(), Some(&row), &[], Some(&last), &[first, synthetic_id(hash, 1)]);
+        n.resume(&session(), Some(&row), &[], Some(&last), &[
+            (first, true),
+            (synthetic_id(hash, 1), true),
+        ]);
 
         let msg = n.capture(&session(), &untimed).pop().unwrap();
         assert_eq!(msg.timestamp, ts);
@@ -759,6 +817,77 @@ mod tests {
         let ids: Vec<_> = rows.into_iter().map(|m| m.source_id).collect();
         assert_eq!(ids, vec![first, synthetic_id(hash, 1)]);
     }
+
+    /// A Codex line's ordinal rides its row.
+    #[rstest]
+    #[case::numbered(Some(12))]
+    #[case::unnumbered(None)]
+    fn codex_rows_carry_the_lines_ordinal(#[case] ordinal: Option<u64>) {
+        let mut raw = serde_json::json!({
+            "type": "response_item", "timestamp": "2026-09-18T10:00:00.123Z",
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}]},
+        });
+        if let Some(ordinal) = ordinal {
+            raw["ordinal"] = serde_json::json!(ordinal);
+        }
+        assert_eq!(one(HarnessKind::Codex, &codex(&raw)).unwrap().seq, ordinal);
+    }
+
+    /// An id-less line with a timestamp is aliased to the id it has without one: the id it was
+    /// keyed on when first captured from a Codex rollout from before 0.32, which stamped no
+    /// line, and which a rehydrated rollout stamps. Identical lines keep counting apart.
+    #[rstest]
+    fn a_stamped_idless_line_is_aliased_to_its_unstamped_id() {
+        let bare = codex(&serde_json::json!({
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "list the files"}],
+        }));
+        let stamped = codex(&serde_json::json!({
+            "timestamp": "2025-07-24T10:00:00.123Z", "type": "response_item",
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "list the files"}]},
+        }));
+        let meta = codex(&serde_json::json!({
+            "id": "5973b6c0-94b8-487b-a530-2aeb6098ae0e", "timestamp": "2025-07-24T10:00:00.123Z",
+        }));
+        let original = rows(&mut MessageEnricher::new(HarnessKind::Codex), &session(), &[
+            meta.clone(),
+            bare.clone(),
+            bare,
+        ]);
+        let again = rows(&mut MessageEnricher::new(HarnessKind::Codex), &session(), &[
+            meta,
+            stamped.clone(),
+            stamped,
+        ]);
+        assert!(original.iter().all(|m| m.alias.is_none()), "an unstamped line is its own id");
+        let original: Vec<_> = original[1..].iter().map(|m| Some(m.source_id.clone())).collect();
+        let aliases: Vec<_> = again[1..].iter().map(|m| m.alias.clone()).collect();
+        assert_eq!(aliases, original);
+        assert_ne!(again[1].source_id, again[2].source_id);
+    }
+
+    /// Resumed past its start, a session numbers its id-less lines on from this host's rows
+    /// only: another host's may be rows its transcript never held, and counting them would
+    /// number the next line past what a read from the start numbers it.
+    #[rstest]
+    fn another_hosts_rows_do_not_number_this_hosts_lines() {
+        let untimed = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Renamed"}));
+        let first = MessageEnricher::source_id(&session(), &untimed);
+        let (hash, _) = parse_synthetic(&first).unwrap();
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        n.resume(&session(), None, &[], None, &[
+            (first, true),
+            (synthetic_id(hash, 1), false),
+            (synthetic_id(hash, 2), false),
+        ]);
+        let msg = n
+            .capture(&session(), &untimed)
+            .pop()
+            .unwrap_or_else(|| n.finish(&session()).pop().unwrap());
+        assert_eq!(msg.source_id, synthetic_id(hash, 1));
+    }
 }
 
 /// What the Claude Code and Pi parsers resolve for a row, as seen through the enricher: fork
@@ -767,6 +896,7 @@ mod tests {
 mod parser_contract {
     use atuin_common::harnesstools::ccode::session::CcodeMessage;
     use atuin_common::harnesstools::pi::session::PiMessage;
+    use atuin_common::harnesstools::session::Role;
     use rstest::rstest;
 
     use super::*;
@@ -875,5 +1005,80 @@ mod parser_contract {
             MessageEnricher::source_id(&s, &pi(&before)),
             MessageEnricher::source_id(&s, &pi(&after))
         );
+    }
+
+    // ---- Continuations (`atuin ai resume --in`) ----
+
+    const ORIGINAL: &str = "019a0d14-f276-77d3-b955-89d5b0151306";
+
+    fn marker() -> String {
+        use atuin_common::harnesstools::AnyHarness;
+        continuation::marker_text(AnyHarness::from_name("codex").unwrap(), ORIGINAL)
+    }
+
+    /// The marker line each target's writer puts first (see `harnesstools::continuation`), then
+    /// a prompt. opencode's (a `synthetic` part) is read back the same way by atuin-common's
+    /// round-trip tests.
+    fn continued(harness: HarnessKind, prompt: &str) -> Vec<AnyMessage> {
+        let marker = marker();
+        match harness {
+            HarnessKind::ClaudeCode => vec![
+                ccode(&serde_json::json!({"type": "user", "uuid": "u0", "parentUuid": null,
+                    "sessionId": "new", "isMeta": true, "timestamp": "2026-09-27T10:00:00Z",
+                    "message": {"role": "user", "content": marker}})),
+                ccode(&serde_json::json!({"type": "user", "uuid": "u1", "parentUuid": "u0",
+                    "sessionId": "new", "timestamp": "2026-09-27T10:00:01Z",
+                    "message": {"role": "user", "content": prompt}})),
+            ],
+            HarnessKind::Pi => vec![
+                pi(&serde_json::json!({"type": "session", "version": 3, "id": "new",
+                    "timestamp": "2026-09-27T10:00:00Z", "cwd": "/w"})),
+                // pi's marker is the first block of the first prompt.
+                pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": null,
+                    "timestamp": "2026-09-27T10:00:01Z",
+                    "message": {"role": "user", "content": [
+                        {"type": "text", "text": marker}, {"type": "text", "text": prompt}]}})),
+                pi(&serde_json::json!({"type": "message", "id": "a2", "parentId": "a1",
+                    "timestamp": "2026-09-27T10:00:02Z",
+                    "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}})),
+            ],
+            _ => unreachable!("no other harness in these tests"),
+        }
+    }
+
+    /// A continuation.s rows name the session it continues as their parent, of the harness it
+    /// was recorded in, and say they continue it; a marker the user typed is only text.
+    #[rstest]
+    #[case::claude(HarnessKind::ClaudeCode)]
+    #[case::pi(HarnessKind::Pi)]
+    fn a_continuation_names_the_session_it_continues(#[case] harness: HarnessKind) {
+        let new = SessionId::from("new".to_owned());
+        let mut n = MessageEnricher::new(harness);
+        let rows: Vec<Message> =
+            continued(harness, "go on").iter().flat_map(|m| n.capture(&new, m)).collect();
+        let parent = HarnessSession {
+            harness: HarnessKind::Codex,
+            session: NativeSessionId::from(ORIGINAL.to_owned()),
+        };
+        let prompt = rows.last().unwrap();
+        assert_eq!(prompt.role, Role::User);
+        assert_eq!(prompt.parent, Some(parent));
+        assert_eq!(prompt.parent_kind, Some(ParentKind::Continuation));
+
+        let mut n = MessageEnricher::new(harness);
+        let typed: Vec<Message> = continued(harness, &marker())
+            .iter()
+            .skip(harness_skip(harness))
+            .flat_map(|m| n.capture(&new, m))
+            .collect();
+        assert!(typed.iter().all(|m| m.parent.is_none()), "{typed:?}");
+    }
+
+    /// How many lines lead up to the marker (Pi's header).
+    fn harness_skip(harness: HarnessKind) -> usize {
+        match harness {
+            HarnessKind::Pi => 2,
+            _ => 1,
+        }
     }
 }

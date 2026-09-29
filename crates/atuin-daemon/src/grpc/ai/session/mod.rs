@@ -3,6 +3,7 @@ pub mod pb;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use atuin_client::ai_session::SearchTerms;
 use futures::StreamExt;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -14,8 +15,8 @@ use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
     HarnessFilterRequest, ImportSessionsEvent, ImportSessionsProgress, ImportSessionsRequest,
     ImportSessionsSummary, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
-    SessionRefRequest, TailSessionsEvent, TailSessionsRequest, get_session_event,
-    import_sessions_event, tail_sessions_event,
+    SessionFilterRequest, SessionRefRequest, TailSessionsEvent, TailSessionsRequest,
+    get_session_event, import_sessions_event, tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
@@ -49,13 +50,11 @@ impl GrpcService for Service {
         &self,
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<Self::ListSessionsStream>, Status> {
-        let request = request.into_inner();
-        let harness = HarnessFilterRequest::harness(&request)?;
-        let updated_since = request.updated_since_time()?;
+        let filter = request.into_inner().filter()?;
 
         let sessions = self
             .capture
-            .list_sessions(harness, updated_since)
+            .list_sessions(&filter)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -117,18 +116,16 @@ impl GrpcService for Service {
         request: Request<SearchSessionsRequest>,
     ) -> Result<Response<Self::SearchSessionsStream>, Status> {
         let request = request.into_inner();
-        let harness = HarnessFilterRequest::harness(&request)?;
+        let filter = request.filter()?;
 
-        let stream = self
-            .capture
-            .search(
-                &request.query,
-                harness,
-                request.cwd.as_deref(),
-                request.any_term,
-                request.limit,
-            )
-            .map(|result| {
+        let terms = if request.any_term {
+            SearchTerms::Any
+        } else {
+            SearchTerms::All
+        };
+
+        let stream =
+            self.capture.search(&request.query, terms, &filter, request.limit).map(|result| {
                 result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
             });
 
@@ -261,6 +258,7 @@ mod tests {
                 harness: None,
                 cwd: None,
                 any_term: false,
+                filter: None,
             }))
             .await
             .expect("search over an empty sidecar succeeds");
@@ -282,6 +280,7 @@ mod tests {
                 harness: Some(9999),
                 cwd: None,
                 any_term: false,
+                filter: None,
             }))
             .await;
 

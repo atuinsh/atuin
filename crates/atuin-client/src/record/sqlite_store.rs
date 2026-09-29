@@ -22,6 +22,10 @@ use uuid::Uuid;
 
 const STORE_COLUMNS: &str = "id, idx, host, tag, timestamp, version, data, cek";
 
+/// The newest migration in `record-migrations`: [`SqliteStore::open_read_only`] reads only a store
+/// at exactly this version.
+const SCHEMA_VERSION: i64 = 20_260_723_000_000;
+
 #[derive(Debug, Clone)]
 pub struct SqliteStore {
     sqlite: Sqlite,
@@ -113,6 +117,47 @@ impl SqliteStore {
         debug!("opening sqlite database at {path:?}");
 
         Self::from_builder(Sqlite::builder(path), timeout).await
+    }
+
+    /// Open an existing store to read beside the processes that write it: no migrations, and no
+    /// writes. Fails when the file is missing, or unless its schema is exactly the one this build
+    /// reads (one that is older needs the migrations only a writer runs).
+    #[instrument(level = "trace", skip_all, fields(timeout = ?timeout), err)]
+    pub async fn open_read_only(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
+        let path = path.as_ref();
+
+        debug!("opening sqlite database read-only at {path:?}");
+
+        let sqlite = Sqlite::builder(path).timeout(timeout).read_only().open().await?;
+        Self::check_schema(sqlite.pool()).await?;
+
+        Ok(Self { sqlite })
+    }
+
+    /// Fails unless the store's newest applied migration is [`SCHEMA_VERSION`].
+    async fn check_schema(pool: &SqlitePool) -> Result<()> {
+        let tracked: Option<i64> = db::query_scalar(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        let found: Option<i64> = match tracked {
+            Some(_) => {
+                db::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success = 1")
+                    .fetch_one(pool)
+                    .await?
+            }
+            None => None,
+        };
+
+        match found {
+            Some(SCHEMA_VERSION) => Ok(()),
+            None => Err(eyre!("the record store is not initialized")),
+            Some(found) => Err(eyre!(
+                "the record store is at schema version {found}, but this build reads \
+                 {SCHEMA_VERSION}"
+            )),
+        }
     }
 
     pub async fn in_memory(timeout: Duration) -> Result<Self> {
@@ -670,7 +715,7 @@ mod tests {
     };
     use rstest::{fixture, rstest};
 
-    use super::{SqliteStore, db};
+    use super::{SCHEMA_VERSION, SqliteStore, db};
     use crate::settings::test_local_timeout;
 
     #[fixture]
@@ -1046,5 +1091,99 @@ mod tests {
         assert_eq!(store.compact().await.unwrap(), 1);
         assert_eq!(storage_class(legacy_id).await.unwrap(), "blobblob");
         assert_eq!(store.get(legacy.id).await.unwrap(), legacy);
+    }
+
+    // --- read-only open -------------------------------------------------------------------------
+
+    /// [`SCHEMA_VERSION`] is the newest migration's version.
+    #[rstest]
+    fn the_schema_version_is_the_newest_migration() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("record-migrations");
+        let newest = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| {
+                let name = entry.unwrap().file_name().into_string().unwrap();
+                name.split('_').next()?.parse::<i64>().ok()
+            })
+            .max();
+        assert_eq!(newest, Some(SCHEMA_VERSION));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_read_only_open_reads_beside_the_writer(record: Record<paseto_v4::EncryptedData>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("records.db");
+        let writer = SqliteStore::new(&path, test_local_timeout()).await.unwrap();
+        writer.push(&record).await.unwrap();
+
+        let reader = SqliteStore::open_read_only(&path, test_local_timeout()).await.unwrap();
+        assert_eq!(reader.get(record.id).await.unwrap(), record);
+        let series = RecordSeriesKey::new(record.host.id, record.tag.clone());
+        assert_eq!(reader.idx(&series, 0).await.unwrap(), Some(record.clone()));
+        assert_eq!(reader.status().await.unwrap().get(&series), Some(0));
+
+        let other = Record::builder()
+            .host(record.host.clone())
+            .version("v1".into())
+            .tag(record.tag.clone())
+            .data(DecryptedData(b"ls".to_vec()))
+            .idx(1)
+            .build()
+            .encrypt(&paseto_v4::Key::generate());
+        assert!(reader.push(&other).await.is_err(), "a read-only store refuses writes");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_read_only_open_never_creates_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.db");
+        assert!(SqliteStore::open_read_only(&path, test_local_timeout()).await.is_err());
+        assert!(!path.exists());
+    }
+
+    /// Nothing runs the migrations a store without them, or with older ones, would need.
+    #[rstest]
+    #[case::uninitialized(None)]
+    #[case::outdated(Some(20_231_127_090_831))]
+    #[case::unknown(Some(SCHEMA_VERSION + 1))]
+    #[tokio::test]
+    async fn a_read_only_open_refuses_another_schema(#[case] version: Option<i64>) {
+        use atuin_common::db::sqlite::Sqlite;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("records.db");
+        {
+            let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
+            if let Some(version) = version {
+                #[allow(clippy::disallowed_macros)]
+                let mut migrator = sqlx::migrate!("./record-migrations");
+                migrator.migrations =
+                    migrator.migrations.iter().filter(|m| m.version <= version).cloned().collect();
+                migrator.run(db.pool()).await.unwrap();
+                if version > SCHEMA_VERSION {
+                    db::query(
+                        "INSERT INTO _sqlx_migrations (version, description, success, checksum, \
+                         execution_time) VALUES (?, 'future', 1, x'00', 0)",
+                    )
+                    .bind(version)
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+                }
+            }
+            db.pool().close().await;
+        }
+
+        assert!(SqliteStore::open_read_only(&path, test_local_timeout()).await.is_err());
+        let tables: i64 = {
+            let db = Sqlite::builder(path.as_os_str()).read_only().open().await.unwrap();
+            db::query_scalar("SELECT count(*) FROM sqlite_master WHERE name = 'store'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap()
+        };
+        assert_eq!(tables, i64::from(version.is_some()), "no migration ran");
     }
 }

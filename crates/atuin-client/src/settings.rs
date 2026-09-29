@@ -34,6 +34,7 @@ static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
+pub mod ai_sessions;
 pub mod daemon;
 pub mod disk_usage_limit;
 mod kv;
@@ -43,6 +44,7 @@ mod scripts;
 pub mod shells;
 pub mod watcher;
 
+pub use ai_sessions::{AiSessionColumn, AiSessionFilterMode, AiSessionResume, AiSessions};
 pub use daemon::Daemon;
 pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
 use output::OutputCaptureConfig;
@@ -710,6 +712,10 @@ pub struct Ai {
     /// and tool output -- into the encrypted store used by sync, so it is strictly opt-in.
     #[serde(default)]
     pub capture_sessions: bool,
+
+    /// The `atuin ai resume` session picker (`[ai.sessions]`).
+    #[serde(default)]
+    pub sessions: AiSessions,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -1207,6 +1213,14 @@ impl Settings {
     #[must_use]
     pub fn command_capture_dir() -> PathBuf {
         Self::effective_data_dir().join("output-capture")
+    }
+
+    /// The AI harness session sidecar database, under the [effective data
+    /// dir](Self::effective_data_dir). The daemon owns and writes it; other readers open it
+    /// read-only (`AiSessionDatabase::open_read_only`).
+    #[must_use]
+    pub fn ai_session_sidecar_path() -> PathBuf {
+        Self::effective_data_dir().join("ai_harness_sessions.db")
     }
 
     // -- Meta store: lazily initialized on first access --
