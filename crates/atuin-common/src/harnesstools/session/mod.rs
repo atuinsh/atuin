@@ -108,6 +108,12 @@ pub trait Message: Send + 'static {
     fn title(&self) -> Option<TitleChange> {
         None
     }
+    /// The line's position in its transcript, when the harness numbers its lines (a Codex
+    /// rollout line's `ordinal`). A host continuing a transcript numbers its new lines on from
+    /// the last it holds, so two hosts continuing the same one number theirs alike.
+    fn seq(&self) -> Option<u64> {
+        None
+    }
 }
 
 pub trait Session: Send + 'static {

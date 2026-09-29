@@ -35,19 +35,68 @@ pub struct CodexSessions {
 
 impl CodexSessions {
     fn resolve_root(&self) -> PathBuf {
-        self.root.clone().unwrap_or_else(|| {
-            env_nonempty("CODEX_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home_dir().join(".codex"))
-                .join("sessions")
-        })
+        self.root.clone().unwrap_or_else(default_root)
     }
+}
+
+/// Codex's live rollouts: `$CODEX_HOME/sessions`, else `~/.codex/sessions`.
+pub(crate) fn default_root() -> PathBuf {
+    env_nonempty("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".codex"))
+        .join("sessions")
+}
+
+/// The rollout Codex continues session `id` from, under `root`
+/// (`<yyyy>/<mm>/<dd>/rollout-<timestamp>-<id>[_<rollout>].jsonl`): of a thread kept in several
+/// segments (see [`session_id_of`]), the newest, as Codex's own lookup picks one when its state
+/// database names none (codex-rs `find_thread_path_by_id_from_filenames`: the latest timestamp
+/// in the name, then the greater rollout id). Archived rollouts are not looked for: codex refuses
+/// to resume one until it is unarchived.
+pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
+    rollouts_of(root, resume_id(id)).pop()
+}
+
+/// Every rollout of thread `id` under `root`, oldest first (see [`locate`]).
+pub(crate) fn rollouts_of(root: &Path, id: &str) -> Vec<PathBuf> {
+    if !crate::harnesstools::resume::is_plain_name(id) {
+        return Vec::new();
+    }
+    let mut found: Vec<(RolloutName, PathBuf)> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file()
+                && let Some(name) = RolloutName::of(&path)
+                && name.thread == id
+            {
+                found.push((name, path));
+            }
+        }
+    }
+    found.sort_by(|(a, _), (b, _)| a.order(b));
+    found.into_iter().map(|(_, path)| path).collect()
+}
+
+/// The id `codex resume` takes for session `id`: its thread's. Rows captured before a thread's
+/// segments were one session name a segment `<thread>_<rollout>`.
+pub(crate) fn resume_id(id: &str) -> &str {
+    id.split_once('_').map_or(id, |(thread, _)| thread)
 }
 
 /// Where Codex moves the rollouts of a thread the user archives: `archived_sessions/` beside
 /// `sessions/` (codex-rs `ARCHIVED_SESSIONS_SUBDIR`, `archive_thread.rs`), flat, each keeping
 /// its name. `None` for a root not named `sessions`, which has no such sibling.
-fn archive_of(root: &Path) -> Option<PathBuf> {
+pub(super) fn archive_of(root: &Path) -> Option<PathBuf> {
     (root.file_name()? == "sessions").then(|| root.with_file_name("archived_sessions"))
 }
 
@@ -99,6 +148,16 @@ impl Sessions for CodexSessions {
                                 .filter(|item| !item.as_ref().is_ok_and(|s| live.contains(&s.id))),
                         );
                     }
+                    // Oldest first, so a thread's newest segment is read last.
+                    items.sort_by(|a, b| match (a, b) {
+                        (Ok(a), Ok(b)) => match (RolloutName::of(&a.path), RolloutName::of(&b.path)) {
+                            (Some(a), Some(b)) => a.order(&b),
+                            _ => std::cmp::Ordering::Equal,
+                        },
+                        (Err(_), Ok(_)) => std::cmp::Ordering::Less,
+                        (Ok(_), Err(_)) => std::cmp::Ordering::Greater,
+                        (Err(_), Err(_)) => std::cmp::Ordering::Equal,
+                    });
                     items
                 })
                 .await;
@@ -123,31 +182,101 @@ impl Observable for Codex {
 }
 
 /// The session a rollout file holds, from its name (`rollout-<timestamp>-<id>.jsonl`, the
-/// timestamp `YYYY-MM-DD` in the earliest rollouts and `YYYY-MM-DDThh-mm-ss` since).
+/// timestamp `YYYY-MM-DD` in the earliest rollouts and `YYYY-MM-DDThh-mm-ss` since): its
+/// thread's id.
 ///
-/// The id is the thread's, except for a rollout a thread was reverted into (codex-rs
-/// `rollout_file_name.rs`: `rollout-<timestamp>-<thread>_<rollout>.jsonl`), which holds only the
-/// thread's history since the revert and names the rollout before it as its `history_base`.
-/// Such a file keeps both ids as its session, so it never shares one with the thread's earlier
-/// rollout (see [`thread_of`]).
-fn session_id_of(stem: &str) -> SessionId {
-    const UUID_LEN: usize = 36;
-    if let Some((head, rollout)) = stem.rsplit_once('_')
-        && let Some(thread) = head.len().checked_sub(UUID_LEN).and_then(|at| head.get(at..))
-    {
-        return SessionId::from(format!("{thread}_{rollout}"));
-    }
-    let mut groups: Vec<&str> = stem.rsplitn(6, '-').collect();
-    groups.truncate(5);
-    groups.reverse();
-    SessionId::from(groups.join("-"))
+/// A paginated thread may be kept in several files (codex-rs `rollout_file_name.rs`,
+/// `revert_thread.rs`): a revert, or a branch written by sync (see `sync::codex`), starts a new
+/// segment `rollout-<timestamp>-<thread>_<rollout>.jsonl` holding only the thread's lines since,
+/// whose `session_meta.history_base` names the rollout (and the point in it) it continues. Every
+/// segment is the same session: Codex resumes the thread from its newest ([`locate`]), numbers
+/// its lines on from that point, and keeps each item's id. Captured under the thread, a segment
+/// yields only rows the session holds already, or new ones; captured under an id of its own,
+/// every row a synced branch was written back as would have been a copy.
+pub(super) fn session_id_of(stem: &str) -> SessionId {
+    SessionId::from(RolloutName::parse(stem).thread)
 }
 
-/// The thread a session belongs to: its id, or for a reverted thread's rollout the thread
-/// part of it (see [`session_id_of`]).
+/// A rollout file's name, taken apart (see [`session_id_of`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RolloutName {
+    /// The time it was created at, as the name writes it: a thread's segments sort by it.
+    pub stamp: String,
+    pub thread: String,
+    /// The file's own id (codex-rs `RolloutId`), which a later segment's `history_base.thread_id`
+    /// names it by: the thread's own for its first file.
+    pub rollout: String,
+}
+
+impl RolloutName {
+    /// The name of the rollout at `path`, if it is one.
+    pub(crate) fn of(path: &Path) -> Option<Self> {
+        let name = path.file_name()?.to_str()?;
+        Some(Self::parse(name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?))
+    }
+
+    /// `stem`, with or without its `rollout-` prefix.
+    fn parse(stem: &str) -> Self {
+        const UUID_LEN: usize = 36;
+        let body = stem.strip_prefix("rollout-").unwrap_or(stem);
+        if let Some((head, rollout)) = body.rsplit_once('_')
+            && let Some(at) = head.len().checked_sub(UUID_LEN)
+            && let Some(thread) = head.get(at..)
+        {
+            return Self {
+                stamp: head[..at].trim_end_matches('-').to_owned(),
+                thread: thread.to_owned(),
+                rollout: rollout.to_owned(),
+            };
+        }
+        let mut groups: Vec<&str> = body.rsplitn(6, '-').collect();
+        let stamp = if groups.len() == 6 {
+            groups.pop().unwrap_or_default()
+        } else {
+            ""
+        };
+        groups.reverse();
+        let thread = groups.join("-");
+        Self {
+            stamp: stamp.to_owned(),
+            rollout: thread.clone(),
+            thread,
+        }
+    }
+
+    /// Which of two rollouts of one thread is newer, as Codex tells (see [`locate`]).
+    fn order(&self, other: &Self) -> std::cmp::Ordering {
+        (&self.stamp, &self.rollout).cmp(&(&other.stamp, &other.rollout))
+    }
+
+    /// The name Codex gives rollout `rollout` of thread `thread`, created at `at`.
+    pub(crate) fn file_name(at: OffsetDateTime, thread: &str, rollout: &str) -> String {
+        let stamp = Self::stamp_at(at);
+        if rollout == thread {
+            format!("rollout-{stamp}-{thread}.jsonl")
+        } else {
+            format!("rollout-{stamp}-{thread}_{rollout}.jsonl")
+        }
+    }
+
+    /// The timestamp a rollout created at `at` is named with (UTC, to the second).
+    pub(crate) fn stamp_at(at: OffsetDateTime) -> String {
+        let at = at.to_offset(time::UtcOffset::UTC);
+        format!(
+            "{:04}-{:02}-{:02}T{:02}-{:02}-{:02}",
+            at.year(),
+            u8::from(at.month()),
+            at.day(),
+            at.hour(),
+            at.minute(),
+            at.second(),
+        )
+    }
+}
+
+/// The thread a session is (see [`resume_id`]).
 fn thread_of(session: &SessionId) -> &str {
-    let id: &str = session.as_ref();
-    id.split_once('_').map_or(id, |(thread, _)| thread)
+    resume_id(session.as_ref())
 }
 
 #[derive(Debug, Clone)]
@@ -160,11 +289,7 @@ impl CodexListener {
     /// The session a codex rollout file holds (see [`session_id_of`]), or `None` if `path` is
     /// not one.
     fn session_id(path: &Path) -> Option<SessionId> {
-        let name = path.file_name()?.to_string_lossy();
-        if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
-            return None;
-        }
-        Some(session_id_of(&path.file_stem()?.to_string_lossy()))
+        RolloutName::of(path).map(|name| SessionId::from(name.thread))
     }
 
     /// Build a read-once session for an accepted codex rollout file (no change signal), or `None`.
@@ -179,12 +304,17 @@ impl CodexListener {
 impl Listener for CodexListener {
     type Session = CodexSession;
 
+    /// Each rollout as it appears, but for one older than a rollout of its thread already
+    /// yielded: a thread's segments are one session, followed from its newest (the one Codex
+    /// writes to), and a session yielded again replaces the one before. What an older segment
+    /// holds past the point a newer one continues from was captured while it was the newest
+    /// (or is by [`Sessions::existing`]).
     fn watch(self) -> impl Stream<Item = Result<CodexSession, WatchError>> + Send + 'static {
         let root = self.root;
         let pool = self.pool;
         async_stream::stream! {
             let files = TreeWatcher::builder()
-                .filter(|path| Self::session_id(path).is_some())
+                .filter(|path| RolloutName::of(path).is_some())
                 .watch(&root);
             let files = match files {
                 Ok(files) => files,
@@ -193,9 +323,16 @@ impl Listener for CodexListener {
                     return;
                 }
             };
+            let mut newest: std::collections::HashMap<String, RolloutName> =
+                std::collections::HashMap::new();
             for await file in files {
                 let (path, stat) = file.into_parts();
-                let Some(id) = Self::session_id(&path) else { continue };
+                let Some(name) = RolloutName::of(&path) else { continue };
+                if newest.get(&name.thread).is_some_and(|seen| name.order(seen).is_lt()) {
+                    continue;
+                }
+                let id = SessionId::from(name.thread.clone());
+                newest.insert(name.thread.clone(), name);
                 yield Ok(CodexSession {
                     id,
                     path: path.to_path_buf(),
@@ -410,18 +547,6 @@ impl CodexMessage {
     /// `source` (`SessionSource::SubAgent`: `review`, `compact`, `thread_spawn`, ...).
     fn parent(&self) -> Option<(SessionId, ParentKind)> {
         let meta = self.own_meta()?;
-        if let Some(own) = self.context.session.as_ref()
-            && thread_of(own) != own.as_ref()
-            && let Some(base) = meta["history_base"]["thread_id"].as_str()
-        {
-            let thread = thread_of(own);
-            let parent = if base == thread {
-                thread.to_owned()
-            } else {
-                format!("{thread}_{base}")
-            };
-            return Some((SessionId::from(parent), ParentKind::Continuation));
-        }
         let parent = [
             &meta["forked_from_id"],
             &meta["parent_thread_id"],
@@ -478,6 +603,55 @@ fn first_own_meta(path: &Path, session: &SessionId) -> Option<serde_json::Value>
     let mut line: CodexMessage = serde_json::from_str(&first).ok()?;
     line.context.session = Some(session.clone());
     line.own_meta().cloned()
+}
+
+/// One line of a rollout as capture reads it, and the bytes it spans.
+#[derive(Debug, Clone)]
+pub(crate) struct ReadLine {
+    /// Just past its newline.
+    pub end: u64,
+    pub message: CodexMessage,
+}
+
+/// The complete lines of rollout `bytes` (session `session`'s), read and told what their reader
+/// knows just as [`CodexSession::read`] reads the file from its start. A line that is not JSON is
+/// skipped, as capture skips it, and so is a last line without its newline (still being written,
+/// or torn), which Codex does not read either.
+pub(crate) fn read_lines(bytes: &[u8], session: &SessionId) -> Vec<ReadLine> {
+    let mut lines = Vec::new();
+    let mut usage_recorded = false;
+    let mut history_start = None;
+    let mut start = 0u64;
+    for line in bytes.split_inclusive(|b| *b == b'\n') {
+        start += line.len() as u64;
+        if !line.ends_with(b"\n") || line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let Ok(mut message) = serde_json::from_slice::<CodexMessage>(line) else {
+            continue;
+        };
+        // What `Stamper::stamp` does for a read from the start.
+        if message.kind == TOKEN_USAGE_RECORD {
+            usage_recorded = true;
+        }
+        message.context = LineContext {
+            session: Some(session.clone()),
+            usage_recorded,
+        };
+        if let Some(meta) = message.own_meta() {
+            history_start = history_start_of(meta);
+            usage_recorded |= records_usage(meta);
+        } else if let (Some(ordinal), Some(first)) = (message.ordinal, history_start)
+            && ordinal < first
+        {
+            message.inherit();
+        }
+        lines.push(ReadLine {
+            end: start,
+            message,
+        });
+    }
+    lines
 }
 
 /// Whether the first `end` bytes of the file at `path` contain `needle`, read in chunks so a
@@ -680,7 +854,7 @@ fn ends_with_ignore_case(text: &str, suffix: &str) -> bool {
 
 /// Whether `text` is a fragment of harness-injected context rather than something the user
 /// typed (codex-rs `is_contextual_user_fragment`).
-fn is_contextual_user_text(text: &str) -> bool {
+pub(super) fn is_contextual_user_text(text: &str) -> bool {
     let text = text.trim();
     CONTEXTUAL_USER_MARKERS.iter().any(|(start, end)| {
         starts_with_ignore_case(text, start) && ends_with_ignore_case(text, end)
@@ -844,7 +1018,7 @@ impl CodexMessage {
     }
 
     /// This rollout's own `session_meta` payload.
-    fn own_meta(&self) -> Option<&serde_json::Value> {
+    pub(crate) fn own_meta(&self) -> Option<&serde_json::Value> {
         (self.kind == "session_meta" && !self.is_copied_meta()).then_some(self.payload.as_ref()?)
     }
 
@@ -884,6 +1058,13 @@ impl CodexMessage {
                 usage_key(&info["last_token_usage"])?
             )),
         }
+    }
+
+    /// Whether this line ends a turn (`task_complete`, however it went, or `turn_aborted`).
+    pub(crate) fn ends_turn(&self) -> bool {
+        self.is_event("task_complete")
+            || self.is_event("turn_complete")
+            || self.is_event("turn_aborted")
     }
 
     /// Why the turn this event ends failed or stopped, when it did.
@@ -1125,8 +1306,8 @@ impl Message for CodexMessage {
     /// The thread a fork or subagent started from (codex-rs `SessionMeta::forked_from_id`,
     /// `parent_thread_id`, and before those `source.subagent.thread_spawn.parent_thread_id`).
     ///
-    /// A rollout a thread was reverted into continues the rollout its `history_base` names
-    /// (codex-rs `revert_thread.rs`), which is its parent here (see `session_id_of`).
+    /// A later segment of a thread (its `history_base` naming a rollout of the same thread) is
+    /// the thread itself, no child of it (see `session_id_of`).
     fn parent_session(&self) -> Option<SessionId> {
         self.parent().map(|(parent, _)| parent)
     }
@@ -1162,6 +1343,14 @@ impl Message for CodexMessage {
             TitleSource::Named,
             payload["thread_name"].as_str().unwrap_or_default(),
         ))
+    }
+
+    /// The line's `ordinal` (codex-rs `RolloutLine.ordinal`), in rollouts written since Codex
+    /// numbers its lines. A thread resumed on another machine from a copy of its rollout numbers
+    /// its new lines on from the copy's last, so two machines continuing one thread from the same
+    /// point repeat each other's numbers.
+    fn seq(&self) -> Option<u64> {
+        self.ordinal
     }
 }
 
@@ -2214,52 +2403,133 @@ mod tests {
             .collect()
     }
 
-    /// The rollout name carries the session: the thread id, or for a thread reverted into a
-    /// new rollout (codex-rs `rollout_file_name.rs`) both ids, so the two files never share one.
+    /// The rollout name carries the session: the thread id, also for a later segment of the
+    /// thread (codex-rs `rollout_file_name.rs`), which is the same session.
     #[rstest]
     #[case::current(
         "rollout-2026-09-24T02-39-05-01a0d147-e745-7ae2-a941-ce48e7888470",
+        "2026-09-24T02-39-05",
         "01a0d147-e745-7ae2-a941-ce48e7888470"
     )]
     #[case::date_only(
         "rollout-2025-05-07-5973b6c0-94b8-487b-a530-2aeb6098ae0e",
+        "2025-05-07",
         "5973b6c0-94b8-487b-a530-2aeb6098ae0e"
     )]
-    #[case::reverted(
+    #[case::segment(
         "rollout-2026-09-24T03-00-00-01a0d147-e745-7ae2-a941-ce48e7888470_01a0d160-0000-7000-8000-000000000001",
-        "01a0d147-e745-7ae2-a941-ce48e7888470_01a0d160-0000-7000-8000-000000000001"
+        "2026-09-24T03-00-00",
+        "01a0d160-0000-7000-8000-000000000001"
     )]
-    fn a_rollout_name_carries_its_session(#[case] stem: &str, #[case] id: &str) {
-        assert_eq!(session_id_of(stem), SessionId::from(id.to_owned()));
+    fn a_rollout_name_carries_its_session(
+        #[case] stem: &str,
+        #[case] stamp: &str,
+        #[case] rollout: &str,
+    ) {
+        let thread = if rollout.starts_with("01a0d160") {
+            "01a0d147-e745-7ae2-a941-ce48e7888470"
+        } else {
+            rollout
+        };
+        assert_eq!(session_id_of(stem), SessionId::from(thread.to_owned()));
+        let name = RolloutName::of(Path::new(&format!("/x/{stem}.jsonl"))).unwrap();
+        assert_eq!(name, RolloutName {
+            stamp: stamp.to_owned(),
+            thread: thread.to_owned(),
+            rollout: rollout.to_owned(),
+        });
     }
 
-    /// A reverted thread's rollout keeps the thread's own `session_meta` (its `id` is the thread
-    /// id), and continues the rollout its `history_base` names.
+    /// A later segment of a thread keeps the thread's own `session_meta` (its `id` is the thread
+    /// id): it is the thread's, never a child of it, whichever rollout its `history_base` names.
     #[rstest]
-    #[case::from_the_first_rollout(
-        "01a0d147-e745-7ae2-a941-ce48e7888470",
-        "01a0d147-e745-7ae2-a941-ce48e7888470"
-    )]
-    #[case::from_an_earlier_revert(
-        "01a0d150-0000-7000-8000-000000000009",
-        "01a0d147-e745-7ae2-a941-ce48e7888470_01a0d150-0000-7000-8000-000000000009"
-    )]
-    fn a_reverted_rollout_continues_its_history_base(#[case] base: &str, #[case] parent: &str) {
+    #[case::from_the_first_rollout("01a0d147-e745-7ae2-a941-ce48e7888470")]
+    #[case::from_an_earlier_segment("01a0d150-0000-7000-8000-000000000009")]
+    fn a_segment_is_its_thread(#[case] base: &str) {
         let thread = "01a0d147-e745-7ae2-a941-ce48e7888470";
         let mut m = line(&serde_json::json!({
-            "timestamp": "2026-09-24T03:00:00.000Z", "ordinal": 0, "type": "session_meta",
+            "timestamp": "2026-09-24T03:00:00.000Z", "ordinal": 12, "type": "session_meta",
             "payload": {"session_id": thread, "id": thread, "cwd": "/work",
                 "history_mode": "paginated", "git": {"branch": "main"},
                 "history_base": {"thread_id": base, "end_ordinal_exclusive": 12,
                     "end_byte_offset": 4096}},
         }));
-        m.context.session =
-            Some(SessionId::from(format!("{thread}_01a0d160-0000-7000-8000-000000000001")));
+        m.context.session = Some(SessionId::from(thread.to_owned()));
         assert!(!m.is_copied_meta());
+        assert_eq!(m.id(), Some(MessageId::from(thread.to_owned())));
         assert_eq!(m.cwd(), Some(PathBuf::from("/work")));
         assert_eq!(m.git_branch().as_deref(), Some("main"));
-        assert_eq!(m.parent_session(), Some(SessionId::from(parent.to_owned())));
-        assert_eq!(m.parent_kind(), Some(ParentKind::Continuation));
+        assert_eq!(m.parent_session(), None);
+    }
+
+    /// Codex resumes a thread from its newest segment; `locate` finds that one, and the listener
+    /// follows it, whichever order the files turn up in.
+    #[rstest]
+    #[tokio::test]
+    async fn a_thread_is_found_and_followed_at_its_newest_segment() {
+        let thread = "01a0d147-e745-7ae2-a941-ce48e7888470";
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("2026/09/24");
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join(format!("rollout-2026-09-24T02-39-05-{thread}.jsonl"));
+        let older = dir.join(format!(
+            "rollout-2026-09-24T03-00-00-{thread}_01a0d150-0000-7000-8000-000000000001.jsonl"
+        ));
+        let newest = dir.join(format!(
+            "rollout-2026-09-24T03-00-00-{thread}_01a0d150-0000-7000-8000-000000000002.jsonl"
+        ));
+        let other =
+            dir.join("rollout-2026-09-25T00-00-00-01a0ffff-0000-7000-8000-000000000000.jsonl");
+        for path in [&newest, &first, &other, &older] {
+            std::fs::write(path, "{}\n").unwrap();
+        }
+        assert_eq!(locate(root.path(), thread), Some(newest.clone()));
+        assert_eq!(rollouts_of(root.path(), thread), vec![first, older, newest.clone()]);
+
+        let listener = CodexSessions::builder().root(root.path()).pool(pool()).build();
+        let followed: Vec<CodexSession> = listener
+            .listener()
+            .unwrap()
+            .watch()
+            .take(4)
+            .take_until(tokio::time::sleep(std::time::Duration::from_secs(2)))
+            .map(Result::unwrap)
+            .collect()
+            .await;
+        let last: std::collections::HashMap<String, PathBuf> =
+            followed.into_iter().map(|session| (session.id.to_string(), session.path)).collect();
+        assert_eq!(last[thread], newest);
+
+        let existing: Vec<CodexSession> =
+            listener.existing().unwrap().map(Result::unwrap).collect().await;
+        let order: Vec<&Path> =
+            existing.iter().filter(|s| s.id.as_ref() == thread).map(|s| s.path.as_path()).collect();
+        assert_eq!(order.last(), Some(&newest.as_path()), "the newest is read last");
+        assert_eq!(order.len(), 3);
+    }
+
+    /// The whole-file reader sync uses reads every line as capture's own reader does.
+    #[rstest]
+    #[case("paginated-compacted.jsonl")]
+    #[case("session1.jsonl")]
+    #[case("forked-subagent.jsonl")]
+    #[case("legacy-forked-subagent.jsonl")]
+    #[tokio::test]
+    async fn reading_a_rollout_whole_matches_the_capture_reader(#[case] name: &str) {
+        let path = fixture(name);
+        let first: serde_json::Value =
+            serde_json::from_str(std::fs::read_to_string(&path).unwrap().lines().next().unwrap())
+                .unwrap();
+        let id = first["payload"]["id"].as_str().unwrap().to_owned();
+        let streamed = read_session(&id, path.clone()).await;
+        let whole = read_lines(&std::fs::read(&path).unwrap(), &SessionId::from(id));
+        let key = |m: &CodexMessage| (m.id(), m.seq(), m.role(), m.content(), m.usage());
+        assert_eq!(
+            whole.iter().map(|l| key(&l.message)).collect::<Vec<_>>(),
+            streamed.iter().map(key).collect::<Vec<_>>()
+        );
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(whole.iter().all(|l| bytes[usize::try_from(l.end).unwrap() - 1] == b'\n'));
     }
 
     /// Before 0.32.0 (codex-rs 43809a454e) a rollout had no `type`/`payload` envelope: its first
@@ -2518,5 +2788,22 @@ mod tests {
         let change = m.title().unwrap();
         assert_eq!(change.source, TitleSource::Named);
         assert_eq!(change.text.as_deref(), expected);
+    }
+
+    /// A line's `ordinal` is its sequence number; a line from before Codex numbered them has
+    /// none.
+    #[rstest]
+    #[case::numbered(Some(19))]
+    #[case::unnumbered(None)]
+    fn a_line_carries_its_ordinal(#[case] ordinal: Option<u64>) {
+        let mut raw = serde_json::json!({
+            "timestamp": "2026-09-24T02:47:49.222Z", "type": "response_item",
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}]},
+        });
+        if let Some(ordinal) = ordinal {
+            raw["ordinal"] = serde_json::json!(ordinal);
+        }
+        assert_eq!(line(&raw).seq(), ordinal);
     }
 }

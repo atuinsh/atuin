@@ -60,8 +60,27 @@ impl PiSessions {
         if let Some(root) = &self.root {
             return root.clone();
         }
-        session_root(&agent_dir(), env_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
+        default_root()
     }
+}
+
+/// Where pi keeps sessions by default (see [`session_root`]).
+pub(crate) fn default_root() -> PathBuf {
+    session_root(&agent_dir(), env_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
+}
+
+/// The file of session `id` under `root`. Pi names it `<timestamp>_<id>.jsonl`, so a file so
+/// named is looked for first; but the header is what says which session a file is (see the
+/// module docs), so a file named otherwise is found by its header.
+pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
+    let is_session = |path: &Path| {
+        PiListener::is_session_file(path)
+            && matches!(read_header(path), Ok(Header::Session { id: found }) if found == id)
+    };
+    crate::harnesstools::resume::find_file(root, |path| {
+        file_name_id(path).is_some_and(|named| named == id) && is_session(path)
+    })
+    .or_else(|| crate::harnesstools::resume::find_file(root, is_session))
 }
 
 /// Where pi keeps sessions when no `--session-dir` is given (pi-mono coding-agent `main.ts`):
@@ -69,10 +88,29 @@ impl PiSessions {
 /// `<agent dir>/sessions`, the first two with `~` expanded. A project's own
 /// `.pi/settings.json` can move its sessions too; no single root covers that.
 fn session_root(agent_dir: &Path, env: Option<&std::ffi::OsStr>) -> PathBuf {
-    if let Some(dir) = env {
-        return expand_tilde(dir);
+    custom_session_dir(agent_dir, env).unwrap_or_else(|| agent_dir.join("sessions"))
+}
+
+/// The session directory the user chose (`PI_CODING_AGENT_SESSION_DIR`, else the global
+/// `settings.json` `sessionDir`), if any: pi keeps every project's sessions directly in it.
+fn custom_session_dir(agent_dir: &Path, env: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    match env {
+        Some(dir) => Some(expand_tilde(dir)),
+        None => settings_session_dir(agent_dir),
     }
-    settings_session_dir(agent_dir).unwrap_or_else(|| agent_dir.join("sessions"))
+}
+
+/// Where pi puts a new session started in `cwd`: the chosen session directory itself, else
+/// `<agent dir>/sessions/--<cwd with separators as dashes>--` (pi-mono coding-agent
+/// `session-manager.ts` `getDefaultSessionDirPath`).
+pub(crate) fn new_session_dir(cwd: &Path) -> PathBuf {
+    let agent_dir = agent_dir();
+    let env = env_nonempty("PI_CODING_AGENT_SESSION_DIR");
+    custom_session_dir(&agent_dir, env.as_deref()).unwrap_or_else(|| {
+        let cwd = cwd.to_string_lossy();
+        let cwd = cwd.strip_prefix(['/', '\\']).unwrap_or(&cwd).replace(['/', '\\', ':'], "-");
+        agent_dir.join("sessions").join(format!("--{cwd}--"))
+    })
 }
 
 /// The global `settings.json` `sessionDir` (pi-mono coding-agent `settings-manager.ts`
