@@ -6,6 +6,8 @@ use tempfile::TempDir;
 
 use super::*;
 
+mod append;
+
 const THREAD: &str = "01a0ea43-08ee-7733-a4bd-7f4dc0189cda";
 
 #[fixture]

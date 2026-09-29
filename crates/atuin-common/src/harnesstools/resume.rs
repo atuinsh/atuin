@@ -666,15 +666,16 @@ mod tests {
                 ),
                 "",
             );
-            let want =
-                touch(&root.join(format!("2026/09/19/rollout-2026-09-19T00-00-00-{id}.jsonl")), "");
-            let reverted = format!("{id}_99999999-4e5f-6789-abcd-ef0123456789");
-            let want_reverted = touch(
-                &root.join(format!("2026/09/20/rollout-2026-09-20T00-00-00-{reverted}.jsonl")),
+            touch(&root.join(format!("2026/09/19/rollout-2026-09-19T00-00-00-{id}.jsonl")), "");
+            // A later segment of the thread: the one Codex resumes it from.
+            let segment = format!("{id}_99999999-4e5f-6789-abcd-ef0123456789");
+            let want = touch(
+                &root.join(format!("2026/09/20/rollout-2026-09-20T00-00-00-{segment}.jsonl")),
                 "",
             );
-            assert_eq!(codex::session::locate(root, id), Some(want));
-            assert_eq!(codex::session::locate(root, &reverted), Some(want_reverted));
+            assert_eq!(codex::session::locate(root, id), Some(want.clone()));
+            // A session captured as the segment before segments were the thread's.
+            assert_eq!(codex::session::locate(root, &segment), Some(want));
             assert_eq!(codex::session::locate(root, "0a1b2c3d"), None);
         }
 

@@ -38,6 +38,7 @@ fn captured(jsonl: &str) -> Vec<RehydrateMessage> {
             turn_id: m.turn_id(),
             cwd: m.cwd(),
             git_branch: m.git_branch(),
+            seq: None,
         })
         .collect()
 }
@@ -143,6 +144,7 @@ fn message(id: &str, parent: Option<&str>, role: Role, content: Vec<Content>) ->
         turn_id: None,
         cwd: None,
         git_branch: None,
+        seq: None,
     }
 }
 

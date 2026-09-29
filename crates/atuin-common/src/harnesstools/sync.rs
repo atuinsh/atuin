@@ -85,6 +85,8 @@ pub struct AppendOptions<'a> {
 /// What [`SessionSync::append`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppendOutcome {
+    /// The transcript written to, which the harness now resumes from: for Codex, a new segment
+    /// of the thread where the rows branched off.
     pub native_path: PathBuf,
     /// The source ids of the lines written, in order. Rows with nothing the format can carry
     /// are not written, and neither are rows merged into another (see
@@ -93,7 +95,7 @@ pub struct AppendOutcome {
     /// The line the harness now resumes from.
     pub tip_source_id: Option<String>,
     /// Whether a marker was written to make that line the tip (Claude Code's `last-prompt`,
-    /// pi's `label`).
+    /// pi's `label`, a Codex segment of nothing but its header).
     pub marked_tip: bool,
 }
 

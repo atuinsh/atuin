@@ -817,6 +817,7 @@ pub(crate) mod tests {
                     turn_id: m.turn_id(),
                     cwd: m.cwd(),
                     git_branch: m.git_branch(),
+                    seq: None,
                 });
             }
         }
@@ -963,6 +964,7 @@ pub(crate) mod tests {
             turn_id: None,
             cwd: None,
             git_branch: None,
+            seq: None,
         }
     }
 
