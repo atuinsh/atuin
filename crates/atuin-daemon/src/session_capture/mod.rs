@@ -48,6 +48,9 @@ pub enum RebuildError {
     Unavailable,
     #[error(transparent)]
     Sidecar(#[from] DbError),
+    /// The rebuild panicked, or the runtime is shutting down.
+    #[error("the AI session rebuild stopped unexpectedly")]
+    Aborted,
 }
 
 pub(crate) struct Sink {
@@ -193,20 +196,136 @@ fn sanitize_message(msg: &mut Message) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StoreState {
-    /// Startup recovery is reprojecting the sidecar; reads see what is projected so far.
+    /// Startup recovery or a rebuild is reprojecting the sidecar; reads see what is projected so
+    /// far.
     Recovering,
-    /// Recovery succeeded: capture (when enabled) and import are running.
+    /// The sidecar holds every record: capture (when enabled) and import are running.
     Ready,
-    /// Opening or recovering the store failed; capture and import stay off until restart.
+    /// Opening or reprojecting the store failed; capture and import stay off until restart.
     Unavailable,
 }
 
-/// A rebuild in progress: the store is ready again once this drops.
-struct Rebuilding(Arc<watch::Sender<StoreState>>);
+/// Replays the sidecar from the record store, for startup recovery and rebuilds alike, and is
+/// the only thing that ends [`StoreState::Recovering`].
+///
+/// A replay settles the state only if no rebuild emptied the sidecar since it started: one that
+/// did may have deleted what the replay projected, so the replay goes round again rather than
+/// call ready a sidecar missing records (whose reads would miss them, and whose dedup gate would
+/// let capture push them twice). Rebuilds and settling take `resets` in turn, so none can land
+/// between a replay's check and the state it sets.
+struct Replayer {
+    sink: Arc<Sink>,
+    progress: ReprojectProgress,
+    resets: Mutex<Resets>,
+    /// Stops a replay between replaying and settling, for tests to interleave a rebuild there.
+    #[cfg(test)]
+    before_settling: Option<Arc<tests::Gate>>,
+}
 
-impl Drop for Rebuilding {
+struct Resets {
+    /// How many rebuilds have emptied the sidecar.
+    count: u64,
+    /// Whether a replay is running: then the state is [`StoreState::Recovering`], and the replay
+    /// settles it.
+    replaying: bool,
+}
+
+/// Settles the state as [`StoreState::Unavailable`] if a replay ends without settling it (a
+/// panic): nothing else would, and capture and reads would wait on it for good.
+struct Unsettled<'a>(Option<&'a watch::Sender<StoreState>>);
+
+impl Drop for Unsettled<'_> {
     fn drop(&mut self) {
-        self.0.send_replace(StoreState::Ready);
+        if let Some(state) = self.0 {
+            state.send_replace(StoreState::Unavailable);
+        }
+    }
+}
+
+impl Replayer {
+    /// Replay until a replay has run entirely after the last reset, then settle `state`:
+    /// [`StoreState::Ready`] when that replay succeeded, [`StoreState::Unavailable`] otherwise.
+    async fn replay(&self, state: &watch::Sender<StoreState>) -> StoreState {
+        let mut unsettled = Unsettled(Some(state));
+        loop {
+            let seen = self.resets.lock().await.count;
+            let started = Instant::now();
+            let result = self.sink.records.reproject_with(&self.sink.sidecar, &self.progress).await;
+            #[cfg(test)]
+            if let Some(gate) = &self.before_settling {
+                gate.pass().await;
+            }
+
+            let mut resets = self.resets.lock().await;
+            if resets.count != seen {
+                tracing::info!("the ai-session sidecar was reset while replaying; replaying again");
+                continue;
+            }
+            let settled = match result {
+                Ok(stats) => {
+                    tracing::info!(
+                        replayed = stats.replayed,
+                        restarted = stats.restarted,
+                        elapsed = ?started.elapsed(),
+                        "ai-session sidecar replayed"
+                    );
+                    StoreState::Ready
+                }
+                Err(err) => {
+                    // Capture's dedup gate cannot trust a sidecar missing records.
+                    tracing::error!(
+                        ?err,
+                        "failed to reproject ai-session sidecar; capture and import disabled \
+                         until restart"
+                    );
+                    StoreState::Unavailable
+                }
+            };
+            resets.replaying = false;
+            state.send_replace(settled);
+            drop(resets);
+            unsettled.0 = None;
+            return settled;
+        }
+    }
+
+    /// See [`AiHarnessSessionCapture::rebuild`]. Not cancellation safe: it is spawned.
+    async fn rebuild(
+        self: Arc<Self>,
+        state: Arc<watch::Sender<StoreState>>,
+    ) -> Result<(), RebuildError> {
+        let mut resets = self.resets.lock().await;
+        if *state.borrow() == StoreState::Unavailable {
+            return Err(RebuildError::Unavailable);
+        }
+        if !resets.replaying {
+            self.progress.clear();
+        }
+        // Said before taking capture's lock, which a capture waiting for it checks again (see
+        // `Sink::append`): no capture checks the sidecar from here until a replay settles.
+        state.send_replace(StoreState::Recovering);
+        let reset = {
+            // No capture is between its dedup check and its append while the rows go.
+            let _local = self.sink.sidecar.lock_local_projection().await;
+            self.sink.sidecar.reset().await
+        };
+        if let Err(err) = reset {
+            // One transaction: nothing went. A replay running settles the state as before;
+            // otherwise the store was ready, and still is.
+            if !resets.replaying {
+                state.send_replace(StoreState::Ready);
+            }
+            return Err(err.into());
+        }
+        // A replay that started before this sees it when it settles, and goes round again.
+        resets.count += 1;
+        if !resets.replaying {
+            resets.replaying = true;
+            let replayer = self.clone();
+            tokio::spawn(async move { replayer.replay(&state).await });
+        }
+        drop(resets);
+        Ok(())
     }
 }
 
@@ -226,11 +345,12 @@ pub struct AiHarnessSessionCapture {
     /// Runs the harness session file reads of capture and import.
     pool: BlockingPool,
     state: watch::Receiver<StoreState>,
-    /// Sets `state` for a rebuild. Weak: startup recovery owns it, so that recovery panicking
-    /// or aborted still closes the channel, which reads as recovery over.
+    /// Sets `state` for a rebuild. Weak: startup recovery owns it, so that recovery aborted
+    /// still closes the channel, which reads as recovery over.
     state_tx: Weak<watch::Sender<StoreState>>,
-    /// How far startup recovery's reprojection has got.
-    progress: ReprojectProgress,
+    /// Replays the sidecar, and so reports how far startup recovery or a rebuild has got. None
+    /// without a persistent store.
+    replayer: Option<Arc<Replayer>>,
     /// Recovery, then the capture engine for the life of the facade; aborted on drop.
     background: Option<JoinHandle<()>>,
 }
@@ -249,7 +369,7 @@ impl AiHarnessSessionCapture {
     /// Recovery is [`AiSessionStore::reproject`]: only the records past each series' watermark
     /// are replayed, and everything when the sidecar is fresh (a new install, or one another
     /// build's migrations made and [`AiSessionDatabase::open`] set aside) or its watermarks were
-    /// cleared (a migration that needs a backfill, a store maintenance command, a new key).
+    /// cleared (a migration that needs a backfill, a key change).
     ///
     /// Capture and import wait for recovery: the dedup gate trusts the sidecar, so writing before
     /// it holds every persisted message would push duplicate records. So does the sync worker's
@@ -262,37 +382,44 @@ impl AiHarnessSessionCapture {
         capture: bool,
         pool: BlockingPool,
     ) -> Self {
+        Self::open_with(
+            records,
+            sidecar,
+            capture,
+            pool,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    fn open_with(
+        records: AiSessionStore,
+        sidecar: AiSessionDatabase,
+        capture: bool,
+        pool: BlockingPool,
+        #[cfg(test)] before_settling: Option<Arc<tests::Gate>>,
+    ) -> Self {
         let (state_tx, state) = watch::channel(StoreState::Recovering);
         let state_tx = Arc::new(state_tx);
         let sink = Arc::new(Sink::with_state(records, sidecar, state.clone()));
-        let progress = ReprojectProgress::default();
+        let replayer = Arc::new(Replayer {
+            sink: sink.clone(),
+            progress: ReprojectProgress::default(),
+            resets: Mutex::new(Resets {
+                count: 0,
+                replaying: true,
+            }),
+            #[cfg(test)]
+            before_settling,
+        });
 
         let background = tokio::spawn({
             let sink = sink.clone();
             let pool = pool.clone();
-            let progress = progress.clone();
+            let replayer = replayer.clone();
             let state_tx = state_tx.clone();
             async move {
-                let started = Instant::now();
-                let state = match sink.records.reproject_with(&sink.sidecar, &progress).await {
-                    Ok(stats) => {
-                        tracing::info!(
-                            replayed = stats.replayed,
-                            restarted = stats.restarted,
-                            elapsed = ?started.elapsed(),
-                            "ai-session sidecar recovered"
-                        );
-                        StoreState::Ready
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            ?err,
-                            "failed to reproject ai-session sidecar; capture and import disabled \
-                             until restart"
-                        );
-                        StoreState::Unavailable
-                    }
-                };
+                let state = replayer.replay(&state_tx).await;
                 // Capture is opt-in. When disabled we still serve existing sessions, but never
                 // spawn the listeners that copy new transcripts into the synced record store.
                 let _engine = if capture && state == StoreState::Ready {
@@ -300,7 +427,6 @@ impl AiHarnessSessionCapture {
                 } else {
                     SessionCaptureEngine::nop()
                 };
-                state_tx.send_replace(state);
                 std::future::pending::<()>().await;
             }
         });
@@ -310,7 +436,7 @@ impl AiHarnessSessionCapture {
             pool,
             state,
             state_tx: Arc::downgrade(&state_tx),
-            progress,
+            replayer: Some(replayer),
             background: Some(background),
         }
     }
@@ -346,7 +472,7 @@ impl AiHarnessSessionCapture {
             state,
             // Nothing sets the state a test drives but the test.
             state_tx: Weak::new(),
-            progress: ReprojectProgress::default(),
+            replayer: None,
             background: None,
         }
     }
@@ -359,47 +485,19 @@ impl AiHarnessSessionCapture {
     /// Everything projected is deleted ([`AiSessionDatabase::reset`]) before this returns, then
     /// replayed in the background, recovering as at startup meanwhile: reads are refused as
     /// rebuilding with the replay's progress, and capture and import wait (their dedup gate
-    /// trusts the sidecar). During startup recovery, or another rebuild, the reprojection
-    /// running notices the reset and starts over, so nothing more is started.
+    /// trusts the sidecar). During startup recovery, or another rebuild, the replay running
+    /// replays again after this reset before the store is ready (see `Replayer`).
+    ///
+    /// Runs to the end once started, even if the caller stops waiting (a client disconnecting):
+    /// stopped midway, the store would recover with no replay to end it.
     pub async fn rebuild(&self) -> Result<(), RebuildError> {
-        let state = *self.state.borrow();
-        let state_tx = match (state, self.state_tx.upgrade()) {
-            (StoreState::Unavailable, _) | (_, None) => return Err(RebuildError::Unavailable),
-            (_, Some(state_tx)) => state_tx,
+        let (Some(replayer), Some(state)) = (self.replayer.clone(), self.state_tx.upgrade()) else {
+            return Err(RebuildError::Unavailable);
         };
-        // Replay here unless a reprojection is running already, which starts over on the reset.
-        let replay = (state == StoreState::Ready).then(|| {
-            self.progress.clear();
-            state_tx.send_replace(StoreState::Recovering);
-            // Ready again once replayed, however that ends (a panic included), so reads and
-            // capture never wait on a rebuild that is over.
-            Rebuilding(state_tx)
-        });
-        let reset = {
-            // No capture is between its dedup check and its append while the rows go.
-            let _local = self.sink.sidecar.lock_local_projection().await;
-            self.sink.sidecar.reset().await
-        };
-        reset?;
-        if let Some(rebuilding) = replay {
-            let sink = self.sink.clone();
-            let progress = self.progress.clone();
-            tokio::spawn(async move {
-                let started = Instant::now();
-                match sink.records.reproject_with(&sink.sidecar, &progress).await {
-                    Ok(stats) => tracing::info!(
-                        replayed = stats.replayed,
-                        elapsed = ?started.elapsed(),
-                        "ai-session sidecar rebuilt"
-                    ),
-                    // Watermarks stay below what failed, so the next reprojection (after a sync,
-                    // or at startup) retries it.
-                    Err(err) => tracing::error!(?err, "failed to rebuild the ai-session sidecar"),
-                }
-                drop(rebuilding);
-            });
-        }
-        Ok(())
+        tokio::spawn(replayer.rebuild(state)).await.unwrap_or_else(|err| {
+            tracing::error!(?err, "the ai-session rebuild failed");
+            Err(RebuildError::Aborted)
+        })
     }
 
     /// A handle for waiting out startup recovery.
@@ -420,7 +518,7 @@ impl AiHarnessSessionCapture {
     /// there are to replay (see [`ReprojectProgress::get`]).
     #[must_use]
     pub fn recovery_progress(&self) -> (u64, u64) {
-        self.progress.get()
+        self.replayer.as_ref().map_or((0, 0), |replayer| replayer.progress.get())
     }
 
     /// Whether recovery succeeded and the persistent session store is ready for capture and
@@ -986,6 +1084,124 @@ mod tests {
 
         let nop = AiHarnessSessionCapture::nop().await;
         assert!(matches!(nop.rebuild().await, Err(RebuildError::Unavailable)));
+    }
+
+    /// Stops a replay between replaying and settling the store's state until released, telling
+    /// the test it got there (see `Replayer::before_settling`).
+    pub(super) struct Gate {
+        reached: tokio::sync::Semaphore,
+        released: tokio::sync::Semaphore,
+    }
+
+    impl Default for Gate {
+        fn default() -> Self {
+            Self {
+                reached: tokio::sync::Semaphore::new(0),
+                released: tokio::sync::Semaphore::new(0),
+            }
+        }
+    }
+
+    impl Gate {
+        pub(super) async fn pass(&self) {
+            self.reached.add_permits(1);
+            self.released.acquire().await.unwrap().forget();
+        }
+
+        /// Wait for a replay to have replayed, and hold it there.
+        async fn reached(&self) {
+            let reached = tokio::time::timeout(Duration::from_secs(10), self.reached.acquire());
+            reached.await.expect("no replay reached the gate").unwrap().forget();
+        }
+
+        fn release(&self) {
+            self.released.add_permits(1);
+        }
+    }
+
+    /// A rebuild landing after a replay (startup recovery's, or an earlier rebuild's) has
+    /// replayed, but before it settled the store's state, empties the sidecar under it: the
+    /// replay must replay again rather than call the empty sidecar ready, which would miss every
+    /// record in reads and let capture push them all a second time.
+    #[rstest]
+    #[tokio::test]
+    async fn a_rebuild_before_a_replay_settles_is_replayed_before_ready(
+        #[values(false, true)] during_a_rebuild: bool,
+    ) {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(store.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = message_of("kept", "k1");
+        records.push(&msg).await.unwrap();
+        let gate = Arc::new(Gate::default());
+        let capture = AiHarnessSessionCapture::open_with(
+            records,
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+            Some(gate.clone()),
+        );
+        let projected = || sidecar.contains_message(&msg.session, &msg.source_id);
+
+        gate.reached().await;
+        if during_a_rebuild {
+            // Recovery settles; a first rebuild's replay then replays, and stops at the gate.
+            gate.release();
+            assert!(capture.ready().await);
+            capture.rebuild().await.unwrap();
+            gate.reached().await;
+        }
+        assert!(projected().await.unwrap(), "the replay has replayed");
+        assert!(capture.is_recovering());
+
+        capture.rebuild().await.unwrap();
+        assert!(!projected().await.unwrap(), "the rebuild emptied the sidecar");
+        // The replay goes on to settle, sees the reset, and replays again.
+        gate.release();
+        gate.reached().await;
+        assert!(capture.is_recovering(), "not ready before that replay settles");
+        assert!(projected().await.unwrap(), "replayed after the reset");
+        gate.release();
+        assert!(capture.ready().await);
+        assert!(projected().await.unwrap());
+
+        // Capture trusts the sidecar again, rightly: nothing is pushed twice.
+        assert_eq!(capture.sink.append(msg).await.unwrap(), Appended::Duplicate);
+        let stored = store.all_tagged(&RecordTag::AiSession).await.unwrap();
+        assert_eq!(stored.len(), 1);
+    }
+
+    /// A rebuild whose caller gives up midway (a client disconnecting) still ends ready, rather
+    /// than leave the store recovering with no replay to end it.
+    #[rstest]
+    #[tokio::test]
+    async fn a_rebuild_given_up_on_still_ends_ready() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = message_of("kept", "k1");
+        records.push(&msg).await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+
+        // The rebuild waits for capture's lock, and is given up on there.
+        let local = sidecar.lock_local_projection().await;
+        let wait = Duration::from_millis(50);
+        assert!(tokio::time::timeout(wait, capture.rebuild()).await.is_err());
+        let mut state = capture.state.clone();
+        state.wait_for(|state| *state == StoreState::Recovering).await.unwrap();
+        drop(local);
+        let ready = tokio::time::timeout(Duration::from_secs(10), capture.ready());
+        assert!(ready.await.expect("the rebuild never ended"));
+        assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
     }
 
     /// Recovery replays only what the sidecar has not projected yet, and reports how far it got.
