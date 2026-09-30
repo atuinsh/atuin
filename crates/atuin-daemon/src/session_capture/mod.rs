@@ -38,12 +38,17 @@ pub enum AppendError {
     Sidecar(#[from] DbError),
     #[error(transparent)]
     Push(#[from] PushError),
+    /// The store is unavailable (its recovery or a rebuild failed): its sidecar may be missing
+    /// persisted messages, so the dedup gate cannot be trusted and nothing is written.
+    #[error("the AI session store is unavailable")]
+    Unavailable,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum RebuildError {
     /// Opening or recovering the store failed at startup: there is nothing to rebuild with until
-    /// the daemon restarts, which rebuilds anyway.
+    /// the daemon restarts, which rebuilds anyway. (A store that recovered but whose rebuild then
+    /// failed can be rebuilt again.)
     #[error("the AI session store is unavailable: it failed to open or recover at startup")]
     Unavailable,
     #[error(transparent)]
@@ -60,7 +65,8 @@ pub(crate) struct Sink {
     // Serialize the dedup gate + persistence across live capture and import. At most one record
     // can be waiting for projection; repair it before admitting another capture.
     pending_projection: Mutex<Option<Message>>,
-    /// The store's state: capture and import wait out a rebuild (see `append`).
+    /// The store's state: capture and import wait out a rebuild, and are refused while the store
+    /// is unavailable (see `append`).
     state: watch::Receiver<StoreState>,
 }
 
@@ -89,6 +95,11 @@ impl Sink {
         BroadcastStream::new(self.tail.subscribe())
     }
 
+    /// Persist and project `msg`, unless its logical message is already projected.
+    ///
+    /// Only while the store is [`StoreState::Ready`]: this waits out a rebuild, and refuses with
+    /// [`AppendError::Unavailable`] (writing nothing) while the store is unavailable, as the
+    /// sidecar the dedup gate trusts may then be missing persisted messages.
     pub(crate) async fn append(&self, mut msg: Message) -> Result<Appended, AppendError> {
         // Apply capture policy before either persistence path or the live tail. Keep structural
         // rows (even with no content) so parent links and usage accounting remain intact.
@@ -113,6 +124,11 @@ impl Sink {
                 break (pending, local);
             }
         };
+        // A failed replay (or a closed channel while recovering: recovery aborted) leaves a
+        // sidecar that may be missing persisted messages, which the dedup gate would push again.
+        if *state.borrow() != StoreState::Ready {
+            return Err(AppendError::Unavailable);
+        }
         if let Some(previous) = pending.as_ref() {
             self.project_and_broadcast(previous).await?;
             *pending = None;
@@ -201,7 +217,9 @@ pub(crate) enum StoreState {
     Recovering,
     /// The sidecar holds every record: capture (when enabled) and import are running.
     Ready,
-    /// Opening or reprojecting the store failed; capture and import stay off until restart.
+    /// Opening or reprojecting the store failed; capture and import are refused (see
+    /// [`Sink::append`]) until restart, or, once startup recovery had succeeded, until a rebuild
+    /// succeeds.
     Unavailable,
 }
 
@@ -228,6 +246,10 @@ struct Resets {
     /// Whether a replay is running: then the state is [`StoreState::Recovering`], and the replay
     /// settles it.
     replaying: bool,
+    /// Whether startup recovery succeeded, so capture is running and a store left unavailable by
+    /// a failed rebuild can be rebuilt again. After a failed startup recovery capture never
+    /// started, and the store stays unavailable until restart.
+    recovered: bool,
 }
 
 /// Settles the state as [`StoreState::Unavailable`] if a replay ends without settling it (a
@@ -273,14 +295,23 @@ impl Replayer {
                 }
                 Err(err) => {
                     // Capture's dedup gate cannot trust a sidecar missing records.
-                    tracing::error!(
-                        ?err,
-                        "failed to reproject ai-session sidecar; capture and import disabled \
-                         until restart"
-                    );
+                    if resets.recovered {
+                        tracing::error!(
+                            ?err,
+                            "failed to reproject ai-session sidecar; capture and import paused \
+                             until a rebuild succeeds or restart"
+                        );
+                    } else {
+                        tracing::error!(
+                            ?err,
+                            "failed to reproject ai-session sidecar; capture and import disabled \
+                             until restart"
+                        );
+                    }
                     StoreState::Unavailable
                 }
             };
+            resets.recovered |= settled == StoreState::Ready;
             resets.replaying = false;
             state.send_replace(settled);
             drop(resets);
@@ -295,7 +326,9 @@ impl Replayer {
         state: Arc<watch::Sender<StoreState>>,
     ) -> Result<(), RebuildError> {
         let mut resets = self.resets.lock().await;
-        if *state.borrow() == StoreState::Unavailable {
+        // Ready or unavailable unless a replay is running (both settled under `resets`).
+        let before = *state.borrow();
+        if before == StoreState::Unavailable && !resets.recovered {
             return Err(RebuildError::Unavailable);
         }
         if !resets.replaying {
@@ -311,9 +344,9 @@ impl Replayer {
         };
         if let Err(err) = reset {
             // One transaction: nothing went. A replay running settles the state as before;
-            // otherwise the store was ready, and still is.
+            // otherwise the store is as it was: ready, or still unavailable.
             if !resets.replaying {
-                state.send_replace(StoreState::Ready);
+                state.send_replace(before);
             }
             return Err(err.into());
         }
@@ -408,6 +441,7 @@ impl AiHarnessSessionCapture {
             resets: Mutex::new(Resets {
                 count: 0,
                 replaying: true,
+                recovered: false,
             }),
             #[cfg(test)]
             before_settling,
@@ -1202,6 +1236,119 @@ mod tests {
         let ready = tokio::time::timeout(Duration::from_secs(10), capture.ready());
         assert!(ready.await.expect("the rebuild never ended"));
         assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
+    }
+
+    /// A rebuild whose replay fails after emptying the sidecar leaves it missing persisted
+    /// messages: capture must not trust its dedup gate then. A line already in the record store is
+    /// refused rather than pushed again, and its transcript is not checkpointed past, until a
+    /// rebuild succeeds -- which then finds it projected.
+    #[rstest]
+    #[tokio::test]
+    async fn a_failed_rebuild_refuses_capture_until_a_rebuild_succeeds() {
+        use atuin_common::harnesstools::session::{Checkpoint, SessionId};
+
+        use super::engine::store as capture_rows;
+        use super::message_enricher::MessageEnricher;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(store.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sidecar = AiSessionDatabase::open(&path).await.unwrap();
+        let msg = message_of("kept", "k1");
+        records.push(&msg).await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        let stored = async || store.all_tagged(&RecordTag::AiSession).await.unwrap().len();
+
+        // The rebuild empties the sidecar, then its replay fails.
+        let fault =
+            atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
+        atuin_common::db::query(
+            "CREATE TRIGGER fail_write BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, \
+             'injected failure'); END",
+        )
+        .execute(fault.pool())
+        .await
+        .unwrap();
+        capture.rebuild().await.unwrap();
+        assert!(!capture.ready().await, "the replay failed");
+        assert!(!sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
+
+        // Capture is refused, and pushes nothing.
+        assert!(matches!(capture.sink.append(msg.clone()).await, Err(AppendError::Unavailable)));
+        assert_eq!(stored().await, 1, "the persisted message was not pushed again");
+
+        // The listener holds the line, unpushed and not checkpointed past.
+        let session = SessionId::from("kept".to_owned());
+        let enricher = MessageEnricher::new(HarnessKind::ClaudeCode);
+        let handle = enricher.handle(&session);
+        assert_eq!(handle, msg.session);
+        let checkpoint = Checkpoint { at: 40, digest: 7 };
+        let listener = tokio::spawn({
+            let (sink, msg) = (capture.sink.clone(), msg.clone());
+            async move {
+                let mut stuck = std::collections::HashSet::new();
+                capture_rows(&sink, &enricher, &mut stuck, &session, vec![msg], checkpoint).await;
+                stuck
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!listener.is_finished(), "capture pauses while the store is unavailable");
+        assert_eq!(stored().await, 1);
+        assert_eq!(sidecar.checkpoint(&handle).await.unwrap(), None, "no checkpoint past it");
+
+        // A rebuild that succeeds makes the store ready again: the held line is captured as the
+        // duplicate it is, and checkpointed past.
+        atuin_common::db::query("DROP TRIGGER fail_write").execute(fault.pool()).await.unwrap();
+        capture.rebuild().await.unwrap();
+        assert!(capture.ready().await);
+        let stuck = tokio::time::timeout(Duration::from_secs(10), listener).await;
+        assert!(stuck.expect("capture never resumed").unwrap().is_empty());
+        assert_eq!(sidecar.checkpoint(&handle).await.unwrap(), Some(checkpoint));
+        assert_eq!(capture.sink.append(msg).await.unwrap(), Appended::Duplicate);
+        assert_eq!(stored().await, 1, "nothing was pushed twice");
+    }
+
+    /// After a failed startup recovery, capture never started and the store stays unavailable
+    /// until restart: a rebuild is refused.
+    #[rstest]
+    #[tokio::test]
+    async fn a_failed_startup_recovery_refuses_rebuilds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::open(&path).await.unwrap();
+        let msg = message_of("kept", "k1");
+        records.push(&msg).await.unwrap();
+        let fault =
+            atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
+        atuin_common::db::query(
+            "CREATE TRIGGER fail_write BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, \
+             'injected failure'); END",
+        )
+        .execute(fault.pool())
+        .await
+        .unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar,
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(!capture.ready().await);
+        assert!(matches!(capture.sink.append(msg).await, Err(AppendError::Unavailable)));
+        assert!(matches!(capture.rebuild().await, Err(RebuildError::Unavailable)));
+        assert!(!capture.is_available());
     }
 
     /// Recovery replays only what the sidecar has not projected yet, and reports how far it got.

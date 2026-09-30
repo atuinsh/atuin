@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId};
+use atuin_client::ai_session::{Appended, HarnessKind, HarnessSession, Message, NativeSessionId};
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::session::{
     AnyMessage, CaptureError, Checkpoint, RuntimeError, SessionEvent, SessionId,
@@ -13,8 +13,8 @@ use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use super::Sink;
 use super::message_enricher::{MessageEnricher, SYNTHETIC};
+use super::{AppendError, Sink, StoreState};
 
 /// Backoff bounds for retrying a harness listener whose session directory does not exist yet.
 const LISTENER_RETRY_START: Duration = Duration::from_secs(2);
@@ -155,7 +155,12 @@ async fn capture(
 
 /// Append a session's rows, then checkpoint just past the line that completed them unless an
 /// append failed.
-async fn store(
+///
+/// A row refused because the store is unavailable (see [`Sink::append`]) pauses the listener
+/// until the store is ready again (a rebuild succeeding), then is retried, so the line is neither
+/// lost nor checkpointed past meanwhile. Should the store stay unavailable, a restart re-reads it
+/// from the checkpoint.
+pub(super) async fn store(
     sink: &Sink,
     enricher: &MessageEnricher,
     stuck: &mut HashSet<SessionId>,
@@ -164,7 +169,7 @@ async fn store(
     checkpoint: Checkpoint,
 ) {
     for msg in rows {
-        if let Err(e) = sink.append(msg).await {
+        if let Err(e) = append(sink, msg).await {
             tracing::warn!(?e, "failed to capture ai-session message");
             stuck.insert(session.clone());
         }
@@ -176,6 +181,23 @@ async fn store(
     // profiles.
     if let Err(e) = sink.sidecar.set_checkpoint(&enricher.handle(session), checkpoint).await {
         tracing::warn!(?e, "failed to record ai-session checkpoint");
+    }
+}
+
+/// Append `msg`, waiting (not retrying hot) for the store to be ready whenever it is refused as
+/// unavailable. Gives up only if the store's state can no longer change (the facade is gone).
+async fn append(sink: &Sink, msg: Message) -> Result<Appended, AppendError> {
+    let mut state = sink.state.clone();
+    loop {
+        match sink.append(msg.clone()).await {
+            Err(AppendError::Unavailable) => {
+                tracing::debug!("ai-session store unavailable; capture paused until it is ready");
+                if state.wait_for(|state| *state == StoreState::Ready).await.is_err() {
+                    return Err(AppendError::Unavailable);
+                }
+            }
+            appended => return appended,
+        }
     }
 }
 
