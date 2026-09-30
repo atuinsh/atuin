@@ -496,12 +496,12 @@ mod tests {
         }
     }
 
-    proptest! {
-        #[test]
-        fn message_msgpack_roundtrips(m in arb_message()) {
+    #[rstest]
+    fn message_msgpack_roundtrips() {
+        proptest!(|(m in arb_message())| {
             let bytes = rmp_serde::to_vec_named(&m).unwrap();
             let back: Message = rmp_serde::from_slice(&bytes).unwrap();
             prop_assert_eq!(m, back);
-        }
+        });
     }
 }
