@@ -13,6 +13,8 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::fs::lock::{LockMode, LockOptions};
 use atuin_common::futures::Backoff;
+#[cfg(target_os = "macos")]
+use atuin_common::os::macos::{SpawnDisclaimedError, spawn_disclaimed};
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::pidfile::{self, PidfileGuard};
 use atuin_daemon::{PROTOCOL_VERSION, VERSION};
@@ -184,6 +186,15 @@ fn spawn_daemon_process() -> Result<()> {
 
     #[cfg(unix)]
     cmd.arg("--daemonize");
+
+    // On macOS, use `spawn_disclaimed` to prevent the terminal emulator from showing a "running in
+    // background" dot.
+    #[cfg(target_os = "macos")]
+    match spawn_disclaimed(cmd.get_program(), cmd.get_args()) {
+        Ok(()) => return Ok(()),
+        Err(SpawnDisclaimedError::Unsupported) => {}
+        Err(err) => return Err(err).wrap_err("failed to spawn daemon process"),
+    }
 
     cmd.spawn().wrap_err("failed to spawn daemon process")?;
 
