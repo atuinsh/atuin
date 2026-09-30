@@ -1580,18 +1580,20 @@ impl AiSessionDatabase {
         .await?)
     }
 
-    /// Delete every session `host` captured, with its rows, for a reprojection that replays that
-    /// host's records from scratch because its record series was rewritten or deleted: what the
-    /// old series projected may be gone from the store. Model calls the sessions claimed are
+    /// Delete every session holding a row `host` captured, whole, for a reprojection that replays
+    /// that host's records from scratch because its record series was rewritten or deleted: what
+    /// the old series projected may be gone from the store. Model calls the sessions claimed are
     /// attributed afresh among the claimants left, and groups they headed are regrouped.
     ///
-    /// Sessions are removed whole, by the host that captured them (their first row's), so rows
-    /// other hosts added to one go too. Those hosts' records are still in the store, so their
-    /// watermarks are forgotten along with `host`'s, and the next reprojection replays them and
-    /// restores the rows. (A row of unknown host, from before hosts were tracked, forgets every
-    /// watermark.) The other way round, rows `host` added to sessions another host captured stay:
-    /// they are keyed by source id, so a replay of whatever the series now holds re-adds them
-    /// unchanged. All of this is one invalidation: it bumps the [`Generation`].
+    /// That is the sessions `host` captured (their first row's host), and the sessions other
+    /// hosts captured that `host` added rows to: rows the old series projected there may be gone
+    /// too, and a session's counts, usage, times, title, preview and last reply cannot be worked
+    /// out again from the rows left (titles are only on the records). So they go whole, and the
+    /// other hosts with rows in them are replayed: their records are still in the store, so their
+    /// watermarks are forgotten along with `host`'s, and the next reprojection restores their rows
+    /// exactly, without `host`'s but for what its series still holds. (A row of unknown host, from
+    /// before hosts were tracked, forgets every watermark.) All of this is one invalidation: it
+    /// bumps the [`Generation`].
     ///
     /// Returns whether it forgot the watermarks of hosts other than `host`, which a reprojection
     /// in progress must replay again.
@@ -1600,42 +1602,49 @@ impl AiSessionDatabase {
         let tag = RecordTag::AiSession.as_str();
         let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
 
-        let turns: Vec<(i64, String)> = db::query_as(
-            "SELECT DISTINCT m.harness, m.turn_id FROM messages m JOIN sessions s ON s.id = \
-             m.session WHERE s.host_id = ? AND m.turn_id IS NOT NULL AND m.usage_present = 1",
+        // The sessions going, as a JSON array of their row ids for `json_each`.
+        let going: String = db::query_scalar(
+            "SELECT json_group_array(id) FROM sessions WHERE host_id = ?1 OR id IN (SELECT \
+             session FROM messages WHERE host_id = ?1)",
         )
-        .bind(&host)
-        .fetch_all(&mut *tx)
-        .await?;
-        let orphaned: i64 = db::query_scalar(
-            "SELECT count(*) FROM sessions c JOIN sessions r ON r.harness = c.root_harness AND \
-             r.session_id = c.root_session_id WHERE r.host_id = ? AND (c.host_id IS NOT ? OR \
-             c.host_id IS NULL)",
-        )
-        .bind(&host)
         .bind(&host)
         .fetch_one(&mut *tx)
         .await?;
+
+        let turns: Vec<(i64, String)> = db::query_as(
+            "SELECT DISTINCT m.harness, m.turn_id FROM messages m WHERE m.session IN (SELECT \
+             value FROM json_each(?)) AND m.turn_id IS NOT NULL AND m.usage_present = 1",
+        )
+        .bind(&going)
+        .fetch_all(&mut *tx)
+        .await?;
         // Every other host with a row in the sessions going: NULL for a row of unknown host.
         let contributors: Vec<Option<String>> = db::query_scalar(
-            "SELECT DISTINCT m.host_id FROM messages m JOIN sessions s ON s.id = m.session WHERE \
-             s.host_id = ? AND m.host_id IS NOT ?",
+            "SELECT DISTINCT m.host_id FROM messages m WHERE m.session IN (SELECT value FROM \
+             json_each(?1)) AND m.host_id IS NOT ?2",
         )
-        .bind(&host)
+        .bind(&going)
         .bind(&host)
         .fetch_all(&mut *tx)
         .await?;
 
         for sql in [
-            "DELETE FROM messages_fts WHERE rowid IN (SELECT m.rowid FROM messages m JOIN \
-             sessions s ON s.id = m.session WHERE s.host_id = ?)",
-            "DELETE FROM messages WHERE session IN (SELECT id FROM sessions WHERE host_id = ?)",
+            "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE session IN \
+             (SELECT value FROM json_each(?)))",
+            "DELETE FROM messages WHERE session IN (SELECT value FROM json_each(?))",
             "DELETE FROM calls WHERE (harness, session_id) IN (SELECT harness, session_id FROM \
-             sessions WHERE host_id = ?)",
-            "DELETE FROM sessions WHERE host_id = ?",
+             sessions WHERE id IN (SELECT value FROM json_each(?)))",
+            "DELETE FROM sessions WHERE id IN (SELECT value FROM json_each(?))",
         ] {
-            db::query(sql).bind(&host).execute(&mut *tx).await?;
+            db::query(sql).bind(&going).execute(&mut *tx).await?;
         }
+        // Sessions left grouped under a root that went.
+        let orphaned: i64 = db::query_scalar(
+            "SELECT count(*) FROM sessions c WHERE NOT EXISTS (SELECT 1 FROM sessions r WHERE \
+             r.harness = c.root_harness AND r.session_id = c.root_session_id)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
 
         for (harness, turn) in &turns {
             Self::attribute_call(&mut tx, *harness, turn).await?;

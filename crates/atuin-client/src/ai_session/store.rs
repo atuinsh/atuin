@@ -946,6 +946,66 @@ mod tests {
         assert_eq!(mark(&db, &b).await.map(|m| m.idx), Some(2));
     }
 
+    /// Forgetting a host takes its rows out of the sessions other hosts captured too, and what
+    /// they made of those sessions: once replayed, a session `a` started and `b` continued holds
+    /// `a`'s rows alone, counted, timed, titled and searchable as `a` left it.
+    #[rstest]
+    #[tokio::test]
+    async fn forgetting_a_host_removes_its_rows_from_other_hosts_sessions() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [a, b] = <[_; 2]>::try_from(writers(&store, 2)).ok().unwrap();
+        let shared = session_named("shared");
+        for i in 0..2 {
+            let mut m = message_in(&shared, i, &format!("alpha words {i}"));
+            m.session_title = Some("alpha title".to_owned());
+            a.push(&m).await.unwrap();
+        }
+        let mut continued = message_in(&shared, 10, "bravo words");
+        continued.session_title = Some("bravo title".to_owned());
+        continued.usage = Some(atuin_common::harnesstools::session::Usage {
+            output: Some(7),
+            ..Default::default()
+        });
+        b.push(&continued).await.unwrap();
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        a.reproject(&db).await.unwrap();
+        let before = db.get_session(&shared).await.unwrap().unwrap();
+        assert_eq!((before.message_count, before.title.as_deref()), (3, Some("bravo title")));
+
+        // Host b's store is reset and starts over elsewhere.
+        for r in store.all_tagged(&RecordTag::AiSession).await.unwrap() {
+            if r.host.id == b.host_id {
+                store.delete(r.id).await.unwrap();
+            }
+        }
+        push_range(&b, &session_named("new"), 0..1).await;
+        a.reproject(&db).await.unwrap();
+
+        let after = db.get_session(&shared).await.unwrap().unwrap();
+        assert_eq!(after.message_count, 2);
+        assert_eq!(after.title.as_deref(), Some("alpha title"));
+        assert_eq!(after.updated_at, OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1));
+        assert_eq!(after.usage.output.unwrap_or(0), 0, "b's call went with its row");
+        assert_eq!(after.host, Some(a.host_id));
+        let bravo = crate::ai_session::SourceId::from("source-10".to_owned());
+        assert!(!db.contains_message(&shared, &bravo).await.unwrap());
+        let search = |query: &'static str| {
+            let db = db.clone();
+            async move {
+                let matches = db.search(
+                    query,
+                    crate::ai_session::SearchTerms::All,
+                    &crate::ai_session::SessionFilter::default(),
+                    0,
+                );
+                futures::TryStreamExt::try_collect::<Vec<_>>(matches).await.unwrap().len()
+            }
+        };
+        assert_eq!(search("bravo").await, 0, "b's row left the index");
+        assert_eq!(search("alpha").await, 1);
+        assert_eq!(mark(&db, &a).await.map(|m| m.idx), Some(1));
+    }
+
     #[rstest]
     #[tokio::test]
     async fn an_unknown_record_kind_holds_the_watermark_below_it() {
@@ -1218,8 +1278,12 @@ mod tests {
         let sess = replayed.get_session(&session).await.unwrap().unwrap();
         assert_eq!((sess.host, sess.message_count), (Some(first), 6));
 
-        // The host that only continued it forgets nothing of it.
-        replayed.forget_host(then).await.unwrap();
-        assert!(replayed.get_session(&session).await.unwrap().is_some());
+        // Forgetting the host that only continued it takes it whole, to be replayed from the
+        // hosts with rows in it, and it comes back as it was.
+        assert!(replayed.forget_host(then).await.unwrap(), "the first host is replayed too");
+        assert!(replayed.get_session(&session).await.unwrap().is_none());
+        first_writer.reproject(&replayed).await.unwrap();
+        let sess = replayed.get_session(&session).await.unwrap().unwrap();
+        assert_eq!((sess.host, sess.message_count), (Some(first), 6));
     }
 }
