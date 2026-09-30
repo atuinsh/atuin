@@ -703,6 +703,13 @@ impl AiSessionDatabase {
         .execute(&mut *tx)
         .await?;
 
+        // A session is on the host of its earliest row, whatever order its rows arrive in (a
+        // replay takes one host's series at a time). A row at or before the earliest so far may
+        // be the new earliest, so the session's host is worked out again.
+        if before.as_ref().is_some_and(|b| timestamp <= b.started_at) {
+            Self::refresh_session_host(&mut tx, session).await?;
+        }
+
         // A session is placed in its group when it first appears and when it learns its parent
         // (the parent link only ever goes from absent to present).
         let gained_parent =
@@ -1979,8 +1986,8 @@ impl AiSessionDatabase {
         Ok(changed)
     }
 
-    /// Record `host` on a stored row that has none, and on its session. Returns whether the row
-    /// had none.
+    /// Record `host` on a stored row that has none, and work its session's host out again.
+    /// Returns whether the row had none.
     async fn backfill_host(
         conn: &mut SqliteConnection,
         session: i64,
@@ -1998,12 +2005,27 @@ impl AiSessionDatabase {
         .await?
         .rows_affected()
             > 0;
-        db::query("UPDATE sessions SET host_id = ? WHERE id = ? AND host_id IS NULL")
-            .bind(host)
-            .bind(session)
-            .execute(conn)
-            .await?;
+        if filled {
+            Self::refresh_session_host(conn, session).await?;
+        }
         Ok(filled)
+    }
+
+    /// Set `session`'s host to its earliest row's: the one with the lowest timestamp, then the
+    /// lowest record id, among the rows whose host is known. A session with no such row keeps
+    /// whatever it has.
+    async fn refresh_session_host(
+        conn: &mut SqliteConnection,
+        session: i64,
+    ) -> Result<(), DbError> {
+        db::query(
+            "UPDATE sessions SET host_id = COALESCE((SELECT host_id FROM messages WHERE session = \
+             ?1 AND host_id IS NOT NULL ORDER BY timestamp, id LIMIT 1), host_id) WHERE id = ?1",
+        )
+        .bind(session)
+        .execute(conn)
+        .await?;
+        Ok(())
     }
 
     /// Place a session that just appeared, just learned its parent or was just linked to its

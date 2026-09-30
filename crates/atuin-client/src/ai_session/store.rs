@@ -1124,4 +1124,54 @@ mod tests {
             futures::TryStreamExt::try_collect(db.messages(&sample_handle())).await.unwrap();
         assert!(rows.iter().all(|m| m.host == Some(host)));
     }
+
+    /// A session is on the host of its earliest row, however its rows arrive: live, in order,
+    /// or in a full replay, which takes one host's series at a time in host-id order.
+    #[rstest]
+    #[case::started_on_the_lower_host(true)]
+    #[case::started_on_the_higher_host(false)]
+    #[tokio::test]
+    async fn a_session_is_on_the_host_of_its_earliest_row(#[case] started_low: bool) {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let low = HostId(uuid::Uuid::from_u128(1));
+        let high = HostId(uuid::Uuid::from_u128(u128::MAX));
+        let (first, then) = if started_low {
+            (low, high)
+        } else {
+            (high, low)
+        };
+        let writer =
+            |host| AiSessionStore::builder().store(store.clone()).host_id(host).key(key()).build();
+        let (first_writer, then_writer) = (writer(first), writer(then));
+        let session = session_named("spans-hosts");
+
+        let live = AiSessionDatabase::in_memory().await.unwrap();
+        // Rows projected before hosts were tracked, which a replay backfills.
+        let hostless = AiSessionDatabase::in_memory().await.unwrap();
+        for (host, s, range) in [(first, &first_writer, 0..3), (then, &then_writer, 3..6)] {
+            for i in range {
+                let msg = message_in(&session, i, &format!("message {i}"));
+                s.push(&msg).await.unwrap();
+                hostless.append(&msg).await.unwrap();
+                live.append(&Message {
+                    host: Some(host),
+                    ..msg
+                })
+                .await
+                .unwrap();
+            }
+        }
+        assert_eq!(live.get_session(&session).await.unwrap().unwrap().host, Some(first));
+        first_writer.reproject(&hostless).await.unwrap();
+        assert_eq!(hostless.get_session(&session).await.unwrap().unwrap().host, Some(first));
+
+        let replayed = AiSessionDatabase::in_memory().await.unwrap();
+        first_writer.build(&replayed).await.unwrap();
+        let sess = replayed.get_session(&session).await.unwrap().unwrap();
+        assert_eq!((sess.host, sess.message_count), (Some(first), 6));
+
+        // The host that only continued it forgets nothing of it.
+        replayed.forget_host(then).await.unwrap();
+        assert!(replayed.get_session(&session).await.unwrap().is_some());
+    }
 }
