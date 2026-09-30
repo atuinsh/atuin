@@ -110,20 +110,25 @@ fn known_parent_kind<'de, D>(deserializer: D) -> Result<Option<ParentKind>, D::E
 where
     D: serde::Deserializer<'de>,
 {
-    /// [`ParentKind`]'s variants, which this must list too, and a catch-all for the rest.
+    use serde::de::IntoDeserializer;
+    use serde::de::value::{Error, StringDeserializer};
+
+    /// A kind's name, or anything else a record may hold there.
     #[derive(Deserialize)]
-    enum Known {
-        Subagent,
-        Fork,
-        Continuation,
-        #[serde(other)]
-        Unknown,
+    #[serde(untagged)]
+    enum Raw {
+        Name(String),
+        Other(serde::de::IgnoredAny),
     }
-    Ok(match Option::<Known>::deserialize(deserializer)? {
-        Some(Known::Subagent) => Some(ParentKind::Subagent),
-        Some(Known::Fork) => Some(ParentKind::Fork),
-        Some(Known::Continuation) => Some(ParentKind::Continuation),
-        Some(Known::Unknown) | None => None,
+
+    // Parse the name with `ParentKind`'s own `Deserialize`, so a new variant is known here
+    // without listing it twice.
+    Ok(match Option::<Raw>::deserialize(deserializer)? {
+        Some(Raw::Name(name)) => {
+            let name: StringDeserializer<Error> = name.into_deserializer();
+            ParentKind::deserialize(name).ok()
+        }
+        Some(Raw::Other(_)) | None => None,
     })
 }
 
@@ -257,7 +262,7 @@ mod tests {
             .build()
     }
 
-    /// Every kind round-trips through a record (so [`known_parent_kind`] lists them all).
+    /// Every kind round-trips through a record.
     #[rstest]
     #[case::none(None)]
     #[case::subagent(Some(ParentKind::Subagent))]
