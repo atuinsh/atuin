@@ -28,7 +28,7 @@ begins. It then hands each captured block to the [daemon](daemon.md), which
 holds it on disk, keyed by the command's Atuin history ID.
 
 [^1]: Atuin uses custom [OSC] escape sequences that begin with `OSC 18188735`.
-18188735 is “atuin” interpreted as a base-36 number; it was chosen to minimize
+18188735 is `atuin` interpreted as a base-36 number; it was chosen to minimize
 conflicts with other programs and terminals.
 
 [OSC]: https://en.wikipedia.org/wiki/ANSI_escape_code#Operating_System_Command_sequences
