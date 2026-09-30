@@ -146,9 +146,19 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     // Right after the daemon starts it rebuilds its AI sessions and refuses reads until done,
     // rather than answer from a partial set. Tail only streams what happens from now on.
     if !matches!(cmd.cmd, SubCmd::Tail) {
+        let mut reported = None;
         client
-            .wait_for_sessions(|| {
-                eprintln!("AI sessions are being rebuilt after the daemon started; waiting...");
+            .wait_for_sessions(|progress| {
+                if reported.is_none() {
+                    eprintln!("AI sessions are being rebuilt after the daemon started; waiting...");
+                }
+                if let Some((replayed, pending)) = progress
+                    && reported != Some(progress)
+                    && pending > 0
+                {
+                    eprintln!("  {replayed} of {pending} records replayed");
+                }
+                reported = Some(progress);
             })
             .await?;
     }

@@ -532,11 +532,15 @@ impl AiClient {
     }
 
     /// Wait while the daemon is still rebuilding AI sessions after starting: until then every
-    /// session read but a tail is refused rather than answered partially. Calls `on_wait` once if
-    /// it has to wait, and returns at once otherwise. A rebuild ends only once, so after this the
-    /// daemon keeps serving reads for as long as it runs.
-    pub async fn wait_for_sessions(&mut self, on_wait: impl FnOnce()) -> Result<()> {
-        let mut on_wait = Some(on_wait);
+    /// session read but a tail is refused rather than answered partially. Calls `on_wait` each
+    /// time it finds the daemon rebuilding, with how far it has got (records replayed, and
+    /// roughly how many there are to replay) when the daemon says, and returns at once when it
+    /// is not. A rebuild ends only once, so after this the daemon keeps serving reads for as long
+    /// as it runs.
+    pub async fn wait_for_sessions(
+        &mut self,
+        mut on_wait: impl FnMut(Option<(u64, u64)>),
+    ) -> Result<()> {
         let mut delay = REBUILD_POLL_START;
         loop {
             // A listing filtered to the future matches nothing, so the probe costs little beyond
@@ -548,9 +552,7 @@ impl AiClient {
             });
             match self.client.list_sessions(probe).await {
                 Err(status) if crate::grpc::ai::session::is_rebuilding(&status) => {
-                    if let Some(on_wait) = on_wait.take() {
-                        on_wait();
-                    }
+                    on_wait(crate::grpc::ai::session::rebuild_progress(&status));
                     tokio::time::sleep(delay).await;
                     delay = (delay * 2).min(REBUILD_POLL_MAX);
                 }
@@ -784,7 +786,9 @@ mod rebuild_tests {
         let counter = notices.clone();
         let wait = tokio::spawn(async move {
             client
-                .wait_for_sessions(|| {
+                .wait_for_sessions(|progress| {
+                    // The test's store replays nothing: the daemon reports that it has none to.
+                    assert_eq!(progress, Some((0, 0)));
                     counter.fetch_add(1, Ordering::SeqCst);
                 })
                 .await
@@ -799,7 +803,8 @@ mod rebuild_tests {
             .expect("returns once the rebuild ends")
             .unwrap()
             .unwrap();
-        assert_eq!(notices.load(Ordering::SeqCst), 1, "the wait is announced once");
+        // Probed at once, then after 250ms: each probe that finds it rebuilding reports.
+        assert!(notices.load(Ordering::SeqCst) >= 2, "each wait reports its progress");
     }
 
     #[rstest]
@@ -810,7 +815,7 @@ mod rebuild_tests {
         let (mut client, _state, _dir) = serve(state).await;
 
         let mut announced = false;
-        client.wait_for_sessions(|| announced = true).await.unwrap();
+        client.wait_for_sessions(|_| announced = true).await.unwrap();
 
         assert!(!announced);
     }

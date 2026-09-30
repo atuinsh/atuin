@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use atuin_common::encryption::paseto_v4::{EncryptedData, Key};
 use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
@@ -185,6 +188,15 @@ impl AiSessionStore {
     /// projection missing already-persisted messages; that series' watermark stays below the
     /// failure, so the next reprojection retries it.
     pub async fn reproject(&self, db: &AiSessionDatabase) -> Result<Reprojected, BuildError> {
+        self.reproject_with(db, &ReprojectProgress::default()).await
+    }
+
+    /// [`Self::reproject`], counting the records it replays into `progress` as it goes.
+    pub async fn reproject_with(
+        &self,
+        db: &AiSessionDatabase,
+        progress: &ReprojectProgress,
+    ) -> Result<Reprojected, BuildError> {
         if db.check_projection_key(&self.key.key_id().to_string()).await? {
             // Also the first time, on a fresh sidecar or one from before key tracking.
             tracing::info!("ai-session watermarks were not made with this key: replaying all");
@@ -195,7 +207,7 @@ impl AiSessionStore {
         let mut stats = Reprojected::default();
         let mut result = None;
         for _ in 0..REPROJECT_PASSES {
-            match self.reproject_pass(db, &mut stats).await {
+            match self.reproject_pass(db, &mut stats, progress).await {
                 Ok(Pass::Done) => {
                     result = Some(Ok(()));
                     break;
@@ -230,6 +242,7 @@ impl AiSessionStore {
         &self,
         db: &AiSessionDatabase,
         stats: &mut Reprojected,
+        progress: &ReprojectProgress,
     ) -> Result<Pass, BuildError> {
         let mut marks = db.reproject_watermarks().await?;
         let mut series: Vec<(RecordSeriesKey, RecordIdx)> = self
@@ -245,11 +258,22 @@ impl AiSessionStore {
             .collect();
         series.sort();
 
+        // At most this many records to read; fewer when a series turns out rewritten and starts
+        // over, which reads more.
+        let pending = series
+            .iter()
+            .map(|(series, last)| {
+                let start = marks.get(series).map_or(0, |mark| mark.idx + 1);
+                (last + 1).saturating_sub(start)
+            })
+            .sum();
+        progress.start(pending);
+
         let mut pass = Pass::Done;
         let mut failure = None;
         for (series, last) in series {
             let mark = marks.remove(&series);
-            match self.reproject_series(db, &series, last, mark, stats).await {
+            match self.reproject_series(db, &series, last, mark, stats, progress).await {
                 Ok(Pass::Done) => {}
                 Ok(Pass::Invalidated) => pass = Pass::Invalidated,
                 Err(err) => {
@@ -302,6 +326,7 @@ impl AiSessionStore {
         last: RecordIdx,
         mark: Option<Watermark>,
         stats: &mut Reprojected,
+        progress: &ReprojectProgress,
     ) -> Result<Pass, BuildError> {
         let mut pass = Pass::Done;
         let (start, mut from) = match mark {
@@ -352,6 +377,7 @@ impl AiSessionStore {
                     held = true;
                 }
                 stats.replayed += 1;
+                progress.replayed.fetch_add(1, Ordering::Relaxed);
                 if !held {
                     to = Some(Watermark { idx, record_id });
                 }
@@ -408,6 +434,29 @@ pub struct Reprojected {
     pub replayed: u64,
     /// Series found rewritten or deleted under their watermark, and so replayed from the start.
     pub restarted: u64,
+}
+
+/// How far a running [`AiSessionStore::reproject_with`] has got, readable from other tasks
+/// meanwhile. Cheap to clone: clones share the counts.
+#[derive(Debug, Clone, Default)]
+pub struct ReprojectProgress {
+    replayed: Arc<AtomicU64>,
+    pending: Arc<AtomicU64>,
+}
+
+impl ReprojectProgress {
+    /// A pass begins, with `pending` records to read: counting starts again from none.
+    fn start(&self, pending: u64) {
+        self.replayed.store(0, Ordering::Relaxed);
+        self.pending.store(pending, Ordering::Relaxed);
+    }
+
+    /// Records replayed so far in this pass, and how many it set out to read. The first can pass
+    /// the second when a series found rewritten is replayed from its start.
+    #[must_use]
+    pub fn get(&self) -> (u64, u64) {
+        (self.replayed.load(Ordering::Relaxed), self.pending.load(Ordering::Relaxed))
+    }
 }
 
 /// What replaying one record did to the sidecar.

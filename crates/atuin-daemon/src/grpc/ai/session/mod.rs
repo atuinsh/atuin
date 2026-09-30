@@ -38,7 +38,7 @@ impl Service {
     /// sessions or messages silently missing.
     fn ensure_recovered(&self) -> Result<(), Status> {
         if self.capture.is_recovering() {
-            return Err(rebuilding_status());
+            return Err(rebuilding_status(self.capture.recovery_progress()));
         }
         Ok(())
     }
@@ -49,12 +49,33 @@ impl Service {
 /// is worth waiting out.
 const REBUILDING_METADATA: &str = "atuin-ai-sessions-rebuilding";
 
-fn rebuilding_status() -> Status {
-    let mut status = Status::unavailable(
-        "AI sessions are being rebuilt after the daemon started; try again shortly",
-    );
-    status.metadata_mut().insert(REBUILDING_METADATA, MetadataValue::from_static("1"));
+/// Metadata key on the rebuilding status carrying how far the rebuild has got, as
+/// `<replayed>/<to replay>` records.
+const REBUILD_PROGRESS_METADATA: &str = "atuin-ai-sessions-rebuild-progress";
+
+fn rebuilding_status((replayed, pending): (u64, u64)) -> Status {
+    let mut status = Status::unavailable(format!(
+        "AI sessions are being rebuilt after the daemon started ({replayed} of {pending} \
+         records); try again shortly"
+    ));
+    let metadata = status.metadata_mut();
+    metadata.insert(REBUILDING_METADATA, MetadataValue::from_static("1"));
+    if let Ok(progress) = MetadataValue::try_from(format!("{replayed}/{pending}")) {
+        metadata.insert(REBUILD_PROGRESS_METADATA, progress);
+    }
     status
+}
+
+/// How far the rebuild `status` reports has got: records replayed, and roughly how many there are
+/// to replay. `None` for any other status, or a daemon that does not say.
+#[must_use]
+pub fn rebuild_progress(status: &Status) -> Option<(u64, u64)> {
+    if !is_rebuilding(status) {
+        return None;
+    }
+    let value = status.metadata().get(REBUILD_PROGRESS_METADATA)?.to_str().ok()?;
+    let (replayed, pending) = value.split_once('/')?;
+    Some((replayed.parse().ok()?, pending.parse().ok()?))
 }
 
 /// Whether `status` says the daemon is still rebuilding AI sessions after starting.
@@ -391,8 +412,14 @@ mod tests {
 
     #[rstest]
     fn only_the_marked_status_is_rebuilding() {
-        assert!(is_rebuilding(&rebuilding_status()));
+        assert!(is_rebuilding(&rebuilding_status((0, 0))));
         // What a dropped connection looks like: must not be waited on.
         assert!(!is_rebuilding(&Status::unavailable("transport error")));
+    }
+
+    #[rstest]
+    fn the_rebuilding_status_carries_its_progress() {
+        assert_eq!(rebuild_progress(&rebuilding_status((12, 340))), Some((12, 340)));
+        assert_eq!(rebuild_progress(&Status::unavailable("transport error")), None);
     }
 }
