@@ -22,42 +22,36 @@ if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
     fi
 fi
 
-__atuin_osc133_command_executed() {
+__atuin_mark_output_start() {
     [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
-    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return 0
 
-    printf '\033]133;C\a'
-}
-
-__atuin_osc133_command_finished() {
-    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
-    [[ -n "${ATUIN_HISTORY_ID:-}" && "$ATUIN_HISTORY_ID" != "__bash_preexec_failure__" ]] || return 0
-
-    printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
-}
-
-__atuin_osc133_prompt_start=$'\001\033]133;A;cl=line\a\002'
-__atuin_osc133_prompt_end=$'\001\033]133;B\a\002'
-
-__atuin_osc133_wrap_prompt() {
-    if [[ -z ${ATUIN_PTY_PROXY_ACTIVE-} ]] && [[ ${__atuin_pty_proxy_owns_tty-} != 1 ]]; then
-        return
+    if [[ -n ${__atuin_needs_osc133_reset-} ]]; then
+        unset -v __atuin_needs_osc133_reset
+        # Old pty-proxy will reset an in-progress capture on a `B` marker.
+        # Always reset, even if there's no history ID, to avoid capturing a
+        # filtered command.
+        printf '\033]133;B\a'
     fi
 
-    local __atuin_prompt="${PS1-}"
-    # Remove existing Atuin OSC 133 markers, if present.
-    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
-    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
 
-    if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]]; then
-        PS1="${__atuin_osc133_prompt_start}${__atuin_prompt}${__atuin_osc133_prompt_end}"
-    elif ! [[ $__atuin_prompt =~ ($'\033'|'\033'|'\e')']133;' ]]; then
-        # Only replace the prompt if there are no remaining OSC 133 markers. If
-        # there are, they likely came from another program, and we don't want
-        # to risk half-removing those markers (e.g., maybe `__atuin_osc133_prompt_end`
-        # matched an existing end marker, but `__atuin_osc133_prompt_start`
-        # didn't match the start marker due to the `cl=line` param).
-        PS1="$__atuin_prompt"
+    if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
+        # Current pty-proxy is an older version that expects OSC 133; new
+        # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
+        printf '\033]133;C\a'
+    else
+        printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"
+    fi
+}
+
+__atuin_mark_output_end() {
+    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
+
+    if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
+        printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
+    else
+        printf '\033]18188735;D;%s\a' "$ATUIN_HISTORY_ID"
     fi
 }
 
@@ -100,19 +94,17 @@ __atuin_preexec() {
     local id
     id=$(ATUIN_SHELL=bash atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID=$id
-    [[ -n ${__atuin_skip_osc133:-} ]] || __atuin_osc133_command_executed
+    [[ -n ${__atuin_skip_output_markers:-} ]] || __atuin_mark_output_start
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
 
 __atuin_precmd() {
     local EXIT=$? __atuin_precmd_time=${EPOCHREALTIME-}
 
-    __atuin_osc133_wrap_prompt
-
     [[ ! $ATUIN_HISTORY_ID ]] && return 0
 
     # If the previous preexec hook failed, we manually call __atuin_preexec
-    local __atuin_skip_osc133=""
+    local __atuin_skip_output_markers=""
     if [[ $ATUIN_HISTORY_ID == __bash_preexec_failure__ ]]; then
         # This is the command extraction code taken from bash-preexec
         local previous_command
@@ -120,7 +112,7 @@ __atuin_precmd() {
             export LC_ALL=C HISTTIMEFORMAT=''
             builtin history 1 | sed '1 s/^ *[0-9][0-9]*[* ] //'
         )
-        __atuin_skip_osc133=1
+        __atuin_skip_output_markers=1
         __atuin_preexec "$previous_command"
     fi
 
@@ -152,7 +144,7 @@ __atuin_precmd() {
         fi
     fi
 
-    [[ -n ${__atuin_skip_osc133:-} ]] || __atuin_osc133_command_finished "$EXIT"
+    [[ -n ${__atuin_skip_output_markers:-} ]] || __atuin_mark_output_end "$EXIT"
     (atuin history end --hook --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" >/dev/null 2>&1 &)
     export ATUIN_HISTORY_ID=""
 }
@@ -789,3 +781,12 @@ if command -v __atuin_load_builtin_preexec > /dev/null; then
 fi
 
 (ATUIN_SHELL=bash atuin __internal prepare-search-index >/dev/null 2>&1 &)
+
+if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] && [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
+    # We're running in an old pty-proxy that expects OSC 133 markers. The outer
+    # shell may have already sent a `C` marker, causing the proxy to start
+    # capturing output. We need to clear this state before the first command's
+    # output starts, or else the prompt and command itself will be erroneously
+    # included in the output.
+    __atuin_needs_osc133_reset=1
+fi

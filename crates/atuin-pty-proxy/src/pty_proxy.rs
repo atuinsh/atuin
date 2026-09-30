@@ -6,9 +6,9 @@ use crate::{CaptureConfig, runtime};
 
 #[derive(Args, Debug)]
 pub struct PtyProxy {
-    /// Highlight OSC 133 prompt, input, output, and exit-code regions
+    /// Highlight `OSC 18188735` escape sequences used to mark the start and end of command output.
     #[arg(long)]
-    debug_osc133: bool,
+    debug_markers: bool,
 
     /// Path to the shell binary that atuin pty-proxy should spawn.
     ///
@@ -50,7 +50,7 @@ pub enum Shell {
 }
 
 pub struct RuntimeOptions {
-    pub(crate) debug_osc133: bool,
+    pub(crate) debug_markers: bool,
     pub(crate) shell: Vec<OsString>,
     pub(crate) command_capture: Option<CaptureConfig>,
     pub(crate) child_umask: Option<u32>,
@@ -58,13 +58,13 @@ pub struct RuntimeOptions {
 
 impl RuntimeOptions {
     fn new(
-        debug_osc133: bool,
+        debug_markers: bool,
         shell: Vec<OsString>,
         command_capture: Option<CaptureConfig>,
         child_umask: Option<u32>,
     ) -> Self {
         Self {
-            debug_osc133: debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
+            debug_markers: debug_markers || env_flag("ATUIN_PTY_PROXY_DEBUG"),
             shell,
             command_capture,
             child_umask,
@@ -89,7 +89,7 @@ impl PtyProxy {
                 }
             }
             None => runtime::main(RuntimeOptions::new(
-                self.debug_osc133,
+                self.debug_markers,
                 self.shell,
                 command_capture,
                 child_umask,
