@@ -565,13 +565,13 @@ mod tests {
         assert_eq!(got.session, msg.session);
     }
 
-    proptest! {
-        #[test]
-        fn record_body_roundtrips(m in arb_message()) {
+    #[rstest]
+    fn record_body_roundtrips() {
+        proptest!(|(m in arb_message())| {
             let bytes = AiSessionRecord::Message(m.clone()).serialize();
             let AiSessionRecord::Message(back) = AiSessionRecord::deserialize(&bytes).unwrap();
             prop_assert_eq!(m, back);
-        }
+        });
     }
 
     #[rstest]

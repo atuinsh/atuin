@@ -3057,11 +3057,12 @@ mod tests {
         ]
     }
 
-    proptest::proptest! {
-        #[test]
-        fn shared_calls_are_attributed_the_same_in_any_order(
-            rows in proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(shared_call_rows()))
-        ) {
+    #[rstest]
+    fn shared_calls_are_attributed_the_same_in_any_order() {
+        let shuffled = proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(
+            shared_call_rows(),
+        ));
+        proptest::proptest!(|(rows in shuffled)| {
             let totals = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -3080,7 +3081,7 @@ mod tests {
             // The fork starts at the parent's copied timestamp and "fork" < "parent", so only
             // ancestry keeps call A with the parent.
             proptest::prop_assert_eq!(totals, [40, 3, 1]);
-        }
+        });
     }
 
     /// Without ancestry, the earliest-started claimant owns the call, then the smallest id.
@@ -4035,13 +4036,13 @@ mod tests {
         .to_vec()
     }
 
-    proptest::proptest! {
-        /// Every session groups under its top-most stored ancestor whatever order its rows (and
-        /// its ancestors') arrive in: children before parents, parents learned late.
-        #[test]
-        fn grouping_does_not_depend_on_arrival_order(
-            rows in proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(forest()))
-        ) {
+    /// Every session groups under its top-most stored ancestor whatever order its rows (and
+    /// its ancestors') arrive in: children before parents, parents learned late.
+    #[rstest]
+    fn grouping_does_not_depend_on_arrival_order() {
+        let shuffled =
+            proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(forest()));
+        proptest::proptest!(|(rows in shuffled)| {
             let roots = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -4054,7 +4055,7 @@ mod tests {
                     roots_of(&db).await
                 });
             proptest::prop_assert_eq!(roots, forest_roots());
-        }
+        });
     }
 
     /// The missing parent arriving at last adopts the group that waited for it.
@@ -4276,14 +4277,14 @@ mod tests {
         out
     }
 
-    proptest::proptest! {
-        /// A copy groups under the session it was copied from, which names it nowhere, whatever
-        /// order the rows arrive in: copied lines before the original's, a start that moves
-        /// earlier, a copy of a copy. Each shared call still counts once, with the group's root.
-        #[test]
-        fn copies_group_under_their_original_in_any_order(
-            rows in proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(copies()))
-        ) {
+    /// A copy groups under the session it was copied from, which names it nowhere, whatever
+    /// order the rows arrive in: copied lines before the original's, a start that moves
+    /// earlier, a copy of a copy. Each shared call still counts once, with the group's root.
+    #[rstest]
+    fn copies_group_under_their_original_in_any_order() {
+        let shuffled =
+            proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(copies()));
+        proptest::proptest!(|(rows in shuffled)| {
             let (links, output) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -4307,7 +4308,7 @@ mod tests {
             .map(|(id, out)| (id.to_owned(), out))
             .to_vec();
             proptest::prop_assert_eq!(output, expected);
-        }
+        });
     }
 
     /// An assistant row of `harness` session `id` holding model call `turn`.

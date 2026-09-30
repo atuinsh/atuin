@@ -608,24 +608,28 @@ mod tests {
         )
     }
 
-    proptest! {
-        #[test]
-        fn harness_session_roundtrips(hs in arb_harness_session()) {
+    #[rstest]
+    fn harness_session_roundtrips() {
+        proptest!(|(hs in arb_harness_session())| {
             let pb: HarnessSession = hs.clone().into();
             prop_assert_eq!(DomainHarnessSession::try_from(pb).unwrap(), hs);
-        }
+        });
+    }
 
-        #[test]
-        fn message_roundtrips(message in arb_message()) {
+    #[rstest]
+    fn message_roundtrips() {
+        proptest!(|(message in arb_message())| {
             let pb = Message::from(message.clone());
             prop_assert_eq!(DomainMessage::try_from(pb).unwrap(), message);
-        }
+        });
+    }
 
-        #[test]
-        fn session_roundtrips(session in arb_session()) {
+    #[rstest]
+    fn session_roundtrips() {
+        proptest!(|(session in arb_session())| {
             let pb = Session::from(session.clone());
             prop_assert_eq!(DomainSession::try_from(pb).unwrap(), session);
-        }
+        });
     }
 
     #[fixture]
