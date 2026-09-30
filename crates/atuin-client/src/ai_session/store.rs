@@ -725,11 +725,11 @@ mod tests {
     }
 
     /// `atuin store purge` deletes the records the key cannot decrypt, projected earlier under
-    /// the key they were made with. Resetting the sidecar, on disk or the daemon's own, and
-    /// reprojecting leaves no trace of them in listings or search, and keeps the rest.
+    /// the key they were made with. Resetting the sidecar and reprojecting leaves no trace of
+    /// them in listings or search, and keeps the rest.
     #[rstest]
     #[tokio::test]
-    async fn purged_records_leave_the_sidecar_once_reset(#[values(false, true)] on_disk: bool) {
+    async fn purged_records_leave_the_sidecar_once_reset() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sessions.db");
         let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
@@ -750,11 +750,7 @@ mod tests {
         assert_eq!(db.list_sessions(&SessionFilter::default()).await.unwrap().len(), 2);
 
         store.purge(&key()).await.unwrap();
-        if on_disk {
-            AiSessionDatabase::reset_projection(&path).await.unwrap();
-        } else {
-            db.reset().await.unwrap();
-        }
+        db.reset().await.unwrap();
         assert!(db.list_sessions(&SessionFilter::default()).await.unwrap().is_empty());
         new.reproject(&db).await.unwrap();
 
@@ -781,17 +777,11 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn resetting_keeps_capture_checkpoints() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("sessions.db");
-        let db = AiSessionDatabase::open(&path).await.unwrap();
+        let db = AiSessionDatabase::in_memory().await.unwrap();
         let checkpoint = atuin_common::harnesstools::session::Checkpoint { at: 42, digest: 7 };
         db.set_checkpoint(&sample_handle(), checkpoint).await.unwrap();
-        AiSessionDatabase::reset_projection(&path).await.unwrap();
+        db.reset().await.unwrap();
         assert_eq!(db.checkpoint(&sample_handle()).await.unwrap(), Some(checkpoint));
-        // A missing sidecar has nothing to reset, and is not created.
-        let missing = dir.path().join("missing.db");
-        AiSessionDatabase::reset_projection(&missing).await.unwrap();
-        assert!(!missing.exists());
     }
 
     /// A watermark row that cannot be read is replaced by the one the replay it causes writes,

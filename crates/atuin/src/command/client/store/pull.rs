@@ -45,8 +45,14 @@ impl Pull {
         let pulled = self.pull(settings, store, db).await;
         // Records only this machine had are gone, and the ai session index must forget what
         // they projected: rebuilt from what the store holds now, however far the pull got.
-        super::reset_ai_sessions_after(settings).await;
-        pulled
+        let reset = super::reset_ai_sessions_after(settings).await;
+        match (pulled, reset) {
+            (Err(pull), Err(reset)) => {
+                eprintln!("{reset:?}");
+                Err(pull)
+            }
+            (pulled, reset) => pulled.and(reset),
+        }
     }
 
     async fn pull(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
