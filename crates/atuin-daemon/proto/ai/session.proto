@@ -142,6 +142,10 @@ message ImportSessionsSummary {
   uint64 failed = 4;
 }
 
+message RebuildSessionsRequest {}
+
+message RebuildSessionsReply {}
+
 message ImportSessionsEvent {
   oneof event {
     ImportSessionsProgress progress = 1;
@@ -173,4 +177,11 @@ service AiSession {
   // Import every already-existing on-disk session, streaming per-session
   // progress and a final summary.
   rpc ImportSessions(ImportSessionsRequest) returns (stream ImportSessionsEvent);
+
+  // Rebuild the sessions from the record store, after records were deleted
+  // under them: everything projected is deleted before this returns, then
+  // replayed in the background, reads meanwhile failing as rebuilding (as after
+  // the daemon starts). FAILED_PRECONDITION when the store failed to open or
+  // recover at startup.
+  rpc RebuildSessions(RebuildSessionsRequest) returns (RebuildSessionsReply);
 }

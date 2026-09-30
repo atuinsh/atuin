@@ -146,6 +146,8 @@ pub struct AiSessionDatabase {
     /// See [`Self::lock_local_projection`]. Shared by clones, so by everything in the one process
     /// (the daemon) that writes the sidecar.
     local_projection: Arc<tokio::sync::Mutex<()>>,
+    /// See [`Self::lock_reprojection`]. Shared by clones, like `local_projection`.
+    reprojection: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -433,6 +435,7 @@ impl AiSessionDatabase {
         Self {
             db,
             local_projection: Arc::default(),
+            reprojection: Arc::default(),
         }
     }
 
@@ -443,6 +446,13 @@ impl AiSessionDatabase {
     /// its own message as a duplicate.
     pub async fn lock_local_projection(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.local_projection.clone().lock_owned().await
+    }
+
+    /// Serialize reprojections in this process (startup recovery, the sync worker's, a rebuild):
+    /// two at once would each see the other's watermark moves as invalidations and start over,
+    /// until one gave up with the sidecar short of the store.
+    pub async fn lock_reprojection(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.reprojection.clone().lock_owned().await
     }
 
     async fn check_schema(&self) -> Result<(), DbError> {
