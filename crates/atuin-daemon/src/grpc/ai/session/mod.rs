@@ -245,7 +245,9 @@ impl GrpcService for Service {
             Err(err @ RebuildError::Unavailable) => {
                 Err(Status::failed_precondition(err.to_string()))
             }
-            Err(err @ RebuildError::Sidecar(_)) => Err(Status::internal(err.to_string())),
+            Err(err @ (RebuildError::Sidecar(_) | RebuildError::Aborted)) => {
+                Err(Status::internal(err.to_string()))
+            }
         }
     }
 
