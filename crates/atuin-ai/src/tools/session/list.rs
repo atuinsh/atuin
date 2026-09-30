@@ -57,7 +57,9 @@ impl AtuinAiSessionListToolCall {
             None => None,
             Some(since) => {
                 let now = time::OffsetDateTime::now_utc().to_offset(offset);
-                match interim::parse_date_string(since, now, settings.dialect.into()) {
+                let offset_at = |t| time::UtcOffset::local_offset_at(t).unwrap_or(offset);
+
+                match parse_since(since, now, settings.dialect.into(), offset_at) {
                     Ok(parsed) => Some(parsed),
                     Err(e) => {
                         return ToolOutcome::Error(format!(
@@ -118,12 +120,65 @@ impl AtuinAiSessionListToolCall {
     }
 }
 
+/// interim resolves "today" and "yesterday" to now's time of day on that date, but as a lower
+/// bound they mean the whole day. That midnight takes the offset in force then, not now's, so a
+/// DST change since doesn't shift the bound by an hour.
+fn parse_since(
+    since: &str,
+    now: time::OffsetDateTime,
+    dialect: interim::Dialect,
+    offset_at: impl Fn(time::OffsetDateTime) -> time::UtcOffset,
+) -> Result<time::OffsetDateTime, interim::DateError> {
+    let parsed = interim::parse_date_string(since, now, dialect)?;
+
+    if since.eq_ignore_ascii_case("today") || since.eq_ignore_ascii_case("yesterday") {
+        let midnight = parsed.replace_time(time::Time::MIDNIGHT);
+
+        Ok(midnight.replace_offset(offset_at(midnight)))
+    } else {
+        Ok(parsed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
     use serde_json::json;
+    use time::macros::{datetime, offset};
 
     use super::*;
+
+    #[rstest]
+    #[case("today", datetime!(2026-09-29 00:00 +1))]
+    #[case("Yesterday", datetime!(2026-09-28 00:00 +1))]
+    #[case("3 hours ago", datetime!(2026-09-29 16:30 +1))]
+    #[case("2026-09-01", datetime!(2026-09-01 00:00 +1))]
+    fn since_bounds(#[case] since: &str, #[case] expected: time::OffsetDateTime) {
+        let now = datetime!(2026-09-29 19:30 +1);
+
+        assert_eq!(
+            parse_since(since, now, interim::Dialect::Uk, |_| now.offset()).unwrap(),
+            expected
+        );
+    }
+
+    // US Eastern falls back from -4 to -5 at 06:00 UTC on 2026-11-01.
+    #[rstest]
+    #[case("today", datetime!(2026-11-01 00:00 -4))]
+    #[case("yesterday", datetime!(2026-10-31 00:00 -4))]
+    fn since_bounds_across_dst(#[case] since: &str, #[case] expected: time::OffsetDateTime) {
+        let now = datetime!(2026-11-01 19:30 -5);
+        let change = datetime!(2026-11-01 06:00 UTC);
+        let offset_at = |t: time::OffsetDateTime| {
+            if t < change {
+                offset!(-4)
+            } else {
+                offset!(-5)
+            }
+        };
+
+        assert_eq!(parse_since(since, now, interim::Dialect::Uk, offset_at).unwrap(), expected);
+    }
 
     #[rstest]
     fn defaults() {
