@@ -6,9 +6,14 @@ mod codegen {
     tonic::include_proto!("ai.session");
 }
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, Session, SessionMatch};
+use std::path::PathBuf;
+
+use atuin_client::ai_session::{
+    HarnessKind, HarnessSession, Session, SessionFilter as DomainSessionFilter, SessionMatch,
+};
 use atuin_common::string::highlighted::{HighlightedString, HighlightedTextProto};
 use atuin_common::time::OffsetDateTimeExt;
+use atuin_domain::record::HostId;
 pub use codegen::*;
 use time::OffsetDateTime;
 
@@ -31,15 +36,6 @@ impl HarnessFilterRequest for ListSessionsRequest {
     }
 }
 
-impl ListSessionsRequest {
-    pub(crate) fn updated_since_time(&self) -> Result<Option<OffsetDateTime>, ParseError> {
-        self.updated_since
-            .map(|ts| OffsetDateTime::from_timespec(ts.seconds.into(), ts.nanos.into()))
-            .transpose()
-            .map_err(Into::into)
-    }
-}
-
 impl HarnessFilterRequest for TailSessionsRequest {
     fn harness_filter(&self) -> Option<i32> {
         self.harness
@@ -49,6 +45,106 @@ impl HarnessFilterRequest for TailSessionsRequest {
 impl HarnessFilterRequest for SearchSessionsRequest {
     fn harness_filter(&self) -> Option<i32> {
         self.harness
+    }
+}
+
+impl From<&DomainSessionFilter> for SessionFilter {
+    fn from(value: &DomainSessionFilter) -> Self {
+        let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.to_string_lossy().into_owned());
+        Self {
+            host_id: value.host.map(|h| h.as_hyphenated().to_string()),
+            workspace: path(&value.workspace),
+            directory: path(&value.directory),
+            branch: value.branch.clone(),
+            harness: value.harness.map(|h| h as i32),
+            model: value.model.clone(),
+            roots_only: value.roots_only,
+            updated_since: value.updated_since.map(timestamp),
+        }
+    }
+}
+
+fn timestamp(ts: OffsetDateTime) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: ts.unix_timestamp(),
+        nanos: ts.nanosecond().cast_signed(),
+    }
+}
+
+fn from_timestamp(ts: prost_types::Timestamp) -> Result<OffsetDateTime, ParseError> {
+    Ok(OffsetDateTime::from_timespec(ts.seconds.into(), ts.nanos.into())?)
+}
+
+impl TryFrom<SessionFilter> for DomainSessionFilter {
+    type Error = ParseError;
+
+    fn try_from(value: SessionFilter) -> Result<Self, Self::Error> {
+        let harness = value
+            .harness
+            .map(|h| HarnessKind::try_from(h).map_err(|_| ParseError::UnknownHarnessKind(h)))
+            .transpose()?;
+        Ok(Self {
+            host: value.host_id.map(|h| uuid::Uuid::parse_str(&h)).transpose()?.map(HostId),
+            workspace: value.workspace.map(PathBuf::from),
+            directory: value.directory.map(PathBuf::from),
+            branch: value.branch,
+            harness,
+            model: value.model,
+            roots_only: value.roots_only,
+            updated_since: value.updated_since.map(from_timestamp).transpose()?,
+        })
+    }
+}
+
+/// A request carrying a [`SessionFilter`], and the older bare filters it supersedes (`harness`,
+/// and a listing's `updated_since` or a search's `cwd`): each applies only where the filter leaves
+/// its field unset, so an older client's request still filters as it asked.
+pub(crate) trait SessionFilterRequest: HarnessFilterRequest {
+    fn session_filter(&self) -> Option<SessionFilter>;
+
+    /// The bare `updated_since`, for a request that has one.
+    fn bare_updated_since(&self) -> Option<prost_types::Timestamp> {
+        None
+    }
+
+    /// The bare `cwd` (the filter's `workspace`), for a request that has one.
+    fn bare_cwd(&self) -> Option<&str> {
+        None
+    }
+
+    fn filter(&self) -> Result<DomainSessionFilter, ParseError> {
+        let mut filter: DomainSessionFilter =
+            self.session_filter().map(TryInto::try_into).transpose()?.unwrap_or_default();
+        if filter.harness.is_none() {
+            filter.harness = self.harness()?;
+        }
+        if filter.updated_since.is_none() {
+            filter.updated_since = self.bare_updated_since().map(from_timestamp).transpose()?;
+        }
+        if filter.workspace.is_none() {
+            filter.workspace = self.bare_cwd().map(PathBuf::from);
+        }
+        Ok(filter)
+    }
+}
+
+impl SessionFilterRequest for ListSessionsRequest {
+    fn session_filter(&self) -> Option<SessionFilter> {
+        self.filter.clone()
+    }
+
+    fn bare_updated_since(&self) -> Option<prost_types::Timestamp> {
+        self.updated_since
+    }
+}
+
+impl SessionFilterRequest for SearchSessionsRequest {
+    fn session_filter(&self) -> Option<SessionFilter> {
+        self.filter.clone()
+    }
+
+    fn bare_cwd(&self) -> Option<&str> {
+        self.cwd.as_deref()
     }
 }
 
@@ -151,6 +247,92 @@ mod tests {
         assert_eq!(decoded.preview.raw(), original.preview.raw());
         assert!((decoded.score - original.score).abs() < f64::EPSILON);
         assert_eq!(decoded.message_index, original.message_index);
+    }
+
+    #[rstest]
+    fn a_session_filter_round_trips() {
+        let original = DomainSessionFilter {
+            host: Some(HostId(uuid::Uuid::from_u128(7))),
+            workspace: Some(PathBuf::from("/work/atuin")),
+            directory: Some(PathBuf::from("/work/atuin/crates")),
+            branch: Some("main".to_owned()),
+            harness: Some(HarnessKind::Codex),
+            model: Some("opus".to_owned()),
+            roots_only: true,
+            updated_since: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(90)),
+        };
+        let decoded = DomainSessionFilter::try_from(SessionFilter::from(&original)).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    /// The filter's harness wins over the older bare field, which still applies alone.
+    #[rstest]
+    #[case::bare_field_alone(Some(HarnessKind::Pi), None, Some(HarnessKind::Pi))]
+    #[case::filter_wins(Some(HarnessKind::Pi), Some(HarnessKind::Codex), Some(HarnessKind::Codex))]
+    #[case::neither(None, None, None)]
+    fn the_filter_harness_supersedes_the_bare_one(
+        #[case] bare: Option<HarnessKind>,
+        #[case] filtered: Option<HarnessKind>,
+        #[case] expected: Option<HarnessKind>,
+    ) {
+        let request = SearchSessionsRequest {
+            query: String::new(),
+            limit: 0,
+            harness: bare.map(|h| h as i32),
+            cwd: None,
+            any_term: false,
+            filter: Some(SessionFilter {
+                harness: filtered.map(|h| h as i32),
+                ..SessionFilter::default()
+            }),
+        };
+        assert_eq!(request.filter().unwrap().harness, expected);
+    }
+
+    /// A search's bare `cwd` is the filter's workspace, which wins when both are set.
+    #[rstest]
+    #[case::bare_field_alone(Some("/a"), None, Some("/a"))]
+    #[case::filter_wins(Some("/a"), Some("/b"), Some("/b"))]
+    #[case::neither(None, None, None)]
+    fn the_filter_workspace_supersedes_the_bare_cwd(
+        #[case] bare: Option<&str>,
+        #[case] filtered: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let request = SearchSessionsRequest {
+            query: String::new(),
+            limit: 0,
+            harness: None,
+            cwd: bare.map(str::to_owned),
+            any_term: false,
+            filter: Some(SessionFilter {
+                workspace: filtered.map(str::to_owned),
+                ..SessionFilter::default()
+            }),
+        };
+        assert_eq!(request.filter().unwrap().workspace, expected.map(PathBuf::from));
+    }
+
+    /// A listing's bare `updated_since` applies unless the filter sets its own.
+    #[rstest]
+    #[case::bare_field_alone(Some(10), None, Some(10))]
+    #[case::filter_wins(Some(10), Some(20), Some(20))]
+    #[case::neither(None, None, None)]
+    fn the_filter_updated_since_supersedes_the_bare_one(
+        #[case] bare: Option<i64>,
+        #[case] filtered: Option<i64>,
+        #[case] expected: Option<i64>,
+    ) {
+        let at = |secs: i64| OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(secs);
+        let request = ListSessionsRequest {
+            harness: None,
+            updated_since: bare.map(|s| timestamp(at(s))),
+            filter: Some(SessionFilter {
+                updated_since: filtered.map(|s| timestamp(at(s))),
+                ..SessionFilter::default()
+            }),
+        };
+        assert_eq!(request.filter().unwrap().updated_since, expected.map(at));
     }
 
     #[rstest]

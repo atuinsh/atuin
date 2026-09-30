@@ -172,6 +172,8 @@ message Message {
   optional string stop_reason_label = 17;
   // How this message's session relates to `parent`, when known.
   optional ParentKind parent_kind = 18;
+  // The host that captured the message (a hyphenated host id), when known.
+  optional string host_id = 19;
 }
 
 message Session {
@@ -192,4 +194,15 @@ message Session {
   optional string last_reply = 13;
   // How this session relates to `parent`, when known.
   optional ParentKind parent_kind = 14;
+  // The host that captured the session (a hyphenated host id), when known.
+  optional string host_id = 15;
+  // The top-most stored ancestor this session is grouped under; absent for a root.
+  optional HarnessSession root = 16;
+  // Sessions grouped under this one; only counted by roots-only queries.
+  uint64 child_count = 17;
+  // The newest updated_at across the group; only set by roots-only queries.
+  optional google.protobuf.Timestamp group_updated_at = 18;
+  // For a session with no parent, the session it was found to be a copy of (from the model
+  // calls they share); always of the same harness.
+  optional HarnessSession copy_of = 19;
 }

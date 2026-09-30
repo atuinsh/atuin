@@ -18,6 +18,8 @@ impl Purge {
             Ok(()) => println!("Local store purge completed OK"),
             Err(e) => println!("Failed to purge local store: {e:?}"),
         }
+        // Even a failed purge may have deleted some records.
+        super::invalidate_ai_sessions().await;
 
         Ok(())
     }

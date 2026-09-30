@@ -8,7 +8,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, Session, SessionMatch};
+use atuin_client::ai_session::{
+    HarnessKind, HarnessSession, Message, SearchTerms, Session, SessionFilter, SessionMatch,
+};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
@@ -144,9 +146,19 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     // Right after the daemon starts it rebuilds its AI sessions and refuses reads until done,
     // rather than answer from a partial set. Tail only streams what happens from now on.
     if !matches!(cmd.cmd, SubCmd::Tail) {
+        let mut reported = None;
         client
-            .wait_for_sessions(|| {
-                eprintln!("AI sessions are being rebuilt after the daemon started; waiting...");
+            .wait_for_sessions(|progress| {
+                if reported.is_none() {
+                    eprintln!("AI sessions are being rebuilt after the daemon started; waiting...");
+                }
+                if let Some((replayed, pending)) = progress
+                    && reported != Some(progress)
+                    && pending > 0
+                {
+                    eprintln!("  {replayed} of {pending} records replayed");
+                }
+                reported = Some(progress);
             })
             .await?;
     }
@@ -310,7 +322,15 @@ async fn search(
     style: Style,
 ) -> Result<()> {
     let matches: Vec<SessionMatch> = client
-        .search_sessions(query, harness, None, false, limit)
+        .search_sessions(
+            query,
+            SearchTerms::All,
+            &SessionFilter {
+                harness,
+                ..SessionFilter::default()
+            },
+            limit,
+        )
         .await?
         .map(|m| Ok::<_, eyre::Report>(SessionMatch::try_from(m?)?))
         .try_collect()
@@ -543,7 +563,7 @@ async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Styl
 /// (the harness is only known from the listing, so an id alone cannot address a session).
 async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession> {
     let mut stream = client
-        .list_sessions(None, None)
+        .list_sessions(&SessionFilter::default())
         .await?
         .map(|session| Ok::<_, eyre::Report>(Session::try_from(session?)?));
     // `latest` only needs the newest session, which the daemon streams first, so take a single
