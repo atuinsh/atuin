@@ -9,7 +9,8 @@ mod codegen {
 use std::path::PathBuf;
 
 use atuin_client::ai_session::{
-    HarnessKind, HarnessSession, Session, SessionFilter as DomainSessionFilter, SessionMatch,
+    HarnessKind, HarnessSession, MatchedSession as DomainMatchedSession, Session,
+    SessionFilter as DomainSessionFilter, SessionMatch,
 };
 use atuin_common::string::highlighted::{HighlightedString, HighlightedTextProto};
 use atuin_common::time::OffsetDateTimeExt;
@@ -156,6 +157,10 @@ impl From<SessionMatch> for SearchSessionsMatch {
             preview: Some(HighlightedTextProto::from(&value.preview)),
             score: value.score,
             message_index: value.message_index,
+            matched: value.matched.map(|matched| MatchedSession {
+                session: Some(agent::HarnessSession::from(matched.handle)),
+                title: Some(HighlightedTextProto::from(&matched.title)),
+            }),
         }
     }
 }
@@ -174,6 +179,18 @@ impl TryFrom<SearchSessionsMatch> for SessionMatch {
             title: highlighted(value.title, "title")?,
             preview: highlighted(value.preview, "preview")?,
             message_index: value.message_index,
+            matched: value
+                .matched
+                .map(|matched| {
+                    Ok::<_, ParseError>(DomainMatchedSession {
+                        handle: matched
+                            .session
+                            .ok_or(ParseError::Missing("matched.session"))?
+                            .try_into()?,
+                        title: highlighted(matched.title, "matched.title")?,
+                    })
+                })
+                .transpose()?,
             score: value.score,
         })
     }
@@ -233,6 +250,13 @@ mod tests {
             title: highlighter.as_highlighted("the \u{E000}build\u{E001}".to_owned()),
             preview: highlighter.as_highlighted("a preview".to_owned()),
             message_index: 7,
+            matched: Some(DomainMatchedSession {
+                handle: HarnessSession {
+                    harness: HarnessKind::Codex,
+                    session: NativeSessionId::from("child".to_owned()),
+                },
+                title: highlighter.as_highlighted("a \u{E000}build\u{E001} fix".to_owned()),
+            }),
             score: 2.5,
         }
     }
@@ -247,6 +271,18 @@ mod tests {
         assert_eq!(decoded.preview.raw(), original.preview.raw());
         assert!((decoded.score - original.score).abs() < f64::EPSILON);
         assert_eq!(decoded.message_index, original.message_index);
+        let (matched, expected) = (decoded.matched.unwrap(), original.matched.unwrap());
+        assert_eq!(matched.handle, expected.handle);
+        assert_eq!(matched.title.raw(), expected.title.raw());
+        assert_eq!(matched.title.markers(), expected.title.markers());
+
+        let unmatched = SessionMatch {
+            matched: None,
+            ..session_match()
+        };
+        assert!(
+            SessionMatch::try_from(SearchSessionsMatch::from(unmatched)).unwrap().matched.is_none()
+        );
     }
 
     #[rstest]

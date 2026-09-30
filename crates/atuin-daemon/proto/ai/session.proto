@@ -79,11 +79,24 @@ message SearchSessionsRequest {
 
 message SearchSessionsMatch {
   ai.agent.Session session = 1;
+  // The session's title, highlighted where the query matched it. When the match is in
+  // `matched`, only highlighted if the title matches the query itself.
   common.HighlightedText title = 2;
   common.HighlightedText preview = 3;
   double score = 4;
-  // Position of the best-matching message in the session, in GetSession message order.
+  // Position of the best-matching message in the session holding it (`session`, or `matched`
+  // when set), in GetSession message order.
   uint64 message_index = 5;
+  // The session holding the best-matching message, when it is not `session`: in a roots-only
+  // search, a session grouped under the root returned.
+  MatchedSession matched = 6;
+}
+
+// The session of a group holding a search match, when it is not the group's root.
+message MatchedSession {
+  ai.agent.HarnessSession session = 1;
+  // Its title, highlighted where the query matched it.
+  common.HighlightedText title = 2;
 }
 
 // Which sessions to follow. An absent field is not a filter.

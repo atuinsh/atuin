@@ -1116,8 +1116,18 @@ struct SearchMatchJson {
     score: f64,
     title: HighlightJson,
     preview: HighlightJson,
-    /// Position of the best-matching message in the session, as numbered by `show`.
+    /// Position of the best-matching message in the session holding it (`session`, else
+    /// `matched`), as numbered by `show`.
     message_index: u64,
+    /// The session holding the best-matching message, when it is not `session`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched: Option<MatchedJson>,
+}
+
+#[derive(Serialize)]
+struct MatchedJson {
+    session: HandleJson,
+    title: HighlightJson,
 }
 
 impl From<&HighlightedString> for HighlightJson {
@@ -1138,6 +1148,10 @@ impl From<&SessionMatch> for SearchMatchJson {
             title: HighlightJson::from(&m.title),
             preview: HighlightJson::from(&m.preview),
             message_index: m.message_index,
+            matched: m.matched.as_ref().map(|matched| MatchedJson {
+                session: handle_json(&matched.handle),
+                title: HighlightJson::from(&matched.title),
+            }),
         }
     }
 }
@@ -1549,6 +1563,7 @@ mod tests {
             title: highlighter.as_highlighted("the \u{E000}build\u{E001}".to_owned()),
             preview: highlighter.as_highlighted(String::new()),
             message_index: 4,
+            matched: None,
             score: 2.5,
         };
 
@@ -1559,5 +1574,20 @@ mod tests {
         assert_eq!(v["title"]["text"], "the build");
         assert_eq!(v["title"]["matches"], json!([[4, 9]]));
         assert!(v["preview"].get("matches").is_none(), "no matches are omitted, not empty");
+        assert!(v.get("matched").is_none(), "a match in the session itself names no other");
+
+        let child = SessionMatch {
+            matched: Some(atuin_client::ai_session::MatchedSession {
+                handle: HarnessSession {
+                    harness: HarnessKind::ClaudeCode,
+                    session: "child".to_owned().into(),
+                },
+                title: highlighter.as_highlighted("\u{E000}build\u{E001} fix".to_owned()),
+            }),
+            ..m
+        };
+        let v = serde_json::to_value(SearchMatchJson::from(&child)).unwrap();
+        assert_eq!(v["matched"]["session"]["session_id"], "child");
+        assert_eq!(v["matched"]["title"]["matches"], json!([[0, 5]]));
     }
 }
