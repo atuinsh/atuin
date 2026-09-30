@@ -35,11 +35,15 @@ impl Rebuild {
                 self.rebuild_scripts(settings, store.clone()).await?;
             }
 
-            // The daemon owns the sidecar and reprojects it at startup, so schedule a full one.
-            "ai-session" => {
-                atuin_client::ai_session::invalidate_sidecar().await?;
-                println!("The ai session index is rebuilt the next time the daemon starts");
-            }
+            // The daemon owns the sidecar: have it rebuild now, else when it next starts.
+            "ai-session" => match super::reset_ai_sessions(settings).await? {
+                super::AiSessionsReset::Rebuilding => {
+                    println!("The daemon is rebuilding the ai session index");
+                }
+                super::AiSessionsReset::Deleted => {
+                    println!("The ai session index is rebuilt the next time the daemon starts");
+                }
+            },
 
             tag => {
                 bail!("unknown tag: {tag}");

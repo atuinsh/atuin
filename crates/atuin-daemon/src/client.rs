@@ -27,8 +27,8 @@ use crate::grpc::ai::agent::pb::Session as AiSession;
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    ImportSessionsEvent, ImportSessionsRequest, ListSessionsRequest, SearchSessionsMatch,
-    SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
+    ImportSessionsEvent, ImportSessionsRequest, ListSessionsRequest, RebuildSessionsRequest,
+    SearchSessionsMatch, SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
 };
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
@@ -535,8 +535,8 @@ impl AiClient {
     /// session read but a tail is refused rather than answered partially. Calls `on_wait` each
     /// time it finds the daemon rebuilding, with how far it has got (records replayed, and
     /// roughly how many there are to replay) when the daemon says, and returns at once when it
-    /// is not. A rebuild ends only once, so after this the daemon keeps serving reads for as long
-    /// as it runs.
+    /// is not. After this the daemon serves reads until a store command has it rebuild again
+    /// (`atuin store rebuild ai-session`, a purge or a forced pull), which is rare.
     pub async fn wait_for_sessions(
         &mut self,
         mut on_wait: impl FnMut(Option<(u64, u64)>),
@@ -622,6 +622,14 @@ impl AiClient {
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
         let request = search_sessions_request(query, terms, filter, limit);
         Ok(self.client.search_sessions(request).await?.into_inner())
+    }
+
+    /// Have the daemon rebuild its sessions from the record store, after records were deleted
+    /// under them. Returns once what they projected is gone; the replay goes on in the
+    /// background, and [`Self::wait_for_sessions`] waits it out.
+    pub async fn rebuild_sessions(&mut self) -> Result<()> {
+        self.client.rebuild_sessions(RebuildSessionsRequest {}).await?;
+        Ok(())
     }
 
     pub async fn import_sessions(

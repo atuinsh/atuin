@@ -197,6 +197,7 @@ impl AiSessionStore {
         db: &AiSessionDatabase,
         progress: &ReprojectProgress,
     ) -> Result<Reprojected, BuildError> {
+        let _running = db.lock_reprojection().await;
         if db.check_projection_key(&self.key.key_id().to_string()).await? {
             // Also the first time, on a fresh sidecar or one from before key tracking.
             tracing::info!("ai-session watermarks were not made with this key: replaying all");
@@ -425,6 +426,11 @@ impl ReprojectProgress {
         self.pending.store(pending, Ordering::Relaxed);
     }
 
+    /// Count from none again, before a reprojection that has yet to start its first pass.
+    pub fn clear(&self) {
+        self.start(0);
+    }
+
     /// Records replayed so far in this pass, and how many it set out to read. The first can pass
     /// the second when a series found rewritten is replayed from its start.
     #[must_use]
@@ -458,6 +464,7 @@ mod tests {
 
     use atuin_common::harnesstools::session::{Content, Role};
     use atuin_domain::record::HostId;
+    use futures::TryStreamExt;
     use proptest::prelude::*;
     use rstest::*;
     use time::OffsetDateTime;
@@ -467,7 +474,8 @@ mod tests {
         RecordSeriesKey, RecordTag, RecordVersion, Reprojected, SqliteStore, Watermark,
     };
     use crate::ai_session::{
-        AiSessionDatabase, HarnessKind, HarnessSession, Message, NativeSessionId, SourceId,
+        AiSessionDatabase, HarnessKind, HarnessSession, Message, NativeSessionId, SearchTerms,
+        SessionFilter, SourceId,
     };
     use crate::settings::test_local_timeout;
 
@@ -714,6 +722,76 @@ mod tests {
         assert_eq!(mark(&db, &s).await, None);
         assert_eq!(s.reproject(&db).await.unwrap().replayed, 3);
         assert_eq!(count(&db, &sample_handle()).await, Some(3));
+    }
+
+    /// `atuin store purge` deletes the records the key cannot decrypt, projected earlier under
+    /// the key they were made with. Resetting the sidecar, on disk or the daemon's own, and
+    /// reprojecting leaves no trace of them in listings or search, and keeps the rest.
+    #[rstest]
+    #[tokio::test]
+    async fn purged_records_leave_the_sidecar_once_reset(#[values(false, true)] on_disk: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let old_key = Key::from([7u8; 32]);
+        let writer = |key: Key| {
+            AiSessionStore::builder().store(store.clone()).host_id(hid()).key(key).build()
+        };
+        let (old, new) = (writer(old_key), writer(key()));
+        let (purged, kept) = (session_named("purged"), session_named("kept"));
+        for i in 0..2 {
+            old.push(&message_in(&purged, i, "zebra crossing")).await.unwrap();
+            new.push(&message_in(&kept, i, "zebra stripes")).await.unwrap();
+        }
+        // Projected under the old key, then under the new one: both sessions are in.
+        let db = AiSessionDatabase::open(&path).await.unwrap();
+        old.reproject(&db).await.unwrap();
+        new.reproject(&db).await.unwrap();
+        assert_eq!(db.list_sessions(&SessionFilter::default()).await.unwrap().len(), 2);
+
+        store.purge(&key()).await.unwrap();
+        if on_disk {
+            AiSessionDatabase::reset_projection(&path).await.unwrap();
+        } else {
+            db.reset().await.unwrap();
+        }
+        assert!(db.list_sessions(&SessionFilter::default()).await.unwrap().is_empty());
+        new.reproject(&db).await.unwrap();
+
+        let listed: Vec<_> = db
+            .list_sessions(&SessionFilter::default())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.handle)
+            .collect();
+        assert_eq!(listed, std::slice::from_ref(&kept));
+        let found: Vec<_> = db
+            .search("zebra", SearchTerms::All, &SessionFilter::default(), 0)
+            .map_ok(|m| m.session.handle)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(found, std::slice::from_ref(&kept), "the purged session left the index");
+        assert_eq!(count(&db, &kept).await, Some(2));
+        assert_eq!(new.reproject(&db).await.unwrap().replayed, 0, "watermarks are back");
+    }
+
+    /// Resetting keeps what capture has read of each native transcript: the records hold it.
+    #[rstest]
+    #[tokio::test]
+    async fn resetting_keeps_capture_checkpoints() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let db = AiSessionDatabase::open(&path).await.unwrap();
+        let checkpoint = atuin_common::harnesstools::session::Checkpoint { at: 42, digest: 7 };
+        db.set_checkpoint(&sample_handle(), checkpoint).await.unwrap();
+        AiSessionDatabase::reset_projection(&path).await.unwrap();
+        assert_eq!(db.checkpoint(&sample_handle()).await.unwrap(), Some(checkpoint));
+        // A missing sidecar has nothing to reset, and is not created.
+        let missing = dir.path().join("missing.db");
+        AiSessionDatabase::reset_projection(&missing).await.unwrap();
+        assert!(!missing.exists());
     }
 
     /// A watermark row that cannot be read is replaced by the one the replay it causes writes,

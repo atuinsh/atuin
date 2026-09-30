@@ -143,14 +143,15 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let style = cmd.style.resolve();
     let mut client = AiClient::from_settings(settings).await?;
 
-    // Right after the daemon starts it rebuilds its AI sessions and refuses reads until done,
-    // rather than answer from a partial set. Tail only streams what happens from now on.
+    // Right after the daemon starts, and when a store command asks it to, it rebuilds its AI
+    // sessions and refuses reads until done, rather than answer from a partial set. Tail only
+    // streams what happens from now on.
     if !matches!(cmd.cmd, SubCmd::Tail) {
         let mut reported = None;
         client
             .wait_for_sessions(|progress| {
                 if reported.is_none() {
-                    eprintln!("AI sessions are being rebuilt after the daemon started; waiting...");
+                    eprintln!("AI sessions are being rebuilt from the record store; waiting...");
                 }
                 if let Some((replayed, pending)) = progress
                     && reported != Some(progress)

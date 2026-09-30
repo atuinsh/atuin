@@ -55,10 +55,52 @@ pub enum Cmd {
 }
 
 /// Have the daemon reproject the ai-session sidecar in full on its next start, after a command
-/// rewrote or deleted records under it. Best effort: the maintenance itself has already happened.
+/// re-encrypted the records under it: they say what they said, so what is projected stays and
+/// the replay only has to cover it again with the new key. Best effort: the maintenance itself
+/// has already happened.
 pub async fn invalidate_ai_sessions() {
     if let Err(err) = atuin_client::ai_session::invalidate_sidecar().await {
         eprintln!("Failed to schedule a rebuild of the ai session index: {err}");
+    }
+}
+
+/// How [`reset_ai_sessions`] went.
+pub enum AiSessionsReset {
+    /// The daemon deleted the index and is rebuilding it now.
+    #[cfg_attr(not(feature = "daemon"), allow(dead_code, reason = "only the daemon rebuilds"))]
+    Rebuilding,
+    /// The index was deleted: the daemon rebuilds it when it next starts or syncs.
+    Deleted,
+}
+
+/// Delete the ai-session index and have it rebuilt from the record store alone, after a command
+/// deleted records under it (or asked for a rebuild): a replay only adds, so what the deleted
+/// records projected would otherwise stay.
+///
+/// The running daemon is asked to do it, so it rebuilds at once, reports the rebuild to readers
+/// meanwhile, and holds capture while its dedup gate cannot be trusted. It is never started for
+/// this; when it cannot be asked (not running, disabled, too old), the index file is reset
+/// directly, which a daemon running anyway notices (see
+/// `AiSessionDatabase::reset_projection`).
+pub async fn reset_ai_sessions(settings: &Settings) -> Result<AiSessionsReset> {
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled {
+        match daemon::rebuild_ai_sessions(settings).await {
+            Ok(()) => return Ok(AiSessionsReset::Rebuilding),
+            Err(err) => tracing::debug!(?err, "the daemon did not rebuild the ai session index"),
+        }
+    }
+    #[cfg(not(feature = "daemon"))]
+    let _ = settings;
+    atuin_client::ai_session::reset_sidecar().await?;
+    Ok(AiSessionsReset::Deleted)
+}
+
+/// [`reset_ai_sessions`], reporting a failure rather than returning it: for commands whose own
+/// work has already happened.
+pub async fn reset_ai_sessions_after(settings: &Settings) {
+    if let Err(err) = reset_ai_sessions(settings).await {
+        eprintln!("Failed to reset the ai session index: {err}");
     }
 }
 

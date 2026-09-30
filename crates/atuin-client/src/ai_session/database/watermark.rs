@@ -225,6 +225,70 @@ impl AiSessionDatabase {
         result
     }
 
+    /// Delete everything projected into the sidecar at `path` from the record store (sessions,
+    /// messages, their search index, model call attribution and groups) and every watermark, so
+    /// the next reprojection rebuilds it from the records alone. For the maintenance commands
+    /// that delete records (`atuin store purge`, `atuin store pull --force`) or ask for a rebuild
+    /// (`atuin store rebuild ai-session`), when the daemon (which does it itself, see
+    /// [`Self::reset`]) cannot be asked to: [`Self::invalidate_projection`] only replays, and a
+    /// replay only adds, so what the deleted records projected would stay.
+    ///
+    /// Safe beside a running daemon: it is one invalidation, bumping the [`Generation`], so a
+    /// reprojection in flight starts over rather than record as projected what this deleted.
+    /// Capture's checkpoints stay: they say how far each native transcript was read into the
+    /// record store, which this does not change. A missing sidecar has nothing to reset.
+    pub async fn reset_projection(path: impl AsRef<Path>) -> Result<(), DbError> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Ok(());
+        }
+
+        let sqlite = Sqlite::builder(path.as_os_str()).restrict_permissions().open().await?;
+        let result = Self::reset_tables(&sqlite).await;
+        sqlite.pool().close().await;
+        result
+    }
+
+    /// [`Self::reset_projection`] of this sidecar: the daemon's own, which it then replays (see
+    /// its `rebuild`). Callers hold [`Self::lock_local_projection`] so no capture is midway.
+    pub async fn reset(&self) -> Result<(), DbError> {
+        Self::reset_tables(&self.db).await
+    }
+
+    /// [`Self::reset_projection`] over an open sidecar, at whatever schema version it is.
+    async fn reset_tables(sqlite: &Sqlite) -> Result<(), DbError> {
+        let mut tx = sqlite.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let tables: Vec<String> = db::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('messages_fts', \
+             'messages', 'calls', 'sessions', 'reproject_watermark', 'projection_state')",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let has = |table: &str| tables.iter().any(|t| t == table);
+        if has("messages_fts") {
+            // Contentless: its rows cannot be read back to delete, but can be dropped at once.
+            db::query("INSERT INTO messages_fts (messages_fts) VALUES ('delete-all')")
+                .execute(&mut *tx)
+                .await?;
+        }
+        // Messages first: they reference their sessions.
+        for (table, sql) in [
+            ("messages", "DELETE FROM messages"),
+            ("calls", "DELETE FROM calls"),
+            ("sessions", "DELETE FROM sessions"),
+            ("reproject_watermark", "DELETE FROM reproject_watermark"),
+        ] {
+            if has(table) {
+                db::query(sql).execute(&mut *tx).await?;
+            }
+        }
+        if has("projection_state") {
+            Self::bump_generation(&mut tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// [`Self::invalidate_projection`] over an open sidecar, at whatever schema version it is.
     async fn invalidate_tables(sqlite: &Sqlite) -> Result<(), DbError> {
         let mut tx = sqlite.pool().begin_with("BEGIN IMMEDIATE").await?;

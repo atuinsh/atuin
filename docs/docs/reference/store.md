@@ -79,9 +79,12 @@ atuin store rebuild history
 
 Useful when the record store is intact but the local view of it isn't.
 
-`atuin store rebuild ai-session` schedules a full rebuild of the daemon's
-index of captured AI agent sessions: the daemon replays every session record
-on its next start.
+`atuin store rebuild ai-session` rebuilds the daemon's index of captured AI
+agent sessions from the session records alone: the running daemon deletes it
+and replays every record in the background (`atuin ai session` waits for it
+meanwhile); with the daemon stopped, the index is deleted and rebuilt when it
+next starts. `atuin store purge` and `atuin store pull --force` do the same
+after deleting records, so their sessions leave the index.
 
 ### `atuin store push`
 

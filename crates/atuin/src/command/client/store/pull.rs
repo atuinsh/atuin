@@ -35,14 +35,21 @@ pub struct Pull {
 
 impl Pull {
     pub async fn run(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
-        if self.force {
-            println!("Forcing local overwrite!");
-            println!("Clearing local store");
-
-            store.delete_all().await?;
-            super::invalidate_ai_sessions().await;
+        if !self.force {
+            return self.pull(settings, store, db).await;
         }
 
+        println!("Forcing local overwrite!");
+        println!("Clearing local store");
+        store.delete_all().await?;
+        let pulled = self.pull(settings, store, db).await;
+        // Records only this machine had are gone, and the ai session index must forget what
+        // they projected: rebuilt from what the store holds now, however far the pull got.
+        super::reset_ai_sessions_after(settings).await;
+        pulled
+    }
+
+    async fn pull(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
         // We can actually just use the existing diff/etc to push
         // 1. Diff
         // 2. Get operations

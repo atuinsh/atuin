@@ -3,7 +3,7 @@ mod import;
 mod message_enricher;
 
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use atuin_client::ai_session::{
@@ -40,6 +40,16 @@ pub enum AppendError {
     Push(#[from] PushError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum RebuildError {
+    /// Opening or recovering the store failed at startup: there is nothing to rebuild with until
+    /// the daemon restarts, which rebuilds anyway.
+    #[error("the AI session store is unavailable: it failed to open or recover at startup")]
+    Unavailable,
+    #[error(transparent)]
+    Sidecar(#[from] DbError),
+}
+
 pub(crate) struct Sink {
     records: AiSessionStore,
     sidecar: AiSessionDatabase,
@@ -47,16 +57,28 @@ pub(crate) struct Sink {
     // Serialize the dedup gate + persistence across live capture and import. At most one record
     // can be waiting for projection; repair it before admitting another capture.
     pending_projection: Mutex<Option<Message>>,
+    /// The store's state: capture and import wait out a rebuild (see `append`).
+    state: watch::Receiver<StoreState>,
 }
 
 impl Sink {
+    #[cfg(test)]
     pub(crate) fn new(records: AiSessionStore, sidecar: AiSessionDatabase) -> Self {
+        Self::with_state(records, sidecar, watch::channel(StoreState::Ready).1)
+    }
+
+    fn with_state(
+        records: AiSessionStore,
+        sidecar: AiSessionDatabase,
+        state: watch::Receiver<StoreState>,
+    ) -> Self {
         let (tail, _) = broadcast::channel(128);
         Self {
             records,
             sidecar,
             tail,
             pending_projection: Mutex::new(None),
+            state,
         }
     }
 
@@ -70,10 +92,24 @@ impl Sink {
         sanitize_message(&mut msg);
         // Captured here, so on this host; a reproject reads the same from the record envelope.
         msg.host = Some(self.records.host_id());
-        let mut pending = self.pending_projection.lock().await;
-        // Keeps a reprojection of this host's records (after a sync) from projecting the record
-        // pushed below before this does. Taken after `pending`, never the other way round.
-        let local = self.sidecar.lock_local_projection().await;
+        let mut state = self.state.clone();
+        let (mut pending, local) = loop {
+            // The dedup gate below trusts the sidecar, which a rebuild empties and refills:
+            // checked meanwhile, a message already in the record store would be pushed again.
+            // (Capture and import only start once startup recovery is over, so this only ever
+            // waits on a rebuild.) A closed channel means the facade is gone: nothing to wait for.
+            let open = state.wait_for(|state| *state != StoreState::Recovering).await.is_ok();
+            let pending = self.pending_projection.lock().await;
+            // Keeps a reprojection of this host's records (after a sync) from projecting the
+            // record pushed below before this does. Taken after `pending`, never the other way
+            // round.
+            let local = self.sidecar.lock_local_projection().await;
+            // A rebuild says so before it takes `local` to empty the sidecar: one that began while
+            // this waited for the locks may have emptied it already.
+            if !open || *state.borrow() != StoreState::Recovering {
+                break (pending, local);
+            }
+        };
         if let Some(previous) = pending.as_ref() {
             self.project_and_broadcast(previous).await?;
             *pending = None;
@@ -165,6 +201,15 @@ pub(crate) enum StoreState {
     Unavailable,
 }
 
+/// A rebuild in progress: the store is ready again once this drops.
+struct Rebuilding(Arc<watch::Sender<StoreState>>);
+
+impl Drop for Rebuilding {
+    fn drop(&mut self) {
+        self.0.send_replace(StoreState::Ready);
+    }
+}
+
 /// Resolves once startup recovery is over, whether it succeeded or not.
 #[derive(Debug, Clone)]
 pub struct Recovery(watch::Receiver<StoreState>);
@@ -181,6 +226,9 @@ pub struct AiHarnessSessionCapture {
     /// Runs the harness session file reads of capture and import.
     pool: BlockingPool,
     state: watch::Receiver<StoreState>,
+    /// Sets `state` for a rebuild. Weak: startup recovery owns it, so that recovery panicking
+    /// or aborted still closes the channel, which reads as recovery over.
+    state_tx: Weak<watch::Sender<StoreState>>,
     /// How far startup recovery's reprojection has got.
     progress: ReprojectProgress,
     /// Recovery, then the capture engine for the life of the facade; aborted on drop.
@@ -214,14 +262,16 @@ impl AiHarnessSessionCapture {
         capture: bool,
         pool: BlockingPool,
     ) -> Self {
-        let sink = Arc::new(Sink::new(records, sidecar));
         let (state_tx, state) = watch::channel(StoreState::Recovering);
+        let state_tx = Arc::new(state_tx);
+        let sink = Arc::new(Sink::with_state(records, sidecar, state.clone()));
         let progress = ReprojectProgress::default();
 
         let background = tokio::spawn({
             let sink = sink.clone();
             let pool = pool.clone();
             let progress = progress.clone();
+            let state_tx = state_tx.clone();
             async move {
                 let started = Instant::now();
                 let state = match sink.records.reproject_with(&sink.sidecar, &progress).await {
@@ -259,6 +309,7 @@ impl AiHarnessSessionCapture {
             sink,
             pool,
             state,
+            state_tx: Arc::downgrade(&state_tx),
             progress,
             background: Some(background),
         }
@@ -289,13 +340,66 @@ impl AiHarnessSessionCapture {
         );
 
         Self {
-            sink: Arc::new(Sink::new(records, sidecar)),
+            sink: Arc::new(Sink::with_state(records, sidecar, state.clone())),
             // Never runs anything: without a persistent store there is no capture or import.
             pool: BlockingPool::new(NonZeroUsize::MIN),
             state,
+            // Nothing sets the state a test drives but the test.
+            state_tx: Weak::new(),
             progress: ReprojectProgress::default(),
             background: None,
         }
+    }
+
+    /// Rebuild the sidecar from the record store while serving, for the maintenance commands
+    /// that delete records under it (`atuin store purge`, `atuin store pull --force`) or ask for
+    /// a rebuild (`atuin store rebuild ai-session`): a reprojection only adds, so what deleted
+    /// records projected would otherwise stay.
+    ///
+    /// Everything projected is deleted ([`AiSessionDatabase::reset`]) before this returns, then
+    /// replayed in the background, recovering as at startup meanwhile: reads are refused as
+    /// rebuilding with the replay's progress, and capture and import wait (their dedup gate
+    /// trusts the sidecar). During startup recovery, or another rebuild, the reprojection
+    /// running notices the reset and starts over, so nothing more is started.
+    pub async fn rebuild(&self) -> Result<(), RebuildError> {
+        let state = *self.state.borrow();
+        let state_tx = match (state, self.state_tx.upgrade()) {
+            (StoreState::Unavailable, _) | (_, None) => return Err(RebuildError::Unavailable),
+            (_, Some(state_tx)) => state_tx,
+        };
+        // Replay here unless a reprojection is running already, which starts over on the reset.
+        let replay = (state == StoreState::Ready).then(|| {
+            self.progress.clear();
+            state_tx.send_replace(StoreState::Recovering);
+            // Ready again once replayed, however that ends (a panic included), so reads and
+            // capture never wait on a rebuild that is over.
+            Rebuilding(state_tx)
+        });
+        let reset = {
+            // No capture is between its dedup check and its append while the rows go.
+            let _local = self.sink.sidecar.lock_local_projection().await;
+            self.sink.sidecar.reset().await
+        };
+        reset?;
+        if let Some(rebuilding) = replay {
+            let sink = self.sink.clone();
+            let progress = self.progress.clone();
+            tokio::spawn(async move {
+                let started = Instant::now();
+                match sink.records.reproject_with(&sink.sidecar, &progress).await {
+                    Ok(stats) => tracing::info!(
+                        replayed = stats.replayed,
+                        elapsed = ?started.elapsed(),
+                        "ai-session sidecar rebuilt"
+                    ),
+                    // Watermarks stay below what failed, so the next reprojection (after a sync,
+                    // or at startup) retries it.
+                    Err(err) => tracing::error!(?err, "failed to rebuild the ai-session sidecar"),
+                }
+                drop(rebuilding);
+            });
+        }
+        Ok(())
     }
 
     /// A handle for waiting out startup recovery.
@@ -752,6 +856,136 @@ mod tests {
         // Capture and import hold on this, so the dedup gate sees every persisted message.
         assert!(capture.ready().await);
         assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
+    }
+
+    /// A message of session `session`, from line `source`.
+    fn message_of(session: &str, source: &str) -> Message {
+        let mut msg = sample_message();
+        msg.id = RecordId(atuin_common::utils::uuid_v7());
+        msg.session.session = NativeSessionId::from(session.to_owned());
+        msg.source_id = source.to_owned().into();
+        msg
+    }
+
+    /// A rebuild (after a purge deleted records) takes out what the deleted records projected and
+    /// replays the rest, reporting it is rebuilding meanwhile. Capture waits it out: its dedup gate
+    /// would otherwise push a message the half-rebuilt sidecar has not got back yet a second time.
+    #[rstest]
+    #[tokio::test]
+    async fn a_rebuild_replays_only_the_records_left_and_holds_capture() {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(store.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let (kept, purged) = (message_of("kept", "k1"), message_of("purged", "p1"));
+        records.push(&kept).await.unwrap();
+        records.push(&purged).await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        assert_eq!(capture.list_sessions(&SessionFilter::default()).await.unwrap().len(), 2);
+
+        store.delete(purged.id).await.unwrap();
+        // Keep the replay from starting, to look at the rebuild midway.
+        let replay = sidecar.lock_reprojection().await;
+        capture.rebuild().await.unwrap();
+        assert!(capture.is_recovering(), "reads are told it is rebuilding");
+        assert!(capture.list_sessions(&SessionFilter::default()).await.unwrap().is_empty());
+        let again = tokio::spawn({
+            let sink = capture.sink.clone();
+            let kept = kept.clone();
+            async move { sink.append(kept).await.unwrap() }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!again.is_finished(), "capture waits for the rebuild");
+
+        drop(replay);
+        assert_eq!(again.await.unwrap(), Appended::Duplicate, "and then finds it projected");
+        assert!(capture.ready().await);
+        let listed: Vec<_> = capture
+            .list_sessions(&SessionFilter::default())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.handle)
+            .collect();
+        assert_eq!(listed, std::slice::from_ref(&kept.session));
+        let stored = store.all_tagged(&atuin_domain::record::RecordTag::AiSession).await.unwrap();
+        assert_eq!(stored.len(), 1, "nothing was pushed twice");
+    }
+
+    /// A capture already past its wait for a rebuild, but still waiting for its locks when one
+    /// empties the sidecar, waits the rebuild out too rather than check an empty sidecar.
+    #[rstest]
+    #[tokio::test]
+    async fn a_capture_overtaken_by_a_rebuild_waits_for_it() {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(store.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let kept = message_of("kept", "k1");
+        records.push(&kept).await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+
+        let pending = capture.sink.pending_projection.lock().await;
+        let again = tokio::spawn({
+            let sink = capture.sink.clone();
+            let kept = kept.clone();
+            async move { sink.append(kept).await.unwrap() }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let replay = sidecar.lock_reprojection().await;
+        capture.rebuild().await.unwrap();
+        drop(pending);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!again.is_finished(), "capture waits for the rebuild");
+
+        drop(replay);
+        assert_eq!(again.await.unwrap(), Appended::Duplicate);
+        let stored = store.all_tagged(&atuin_domain::record::RecordTag::AiSession).await.unwrap();
+        assert_eq!(stored.len(), 1, "nothing was pushed twice");
+    }
+
+    /// Asked during startup recovery, a rebuild resets the sidecar and leaves the replay to the
+    /// recovery running, which starts over; without a store there is nothing to rebuild.
+    #[rstest]
+    #[tokio::test]
+    async fn a_rebuild_during_recovery_leaves_it_the_replay() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = message_of("kept", "k1");
+        records.push(&msg).await.unwrap();
+        let recovery = sidecar.lock_reprojection().await;
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        capture.rebuild().await.unwrap();
+        assert!(capture.is_recovering());
+        drop(recovery);
+        assert!(capture.ready().await);
+        assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
+
+        let nop = AiHarnessSessionCapture::nop().await;
+        assert!(matches!(nop.rebuild().await, Err(RebuildError::Unavailable)));
     }
 
     /// Recovery replays only what the sidecar has not projected yet, and reports how far it got.

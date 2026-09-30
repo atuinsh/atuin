@@ -15,13 +15,16 @@ use crate::grpc::ai::session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
     HarnessFilterRequest, ImportSessionsEvent, ImportSessionsProgress, ImportSessionsRequest,
-    ImportSessionsSummary, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
-    SessionFilterRequest, SessionRefRequest, TailSessionsEvent, TailSessionsRequest,
-    get_session_event, import_sessions_event, tail_sessions_event,
+    ImportSessionsSummary, ListSessionsRequest, RebuildSessionsReply, RebuildSessionsRequest,
+    SearchSessionsMatch, SearchSessionsRequest, SessionFilterRequest, SessionRefRequest,
+    TailSessionsEvent, TailSessionsRequest, get_session_event, import_sessions_event,
+    tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
-use crate::session_capture::{AiHarnessSessionCapture, ImportProgress, SessionTailEvent};
+use crate::session_capture::{
+    AiHarnessSessionCapture, ImportProgress, RebuildError, SessionTailEvent,
+};
 
 #[derive(Clone)]
 pub struct Service {
@@ -34,8 +37,8 @@ impl Service {
         Self { capture }
     }
 
-    /// Refuse while startup recovery is still restoring sessions: a read would succeed with
-    /// sessions or messages silently missing.
+    /// Refuse while startup recovery or a rebuild is still restoring sessions: a read would
+    /// succeed with sessions or messages silently missing.
     fn ensure_recovered(&self) -> Result<(), Status> {
         if self.capture.is_recovering() {
             return Err(rebuilding_status(self.capture.recovery_progress()));
@@ -55,8 +58,8 @@ const REBUILD_PROGRESS_METADATA: &str = "atuin-ai-sessions-rebuild-progress";
 
 fn rebuilding_status((replayed, pending): (u64, u64)) -> Status {
     let mut status = Status::unavailable(format!(
-        "AI sessions are being rebuilt after the daemon started ({replayed} of {pending} \
-         records); try again shortly"
+        "AI sessions are being rebuilt from the record store ({replayed} of {pending} records); \
+         try again shortly"
     ));
     let metadata = status.metadata_mut();
     metadata.insert(REBUILDING_METADATA, MetadataValue::from_static("1"));
@@ -231,6 +234,19 @@ impl GrpcService for Service {
             });
 
         Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn rebuild_sessions(
+        &self,
+        _request: Request<RebuildSessionsRequest>,
+    ) -> Result<Response<RebuildSessionsReply>, Status> {
+        match self.capture.rebuild().await {
+            Ok(()) => Ok(Response::new(RebuildSessionsReply {})),
+            Err(err @ RebuildError::Unavailable) => {
+                Err(Status::failed_precondition(err.to_string()))
+            }
+            Err(err @ RebuildError::Sidecar(_)) => Err(Status::internal(err.to_string())),
+        }
     }
 
     async fn import_sessions(

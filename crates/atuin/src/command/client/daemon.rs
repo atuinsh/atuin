@@ -471,6 +471,19 @@ pub async fn rebuild_history(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+/// Have a running daemon that speaks our version rebuild its AI sessions from the record store
+/// (see `AiClient::rebuild_sessions`). Never starts or restarts it: a daemon that is not running
+/// rebuilds when it starts anyway.
+pub async fn rebuild_ai_sessions(settings: &Settings) -> Result<()> {
+    match probe(settings).await {
+        Probe::Ready(_) => {}
+        Probe::NeedsRestart(reason) => bail!(reason),
+        Probe::Unreachable(err) => return Err(err),
+    }
+    let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
+    client.rebuild_sessions().await
+}
+
 pub async fn compact_store(settings: &Settings) -> Result<u64> {
     let reply = try_with_restart(settings, async |client| client.compact_store().await).await?;
     Ok(reply.rewritten)
