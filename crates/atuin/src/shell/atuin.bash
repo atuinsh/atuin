@@ -439,7 +439,7 @@ __atuin_ai_resume() {
         local READLINE_LINE="" READLINE_POINT=0
 
     local __atuin_output
-    if ! __atuin_output=$(ATUIN_SHELL=bash ATUIN_QUERY=$READLINE_LINE atuin ai resume --shell-widget "$@" 3>&1 1>&2 2>&3); then
+    if ! __atuin_output=$(ATUIN_SHELL=bash ATUIN_QUERY=$READLINE_LINE atuin ai resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-); then
         [[ $__atuin_output ]] && printf '%s\n' "$__atuin_output" >&2
         return 1
     fi

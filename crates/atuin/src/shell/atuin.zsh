@@ -247,7 +247,7 @@ _atuin_ai_resume() {
     zle -I
 
     local output __atuin_status
-    output=$(ATUIN_SHELL=zsh ATUIN_QUERY=$BUFFER atuin ai resume --shell-widget "$@" 3>&1 1>&2 2>&3)
+    output=$(ATUIN_SHELL=zsh ATUIN_QUERY=$BUFFER atuin ai resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-)
     __atuin_status=$?
 
     zle reset-prompt
