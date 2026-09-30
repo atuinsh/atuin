@@ -1620,21 +1620,36 @@ impl AiSessionDatabase {
     }
 
     /// Group every session afresh under its top-most stored ancestor, following the parent else
-    /// the copy link, as the `incremental_sidecar` migration does.
+    /// the copy link, as the `incremental_sidecar` migration does (with the same query): however
+    /// deep the chain, and with a cycle headed by its least member.
     async fn regroup_all(conn: &mut SqliteConnection) -> Result<(), DbError> {
         db::query(
-            "WITH RECURSIVE chain (harness, session_id, anc_harness, anc_session_id, depth) AS ( \
-             SELECT harness, session_id, harness, session_id, 0 FROM sessions UNION ALL SELECT \
-             c.harness, c.session_id, p.harness, p.session_id, c.depth + 1 FROM chain c JOIN \
-             sessions a ON a.harness = c.anc_harness AND a.session_id = c.anc_session_id JOIN \
-             sessions p ON p.harness = CASE WHEN a.parent_session_id IS NULL THEN a.harness ELSE \
+            "WITH RECURSIVE up (harness, session_id, up_harness, up_session_id) AS (SELECT \
+             a.harness, a.session_id, p.harness, p.session_id FROM sessions a JOIN sessions p ON \
+             p.harness = CASE WHEN a.parent_session_id IS NULL THEN a.harness ELSE \
              a.parent_harness END AND p.session_id = COALESCE(a.parent_session_id, \
-             a.copy_of_session_id) WHERE c.depth < 64 AND NOT (p.harness = c.harness AND \
-             p.session_id = c.session_id)), roots AS (SELECT harness, session_id, anc_harness, \
-             anc_session_id, max(depth) FROM chain GROUP BY harness, session_id) UPDATE sessions \
-             SET root_harness = roots.anc_harness, root_session_id = roots.anc_session_id FROM \
-             roots WHERE roots.harness = sessions.harness AND roots.session_id = \
-             sessions.session_id",
+             a.copy_of_session_id)), chain (harness, session_id, anc_harness, anc_session_id, \
+             depth, path) AS (SELECT harness, session_id, harness, session_id, 0, \
+             json_array(harness || ':' || session_id) FROM sessions UNION ALL SELECT c.harness, \
+             c.session_id, u.up_harness, u.up_session_id, c.depth + 1, json_insert(c.path, \
+             '$[#]', u.up_harness || ':' || u.up_session_id) FROM chain c JOIN up u ON u.harness \
+             = c.anc_harness AND u.session_id = c.anc_session_id WHERE NOT EXISTS (SELECT 1 FROM \
+             json_each(c.path) v WHERE v.value = u.up_harness || ':' || u.up_session_id)), ends \
+             AS (SELECT harness, session_id, anc_harness, anc_session_id, max(depth) AS depth \
+             FROM chain GROUP BY harness, session_id), loops AS (SELECT e.harness, e.session_id, \
+             c.depth AS entered FROM ends e JOIN up u ON u.harness = e.anc_harness AND \
+             u.session_id = e.anc_session_id JOIN chain c ON c.harness = e.harness AND \
+             c.session_id = e.session_id AND c.anc_harness = u.up_harness AND c.anc_session_id = \
+             u.up_session_id), heads AS (SELECT l.harness, l.session_id, c.anc_harness, \
+             c.anc_session_id, row_number() OVER (PARTITION BY l.harness, l.session_id ORDER BY \
+             c.anc_harness, c.anc_session_id) AS n FROM loops l JOIN chain c ON c.harness = \
+             l.harness AND c.session_id = l.session_id AND c.depth >= l.entered), roots AS \
+             (SELECT e.harness, e.session_id, COALESCE(h.anc_harness, e.anc_harness) AS \
+             anc_harness, COALESCE(h.anc_session_id, e.anc_session_id) AS anc_session_id FROM \
+             ends e LEFT JOIN heads h ON h.harness = e.harness AND h.session_id = e.session_id \
+             AND h.n = 1) UPDATE sessions SET root_harness = roots.anc_harness, root_session_id = \
+             roots.anc_session_id FROM roots WHERE roots.harness = sessions.harness AND \
+             roots.session_id = sessions.session_id",
         )
         .execute(conn)
         .await?;
@@ -1886,11 +1901,31 @@ impl AiSessionDatabase {
             }
             _ => None,
         };
-        // A parent that is not stored leaves the session a root; one grouped under this very
-        // session (a parent cycle) does too.
-        let (root_harness, root_session_id) = parent_root
-            .filter(|(h, s)| (*h, s.as_str()) != (harness, session_id))
-            .unwrap_or_else(|| (harness, session_id.to_owned()));
+        // The link closes a cycle when the parent is grouped under this very session, or the
+        // root it is grouped under was waiting for this session as its own parent. A cycle has no
+        // top: it is headed by its least member whichever order its sessions arrived in, which
+        // `regroup_all` works out.
+        if let Some((root_harness, root_session_id)) = &parent_root {
+            let closes_cycle = (*root_harness, root_session_id.as_str()) == (harness, session_id)
+                || db::query_scalar::<_, i64>(
+                    "SELECT 1 FROM sessions WHERE harness = ?1 AND session_id = ?2 AND \
+                     ((parent_harness = ?3 AND parent_session_id = ?4) OR (parent_session_id IS \
+                     NULL AND harness = ?3 AND copy_of_session_id = ?4))",
+                )
+                .bind(*root_harness)
+                .bind(root_session_id)
+                .bind(harness)
+                .bind(session_id)
+                .fetch_optional(&mut *conn)
+                .await?
+                .is_some();
+            if closes_cycle {
+                return Self::regroup_all(conn).await;
+            }
+        }
+        // A parent that is not stored leaves the session a root.
+        let (root_harness, root_session_id) =
+            parent_root.unwrap_or_else(|| (harness, session_id.to_owned()));
 
         if (root_harness, root_session_id.as_str()) != (harness, session_id) {
             db::query(
@@ -3933,16 +3968,56 @@ mod tests {
         assert_eq!(children, ["in-pi", "in-claude"]);
     }
 
-    /// A parent cycle cannot loop: every session still has a root.
+    /// A cycle of parent links (`a` → `b` → `c` → `a`, with `x` hanging off it) cannot loop, and
+    /// has no top: it and what hangs off it group under its least member, whatever order its
+    /// rows arrive in, and as a regroup of everything decides.
     #[rstest]
     #[tokio::test]
-    async fn a_parent_cycle_still_groups() {
+    async fn a_parent_cycle_groups_under_its_least_member(
+        #[values([0, 1, 2, 3], [3, 2, 1, 0], [1, 3, 0, 2], [2, 0, 3, 1])] order: [usize; 4],
+    ) {
+        let rows = [
+            tree_row("x", Some("a"), 0, "x"),
+            tree_row("a", Some("b"), 1, "x"),
+            tree_row("b", Some("c"), 2, "x"),
+            tree_row("c", Some("a"), 3, "x"),
+        ];
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        db.append(&tree_row("a", Some("b"), 0, "x")).await.unwrap();
-        db.append(&tree_row("b", Some("a"), 1, "x")).await.unwrap();
-        let roots = roots_of(&db).await;
-        assert_eq!(roots.len(), 2);
-        assert_eq!(roots[0].1, roots[1].1, "both land in one group: {roots:?}");
+        for i in order {
+            db.append(&rows[i]).await.unwrap();
+        }
+        let expected: Vec<_> =
+            ["a", "b", "c", "x"].map(|id| (id.to_owned(), "a".to_owned())).to_vec();
+        assert_eq!(roots_of(&db).await, expected);
+
+        let mut conn = db.db.pool().acquire().await.unwrap();
+        AiSessionDatabase::regroup_all(&mut conn).await.unwrap();
+        drop(conn);
+        assert_eq!(roots_of(&db).await, expected);
+    }
+
+    /// `s000` ← `s001` ← … ← `s{n-1}`: a chain of parents `n` long.
+    fn chain_ids(n: usize) -> Vec<(String, Option<String>)> {
+        (0..n).map(|i| (format!("s{i:03}"), i.checked_sub(1).map(|p| format!("s{p:03}")))).collect()
+    }
+
+    /// However long a chain of forks, it is one group, whether placed as its rows arrive or
+    /// regrouped all at once.
+    #[rstest]
+    #[tokio::test]
+    async fn a_deep_chain_is_one_group() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for (i, (id, parent)) in chain_ids(100).iter().enumerate() {
+            let seconds = i64::try_from(i).unwrap();
+            db.append(&tree_row(id, parent.as_deref(), seconds, "x")).await.unwrap();
+        }
+        let one_group = |roots: Vec<(String, String)>| roots.iter().all(|(_, r)| r == "s000");
+        assert!(one_group(roots_of(&db).await));
+
+        let mut conn = db.db.pool().acquire().await.unwrap();
+        AiSessionDatabase::regroup_all(&mut conn).await.unwrap();
+        drop(conn);
+        assert!(one_group(roots_of(&db).await), "{:?}", roots_of(&db).await);
     }
 
     // --- copies ---------------------------------------------------------------------------------
@@ -4507,8 +4582,9 @@ mod tests {
         assert_eq!(root_of("fork"), "root");
         assert_eq!(root_of("root"), "root");
         assert_eq!(root_of("orphan"), "orphan");
-        // A parent cycle has no top: it only has to end, inside the cycle.
-        assert!(["a", "b"].contains(&root_of("a").as_str()));
+        // A parent cycle has no top: its least member heads it.
+        assert_eq!(root_of("a"), "a");
+        assert_eq!(root_of("b"), "a");
         let watermarks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
             .fetch_one(db.db.pool())
             .await
@@ -4518,6 +4594,20 @@ mod tests {
         // Grouping carries on incrementally from the migrated state.
         db.append(&tree_row("agent-c", Some("agent-b"), 50, "x")).await.unwrap();
         assert_eq!(roots_of(&db).await.iter().find(|(s, _)| s == "agent-c").unwrap().1, "root");
+    }
+
+    /// Migrating groups a chain of any length under its top.
+    #[rstest]
+    #[tokio::test]
+    async fn migrating_groups_a_deep_chain_under_its_top() {
+        let ids = chain_ids(100);
+        let sessions: Vec<_> = ids.iter().map(|(id, p)| (id.as_str(), p.as_deref())).collect();
+        let db = sidecar_at(BEFORE_INCREMENTAL, &sessions).await;
+
+        db.migrate().await.unwrap();
+
+        let roots = roots_of(&db).await;
+        assert!(roots.iter().all(|(_, root)| root == "s000"), "{roots:?}");
     }
 
     /// Migrating links the copies already stored to their originals from the calls they share,

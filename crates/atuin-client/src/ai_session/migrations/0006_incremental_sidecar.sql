@@ -72,22 +72,59 @@ UPDATE sessions SET copy_of_session_id = (
 )
 WHERE parent_session_id IS NULL;
 
+-- Each session's root: the last session reached walking up from it, however far that is. A walk
+-- stops at a session already on it, so a cycle of parent links (which only corrupt data makes)
+-- ends too; a cycle has no top, so its least member (by harness, then id) heads it and whatever
+-- hangs off it, whichever member a walk entered it by. `regroup_all` runs the same query.
 CREATE TEMP TABLE ai_session_roots AS
-WITH RECURSIVE chain (harness, session_id, anc_harness, anc_session_id, depth) AS (
-    SELECT harness, session_id, harness, session_id, 0 FROM sessions
-    UNION ALL
-    SELECT c.harness, c.session_id, p.harness, p.session_id, c.depth + 1
-    FROM chain c
-    JOIN sessions a ON a.harness = c.anc_harness AND a.session_id = c.anc_session_id
+WITH RECURSIVE
+-- The next session up from each: its parent, else the original it was copied from, if stored.
+up (harness, session_id, up_harness, up_session_id) AS (
+    SELECT a.harness, a.session_id, p.harness, p.session_id
+    FROM sessions a
     JOIN sessions p ON p.harness = CASE WHEN a.parent_session_id IS NULL THEN a.harness
             ELSE a.parent_harness END
         AND p.session_id = COALESCE(a.parent_session_id, a.copy_of_session_id)
-    -- A parent cycle stops where it would come back round, and depth bounds any other.
-    WHERE c.depth < 64 AND NOT (p.harness = c.harness AND p.session_id = c.session_id)
+),
+-- Every session reached walking up from each, with the sessions on the way (`harness:id`, the
+-- harness being a number) in `path`.
+chain (harness, session_id, anc_harness, anc_session_id, depth, path) AS (
+    SELECT harness, session_id, harness, session_id, 0, json_array(harness || ':' || session_id)
+    FROM sessions
+    UNION ALL
+    SELECT c.harness, c.session_id, u.up_harness, u.up_session_id, c.depth + 1,
+        json_insert(c.path, '$[#]', u.up_harness || ':' || u.up_session_id)
+    FROM chain c
+    JOIN up u ON u.harness = c.anc_harness AND u.session_id = c.anc_session_id
+    WHERE NOT EXISTS (
+        SELECT 1 FROM json_each(c.path) v WHERE v.value = u.up_harness || ':' || u.up_session_id
+    )
+),
+-- Where each walk ended: SQLite takes the bare columns from the max(depth) row.
+ends AS (
+    SELECT harness, session_id, anc_harness, anc_session_id, max(depth) AS depth
+    FROM chain GROUP BY harness, session_id
+),
+-- A walk that ended with a session still above it came round to one already on it, at depth
+-- `entered`: everything on it from there is the cycle.
+loops AS (
+    SELECT e.harness, e.session_id, c.depth AS entered
+    FROM ends e
+    JOIN up u ON u.harness = e.anc_harness AND u.session_id = e.anc_session_id
+    JOIN chain c ON c.harness = e.harness AND c.session_id = e.session_id
+        AND c.anc_harness = u.up_harness AND c.anc_session_id = u.up_session_id
+),
+heads AS (
+    SELECT l.harness, l.session_id, c.anc_harness, c.anc_session_id,
+        row_number() OVER (PARTITION BY l.harness, l.session_id
+            ORDER BY c.anc_harness, c.anc_session_id) AS n
+    FROM loops l
+    JOIN chain c ON c.harness = l.harness AND c.session_id = l.session_id AND c.depth >= l.entered
 )
--- The deepest ancestor reached: SQLite takes the bare columns from the max(depth) row.
-SELECT harness, session_id, anc_harness, anc_session_id, max(depth) AS depth
-FROM chain GROUP BY harness, session_id;
+SELECT e.harness, e.session_id, COALESCE(h.anc_harness, e.anc_harness) AS anc_harness,
+    COALESCE(h.anc_session_id, e.anc_session_id) AS anc_session_id
+FROM ends e
+LEFT JOIN heads h ON h.harness = e.harness AND h.session_id = e.session_id AND h.n = 1;
 
 UPDATE sessions SET root_harness = r.anc_harness, root_session_id = r.anc_session_id
 FROM temp.ai_session_roots r
