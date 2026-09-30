@@ -4,7 +4,7 @@ use atuin_client::settings::Settings;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
 use atuin_domain::record::RecordSeriesKey;
 use clap::Subcommand;
-use eyre::Result;
+use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
 use time::OffsetDateTime;
 use tracing::instrument;
@@ -64,44 +64,50 @@ pub async fn invalidate_ai_sessions() {
     }
 }
 
-/// How [`reset_ai_sessions`] went.
-pub enum AiSessionsReset {
-    /// The daemon deleted the index and is rebuilding it now.
-    #[cfg_attr(not(feature = "daemon"), allow(dead_code, reason = "only the daemon rebuilds"))]
-    Rebuilding,
-    /// The index was deleted: the daemon rebuilds it when it next starts or syncs.
-    Deleted,
-}
-
-/// Delete the ai-session index and have it rebuilt from the record store alone, after a command
-/// deleted records under it (or asked for a rebuild): a replay only adds, so what the deleted
-/// records projected would otherwise stay.
+/// Have the daemon delete the ai-session index and rebuild it from the record store alone, after
+/// a command deleted records under it (or asked for a rebuild): a replay only adds, so what the
+/// deleted records projected would otherwise stay.
 ///
-/// The running daemon is asked to do it, so it rebuilds at once, reports the rebuild to readers
-/// meanwhile, and holds capture while its dedup gate cannot be trusted. It is never started for
-/// this; when it cannot be asked (not running, disabled, too old), the index file is reset
-/// directly, which a daemon running anyway notices (see
-/// `AiSessionDatabase::reset_projection`).
-pub async fn reset_ai_sessions(settings: &Settings) -> Result<AiSessionsReset> {
+/// Only the daemon does it, started for it as for the other AI session commands: it owns the
+/// index, rebuilds at once, reports the rebuild to readers meanwhile, and holds capture while its
+/// dedup gate cannot be trusted. Deleting the file from here could leave a running daemon serving
+/// an empty index, and capture pushing duplicate records. So when the daemon is disabled, or
+/// cannot be reached or asked, this fails and nothing is touched.
+#[cfg_attr(
+    not(feature = "daemon"),
+    expect(clippy::unused_async, reason = "only the daemon rebuilds")
+)]
+pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
     #[cfg(feature = "daemon")]
-    if settings.daemon.enabled {
-        match daemon::rebuild_ai_sessions(settings).await {
-            Ok(()) => return Ok(AiSessionsReset::Rebuilding),
-            Err(err) => tracing::debug!(?err, "the daemon did not rebuild the ai session index"),
+    {
+        if !settings.daemon.enabled {
+            eyre::bail!(
+                "AI sessions need the daemon: enable it (`enabled = true` under `[daemon]` in the \
+                 config) to rebuild the AI session index"
+            );
         }
+        daemon::rebuild_ai_sessions(settings)
+            .await
+            .wrap_err("the daemon could not rebuild the AI session index")
     }
     #[cfg(not(feature = "daemon"))]
-    let _ = settings;
-    atuin_client::ai_session::reset_sidecar().await?;
-    Ok(AiSessionsReset::Deleted)
+    {
+        let _ = settings;
+        eyre::bail!("AI sessions need the daemon, which this build of atuin does not include");
+    }
 }
 
-/// [`reset_ai_sessions`], reporting a failure rather than returning it: for commands whose own
-/// work has already happened.
-pub async fn reset_ai_sessions_after(settings: &Settings) {
-    if let Err(err) = reset_ai_sessions(settings).await {
-        eprintln!("Failed to reset the ai session index: {err}");
+/// [`reset_ai_sessions`] for commands that have already deleted records: a failure says the
+/// index is now stale, and how to fix it. Nothing to do when there is no index yet: the daemon
+/// builds it from the records as they are now.
+pub async fn reset_ai_sessions_after(settings: &Settings) -> Result<()> {
+    if !atuin_client::ai_session::sidecar_path().exists() {
+        return Ok(());
     }
+    reset_ai_sessions(settings).await.wrap_err(
+        "the records changed, but the AI session index was not rebuilt and still lists what they \
+         held: run `atuin store rebuild ai-session` once the daemon is enabled and running",
+    )
 }
 
 impl Cmd {

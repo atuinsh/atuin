@@ -20,8 +20,6 @@ impl Purge {
         }
         // Even a failed purge may have deleted some records, which a replay would not take out
         // of the ai session index.
-        super::reset_ai_sessions_after(settings).await;
-
-        Ok(())
+        super::reset_ai_sessions_after(settings).await
     }
 }

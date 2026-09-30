@@ -471,15 +471,11 @@ pub async fn rebuild_history(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-/// Have a running daemon that speaks our version rebuild its AI sessions from the record store
-/// (see `AiClient::rebuild_sessions`). Never starts or restarts it: a daemon that is not running
-/// rebuilds when it starts anyway.
+/// Have the daemon rebuild its AI sessions from the record store (see
+/// `AiClient::rebuild_sessions`), first starting or replacing it (via [`ready_client`]) as the
+/// other AI session commands do.
 pub async fn rebuild_ai_sessions(settings: &Settings) -> Result<()> {
-    match probe(settings).await {
-        Probe::Ready(_) => {}
-        Probe::NeedsRestart(reason) => bail!(reason),
-        Probe::Unreachable(err) => return Err(err),
-    }
+    ready_client(settings).await?;
     let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
     client.rebuild_sessions().await
 }
