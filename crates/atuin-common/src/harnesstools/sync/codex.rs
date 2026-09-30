@@ -47,9 +47,13 @@
 //! **Liveness.** A Codex process holds an exclusive `flock` on
 //! `$CODEX_HOME/thread-writer-locks/<thread>.lock` for as long as it has the thread loaded, and
 //! removes the file when it lets go (codex-rs `rollout/src/writer_lock.rs`; seen held by `codex
-//! app-server` 0.157 with a thread loaded, and gone after it exited). A Codex old enough to keep
-//! no locks has no such directory; its processes are looked for instead. Appending takes that
-//! lock itself, as Codex's own writers take it, so no Codex loads the thread meanwhile.
+//! app-server` 0.157 with a thread loaded, and gone after it exited). A lock file that is there
+//! says it all. Without one, a Codex old enough to keep no locks may still have the thread
+//! loaded, whether or not a newer Codex (or another tool) made the directory, so its processes
+//! are looked for: a process that may have the thread (one resuming it, one in its directory
+//! when that is known or in any directory when not, a server) keeps it from being written.
+//! Appending takes that lock itself, as Codex's own writers take it, so no Codex that keeps locks
+//! loads the thread meanwhile; but never makes the directory, only a Codex does.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -111,10 +115,15 @@ pub(super) fn liveness(home: &Path, id: &str, cwd: Option<&Path>, procs: &Proces
     if !crate::harnesstools::resume::is_plain_name(thread) {
         return Liveness::NotLive;
     }
-    let locks = home.join(LOCKS);
-    if locks.is_dir() {
-        return flock_holder(&locks.join(format!("{thread}.lock")), procs);
+    let lock = home.join(LOCKS).join(format!("{thread}.lock"));
+    if lock.is_file() {
+        match flock_holder(&lock, procs) {
+            // Let go (and removed) just now: no lock file to go by after all.
+            Liveness::NotLive if !lock.exists() => {}
+            held => return held,
+        }
     }
+    // No lock file: no Codex that keeps locks has the thread, but one that keeps none might.
     match procs.list() {
         Ok(processes) => scan(&processes, cwd, |p| claim(p, thread)),
         Err(_) => Liveness::Unknown,
@@ -153,6 +162,10 @@ const LOCKS: &str = "thread-writer-locks";
 /// A Codex thread's writer lock, held as Codex's own writers hold it (codex-rs
 /// `WriterLockCoordinator`): the lock file is opened (and made) and locked under the home's
 /// coordination lock, and closed and removed under it again when let go.
+///
+/// Only taken in a home whose lock directory a Codex made. Making it here would tell
+/// [`liveness`] that this home's Codex keeps locks, and an older one that keeps none would pass
+/// for idle as long as it runs.
 struct WriterLock {
     dir: PathBuf,
     path: PathBuf,
@@ -160,18 +173,22 @@ struct WriterLock {
 }
 
 impl WriterLock {
-    fn acquire(home: &Path, thread: &str) -> Result<Self, SyncError> {
+    /// `None` when the home has no lock directory: no Codex there keeps locks to respect.
+    fn acquire(home: &Path, thread: &str) -> Result<Option<Self>, SyncError> {
         let dir = home.join(LOCKS);
+        if !dir.is_dir() {
+            return Ok(None);
+        }
         let _coordination = coordinate(&dir)?;
         let path = dir.join(format!("{thread}.lock"));
         let file =
             OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
         match file.try_lock() {
-            Ok(()) => Ok(Self {
+            Ok(()) => Ok(Some(Self {
                 dir,
                 path,
                 file: Some(file),
-            }),
+            })),
             Err(std::fs::TryLockError::WouldBlock) => Err(SyncError::Live(None)),
             Err(std::fs::TryLockError::Error(err)) => Err(err.into()),
         }
@@ -188,9 +205,8 @@ impl Drop for WriterLock {
 }
 
 /// The coordination lock over the writer locks of a Codex home (codex-rs
-/// `COORDINATION_LOCK_FILE`), held until dropped.
+/// `COORDINATION_LOCK_FILE`), held until dropped. The directory `dir` must be there already.
 fn coordinate(dir: &Path) -> std::io::Result<File> {
-    std::fs::create_dir_all(dir)?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -461,8 +477,8 @@ struct Written {
     outcome: AppendOutcome,
     /// A new segment, and the one it took over from.
     segment: Option<(PathBuf, PathBuf)>,
-    /// Held until the index names the new segment.
-    lock: WriterLock,
+    /// Held until the index names the new segment (when the home keeps locks).
+    lock: Option<WriterLock>,
 }
 
 /// [`SessionSync::append`] to thread `thread` under Codex home `home`, once it is known to be

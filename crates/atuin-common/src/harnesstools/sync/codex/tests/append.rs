@@ -451,6 +451,19 @@ async fn a_thread_codex_holds_is_refused(#[future] synced: Synced, home: TempDir
     assert!(!locks.join(format!("{}.lock", synced.id)).exists(), "the lock is let go");
 }
 
+/// Catching up in a home without a lock directory makes none: that would tell liveness this
+/// home's Codex keeps locks, and a running Codex that keeps none would read as idle from then on.
+#[rstest]
+#[tokio::test]
+async fn catching_up_never_makes_the_lock_directory(#[future] synced: Synced, home: TempDir) {
+    let synced = synced.await;
+    local_copy(&home, &synced.id, synced.before(SECOND_TURN));
+    let base = tip(&home, &synced.id);
+    let missing = synced.from(SECOND_TURN);
+    append_in(home.path(), &synced.id, &base, &missing, &AppendOptions::default()).await.unwrap();
+    assert!(!home.path().join(LOCKS).exists());
+}
+
 /// A rollout that changed since its tip was read (Codex went on, or reverted) is not written to.
 #[rstest]
 #[case::appended_to(false)]
