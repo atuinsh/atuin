@@ -109,6 +109,30 @@ macro_rules! group_columns {
     };
 }
 
+/// Whether the row `m`'s `turn_id` is an id its harness gave the model call, which a copy of the
+/// row keeps and nothing else holds: only such an id links a copy to its original (see
+/// [`AiSessionDatabase::link_copies`]). Not one capture derived from the line's content, because
+/// unrelated sessions can share that:
+///
+/// - Codex lines with no `response_id` are keyed by their token counts (`token_count:<total>`,
+///   `token_count:<time>:<last>` and `thread:<total>`, harnesstools `codex::session`
+///   `usage_turn`), which two fresh sessions sent the same first prompt report alike.
+/// - Pi lines with no entry id are keyed by their kind, timestamps and token counts
+///   (`line:...`, harnesstools `pi::session` `turn_id`).
+/// - opencode assistant messages are keyed by their creation time and model (`<millis>:...`,
+///   harnesstools `opencode::session` `turn_of` and `v2` `turn`). opencode records a fork's
+///   original as its parent anyway.
+///
+/// Usage is still counted once per turn id whatever its form: this only keeps the id from
+/// linking sessions.
+macro_rules! linkable_turn {
+    () => {
+        "(m.turn_id IS NOT NULL AND NOT ((m.harness = 2 AND (m.turn_id GLOB 'token_count:*' OR \
+         m.turn_id GLOB 'thread:*')) OR (m.harness = 5 AND m.turn_id GLOB 'line:*') OR (m.harness \
+         = 4 AND m.turn_id GLOB '[0-9]*')))"
+    };
+}
+
 /// [`group_columns`] for queries that do not group.
 macro_rules! no_group_columns {
     () => {
@@ -499,6 +523,39 @@ impl AiSessionDatabase {
     async fn migrate(&self) -> Result<(), DbError> {
         let pool = self.db.pool();
         db::migrate!(pool, "./src/ai_session/migrations").await?;
+        self.group_migrated().await
+    }
+
+    /// Link and group the sessions stored before the `incremental_sidecar` migration, which
+    /// leaves them without a root: in Rust rather than in the migration, so it links copies by
+    /// the same [`linkable_turn`] rule and groups them with the same query ([`Self::regroup_all`])
+    /// as rows arriving later are. Every session stored since has a root, so this runs until it
+    /// has committed once, and then never again.
+    async fn group_migrated(&self) -> Result<(), DbError> {
+        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let ungrouped: Option<i64> =
+            db::query_scalar("SELECT 1 FROM sessions WHERE root_harness IS NULL LIMIT 1")
+                .fetch_optional(&mut *tx)
+                .await?;
+        if ungrouped.is_none() {
+            return Ok(());
+        }
+        // Each parentless session links to the lowest-ranked other parentless session sharing a
+        // call, when that ranks below it (see the migration), as `relink` does one at a time.
+        db::query(concat!(
+            "UPDATE sessions SET copy_of_session_id = (SELECT t.session_id FROM messages m CROSS \
+             JOIN messages o ON o.harness = m.harness AND o.turn_id = m.turn_id AND o.session <> \
+             m.session CROSS JOIN sessions t ON t.id = o.session WHERE m.session = sessions.id \
+             AND ",
+            linkable_turn!(),
+            " AND t.parent_session_id IS NULL AND (t.started_at, t.session_id) < \
+             (sessions.started_at, sessions.session_id) ORDER BY t.started_at, t.session_id LIMIT \
+             1) WHERE parent_session_id IS NULL"
+        ))
+        .execute(&mut *tx)
+        .await?;
+        Self::regroup_all(&mut tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1620,8 +1677,8 @@ impl AiSessionDatabase {
     }
 
     /// Group every session afresh under its top-most stored ancestor, following the parent else
-    /// the copy link, as the `incremental_sidecar` migration does (with the same query): however
-    /// deep the chain, and with a cycle headed by its least member.
+    /// the copy link: however deep the chain, and with a cycle headed by its least member (by
+    /// harness, then id), whichever member a walk up entered it by.
     async fn regroup_all(conn: &mut SqliteConnection) -> Result<(), DbError> {
         db::query(
             "WITH RECURSIVE up (harness, session_id, up_harness, up_session_id) AS (SELECT \
@@ -1670,10 +1727,11 @@ impl AiSessionDatabase {
         session_id: &str,
         turn: &str,
     ) -> Result<bool, DbError> {
-        let others: Vec<String> = db::query_scalar(
+        let others: Vec<String> = db::query_scalar(concat!(
             "SELECT DISTINCT s.session_id FROM messages m JOIN sessions s ON s.id = m.session \
-             WHERE m.harness = ? AND m.turn_id = ? AND s.session_id <> ?",
-        )
+             WHERE m.harness = ? AND m.turn_id = ? AND s.session_id <> ? AND ",
+            linkable_turn!()
+        ))
         .bind(harness)
         .bind(turn)
         .bind(session_id)
@@ -1719,8 +1777,8 @@ impl AiSessionDatabase {
         Ok(moved)
     }
 
-    /// Link `session` to its original afresh from every call it shares, as the
-    /// `incremental_sidecar` migration does. Returns whether its link changed.
+    /// Link `session` to its original afresh from every call it shares, as
+    /// [`Self::group_migrated`] does. Returns whether its link changed.
     async fn relink(
         conn: &mut SqliteConnection,
         harness: i64,
@@ -1738,14 +1796,15 @@ impl AiSessionDatabase {
             Some(_) => None,
             // CROSS JOIN keeps this order: the session's own rows, then who else holds each call.
             None => {
-                db::query_scalar(
+                db::query_scalar(concat!(
                     "SELECT t.session_id FROM sessions s CROSS JOIN messages m ON m.session = \
                      s.id CROSS JOIN messages o ON o.harness = m.harness AND o.turn_id = \
                      m.turn_id AND o.session <> m.session CROSS JOIN sessions t ON t.id = \
-                     o.session WHERE s.harness = ? AND s.session_id = ? AND m.turn_id IS NOT NULL \
-                     AND t.parent_session_id IS NULL AND (t.started_at, t.session_id) < \
-                     (s.started_at, s.session_id) ORDER BY t.started_at, t.session_id LIMIT 1",
-                )
+                     o.session WHERE s.harness = ? AND s.session_id = ? AND ",
+                    linkable_turn!(),
+                    " AND t.parent_session_id IS NULL AND (t.started_at, t.session_id) < \
+                     (s.started_at, s.session_id) ORDER BY t.started_at, t.session_id LIMIT 1"
+                ))
                 .bind(harness)
                 .bind(session_id)
                 .fetch_optional(&mut *conn)
@@ -1773,12 +1832,13 @@ impl AiSessionDatabase {
         harness: i64,
         session_id: &str,
     ) -> Result<bool, DbError> {
-        let sharers: Vec<String> = db::query_scalar(
+        let sharers: Vec<String> = db::query_scalar(concat!(
             "SELECT DISTINCT t.session_id FROM messages m CROSS JOIN messages o ON o.harness = \
              m.harness AND o.turn_id = m.turn_id AND o.session <> m.session CROSS JOIN sessions t \
              ON t.id = o.session WHERE m.session = (SELECT id FROM sessions WHERE harness = ? AND \
-             session_id = ?) AND m.turn_id IS NOT NULL",
-        )
+             session_id = ?) AND ",
+            linkable_turn!()
+        ))
         .bind(harness)
         .bind(session_id)
         .fetch_all(&mut *conn)
@@ -4153,6 +4213,102 @@ mod tests {
             .map(|(id, out)| (id.to_owned(), out))
             .to_vec();
             proptest::prop_assert_eq!(output, expected);
+        }
+    }
+
+    /// An assistant row of `harness` session `id` holding model call `turn`.
+    fn turn_row(harness: HarnessKind, id: &str, seconds: i64, turn: &str) -> Message {
+        let mut m = message_in(&handle(harness, id), seconds, "words");
+        m.source_id = SourceId::from(format!("{id}-{seconds}"));
+        m.role = Role::Assistant;
+        m.turn_id = Some(turn.to_owned());
+        m
+    }
+
+    /// The turn ids of each harness's form: whether the harness gave it, so that two sessions
+    /// holding it were copied one from the other, or capture derived it from the line's content,
+    /// which unrelated sessions can share.
+    fn turn_forms() -> Vec<(HarnessKind, &'static str, bool)> {
+        vec![
+            (HarnessKind::ClaudeCode, "msg_01ABC", true),
+            (HarnessKind::Codex, "resp_0123abcd", true),
+            (HarnessKind::Codex, "token_count:12000.0.40.0.12040", false),
+            (HarnessKind::Codex, "token_count:2026-09-18T10:00:00.000Z:12000.0.40.0.12040", false),
+            (HarnessKind::Codex, "thread:12000.0.40.0.12040", false),
+            (HarnessKind::Pi, "entry:a1b2c3d4:2026-09-18T10:00:00.000Z", true),
+            (HarnessKind::Pi, "line:message:2026-09-18T10:00:00.000Z:1758189600000:10:5::", false),
+            (HarnessKind::Opencode, "1758189600000:anthropic/claude-sonnet-4", false),
+            (HarnessKind::Opencode, "1758189600000:anthropic/claude#10/5/0/0/0", false),
+        ]
+    }
+
+    /// Two parentless sessions holding one call are linked, the later a copy of the earlier,
+    /// only when the harness gave the call its id.
+    #[rstest]
+    #[tokio::test]
+    async fn only_a_harness_given_turn_id_links_copies() {
+        for (harness, turn, links) in turn_forms() {
+            let db = AiSessionDatabase::in_memory().await.unwrap();
+            db.append(&turn_row(harness, "first", 0, turn)).await.unwrap();
+            db.append(&turn_row(harness, "second", 10, turn)).await.unwrap();
+            let second = db.get_session(&handle(harness, "second")).await.unwrap().unwrap();
+            let expected = links.then(|| handle(harness, "first"));
+            assert_eq!(second.copy_of, expected, "{harness:?} {turn}");
+            assert_eq!(second.is_root(), !links, "{harness:?} {turn}");
+        }
+    }
+
+    /// Migrating links the copies stored before by the same rule as rows arriving later.
+    #[rstest]
+    #[tokio::test]
+    async fn migrating_links_only_by_harness_given_turn_ids() {
+        let forms = turn_forms();
+        let db = sidecar_at(BEFORE_INCREMENTAL, &[]).await;
+        for (i, (harness, turn, _)) in forms.iter().enumerate() {
+            for (n, copy) in ["first", "second"].into_iter().enumerate() {
+                let id = format!("{copy}-{i}");
+                let at = i64::try_from(n).unwrap();
+                db::query(
+                    "INSERT INTO sessions (harness, session_id, started_at, updated_at) VALUES \
+                     (?, ?, ?, ?)",
+                )
+                .bind(*harness as i64)
+                .bind(&id)
+                .bind(at)
+                .bind(at)
+                .execute(db.db.pool())
+                .await
+                .unwrap();
+                db::query(
+                    "INSERT INTO messages (id, harness, session, source_id, timestamp, role, \
+                     content, turn_id) VALUES (randomblob(16), ?1, (SELECT id FROM sessions WHERE \
+                     harness = ?1 AND session_id = ?2), 'a1', ?3, '\"Assistant\"', '[]', ?4)",
+                )
+                .bind(*harness as i64)
+                .bind(&id)
+                .bind(at)
+                .bind(*turn)
+                .execute(db.db.pool())
+                .await
+                .unwrap();
+            }
+        }
+
+        db.migrate().await.unwrap();
+
+        for (i, (harness, turn, links)) in forms.into_iter().enumerate() {
+            let second = handle(harness, &format!("second-{i}"));
+            let second = db.get_session(&second).await.unwrap().unwrap();
+            let expected = links.then(|| handle(harness, &format!("first-{i}")));
+            assert_eq!(second.copy_of, expected, "{harness:?} {turn}");
+            assert_eq!(
+                second.group().session.as_ref(),
+                if links {
+                    format!("first-{i}")
+                } else {
+                    format!("second-{i}")
+                }
+            );
         }
     }
 
