@@ -221,7 +221,7 @@ impl AiSessionDatabase {
 
         let sqlite = Sqlite::builder(path.as_os_str()).restrict_permissions().open().await?;
         let result = Self::invalidate_tables(&sqlite).await;
-        sqlite.pool().close().await;
+        sqlite.close().await;
         result
     }
 
