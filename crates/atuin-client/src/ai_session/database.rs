@@ -397,13 +397,22 @@ impl AiSessionDatabase {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let path = path.as_ref();
         let mut sqlite = Sqlite::builder(path.as_os_str()).restrict_permissions().open().await?;
-        if Self::lineage(&sqlite).await? == Lineage::Foreign {
+        let lineage = match Self::lineage(&sqlite).await {
+            Ok(lineage) => lineage,
+            Err(err) => {
+                sqlite.close().await;
+                return Err(err);
+            }
+        };
+        if lineage == Lineage::Foreign {
             warn!(
                 ?path,
                 "the ai-session sidecar was migrated by another build of atuin; rebuilding it \
                  from the record store"
             );
-            sqlite.pool().close().await;
+            // Every connection, the WAL compactor's too, closed before the files go: Windows
+            // refuses to delete a file that is open.
+            sqlite.close().await;
             Self::remove(path)?;
             sqlite = Sqlite::builder(path.as_os_str()).restrict_permissions().open().await?;
         }
@@ -420,7 +429,12 @@ impl AiSessionDatabase {
     pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let db = Sqlite::builder(path.as_ref().as_os_str()).read_only().open().await?;
         let db = Self::from_sqlite(db);
-        db.check_schema().await?;
+        if let Err(err) = db.check_schema().await {
+            // Not left to a drop, which closes it only eventually: the daemon may be about to
+            // delete a sidecar refused here (see `open`), which Windows refuses while it is open.
+            db.db.close().await;
+            return Err(err);
+        }
         Ok(db)
     }
 
@@ -4998,7 +5012,7 @@ mod tests {
                     .unwrap();
                 }
             }
-            db.pool().close().await;
+            db.close().await;
         }
 
         let err = AiSessionDatabase::open_read_only(&path).await.expect_err("must refuse");
@@ -5088,7 +5102,7 @@ mod tests {
         .execute(db.pool())
         .await
         .unwrap();
-        db.pool().close().await;
+        db.close().await;
     }
 
     /// A sidecar another build migrated is rebuilt: deleted, then created afresh without
@@ -5142,7 +5156,7 @@ mod tests {
             .execute(db.pool())
             .await
             .unwrap();
-            db.pool().close().await;
+            db.close().await;
         }
 
         let db = AiSessionDatabase::open(&path).await.unwrap();
@@ -5170,7 +5184,7 @@ mod tests {
             .execute(db.db.pool())
             .await
             .unwrap();
-            db.db.pool().close().await;
+            db.db.close().await;
         }
 
         assert!(AiSessionDatabase::open(&path).await.is_err());

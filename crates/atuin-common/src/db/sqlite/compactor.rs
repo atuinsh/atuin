@@ -7,6 +7,7 @@ use std::time::Duration;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, SqliteConnection};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::warn;
 
@@ -24,6 +25,11 @@ enum WalCompactionError {
 #[derive(Debug, Clone)]
 struct ActiveCompactor {
     _task: Arc<AbortOnDropHandle<()>>,
+    /// Asks the task to close its connection and stop.
+    stop: CancellationToken,
+    /// Cancelled once the task has stopped, however it ended (its future is dropped, aborted or
+    /// not): its connection and WAL file handle are closed by then.
+    stopped: CancellationToken,
 }
 
 impl ActiveCompactor {
@@ -42,14 +48,37 @@ impl ActiveCompactor {
 
     #[must_use]
     fn spawn(conn: SqliteConnection, info: EagerFutureCell<Info>) -> Self {
-        let task = tokio::spawn(Self::run(conn, info));
+        let (stop, stopped) = (CancellationToken::new(), CancellationToken::new());
+        // Owned by the future, so dropped with it: the task has stopped either way.
+        let done = stopped.clone().drop_guard();
+        let task = tokio::spawn({
+            let stop = stop.clone();
+            async move {
+                let _done = done;
+                let mut conn = conn;
+                stop.run_until_cancelled(Self::run(&mut conn, info)).await;
+                // Close it now rather than on drop, which only asks its worker to: a file with a
+                // connection open cannot be deleted on Windows.
+                if let Err(error) = conn.close().await {
+                    warn!(%error, "failed to close the WAL compactor connection");
+                }
+            }
+        });
 
         Self {
             _task: Arc::new(AbortOnDropHandle::new(task)),
+            stop,
+            stopped,
         }
     }
 
-    async fn run(mut conn: SqliteConnection, info: EagerFutureCell<Info>) {
+    /// Stop the task, and wait for its connection and WAL file handle to be closed.
+    async fn close(&self) {
+        self.stop.cancel();
+        self.stopped.cancelled().await;
+    }
+
+    async fn run(conn: &mut SqliteConnection, info: EagerFutureCell<Info>) {
         let wal_path = match info.get().await.wal_path().map(Path::to_path_buf) {
             Ok(wal_path) => wal_path,
             Err(error) => {
@@ -70,7 +99,7 @@ impl ActiveCompactor {
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            if let Err(error) = Self::compact_wal(&mut conn, &wal).await {
+            if let Err(error) = Self::compact_wal(conn, &wal).await {
                 warn!(%error, "failed to compact the WAL");
             }
         }
@@ -113,7 +142,7 @@ impl ActiveCompactor {
 #[derive(Debug, Clone)]
 enum CompactorInner {
     Active {
-        _compactor: ActiveCompactor,
+        compactor: ActiveCompactor,
     },
     Inactive,
 }
@@ -128,7 +157,7 @@ enum CompactorInner {
 /// This seems to be generally present in high parallel uses of AI agents.
 #[derive(Debug, Clone)]
 pub(super) struct Compactor {
-    _inner: CompactorInner,
+    inner: CompactorInner,
 }
 
 impl Compactor {
@@ -138,8 +167,8 @@ impl Compactor {
     ) -> Self {
         match ActiveCompactor::connect(opts).await {
             Ok(conn) => Self {
-                _inner: CompactorInner::Active {
-                    _compactor: ActiveCompactor::spawn(conn, info),
+                inner: CompactorInner::Active {
+                    compactor: ActiveCompactor::spawn(conn, info),
                 },
             },
             Err(error) => {
@@ -151,7 +180,15 @@ impl Compactor {
 
     pub(super) fn inactive() -> Self {
         Self {
-            _inner: CompactorInner::Inactive,
+            inner: CompactorInner::Inactive,
+        }
+    }
+
+    /// Stop compacting, and wait for the compactor's own connection and WAL file handle to be
+    /// closed.
+    pub(super) async fn close(&self) {
+        if let CompactorInner::Active { compactor } = &self.inner {
+            compactor.close().await;
         }
     }
 }
