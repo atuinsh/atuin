@@ -3805,7 +3805,7 @@ mod tests {
     /// The last term matches as a prefix while it is being typed, and whole once finished.
     #[rstest]
     #[case::partial_last_term("refac", 1)]
-    #[case::partial_after_a_whole_term("cargo te", 1)]
+    #[case::partial_after_a_whole_term("cargo tes", 1)]
     #[case::finished_term("refac ", 0)]
     #[case::only_the_last_term_is_a_prefix("carg test", 0)]
     #[case::partial_phrase("foo-ba", 1)]
@@ -4736,7 +4736,7 @@ mod tests {
     #[case::underscore_is_literal("ab_", &["ab_c"])]
     #[case::exact("abc", &["abc"])]
     #[case::case_matters("AB", &["AB"])]
-    #[case::nothing("abd", &[])]
+    #[case::nothing("abz", &[])]
     #[case::empty("", &["AB", "ab", "ab%c", "ab_c", "abc", "abxc", "ac", "é\u{10FFFF}x"])]
     #[case::the_last_code_point("é\u{10FFFF}", &["é\u{10FFFF}x"])]
     #[tokio::test]
