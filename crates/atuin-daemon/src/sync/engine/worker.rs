@@ -83,13 +83,16 @@ impl From<SyncTickError> for ControlFlow<()> {
 /// reprojects everything past the watermarks, so records a failed or interrupted earlier one left
 /// out are retried too. Signals that queued up meanwhile are taken together.
 ///
-/// Nothing is projected until startup recovery is over, so only one reprojection runs at a time:
-/// recovery is one too, and two at once would race each other's watermarks. This host's own
+/// Nothing is projected until startup recovery is over, and each reprojection takes
+/// [`AiSessionDatabase::lock_reprojection`], so one runs at a time beside recovery's and
+/// rebuilds' replays: two at once would race each other's watermarks. This never sets the
+/// store's state, and never deletes: a rebuild's wipe landing meanwhile fails its watermark
+/// moves (compare-and-set on the sidecar's generation), and it starts over. This host's own
 /// series is included, under capture's lock
 /// ([`AiSessionDatabase::lock_local_projection`]): its own records can arrive from the server
 /// (a reinstall that kept the host id), and capture dedups against the sidecar. The task ends
 /// once the sender is dropped.
-fn spawn_ai_session_projector(
+pub fn spawn_ai_session_projector(
     store: AiSessionStore,
     db: AiSessionDatabase,
     recovery: Recovery,
@@ -99,6 +102,10 @@ fn spawn_ai_session_projector(
         recovery.finished().await;
         while rx.recv().await.is_some() {
             while rx.try_recv().is_ok() {}
+            #[cfg(test)]
+            if let Some(hooks) = &recovery.hooks {
+                hooks.at(crate::session_capture::hooks::Point::SyncReproject).await;
+            }
             if let Err(err) = store.reproject(&db).await {
                 tracing::error!(?err, "failed to project synced ai-session records");
             }
