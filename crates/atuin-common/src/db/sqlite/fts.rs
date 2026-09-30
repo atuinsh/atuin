@@ -236,7 +236,7 @@ mod tests {
 
     #[rstest]
     #[case::single_term("refac", Some("\"refac\"*"))]
-    #[case::only_the_last_term("cargo te", Some("\"cargo\" \"te\"*"))]
+    #[case::only_the_last_term("cargo tes", Some("\"cargo\" \"tes\"*"))]
     #[case::trailing_whitespace_finishes_the_term("cargo ", Some("\"cargo\""))]
     #[case::embedded_quote_is_doubled("a\"b", Some("\"a\"\"b\"*"))]
     #[case::empty_is_none("", None)]
