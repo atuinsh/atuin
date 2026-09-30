@@ -1,6 +1,22 @@
+use std::path::PathBuf;
+
+use crate::settings::Settings;
+
 pub mod model;
 pub use model::*;
 mod store;
 pub use store::*;
 mod database;
 pub use database::*;
+
+/// Where the daemon keeps the ai-session sidecar (see [`Settings::ai_session_sidecar_path`]).
+#[must_use]
+pub fn sidecar_path() -> PathBuf {
+    Settings::ai_session_sidecar_path()
+}
+
+/// Have the daemon reproject the sidecar from the whole record store on its next start, for
+/// commands that rewrite the record store under it.
+pub async fn invalidate_sidecar() -> Result<(), DbError> {
+    AiSessionDatabase::invalidate_projection(sidecar_path()).await
+}

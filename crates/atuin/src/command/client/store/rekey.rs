@@ -28,6 +28,7 @@ impl Rekey {
             .context("could not load encryption key")?;
 
         store.re_encrypt(&current_key, &key).await?;
+        super::invalidate_ai_sessions().await;
 
         println!("Store rewritten. Saving new key");
         key.overwrite_path(&settings.key_path)?;

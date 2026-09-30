@@ -293,7 +293,7 @@ pub async fn boot(
 
     let host_id = Settings::host_id().await?;
 
-    let ai_session_db_path = Settings::effective_data_dir().join("ai_harness_sessions.db");
+    let ai_session_db_path = atuin_client::ai_session::sidecar_path();
     let ai_session_db = match AiSessionDatabase::open(&ai_session_db_path).await {
         Ok(db) => Some(db),
         Err(err) => {

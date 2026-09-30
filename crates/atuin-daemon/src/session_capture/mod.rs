@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use atuin_client::ai_session::{
     AiSessionDatabase, AiSessionStore, Appended, DbError, HarnessKind, HarnessSession, Message,
-    PushError, Session, SessionMatch,
+    PushError, ReprojectProgress, SearchTerms, Session, SessionFilter, SessionMatch,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
@@ -68,7 +68,12 @@ impl Sink {
         // Apply capture policy before either persistence path or the live tail. Keep structural
         // rows (even with no content) so parent links and usage accounting remain intact.
         sanitize_message(&mut msg);
+        // Captured here, so on this host; a reproject reads the same from the record envelope.
+        msg.host = Some(self.records.host_id());
         let mut pending = self.pending_projection.lock().await;
+        // Keeps a reprojection of this host's records (after a sync) from projecting the record
+        // pushed below before this does. Taken after `pending`, never the other way round.
+        let local = self.sidecar.lock_local_projection().await;
         if let Some(previous) = pending.as_ref() {
             self.project_and_broadcast(previous).await?;
             *pending = None;
@@ -89,6 +94,7 @@ impl Sink {
         *pending = Some(msg.clone());
         let appended = self.project_and_broadcast(&msg).await?;
         *pending = None;
+        drop(local);
         drop(pending);
         Ok(appended)
     }
@@ -175,6 +181,8 @@ pub struct AiHarnessSessionCapture {
     /// Runs the harness session file reads of capture and import.
     pool: BlockingPool,
     state: watch::Receiver<StoreState>,
+    /// How far startup recovery's reprojection has got.
+    progress: ReprojectProgress,
     /// Recovery, then the capture engine for the life of the facade; aborted on drop.
     background: Option<JoinHandle<()>>,
 }
@@ -190,9 +198,15 @@ impl Drop for AiHarnessSessionCapture {
 impl AiHarnessSessionCapture {
     /// Serve the sidecar immediately and recover it from the record store in the background.
     ///
+    /// Recovery is [`AiSessionStore::reproject`]: only the records past each series' watermark
+    /// are replayed, and everything when the sidecar is fresh (a new install, or one another
+    /// build's migrations made and [`AiSessionDatabase::open`] set aside) or its watermarks were
+    /// cleared (a migration that needs a backfill, a store maintenance command, a new key).
+    ///
     /// Capture and import wait for recovery: the dedup gate trusts the sidecar, so writing before
-    /// it holds every persisted message would push duplicate records. Failed recovery leaves
-    /// existing sessions readable but keeps both off until restart.
+    /// it holds every persisted message would push duplicate records. So does the sync worker's
+    /// projection of downloaded records (see [`Recovery`]), so one reprojection runs at a time.
+    /// Failed recovery leaves existing sessions readable but keeps both off until restart.
     #[must_use]
     pub fn open(
         records: AiSessionStore,
@@ -202,15 +216,22 @@ impl AiHarnessSessionCapture {
     ) -> Self {
         let sink = Arc::new(Sink::new(records, sidecar));
         let (state_tx, state) = watch::channel(StoreState::Recovering);
+        let progress = ReprojectProgress::default();
 
         let background = tokio::spawn({
             let sink = sink.clone();
             let pool = pool.clone();
+            let progress = progress.clone();
             async move {
                 let started = Instant::now();
-                let state = match sink.records.build(&sink.sidecar).await {
-                    Ok(()) => {
-                        tracing::info!(elapsed = ?started.elapsed(), "ai-session sidecar recovered");
+                let state = match sink.records.reproject_with(&sink.sidecar, &progress).await {
+                    Ok(stats) => {
+                        tracing::info!(
+                            replayed = stats.replayed,
+                            restarted = stats.restarted,
+                            elapsed = ?started.elapsed(),
+                            "ai-session sidecar recovered"
+                        );
                         StoreState::Ready
                     }
                     Err(err) => {
@@ -238,6 +259,7 @@ impl AiHarnessSessionCapture {
             sink,
             pool,
             state,
+            progress,
             background: Some(background),
         }
     }
@@ -271,6 +293,7 @@ impl AiHarnessSessionCapture {
             // Never runs anything: without a persistent store there is no capture or import.
             pool: BlockingPool::new(NonZeroUsize::MIN),
             state,
+            progress: ReprojectProgress::default(),
             background: None,
         }
     }
@@ -287,6 +310,13 @@ impl AiHarnessSessionCapture {
     #[must_use]
     pub fn is_recovering(&self) -> bool {
         *self.state.borrow() == StoreState::Recovering && self.state.has_changed().is_ok()
+    }
+
+    /// While [recovering](Self::is_recovering): the records replayed so far, and roughly how many
+    /// there are to replay (see [`ReprojectProgress::get`]).
+    #[must_use]
+    pub fn recovery_progress(&self) -> (u64, u64) {
+        self.progress.get()
     }
 
     /// Whether recovery succeeded and the persistent session store is ready for capture and
@@ -341,12 +371,8 @@ impl AiHarnessSessionCapture {
         self.sink.subscribe()
     }
 
-    pub async fn list_sessions(
-        &self,
-        harness: Option<HarnessKind>,
-        updated_since: Option<time::OffsetDateTime>,
-    ) -> Result<Vec<Session>, DbError> {
-        self.sink.sidecar.list_sessions(harness, updated_since).await
+    pub async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<Session>, DbError> {
+        self.sink.sidecar.list_sessions(filter).await
     }
 
     pub async fn get_session(&self, session: &HarnessSession) -> Result<Option<Session>, DbError> {
@@ -370,12 +396,11 @@ impl AiHarnessSessionCapture {
     pub fn search(
         &self,
         query: &str,
-        harness: Option<HarnessKind>,
-        cwd: Option<&str>,
-        any_term: bool,
+        terms: SearchTerms,
+        filter: &SessionFilter,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
-        self.sink.sidecar.search_in(query, harness, cwd, any_term, limit)
+        self.sink.sidecar.search(query, terms, filter, limit)
     }
 }
 
@@ -469,6 +494,8 @@ mod tests {
         ];
         sink.append(msg.clone()).await.unwrap();
         sanitize_message(&mut msg);
+        // Capture stamps the local host.
+        msg.host = Some(sink.records.host_id());
         assert_eq!(msg.content.len(), 4);
         assert_eq!(msg.content[3], Content::ReasoningSummary { tokens: None });
         assert_eq!(msg.content[0], Content::Text("AWS_SECRET_ACCESS_KEY=****".to_owned()));
@@ -510,7 +537,12 @@ mod tests {
             "PRIVATE_ATTACHMENT",
             "TEXTSECRET",
         ] {
-            let mut matches = Box::pin(sink.sidecar.search(query, None, 10));
+            let mut matches = Box::pin(sink.sidecar.search(
+                query,
+                SearchTerms::Typed,
+                &SessionFilter::default(),
+                10,
+            ));
             assert!(matches.next().await.is_none(), "sensitive content indexed: {query}");
         }
     }
@@ -720,6 +752,34 @@ mod tests {
         // Capture and import hold on this, so the dedup gate sees every persisted message.
         assert!(capture.ready().await);
         assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
+    }
+
+    /// Recovery replays only what the sidecar has not projected yet, and reports how far it got.
+    #[rstest]
+    #[tokio::test]
+    async fn recovery_is_incremental_and_reports_progress() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        for source in ["a", "b", "c"] {
+            records.push(&call_message(source, source, 1, None)).await.unwrap();
+        }
+        let open = || {
+            AiHarnessSessionCapture::open(
+                records.clone(),
+                sidecar.clone(),
+                false,
+                BlockingPool::new(NonZeroUsize::MIN),
+            )
+        };
+
+        let first = open();
+        assert!(first.ready().await);
+        assert_eq!(first.recovery_progress(), (3, 3), "a fresh sidecar replays everything");
+        drop(first);
+
+        let again = open();
+        assert!(again.ready().await);
+        assert_eq!(again.recovery_progress(), (0, 0), "nothing new to replay");
     }
 
     #[rstest]
@@ -989,13 +1049,20 @@ mod pipeline_tests {
                 .map(|s| (s.handle.session.to_string(), s.usage.output.unwrap()))
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
-        let live = collect(sink.sidecar.list_sessions(None, None).await.unwrap());
+        let live = collect(sink.sidecar.list_sessions(&SessionFilter::default()).await.unwrap());
         let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
         sink.records.build(&rebuilt).await.unwrap();
         assert_eq!(
-            collect(rebuilt.list_sessions(None, None).await.unwrap()),
+            collect(rebuilt.list_sessions(&SessionFilter::default()).await.unwrap()),
             live,
             "rebuild agrees"
+        );
+        // So does a startup reprojection over the live sidecar, which replays what it holds.
+        sink.records.reproject(&sink.sidecar).await.unwrap();
+        assert_eq!(
+            collect(sink.sidecar.list_sessions(&SessionFilter::default()).await.unwrap()),
+            live,
+            "replay agrees"
         );
         live
     }

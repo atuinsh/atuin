@@ -35,8 +35,8 @@ pub struct Worker {
     handle: DaemonHandle,
     index: Arc<RwLock<SearchIndex>>,
     history_store: HistoryStore,
-    /// Hands downloaded record ids to [`spawn_ai_session_projector`]; `None` without a sidecar.
-    ai_session_projector: Option<mpsc::UnboundedSender<Vec<RecordId>>>,
+    /// Tells [`spawn_ai_session_projector`] records were downloaded; `None` without a sidecar.
+    ai_session_projector: Option<mpsc::UnboundedSender<()>>,
 }
 
 /// Errors that prevent the sync worker from starting.
@@ -79,20 +79,29 @@ impl From<SyncTickError> for ControlFlow<()> {
     }
 }
 
-/// Project downloaded AI-session records into the sidecar, one batch at a time in the order they
-/// were downloaded. Nothing is projected until startup recovery is over: projected alongside its
-/// replay, a session's newer rows could land before its older ones, and some session fields (the
-/// preview) keep whichever arrives first. The task ends once the sender is dropped.
+/// Project downloaded AI-session records into the sidecar: each signal (a sync downloaded some)
+/// reprojects everything past the watermarks, so records a failed or interrupted earlier one left
+/// out are retried too. Signals that queued up meanwhile are taken together.
+///
+/// Nothing is projected until startup recovery is over, so only one reprojection runs at a time:
+/// recovery is one too, and two at once would race each other's watermarks. This host's own
+/// series is included, under capture's lock
+/// ([`AiSessionDatabase::lock_local_projection`]): its own records can arrive from the server
+/// (a reinstall that kept the host id), and capture dedups against the sidecar. The task ends
+/// once the sender is dropped.
 fn spawn_ai_session_projector(
     store: AiSessionStore,
     db: AiSessionDatabase,
     recovery: Recovery,
-) -> mpsc::UnboundedSender<Vec<RecordId>> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<RecordId>>();
+) -> mpsc::UnboundedSender<()> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<()>();
     tokio::spawn(async move {
         recovery.finished().await;
-        while let Some(ids) = rx.recv().await {
-            store.incremental_build(&db, &ids).await;
+        while rx.recv().await.is_some() {
+            while rx.try_recv().is_ok() {}
+            if let Err(err) = store.reproject(&db).await {
+                tracing::error!(?err, "failed to project synced ai-session records");
+            }
         }
     });
     tx
@@ -211,7 +220,7 @@ impl Worker {
         if let Some(projector) = &self.ai_session_projector
             && !downloaded_records.is_empty()
         {
-            let _ = projector.send(downloaded_records.clone());
+            let _ = projector.send(());
         }
 
         self.index_downloaded_records(&downloaded_records).await;
@@ -318,13 +327,13 @@ mod tests {
             .role(Role::User)
             .content(vec![Content::Text("hello".to_owned())])
             .build();
-        let id = store.push(&msg).await.unwrap();
+        store.push(&msg).await.unwrap();
         let projected = async || db.contains_message(&msg.session, &msg.source_id).await.unwrap();
 
         let (capture, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
         let projector = spawn_ai_session_projector(store, db.clone(), capture.recovery());
         // Accepted at once, so a sync never waits on recovery.
-        projector.send(vec![id]).unwrap();
+        projector.send(()).unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!projected().await, "nothing is projected while recovery replays");
 
