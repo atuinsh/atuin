@@ -359,7 +359,10 @@ impl AiSessionStore {
         // Read before replaying anything: an invalidation after this stops the watermark moving.
         let generation = db.projection_generation().await?;
         let mut next = start;
-        // A held record keeps the watermark below it (see `decode_and_append`).
+        // A held record keeps the watermark below it (see `decode_and_append`), and so does a
+        // hole in the series: a record missing there (not downloaded yet, as sync can fetch a
+        // series' records out of order) would never be replayed if the watermark passed it.
+        // Records past either are still replayed, which a later replay repeats idempotently.
         let mut held = false;
         loop {
             // Per page rather than per series, so capture never waits long.
@@ -368,11 +371,16 @@ impl AiSessionStore {
             let Some(tail) = page.last() else {
                 break;
             };
+            let mut expected = next;
             next = tail.idx + 1;
 
             let mut to = None;
             for record in page {
                 let (idx, record_id) = (record.idx, record.id);
+                if idx != expected {
+                    held = true;
+                }
+                expected = idx + 1;
                 if self.decode_and_append(record, db).await? == Projected::Held {
                     held = true;
                 }
@@ -978,6 +986,61 @@ mod tests {
         assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(0));
         // Retried until a build understands it.
         assert_eq!(s.reproject(&db).await.unwrap().replayed, 3);
+    }
+
+    /// A record of `s`'s series at `idx`, as sync stores one it downloaded.
+    async fn push_at(store: &SqliteStore, s: &AiSessionStore, idx: u64, msg: &Message) {
+        let record = Record::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .host(Host::new(s.host_id))
+            .version(RecordVersion::V0)
+            .tag(RecordTag::AiSession)
+            .idx(idx)
+            .data(DecryptedData(AiSessionRecord::Message(msg.clone()).serialize()))
+            .build();
+        store.push(&record.encrypt(&key())).await.unwrap();
+    }
+
+    /// A hole in a series (a record not downloaded yet) holds the watermark below it, so the
+    /// record is replayed once it arrives; the records past it project meanwhile.
+    #[rstest]
+    #[tokio::test]
+    async fn a_hole_in_a_series_holds_the_watermark_below_it() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        let handle = sample_handle();
+        for idx in [0, 1, 3] {
+            push_at(&store, &s, idx, &message_in(&handle, idx.cast_signed(), "text")).await;
+        }
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        s.reproject(&db).await.unwrap();
+        assert_eq!(count(&db, &handle).await, Some(3), "records past the hole still project");
+        assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(1));
+
+        push_at(&store, &s, 2, &message_in(&handle, 2, "text")).await;
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 2);
+        assert_eq!(count(&db, &handle).await, Some(4), "the late record is replayed");
+        assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(3));
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 0);
+    }
+
+    /// A series whose first records are missing holds its watermark at nothing.
+    #[rstest]
+    #[tokio::test]
+    async fn a_hole_at_the_start_of_a_series_holds_the_watermark() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        let handle = sample_handle();
+        push_at(&store, &s, 1, &message_in(&handle, 1, "text")).await;
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        s.reproject(&db).await.unwrap();
+        assert_eq!(mark(&db, &s).await, None);
+        push_at(&store, &s, 0, &message_in(&handle, 0, "text")).await;
+        s.reproject(&db).await.unwrap();
+        assert_eq!(count(&db, &handle).await, Some(2));
+        assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(1));
     }
 
     /// This host's series is replayed under capture's lock, other hosts' without it.
