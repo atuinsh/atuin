@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package atuin.hub.v1;
+
+import "atuin/hub/v1/history.proto";
+
+// The hub's user-facing API.
+service HubService {
+  // Store a finished command for the calling user if the history is not already stored.
+  //
+  // Otherwise fails with `ALREADY_EXISTS` (`HISTORY_ALREADY_EXISTS`), keeping what was stored.
+  rpc InsertHistory(InsertHistoryRequest) returns (InsertHistoryResponse);
+
+  // Stream the calling user's history entries as they are stored, from when the call starts.
+  //
+  // Entries stored before the call, or while no call is open, are not sent.
+  rpc WatchHistory(WatchHistoryRequest) returns (stream WatchHistoryResponse);
+}
+
+message InsertHistoryRequest {
+  // Logically required.
+  History history = 1;
+}
+
+message InsertHistoryResponse {}
+
+message WatchHistoryRequest {}
+
+message WatchHistoryResponse {
+  // An entry the user stored.
+  History history = 1;
+}

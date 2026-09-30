@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package atuin.hub.v1;
+
+// A UUID, carried as its 16 raw bytes.
+message Uuid {
+  bytes value = 1;
+}
+
+// The machine and account a command ran on.
+message CmdOrigin {
+  // The machine's hostname, e.g. `laptop`. Never contains a `:`.
+  string host = 1;
+  // The account on that machine, e.g. `alice`.
+  string user = 2;
+}
+
+// Who decided to run a command: a person or an agent. Not a hub user.
+message Author {
+  // e.g. `alice` or `claude-code`.
+  string name = 1;
+  // Logically required; the hub rejects `AUTHOR_KIND_UNSPECIFIED`.
+  AuthorKind kind = 2;
+}
+
+// Whether a person or an agent decided to run a command.
+enum AuthorKind {
+  AUTHOR_KIND_UNSPECIFIED = 0;
+  AUTHOR_KIND_USER = 1;
+  AUTHOR_KIND_AGENT = 2;
+}
