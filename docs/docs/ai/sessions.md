@@ -25,9 +25,41 @@ atuin ai session search "flaky test"
 
 ## Resuming
 
-`atuin ai resume` (or ++ctrl+bracket-right++ at the prompt) opens a picker over
+`atuin ai resume` (or a key you bind to it, see
+[Binding `atuin ai resume`](../reference/init.md#binding-atuin-ai-resume)) opens a picker over
 your sessions. It works like the history search: type to search, ++ctrl+o++
 inspects the selected session, and ++esc++ leaves.
+
+No key opens it by default. To open it with ++ctrl+bracket-right++ (which
+replaces the shell's own character search on that key), pass `--bind-ai-resume`
+to `atuin init`; or bind the widget to a key of your choice after the
+`atuin init` line:
+
+=== "zsh"
+
+    ```shell
+    bindkey -M emacs '^]' atuin-ai-resume
+    bindkey -M viins '^]' atuin-ai-resume-viins
+    bindkey -M vicmd '^]' atuin-ai-resume-vicmd
+    ```
+
+=== "bash"
+
+    ```shell
+    atuin-bind -m emacs      '\C-]' atuin-ai-resume-emacs
+    atuin-bind -m vi-insert  '\C-]' atuin-ai-resume-viins
+    atuin-bind -m vi-command '\C-]' atuin-ai-resume-vicmd
+    ```
+
+=== "fish"
+
+    ```fish
+    bind ctrl-] _atuin_ai_resume
+    bind -M insert ctrl-] _atuin_ai_resume
+    ```
+
+Through the widget, the command it picks lands in your shell, as with the
+history search.
 
 Each row shows when the session was last active, its agent, its title and its
 message count (when there's room). Messages are prompts and replies: tool calls,
