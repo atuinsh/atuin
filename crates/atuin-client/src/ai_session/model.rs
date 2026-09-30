@@ -56,9 +56,10 @@ pub struct Message {
     #[builder(default)]
     pub parent: Option<HarnessSession>,
     /// How this session relates to [`Self::parent`]. Absent in records written before it was
-    /// captured, and whenever the harness did not say.
+    /// captured, and whenever the harness did not say. A kind this build does not know (a newer
+    /// build's) reads as absent, rather than failing the whole record.
     #[builder(default)]
-    #[serde(default)]
+    #[serde(default, deserialize_with = "known_parent_kind")]
     pub parent_kind: Option<ParentKind>,
     #[builder(default)]
     pub parent_source_id: Option<SourceId>,
@@ -100,6 +101,35 @@ pub struct Message {
     #[builder(default)]
     #[serde(default)]
     pub turn_id: Option<String>,
+}
+
+/// [`Message::parent_kind`] as a record holds it: `None` for a kind this build does not know,
+/// so a newer build can add kinds without its records failing to decode here, and for a value
+/// that names no kind at all (some development builds' records hold another field there).
+fn known_parent_kind<'de, D>(deserializer: D) -> Result<Option<ParentKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::IntoDeserializer;
+    use serde::de::value::{Error, StringDeserializer};
+
+    /// A kind's name, or anything else a record may hold there.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Name(String),
+        Other(serde::de::IgnoredAny),
+    }
+
+    // Parse the name with `ParentKind`'s own `Deserialize`, so a new variant is known here
+    // without listing it twice.
+    Ok(match Option::<Raw>::deserialize(deserializer)? {
+        Some(Raw::Name(name)) => {
+            let name: StringDeserializer<Error> = name.into_deserializer();
+            ParentKind::deserialize(name).ok()
+        }
+        Some(Raw::Other(_)) | None => None,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
@@ -213,6 +243,71 @@ mod tests {
         let record = crate::ai_session::AiSessionRecord::Message(msg).serialize();
         let old = rmp_serde::from_slice::<OldMessage>(&record[1..]);
         assert!(old.is_ok(), "older host cannot decode: {:?}", old.err());
+    }
+
+    fn kinded(kind: Option<ParentKind>) -> Message {
+        let session = HarnessSession {
+            harness: HarnessKind::ClaudeCode,
+            session: NativeSessionId::from("s".to_owned()),
+        };
+        Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(session.clone())
+            .source_id(SourceId::from("x".to_owned()))
+            .parent(Some(session))
+            .parent_kind(kind)
+            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .role(Role::User)
+            .content(vec![])
+            .build()
+    }
+
+    /// Every kind round-trips through a record.
+    #[rstest]
+    #[case::none(None)]
+    #[case::subagent(Some(ParentKind::Subagent))]
+    #[case::fork(Some(ParentKind::Fork))]
+    #[case::continuation(Some(ParentKind::Continuation))]
+    fn a_parent_kind_round_trips(#[case] kind: Option<ParentKind>) {
+        let record = crate::ai_session::AiSessionRecord::Message(kinded(kind)).serialize();
+        let crate::ai_session::AiSessionRecord::Message(back) =
+            crate::ai_session::AiSessionRecord::deserialize(&record).unwrap();
+        assert_eq!(back.parent_kind, kind);
+    }
+
+    /// A kind this build does not know (a newer build's), or a value naming none, reads as no
+    /// kind: the rest of the record still decodes.
+    #[rstest]
+    #[case::a_newer_kind("Handoff")]
+    #[case::not_a_kind("784ad9be-9b3d-48e2-a3d7-a7cf227fd86e")]
+    fn an_unknown_parent_kind_reads_as_none(#[case] kind: &str) {
+        /// A record as a build that writes `kind` would.
+        #[derive(Serialize)]
+        struct Written<'a> {
+            id: RecordId,
+            session: HarnessSession,
+            source_id: SourceId,
+            parent_kind: &'a str,
+            timestamp: OffsetDateTime,
+            role: Role,
+            content: Vec<Content>,
+        }
+        let written = Written {
+            id: RecordId(atuin_common::utils::uuid_v7()),
+            session: HarnessSession {
+                harness: HarnessKind::ClaudeCode,
+                session: NativeSessionId::from("s".to_owned()),
+            },
+            source_id: SourceId::from("x".to_owned()),
+            parent_kind: kind,
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            role: Role::User,
+            content: vec![],
+        };
+        let body = rmp_serde::to_vec_named(&written).unwrap();
+        let back: Message = rmp_serde::from_slice(&body).unwrap();
+        assert_eq!(back.parent_kind, None);
+        assert_eq!(back.source_id, written.source_id);
     }
 
     #[rstest]
