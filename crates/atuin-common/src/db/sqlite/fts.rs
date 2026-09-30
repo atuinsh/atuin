@@ -87,6 +87,24 @@ pub fn match_any_expression(input: &str) -> Option<String> {
         .reduce(|expr, term| format!("{expr} OR {term}"))
 }
 
+/// [`match_expression`] for search as you type: the last term also matches as a prefix
+/// (`refac` becomes `"refac"*`), unless the input ends in whitespace, which marks the term as
+/// finished. A term of several tokens (`foo-ba`) is a phrase whose last token is the prefix.
+///
+/// No `prefix=` index is needed: FTS5 answers a prefix query by merging the doclists of every
+/// indexed term starting with it, which is slower but costs no disk.
+///
+/// Returns `None` when the input has no searchable terms.
+#[must_use]
+pub fn prefix_match_expression(input: &str) -> Option<String> {
+    let expr = match_expression(input)?;
+    if input.ends_with(char::is_whitespace) {
+        Some(expr)
+    } else {
+        Some(format!("{expr}*"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
@@ -214,6 +232,50 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         assert_eq!(match_expression(input).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::single_term("refac", Some("\"refac\"*"))]
+    #[case::only_the_last_term("cargo te", Some("\"cargo\" \"te\"*"))]
+    #[case::trailing_whitespace_finishes_the_term("cargo ", Some("\"cargo\""))]
+    #[case::embedded_quote_is_doubled("a\"b", Some("\"a\"\"b\"*"))]
+    #[case::empty_is_none("", None)]
+    #[case::whitespace_only_is_none("  \t ", None)]
+    fn prefix_match_expression_prefixes_the_last_term(
+        #[case] input: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(prefix_match_expression(input).as_deref(), expected);
+    }
+
+    /// A prefix expression matches the partial token, a phrase with a partial last token, and
+    /// punctuation-only terms (a phrase of no tokens) quietly match nothing rather than erroring.
+    #[rstest]
+    #[case::partial_token("refac", 1)]
+    #[case::partial_phrase("foo-ba", 1)]
+    #[case::finished_term_is_not_a_prefix("refac ", 0)]
+    #[case::punctuation_only("()", 0)]
+    #[case::operator_soup("***", 0)]
+    #[tokio::test]
+    async fn prefix_match_expression_runs_against_fts5(#[case] input: &str, #[case] hits: i64) {
+        let sqlite = crate::db::sqlite::Sqlite::builder_in_memory().open().await.unwrap();
+        let mut conn = sqlite.pool().acquire().await.unwrap();
+        crate::db::query::<Sqlite>("create virtual table docs using fts5(body)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        crate::db::query::<Sqlite>("insert into docs(body) values ('refactor the foo-bar thing')")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+
+        let n =
+            crate::db::query_scalar::<Sqlite, i64>("select count(*) from docs where docs match ?")
+                .bind(prefix_match_expression(input).unwrap())
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(n, hits);
     }
 
     #[rstest]
