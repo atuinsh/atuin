@@ -41,20 +41,39 @@ impl AiSessionDatabase {
     pub async fn reproject_watermarks(
         &self,
     ) -> Result<HashMap<RecordSeriesKey, Watermark>, DbError> {
-        let rows: Vec<(String, String, i64, String)> =
-            db::query_as("SELECT host, tag, idx, record_id FROM reproject_watermark")
-                .fetch_all(self.db.pool())
-                .await?;
+        // An `idx` that is not an integer (SQLite keeps what it cannot convert) reads as NULL
+        // rather than failing every row.
+        let rows: Vec<(i64, String, String, Option<i64>, String)> = db::query_as(
+            "SELECT rowid, host, tag, CASE WHEN typeof(idx) = 'integer' THEN idx END, record_id \
+             FROM reproject_watermark",
+        )
+        .fetch_all(self.db.pool())
+        .await?;
 
         let mut marks = HashMap::with_capacity(rows.len());
-        for (host, tag, idx, record_id) in rows {
-            // An unreadable row is as good as none: the series is replayed and the row rewritten.
-            let (Ok(host), Ok(record_id), Ok(idx)) =
-                (Uuid::from_str(&host), Uuid::from_str(&record_id), u64::try_from(idx))
+        for (rowid, host, tag, idx, record_id) in rows {
+            let parsed_idx = idx.map(u64::try_from);
+            let (Ok(host_id), Ok(record_uuid), Some(Ok(mark_idx))) =
+                (Uuid::from_str(&host), Uuid::from_str(&record_id), parsed_idx)
             else {
-                warn!(host, tag, idx, record_id, "ignoring malformed reprojection watermark");
+                // An unreadable row is as good as none: the series is replayed from its start.
+                // Delete it, or it would stand in the way of the watermark that replay writes
+                // (which only ever inserts where there is none). Nothing it named is lost, so this
+                // is no invalidation; exactly this row goes, not one written meanwhile.
+                warn!(host, tag, idx, record_id, "deleting malformed reprojection watermark");
+                db::query(
+                    "DELETE FROM reproject_watermark WHERE rowid = ? AND host = ? AND tag = ? AND \
+                     record_id = ?",
+                )
+                .bind(rowid)
+                .bind(&host)
+                .bind(&tag)
+                .bind(&record_id)
+                .execute(self.db.pool())
+                .await?;
                 continue;
             };
+            let (host, record_id, idx) = (host_id, record_uuid, mark_idx);
             marks.insert(RecordSeriesKey::new(HostId(host), RecordTag::from(tag)), Watermark {
                 idx,
                 record_id: RecordId(record_id),

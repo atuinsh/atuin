@@ -716,6 +716,43 @@ mod tests {
         assert_eq!(count(&db, &sample_handle()).await, Some(3));
     }
 
+    /// A watermark row that cannot be read is replaced by the one the replay it causes writes,
+    /// not left standing in its way so the series is replayed on every reprojection.
+    #[rstest]
+    #[case::bad_record_id("0", "'not-a-uuid'")]
+    #[case::negative_idx("-1", "?2")]
+    #[case::text_idx("'seven'", "?2")]
+    #[tokio::test]
+    async fn a_malformed_watermark_is_replaced(#[case] idx: &str, #[case] record_id: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        push_range(&s, &sample_handle(), 0..3).await;
+        let db = AiSessionDatabase::open(&path).await.unwrap();
+        // Replayed once, so the key is known and the next reprojection trusts the watermarks.
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 3);
+
+        let raw = atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
+        let sql = format!(
+            "UPDATE reproject_watermark SET idx = {idx}, record_id = {record_id} WHERE host = ?1 \
+             AND tag = ?3"
+        );
+        atuin_common::db::query(sqlx::AssertSqlSafe(sql))
+            .bind(s.host_id.as_hyphenated().to_string())
+            .bind(atuin_common::utils::uuid_v7().as_hyphenated().to_string())
+            .bind(RecordTag::AiSession.as_str())
+            .execute(raw.pool())
+            .await
+            .unwrap();
+        assert_eq!(mark(&db, &s).await, None, "a malformed watermark reads as none");
+
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 3);
+        assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(2), "the replay wrote a watermark");
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 0, "and the next one trusts it");
+        assert_eq!(count(&db, &sample_handle()).await, Some(3));
+    }
+
     #[rstest]
     #[tokio::test]
     async fn a_series_rewritten_under_the_watermark_is_replayed_from_the_start() {
