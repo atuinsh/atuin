@@ -462,6 +462,10 @@ impl From<Context> for RpcSearchContext {
     }
 }
 
+/// First and longest waits between [`AiClient::wait_for_sessions`] probes.
+const REBUILD_POLL_START: std::time::Duration = std::time::Duration::from_millis(250);
+const REBUILD_POLL_MAX: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Client for the daemon's `ai.session.AiSession` service. Wraps the generated tonic stub the same
 /// way [`HistoryClient`] and [`SearchClient`] do, returning the raw protobuf messages so callers can
 /// render them however they like.
@@ -525,6 +529,38 @@ impl AiClient {
     #[cfg(not(unix))]
     pub async fn from_settings(settings: &Settings) -> Result<Self> {
         Self::new(settings.daemon.tcp_port).await
+    }
+
+    /// Wait while the daemon is still rebuilding AI sessions after starting: until then every
+    /// session read but a tail is refused rather than answered partially. Calls `on_wait` once if
+    /// it has to wait, and returns at once otherwise. A rebuild ends only once, so after this the
+    /// daemon keeps serving reads for as long as it runs.
+    pub async fn wait_for_sessions(&mut self, on_wait: impl FnOnce()) -> Result<()> {
+        let mut on_wait = Some(on_wait);
+        let mut delay = REBUILD_POLL_START;
+        loop {
+            // A listing filtered to the future matches nothing, so the probe costs little beyond
+            // the rebuild check every read makes first.
+            let future = OffsetDateTime::now_utc() + time::Duration::days(365);
+            let probe = ListSessionsRequest {
+                harness: None,
+                updated_since: Some(prost_types::Timestamp {
+                    seconds: future.unix_timestamp(),
+                    nanos: 0,
+                }),
+            };
+            match self.client.list_sessions(probe).await {
+                Err(status) if crate::grpc::ai::session::is_rebuilding(&status) => {
+                    if let Some(on_wait) = on_wait.take() {
+                        on_wait();
+                    }
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(REBUILD_POLL_MAX);
+                }
+                Err(status) => return Err(status.into()),
+                Ok(_) => return Ok(()),
+            }
+        }
     }
 
     /// Stream captured session summaries, newest first. `harness` filters to a single harness and
@@ -658,5 +694,73 @@ mod tests {
             systemd_socket,
         );
         assert_eq!(socket_path(&settings), dir.path().join("a.sock"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod rebuild_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use rstest::rstest;
+    use tokio::net::UnixListener;
+    use tokio::sync::watch;
+    use tokio_stream::wrappers::UnixListenerStream;
+    use tonic::transport::Server;
+
+    use super::AiClient;
+    use crate::grpc::AiSessionService;
+    use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
+    use crate::session_capture::{AiHarnessSessionCapture, StoreState};
+
+    /// A client of an AI-session service over a real socket, in the given recovery state.
+    async fn serve(state: StoreState) -> (AiClient, watch::Sender<StoreState>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.sock");
+        let (capture, state) = AiHarnessSessionCapture::with_state(state).await;
+        let service = AiSessionServer::new(AiSessionService::new(Arc::new(capture)));
+        let incoming = UnixListenerStream::new(UnixListener::bind(&path).unwrap());
+        tokio::spawn(Server::builder().add_service(service).serve_with_incoming(incoming));
+        (AiClient::new(path).await.unwrap(), state, dir)
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn waits_out_a_rebuild_over_the_wire() {
+        let (mut client, state, _dir) = serve(StoreState::Recovering).await;
+        let notices = Arc::new(AtomicUsize::new(0));
+        let counter = notices.clone();
+        let wait = tokio::spawn(async move {
+            client
+                .wait_for_sessions(|| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                })
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!wait.is_finished(), "returned while the daemon was rebuilding");
+
+        state.send_replace(StoreState::Ready);
+        tokio::time::timeout(Duration::from_secs(10), wait)
+            .await
+            .expect("returns once the rebuild ends")
+            .unwrap()
+            .unwrap();
+        assert_eq!(notices.load(Ordering::SeqCst), 1, "the wait is announced once");
+    }
+
+    #[rstest]
+    #[case::ready(StoreState::Ready)]
+    #[case::failed(StoreState::Unavailable)]
+    #[tokio::test]
+    async fn returns_at_once_when_not_rebuilding(#[case] state: StoreState) {
+        let (mut client, _state, _dir) = serve(state).await;
+
+        let mut announced = false;
+        client.wait_for_sessions(|| announced = true).await.unwrap();
+
+        assert!(!announced);
     }
 }

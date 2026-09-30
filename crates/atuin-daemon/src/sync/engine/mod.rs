@@ -11,6 +11,7 @@ use worker::Worker;
 
 use crate::daemon::DaemonHandle;
 use crate::search::SearchIndex;
+use crate::session_capture::Recovery;
 
 /// Owns the background sync task.
 #[derive(Debug)]
@@ -25,10 +26,11 @@ impl SyncEngine {
         handle: DaemonHandle,
         index: Arc<RwLock<SearchIndex>>,
         ai_session_db: Option<AiSessionDatabase>,
+        ai_session_recovery: Recovery,
     ) -> Self {
         Self {
             task: tokio::spawn(async {
-                match Worker::new(handle, index, ai_session_db).await {
+                match Worker::new(handle, index, ai_session_db, ai_session_recovery).await {
                     Ok(worker) => worker.run().await,
                     Err(e) => tracing::error!("sync disabled: {e}"),
                 }

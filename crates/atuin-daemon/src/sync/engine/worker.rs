@@ -12,11 +12,12 @@ use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
 use atuin_domain::record::RecordId;
 use futures::StreamExt;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use tokio::time;
 
 use crate::daemon::DaemonHandle;
 use crate::search::SearchIndex;
+use crate::session_capture::Recovery;
 
 /// Cap on the exponential backoff between failed sync attempts. Once a failing sync has ramped to
 /// this interval it keeps retrying at that cadence until it succeeds -- it is never abandoned, and
@@ -34,8 +35,8 @@ pub struct Worker {
     handle: DaemonHandle,
     index: Arc<RwLock<SearchIndex>>,
     history_store: HistoryStore,
-    ai_session_store: AiSessionStore,
-    ai_session_db: Option<AiSessionDatabase>,
+    /// Hands downloaded record ids to [`spawn_ai_session_projector`]; `None` without a sidecar.
+    ai_session_projector: Option<mpsc::UnboundedSender<Vec<RecordId>>>,
 }
 
 /// Errors that prevent the sync worker from starting.
@@ -78,11 +79,31 @@ impl From<SyncTickError> for ControlFlow<()> {
     }
 }
 
+/// Project downloaded AI-session records into the sidecar, one batch at a time in the order they
+/// were downloaded. Nothing is projected until startup recovery is over: projected alongside its
+/// replay, a session's newer rows could land before its older ones, and some session fields (the
+/// preview) keep whichever arrives first. The task ends once the sender is dropped.
+fn spawn_ai_session_projector(
+    store: AiSessionStore,
+    db: AiSessionDatabase,
+    recovery: Recovery,
+) -> mpsc::UnboundedSender<Vec<RecordId>> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<RecordId>>();
+    tokio::spawn(async move {
+        recovery.finished().await;
+        while let Some(ids) = rx.recv().await {
+            store.incremental_build(&db, &ids).await;
+        }
+    });
+    tx
+}
+
 impl Worker {
     pub async fn new(
         handle: DaemonHandle,
         index: Arc<RwLock<SearchIndex>>,
         ai_session_db: Option<AiSessionDatabase>,
+        ai_session_recovery: Recovery,
     ) -> Result<Self, StartError> {
         let host_id = Settings::host_id().await.map_err(StartError::HostId)?;
 
@@ -97,12 +118,14 @@ impl Worker {
             .key(encryption_key.clone())
             .build();
 
+        let ai_session_projector = ai_session_db
+            .map(|db| spawn_ai_session_projector(ai_session_store, db, ai_session_recovery));
+
         Ok(Self {
             handle,
             index,
             history_store,
-            ai_session_store,
-            ai_session_db,
+            ai_session_projector,
         })
     }
 
@@ -183,16 +206,15 @@ impl Worker {
             "sync complete"
         );
 
-        let history_build = self.index_downloaded_records(&downloaded_records);
+        // Queued rather than awaited: the projector may still be waiting out startup recovery, and
+        // that must not hold up this sync or the next.
+        if let Some(projector) = &self.ai_session_projector
+            && !downloaded_records.is_empty()
+        {
+            let _ = projector.send(downloaded_records.clone());
+        }
 
-        let ai_session_build = async {
-            let Some(ai_session_db) = &self.ai_session_db else {
-                return;
-            };
-            self.ai_session_store.incremental_build(ai_session_db, &downloaded_records).await;
-        };
-
-        tokio::join!(history_build, ai_session_build);
+        self.index_downloaded_records(&downloaded_records).await;
 
         // Store sync time
         if let Err(e) = Settings::save_sync_time().await {
@@ -255,5 +277,64 @@ impl Worker {
                 Err(e) => tracing::error!("failed to load synced history for indexing: {e}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use atuin_client::ai_session::{
+        AiSessionDatabase, AiSessionStore, HarnessKind, HarnessSession, Message, NativeSessionId,
+        SourceId,
+    };
+    use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_common::encryption::paseto_v4::Key;
+    use atuin_common::harnesstools::session::{Content, Role};
+    use atuin_domain::record::{HostId, RecordId};
+    use rstest::rstest;
+    use time::OffsetDateTime;
+
+    use super::spawn_ai_session_projector;
+    use crate::session_capture::{AiHarnessSessionCapture, StoreState};
+
+    #[rstest]
+    #[tokio::test]
+    async fn downloaded_ai_sessions_are_projected_after_recovery() {
+        let store = AiSessionStore::builder()
+            .store(SqliteStore::in_memory(Duration::from_secs(5)).await.unwrap())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(HarnessSession {
+                harness: HarnessKind::ClaudeCode,
+                session: NativeSessionId::from("downloaded".to_owned()),
+            })
+            .source_id(SourceId::from("source".to_owned()))
+            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .role(Role::User)
+            .content(vec![Content::Text("hello".to_owned())])
+            .build();
+        let id = store.push(&msg).await.unwrap();
+        let projected = async || db.contains_message(&msg.session, &msg.source_id).await.unwrap();
+
+        let (capture, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
+        let projector = spawn_ai_session_projector(store, db.clone(), capture.recovery());
+        // Accepted at once, so a sync never waits on recovery.
+        projector.send(vec![id]).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!projected().await, "nothing is projected while recovery replays");
+
+        state.send_replace(StoreState::Ready);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !projected().await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("queued records are projected once recovery ends");
     }
 }

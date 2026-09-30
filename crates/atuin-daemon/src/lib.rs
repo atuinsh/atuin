@@ -313,35 +313,27 @@ pub async fn boot(
                 .key(handle.encryption_key().clone())
                 .build();
 
-            // Reproject the sidecar from the synced record store before capture starts. The record
-            // store is the source of truth; a sidecar that missed an append (transient error,
-            // crash between the two writes, or a lost db file) is repaired here instead of being
-            // stranded until — or re-pushed as duplicate records by — file re-capture. append's
-            // ON CONFLICT keying makes the replay idempotent.
-            let recovered = match records.build(db).await {
-                Ok(()) => true,
-                Err(err) => {
-                    tracing::error!(
-                        ?err,
-                        "failed to reproject ai-session sidecar; capture and import disabled \
-                         until restart"
-                    );
-                    false
-                }
-            };
-
+            // Reprojects the sidecar from the synced record store in the background, then starts
+            // capture. The record store is the source of truth; a sidecar that missed an append
+            // (transient error, crash between the two writes, or a lost db file) is repaired there
+            // instead of being stranded until — or re-pushed as duplicate records by — file
+            // re-capture. Serving does not wait on it.
             AiHarnessSessionCapture::open(
                 records,
                 db.clone(),
                 settings.ai.capture_sessions,
-                recovered,
                 blocking_pool.clone(),
             )
         }
         None => AiHarnessSessionCapture::nop().await,
     });
 
-    let _sync_engine = sync::SyncEngine::spawn(handle.clone(), search_index.clone(), ai_session_db);
+    let _sync_engine = sync::SyncEngine::spawn(
+        handle.clone(),
+        search_index.clone(),
+        ai_session_db,
+        ai_session_capture.recovery(),
+    );
 
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
