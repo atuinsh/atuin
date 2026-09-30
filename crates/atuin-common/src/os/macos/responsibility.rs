@@ -64,9 +64,9 @@ pub enum SpawnDisclaimedError {
 /// The process will be marked as being responsible for itself; see the [module documentation](self)
 /// for more information.
 ///
-/// This function is designed to behave like [`std::process::Command`] -- `program` can be relative
-/// or absolute, and the child process inherits the parent's environment and file descriptors
-/// (except those marked close-on-exec).
+/// This function is designed to behave like [`std::process::Command`] -- `PATH` will be searched if
+/// `program` is a bare name, and the child process inherits the parent's environment and file
+/// descriptors (except those marked close-on-exec).
 ///
 /// For simplicity, this function does not offer the same flexibility as [`Command`], but is rather
 /// tailored towards spawning daemon processes: file descriptors 0, 1, and 2 will be connected to
@@ -153,7 +153,7 @@ where
     // None of these are destroyed until the call finishes, and they are not required to be valid
     // past that.
     posix_spawn_result(unsafe {
-        libc::posix_spawn(
+        libc::posix_spawnp(
             &raw mut pid,
             program.as_ptr(),
             actions.as_ptr(),
