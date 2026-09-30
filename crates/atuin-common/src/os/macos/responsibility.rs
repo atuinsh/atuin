@@ -2,22 +2,23 @@
 //!
 //! # Background
 //!
-//! As of macOS 27 (Golden Gate), if a terminal command spawns a background process, macOS will
-//! display a "running in background" dot next to the terminal emulator in the dock. This means that
-//! if the Atuin daemon isn't running and autostart is enabled, the terminal that autostarts the
-//! daemon will forever have a "running in background" dot until the daemon is killed. This is
-//! undesirable as the Atuin daemon is meant to behave more like a system process that persists
-//! beyond an individual terminal session.
+//! When the Atuin daemon is autostarted by a terminal command, it marks the terminal app as the
+//! daemon's "responsible process". This is used for privacy permissions (TCC): if the daemon
+//! accesses a protected resource, such as files in `~/Documents` or a sync server running on the
+//! local network, macOS checks if the responsible process (the terminal) has been granted these
+//! permissions, and if not, prompts the user to grant them in a dialog.
+//!
+//! However, rather than associate these permissions with the terminal emulator, which could cause
+//! confusion for users (the permission dialog doesn't name Atuin) and could require users to
+//! reconfirm the same permissions if they use multiple terminal apps, it would be better to
+//! associate these permissions with Atuin itself.
 //!
 //! # Solution
 //!
-//! macOS associates every process with a "responsible process", and, among other uses, uses this to
-//! determine whether an app is running in the background. We need to ensure that the daemon, when
-//! launched, will not have the terminal emulator as its responsible process.
-//!
-//! To clear this association, we have to use `responsibility_spawnattrs_setdisclaim`, a private but
-//! stable function that tells `posix_spawn` to mark the child process as responsible for itself.
-//! This is used by [LLDB][2] and Chromium, among others, for exactly this purpose.
+//! To clear the association of the terminal as the daemon's responsible process, we have to use
+//! `responsibility_spawnattrs_setdisclaim`, a private but stable function that tells `posix_spawn`
+//! to mark the child process as responsible for itself. This is used by [LLDB][2] and Chromium,
+//! among others, for exactly this purpose.
 //!
 //! This module provides [`spawn_disclaimed`], which behaves like [`std::process::Command`] but
 //! marks the process as responsible for itself.

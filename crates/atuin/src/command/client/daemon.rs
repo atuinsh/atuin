@@ -187,8 +187,8 @@ fn spawn_daemon_process() -> Result<()> {
     #[cfg(unix)]
     cmd.arg("--daemonize");
 
-    // On macOS, use `spawn_disclaimed` to prevent the terminal emulator from showing a "running in
-    // background" dot.
+    // On macOS, use `spawn_disclaimed` so that privacy permissions are associated with Atuin,
+    // rather than whichever terminal app happened to autostart it.
     #[cfg(target_os = "macos")]
     match spawn_disclaimed(cmd.get_program(), cmd.get_args()) {
         Ok(()) => return Ok(()),
