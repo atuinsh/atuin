@@ -3,6 +3,7 @@ mod import;
 mod message_enricher;
 
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
@@ -235,6 +236,10 @@ struct Replayer {
     sink: Arc<Sink>,
     progress: ReprojectProgress,
     resets: Mutex<Resets>,
+    /// Whether a replay is running: then the state is [`StoreState::Recovering`], and the replay
+    /// settles it. Read and set under `resets`; cleared without it only by [`Unsettled`], so a
+    /// replay that panics does not leave rebuilds waiting on a replay that will never settle.
+    replaying: AtomicBool,
     /// Stops a replay between replaying and settling, for tests to interleave a rebuild there.
     #[cfg(test)]
     before_settling: Option<Arc<tests::Gate>>,
@@ -243,9 +248,6 @@ struct Replayer {
 struct Resets {
     /// How many rebuilds have emptied the sidecar.
     count: u64,
-    /// Whether a replay is running: then the state is [`StoreState::Recovering`], and the replay
-    /// settles it.
-    replaying: bool,
     /// Whether startup recovery succeeded, so capture is running and a store left unavailable by
     /// a failed rebuild can be rebuilt again. After a failed startup recovery capture never
     /// started, and the store stays unavailable until restart.
@@ -253,12 +255,17 @@ struct Resets {
 }
 
 /// Settles the state as [`StoreState::Unavailable`] if a replay ends without settling it (a
-/// panic): nothing else would, and capture and reads would wait on it for good.
-struct Unsettled<'a>(Option<&'a watch::Sender<StoreState>>);
+/// panic): nothing else would, and capture and reads would wait on it for good. It also marks the
+/// replay over, so a later rebuild starts one rather than waiting on this one.
+struct Unsettled<'a> {
+    state: Option<&'a watch::Sender<StoreState>>,
+    replaying: &'a AtomicBool,
+}
 
 impl Drop for Unsettled<'_> {
     fn drop(&mut self) {
-        if let Some(state) = self.0 {
+        if let Some(state) = self.state {
+            self.replaying.store(false, Ordering::SeqCst);
             state.send_replace(StoreState::Unavailable);
         }
     }
@@ -268,7 +275,10 @@ impl Replayer {
     /// Replay until a replay has run entirely after the last reset, then settle `state`:
     /// [`StoreState::Ready`] when that replay succeeded, [`StoreState::Unavailable`] otherwise.
     async fn replay(&self, state: &watch::Sender<StoreState>) -> StoreState {
-        let mut unsettled = Unsettled(Some(state));
+        let mut unsettled = Unsettled {
+            state: Some(state),
+            replaying: &self.replaying,
+        };
         loop {
             let seen = self.resets.lock().await.count;
             let started = Instant::now();
@@ -312,10 +322,10 @@ impl Replayer {
                 }
             };
             resets.recovered |= settled == StoreState::Ready;
-            resets.replaying = false;
+            self.replaying.store(false, Ordering::SeqCst);
             state.send_replace(settled);
             drop(resets);
-            unsettled.0 = None;
+            unsettled.state = None;
             return settled;
         }
     }
@@ -331,7 +341,7 @@ impl Replayer {
         if before == StoreState::Unavailable && !resets.recovered {
             return Err(RebuildError::Unavailable);
         }
-        if !resets.replaying {
+        if !self.replaying.load(Ordering::SeqCst) {
             self.progress.clear();
         }
         // Said before taking capture's lock, which a capture waiting for it checks again (see
@@ -345,15 +355,14 @@ impl Replayer {
         if let Err(err) = reset {
             // One transaction: nothing went. A replay running settles the state as before;
             // otherwise the store is as it was: ready, or still unavailable.
-            if !resets.replaying {
+            if !self.replaying.load(Ordering::SeqCst) {
                 state.send_replace(before);
             }
             return Err(err.into());
         }
         // A replay that started before this sees it when it settles, and goes round again.
         resets.count += 1;
-        if !resets.replaying {
-            resets.replaying = true;
+        if !self.replaying.swap(true, Ordering::SeqCst) {
             let replayer = self.clone();
             tokio::spawn(async move { replayer.replay(&state).await });
         }
@@ -440,9 +449,9 @@ impl AiHarnessSessionCapture {
             progress: ReprojectProgress::default(),
             resets: Mutex::new(Resets {
                 count: 0,
-                replaying: true,
                 recovered: false,
             }),
+            replaying: AtomicBool::new(true),
             #[cfg(test)]
             before_settling,
         });
@@ -1125,6 +1134,8 @@ mod tests {
     pub(super) struct Gate {
         reached: tokio::sync::Semaphore,
         released: tokio::sync::Semaphore,
+        /// Panic the next replay released from the gate, as a replay failing unexpectedly would.
+        panic_next: AtomicBool,
     }
 
     impl Default for Gate {
@@ -1132,6 +1143,7 @@ mod tests {
             Self {
                 reached: tokio::sync::Semaphore::new(0),
                 released: tokio::sync::Semaphore::new(0),
+                panic_next: AtomicBool::new(false),
             }
         }
     }
@@ -1140,6 +1152,7 @@ mod tests {
         pub(super) async fn pass(&self) {
             self.reached.add_permits(1);
             self.released.acquire().await.unwrap().forget();
+            assert!(!self.panic_next.swap(false, Ordering::SeqCst), "a replay panicking");
         }
 
         /// Wait for a replay to have replayed, and hold it there.
@@ -1207,6 +1220,48 @@ mod tests {
         assert_eq!(capture.sink.append(msg).await.unwrap(), Appended::Duplicate);
         let stored = store.all_tagged(&RecordTag::AiSession).await.unwrap();
         assert_eq!(stored.len(), 1);
+    }
+
+    /// A replay that panics leaves the store unavailable, not stuck recovering, and a later
+    /// rebuild starts a replay of its own rather than wait on the one that panicked.
+    #[rstest]
+    #[tokio::test]
+    async fn a_rebuild_after_a_replay_panicked_replays() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = message_of("kept", "k1");
+        records.push(&msg).await.unwrap();
+        let gate = Arc::new(Gate::default());
+        let capture = AiHarnessSessionCapture::open_with(
+            records,
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+            Some(gate.clone()),
+        );
+        gate.reached().await;
+        gate.release();
+        assert!(capture.ready().await);
+
+        // A rebuild's replay panics before settling.
+        gate.panic_next.store(true, Ordering::SeqCst);
+        capture.rebuild().await.unwrap();
+        gate.reached().await;
+        gate.release();
+        let mut state = capture.state.clone();
+        let unavailable = state.wait_for(|state| *state == StoreState::Unavailable);
+        tokio::time::timeout(Duration::from_secs(10), unavailable)
+            .await
+            .expect("the panicked replay left the store recovering")
+            .unwrap();
+
+        // The next rebuild replays, and the store is ready with the record back.
+        capture.rebuild().await.unwrap();
+        gate.reached().await;
+        gate.release();
+        let ready = tokio::time::timeout(Duration::from_secs(10), capture.ready());
+        assert!(ready.await.expect("the rebuild never ended"));
+        assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
     }
 
     /// A rebuild whose caller gives up midway (a client disconnecting) still ends ready, rather
