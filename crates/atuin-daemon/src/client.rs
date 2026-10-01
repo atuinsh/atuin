@@ -612,7 +612,7 @@ impl AiClient {
     /// them newest first.
     ///
     /// The daemon matches every term as a whole word, or with [`SearchTerms::Any`] any term as a
-    /// prefix.
+    /// prefix; [`SearchTerms::Typed`] (search as you type) is searched as [`SearchTerms::All`].
     pub async fn search_sessions(
         &mut self,
         query: &str,

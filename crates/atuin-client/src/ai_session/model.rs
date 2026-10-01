@@ -188,6 +188,10 @@ pub struct Session {
     /// [`SessionFilter::roots_only`]); 0 elsewhere.
     #[builder(default)]
     pub child_count: u64,
+    /// The newest `updated_at` across this session and the sessions grouped under it, which is
+    /// what roots-only queries order by. Only set by roots-only queries.
+    #[builder(default)]
+    pub group_updated_at: Option<OffsetDateTime>,
 }
 
 impl Session {
@@ -269,6 +273,10 @@ pub enum SearchTerms {
     /// Every term, each as a whole word (`app` finds `app`, not `apple`).
     #[default]
     All,
+    /// [`Self::All`] for search as you type: the last term also matches as a prefix, unless
+    /// the query ends in whitespace (see
+    /// [`atuin_common::db::sqlite::fts::prefix_match_expression`]).
+    Typed,
     /// Any term, each as a prefix: the fallback when no message holds every term (see
     /// [`atuin_common::db::sqlite::fts::match_any_expression`]).
     Any,
