@@ -8,9 +8,14 @@
 //! One task, the [`Coordinator`], owns everything that decides the store's [`StoreState`]: the
 //! state itself (it is the only writer of its watch channel), how many wipes there have been
 //! (`gen`), the replay running and whether startup recovery succeeded. It takes one message at a
-//! time: rebuild requests, and replays reporting they are done (a supervisor task turns a replay
-//! that panicked or was aborted into a report too). It wipes inline, holding capture's lock, so
-//! nothing interleaves with a wipe but what the locks allow.
+//! time: rebuild requests, the sync worker finding a series it must not forget beside capture
+//! (see [`AiSessionStore::reproject_beside_capture`]), and replays reporting they are done (a
+//! supervisor task turns a replay that panicked or was aborted into a report too). It wipes
+//! inline, holding capture's lock, so nothing interleaves with a wipe but what the locks allow.
+//! A wipe is a rebuild's (everything) or the sync worker's (the one host's sessions): both hold
+//! capture off first, and are replayed after.
+//!
+//! [`AiSessionStore::reproject_beside_capture`]: atuin_client::ai_session::AiSessionStore::reproject_beside_capture
 //!
 //! Its decisions are a pure transition function, [`CoordState::step`], from an [`Event`] to the
 //! [`Effect`]s the coordinator then carries out; a wipe's outcome is fed back as an event. The
@@ -20,7 +25,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use atuin_client::ai_session::{DbError, ReprojectProgress};
+use atuin_client::ai_session::{BuildError, DbError, ReprojectProgress};
+use atuin_domain::record::HostId;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 
@@ -47,6 +53,24 @@ pub(super) enum ReplayResult {
     Failed,
     /// The replay task panicked or was aborted.
     Panicked,
+    /// Invalidations kept landing until the reprojection gave up
+    /// ([`BuildError::Incomplete`]): the sidecar may be missing records, but a replay again may
+    /// well get through.
+    Incomplete,
+}
+
+/// How many times in a row a replay ending [`ReplayResult::Incomplete`] at one generation is
+/// replayed again, before the store is left unavailable.
+pub(super) const INCOMPLETE_RETRIES: u32 = 2;
+
+/// What a wipe empties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Scope {
+    /// Everything ([`atuin_client::ai_session::AiSessionDatabase::reset`]): a rebuild.
+    All,
+    /// The sessions of the host whose series changed
+    /// ([`atuin_client::ai_session::AiSessionDatabase::forget_host`]).
+    Host,
 }
 
 /// Why a rebuild was refused.
@@ -63,6 +87,10 @@ pub(super) enum Refusal {
 pub(super) enum Event {
     /// A rebuild was asked for.
     Rebuild,
+    /// The sync worker found a series rewritten or deleted under its watermark whose forgetting
+    /// deletes rows of this host, which capture dedups against: this host's own (or another's,
+    /// in this host's sessions). Handled as a rebuild wiping only that host's sessions.
+    SeriesRewritten,
     /// The wipe a [`Effect::Wipe`] asked for is over. Always the next event after that effect:
     /// the coordinator wipes inline.
     WipeDone {
@@ -80,11 +108,11 @@ pub(super) enum Event {
 pub(super) enum Effect {
     /// Set the store's state.
     Broadcast(StoreState),
-    /// Empty the sidecar under capture's lock, then report [`Event::WipeDone`].
-    Wipe,
+    /// Empty the sidecar (or part) under capture's lock, then report [`Event::WipeDone`].
+    Wipe(Scope),
     /// Spawn a replay.
     StartReplay(Replay),
-    /// Answer the rebuild being handled.
+    /// Answer the request being handled (a rebuild, or the sync worker's).
     Reply(Result<(), Refusal>),
 }
 
@@ -103,6 +131,8 @@ pub(super) struct CoordState {
     /// While a rebuild's wipe runs: the state it replaced, restored should the wipe fail with no
     /// replay running.
     pub(super) wiping: Option<StoreState>,
+    /// Replays in a row ended [`ReplayResult::Incomplete`] at this generation and replayed again.
+    pub(super) retries: u32,
     next_id: u64,
 }
 
@@ -119,6 +149,7 @@ impl CoordState {
             replay: Some(replay),
             recovered: false,
             wiping: None,
+            retries: 0,
             next_id: 1,
         };
         (coord, vec![Effect::Broadcast(StoreState::Recovering), Effect::StartReplay(replay)])
@@ -132,13 +163,16 @@ impl CoordState {
             "{event:?} while wiping"
         );
         match event {
-            Event::Rebuild => self.rebuild(),
+            Event::Rebuild => self.rebuild(Scope::All),
+            Event::SeriesRewritten => self.rebuild(Scope::Host),
             Event::WipeDone { ok } => self.wiped(ok),
             Event::ReplayDone { replay, result } => self.replayed(replay, result),
         }
     }
 
-    fn rebuild(&mut self) -> Vec<Effect> {
+    /// A rebuild, or the sync worker's forget: the same but for what the wipe empties.
+    fn rebuild(&mut self, scope: Scope) -> Vec<Effect> {
+        // Capture never started (so has nothing to dedup), and nothing replays until restart.
         if self.state == StoreState::Unavailable && !self.recovered {
             return vec![Effect::Reply(Err(Refusal::Unavailable))];
         }
@@ -146,7 +180,7 @@ impl CoordState {
         self.state = StoreState::Recovering;
         // Said before the wipe takes capture's lock, which capture checks again under that lock:
         // no capture checks the sidecar from then until a replay settles.
-        vec![Effect::Broadcast(StoreState::Recovering), Effect::Wipe]
+        vec![Effect::Broadcast(StoreState::Recovering), Effect::Wipe(scope)]
     }
 
     fn wiped(&mut self, ok: bool) -> Vec<Effect> {
@@ -183,14 +217,23 @@ impl CoordState {
         if replay.started_gen != self.generation {
             // A wipe since it started may have deleted what it projected: replay again rather
             // than call the sidecar ready.
+            self.retries = 0;
             return vec![self.start_replay()];
         }
+        if result == ReplayResult::Incomplete && self.retries < INCOMPLETE_RETRIES {
+            // Invalidations kept it from finishing: another go may get through.
+            self.retries += 1;
+            return vec![self.start_replay()];
+        }
+        self.retries = 0;
         self.state = match result {
             ReplayResult::Ok => {
                 self.recovered = true;
                 StoreState::Ready
             }
-            ReplayResult::Failed | ReplayResult::Panicked => StoreState::Unavailable,
+            ReplayResult::Failed | ReplayResult::Panicked | ReplayResult::Incomplete => {
+                StoreState::Unavailable
+            }
         };
         vec![Effect::Broadcast(self.state)]
     }
@@ -210,6 +253,11 @@ impl CoordState {
 /// A message to the coordinator.
 pub(super) enum Msg {
     Rebuild(oneshot::Sender<Result<(), RebuildError>>),
+    /// From the sync worker: see [`Event::SeriesRewritten`]. `host` is the host to forget.
+    SeriesRewritten {
+        host: HostId,
+        reply: oneshot::Sender<Result<(), RebuildError>>,
+    },
     ReplayDone {
         replay: Replay,
         result: ReplayResult,
@@ -262,43 +310,46 @@ impl Coordinator {
     }
 
     async fn run(mut self, boot: Vec<Effect>) {
-        self.apply(boot, None).await;
+        self.apply(boot, None, None).await;
         while let Some(msg) = self.rx.recv().await {
             match msg {
                 Msg::Rebuild(reply) => {
                     let effects = self.core.step(Event::Rebuild);
-                    self.apply(effects, Some(reply)).await;
+                    self.apply(effects, Some(reply), None).await;
+                }
+                Msg::SeriesRewritten { host, reply } => {
+                    let effects = self.core.step(Event::SeriesRewritten);
+                    self.apply(effects, Some(reply), Some(host)).await;
                 }
                 Msg::ReplayDone { replay, result } => {
                     if self.core.replay == Some(replay) {
                         self.running = None;
                     }
                     let effects = self.core.step(Event::ReplayDone { replay, result });
-                    self.apply(effects, None).await;
+                    self.apply(effects, None, None).await;
                 }
             }
         }
     }
 
-    /// Carry out `effects` in order, answering `reply` (the rebuild being handled).
+    /// Carry out `effects` in order, answering `reply` (the request being handled). `host` is
+    /// the host a [`Scope::Host`] wipe forgets.
     async fn apply(
         &mut self,
         effects: Vec<Effect>,
         mut reply: Option<oneshot::Sender<Result<(), RebuildError>>>,
+        host: Option<HostId>,
     ) {
         let mut effects = VecDeque::from(effects);
         let mut wipe_error = None;
         while let Some(effect) = effects.pop_front() {
             match effect {
                 Effect::Broadcast(state) => self.broadcast(state),
-                Effect::Wipe => {
-                    let wiped = self.wipe().await;
+                Effect::Wipe(scope) => {
+                    let wiped = self.wipe(scope, host).await;
                     let ok = wiped.is_ok();
                     if let Err(err) = wiped {
-                        tracing::error!(
-                            ?err,
-                            "failed to empty the ai-session sidecar to rebuild it"
-                        );
+                        tracing::error!(?err, ?scope, "failed to empty the ai-session sidecar");
                         wipe_error = Some(err);
                     }
                     effects.extend(self.core.step(Event::WipeDone { ok }));
@@ -337,8 +388,9 @@ impl Coordinator {
         self.state.send_replace(state);
     }
 
-    /// Empty the sidecar, holding capture's lock so no capture is between its check and its push.
-    async fn wipe(&self) -> Result<(), DbError> {
+    /// Empty the sidecar, or what `host` projected for [`Scope::Host`], holding capture's lock so
+    /// no capture is between its check and its push.
+    async fn wipe(&self, scope: Scope, host: Option<HostId>) -> Result<(), DbError> {
         #[cfg(test)]
         self.sink.hook(Point::BeforeWipe).await;
         let wiped = {
@@ -351,7 +403,18 @@ impl Coordinator {
             if fault != Fault::None {
                 return Err(DbError::Query(sqlx::Error::Protocol("injected wipe failure".into())));
             }
-            self.sink.sidecar.reset().await
+            match (scope, host) {
+                (Scope::All, _) => self.sink.sidecar.reset().await,
+                (Scope::Host, Some(host)) => {
+                    tracing::warn!(
+                        %host,
+                        "ai-session records rewritten under capture: holding capture off to \
+                         replay them"
+                    );
+                    self.sink.sidecar.forget_host(host).await.map(|_| ())
+                }
+                (Scope::Host, None) => unreachable!("a host's wipe asked for without the host"),
+            }
         };
         #[cfg(test)]
         self.sink.hook(Point::AfterWipe).await;
@@ -385,11 +448,18 @@ async fn run_replay(sink: Arc<Sink>, progress: ReprojectProgress) -> ReplayResul
     #[cfg(test)]
     let _section = sink.enter(Section::Replay);
     let started = std::time::Instant::now();
+    // Capture is held off (the store is recovering while a replay runs), so a series found
+    // rewritten is forgotten here and now, this host's included.
     let result = sink.records.reproject_with(&sink.sidecar, &progress).await;
+    #[cfg(test)]
+    if matches!(result, Err(BuildError::Incomplete)) {
+        sink.hook(Point::ReplayIncomplete).await;
+    }
     #[cfg(test)]
     let result = match sink.hook(Point::ReplayBeforeSettle).await {
         Fault::None => result,
         Fault::Fail => Err(DbError::InvalidRecordId.into()),
+        Fault::Incomplete => Err(BuildError::Incomplete),
         Fault::Panic => std::panic::panic_any(super::hooks::INJECTED_PANIC),
     };
     match result {
@@ -401,6 +471,10 @@ async fn run_replay(sink: Arc<Sink>, progress: ReprojectProgress) -> ReplayResul
                 "ai-session sidecar replayed"
             );
             ReplayResult::Ok
+        }
+        Err(BuildError::Incomplete) => {
+            tracing::warn!("the ai-session sidecar replay kept being invalidated");
+            ReplayResult::Incomplete
         }
         Err(err) => {
             tracing::error!(?err, "failed to reproject the ai-session sidecar");
@@ -433,6 +507,11 @@ mod tests {
         /// The last replay the coordinator acted on: how it ended, and the generation it started
         /// at.
         last_done: Option<(u64, ReplayResult)>,
+        /// How many replays in a row, started at the generation given, the coordinator heard
+        /// end incomplete.
+        incomplete: (u64, u32),
+        /// What the request being handled wipes: a rebuild everything, the sync worker's a host.
+        asked: Option<Scope>,
         /// Every state the coordinator said, in order.
         broadcasts: Vec<StoreState>,
     }
@@ -446,6 +525,8 @@ mod tests {
                 started: Vec::new(),
                 unanswered: 0,
                 last_done: None,
+                incomplete: (0, 0),
+                asked: None,
                 broadcasts: Vec::new(),
             };
             world.run(&effects);
@@ -459,9 +540,14 @@ mod tests {
             if self.core.wiping.is_some() {
                 return vec![Event::WipeDone { ok: true }, Event::WipeDone { ok: false }];
             }
-            let mut events = vec![Event::Rebuild];
+            let mut events = vec![Event::Rebuild, Event::SeriesRewritten];
             if let Some(replay) = self.core.replay {
-                for result in [ReplayResult::Ok, ReplayResult::Failed, ReplayResult::Panicked] {
+                for result in [
+                    ReplayResult::Ok,
+                    ReplayResult::Failed,
+                    ReplayResult::Panicked,
+                    ReplayResult::Incomplete,
+                ] {
                     events.push(Event::ReplayDone { replay, result });
                 }
             }
@@ -485,7 +571,12 @@ mod tests {
 
         fn apply(&mut self, event: Event) {
             let before = self.core.clone();
-            if let Event::Rebuild = event {
+            match event {
+                Event::Rebuild => self.asked = Some(Scope::All),
+                Event::SeriesRewritten => self.asked = Some(Scope::Host),
+                Event::WipeDone { .. } | Event::ReplayDone { .. } => {}
+            }
+            if matches!(event, Event::Rebuild | Event::SeriesRewritten) {
                 self.unanswered += 1;
             }
             let current = matches!(event, Event::ReplayDone { replay, .. } if Some(replay) == self.core.replay);
@@ -494,6 +585,11 @@ mod tests {
             {
                 assert!(self.live.remove(&replay.id.0), "a report from a replay not running");
                 self.last_done = Some((replay.started_gen, result));
+                self.incomplete = match (result, self.incomplete) {
+                    (ReplayResult::Incomplete, (at, n)) if at == replay.started_gen => (at, n + 1),
+                    (ReplayResult::Incomplete, _) => (replay.started_gen, 1),
+                    _ => (replay.started_gen, 0),
+                };
             }
             let effects = self.core.step(event);
             if matches!(event, Event::ReplayDone { .. }) && !current {
@@ -513,13 +609,16 @@ mod tests {
                         state = Some(s);
                         self.broadcasts.push(s);
                     }
-                    Effect::Wipe => {
+                    Effect::Wipe(scope) => {
                         assert_eq!(i, effects.len() - 1, "the wipe is the last effect");
+                        // Capture is held off before anything is deleted, this host's rows
+                        // (the sync worker's forget) included.
                         assert_eq!(
                             state,
                             Some(StoreState::Recovering),
                             "recovering is said before wiping"
                         );
+                        assert_eq!(Some(scope), self.asked, "wiped what was not asked");
                     }
                     Effect::StartReplay(replay) => {
                         // I4: at most one replay.
@@ -549,6 +648,16 @@ mod tests {
             assert!(self.live.len() <= 1);
             // The last state said is the core's.
             assert_eq!(self.broadcasts.last(), Some(&core.state));
+            // A replay runs only while recovering: capture is held off, so a replay may forget
+            // what a series rewritten under its watermark projected, this host's rows included.
+            if core.replay.is_some() {
+                assert_eq!(core.state, StoreState::Recovering, "a replay beside capture");
+            }
+            // Retries are bounded, and counted only while recovering.
+            assert!(core.retries <= INCOMPLETE_RETRIES);
+            if core.state != StoreState::Recovering {
+                assert_eq!(core.retries, 0);
+            }
             if core.wiping.is_some() {
                 // A rebuild in hand; it is answered once its wipe reports.
                 assert_eq!(self.unanswered, 1);
@@ -576,13 +685,25 @@ mod tests {
                     assert!(
                         matches!(
                             self.last_done,
-                            Some((generation, ReplayResult::Failed | ReplayResult::Panicked))
-                                if generation == core.generation
+                            Some((
+                                generation,
+                                ReplayResult::Failed
+                                    | ReplayResult::Panicked
+                                    | ReplayResult::Incomplete
+                            )) if generation == core.generation
                         ),
                         "unavailable on {:?} at generation {}",
                         self.last_done,
                         core.generation
                     );
+                    // Given up as incomplete only once the retries ran out.
+                    if matches!(self.last_done, Some((_, ReplayResult::Incomplete))) {
+                        assert_eq!(
+                            self.incomplete,
+                            (core.generation, INCOMPLETE_RETRIES + 1),
+                            "unavailable on an incomplete replay not retried"
+                        );
+                    }
                 }
             }
         }
@@ -595,13 +716,15 @@ mod tests {
                     ok: result == ReplayResult::Ok,
                 });
             }
-            // The replay running, then (if a wipe came after it started) one more.
-            for _ in 0..2 {
+            // The replay running, then (if a wipe came after it started) one more, then (if
+            // incomplete) the retries.
+            let most = 2 + INCOMPLETE_RETRIES;
+            for _ in 0..most {
                 if let Some(replay) = self.core.replay {
                     self.apply(Event::ReplayDone { replay, result });
                 }
             }
-            assert!(self.core.replay.is_none(), "settling needs at most two replays");
+            assert!(self.core.replay.is_none(), "settling needs at most {most} replays");
             assert_ne!(self.core.state, StoreState::Recovering);
             self
         }
@@ -672,6 +795,8 @@ mod tests {
                 world.apply(event);
                 world.check_liveness();
             }
+            let incomplete = world.clone().settle(ReplayResult::Incomplete);
+            prop_assert_ne!(incomplete.core.state, StoreState::Recovering);
             let settled = world.settle(ReplayResult::Failed);
             prop_assert_ne!(settled.core.state, StoreState::Recovering);
         });
@@ -700,6 +825,43 @@ mod tests {
     #[case::failed_startup(&[
         Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Failed },
         Event::Rebuild,
+    ], StoreState::Unavailable)]
+    // And the sync worker's forget: capture never started.
+    #[case::series_rewritten_after_failed_startup(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Failed },
+        Event::SeriesRewritten,
+    ], StoreState::Unavailable)]
+    // This host's series rewritten while ready: capture is held off before the forget, and a
+    // replay follows.
+    #[case::series_rewritten_while_ready(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Ok },
+        Event::SeriesRewritten,
+    ], StoreState::Recovering)]
+    #[case::series_rewritten_then_replayed(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Ok },
+        Event::SeriesRewritten,
+        Event::WipeDone { ok: true },
+        Event::ReplayDone { replay: Replay { id: ReplayId(1), started_gen: 1 }, result: ReplayResult::Ok },
+    ], StoreState::Ready)]
+    // A failed forget restores the store as it was: the next sync finds the series again.
+    #[case::failed_forget_when_ready(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Ok },
+        Event::SeriesRewritten,
+        Event::WipeDone { ok: false },
+    ], StoreState::Ready)]
+    // A replay invalidated pass after pass is replayed again, a bounded number of times.
+    #[case::incomplete_is_retried(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Incomplete },
+    ], StoreState::Recovering)]
+    #[case::incomplete_retried_then_ready(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Incomplete },
+        Event::ReplayDone { replay: Replay { id: ReplayId(1), started_gen: 0 }, result: ReplayResult::Ok },
+    ], StoreState::Ready)]
+    // Never ready on an incomplete replay: unavailable once the retries run out.
+    #[case::incomplete_until_unavailable(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Incomplete },
+        Event::ReplayDone { replay: Replay { id: ReplayId(1), started_gen: 0 }, result: ReplayResult::Incomplete },
+        Event::ReplayDone { replay: Replay { id: ReplayId(2), started_gen: 0 }, result: ReplayResult::Incomplete },
     ], StoreState::Unavailable)]
     fn named_interleavings(#[case] events: &[Event], #[case] expected: StoreState) {
         let mut world = World::boot();

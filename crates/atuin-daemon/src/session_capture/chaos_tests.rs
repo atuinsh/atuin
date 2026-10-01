@@ -1,9 +1,11 @@
 //! A chaos test of the recovery protocol on the real components: an in-memory record store and
 //! sidecar, the real coordinator, capture's sink, the sync worker's reprojection and the gRPC
 //! rebuild, on a multi-thread runtime. Test hooks (see [`super::hooks`]) delay every step of the
-//! protocol at random, fail wipes, and fail or panic replays, while rebuilds, captures (of lines
-//! already persisted and new ones), sync reprojections and reads run at once. Once it quiesces,
-//! it checks the protocol's invariants.
+//! protocol at random, fail wipes, fail, panic or give up replays, and storm replays and sync
+//! reprojections with invalidations (toward their pass cap), while rebuilds, captures (of lines
+//! already persisted and new ones), sync reprojections, rewrites of this host's and another's
+//! record series under their watermarks, and reads run at once. Once it quiesces, it checks the
+//! protocol's invariants.
 //!
 //! `ATUIN_CHAOS_ITERATIONS` sets how many seeds to run: by default 100, a few seconds in all, as
 //! each takes some 50ms of in-memory SQLite.
@@ -41,6 +43,22 @@ struct Totals {
     ended_unrecoverable: AtomicU64,
     /// Captures a rebuild overtook between their wait and their lock.
     captures_overtaken: AtomicU64,
+    /// This host's record series rewritten under capture.
+    local_rewrites: AtomicU64,
+    /// The other host's.
+    remote_rewrites: AtomicU64,
+    /// Series the sync worker found it must not forget beside capture, handed to the coordinator.
+    forgets_held_off: AtomicU64,
+    /// Invalidation storms, over a replay or a sync reprojection: clearing the watermarks over
+    /// and over, or rewriting the other host's series over and over.
+    storms: AtomicU64,
+    rewriting_storms: AtomicU64,
+    /// Replays that gave up, invalidated every pass (the cap itself, not injected).
+    replays_incomplete: AtomicU64,
+    /// Replays made to give up as incomplete by a fault.
+    injected_incomplete: AtomicU64,
+    /// Sync reprojections that gave up, invalidated every pass.
+    syncs_incomplete: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -54,6 +72,8 @@ struct Chaos {
     violations: parking_lot::Mutex<Vec<String>>,
     totals: Arc<Totals>,
     probe: parking_lot::Mutex<Option<Probe>>,
+    /// Storms still running.
+    storming: Arc<AtomicUsize>,
     /// Wipes that went ahead.
     emptied: Arc<AtomicU64>,
     /// How many wipes had gone ahead when the last replay to end began.
@@ -65,6 +85,12 @@ struct Chaos {
 struct Probe {
     sidecar: AiSessionDatabase,
     host: HostId,
+    /// The record store, its key, and the other host, for storms rewriting its series. Its
+    /// writes take `remote_writes`.
+    store: SqliteStore,
+    key: Key,
+    remote: HostId,
+    remote_writes: Arc<tokio::sync::Mutex<()>>,
     /// This host's lines pushed to the record store: those persisted, and each capture reported
     /// new. A line pushed twice (the dedup gate trusting a sidecar missing it) is reported new
     /// twice.
@@ -76,15 +102,45 @@ struct Leave {
     counter: Arc<AtomicUsize>,
     /// A replay's: where to say, when it ends, how many wipes had gone ahead when it began.
     replayed_from: Option<(Arc<AtomicU64>, u64)>,
+    /// A storm of invalidations over a replay, to stop.
+    storm: Option<Arc<AtomicBool>>,
 }
 
 impl Drop for Leave {
     fn drop(&mut self) {
+        if let Some(storm) = &self.storm {
+            storm.store(true, Ordering::SeqCst);
+        }
         if let Some((last, from)) = &self.replayed_from {
             last.store(*from, Ordering::SeqCst);
         }
         self.counter.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// Invalidate over and over until `stop`, so that a reprojection meanwhile starts over pass
+/// after pass, toward its cap: clear the sidecar's watermarks (deleting no row), or, if
+/// `rewriting`, rewrite the other host's series, which a reprojection forgets on finding it, as
+/// one does when a sync downloads it rewritten. Forgetting it deletes the sessions it added to,
+/// this host's rows in them included, and has the pass go round again for them.
+fn storm(probe: Probe, rewriting: bool, stop: Arc<AtomicBool>, storming: Arc<AtomicUsize>) {
+    storming.fetch_add(1, Ordering::SeqCst);
+    tokio::spawn(async move {
+        let _done = Leave {
+            counter: storming,
+            replayed_from: None,
+            storm: None,
+        };
+        while !stop.load(Ordering::SeqCst) {
+            if rewriting {
+                let _writes = probe.remote_writes.lock().await;
+                super::tests::rewrite_series(&probe.store, &probe.key, probe.remote).await;
+            } else {
+                probe.sidecar.clear_reproject_watermarks().await.unwrap();
+            }
+            tokio::task::yield_now().await;
+        }
+    });
 }
 
 /// No replay has ended yet.
@@ -101,6 +157,7 @@ impl Chaos {
             violations: parking_lot::Mutex::default(),
             totals,
             probe: parking_lot::Mutex::default(),
+            storming: Arc::default(),
             emptied: Arc::default(),
             last_replayed_from: Arc::new(AtomicU64::new(NONE_REPLAYED)),
         }
@@ -205,6 +262,32 @@ impl Hooks for Chaos {
                     self.totals.replay_failures.fetch_add(1, Ordering::Relaxed);
                     Fault::Fail
                 }
+                Point::ReplayBeforeSettle if self.fault(0.05) => {
+                    self.totals.injected_incomplete.fetch_add(1, Ordering::Relaxed);
+                    Fault::Incomplete
+                }
+                Point::ReplayIncomplete => {
+                    self.totals.replays_incomplete.fetch_add(1, Ordering::Relaxed);
+                    Fault::None
+                }
+                Point::SyncForgetHeldOff => {
+                    self.totals.forgets_held_off.fetch_add(1, Ordering::Relaxed);
+                    Fault::None
+                }
+                Point::SyncIncomplete => {
+                    self.totals.syncs_incomplete.fetch_add(1, Ordering::Relaxed);
+                    Fault::None
+                }
+                Point::SyncReproject if self.fault(0.2) => {
+                    // A storm over (some of) the sync worker's reprojection.
+                    if let Some(stop) = self.storm() {
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(3)).await;
+                            stop.store(true, Ordering::SeqCst);
+                        });
+                    }
+                    Fault::None
+                }
                 Point::CaptureOvertaken => {
                     self.totals.captures_overtaken.fetch_add(1, Ordering::Relaxed);
                     Fault::None
@@ -239,10 +322,33 @@ impl Hooks for Chaos {
         }
         let replayed_from = matches!(section, Section::Replay)
             .then(|| (self.last_replayed_from.clone(), self.emptied.load(Ordering::SeqCst)));
+        let storm = if matches!(section, Section::Replay) && self.fault(0.1) {
+            self.storm()
+        } else {
+            None
+        };
         Box::new(Leave {
             counter: counter.clone(),
             replayed_from,
+            storm,
         })
+    }
+}
+
+impl Chaos {
+    /// Start a [`storm`] of either kind, returning its stop.
+    fn storm(&self) -> Option<Arc<AtomicBool>> {
+        let probe = self.probe.lock().clone()?;
+        let rewriting = self.rng.lock().gen_bool(0.5);
+        let started = if rewriting {
+            &self.totals.rewriting_storms
+        } else {
+            &self.totals.storms
+        };
+        started.fetch_add(1, Ordering::Relaxed);
+        let stop = Arc::new(AtomicBool::new(false));
+        storm(probe, rewriting, stop.clone(), self.storming.clone());
+        Some(stop)
     }
 }
 
@@ -296,10 +402,11 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
     let records =
         AiSessionStore::builder().store(store.clone()).host_id(local_host).key(key.clone()).build();
     // Another host's records, as a sync downloads them.
+    let remote_host = HostId(atuin_common::utils::uuid_v7());
     let remote = AiSessionStore::builder()
         .store(store.clone())
-        .host_id(HostId(atuin_common::utils::uuid_v7()))
-        .key(key)
+        .host_id(remote_host)
+        .key(key.clone())
         .build();
     let sidecar = AiSessionDatabase::in_memory().await.unwrap();
 
@@ -313,9 +420,14 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
 
     let pushed = Arc::new(parking_lot::Mutex::new(persisted.iter().map(key_of).collect()));
     let chaos = Arc::new(Chaos::new(seed, totals.clone()));
+    let remote_writes = Arc::new(tokio::sync::Mutex::new(()));
     *chaos.probe.lock() = Some(Probe {
         sidecar: sidecar.clone(),
         host: local_host,
+        store: store.clone(),
+        key: key.clone(),
+        remote: remote_host,
+        remote_writes: remote_writes.clone(),
         pushed: pushed.clone(),
     });
     let capture = Arc::new(AiHarnessSessionCapture::open_with(
@@ -357,15 +469,57 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
             }
         });
     }
-    // Sync downloads, and the sync worker reprojecting them.
+    // Sync downloads, and the sync worker reprojecting them. The other host adds to one of this
+    // host's sessions sometimes: forgetting it then deletes rows of this host.
+    let shared = rng.gen_bool(0.5);
     {
         let (remote, chaos, projector) = (remote.clone(), chaos.clone(), projector.clone());
+        let remote_writes = remote_writes.clone();
         tasks.spawn(async move {
             for i in 1..3 {
                 chaos.pause().await;
-                remote.push(&line("r", &format!("r{i}"))).await.unwrap();
+                let session = if shared && i == 1 {
+                    "s0"
+                } else {
+                    "r"
+                };
+                {
+                    let _writes = remote_writes.lock().await;
+                    remote.push(&line(session, &format!("r{i}"))).await.unwrap();
+                }
                 projector.send(()).unwrap();
             }
+        });
+    }
+    // Series rewritten under their watermarks, as a sync finds them: this host's (which the
+    // sync worker must leave to the coordinator), and the other host's. Each lands at once as
+    // far as projecting goes: under capture's lock, which projecting this host's series takes.
+    for _ in 0..rng.gen_range(0..=2) {
+        let (store, key, chaos, projector, sidecar) =
+            (store.clone(), key.clone(), chaos.clone(), projector.clone(), sidecar.clone());
+        let (host, settled_first) = if rng.gen_bool(0.7) {
+            (local_host, rng.gen_bool(0.8))
+        } else {
+            (remote_host, rng.gen_bool(0.8))
+        };
+        let (capture, remote_writes) = (capture.clone(), remote_writes.clone());
+        tasks.spawn(async move {
+            if settled_first {
+                capture.ready().await;
+            }
+            chaos.pause().await;
+            {
+                let _writes = remote_writes.lock().await;
+                let _local = sidecar.lock_local_projection().await;
+                super::tests::rewrite_series(&store, &key, host).await;
+            }
+            let rewrites = if host == local_host {
+                &chaos.totals.local_rewrites
+            } else {
+                &chaos.totals.remote_rewrites
+            };
+            rewrites.fetch_add(1, Ordering::Relaxed);
+            projector.send(()).unwrap();
         });
     }
     // Reads: served, or refused as rebuilding.
@@ -476,6 +630,13 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
     watching.abort();
     let violations = chaos.violations.lock().clone();
     assert!(violations.is_empty(), "seed {seed}: {violations:#?}");
+    // The record store as it ends: no storm left rewriting it.
+    let calm = tokio::time::timeout(TIMEOUT, async {
+        while chaos.storming.load(Ordering::SeqCst) > 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    });
+    assert!(calm.await.is_ok(), "seed {seed}: a storm never stopped");
 
     // No duplicate record (I2): each line pushed once, and each key once in the record store.
     let pushed = pushed.lock().clone();

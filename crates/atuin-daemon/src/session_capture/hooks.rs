@@ -14,7 +14,9 @@ pub enum Point {
     WipeLocked,
     /// The wipe done, capture's lock released.
     AfterWipe,
-    /// A replay has reprojected, before reporting. A fault fails or panics it.
+    /// A replay's reprojection gave up, invalidated pass after pass (to count them).
+    ReplayIncomplete,
+    /// A replay has reprojected, before reporting. A fault fails, gives up or panics it.
     ReplayBeforeSettle,
     /// Capture found the store ready, before taking its lock.
     CaptureWaited,
@@ -24,6 +26,11 @@ pub enum Point {
     CaptureChecked,
     /// The sync worker, before reprojecting downloaded records.
     SyncReproject,
+    /// The sync worker's reprojection found a series it must not forget beside capture, before
+    /// telling the coordinator.
+    SyncForgetHeldOff,
+    /// The sync worker's reprojection gave up, invalidated pass after pass.
+    SyncIncomplete,
 }
 
 /// The payload of a panic [`Fault::Panic`] injects.
@@ -34,6 +41,8 @@ pub const INJECTED_PANIC: &str = "injected replay panic";
 pub enum Fault {
     None,
     Fail,
+    /// For a replay: give up as invalidated too often.
+    Incomplete,
     Panic,
 }
 

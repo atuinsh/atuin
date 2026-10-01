@@ -12,8 +12,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::ai_session::{
-    AiSessionDatabase, AiSessionStore, Appended, DbError, HarnessKind, HarnessSession, Message,
-    PushError, ReprojectProgress, SearchTerms, Session, SessionFilter, SessionMatch,
+    AiSessionDatabase, AiSessionStore, Appended, BuildError, DbError, HarnessKind, HarnessSession,
+    Message, PushError, ReprojectProgress, SearchTerms, Session, SessionFilter, SessionMatch,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
@@ -273,10 +273,14 @@ pub(crate) enum StoreState {
     Unavailable,
 }
 
-/// Resolves once startup recovery is over, whether it succeeded or not.
+/// The sync worker's handle on recovery: resolves once startup recovery is over, whether it
+/// succeeded or not, and projects downloaded records beside capture.
 #[derive(Debug, Clone)]
 pub struct Recovery {
     state: watch::Receiver<StoreState>,
+    /// The coordinator's mailbox, for a series only it may forget. Weak: the sync worker does
+    /// not keep the coordinator alive. None without a persistent store.
+    coordinator: Option<mpsc::WeakUnboundedSender<Msg>>,
     /// The facade's test hooks, for the sync worker's (see its `SyncReproject` point).
     #[cfg(test)]
     pub(crate) hooks: Option<Arc<dyn hooks::Hooks>>,
@@ -286,6 +290,60 @@ impl Recovery {
     pub async fn finished(&self) {
         // A closed channel means the coordinator is gone: recovery is over either way.
         let _ = self.state.clone().wait_for(|state| *state != StoreState::Recovering).await;
+    }
+
+    /// Project what a sync downloaded into `sidecar`, beside capture
+    /// ([`AiSessionStore::reproject_beside_capture`]). This never deletes a row of this host,
+    /// which capture dedups against, and never sets the store's state: a series whose forgetting
+    /// would is handed to the coordinator, which holds capture off first, as for a rebuild. A
+    /// reprojection that kept being invalidated is left to the next sync.
+    pub async fn project_synced(&self, records: &AiSessionStore, sidecar: &AiSessionDatabase) {
+        let host = match records.reproject_beside_capture(sidecar).await {
+            Ok(_) => return,
+            Err(BuildError::ForgetHeldOff(host)) => host,
+            Err(BuildError::Incomplete) => {
+                #[cfg(test)]
+                self.hook(hooks::Point::SyncIncomplete).await;
+                tracing::warn!(
+                    "synced ai-session records kept being invalidated while projected; the next \
+                     sync projects the rest"
+                );
+                return;
+            }
+            Err(err) => {
+                tracing::error!(?err, "failed to project synced ai-session records");
+                return;
+            }
+        };
+        #[cfg(test)]
+        self.hook(hooks::Point::SyncForgetHeldOff).await;
+        let Some(coordinator) =
+            self.coordinator.as_ref().and_then(mpsc::WeakUnboundedSender::upgrade)
+        else {
+            tracing::warn!(%host, "ai-session records rewritten, with nothing to replay them");
+            return;
+        };
+        let (reply, answer) = oneshot::channel();
+        if coordinator.send(Msg::SeriesRewritten { host, reply }).is_err() {
+            return;
+        }
+        drop(coordinator);
+        match answer.await {
+            // Replaying, or (startup recovery failed) capture never started and nothing replays
+            // until restart; or the coordinator is gone.
+            Ok(Ok(()) | Err(RebuildError::Unavailable)) | Err(_) => {}
+            // The series is found again by the next sync.
+            Ok(Err(err)) => {
+                tracing::error!(?err, %host, "failed to forget rewritten ai-session records");
+            }
+        }
+    }
+
+    #[cfg(test)]
+    async fn hook(&self, point: hooks::Point) {
+        if let Some(hooks) = &self.hooks {
+            hooks.at(point).await;
+        }
     }
 }
 
@@ -455,6 +513,7 @@ impl AiHarnessSessionCapture {
     pub fn recovery(&self) -> Recovery {
         Recovery {
             state: self.state.clone(),
+            coordinator: self.coordinator.as_ref().map(mpsc::UnboundedSender::downgrade),
             #[cfg(test)]
             hooks: self.sink.hooks.clone(),
         }
@@ -1333,6 +1392,189 @@ mod tests {
         assert_eq!(sidecar.checkpoint(&handle).await.unwrap(), Some(checkpoint));
         assert_eq!(capture.sink.append(msg).await.unwrap(), Appended::Duplicate);
         assert_eq!(stored().await, 1, "nothing was pushed twice");
+    }
+
+    /// Rewrite `host`'s ai-session records in `store`: each comes back at its index under a new
+    /// record id, as when the series is reset and pushed again. A reprojection finds it rewritten
+    /// under its watermark.
+    pub(super) async fn rewrite_series(store: &SqliteStore, key: &Key, host: HostId) {
+        for record in store.all_tagged(&RecordTag::AiSession).await.unwrap() {
+            if record.host.id != host {
+                continue;
+            }
+            let rewritten = atuin_domain::record::Record {
+                id: RecordId(atuin_common::utils::uuid_v7()),
+                ..record.decrypt(key).unwrap()
+            };
+            store.delete(record.id).await.unwrap();
+            store.push(&rewritten.encrypt(key)).await.unwrap();
+        }
+    }
+
+    /// Watches a wipe: the store's state, and whether the sidecar still held a line, as the wipe
+    /// takes capture's lock; then holds the coordinator after the wipe until released.
+    #[derive(Debug)]
+    struct HoldAfterWipe {
+        watched: std::sync::OnceLock<(watch::Receiver<StoreState>, AiSessionDatabase, Message)>,
+        /// What the wipe saw under capture's lock: the state, and whether the line was there.
+        seen: parking_lot::Mutex<Vec<(StoreState, bool)>>,
+        reached: tokio::sync::Semaphore,
+        released: tokio::sync::Semaphore,
+    }
+
+    impl Default for HoldAfterWipe {
+        fn default() -> Self {
+            Self {
+                watched: std::sync::OnceLock::new(),
+                seen: parking_lot::Mutex::default(),
+                reached: tokio::sync::Semaphore::new(0),
+                released: tokio::sync::Semaphore::new(0),
+            }
+        }
+    }
+
+    impl hooks::Hooks for HoldAfterWipe {
+        fn at(&self, point: hooks::Point) -> futures::future::BoxFuture<'_, hooks::Fault> {
+            Box::pin(async move {
+                match point {
+                    hooks::Point::WipeLocked => {
+                        if let Some((state, sidecar, msg)) = self.watched.get() {
+                            let held = sidecar.contains_message(&msg.session, &msg.source_id).await;
+                            self.seen.lock().push((*state.borrow(), held.unwrap()));
+                        }
+                    }
+                    hooks::Point::AfterWipe => {
+                        self.reached.add_permits(1);
+                        self.released.acquire().await.unwrap().forget();
+                    }
+                    _ => {}
+                }
+                hooks::Fault::None
+            })
+        }
+
+        fn enter(&self, _: hooks::Section) -> Box<dyn Send> {
+            Box::new(())
+        }
+    }
+
+    /// This host's record series rewritten under its watermark, found by the sync worker while
+    /// the store is ready: what it projected is forgotten by the coordinator, as a rebuild. So
+    /// capture is held off before anything is deleted, and a capture of a line already
+    /// persisted waits for the replay, then finds it projected, rather than check the sidecar
+    /// missing it and push it again.
+    #[rstest]
+    #[tokio::test]
+    async fn a_local_series_rewritten_while_ready_holds_capture_off() {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let (key, host) = (Key::generate(), HostId(atuin_common::utils::uuid_v7()));
+        let records =
+            AiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build();
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = message_of("kept", "k1");
+        records.push(&msg).await.unwrap();
+        let hooks = Arc::new(HoldAfterWipe::default());
+        let capture = AiHarnessSessionCapture::open_with(
+            records.clone(),
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+            Some(hooks.clone() as Arc<dyn hooks::Hooks>),
+        );
+        assert!(capture.ready().await);
+        hooks.watched.set((capture.state.clone(), sidecar.clone(), msg.clone())).unwrap();
+        let projected = || sidecar.contains_message(&msg.session, &msg.source_id);
+
+        rewrite_series(&store, &key, host).await;
+        let projector =
+            crate::sync::spawn_ai_session_projector(records, sidecar.clone(), capture.recovery());
+        projector.send(()).unwrap();
+        let reached = tokio::time::timeout(Duration::from_secs(10), hooks.reached.acquire());
+        reached.await.expect("the sync worker never had it forgotten").unwrap().forget();
+
+        assert_eq!(
+            *hooks.seen.lock(),
+            [(StoreState::Recovering, true)],
+            "recovering before anything was deleted"
+        );
+        assert!(capture.is_recovering());
+        assert!(!projected().await.unwrap(), "forgotten");
+        let again = tokio::spawn({
+            let (sink, msg) = (capture.sink.clone(), msg.clone());
+            async move { sink.append(msg).await.unwrap() }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!again.is_finished(), "capture waits for the replay");
+
+        hooks.released.add_permits(1);
+        let again = tokio::time::timeout(Duration::from_secs(10), again).await;
+        assert_eq!(again.expect("capture never resumed").unwrap(), Appended::Duplicate);
+        assert!(capture.ready().await);
+        assert!(projected().await.unwrap());
+        let stored = store.all_tagged(&RecordTag::AiSession).await.unwrap();
+        assert_eq!(stored.len(), 1, "nothing was pushed twice");
+    }
+
+    /// A replay whose reprojection keeps being invalidated, pass after pass, until it gives up
+    /// leaves the store unavailable, however often it is replayed again: never ready with the
+    /// sidecar possibly missing records. At startup that is until restart; after a rebuild,
+    /// until a rebuild gets through.
+    #[rstest]
+    #[tokio::test]
+    async fn a_replay_that_keeps_being_invalidated_is_never_ready(
+        #[values(false, true)] at_startup: bool,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(store.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sidecar = AiSessionDatabase::open(&path).await.unwrap();
+        let msg = message_of("kept", "k1");
+        records.push(&msg).await.unwrap();
+        // Every watermark move fails, as when an invalidation lands in the middle of each pass.
+        let fault =
+            atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
+        let invalidate = async || {
+            atuin_common::db::query(
+                "CREATE TRIGGER invalidate BEFORE INSERT ON reproject_watermark BEGIN SELECT \
+                 RAISE(IGNORE); END",
+            )
+            .execute(fault.pool())
+            .await
+            .unwrap();
+        };
+        if at_startup {
+            invalidate().await;
+        }
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        if !at_startup {
+            assert!(capture.ready().await);
+            invalidate().await;
+            capture.rebuild().await.unwrap();
+        }
+        let settled = tokio::time::timeout(Duration::from_secs(10), capture.ready());
+        assert!(!settled.await.expect("never settled"), "ready, though incomplete");
+        assert!(matches!(capture.sink.append(msg.clone()).await, Err(AppendError::Unavailable)));
+
+        atuin_common::db::query("DROP TRIGGER invalidate").execute(fault.pool()).await.unwrap();
+        if at_startup {
+            assert!(matches!(capture.rebuild().await, Err(RebuildError::Unavailable)));
+            return;
+        }
+        capture.rebuild().await.unwrap();
+        assert!(capture.ready().await);
+        assert_eq!(capture.sink.append(msg).await.unwrap(), Appended::Duplicate);
+        let stored = store.all_tagged(&RecordTag::AiSession).await.unwrap();
+        assert_eq!(stored.len(), 1, "nothing was pushed twice");
     }
 
     /// After a failed startup recovery, capture never started and the store stays unavailable

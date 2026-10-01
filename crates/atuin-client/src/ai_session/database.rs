@@ -1655,6 +1655,24 @@ impl AiSessionDatabase {
     /// Returns whether it forgot the watermarks of hosts other than `host`, which a reprojection
     /// in progress must replay again.
     pub async fn forget_host(&self, host: HostId) -> Result<bool, DbError> {
+        let forgot = self.forget_host_sparing(host, None).await?;
+        Ok(forgot.expect("nothing is spared"))
+    }
+
+    /// [`Self::forget_host`], unless `host` is `spare` or that would delete a row of `spare` (or
+    /// of unknown host, which may be `spare`'s): then it does nothing, and returns None. In one
+    /// transaction, so a row of `spare` appended meanwhile is either seen, or appended after the
+    /// deletes.
+    ///
+    /// For forgetting another host while this one's capture runs: capture dedups a line it
+    /// captured again against the row it pushed for it, a row of this host, so deleting none of
+    /// this host's rows keeps every line it pushed deduplicated.
+    pub async fn forget_host_sparing(
+        &self,
+        host: HostId,
+        spare: Option<HostId>,
+    ) -> Result<Option<bool>, DbError> {
+        let spare = spare.map(Self::host_repr);
         let host = Self::host_repr(host);
         let tag = RecordTag::AiSession.as_str();
         let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
@@ -1684,6 +1702,13 @@ impl AiSessionDatabase {
         .bind(&host)
         .fetch_all(&mut *tx)
         .await?;
+        if let Some(spare) = &spare
+            && (*spare == host
+                || contributors.iter().any(|c| c.as_ref().is_none_or(|c| c == spare)))
+        {
+            tx.rollback().await?;
+            return Ok(None);
+        }
 
         for sql in [
             "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE session IN \
@@ -1739,7 +1764,7 @@ impl AiSessionDatabase {
         Self::bump_generation(&mut tx).await?;
 
         tx.commit().await?;
-        Ok(!contributors.is_empty())
+        Ok(Some(!contributors.is_empty()))
     }
 
     /// Group every session afresh under its top-most stored ancestor, following the parent else
