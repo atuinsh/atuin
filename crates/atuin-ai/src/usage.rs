@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use atuin_api_client::ApiBody;
+use atuin_api_client::{ApiBody, Client};
 use atuin_api_client::types::UsageSnapshot;
 use eyre::Result;
 use reqwest::Url;
@@ -82,7 +82,7 @@ pub fn cache_key(token: &SecretString) -> String {
 /// Fetch current usage from the hub. Mirrors the `credits` object on the
 /// chat `done` event, for refreshing without starting a chat.
 pub async fn fetch_usage(endpoint: &Url, token: &SecretString) -> Result<UsageSnapshot> {
-    Ok(crate::api::client(endpoint, Some(token))?.get_usage().body().await?)
+    Ok(Client::for_ai(endpoint, Some(token))?.get_usage().body().await?)
 }
 
 #[cfg(test)]

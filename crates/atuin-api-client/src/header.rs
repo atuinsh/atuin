@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_USER_AGENT};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, InvalidHeaderValue, USER_AGENT};
 use secrecy::zeroize::Zeroizing;
@@ -41,6 +43,28 @@ impl Client {
             headers.insert(AUTHORIZATION, authorization("Bearer", token)?);
         }
         let http = reqwest::Client::builder().default_headers(headers).build()?;
+        Ok(Self::from_http(endpoint, http)?)
+    }
+
+    /// A client for the AI server at `endpoint` that sends `token`, if any, as a bearer.
+    ///
+    /// Sends `User-Agent` and nothing of the sync client's (no `extra_headers`, `Atuin-Version` or
+    /// capability headers), since `ai.endpoint` can be a third-party origin.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientBuildError`] when the token cannot be a header, TLS cannot be set up, or `endpoint`
+    /// cannot be a base URL.
+    pub fn for_ai(endpoint: &Url, token: Option<&SecretString>) -> Result<Self, ClientBuildError> {
+        // Bounds a whole call, answer body included.
+        const TIMEOUT: Duration = Duration::from_secs(10);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(USER_AGENT, HeaderValue::from_static(ATUIN_USER_AGENT));
+        if let Some(token) = token {
+            headers.insert(AUTHORIZATION, authorization("Bearer", token)?);
+        }
+        let http = reqwest::Client::builder().default_headers(headers).timeout(TIMEOUT).build()?;
         Ok(Self::from_http(endpoint, http)?)
     }
 }

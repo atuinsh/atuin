@@ -1,4 +1,3 @@
-pub(crate) mod api;
 pub mod commands;
 pub(crate) mod context;
 pub(crate) mod context_window;
