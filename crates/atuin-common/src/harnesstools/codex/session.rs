@@ -66,7 +66,7 @@ pub(crate) fn resume_id(id: &str) -> &str {
 /// Where Codex moves the rollouts of a thread the user archives: `archived_sessions/` beside
 /// `sessions/` (codex-rs `ARCHIVED_SESSIONS_SUBDIR`, `archive_thread.rs`), flat, each keeping
 /// its name. `None` for a root not named `sessions`, which has no such sibling.
-fn archive_of(root: &Path) -> Option<PathBuf> {
+pub(super) fn archive_of(root: &Path) -> Option<PathBuf> {
     (root.file_name()? == "sessions").then(|| root.with_file_name("archived_sessions"))
 }
 
@@ -149,7 +149,7 @@ impl Observable for Codex {
 /// thread's history since the revert and names the rollout before it as its `history_base`.
 /// Such a file keeps both ids as its session, so it never shares one with the thread's earlier
 /// rollout (see [`thread_of`]).
-fn session_id_of(stem: &str) -> SessionId {
+pub(super) fn session_id_of(stem: &str) -> SessionId {
     const UUID_LEN: usize = 36;
     if let Some((head, rollout)) = stem.rsplit_once('_')
         && let Some(thread) = head.len().checked_sub(UUID_LEN).and_then(|at| head.get(at..))
@@ -698,7 +698,7 @@ fn ends_with_ignore_case(text: &str, suffix: &str) -> bool {
 
 /// Whether `text` is a fragment of harness-injected context rather than something the user
 /// typed (codex-rs `is_contextual_user_fragment`).
-fn is_contextual_user_text(text: &str) -> bool {
+pub(super) fn is_contextual_user_text(text: &str) -> bool {
     let text = text.trim();
     CONTEXTUAL_USER_MARKERS.iter().any(|(start, end)| {
         starts_with_ignore_case(text, start) && ends_with_ignore_case(text, end)
