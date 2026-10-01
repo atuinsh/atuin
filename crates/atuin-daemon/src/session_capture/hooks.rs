@@ -7,6 +7,12 @@ use futures::future::BoxFuture;
 /// Where a hook runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Point {
+    /// Holding capture's lock, before wiping.
+    WipeLocked,
+    /// The wipe done, capture's lock released.
+    AfterWipe,
+    /// A replay's reprojection gave up, invalidated pass after pass (to count them).
+    ReplayIncomplete,
     /// A replay has reprojected, before reporting. A panic fault panics it.
     ReplayBeforeSettle,
 }
@@ -23,4 +29,9 @@ pub enum Fault {
 
 pub trait Hooks: Send + Sync + Debug {
     fn at(&self, point: Point) -> BoxFuture<'_, Fault>;
+
+    /// The backoff the coordinator waits out between incomplete replays.
+    fn backoff(&self) -> super::recovery::Backoff {
+        super::recovery::Backoff::DEFAULT
+    }
 }

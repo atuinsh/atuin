@@ -17,8 +17,8 @@ use crate::record::sqlite_store::SqliteStore;
 const REPROJECT_PAGE: u64 = 512;
 
 /// How many times one reprojection starts over after an invalidation lands in the middle of it.
-/// Past that it gives up for now: the invalidation cleared the watermarks it concerned, so the
-/// next reprojection replays whatever this one left.
+/// Past that it gives up for now with [`BuildError::Incomplete`]: the invalidation cleared the
+/// watermarks it concerned, so the next reprojection replays whatever this one left.
 const REPROJECT_PASSES: usize = 4;
 
 #[derive(Debug, Clone, TypedBuilder)]
@@ -55,6 +55,16 @@ pub enum BuildError {
     Store(#[from] eyre::Report),
     #[error(transparent)]
     Db(#[from] DbError),
+    /// Invalidations kept landing in the middle of it: after `REPROJECT_PASSES` passes the
+    /// sidecar may still be missing records. The next reprojection replays what this one left.
+    #[error("the ai-session projection kept being invalidated, and is incomplete")]
+    Incomplete,
+    /// Only [`AiSessionStore::reproject_beside_capture`]: the host's series was rewritten or
+    /// deleted under its watermark, and forgetting what it projected would delete rows of this
+    /// host, which capture dedups against. Nothing was forgotten: the caller must have it
+    /// forgotten with capture held off, then replay.
+    #[error("the ai-session records of host {0} were rewritten under capture")]
+    ForgetHeldOff(HostId),
 }
 
 impl AiSessionRecord {
@@ -177,16 +187,17 @@ impl AiSessionStore {
     /// migration, maintenance command or key change) is replayed from its start, as is one
     /// rewritten under its watermark.
     ///
-    /// Safe beside live capture: this host's series is replayed under
-    /// [`AiSessionDatabase::lock_local_projection`], which capture holds too. So it runs both at
-    /// startup and after each sync, which is what projects this host's own records arriving from
-    /// the server (a reinstall that kept its host id) before capture, which dedups against the
-    /// sidecar, pushes them again.
+    /// This host's series is replayed under [`AiSessionDatabase::lock_local_projection`], which
+    /// capture holds too. But a series found rewritten or deleted has what it projected forgotten
+    /// ([`AiSessionDatabase::forget_host`]), which can delete rows of this host that capture
+    /// dedups against: so this is for while capture is held off (startup recovery, a rebuild).
+    /// Beside capture, see [`Self::reproject_beside_capture`].
     ///
-    /// An invalidation landing meanwhile is noticed, and the reprojection starts over. Continues
-    /// past a failed series, but reports it so callers do not enable capture against a
-    /// projection missing already-persisted messages; that series' watermark stays below the
-    /// failure, so the next reprojection retries it.
+    /// An invalidation landing meanwhile is noticed, and the reprojection starts over, up to
+    /// `REPROJECT_PASSES` times, then fails with [`BuildError::Incomplete`]. Continues past a
+    /// failed series, but reports it so callers do not enable capture against a projection
+    /// missing already-persisted messages; that series' watermark stays below the failure, so
+    /// the next reprojection retries it.
     pub async fn reproject(&self, db: &AiSessionDatabase) -> Result<Reprojected, BuildError> {
         self.reproject_with(db, &ReprojectProgress::default()).await
     }
@@ -197,6 +208,32 @@ impl AiSessionStore {
         db: &AiSessionDatabase,
         progress: &ReprojectProgress,
     ) -> Result<Reprojected, BuildError> {
+        self.reproject_as(db, progress, Forgetting::HeldOff).await
+    }
+
+    /// [`Self::reproject`], safe beside live capture, for projecting what a sync downloaded:
+    /// this host's own records can arrive from the server (a reinstall that kept its host id),
+    /// and must be projected before capture, which dedups against the sidecar, pushes them again.
+    ///
+    /// It forgets only series whose forgetting deletes no row of this host: capture dedups a line
+    /// it captured again against the row of this host it pushed for it. A series whose forgetting
+    /// would (this host's own, rewritten or deleted under its watermark, or another host's that
+    /// added rows to this host's sessions) is skipped, forgetting nothing, and once the other
+    /// series are projected this fails with [`BuildError::ForgetHeldOff`] naming its host (the
+    /// first, if several).
+    pub async fn reproject_beside_capture(
+        &self,
+        db: &AiSessionDatabase,
+    ) -> Result<Reprojected, BuildError> {
+        self.reproject_as(db, &ReprojectProgress::default(), Forgetting::BesideCapture).await
+    }
+
+    async fn reproject_as(
+        &self,
+        db: &AiSessionDatabase,
+        progress: &ReprojectProgress,
+        forgetting: Forgetting,
+    ) -> Result<Reprojected, BuildError> {
         let _running = db.lock_reprojection().await;
         if db.check_projection_key(&self.key.key_id().to_string()).await? {
             // Also the first time, on a fresh sidecar or one from before key tracking.
@@ -206,7 +243,7 @@ impl AiSessionStore {
         let mut stats = Reprojected::default();
         let mut result = None;
         for _ in 0..REPROJECT_PASSES {
-            match self.reproject_pass(db, &mut stats, progress).await {
+            match self.reproject_pass(db, &mut stats, progress, forgetting).await {
                 Ok(Pass::Done) => {
                     result = Some(Ok(()));
                     break;
@@ -228,7 +265,7 @@ impl AiSessionStore {
                     "ai-session projection kept being invalidated, leaving the rest for the next \
                      one"
                 );
-                Ok(stats)
+                Err(BuildError::Incomplete)
             }
         }
     }
@@ -238,6 +275,7 @@ impl AiSessionStore {
         db: &AiSessionDatabase,
         stats: &mut Reprojected,
         progress: &ReprojectProgress,
+        forgetting: Forgetting,
     ) -> Result<Pass, BuildError> {
         let mut marks = db.reproject_watermarks().await?;
         let mut series: Vec<(RecordSeriesKey, RecordIdx)> = self
@@ -266,11 +304,18 @@ impl AiSessionStore {
 
         let mut pass = Pass::Done;
         let mut failure = None;
+        // A series this must not forget (beside capture) is skipped, and left to the caller once
+        // the rest is projected.
+        let mut held_off = None;
         for (series, last) in series {
             let mark = marks.remove(&series);
-            match self.reproject_series(db, &series, last, mark, stats, progress).await {
+            match self.reproject_series(db, &series, last, mark, stats, progress, forgetting).await
+            {
                 Ok(Pass::Done) => {}
                 Ok(Pass::Invalidated) => pass = Pass::Invalidated,
+                Err(BuildError::ForgetHeldOff(host)) => {
+                    held_off.get_or_insert(host);
+                }
                 Err(err) => {
                     warn!(?err, host = %series.host_id, "failed to reproject ai-session records");
                     failure = Some(err);
@@ -283,20 +328,43 @@ impl AiSessionStore {
         for (series, _) in marks {
             if series.tag == RecordTag::AiSession {
                 warn!(host = %series.host_id, "ai-session records vanished from the record store");
-                if self.forget_host(db, series.host_id).await? {
-                    pass = Pass::Invalidated;
+                match self.forget_host(db, series.host_id, forgetting).await {
+                    Ok(true) => pass = Pass::Invalidated,
+                    Ok(false) => {}
+                    Err(BuildError::ForgetHeldOff(host)) => {
+                        held_off.get_or_insert(host);
+                        continue;
+                    }
+                    Err(err) => return Err(err),
                 }
                 stats.restarted += 1;
             }
         }
 
+        if let Some(host) = held_off {
+            return Err(BuildError::ForgetHeldOff(host));
+        }
         failure.map_or(Ok(pass), Err)
     }
 
-    /// [`AiSessionDatabase::forget_host`], under the local projection lock for this host.
-    async fn forget_host(&self, db: &AiSessionDatabase, host: HostId) -> Result<bool, DbError> {
-        let _local = self.lock_if_local(db, host).await;
-        db.forget_host(host).await
+    /// [`AiSessionDatabase::forget_host`], under the local projection lock for this host. Beside
+    /// capture, only if that deletes no row of this host (else [`BuildError::ForgetHeldOff`]).
+    async fn forget_host(
+        &self,
+        db: &AiSessionDatabase,
+        host: HostId,
+        forgetting: Forgetting,
+    ) -> Result<bool, BuildError> {
+        match forgetting {
+            Forgetting::HeldOff => {
+                let _local = self.lock_if_local(db, host).await;
+                Ok(db.forget_host(host).await?)
+            }
+            Forgetting::BesideCapture => db
+                .forget_host_sparing(host, Some(self.host_id))
+                .await?
+                .ok_or(BuildError::ForgetHeldOff(host)),
+        }
     }
 
     /// Capture's lock when `host` is this one: see [`AiSessionDatabase::lock_local_projection`].
@@ -314,6 +382,7 @@ impl AiSessionStore {
 
     /// Replay `series` past `mark`. [`Pass::Invalidated`] when an invalidation stopped it, or it
     /// forgot other hosts' watermarks, so that the reprojection goes round again.
+    #[expect(clippy::too_many_arguments)]
     async fn reproject_series(
         &self,
         db: &AiSessionDatabase,
@@ -322,6 +391,7 @@ impl AiSessionStore {
         mark: Option<Watermark>,
         stats: &mut Reprojected,
         progress: &ReprojectProgress,
+        forgetting: Forgetting,
     ) -> Result<Pass, BuildError> {
         let mut pass = Pass::Done;
         let (start, mut from) = match mark {
@@ -339,7 +409,7 @@ impl AiSessionStore {
                     );
                     // What the old series projected may no longer be in it. This forgets the
                     // series' watermark too.
-                    if self.forget_host(db, series.host_id).await? {
+                    if self.forget_host(db, series.host_id, forgetting).await? {
                         pass = Pass::Invalidated;
                     }
                     stats.restarted += 1;
@@ -450,6 +520,15 @@ enum Projected {
     Held,
 }
 
+/// Whether a reprojection may delete rows of this host when it forgets a series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Forgetting {
+    /// Capture is held off (the store is recovering), so it may.
+    HeldOff,
+    /// Capture runs, and dedups against this host's rows: it must not.
+    BesideCapture,
+}
+
 /// How a reprojection pass, or its replay of one series, ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pass {
@@ -470,7 +549,7 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{
-        AiSessionRecord, AiSessionStore, DecryptedData, Host, Key, Record, RecordId,
+        AiSessionRecord, AiSessionStore, BuildError, DecryptedData, Host, Key, Record, RecordId,
         RecordSeriesKey, RecordTag, RecordVersion, Reprojected, SqliteStore, Watermark,
     };
     use crate::ai_session::{
@@ -979,6 +1058,96 @@ mod tests {
         let source_1 = crate::ai_session::SourceId::from("source-1".to_owned());
         assert!(db.contains_message(&handle, &source_1).await.unwrap(), "the replay restored it");
         assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(5));
+    }
+
+    /// A reprojection invalidated pass after pass gives up as incomplete, rather than report a
+    /// sidecar that may be missing records as projected; the next one replays what it left.
+    #[rstest]
+    #[tokio::test]
+    async fn a_reprojection_invalidated_every_pass_is_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.db");
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        push_range(&s, &sample_handle(), 0..3).await;
+        let db = AiSessionDatabase::open(&path).await.unwrap();
+
+        // Every watermark move fails, as when an invalidation lands in the middle of each pass.
+        let raw = atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
+        atuin_common::db::query(
+            "CREATE TRIGGER invalidate BEFORE INSERT ON reproject_watermark BEGIN SELECT \
+             RAISE(IGNORE); END",
+        )
+        .execute(raw.pool())
+        .await
+        .unwrap();
+        assert!(matches!(s.reproject(&db).await, Err(BuildError::Incomplete)));
+        assert!(matches!(s.reproject_beside_capture(&db).await, Err(BuildError::Incomplete)));
+        assert_eq!(mark(&db, &s).await, None);
+
+        atuin_common::db::query("DROP TRIGGER invalidate").execute(raw.pool()).await.unwrap();
+        s.reproject(&db).await.unwrap();
+        assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(2));
+    }
+
+    /// Beside capture, a reprojection never deletes a row of this host, which capture dedups
+    /// against: a series whose forgetting would (this host's own, or another's that added rows
+    /// to this host's sessions) is left to the caller, and nothing is forgotten. Another host's
+    /// series whose sessions hold no row of this host is forgotten there and then.
+    #[rstest]
+    #[tokio::test]
+    async fn beside_capture_a_reprojection_never_forgets_this_hosts_rows() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        // `a` is this host.
+        let [a, b, c] = <[_; 3]>::try_from(writers(&store, 3)).ok().unwrap();
+        let (mine, shared, theirs) =
+            (session_named("mine"), session_named("shared"), session_named("theirs"));
+        push_range(&a, &mine, 0..2).await;
+        // `b` captured `shared`, and `a` added a row to it.
+        push_range(&b, &shared, 10..12).await;
+        push_range(&a, &shared, 12..13).await;
+        push_range(&c, &theirs, 20..22).await;
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        a.reproject(&db).await.unwrap();
+        let delete_all_of = async |host: HostId| {
+            for r in store.all_tagged(&RecordTag::AiSession).await.unwrap() {
+                if r.host.id == host {
+                    store.delete(r.id).await.unwrap();
+                }
+            }
+        };
+
+        // Host c's store is reset: its sessions hold no row of `a`, so it is forgotten.
+        delete_all_of(c.host_id).await;
+        push_range(&c, &session_named("again"), 30..31).await;
+        a.reproject_beside_capture(&db).await.unwrap();
+        assert_eq!(count(&db, &theirs).await, None);
+        assert_eq!(count(&db, &session_named("again")).await, Some(1));
+
+        // Host b's: forgetting it would delete a's row in `shared`. It is skipped, and the other
+        // series projected.
+        delete_all_of(b.host_id).await;
+        push_range(&b, &session_named("anew"), 40..41).await;
+        push_range(&c, &session_named("again"), 31..32).await;
+        let err = a.reproject_beside_capture(&db).await.unwrap_err();
+        assert!(matches!(err, BuildError::ForgetHeldOff(host) if host == b.host_id), "{err:?}");
+        assert_eq!(count(&db, &shared).await, Some(3), "nothing was forgotten");
+        assert_eq!(count(&db, &session_named("anew")).await, None);
+        assert_eq!(count(&db, &session_named("again")).await, Some(2));
+        // With capture held off, it is.
+        a.reproject(&db).await.unwrap();
+        assert_eq!(count(&db, &shared).await, Some(1), "a's row alone came back");
+
+        // This host's own series rewritten under its watermark (reset, and pushed again).
+        delete_all_of(a.host_id).await;
+        push_range(&a, &mine, 0..2).await;
+        let err = a.reproject_beside_capture(&db).await.unwrap_err();
+        assert!(matches!(err, BuildError::ForgetHeldOff(host) if host == a.host_id), "{err:?}");
+        assert_eq!(count(&db, &mine).await, Some(2), "nothing was forgotten");
+        assert_eq!(count(&db, &shared).await, Some(1));
+        a.reproject(&db).await.unwrap();
+        assert_eq!(count(&db, &mine).await, Some(2));
+        assert_eq!(count(&db, &shared).await, None, "its row went with the old series");
     }
 
     /// Forgetting a host deletes its sessions whole, rows other hosts added included, so those

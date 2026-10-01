@@ -8,6 +8,8 @@ use atuin_client::ai_session::AiSessionDatabase;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use worker::Worker;
+#[cfg(test)]
+pub use worker::spawn_ai_session_projector;
 
 use crate::daemon::DaemonHandle;
 use crate::search::SearchIndex;
