@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, SourceId};
 use atuin_client::settings::{AiSessionFilterMode as FilterMode, KeymapMode, Settings};
 use atuin_client::theme::Meaning;
 use atuin_client::tui::cursor::Cursor;
@@ -18,7 +18,8 @@ use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind
 use ratatui::layout::{Position, Rect};
 use time::OffsetDateTime;
 
-use super::chooser::{Chooser, ListAnchor};
+use super::catchup::Synced;
+use super::chooser::{Chooser, ListAnchor, Warning};
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
 use super::rebuild::Rebuilding;
@@ -35,8 +36,11 @@ pub const LIVE_SECS: u64 = 120;
 pub const PREVIEW: u8 = 0;
 pub const CHILDREN: u8 = 1;
 pub const PLAN: u8 = 2;
-/// Restoring the session's transcript from sync, once an action is waiting on it.
-pub const RESTORE: u8 = 3;
+/// Catching the session's transcript up with sync (or restoring it), once an action is waiting
+/// on it.
+pub const SYNC: u8 = 3;
+/// Reading the session's heads as they are now, once an action is waiting on them.
+pub const HEADS: u8 = 4;
 
 /// How many rows a search asks for.
 pub const SEARCH_LIMIT: usize = 500;
@@ -225,13 +229,34 @@ pub struct State {
     pub chooser: Option<Chooser>,
     /// Where the selected row was last drawn, for the chooser to open against.
     pub list_anchor: Option<ListAnchor>,
-    /// What continuing each session elsewhere would flatten, once read (see
+    /// What continuing each session elsewhere would flatten, by the head of the branch continued
+    /// (`None`: a session that went one way), once read (see
     /// [`Request::Flatten`](super::worker::Request::Flatten)); `Err` when it can't be read.
-    pub flattened: HashMap<HarnessSession, Result<Flattened, String>>,
+    pub flattened: HashMap<(HarnessSession, Option<SourceId>), Result<Flattened, String>>,
     /// The last flattening asked of the worker (which keeps only the newest).
-    pub flattening: Option<HarnessSession>,
+    pub flattening: Option<(HarnessSession, Option<SourceId>)>,
+    /// The branch picked in the chooser to continue in another harness, for a session with
+    /// several.
+    pub continue_from: HashMap<HarnessSession, SourceId>,
     /// A continuation being written, and what to do once it is.
     pub continuing: Option<(HarnessSession, HarnessKind, Pending)>,
+    /// Sessions caught up with sync to a head (or not), waiting for the action that asked.
+    pub synced: HashMap<HarnessSession, (Option<SourceId>, Result<Synced, NotResumable>)>,
+    /// Sessions whose copy here couldn't be caught up (see [`Synced::holds`]): the next accept
+    /// resumes them as they are.
+    pub as_is: HashSet<HarnessSession>,
+    /// The branch picked in the chooser, for a session with several.
+    pub picked: HashMap<HarnessSession, SourceId>,
+    /// The warning that resuming will branch a session another host is working on, while it's
+    /// open.
+    pub warning: Option<Warning>,
+    /// Sessions the user was warned about and resumes anyway.
+    pub confirmed: HashSet<HarnessSession>,
+    /// Sessions whose heads were just read again (see
+    /// [`Request::Heads`](super::worker::Request::Heads)), for the action waiting on them.
+    pub fresh_heads: HashSet<HarnessSession>,
+    /// What to tell the user once the picker is gone.
+    pub note: Option<String>,
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
@@ -281,7 +306,15 @@ impl State {
             list_anchor: None,
             flattened: HashMap::new(),
             flattening: None,
+            continue_from: HashMap::new(),
             continuing: None,
+            synced: HashMap::new(),
+            as_is: HashSet::new(),
+            picked: HashMap::new(),
+            warning: None,
+            confirmed: HashSet::new(),
+            fresh_heads: HashSet::new(),
+            note: None,
             status: None,
             rebuilding: None,
             now: if settings.prefers_reduced_motion {
@@ -626,7 +659,7 @@ impl State {
     /// the panes' areas are, inline or not.
     fn handle_mouse_input(&mut self, settings: &Settings, event: MouseEvent) -> InputAction {
         // The chooser is for the session it opened on.
-        if self.chooser.is_some() {
+        if self.chooser.is_some() || self.warning.is_some() {
             return InputAction::Continue;
         }
         let down = match event.kind {
@@ -678,6 +711,9 @@ impl State {
         let Some(single) = SingleKey::from_event(input) else {
             return InputAction::Continue;
         };
+        if self.warning.is_some() {
+            return self.warning_key(&single);
+        }
         if self.chooser.is_some() {
             return self.chooser_key(&single);
         }

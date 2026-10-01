@@ -4,16 +4,19 @@
 //! It covers all four harnesses, forks and subagents grouped under their roots, sessions from other
 //! hosts, a deleted worktree (missing cwd), and live sessions (updated in the last two minutes).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
+use atuin_client::ai_session::{
+    HarnessKind, HarnessSession, Head, NativeSessionId, SessionHeads, SourceId,
+};
 use atuin_common::harnesstools::Harness as _;
 use atuin_common::harnesstools::continuation::Flattened;
-use atuin_common::harnesstools::rehydrate::RehydrateSession;
+use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use atuin_common::harnesstools::resume::CwdRequirement;
-use atuin_common::harnesstools::session::Usage;
+use atuin_common::harnesstools::session::{Content, Role as MessageRole, Usage};
+use atuin_domain::record::HostId;
 use time::{Duration, OffsetDateTime};
 
 use super::ResumeContext;
@@ -60,6 +63,8 @@ pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
         usage: Usage::default(),
         children: 0,
         matched: None,
+        heads: Vec::new(),
+        diverged: false,
     }
 }
 
@@ -86,6 +91,7 @@ struct FakeSession {
 
 pub struct FakeSource {
     sessions: Vec<FakeSession>,
+    branches: HashMap<HarnessSession, FakeBranches>,
 }
 
 struct Spec {
@@ -105,6 +111,120 @@ struct Spec {
 pub const OTHER_HOST_ID: &str = "01900000000070008000000000000002";
 const OTHER_HOST: &str = OTHER_HOST_ID;
 const LAPTOP: &str = "01900000000070008000000000000003";
+/// The session that went on separately here and on buildbox: two branches.
+pub const DIVERGED: &str = "b2c4d6e8-0a1b-4c3d-8e5f-6a7b8c9d0e1f";
+
+/// A host id, from its simple form.
+pub fn host(id: &str) -> HostId {
+    HostId(uuid::Uuid::try_parse(id).expect("a fake host id is a UUID"))
+}
+
+/// A session's branches, for [`FakeSource::with_branches`]: its heads, and every row it holds,
+/// each hanging from its parent.
+#[derive(Clone, Debug, Default)]
+pub struct FakeBranches {
+    pub heads: SessionHeads,
+    pub rows: Vec<RehydrateMessage>,
+    /// Whether the rows handed back name no parent, as Codex's don't (the sidecar strings them
+    /// together by number).
+    pub parentless: bool,
+}
+
+impl FakeBranches {
+    /// The rows from the root down to `head`, following parents.
+    pub fn path(&self, head: &str) -> Vec<RehydrateMessage> {
+        let by_id: HashMap<&str, &RehydrateMessage> =
+            self.rows.iter().map(|r| (r.source_id.as_str(), r)).collect();
+        let mut path = Vec::new();
+        let mut at = by_id.get(head).copied();
+        while let Some(row) = at {
+            path.push(row.clone());
+            at = row.parent_source_id.as_deref().and_then(|p| by_id.get(p).copied());
+        }
+        path.reverse();
+        if self.parentless {
+            for row in &mut path {
+                row.parent_source_id = None;
+            }
+        }
+        path
+    }
+}
+
+/// One row of a fake transcript, `minutes` before [`now()`].
+pub fn line(
+    id: &str,
+    parent: Option<&str>,
+    user: bool,
+    text: &str,
+    minutes: i64,
+) -> RehydrateMessage {
+    RehydrateMessage {
+        source_id: id.to_owned(),
+        parent_source_id: parent.map(str::to_owned),
+        timestamp: now() - Duration::minutes(minutes),
+        role: if user {
+            MessageRole::User
+        } else {
+            MessageRole::Assistant
+        },
+        content: vec![Content::Text(text.to_owned())],
+        model: None,
+        usage: None,
+        stop_reason: None,
+        turn_id: None,
+        cwd: None,
+        git_branch: None,
+        seq: None,
+    }
+}
+
+/// `n` rows `<prefix>1`, `<prefix>2`, …, prompts and replies in turn, hanging from `from` and
+/// ending `minutes` before [`now()`].
+pub fn chain(prefix: &str, n: usize, from: Option<&str>, minutes: i64) -> Vec<RehydrateMessage> {
+    let mut parent = from.map(str::to_owned);
+    (1..=n)
+        .map(|i| {
+            let id = format!("{prefix}{i}");
+            let ago = minutes + i64::try_from(n - i).unwrap_or(0);
+            let row = line(&id, parent.as_deref(), i % 2 == 1, &format!("{prefix} {i}"), ago);
+            parent = Some(id);
+            row
+        })
+        .collect()
+}
+
+/// The branches of [`DIVERGED`]: six rows shared, then 40 on buildbox (the newest, 5h ago) and 24
+/// here (yesterday).
+pub fn diverged_branches() -> FakeBranches {
+    let mut rows = chain("s", 6, None, 60 * 30);
+    rows.extend(chain("b", 40, Some("s6"), 60 * 5));
+    rows.extend(chain("h", 24, Some("s6"), 60 * 24));
+    FakeBranches {
+        heads: SessionHeads {
+            heads: vec![
+                Head {
+                    source_id: SourceId::from("b40".to_owned()),
+                    host: Some(host(OTHER_HOST_ID)),
+                    last_at: now() - Duration::hours(5),
+                    rows: 40,
+                    messages: 40,
+                },
+                Head {
+                    source_id: SourceId::from("h24".to_owned()),
+                    host: Some(host(THIS_HOST_ID)),
+                    last_at: now() - Duration::hours(24),
+                    rows: 24,
+                    messages: 24,
+                },
+            ],
+            branch_point: Some(SourceId::from("s6".to_owned())),
+            diverged: true,
+        },
+        rows,
+        parentless: false,
+    }
+}
 const HERE: &str = THIS_HOST_ID;
 
 fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSession {
@@ -149,6 +269,8 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
             },
             children: 0,
             matched: None,
+            heads: Vec::new(),
+            diverged: false,
         },
         parent: parent.map(|p| p.handle.clone()),
         root: None,
@@ -433,6 +555,7 @@ impl FakeSource {
                 host: HERE,
                 age: h(5),
                 duration: h(2),
+                // Six shared, then 40 on buildbox and 24 here (see `diverged_branches`).
                 msgs: 70,
                 messages: vec![
                     (U, "Sketch how dotfiles sync should handle conflicting aliases."),
@@ -662,7 +785,39 @@ impl FakeSource {
             s.root = root;
         }
 
-        Self { sessions }
+        let dotfiles = handle(ClaudeCode, DIVERGED);
+        Self {
+            sessions,
+            branches: HashMap::new(),
+        }
+        .with_branches(&dotfiles, diverged_branches())
+    }
+
+    /// The same sessions, `session` holding `branches`: its rows show their heads, and it
+    /// reads its branches from them.
+    pub fn with_branches(mut self, session: &HarnessSession, branches: FakeBranches) -> Self {
+        for s in self.sessions.iter_mut().filter(|s| &s.row.handle == session) {
+            s.row.heads.clone_from(&branches.heads.heads);
+            s.row.diverged = branches.heads.diverged;
+        }
+        self.branches.insert(session.clone(), branches);
+        self
+    }
+
+    /// A source holding only `row`, with `branches`.
+    #[cfg(test)]
+    pub fn only(row: SessionRow, branches: FakeBranches) -> Self {
+        let handle = row.handle.clone();
+        Self {
+            sessions: vec![FakeSession {
+                row,
+                parent: None,
+                root: None,
+                messages: Vec::new(),
+            }],
+            branches: HashMap::new(),
+        }
+        .with_branches(&handle, branches)
     }
 
     /// A source holding only `rows`.
@@ -678,6 +833,7 @@ impl FakeSource {
                     messages: Vec::new(),
                 })
                 .collect(),
+            branches: HashMap::new(),
         }
     }
 
@@ -858,8 +1014,24 @@ impl SessionSource for FakeSource {
             git_branch: row.branch.clone(),
             model: row.model.clone(),
             started_at: row.started_at,
-            messages: Vec::new(),
+            messages: self.branches.get(session).map(|b| b.rows.clone()).unwrap_or_default(),
         })
+    }
+
+    async fn heads(&self, session: &HarnessSession) -> eyre::Result<Option<SessionHeads>> {
+        Ok(self.branches.get(session).map(|b| b.heads.clone()))
+    }
+
+    async fn branch(
+        &self,
+        session: &HarnessSession,
+        head: &SourceId,
+        cwd: &Path,
+    ) -> eyre::Result<RehydrateSession> {
+        let mut out = self.rehydrate(session, cwd).await?;
+        out.messages =
+            self.branches.get(session).map(|b| b.path(head.as_ref())).unwrap_or_default();
+        Ok(out)
     }
 }
 
@@ -949,6 +1121,7 @@ impl Resumer for FakeResumer {
         _source: &dyn SessionSource,
         session: &SessionRow,
         target: HarnessKind,
+        _head: Option<&SourceId>,
     ) -> Result<Continued, NotResumable> {
         let mut row = session.clone();
         row.handle = HarnessSession {

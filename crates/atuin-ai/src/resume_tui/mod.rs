@@ -3,12 +3,14 @@
 //! A ratatui view built to look and behave like the history search (`atuin search -i`): the same
 //! header, tabs and `[ MODE ] >` input box, preview pane, `invert`/`style`/`inline_height`, enter
 //! vs tab accept, and emacs/vim keymaps ([`keymap`]). Accepting a session asks where to resume
-//! it: in its own harness, or continued in another ([`chooser`]).
+//! it: in its own harness, or continued in another ([`chooser`]). Resuming it in its own harness
+//! first catches this machine's copy up with sync ([`catchup`]).
 //!
 //! It depends on two seams:
 //! - [`SessionSource`] lists, searches and previews sessions;
 //! - [`Resumer`] turns a session into a resume command, or says why it can't be resumed.
 
+pub mod catchup;
 pub mod chooser;
 pub mod clock;
 #[cfg(test)]
@@ -41,8 +43,9 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 
+use self::catchup::Synced;
 use self::resumer::{Continued, NotResumable, Resume};
-use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, RESTORE, State};
+use self::state::{CHILDREN, HEADS, InputAction, PLAN, PREVIEW, Pending, SYNC, State};
 use self::worker::{Request, Requests, Response};
 
 /// How often the picker redraws on its own.
@@ -204,8 +207,8 @@ fn request_details(state: &mut State, requests: &Requests, settle: &mut Settle) 
     request_flatten(state, requests);
 }
 
-/// While the chooser is open, read what continuing the session in another harness would flatten,
-/// if it isn't known yet.
+/// While the chooser is open, read what continuing the branch its harness lines are for (the
+/// session, when it went one way) would flatten, if it isn't known yet.
 fn request_flatten(state: &mut State, requests: &Requests) {
     let Some(chooser) = &state.chooser else {
         return;
@@ -213,12 +216,12 @@ fn request_flatten(state: &mut State, requests: &Requests) {
     if chooser.targets.is_empty() {
         return;
     }
-    let session = chooser.session.clone();
-    if state.flattened.contains_key(&session) || state.flattening.as_ref() == Some(&session) {
+    let key = (chooser.session.clone(), chooser.continued().map(|h| h.source_id.clone()));
+    if state.flattened.contains_key(&key) || state.flattening.as_ref() == Some(&key) {
         return;
     }
-    requests.send(Request::Flatten(session.clone(), state.context.cwd.clone()));
-    state.flattening = Some(session);
+    requests.send(Request::Flatten(key.0.clone(), key.1.clone(), state.context.cwd.clone()));
+    state.flattening = Some(key);
 }
 
 fn request_plan(state: &mut State, requests: &Requests, row: &SessionRow) {
@@ -265,12 +268,22 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
             state.plans.insert(handle, plan);
             state.settle_chooser();
         }
-        Response::Restored(handle, plan) => {
-            state.requested.remove(&(handle.clone(), RESTORE));
-            state.plans.insert(handle, plan.map(Resume::ready));
+        Response::Synced(handle, head, synced) => {
+            state.requested.remove(&(handle.clone(), SYNC));
+            state.synced.insert(handle, (head, synced));
         }
-        Response::Flattened(handle, flattened) => {
-            state.flattened.insert(handle, flattened);
+        Response::Flattened(handle, head, flattened) => {
+            state.flattened.insert((handle, head), flattened);
+        }
+        Response::Heads(handle, heads) => {
+            state.requested.remove(&(handle.clone(), HEADS));
+            if let Some(heads) = heads {
+                for row in state.results.iter_mut().filter(|r| r.handle == handle) {
+                    row.heads.clone_from(&heads.heads);
+                    row.diverged = heads.diverged;
+                }
+            }
+            state.fresh_heads.insert(handle);
         }
         // Handled by `finish_continuation`, which may end the picker.
         Response::Continued(..) => {}
@@ -278,8 +291,9 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
 }
 
 /// Carry out `action` for the session acted on ([`State::target`]) once its plan is known,
-/// restoring the session from sync first when its transcript isn't here. `None` keeps the picker
-/// open (the plan or the restore is still coming, the session can't be resumed, or it was a copy).
+/// catching this machine's copy up with sync first (restoring it when it isn't here; see
+/// [`catchup`]). `None` keeps the picker open (the plan or the catch-up is still coming, the
+/// session can't be resumed, the user is asked first, or it was a copy).
 fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<Outcome> {
     let row = state.target()?.clone();
     let Some(plan) = state.plans.get(&row.handle).cloned() else {
@@ -293,35 +307,111 @@ fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<O
             None
         }
         (Ok(resume), Pending::Copy) => {
-            let line = resume_line(&row, &resume);
+            let line = resume_line(state, &row, &resume);
             copy(state, &line);
             None
         }
-        (
-            Ok(Resume {
-                restore: Some(restore),
-                ..
-            }),
-            action,
-        ) => {
-            if state.requested.insert((row.handle.clone(), RESTORE)) {
-                requests.send(Request::Restore(Box::new(row.clone()), restore.clone()));
-            }
-            let note = restore.note.map(|n| format!(": {n}")).unwrap_or_default();
-            state.status = Some((format!("restoring from sync…{note}"), Meaning::Annotation));
-            state.pending = Some((row.handle, action));
-            return None;
-        }
-        (Ok(resume), Pending::Resume) => Some(Outcome::Resume(resume.plan)),
-        (Ok(resume), Pending::Edit) => Some(Outcome::Edit(resume.plan)),
+        // Couldn't be caught up, and the user was told: as it is.
+        (Ok(resume), action) if state.as_is.contains(&row.handle) => Some(match action {
+            Pending::Resume => Outcome::Resume(resume.plan),
+            Pending::Edit | Pending::Copy => Outcome::Edit(resume.plan),
+        }),
+        (Ok(resume), action) => return catch_up(state, &row, &resume, action, requests),
     };
     state.pending = None;
     outcome
 }
 
+/// Resume (or edit) `row`, planned as `resume`, once its copy here is caught up with sync:
+/// warning first when another host may still be working on it, then asking the worker, then
+/// taking its answer.
+fn catch_up(
+    state: &mut State,
+    row: &SessionRow,
+    resume: &Resume,
+    action: Pending,
+    requests: &Requests,
+) -> Option<Outcome> {
+    let handle = &row.handle;
+    let head = state.picked.get(handle).cloned();
+    // An answer for another branch than the one picked now is dropped.
+    if let Some((for_head, synced)) = state.synced.remove(handle)
+        && for_head == head
+    {
+        state.pending = None;
+        return finish_sync(state, row, synced, action);
+    }
+    if !state.confirmed.contains(handle) {
+        // Whether another host is still at it is told from the heads as they are now: the row's
+        // are from the last search, which may be minutes old.
+        if !state.fresh_heads.remove(handle) {
+            if state.requested.insert((handle.clone(), HEADS)) {
+                requests.send(Request::Heads(handle.clone()));
+            }
+            state.pending = Some((handle.clone(), action));
+            return None;
+        }
+        if let Some(warning) = state.live_elsewhere(row, action) {
+            state.warning = Some(warning);
+            state.pending = None;
+            return None;
+        }
+    }
+    if state.requested.insert((handle.clone(), SYNC)) {
+        requests.send(Request::Sync(Box::new(row.clone()), head));
+    }
+    state.status = Some(match &resume.restore {
+        Some(restore) => {
+            let note = restore.note.as_ref().map(|n| format!(": {n}")).unwrap_or_default();
+            (format!("restoring from sync…{note}"), Meaning::Annotation)
+        }
+        None => ("catching up with sync…".to_owned(), Meaning::Annotation),
+    });
+    state.pending = Some((handle.clone(), action));
+    None
+}
+
+/// The worker's answer to a catch-up: the outcome that resumes it, leaving its status line as
+/// the note to print; or, when nothing could be written under a harness running it here (or
+/// writing failed), stay open saying why, the next enter resuming the copy here as it is.
+fn finish_sync(
+    state: &mut State,
+    row: &SessionRow,
+    synced: Result<Synced, NotResumable>,
+    action: Pending,
+) -> Option<Outcome> {
+    let synced = match synced {
+        Ok(synced) => synced,
+        Err(why) => {
+            state.status = Some((format!("can't resume: {why}"), Meaning::AlertError));
+            return None;
+        }
+    };
+    let status = synced.status(row.handle.harness, &|h| state.head_host(h));
+    if synced.holds() {
+        let status = status.unwrap_or_default();
+        state.status = Some((
+            format!("{status}; enter resumes this machine's copy as it is"),
+            Meaning::AlertWarn,
+        ));
+        state.as_is.insert(row.handle.clone());
+        state.plans.insert(row.handle.clone(), Ok(Resume::ready(synced.plan)));
+        return None;
+    }
+    if let Some(status) = &status {
+        state.status = Some((status.clone(), Meaning::AlertInfo));
+    }
+    state.note = status;
+    Some(match action {
+        Pending::Resume => Outcome::Resume(synced.plan),
+        Pending::Edit | Pending::Copy => Outcome::Edit(synced.plan),
+    })
+}
+
 /// Enter or tab on a session (or ctrl-y, which copies): ask where to resume it (the "Resume in"
-/// chooser, when `chooser` is on and another harness is installed to continue it in), or resume
-/// it in its own harness. In Inspect with the forks expanded, that's the fork highlighted.
+/// chooser, when `chooser` is on and another harness is installed to continue it in, or the
+/// session went on separately on several machines, to pick a branch), or resume it in its own
+/// harness. In Inspect with the forks expanded, that's the fork highlighted.
 fn accept(
     state: &mut State,
     action: Pending,
@@ -336,9 +426,14 @@ fn accept(
         state.requested.insert((row.handle.clone(), PLAN));
         requests.send(Request::Accept(Box::new(row.clone())));
     }
-    if chooser && action != Pending::Copy {
-        let targets = resumer.continue_targets(&row);
-        if !targets.is_empty() {
+    // A session with several branches always asks which (with only them, without `chooser`).
+    if (chooser || !row.branches().is_empty()) && action != Pending::Copy {
+        let targets = if chooser {
+            resumer.continue_targets(&row)
+        } else {
+            Vec::new()
+        };
+        if !targets.is_empty() || !row.branches().is_empty() {
             open_chooser(state, targets, action, requests);
             return None;
         }
@@ -400,10 +495,12 @@ fn start_continuation(
     if action == Pending::Copy {
         let id = resumer::quote(row.handle.session.as_ref());
         let into = source::harness_arg(target).unwrap_or_default();
-        copy(state, &format!("atuin ai resume {id} --in {into}"));
+        let branch = branch_arg(&row, state.continue_from.get(&row.handle));
+        copy(state, &format!("atuin ai resume {id} --in {into}{branch}"));
         return;
     }
-    let what = match state.flattened.get(&row.handle) {
+    let head = state.continue_from.get(&row.handle).cloned();
+    let what = match state.flattened.get(&(row.handle.clone(), head.clone())) {
         Some(Ok(flattened)) if !flattened.summary().is_empty() => {
             format!(": {}", flattened.summary())
         }
@@ -411,7 +508,7 @@ fn start_continuation(
     };
     state.status = Some((format!("continuing in {label}{what}…"), Meaning::Annotation));
     state.continuing = Some((row.handle.clone(), target, action));
-    requests.send(Request::Continue(Box::new(row), target));
+    requests.send(Request::Continue(Box::new(row), target, head));
 }
 
 /// A continuation is written (or failed): the outcome that resumes it, with the status line to
@@ -448,12 +545,24 @@ fn finish_continuation(
 
 /// What ctrl-y copies to resume `row`, planned as `resume`, in its own harness. Copying writes
 /// nothing, so when running the harness's own command wouldn't do (the session has to be
-/// restored from sync first), it is `atuin ai resume <id>`, which does that when run.
-fn resume_line(row: &SessionRow, resume: &Resume) -> String {
-    if resume.restore.is_none() {
+/// restored from sync first, or a branch was picked of one with several), it is `atuin ai
+/// resume <id>`, which does that when run, naming the branch picked with `--branch`.
+fn resume_line(state: &State, row: &SessionRow, resume: &Resume) -> String {
+    let branch = branch_arg(row, state.picked.get(&row.handle));
+    if resume.restore.is_none() && branch.is_empty() {
         return resumer::shell_line(&resume.plan);
     }
-    format!("atuin ai resume {}", resumer::quote(row.handle.session.as_ref()))
+    format!("atuin ai resume {}{branch}", resumer::quote(row.handle.session.as_ref()))
+}
+
+/// ` --branch <selector>` for `head`, when it is one of the branches of `row` (a session that went
+/// on separately on several machines), else nothing. The selector is the start of the branch's
+/// id ([`catchup::branch_selector`]), which names it for good, where its host may not.
+fn branch_arg(row: &SessionRow, head: Option<&atuin_client::ai_session::SourceId>) -> String {
+    let branches = row.branches();
+    head.and_then(|p| branches.iter().find(|h| &h.source_id == p)).map_or_else(String::new, |h| {
+        format!(" --branch {}", resumer::quote(&catchup::branch_selector(branches, h)))
+    })
 }
 
 /// Put `line` on the clipboard, saying so in the status row.
@@ -522,7 +631,8 @@ impl Picker<'_> {
         let mut last_input = std::time::Instant::now();
         let mut last_refresh = std::time::Instant::now();
         let mut settle = Settle::default();
-        // What to tell the user once the picker is gone (a continuation's status line).
+        // What to tell the user once the picker is gone (a continuation's status line; a
+        // catch-up's is left in `state.note`).
         let mut note = None;
         let outcome = 'render: loop {
             request_details(&mut state, &requests, &mut settle);
@@ -652,7 +762,7 @@ impl Picker<'_> {
                 crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
             )?;
         }
-        Ok((outcome, note))
+        Ok((outcome, note.or(state.note)))
     }
 }
 

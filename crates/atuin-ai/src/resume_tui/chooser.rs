@@ -10,10 +10,34 @@
 //! session, a directory that's gone, a harness that isn't installed), and the first line that
 //! works is preselected instead.
 //!
+//! A session that went on separately on several machines ([diverged](SessionRow::diverged))
+//! has a line of its own harness per branch instead, newest first and preselected: `@00000002 ·
+//! 5h · 40 msgs (latest)`, `this machine · yest · 24 msgs`. Picking one resumes that branch, in
+//! the same session ([`super::catchup`]). The branch lines also pick which branch the other
+//! harnesses' lines continue: under a heading naming it (`Continue @00000002's branch in:`),
+//! each saying what continuing that branch flattens. Moving onto a branch line makes it the one
+//! they continue; moving on down to them keeps it, marked `•`:
+//!
+//! ```text
+//! ╭ Resume in ───────────────────────────────────────────────────────╮
+//! │ 2 branches: it went on separately on several machines            │
+//! │   1 CC Claude Code  @00000002 · 5h · 40 msgs (latest)            │
+//! │ • 2 CC Claude Code  this machine · yest · 24 msgs                │
+//! │ Continue this machine's branch in:                               │
+//! │ > 3 CX Codex        3 tool calls become notes, reasoning dropped │
+//! │   4 PI Pi           3 tool calls become notes, reasoning dropped │
+//! │ <enter>: resume  <tab>: edit  <esc>: back                        │
+//! ╰──────────────────────────────────────────────────────────────────╯
+//! ```
+//!
 //! The chooser keeps the key's meaning: opened with enter it resumes (or edits, without
 //! `enter_accept`), opened with tab it edits, and tab in it always edits.
+//!
+//! Resuming a branch another host wrote to in the last few minutes
+//! ([`LIVE_ELSEWHERE`](super::catchup::LIVE_ELSEWHERE)) first asks, in a [`Warning`] popup:
+//! resuming it here will branch the session.
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, Head};
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
 use atuin_client::tui::key::{KeyCodeValue, SingleKey};
@@ -27,9 +51,10 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use super::catchup::{self, describe, host_label};
 use super::render::{harness_style, is_live, style};
 use super::resumer::NotResumable;
-use super::source::{harness_badge, harness_label};
+use super::source::{SessionRow, harness_badge, harness_label};
 use super::state::{InputAction, Pending, State};
 
 /// The chooser, while it's open.
@@ -47,23 +72,59 @@ pub struct Chooser {
     /// Whether the selection was moved by hand: if not, it moves off the first line once that
     /// turns out not to work.
     pub moved: bool,
+    /// The session's branches, newest first, when it went on separately on several hosts: the
+    /// first lines resume one each. Empty for a session that went one way, which has one.
+    pub branches: Vec<Head>,
+    /// The branch the other harnesses' lines continue: the branch line the selection was last
+    /// on.
+    pub branch: usize,
 }
 
 impl Chooser {
     pub fn len(&self) -> usize {
-        self.targets.len() + 1
+        self.targets.len() + self.own()
+    }
+
+    /// How many lines resume the session in its own harness: one per branch.
+    pub fn own(&self) -> usize {
+        self.branches.len().max(1)
     }
 
     /// The harness line `n` continues the session in; `None` for its own.
     pub fn target(&self, n: usize) -> Option<HarnessKind> {
-        n.checked_sub(1).and_then(|i| self.targets.get(i).copied())
+        n.checked_sub(self.own()).and_then(|i| self.targets.get(i).copied())
     }
 
-    /// Select line `n`.
+    /// The branch line `n` resumes, for a session with several.
+    pub fn branch(&self, n: usize) -> Option<&Head> {
+        self.branches.get(n)
+    }
+
+    /// The branch the other harnesses' lines continue, for a session with several.
+    pub fn continued(&self) -> Option<&Head> {
+        self.branches.get(self.branch)
+    }
+
+    /// Select line `n`: a branch line becomes the branch the other harnesses' lines continue.
     fn select(&mut self, n: usize) {
         self.selected = n;
         self.moved = true;
+        if n < self.branches.len() {
+            self.branch = n;
+        }
     }
+}
+
+/// The popup warning that another host may still be working on the branch about to be resumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Warning {
+    pub session: HarnessSession,
+    /// What continuing does.
+    pub action: Pending,
+    /// The host, as [`host_label`] names it: `@3f9a12bc`.
+    pub host: String,
+    /// How long ago it last wrote.
+    pub ago: time::Duration,
 }
 
 /// One line of the chooser, as drawn.
@@ -117,14 +178,72 @@ impl State {
         let Some(row) = self.target() else {
             return;
         };
+        let branches = row.branches().to_vec();
+        // The branch picked last time, if any.
+        let selected = self
+            .picked
+            .get(&row.handle)
+            .and_then(|p| branches.iter().position(|h| &h.source_id == p))
+            .unwrap_or(0);
         self.chooser = Some(Chooser {
             session: row.handle.clone(),
             targets,
-            selected: 0,
+            selected,
             action,
             moved: false,
+            branches,
+            branch: selected,
         });
         self.settle_chooser();
+    }
+
+    /// A head's host as the chooser and the status line name it: `this machine`, `@3f9a12bc`.
+    pub fn head_host(&self, head: &Head) -> String {
+        host_label(head, &self.context.host_id)
+    }
+
+    /// A branch in a line: `@3f9a12bc · 5h · 40 msgs`.
+    pub fn describe_head(&self, head: &Head) -> String {
+        describe(head, (self.now)(), &|h| self.head_host(h))
+    }
+
+    /// The warning to show before resuming `row` on the branch picked (the newest, unless
+    /// another was), when another host wrote to it in the last few minutes.
+    pub fn live_elsewhere(&self, row: &SessionRow, action: Pending) -> Option<Warning> {
+        let head = catchup::chosen_head(row, self.picked.get(&row.handle).map(AsRef::as_ref))?;
+        let ago = catchup::live_elsewhere(head, &self.context.host_id, (self.now)())?;
+        Some(Warning {
+            session: row.handle.clone(),
+            action,
+            host: self.head_host(head),
+            ago,
+        })
+    }
+
+    /// A key while the warning is open: enter (or `y`) goes on and resumes, esc (or `n`, `q`,
+    /// ctrl-c, ctrl-g) goes back to the list.
+    pub fn warning_key(&mut self, key: &SingleKey) -> InputAction {
+        let Some(warning) = self.warning.as_ref() else {
+            return InputAction::Continue;
+        };
+        match (&key.code, key.ctrl) {
+            (KeyCodeValue::Enter, _)
+            | (KeyCodeValue::Char('m'), true)
+            | (KeyCodeValue::Char('y'), false) => {
+                let action = warning.action;
+                self.confirmed.insert(warning.session.clone());
+                self.warning = None;
+                InputAction::Pick(None, action)
+            }
+            (KeyCodeValue::Esc, _)
+            | (KeyCodeValue::Char('c' | 'g' | '['), true)
+            | (KeyCodeValue::Char('q' | 'n'), false) => {
+                self.warning = None;
+                self.status = None;
+                InputAction::Continue
+            }
+            _ => InputAction::Continue,
+        }
     }
 
     /// Whether the session's own harness can't resume it here, and why (once its plan is known).
@@ -145,7 +264,7 @@ impl State {
             return;
         }
         if let Some(chooser) = self.chooser.as_mut() {
-            chooser.selected = 1;
+            chooser.selected = chooser.own();
         }
     }
 
@@ -159,6 +278,19 @@ impl State {
             .target()
             .filter(|r| r.handle == *session)
             .is_some_and(|r| is_live((self.now)(), r));
+        let unavailable = match self.plans.get(session) {
+            Some(Err(why)) => Some(short_reason(why)),
+            _ => None,
+        };
+        let branches = chooser.branches.iter().enumerate().map(|(n, head)| Choice {
+            harness: session.harness,
+            detail: if n == 0 {
+                format!("{} (latest)", self.describe_head(head))
+            } else {
+                self.describe_head(head)
+            },
+            unavailable: unavailable.clone(),
+        });
         let original = match self.plans.get(session) {
             Some(Err(why)) => Choice {
                 harness: session.harness,
@@ -184,20 +316,26 @@ impl State {
                 unavailable: None,
             },
         };
-        let flattened = match self.flattened.get(session) {
+        let head = chooser.continued().map(|h| h.source_id.clone());
+        let flattened = match self.flattened.get(&(session.clone(), head)) {
             Some(Ok(flattened)) => flattened_detail(flattened),
             _ => String::new(),
         };
         let continued = chooser.targets.iter().map(|target| Choice {
             harness: *target,
-            detail: if flattened.is_empty() {
-                "continue".to_owned()
-            } else {
-                format!("continue, {flattened}")
+            detail: match (flattened.is_empty(), chooser.branches.is_empty()) {
+                (true, _) => "continue".to_owned(),
+                (false, true) => format!("continue, {flattened}"),
+                // The heading says what they continue.
+                (false, false) => flattened.clone(),
             },
             unavailable: None,
         });
-        std::iter::once(original).chain(continued).collect()
+        if chooser.branches.is_empty() {
+            std::iter::once(original).chain(continued).collect()
+        } else {
+            branches.chain(continued).collect()
+        }
     }
 
     /// A key while the chooser is open: move (up/down, ctrl-p/ctrl-n, k/j), pick (enter does
@@ -241,6 +379,8 @@ impl State {
             _ => return InputAction::Continue,
         };
         let target = chooser.target(chooser.selected);
+        let branch = chooser.branch(chooser.selected).map(|h| h.source_id.clone());
+        let continued = chooser.continued().map(|h| h.source_id.clone());
         let session = chooser.session.clone();
         if target.is_none()
             && pick != Pending::Copy
@@ -256,6 +396,25 @@ impl State {
         }
         if pick != Pending::Copy {
             self.chooser = None;
+        }
+        if target.is_none() {
+            match branch {
+                Some(head) => {
+                    self.picked.insert(session, head);
+                }
+                None => {
+                    self.picked.remove(&session);
+                }
+            }
+        } else {
+            match continued {
+                Some(head) => {
+                    self.continue_from.insert(session, head);
+                }
+                None => {
+                    self.continue_from.remove(&session);
+                }
+            }
         }
         InputAction::Pick(target, pick)
     }
@@ -278,16 +437,35 @@ impl State {
         let label_width = label_width.unwrap_or(0);
 
         let mut lines: Vec<Line<'static>> = Vec::new();
+        if !chooser.branches.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{} branches: it went on separately on several machines",
+                    chooser.branches.len()
+                ),
+                muted,
+            )));
+        }
+        let own = chooser.own();
+        let continuing = chooser.continued().filter(|_| !chooser.targets.is_empty());
         for (n, choice) in choices.iter().enumerate() {
+            if n == own
+                && let Some(head) = continuing
+            {
+                let branch = catchup::branch_name(&self.head_host(head));
+                lines.push(Line::from(Span::styled(format!("Continue {branch} in:"), muted)));
+            }
             let selected = n == chooser.selected;
+            // The branch the lines below continue, while the selection is on them.
+            let continued = chooser.selected >= own && continuing.is_some() && n == chooser.branch;
             let label = harness_label(choice.harness);
             let pad = " ".repeat(label_width - label.width());
             let mut spans = vec![
                 Span::styled(
-                    if selected {
-                        "> "
-                    } else {
-                        "  "
+                    match (selected, continued) {
+                        (true, _) => "> ",
+                        (false, true) => "• ",
+                        (false, false) => "  ",
                     },
                     bold,
                 ),
@@ -358,6 +536,54 @@ impl State {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(muted)
+            .padding(ratatui::widgets::Padding::horizontal(1))
+            .title(title);
+        f.render_widget(Clear, popup);
+        f.render_widget(Paragraph::new(Text::from(lines)).block(block), popup);
+    }
+
+    /// The warning that another host may still be working on the session, centred.
+    pub fn draw_warning(&self, f: &mut Frame, theme: &Theme) {
+        let Some(warning) = &self.warning else {
+            return;
+        };
+        let area = f.area();
+        let muted = style(theme, Meaning::Annotation);
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let ago = match warning.ago.whole_minutes() {
+            0 => "just now".to_owned(),
+            n => format!("{n}m ago"),
+        };
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("Still active on ", style(theme, Meaning::Base)),
+                Span::styled(warning.host.clone(), bold),
+                Span::styled(format!(" ({ago})."), style(theme, Meaning::Base)),
+            ]),
+            Line::from(Span::styled(
+                "Resuming here will branch the session.",
+                style(theme, Meaning::Base),
+            )),
+            Line::default(),
+            Line::from(vec![
+                Span::styled("<enter>", bold),
+                Span::styled(": continue  ", muted),
+                Span::styled("<esc>", bold),
+                Span::styled(": back", muted),
+            ]),
+        ];
+        let widest = lines.iter().map(Line::width).max().unwrap_or(0);
+        let width = u16::try_from(widest + 4).unwrap_or(u16::MAX).min(area.width);
+        let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX).min(area.height);
+        let popup = place(area, None, width, height, false);
+        let title = Line::from(vec![Span::styled(
+            " Still active elsewhere ",
+            style(theme, Meaning::AlertWarn).add_modifier(Modifier::BOLD),
+        )]);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(style(theme, Meaning::AlertWarn))
             .padding(ratatui::widgets::Padding::horizontal(1))
             .title(title);
         f.render_widget(Clear, popup);

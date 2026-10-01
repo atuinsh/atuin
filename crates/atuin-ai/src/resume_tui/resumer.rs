@@ -10,18 +10,25 @@
 //! resumed from the synced messages: the plan says so ([`Resume::restore`]), and only once the
 //! user accepts it does [`Resumer::restore`] write the transcript back out
 //! ([`Harness::rehydrate`](atuin_common::harnesstools::Harness::rehydrate)) and plan resuming it.
+//!
+//! Resuming goes through [`Resumer::sync`], which also catches a transcript that is here up with
+//! sync first, or puts the branch the user picked in it ([`super::catchup`]).
 
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use atuin_client::ai_session::HarnessKind;
+use atuin_client::ai_session::{HarnessKind, Head, SourceId};
 use atuin_client::settings::AiSessionResume;
 use atuin_common::harnesstools::continuation::{self, Flattened};
-use atuin_common::harnesstools::rehydrate::{RehydrateError, RehydrateSession};
+use atuin_common::harnesstools::rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
 pub use atuin_common::harnesstools::resume::{ResumeError, ResumePlan, ResumeTarget, quote};
+use atuin_common::harnesstools::sync::{
+    AppendOptions, AppendOutcome, Liveness, LocalTip, SessionSync as _, SyncError,
+};
 use atuin_common::harnesstools::{AnyHarness, Harness as _};
 
 use super::ResumeContext;
+use super::catchup::{Caught, Kept, Step, Synced, classify, message_count};
 use super::source::{SessionRow, SessionSource, harness_label};
 
 /// Why a session can be viewed but not resumed here.
@@ -38,6 +45,9 @@ pub enum NotResumable {
 
     #[error("continuing it in {0} failed: {1}")]
     Continue(&'static str, String),
+
+    #[error("catching it up with sync failed: {0}")]
+    CatchUp(String),
 
     #[error(transparent)]
     Harness(#[from] ResumeError),
@@ -109,18 +119,47 @@ pub trait Resumer: Send + Sync {
         restore: &Restore,
     ) -> Result<ResumePlan, NotResumable>;
 
+    /// Bring this machine's copy of `session` to `head` (one of its heads; the newest when
+    /// `None`) from what `source` holds of it, and plan resuming it ([`super::catchup`]): write it
+    /// out when it isn't here, append what it lacks, or put the head's branch in it. Only once
+    /// the user has chosen to resume it.
+    ///
+    /// Without heads to go by, a session is resumed as [`plan`](Self::plan) and
+    /// [`restore`](Self::restore) have it.
+    async fn sync(
+        &self,
+        source: &dyn SessionSource,
+        session: &SessionRow,
+        _head: Option<&SourceId>,
+    ) -> Result<Synced, NotResumable> {
+        let resume = self.plan(session).await?;
+        let Some(restore) = resume.restore else {
+            return Ok(Synced::up_to_date(resume.plan));
+        };
+        let plan = self.restore(source, session, &restore).await?;
+        Ok(Synced {
+            caught: Caught::Restored {
+                messages: 0,
+                note: restore.note,
+            },
+            ..Synced::up_to_date(plan)
+        })
+    }
+
     /// The harnesses `session` can be continued in here: installed, and not its own.
     fn continue_targets(&self, _session: &SessionRow) -> Vec<HarnessKind> {
         Vec::new()
     }
 
     /// Write `session`, from what `source` holds of it, out as a new session of `target`
-    /// ([`continuation`]), and plan resuming that. Only once the user has chosen to.
+    /// ([`continuation`]), and plan resuming that: the branch ending at `head` (one of its
+    /// heads), else, for a session with several, its newest. Only once the user has chosen to.
     async fn continue_in(
         &self,
         _source: &dyn SessionSource,
         session: &SessionRow,
         _target: HarnessKind,
+        _head: Option<&SourceId>,
     ) -> Result<Continued, NotResumable> {
         Err(NotResumable::Unsupported(harness_label(session.handle.harness)))
     }
@@ -151,6 +190,31 @@ pub trait Machine: Send + Sync {
 
     /// Whether `program` can be run here.
     fn installed(&self, program: &str) -> bool;
+
+    /// What `harness`'s copy of session `id` here holds ([`SessionSync::local_tip`]).
+    ///
+    /// [`SessionSync::local_tip`]: atuin_common::harnesstools::sync::SessionSync::local_tip
+    async fn local_tip(&self, harness: AnyHarness, id: &str)
+    -> Result<Option<LocalTip>, SyncError>;
+
+    /// Whether a `harness` process here may be writing session `id`
+    /// ([`SessionSync::is_live`]).
+    ///
+    /// [`SessionSync::is_live`]: atuin_common::harnesstools::sync::SessionSync::is_live
+    async fn is_live(&self, harness: AnyHarness, id: &str, cwd: Option<&Path>) -> Liveness;
+
+    /// Append `lines` to `harness`'s copy of session `id`, read as `base`
+    /// ([`SessionSync::append`]).
+    ///
+    /// [`SessionSync::append`]: atuin_common::harnesstools::sync::SessionSync::append
+    async fn append(
+        &self,
+        harness: AnyHarness,
+        id: &str,
+        base: &LocalTip,
+        lines: &[RehydrateMessage],
+        options: &AppendOptions<'_>,
+    ) -> Result<AppendOutcome, SyncError>;
 }
 
 /// This machine, as the harnesses themselves see it.
@@ -172,6 +236,29 @@ impl Machine for ThisMachine {
 
     fn installed(&self, program: &str) -> bool {
         on_path(program)
+    }
+
+    async fn local_tip(
+        &self,
+        harness: AnyHarness,
+        id: &str,
+    ) -> Result<Option<LocalTip>, SyncError> {
+        harness.local_tip(id).await
+    }
+
+    async fn is_live(&self, harness: AnyHarness, id: &str, cwd: Option<&Path>) -> Liveness {
+        harness.is_live(id, cwd).await
+    }
+
+    async fn append(
+        &self,
+        harness: AnyHarness,
+        id: &str,
+        base: &LocalTip,
+        lines: &[RehydrateMessage],
+        options: &AppendOptions<'_>,
+    ) -> Result<AppendOutcome, SyncError> {
+        harness.append(id, base, lines, options).await
     }
 }
 
@@ -211,6 +298,11 @@ impl HarnessResumer {
         }
     }
 
+    /// Whether `head` was written on this machine (rows from before hosts were recorded were).
+    fn is_here(&self, head: &Head) -> bool {
+        head.host.is_none_or(|h| h.0.as_simple().to_string() == self.host_id)
+    }
+
     /// Write `data`, session `session` read from sync, out as its harness's transcript, planned
     /// with `restore`, and plan resuming it.
     async fn write_out(
@@ -231,6 +323,58 @@ impl HarnessResumer {
         let plan = harness.resume(&target, self.templates.template(kind))?.prepare()?;
         self.check_installed(&plan)?;
         Ok(plan)
+    }
+
+    /// Write `session` out from sync along `head`'s branch (the whole session when it went one
+    /// way, `branched` false, as a restore always did), and plan resuming it, with how many
+    /// messages it holds.
+    async fn restore_branch(
+        &self,
+        source: &dyn SessionSource,
+        session: &SessionRow,
+        head: &Head,
+        branched: bool,
+        restore: &Restore,
+    ) -> Result<(ResumePlan, usize), NotResumable> {
+        let handle = &session.handle;
+        let data = if branched {
+            source.branch(handle, &head.source_id, &restore.cwd).await
+        } else {
+            source.rehydrate(handle, &restore.cwd).await
+        };
+        let data = data.map_err(|e| NotResumable::Restore(format!("{e:#}")))?;
+        let messages = message_count(&data.messages);
+        Ok((self.write_out(session, &data, restore).await?, messages))
+    }
+
+    /// `head`'s branch of `session`, which its harness can't take in place, continued as a new
+    /// session of the same harness linked to it ([`continuation`]), resuming in `cwd`: its plan,
+    /// and what was flattened.
+    async fn fork(
+        &self,
+        source: &dyn SessionSource,
+        session: &SessionRow,
+        head: &Head,
+        cwd: &Path,
+    ) -> Result<(ResumePlan, Flattened), NotResumable> {
+        let kind = session.handle.harness;
+        let harness = kind.harness().ok_or(NotResumable::Unsupported(harness_label(kind)))?;
+        let fail = NotResumable::CatchUp;
+        let branch = source
+            .branch(&session.handle, &head.source_id, cwd)
+            .await
+            .map_err(|e| fail(format!("{e:#}")))?;
+        let continued = continuation::continue_in(harness, &branch, harness);
+        let template = self.templates.template(kind);
+        let planned = ResumeTarget::new(&continued.session.id).with_cwd(cwd);
+        self.check_installed(&harness.resume(&planned, template)?)?;
+        let native = self
+            .machine
+            .rehydrate(harness, &continued.session)
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+        let plan = harness.resume(&planned.with_native_path(native), template)?.prepare()?;
+        Ok((plan, continued.flattened))
     }
 }
 
@@ -285,6 +429,175 @@ impl Resumer for HarnessResumer {
         self.write_out(session, &data, restore).await
     }
 
+    #[allow(clippy::too_many_lines)]
+    async fn sync(
+        &self,
+        source: &dyn SessionSource,
+        session: &SessionRow,
+        head: Option<&SourceId>,
+    ) -> Result<Synced, NotResumable> {
+        let kind = session.handle.harness;
+        let harness = kind.harness().ok_or(NotResumable::Unsupported(harness_label(kind)))?;
+        let handle = &session.handle;
+        let id = handle.session.as_ref();
+        let resume = self.plan(session).await?;
+        let failed = |e: eyre::Report| NotResumable::CatchUp(format!("{e:#}"));
+
+        let heads = source.heads(handle).await.map_err(failed)?.unwrap_or_default();
+        let picked = head.and_then(|h| heads.heads.iter().find(|x| &x.source_id == h));
+        let Some(chosen) = picked.or(heads.heads.first()).cloned() else {
+            // Nothing to go by: as before.
+            let Some(restore) = resume.restore else {
+                return Ok(Synced::up_to_date(resume.plan));
+            };
+            let data = source.rehydrate(handle, &restore.cwd).await.map_err(failed)?;
+            let messages = message_count(&data.messages);
+            let plan = self.write_out(session, &data, &restore).await?;
+            return Ok(Synced {
+                caught: Caught::Restored {
+                    messages,
+                    note: restore.note,
+                },
+                ..Synced::up_to_date(plan)
+            });
+        };
+        let branched = heads.heads.len() > 1;
+        let others: Vec<Head> = if heads.diverged {
+            heads.heads.iter().filter(|h| h.source_id != chosen.source_id).cloned().collect()
+        } else {
+            Vec::new()
+        };
+        let synced = |plan: ResumePlan, caught: Caught| Synced {
+            plan,
+            caught,
+            head: Some(chosen.clone()),
+            others: others.clone(),
+        };
+        let cwd = resume
+            .plan
+            .cwd
+            .clone()
+            .unwrap_or_else(|| resolve_cwd(session.cwd.as_deref(), &self.context).cwd);
+        let fork = |why: &str| {
+            let why = why.to_owned();
+            async {
+                let (plan, flattened) = self.fork(source, session, &chosen, &cwd).await?;
+                Ok(synced(plan, Caught::Forked { why, flattened }))
+            }
+        };
+
+        let tip = match self.machine.local_tip(harness, id).await {
+            Ok(tip) => tip,
+            // The harness can't read its copy (an opencode 2.0 session): written out along the
+            // head's branch when there is none, else resumed as it is.
+            Err(SyncError::Unsupported(why)) => {
+                if let Some(restore) = &resume.restore {
+                    let (plan, messages) =
+                        self.restore_branch(source, session, &chosen, branched, restore).await?;
+                    let note = restore.note.clone();
+                    return Ok(synced(plan, Caught::Restored { messages, note }));
+                }
+                // The copy here is on some branch, which it can't say: another host's branch
+                // is continued as a session of its own.
+                if !others.is_empty() && !self.is_here(&chosen) {
+                    return fork(why).await;
+                }
+                return Ok(synced(resume.plan, Caught::Current));
+            }
+            Err(e) => return Err(NotResumable::CatchUp(e.to_string())),
+        };
+        let Some(tip) = tip else {
+            let restore = resume
+                .restore
+                .clone()
+                .unwrap_or_else(|| resolve_cwd(session.cwd.as_deref(), &self.context));
+            let (plan, messages) =
+                self.restore_branch(source, session, &chosen, branched, &restore).await?;
+            return Ok(synced(plan, Caught::Restored {
+                messages,
+                note: restore.note,
+            }));
+        };
+        // Resuming the copy here as it is.
+        let here = match resume.restore {
+            None => resume.plan.clone(),
+            Some(_) => {
+                let target =
+                    ResumeTarget::new(id).with_cwd(&cwd).with_native_path(&tip.native_path);
+                harness.resume(&target, self.templates.template(kind))?.prepare()?
+            }
+        };
+
+        let path = source.branch(handle, &chosen.source_id, &cwd).await.map_err(failed)?.messages;
+        let tip_path = match tip.tip_source_id.as_deref() {
+            Some(at)
+                if at != chosen.source_id.as_ref() && !path.iter().any(|m| m.source_id == at) =>
+            {
+                let at = SourceId::from(at.to_owned());
+                Some(source.branch(handle, &at, &cwd).await.map_err(failed)?.messages)
+            }
+            _ => None,
+        };
+        let step = classify(
+            &tip,
+            chosen.source_id.as_ref(),
+            &path,
+            tip_path.as_deref(),
+            picked.is_some() && branched,
+        );
+        let (lines, head_line) = match &step {
+            Step::AsIs | Step::Ahead => return Ok(synced(here, Caught::Current)),
+            Step::Unsynced => return Ok(synced(here, Caught::Kept(Kept::Unsynced))),
+            Step::FastForward(rows) | Step::Branch(rows) => (rows.clone(), None),
+            Step::Switch => (Vec::new(), Some(chosen.source_id.to_string())),
+        };
+
+        // Never under a harness that may be writing the session.
+        match self.machine.is_live(harness, id, Some(&cwd)).await {
+            Liveness::NotLive => {}
+            Liveness::Live { pid } => return Ok(synced(here, Caught::Kept(Kept::Live { pid }))),
+            Liveness::Unknown => return Ok(synced(here, Caught::Kept(Kept::Live { pid: None }))),
+        }
+        let mut taken = source.source_ids(handle).await.map_err(failed)?;
+        for line in &lines {
+            taken.remove(&line.source_id);
+        }
+        let options = AppendOptions {
+            make_tip: true,
+            head: head_line.as_deref(),
+            taken_ids: Some(&taken),
+        };
+        match self.machine.append(harness, id, &tip, &lines, &options).await {
+            Ok(outcome) => {
+                // Counted as the branch labels count them: the harness may write fewer lines
+                // for the rows (calls captured without their input fold into notes), and
+                // most are tool calls and their results.
+                let messages = message_count(&lines);
+                let caught = match step {
+                    // Nothing but lines the copy held already (by content, for Codex).
+                    Step::FastForward(_) if outcome.appended.is_empty() => Caught::Current,
+                    Step::FastForward(_) => Caught::FastForwarded { messages },
+                    _ => Caught::Switched { messages },
+                };
+                // Resumed from where it was written: a branch may be a transcript of its own
+                // (a new Codex segment), which a `{path}` template names.
+                let plan = if outcome.native_path == tip.native_path {
+                    here
+                } else {
+                    let target =
+                        ResumeTarget::new(id).with_cwd(&cwd).with_native_path(&outcome.native_path);
+                    harness.resume(&target, self.templates.template(kind))?.prepare()?
+                };
+                Ok(synced(plan, caught))
+            }
+            Err(SyncError::Live(pid)) => Ok(synced(here, Caught::Kept(Kept::Live { pid }))),
+            Err(SyncError::MaybeLive) => Ok(synced(here, Caught::Kept(Kept::Live { pid: None }))),
+            // It can't take the branch in place (opencode keeps a session as one line).
+            Err(SyncError::Unsupported(why)) => fork(why).await,
+            Err(e) => Ok(synced(here, Caught::Kept(Kept::Failed(e.to_string())))),
+        }
+    }
+
     fn continue_targets(&self, session: &SessionRow) -> Vec<HarnessKind> {
         let own = session.handle.harness;
         AnyHarness::all()
@@ -307,6 +620,7 @@ impl Resumer for HarnessResumer {
         source: &dyn SessionSource,
         session: &SessionRow,
         target: HarnessKind,
+        head: Option<&SourceId>,
     ) -> Result<Continued, NotResumable> {
         let from_kind = session.handle.harness;
         let from =
@@ -317,10 +631,18 @@ impl Resumer for HarnessResumer {
             return Err(fail("it's that agent's own session".to_owned()));
         }
         let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
-        let original = source
-            .rehydrate(&session.handle, &restore.cwd)
-            .await
-            .map_err(|e| fail(format!("{e:#}")))?;
+        // A session with several branches goes on from the one picked (else the newest), never
+        // from all of them.
+        let heads = source.heads(&session.handle).await.map_err(|e| fail(format!("{e:#}")))?;
+        let several = heads.as_ref().filter(|h| h.heads.len() > 1);
+        let branch = several.and_then(|h| {
+            head.and_then(|p| h.heads.iter().find(|x| &x.source_id == p)).or_else(|| h.latest())
+        });
+        let original = match branch {
+            Some(branch) => source.branch(&session.handle, &branch.source_id, &restore.cwd).await,
+            None => source.rehydrate(&session.handle, &restore.cwd).await,
+        };
+        let original = original.map_err(|e| fail(format!("{e:#}")))?;
         let continued = continuation::continue_in(from, &original, into);
         let id = continued.session.id.clone();
         let template = self.templates.template(target);

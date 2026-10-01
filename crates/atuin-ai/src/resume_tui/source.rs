@@ -4,11 +4,14 @@
 //! (read-only, never through the daemon, so the first frame doesn't wait on it); tests use
 //! `super::fake::FakeSource`.
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use atuin_client::ai_session::{HarnessKind, HarnessSession, SessionFilter as DbFilter};
+use atuin_client::ai_session::{
+    HarnessKind, HarnessSession, Head, SessionFilter as DbFilter, SessionHeads, SourceId,
+};
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::Usage;
 use time::OffsetDateTime;
@@ -94,8 +97,11 @@ pub struct SessionRow {
     pub started_at: OffsetDateTime,
     /// The newest message in the session or any of its grouped children.
     pub updated_at: OffsetDateTime,
-    /// How many messages the session holds: every row stored of it
-    /// ([`atuin_client::ai_session::Session::message_count`]).
+    /// How many messages the session holds: user prompts and assistant text, not tool calls,
+    /// their results or the harness's own lines; for a session with several branches, every
+    /// branch's, the rows they share counted once. Counted the way [`Head::messages`] counts a
+    /// branch's (see [`atuin_client::ai_session::Session::messages`]), so the list, the preview,
+    /// Inspect, the chooser's branches and the status line all count alike.
     pub messages: u64,
     /// Token usage attributed to this session (each model call counted once).
     pub usage: Usage,
@@ -104,6 +110,24 @@ pub struct SessionRow {
     pub children: u32,
     /// The best-matching message text, when there is a query. The match may be in a child.
     pub matched: Option<Snippet>,
+    /// The tips of the session's branches, newest first, as the source last worked them out
+    /// (see [`SessionSource::heads`] for them as they are now). Empty when it hasn't.
+    pub heads: Vec<Head>,
+    /// Whether the session went on separately on more than one host: each of its
+    /// [`heads`](Self::heads) is a branch, and resuming it picks one.
+    pub diverged: bool,
+}
+
+impl SessionRow {
+    /// The branches to pick from when resuming: the heads of a [diverged](Self::diverged)
+    /// session, newest first. Empty for one that went one way.
+    pub fn branches(&self) -> &[Head] {
+        if self.diverged && self.heads.len() > 1 {
+            &self.heads
+        } else {
+            &[]
+        }
+    }
 }
 
 /// The preview for one session: its opening prompt and where it left off. Tool calls and
@@ -141,6 +165,31 @@ pub trait SessionSource: Send + Sync {
         _cwd: &Path,
     ) -> eyre::Result<RehydrateSession> {
         eyre::bail!("this source can't restore sessions")
+    }
+
+    /// The branches of `session` as they are now: its heads, newest first, where they part, and
+    /// whether several hosts went on with it. `None` when the source doesn't know them.
+    async fn heads(&self, _session: &HarnessSession) -> eyre::Result<Option<SessionHeads>> {
+        Ok(None)
+    }
+
+    /// Session `session` as [`rehydrate`](Self::rehydrate) gives it, but holding only the rows
+    /// from its root down to `head` (one of its [heads](Self::heads), or any row of it): that
+    /// branch, as a transcript on it holds it. Empty of messages when `head` isn't stored.
+    async fn branch(
+        &self,
+        session: &HarnessSession,
+        _head: &SourceId,
+        cwd: &Path,
+    ) -> eyre::Result<RehydrateSession> {
+        self.rehydrate(session, cwd).await
+    }
+
+    /// The source id of every row `session` holds, on any branch: ids a transcript being caught
+    /// up must not take.
+    async fn source_ids(&self, session: &HarnessSession) -> eyre::Result<HashSet<String>> {
+        let session = self.rehydrate(session, Path::new("/")).await?;
+        Ok(session.messages.into_iter().map(|m| m.source_id).collect())
     }
 }
 

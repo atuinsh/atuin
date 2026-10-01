@@ -469,7 +469,7 @@ async fn with_chooser(settings: &Settings, query: &str, action: super::state::Pe
         tool_results: 42,
         reasoning: 3,
     };
-    state.flattened.insert(row.handle, Ok(flattened));
+    state.flattened.insert((row.handle, None), Ok(flattened));
     state
 }
 
@@ -620,6 +620,24 @@ async fn an_original_that_cant_resume_is_dimmed_and_passed_over() {
     assert!(out.contains("> 1 CP Copilot  original: atuin can't resume"), "{out}");
 }
 
+/// The worker's answer to the catch-up the selected session is waiting on, as the fake source
+/// and `resumer` give it.
+/// What the worker answers a request for the selected session's heads with, from `source`.
+async fn answer_heads(state: &mut State, source: &FakeSource, requests: &super::worker::Requests) {
+    let row = state.selected().unwrap().clone();
+    let heads = source.heads(&row.handle).await.unwrap();
+    assert!(state.requested.contains(&(row.handle.clone(), super::state::HEADS)), "asked");
+    super::apply_response(state, super::worker::Response::Heads(row.handle, heads), requests);
+}
+
+async fn answer_sync(state: &mut State, resumer: &dyn Resumer) {
+    let row = state.target().unwrap().clone();
+    let head = state.picked.get(&row.handle).cloned();
+    let synced = resumer.sync(&FakeSource::new(), &row, head.as_ref()).await;
+    state.requested.remove(&(row.handle.clone(), super::state::SYNC));
+    state.synced.insert(row.handle, (head, synced));
+}
+
 /// Enter asks where to resume only when there is a choice: with `resume_chooser = false`, or
 /// nothing else installed, it resumes in the session's own harness straight away. When that
 /// can't, the chooser opens anyway, saying why.
@@ -641,12 +659,20 @@ async fn the_chooser_opens_when_there_is_a_choice() {
     assert_eq!(outcome, None);
     assert!(state.chooser.is_some());
 
-    let mut state = loaded(&s, "", 0).await;
-    let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
-    assert!(matches!(outcome, Some(Outcome::Resume(_))), "{outcome:?}");
-    let mut state = loaded(&s, "", 0).await;
-    let outcome = accept(&mut state, Pending::Edit, resumer.as_ref(), &requests, false);
-    assert!(matches!(outcome, Some(Outcome::Edit(_))), "{outcome:?}");
+    // Without the chooser, it catches the session up with sync (the worker), then resumes.
+    for action in [Pending::Resume, Pending::Edit] {
+        let mut state = loaded(&s, "", 0).await;
+        let outcome = accept(&mut state, action, resumer.as_ref(), &requests, false);
+        assert_eq!(outcome, None);
+        assert!(state.chooser.is_none());
+        assert_eq!(state.pending.as_ref().map(|(_, a)| *a), Some(action));
+        answer_sync(&mut state, resumer.as_ref()).await;
+        let outcome = accept(&mut state, action, resumer.as_ref(), &requests, false);
+        match action {
+            Pending::Resume => assert!(matches!(outcome, Some(Outcome::Resume(_))), "{outcome:?}"),
+            _ => assert!(matches!(outcome, Some(Outcome::Edit(_))), "{outcome:?}"),
+        }
+    }
 
     // ctrl-y copies the original's command; it never asks.
     let mut state = loaded(&s, "", 0).await;
@@ -663,46 +689,6 @@ async fn the_chooser_opens_when_there_is_a_choice() {
     assert_eq!(state.status, None);
     let out = text(&render(&mut state, &s, 100, 30));
     assert_eq!(out.matches("the session's directory is gone").count(), 1, "{out}");
-}
-
-/// A session recorded on another machine is restored from sync (by the worker) only once it is
-/// chosen, and then resumed from where it was written; ctrl-y copies `atuin ai resume <id>`,
-/// which restores it when run, and writes nothing.
-#[rstest]
-#[tokio::test]
-async fn a_session_from_another_machine_is_restored_first() {
-    use std::sync::Arc;
-
-    use super::state::{Pending, RESTORE};
-    use super::worker::Response;
-    use super::{Outcome, accept, apply_response, resume_line, worker};
-
-    let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
-    let resumer = Arc::new(FakeResumer::default());
-    let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
-
-    let mut state = loaded(&s, "aarch64 release build", 0).await;
-    let row = state.selected().unwrap().clone();
-    assert_ne!(row.host_id, fake::THIS_HOST_ID, "another machine's session");
-    let resume = state.plans[&row.handle].clone().unwrap();
-    assert!(resume.restore.is_some());
-    let id = row.handle.session.to_string();
-    assert_eq!(resume_line(&row, &resume), format!("atuin ai resume {id}"));
-
-    let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
-    assert_eq!(outcome, None, "waits for the restore");
-    assert!(state.requested.contains(&(row.handle.clone(), RESTORE)));
-    assert!(state.status.as_ref().is_some_and(|(s, _)| s.starts_with("restoring from sync")));
-
-    let restore = resume.restore.clone().unwrap();
-    let plan = resumer.restore(&FakeSource::new(), &row, &restore).await;
-    apply_response(&mut state, Response::Restored(row.handle.clone(), plan), &requests);
-    let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
-    let Some(Outcome::Resume(plan)) = outcome else {
-        panic!("{outcome:?}");
-    };
-    assert_eq!(plan.native_path, Some(std::path::PathBuf::from(format!("/restored/{id}.jsonl"))));
 }
 
 /// A continuation written out ends the picker the way its key asked, leaving the status line
@@ -724,7 +710,7 @@ async fn a_written_continuation_resumes_or_edits_its_new_session() {
 
     for (action, run) in [(Pending::Resume, true), (Pending::Edit, false)] {
         state.continuing = Some((row.handle.clone(), HarnessKind::Codex, action));
-        let continued = resumer.continue_in(&source, &row, HarnessKind::Codex).await;
+        let continued = resumer.continue_in(&source, &row, HarnessKind::Codex, None).await;
         let (outcome, status) = finish_continuation(&mut state, &row.handle, continued).unwrap();
         assert_eq!(
             status,
@@ -876,24 +862,36 @@ async fn enter_and_tab_in_the_expanded_forks_resume_the_fork() {
     for child in state.children[&root.handle].clone() {
         state.plans.insert(child.handle.clone(), resumer.plan(&child).await);
     }
-    let resumes =
-        |state: &mut State, action| match accept(state, action, resumer.as_ref(), &requests, false)
-        {
+    // Caught up with sync (the worker) first, then resumed.
+    async fn resumes(
+        state: &mut State,
+        action: Pending,
+        resumer: &FakeResumer,
+        requests: &worker::Requests,
+    ) -> String {
+        assert_eq!(accept(state, action, resumer, requests, false), None);
+        answer_sync(state, resumer).await;
+        match accept(state, action, resumer, requests, false) {
             Some(Outcome::Resume(plan) | Outcome::Edit(plan)) => plan.args.join(" "),
             other => panic!("{other:?}"),
-        };
+        }
+    }
+    let resumer = resumer.as_ref();
 
     assert_eq!(state.target(), Some(&root), "collapsed, it's the session inspected");
-    assert!(resumes(&mut state, Pending::Resume).contains(root.handle.session.as_ref()));
+    let args = resumes(&mut state, Pending::Resume, resumer, &requests).await;
+    assert!(args.contains(root.handle.session.as_ref()), "{args}");
 
     press(&mut state, &s, "c");
     assert_eq!(state.target().unwrap().handle.session.as_ref(), "fork-01");
     press(&mut state, &s, "down");
     assert_eq!(state.target().unwrap().handle.session.as_ref(), "fork-00");
     assert_eq!(press(&mut state, &s, "enter"), InputAction::Resume);
-    assert!(resumes(&mut state, Pending::Resume).ends_with("fork-00"));
+    let args = resumes(&mut state, Pending::Resume, resumer, &requests).await;
+    assert!(args.ends_with("fork-00"), "{args}");
     assert_eq!(press(&mut state, &s, "tab"), InputAction::ReturnCommand);
-    assert!(resumes(&mut state, Pending::Edit).ends_with("fork-00"));
+    let args = resumes(&mut state, Pending::Edit, resumer, &requests).await;
+    assert!(args.ends_with("fork-00"), "{args}");
     assert_eq!(state.selected(), Some(&root), "the selection stays on the session inspected");
 
     press(&mut state, &s, "esc");
@@ -977,6 +975,440 @@ async fn the_detail_pane_counts_the_forks() {
     assert!(out.contains("in 3.2M (84% cached) · out 58k tokens"), "{out}");
     // This host goes without saying.
     assert!(!out.contains("@wintermute"), "{out}");
+}
+
+// --- branches: a session that went on on several machines ---------------------------------------
+
+/// The diverged fake session (`fake::DIVERGED`) selected, in the global filter.
+async fn diverged(settings: &Settings, tab: usize) -> State {
+    let state = loaded(settings, "dotfiles sync redesign", tab).await;
+    assert_eq!(state.selected().unwrap().handle.session.as_ref(), fake::DIVERGED);
+    state
+}
+
+/// A diverged session asks which branch: one line of its own harness per branch, newest first
+/// and selected, then the other harnesses. Picking a branch line resumes that branch.
+#[rstest]
+#[tokio::test]
+async fn the_chooser_lists_the_branches_of_a_diverged_session() {
+    use super::state::{InputAction, Pending};
+
+    let s = chooser_settings();
+    let mut state = diverged(&s, 0).await;
+    let row = state.selected().unwrap().clone();
+    state.open_chooser(FakeResumer::default().continue_targets(&row), Pending::Resume);
+    let out = text(&render(&mut state, &s, 100, 30));
+    let dump = out.lines().filter(|l| l.contains('│') || l.contains('╭') || l.contains('╰'));
+    println!("{}", dump.collect::<Vec<_>>().join("\n"));
+    assert!(out.contains("2 branches: it went on separately on several machines"), "{out}");
+    assert!(out.contains("> 1 CC Claude Code  @00000002 · 5h · 40 msgs (latest)"), "{out}");
+    assert!(out.contains("  2 CC Claude Code  this machine · yest · 24 msgs"), "{out}");
+    assert!(out.contains("  3 CX Codex        continue"), "{out}");
+
+    // Enter resumes the latest; a digit, the other.
+    assert_eq!(press(&mut state, &s, "enter"), InputAction::Pick(None, Pending::Resume));
+    assert_eq!(state.picked[&row.handle].as_ref(), "b40");
+    state.open_chooser(Vec::new(), Pending::Resume);
+    assert_eq!(state.chooser.as_ref().unwrap().selected, 0, "reopens on the branch picked");
+    assert_eq!(press(&mut state, &s, "2"), InputAction::Pick(None, Pending::Resume));
+    assert_eq!(state.picked[&row.handle].as_ref(), "h24");
+    state.open_chooser(Vec::new(), Pending::Resume);
+    assert_eq!(state.chooser.as_ref().unwrap().selected, 1);
+    // Without other harnesses, only the branches.
+    assert_eq!(state.chooser.as_ref().unwrap().len(), 2);
+}
+
+/// The chooser's box, as drawn.
+fn chooser_box(out: &str) -> String {
+    let lines: Vec<&str> = out.lines().collect();
+    let top = lines.iter().position(|l| l.contains("╭ Resume in ")).unwrap();
+    let bottom = top + lines[top..].iter().position(|l| l.contains('╰')).unwrap();
+    let top_line: Vec<char> = lines[top].chars().collect();
+    let start = top_line.iter().position(|c| *c == '╭').unwrap();
+    let end = top_line.iter().position(|c| *c == '╮').unwrap();
+    lines[top..=bottom]
+        .iter()
+        .map(|l| l.chars().skip(start).take(end - start + 1).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// For a diverged session, the other harnesses' lines continue the branch the branch lines
+/// picked, under a heading naming it, each saying what continuing that branch flattens: moving
+/// onto a branch line switches them to it, moving on down to them keeps it (marked `•`), and
+/// picking one continues that branch.
+#[rstest]
+#[tokio::test]
+async fn the_chooser_continues_the_branch_picked() {
+    use atuin_client::ai_session::{HarnessKind, SourceId};
+    use atuin_common::harnesstools::continuation::Flattened;
+
+    use super::state::{InputAction, Pending};
+
+    let s = chooser_settings();
+    let mut state = diverged(&s, 0).await;
+    let row = state.selected().unwrap().clone();
+    let targets = vec![HarnessKind::Codex, HarnessKind::Pi];
+    state.open_chooser(targets, Pending::Resume);
+    let flattened = |calls| {
+        Ok(Flattened {
+            tool_calls: calls,
+            tool_results: calls,
+            reasoning: 1,
+        })
+    };
+    let head = |id: &str| Some(SourceId::from(id.to_owned()));
+    state.flattened.insert((row.handle.clone(), head("b40")), flattened(12));
+    state.flattened.insert((row.handle.clone(), head("h24")), flattened(3));
+
+    let mut frames = Vec::new();
+    let mut frame = |state: &mut State| {
+        let out = chooser_box(&text(&render(state, &s, 100, 30)));
+        frames.push(out.clone());
+        out
+    };
+    let out = frame(&mut state);
+    assert!(out.contains("> 1 CC Claude Code  @00000002 · 5h · 40 msgs (latest)"), "{out}");
+    assert!(out.contains("Continue @00000002's branch in:"), "{out}");
+    assert!(out.contains("  3 CX Codex        12 tool calls become notes, reasoning dropped"));
+
+    press(&mut state, &s, "down");
+    let out = frame(&mut state);
+    assert!(out.contains("> 2 CC Claude Code  this machine · yest · 24 msgs"), "{out}");
+    assert!(out.contains("Continue this machine's branch in:"), "{out}");
+    assert!(out.contains("  3 CX Codex        3 tool calls become notes, reasoning dropped"));
+
+    press(&mut state, &s, "down");
+    let out = frame(&mut state);
+    assert!(out.contains("• 2 CC Claude Code  this machine"), "{out}");
+    assert!(out.contains("> 3 CX Codex        3 tool calls become notes"), "{out}");
+    println!("{}", frames.join("\n\n"));
+
+    assert_eq!(
+        press(&mut state, &s, "enter"),
+        InputAction::Pick(Some(HarnessKind::Codex), Pending::Resume)
+    );
+    assert_eq!(state.continue_from[&row.handle].as_ref(), "h24");
+    assert!(!state.picked.contains_key(&row.handle), "no branch resumed in its own harness");
+
+    // Straight to a harness line from the latest branch: it continues the latest.
+    state.open_chooser(vec![HarnessKind::Codex, HarnessKind::Pi], Pending::Resume);
+    assert_eq!(
+        press(&mut state, &s, "4"),
+        InputAction::Pick(Some(HarnessKind::Pi), Pending::Resume)
+    );
+    assert_eq!(state.continue_from[&row.handle].as_ref(), "b40");
+}
+
+/// ctrl-y on a branch line copies a command resuming that branch, named by the start of its id
+/// (`--branch`); on a harness line, one continuing the branch its lines are for. A session that
+/// went one way copies its harness's own command, as before.
+#[rstest]
+#[tokio::test]
+async fn copying_a_branch_names_it() {
+    use atuin_client::ai_session::HarnessKind;
+
+    use super::state::{InputAction, Pending};
+    use super::{branch_arg, resume_line};
+
+    let s = chooser_settings();
+    let mut state = diverged(&s, 0).await;
+    let row = state.selected().unwrap().clone();
+    let resume = FakeResumer::default().plan(&row).await.unwrap();
+    let targets = vec![HarnessKind::Codex, HarnessKind::Pi];
+
+    state.open_chooser(targets.clone(), Pending::Resume);
+    press(&mut state, &s, "down");
+    assert_eq!(press(&mut state, &s, "ctrl-y"), InputAction::Pick(None, Pending::Copy));
+    assert!(state.chooser.is_some(), "copying leaves the chooser open");
+    let id = fake::DIVERGED;
+    assert_eq!(resume_line(&state, &row, &resume), format!("atuin ai resume {id} --branch h24"));
+
+    press(&mut state, &s, "up");
+    press(&mut state, &s, "ctrl-y");
+    assert_eq!(resume_line(&state, &row, &resume), format!("atuin ai resume {id} --branch b40"));
+
+    // A harness line continues the branch its lines are for.
+    state.open_chooser(targets, Pending::Resume);
+    press(&mut state, &s, "down");
+    press(&mut state, &s, "down");
+    assert_eq!(
+        press(&mut state, &s, "ctrl-y"),
+        InputAction::Pick(Some(HarnessKind::Codex), Pending::Copy)
+    );
+    assert_eq!(branch_arg(&row, state.continue_from.get(&row.handle)), " --branch h24");
+
+    // One way: no branch to name, the harness's own command.
+    let one_way = loaded(&s, "", 0).await;
+    let row = one_way.selected().unwrap().clone();
+    assert!(row.branches().is_empty());
+    let resume = FakeResumer::default().plan(&row).await.unwrap();
+    assert_eq!(resume_line(&one_way, &row, &resume), super::resumer::shell_line(&resume.plan));
+}
+
+/// Continuing a diverged session in another harness writes out the branch picked, else the
+/// newest.
+#[rstest]
+#[case::picked(Some("h24"), "h", 24)]
+#[case::the_newest(None, "b", 40)]
+#[tokio::test]
+async fn continuing_a_diverged_session_writes_the_branch_picked(
+    #[case] picked: Option<&str>,
+    #[case] prefix: &str,
+    #[case] rows: usize,
+) {
+    use atuin_client::ai_session::{HarnessKind, SourceId};
+
+    let source = FakeSource::new();
+    let row = source.find_by_id(fake::DIVERGED).await.unwrap().remove(0);
+    let tmp = tempfile::tempdir().unwrap();
+    let context = super::ResumeContext {
+        cwd: tmp.path().to_owned(),
+        ..fake::context()
+    };
+    let written = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let resumer = super::resumer::HarnessResumer::on(
+        context,
+        atuin_client::settings::AiSessionResume::default(),
+        Recording(written.clone()),
+    );
+    let head = picked.map(|p| SourceId::from(p.to_owned()));
+    resumer.continue_in(&source, &row, HarnessKind::Pi, head.as_ref()).await.unwrap();
+    let written = written.lock().clone();
+    // Under new ids, the branch's messages.
+    let messages = &written[0].messages;
+    assert_eq!(messages.len(), 6 + rows);
+    let last = &messages.last().unwrap().content;
+    let expected = format!("{prefix} {rows}");
+    assert!(
+        matches!(last.as_slice(), [atuin_common::harnesstools::session::Content::Text(t)] if *t == expected),
+        "{last:?}"
+    );
+}
+
+/// A machine where every program is installed, and rehydrating records what it would write.
+struct Recording(
+    std::sync::Arc<
+        parking_lot::Mutex<Vec<atuin_common::harnesstools::rehydrate::RehydrateSession>>,
+    >,
+);
+
+#[async_trait::async_trait]
+impl super::resumer::Machine for Recording {
+    async fn locate(
+        &self,
+        _: atuin_common::harnesstools::AnyHarness,
+        _: &str,
+    ) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    async fn rehydrate(
+        &self,
+        _: atuin_common::harnesstools::AnyHarness,
+        session: &atuin_common::harnesstools::rehydrate::RehydrateSession,
+    ) -> Result<std::path::PathBuf, atuin_common::harnesstools::rehydrate::RehydrateError> {
+        self.0.lock().push(session.clone());
+        Ok(std::path::PathBuf::from("/written.jsonl"))
+    }
+
+    fn installed(&self, _: &str) -> bool {
+        true
+    }
+
+    async fn local_tip(
+        &self,
+        _: atuin_common::harnesstools::AnyHarness,
+        _: &str,
+    ) -> Result<
+        Option<atuin_common::harnesstools::sync::LocalTip>,
+        atuin_common::harnesstools::sync::SyncError,
+    > {
+        Ok(None)
+    }
+
+    async fn is_live(
+        &self,
+        _: atuin_common::harnesstools::AnyHarness,
+        _: &str,
+        _: Option<&std::path::Path>,
+    ) -> atuin_common::harnesstools::sync::Liveness {
+        atuin_common::harnesstools::sync::Liveness::NotLive
+    }
+
+    async fn append(
+        &self,
+        _: atuin_common::harnesstools::AnyHarness,
+        _: &str,
+        _: &atuin_common::harnesstools::sync::LocalTip,
+        _: &[atuin_common::harnesstools::rehydrate::RehydrateMessage],
+        _: &atuin_common::harnesstools::sync::AppendOptions<'_>,
+    ) -> Result<
+        atuin_common::harnesstools::sync::AppendOutcome,
+        atuin_common::harnesstools::sync::SyncError,
+    > {
+        Err(atuin_common::harnesstools::sync::SyncError::NotFound)
+    }
+}
+
+/// Accepting a diverged session opens the chooser even with `resume_chooser = false`: a branch
+/// has to be picked. The catch-up then asks for the branch picked.
+#[rstest]
+#[tokio::test]
+async fn a_diverged_session_always_asks_which_branch() {
+    use std::sync::Arc;
+
+    use super::state::{InputAction, Pending};
+    use super::{Outcome, accept, resume_original, worker};
+
+    let s = chooser_settings();
+    let resumer = Arc::new(FakeResumer::default());
+    let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+    let mut state = diverged(&s, 0).await;
+    assert_eq!(accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false), None);
+    let chooser = state.chooser.as_ref().expect("asks");
+    assert!(chooser.targets.is_empty());
+    assert_eq!(press(&mut state, &s, "2"), InputAction::Pick(None, Pending::Resume));
+    assert_eq!(resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests), None);
+    answer_heads(&mut state, &FakeSource::new(), &requests).await;
+    assert_eq!(resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests), None);
+    assert_eq!(state.status.as_ref().unwrap().0, "catching up with sync…");
+    answer_sync(&mut state, resumer.as_ref()).await;
+    assert_eq!(state.synced.values().next().unwrap().0.as_ref().map(AsRef::as_ref), Some("h24"));
+    let outcome = resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests);
+    assert!(matches!(outcome, Some(Outcome::Resume(_))), "{outcome:?}");
+}
+
+/// The preview, the detail pane and Inspect say a session went on in several branches; the row
+/// doesn't.
+#[rstest]
+#[tokio::test]
+async fn a_diverged_session_shows_its_branches() {
+    let s = chooser_settings();
+    let mut state = diverged(&s, 0).await;
+    let out = text(&render(&mut state, &s, 100, 30));
+    let row = out.lines().find(|l| l.contains("Plan the dotfiles sync")).unwrap();
+    assert!(!row.contains("branches"), "{row}");
+    assert!(out.contains("dotfiles · main · 2 branches"), "{out}");
+    // Every branch's messages, the six they share counted once: 6 + 40 + 24.
+    assert!(row.trim_end_matches(['│', ' ']).ends_with(" 70"), "{row}");
+
+    let out = text(&render(&mut state, &s, 150, 40));
+    assert!(out.contains("70 messages · 2 branches · started"), "{out}");
+
+    let mut state = diverged(&s, 1).await;
+    let out = text(&render(&mut state, &s, 100, 40));
+    println!("{out}");
+    assert!(out.contains(" Messages  70"), "{out}");
+    assert!(out.contains(" Branches  @00000002 · 5h · 40 msgs  (latest)"), "{out}");
+    assert!(out.contains("           this machine · yest · 24 msgs"), "{out}");
+}
+
+/// A branch another host wrote to minutes ago asks first, in a popup: resuming here will branch
+/// the session. Enter goes on (and isn't asked again), esc goes back. Whether it did is read
+/// again when the session is accepted: the list's heads are from the last search, which may be
+/// minutes old.
+#[rstest]
+#[tokio::test]
+async fn resuming_a_branch_live_elsewhere_warns_first() {
+    use std::sync::Arc;
+
+    use super::state::{InputAction, Pending};
+    use super::{Outcome, resume_original, worker};
+
+    let s = chooser_settings();
+    let resumer = Arc::new(FakeResumer::default());
+    let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+    let mut state = diverged(&s, 0).await;
+    let handle = state.selected().unwrap().handle.clone();
+    // Buildbox went on since the list was searched.
+    let mut branches = fake::diverged_branches();
+    branches.heads.heads[0].last_at = fake::now() - time::Duration::minutes(2);
+    let source = FakeSource::new().with_branches(&handle, branches);
+    assert!(
+        state.live_elsewhere(state.selected().unwrap(), Pending::Resume).is_none(),
+        "not by the list's heads"
+    );
+
+    assert_eq!(resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests), None);
+    assert!(state.warning.is_none(), "not before the heads are read again");
+    answer_heads(&mut state, &source, &requests).await;
+    assert_eq!(resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests), None);
+    let warning = state.warning.clone().expect("warns");
+    assert_eq!(warning.host, "@00000002");
+    assert!(state.pending.is_none(), "nothing asked of the worker yet");
+    let out = text(&render(&mut state, &s, 100, 30));
+    let dump = out.lines().filter(|l| l.contains('│') || l.contains('╭') || l.contains('╰'));
+    println!("{}", dump.collect::<Vec<_>>().join("\n"));
+    assert!(out.contains("╭ Still active elsewhere "), "{out}");
+    assert!(out.contains("Still active on @00000002 (2m ago)."), "{out}");
+    assert!(out.contains("Resuming here will branch the session."), "{out}");
+    assert!(out.contains("<enter>: continue  <esc>: back"), "{out}");
+
+    // Keys go to it, not the list; esc goes back.
+    assert_eq!(press(&mut state, &s, "x"), InputAction::Continue);
+    assert_eq!(press(&mut state, &s, "esc"), InputAction::Continue);
+    assert!(state.warning.is_none());
+    assert_eq!(state.input.as_str(), "dotfiles sync redesign");
+
+    // Asked again, from heads read again.
+    assert_eq!(resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests), None);
+    answer_heads(&mut state, &source, &requests).await;
+    assert_eq!(resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests), None);
+    assert!(state.warning.is_some());
+    assert_eq!(press(&mut state, &s, "enter"), InputAction::Pick(None, Pending::Resume));
+    assert!(state.warning.is_none());
+    assert_eq!(resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests), None);
+    assert!(state.warning.is_none(), "not asked again");
+    answer_sync(&mut state, resumer.as_ref()).await;
+    let outcome = resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests);
+    assert!(matches!(outcome, Some(Outcome::Resume(_))), "{outcome:?}");
+}
+
+/// A catch-up that couldn't write (the harness has it open here) keeps the picker open saying
+/// why; enter then resumes the copy here as it is. One that did leaves its status as the note.
+#[rstest]
+#[tokio::test]
+async fn a_held_catch_up_stays_open_and_then_resumes_as_it_is() {
+    use std::sync::Arc;
+
+    use atuin_client::theme::Meaning;
+
+    use super::catchup::{Caught, Kept, Synced};
+    use super::state::Pending;
+    use super::{Outcome, finish_sync, resume_original, worker};
+
+    let s = chooser_settings();
+    let resumer = Arc::new(FakeResumer::default());
+    let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+    let mut state = loaded(&s, "", 0).await;
+    let row = state.selected().unwrap().clone();
+    let plan = resumer.plan(&row).await.unwrap().plan;
+
+    let held = Synced {
+        caught: Caught::Kept(Kept::Live { pid: Some(7) }),
+        ..Synced::up_to_date(plan.clone())
+    };
+    assert_eq!(finish_sync(&mut state, &row, Ok(held), Pending::Resume), None);
+    let (status, meaning) = state.status.clone().unwrap();
+    assert_eq!(
+        status,
+        "Claude Code is running this session here — close it to catch up; enter resumes this \
+         machine's copy as it is"
+    );
+    assert_eq!(meaning, Meaning::AlertWarn);
+    let outcome = resume_original(&mut state, Pending::Resume, resumer.as_ref(), &requests);
+    assert_eq!(outcome, Some(Outcome::Resume(plan.clone())));
+
+    let mut state = loaded(&s, "", 0).await;
+    let caught = Synced {
+        caught: Caught::FastForwarded { messages: 136 },
+        head: Some(fake::diverged_branches().heads.heads[0].clone()),
+        ..Synced::up_to_date(plan.clone())
+    };
+    let outcome = finish_sync(&mut state, &row, Ok(caught), Pending::Edit);
+    assert_eq!(outcome, Some(Outcome::Edit(plan)));
+    assert_eq!(state.note.as_deref(), Some("caught up 136 messages from @00000002"));
 }
 
 // --- scrolling the preview, and keeping it steady -------------------------------------------------
@@ -1290,10 +1722,12 @@ async fn an_accept_always_gets_its_plan() {
         let next = tokio::time::timeout(std::time::Duration::from_secs(10), responses.recv());
         let response = next.await.expect("the plan never came").unwrap();
         apply_response(&mut state, response, &requests);
+        // As the picker does: the plan, then the session caught up with sync.
         if let Some((handle, pending)) = state.pending.clone()
             && state.plans.contains_key(&handle)
+            && let Some(outcome) = complete(&mut state, pending, &requests)
         {
-            break complete(&mut state, pending, &requests);
+            break Some(outcome);
         }
     };
     let Some(Outcome::Resume(plan)) = outcome else {

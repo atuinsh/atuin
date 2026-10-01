@@ -62,9 +62,14 @@ Through the widget, the command it picks lands in your shell, as with the
 history search.
 
 Each row shows when the session was last active, its agent, its title and its
-message count (when there's room). ++ctrl+r++ cycles which sessions are listed:
-those in the current repository (where the picker opens), all of them, this
-machine's, the current directory's, and the current branch's.
+message count (when there's room). Messages are prompts and replies: tool calls,
+their output and the agent's own bookkeeping aren't counted. A session with
+several branches (see [Across machines](#across-machines)) counts every branch's
+messages, and the ones they share once, so its count is the shared messages plus
+each branch's count in the chooser. The preview and Inspect count the same way.
+++ctrl+r++ cycles which sessions are listed: those in the current repository
+(where the picker opens), all of them, this machine's, the current directory's,
+and the current branch's.
 
 Words in the query of the form `filter:value` narrow the search further, and show
 as chips in the input:
@@ -163,8 +168,72 @@ The chooser still opens for a session its own agent can't resume.
 
 From the command line, `atuin ai resume <id>` resumes a session in its own
 agent directly (an id prefix works too), and `atuin ai resume <id> --in codex`
-continues it in another (`claude`, `codex`, `opencode` or `pi`). `--print`
-prints the command instead of running it.
+continues it in another (`claude`, `codex`, `opencode` or `pi`). `--branch`
+picks a branch of a session that went on separately on several machines (see
+below). `--print` prints the command instead of running it.
+
+### Across machines
+
+A session keeps one id on every machine. Each machine's copy of the transcript
+is a branch of it, and the synced messages are the shared history, the way
+git has a remote. Resuming never merges branches, and never writes the history
+out again under a new id.
+
+- **Fast-forward.** If the copy on this machine is behind (the session went
+  on elsewhere since), Atuin appends the messages it's missing and resumes it
+  in place. The status line says so: `caught up 136 messages from
+  @3f9a12bc`. Messages are prompts and replies, counted the same way as
+  the chooser's branches; tool calls and their output come along without being
+  counted. With no copy here, it writes one out from sync.
+- **Branches.** If the session went on separately on two machines, it has two
+  branches. The preview and Inspect say `2 branches`, and the chooser lists
+  them, newest first and already selected:
+
+  ```
+  ╭ Resume in ────────────────────────────────────────────────────────╮
+  │ 2 branches: it went on separately on several machines             │
+  │ > 1 CC Claude Code  @3f9a12bc · 2h · 136 msgs (latest)            │
+  │   2 CC Claude Code  this machine · yest · 47 msgs                 │
+  │ Continue @3f9a12bc's branch in:                                   │
+  │   3 CX Codex        12 tool calls become notes, reasoning dropped │
+  │ <enter>: resume  <tab>: edit  <esc>: back                         │
+  ╰───────────────────────────────────────────────────────────────────╯
+  ```
+
+  Picking a branch makes it the one the agent continues from, in the same
+  session. The branch lines also choose which branch the other agents' lines
+  continue: moving onto a branch switches them to it, and moving on down to
+  them keeps it (marked `•`). The other branch stays in the transcript, untouched. opencode keeps
+  a session as a single line, so a branch it can't take in place is continued
+  as a new session linked to the original instead, and the status line says
+  so. `atuin ai resume <id>` resumes the newest branch and names the others.
+
+  To pick a branch from the command line, add `--branch`:
+
+  ```shell
+  atuin ai resume <id> --branch @3f9a12bc        # that machine's branch
+  atuin ai resume <id> --branch this             # this machine's branch
+  atuin ai resume <id> --branch 7aaabc31         # the branch whose id starts so
+  atuin ai resume <id> --in codex --branch this  # continue this machine's branch in Codex
+  ```
+
+  It resumes that branch just as picking it in the chooser does, or with
+  `--in`, continues it in another agent. A machine is named as the chooser
+  names it (`@3f9a12bc`, the end of its host id, or `@` and the full host id),
+  and a branch id by enough of its start to tell it apart. If the name matches no branch, or more than one
+  (say, two branches on one machine), Atuin lists the branches with their ids
+  and stops. ++ctrl+y++ on a line of the chooser copies the command for that
+  branch, with `--branch` naming it by id, which doesn't change as the session
+  goes on.
+- **Still active elsewhere.** If another machine wrote to the branch in the
+  last five minutes, it may still be running there, and resuming here would
+  branch the session. Atuin asks first (`atuin ai resume <id>` asks on a
+  terminal, and otherwise prints a note). Sync takes a little while to deliver
+  messages, so a session active on another machine moments ago may not show
+  up as active yet.
+- **Running here.** Atuin never writes to a transcript that an agent on this
+  machine has open. If the copy here needs catching up, close the agent first.
+  Pressing ++enter++ again resumes the copy as it is.
 
 ## Settings
 

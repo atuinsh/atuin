@@ -6,19 +6,20 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
-//!   Restoring a session from sync, or continuing it in another harness, which only an enter or
-//!   tab asks for, goes first, then the plan an enter or tab is waiting on, which is never dropped
-//!   for another session's (see [`Request::Accept`]).
+//!   Catching a session up with sync (or restoring it) to resume it, or continuing it in another
+//!   harness, which only an enter or tab asks for, goes first, with the plan an enter or tab is
+//!   waiting on, which is never dropped for another session's (see [`Request::Accept`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, SessionHeads, SourceId};
 use atuin_client::settings::AiSessionFilterMode as FilterMode;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
-use super::resumer::{Continued, NotResumable, Restore, Resume, ResumePlan, Resumer};
+use super::catchup::Synced;
+use super::resumer::{Continued, NotResumable, Resume, Resumer};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -37,12 +38,17 @@ pub enum Request {
     /// a plan for another session (the selection's, as it settles) can't take the place of. Only
     /// a newer accept can, which the picker then waits on instead.
     Accept(Box<SessionRow>),
-    /// Write out the transcript of a session planned with a restore, and plan resuming it.
-    Restore(Box<SessionRow>, Restore),
-    /// Count what continuing a session in another harness would flatten (reads all of it).
-    Flatten(HarnessSession, PathBuf),
-    /// Write a session out as a new session of another harness, and plan resuming that.
-    Continue(Box<SessionRow>, HarnessKind),
+    /// Bring this machine's copy of a session to a head (the newest when `None`), restoring it
+    /// from sync when it isn't here, and plan resuming it ([`Resumer::sync`]).
+    Sync(Box<SessionRow>, Option<SourceId>),
+    /// Read a session's heads as they are now (the row's are from the last search).
+    Heads(HarnessSession),
+    /// Count what continuing a session in another harness would flatten (reads all of it, or the
+    /// branch ending at the head given).
+    Flatten(HarnessSession, Option<SourceId>, PathBuf),
+    /// Write a session (the branch ending at the head given, else its newest) out as a new
+    /// session of another harness, and plan resuming that.
+    Continue(Box<SessionRow>, HarnessKind, Option<SourceId>),
 }
 
 #[derive(Debug)]
@@ -55,9 +61,12 @@ pub enum Response {
     Preview(HarnessSession, SessionPreview),
     Children(HarnessSession, Vec<SessionRow>),
     Plan(HarnessSession, Result<Resume, NotResumable>),
-    /// The session is restored (or couldn't be): the plan that resumes it.
-    Restored(HarnessSession, Result<ResumePlan, NotResumable>),
-    Flattened(HarnessSession, Result<Flattened, String>),
+    /// The session is caught up to a head (or couldn't be): the plan that resumes it, and what
+    /// was done.
+    Synced(HarnessSession, Option<SourceId>, Result<Synced, NotResumable>),
+    Flattened(HarnessSession, Option<SourceId>, Result<Flattened, String>),
+    /// A session's heads as they are now; `None` when they can't be read.
+    Heads(HarnessSession, Option<SessionHeads>),
     /// The session is continued in another harness (or couldn't be).
     Continued(HarnessSession, Result<Continued, NotResumable>),
 }
@@ -136,7 +145,8 @@ struct Latest {
     children: Option<Request>,
     plan: Option<Request>,
     accept: Option<Request>,
-    restore: Option<Request>,
+    heads: Option<Request>,
+    sync: Option<Request>,
     flatten: Option<Request>,
     continuation: Option<Request>,
 }
@@ -148,7 +158,8 @@ impl Latest {
             Request::Children(_) => &mut self.children,
             Request::Plan(_) => &mut self.plan,
             Request::Accept(_) => &mut self.accept,
-            Request::Restore(..) => &mut self.restore,
+            Request::Heads(_) => &mut self.heads,
+            Request::Sync(..) => &mut self.sync,
             Request::Flatten(..) => &mut self.flatten,
             Request::Continue(..) => &mut self.continuation,
             Request::Search { .. } => return,
@@ -156,13 +167,14 @@ impl Latest {
         *slot = Some(request);
     }
 
-    /// The next to answer: a continuation, a restore, then the plan an enter is waiting on (an
-    /// enter waits on any of them), then the selection's plan (one may soon be), then what the
-    /// chooser shows, then children, then the preview.
+    /// The next to answer: a continuation, a catch-up, heads or the plan an enter is waiting on
+    /// first, then the selection's plan (one may soon be), then what the chooser shows, then
+    /// children, then the preview.
     fn take(&mut self) -> Option<Request> {
         self.continuation
             .take()
-            .or_else(|| self.restore.take())
+            .or_else(|| self.sync.take())
+            .or_else(|| self.heads.take())
             .or_else(|| self.accept.take())
             .or_else(|| self.plan.take())
             .or_else(|| self.flatten.take())
@@ -208,21 +220,30 @@ async fn details(
             Request::Plan(row) | Request::Accept(row) => {
                 Response::Plan(row.handle.clone(), resumer.plan(&row).await)
             }
-            Request::Restore(row, restore) => Response::Restored(
-                row.handle.clone(),
-                resumer.restore(source.as_ref(), &row, &restore).await,
-            ),
-            Request::Flatten(session, cwd) => {
-                let flattened = source
-                    .rehydrate(&session, &cwd)
-                    .await
+            Request::Heads(session) => {
+                let heads = source.heads(&session).await.unwrap_or_else(|e| {
+                    tracing::warn!("failed to read the heads of {session:?}: {e:#}");
+                    None
+                });
+                Response::Heads(session, heads)
+            }
+            Request::Sync(row, head) => {
+                let synced = resumer.sync(source.as_ref(), &row, head.as_ref()).await;
+                Response::Synced(row.handle.clone(), head, synced)
+            }
+            Request::Flatten(session, head, cwd) => {
+                let original = match &head {
+                    Some(head) => source.branch(&session, head, &cwd).await,
+                    None => source.rehydrate(&session, &cwd).await,
+                };
+                let flattened = original
                     .map(|original| continuation::flattened(&original))
                     .map_err(|e| format!("{e:#}"));
-                Response::Flattened(session, flattened)
+                Response::Flattened(session, head, flattened)
             }
-            Request::Continue(row, target) => Response::Continued(
+            Request::Continue(row, target, head) => Response::Continued(
                 row.handle.clone(),
-                resumer.continue_in(source.as_ref(), &row, target).await,
+                resumer.continue_in(source.as_ref(), &row, target, head.as_ref()).await,
             ),
             Request::Search { .. } => continue,
         };
