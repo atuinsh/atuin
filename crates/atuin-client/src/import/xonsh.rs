@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_domain::record::CmdOrigin;
-use directories::BaseDirs;
 use easy_cast::CastFloat;
 use eyre::{Result, eyre};
 use serde::Deserialize;
@@ -54,9 +53,9 @@ fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     }
 
     // otherwise, fall back to default
-    let base = BaseDirs::new().ok_or_else(|| eyre!("Could not determine home directory"))?;
+    let data_dir = dirs::data_dir().ok_or_else(|| eyre!("Could not determine data directory"))?;
 
-    let hist_dir = base.data_dir().join("xonsh/history_json");
+    let hist_dir = data_dir.join("xonsh/history_json");
     if hist_dir.exists() || cfg!(test) {
         Ok(hist_dir)
     } else {

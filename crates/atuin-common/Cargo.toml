@@ -30,7 +30,7 @@ bytes = { workspace = true }
 bytesize = { workspace = true }
 crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
-directories = { workspace = true }
+dirs = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
 flume = { workspace = true }

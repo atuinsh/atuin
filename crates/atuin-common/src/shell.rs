@@ -74,7 +74,7 @@ impl Shell {
 
     #[must_use]
     pub fn config_file(&self) -> Option<PathBuf> {
-        let mut path = directories::BaseDirs::new()?.home_dir().to_owned();
+        let mut path = dirs::home_dir()?;
 
         // TODO: handle all shells
         match self {
