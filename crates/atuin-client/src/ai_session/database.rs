@@ -20,8 +20,8 @@ use time::OffsetDateTime;
 use tracing::warn;
 
 use super::{
-    HarnessKind, HarnessSession, MatchedSession, Message, NativeSessionId, SearchTerms, Session,
-    SessionFilter, SessionMatch, SourceId,
+    HarnessKind, HarnessSession, MatchedSession, Message, NativeSessionId, PreviewParts,
+    SearchTerms, Session, SessionFilter, SessionMatch, SourceId,
 };
 
 mod watermark;
@@ -971,6 +971,83 @@ impl AiSessionDatabase {
         rows.into_iter().map(Self::session_from_row).collect()
     }
 
+    /// What a session's preview shows: the content of only the first user message and the last
+    /// assistant message with conversation text. The rest of the content is never read, so a
+    /// long session previews as fast as a short one.
+    pub async fn preview_parts(&self, session: &HarnessSession) -> Result<PreviewParts, DbError> {
+        let mut parts = PreviewParts::default();
+        let id: Option<i64> =
+            db::query_scalar("SELECT id FROM sessions WHERE harness = ? AND session_id = ?")
+                .bind(session.harness as i64)
+                .bind(session.session.as_ref())
+                .fetch_optional(self.db.pool())
+                .await?;
+        let Some(id) = id else {
+            return Ok(parts);
+        };
+        // Roles are stored as their JSON, so a role is matched as that text: SQLite walks the
+        // session's messages in time order (`messages_session_timestamp`) and stops at the first
+        // match, without the roles of the rest ever reaching here.
+        let user = serde_json::to_string(&Role::User)?;
+        let assistant = serde_json::to_string(&Role::Assistant)?;
+
+        let first: Option<(String, Option<Vec<u8>>)> = db::query_as(
+            "SELECT content, content_z FROM messages WHERE session = ? AND role = ? ORDER BY \
+             timestamp, id LIMIT 1",
+        )
+        .bind(id)
+        .bind(&user)
+        .fetch_optional(self.db.pool())
+        .await?;
+        if let Some((content, content_z)) = first {
+            parts.first_user = Some(Self::read_content(content, content_z)?);
+        }
+
+        // Newest first, reading each assistant message only until one has text: the tail of a
+        // session is often tool calls and reasoning. Each step asks for the next older one.
+        // An assistant message: its time and id (where the next step starts), and its content.
+        type Reply = (i64, Vec<u8>, String, Option<Vec<u8>>);
+        let mut before: Option<(i64, Vec<u8>)> = None;
+        loop {
+            let row: Option<Reply> = match &before {
+                None => {
+                    db::query_as(
+                        "SELECT timestamp, id, content, content_z FROM messages WHERE session = ? \
+                         AND role = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
+                    )
+                    .bind(id)
+                    .bind(&assistant)
+                    .fetch_optional(self.db.pool())
+                    .await?
+                }
+                Some((timestamp, message)) => {
+                    db::query_as(
+                        "SELECT timestamp, id, content, content_z FROM messages WHERE session = ? \
+                         AND role = ? AND (timestamp < ? OR (timestamp = ? AND id < ?)) ORDER BY \
+                         timestamp DESC, id DESC LIMIT 1",
+                    )
+                    .bind(id)
+                    .bind(&assistant)
+                    .bind(*timestamp)
+                    .bind(*timestamp)
+                    .bind(message.as_slice())
+                    .fetch_optional(self.db.pool())
+                    .await?
+                }
+            };
+            let Some((timestamp, message, content, content_z)) = row else {
+                break;
+            };
+            let content = Self::read_content(content, content_z)?;
+            if content.iter().any(is_conversation_text) {
+                parts.last_assistant = Some(content);
+                break;
+            }
+            before = Some((timestamp, message));
+        }
+        Ok(parts)
+    }
+
     /// [`Self::list_sessions`], at most `limit` of them (0 is unbounded).
     async fn recent_sessions(
         &self,
@@ -1019,7 +1096,11 @@ impl AiSessionDatabase {
         let mut sql = String::new();
         let mut binds = Vec::new();
         if let Some(host) = filter.host {
-            sql.push_str(" AND s.host_id = ?");
+            sql.push_str(if filter.or_unrecorded {
+                " AND (s.host_id = ? OR s.host_id IS NULL)"
+            } else {
+                " AND s.host_id = ?"
+            });
             binds.push(Bind::Text(Self::host_repr(host)));
         }
         if let Some(workspace) = &filter.workspace {
@@ -2385,6 +2466,11 @@ impl Bind {
             Self::Int(n) => query.bind(n),
         }
     }
+}
+
+/// Conversation text: text and summaries, not tool calls, reasoning or errors.
+fn is_conversation_text(content: &Content) -> bool {
+    matches!(content, Content::Text(t) | Content::Summary(t) if !t.trim().is_empty())
 }
 
 /// The smallest string greater than every string starting with `prefix`, or `None` when there is
@@ -4762,9 +4848,57 @@ mod tests {
         assert_eq!(ids(hits.into_iter().map(|m| m.session).collect()), expected, "search");
     }
 
-    /// Sessions from any of several hosts (a host name standing for several ids), filtered before
-    /// the limit, and alongside the other filters.
-    /// Sessions with no recorded host (`e`) count only when the set says so.
+    /// A host filter, before the limit. Sessions with no recorded host (`e`) count only with
+    /// [`SessionFilter::or_unrecorded`].
+    #[rstest]
+    #[case::one(2, false, 0, &["b"])]
+    #[case::several_sessions(1, false, 0, &["a", "c"])]
+    #[case::before_the_limit(3, false, 1, &["d"])]
+    #[case::with_the_unrecorded(2, true, 0, &["b", "e"])]
+    #[case::the_unrecorded_before_the_limit(1, true, 1, &["e"])]
+    #[tokio::test]
+    async fn a_host_filter_selects_sessions(
+        #[case] only: u128,
+        #[case] or_unrecorded: bool,
+        #[case] limit: u32,
+        #[case] expected: &[&str],
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut e = filtered_row("e", "/work/atuin", "main", "opus", 0);
+        e.host = None;
+        e.timestamp += time::Duration::seconds(1);
+        for m in [
+            filtered_row("a", "/work/atuin", "main", "opus", 1),
+            filtered_row("b", "/work/atuin", "main", "opus", 2),
+            filtered_row("c", "/work/atuin", "main", "opus", 1),
+            filtered_row("d", "/work/atuin", "main", "opus", 3),
+            e,
+        ] {
+            db.append(&m).await.unwrap();
+        }
+        let filter = SessionFilter {
+            host: Some(host(only)),
+            or_unrecorded,
+            ..SessionFilter::default()
+        };
+        let sorted = |mut ids: Vec<String>| {
+            ids.sort();
+            ids
+        };
+
+        if limit == 0 {
+            let listed = db.list_sessions(&filter).await.unwrap();
+            let listed = listed.iter().map(|s| s.handle.session.to_string()).collect();
+            assert_eq!(sorted(listed), expected, "listing");
+        }
+        for query in ["shared", ""] {
+            let hits: Vec<SessionMatch> =
+                db.search(query, SearchTerms::Typed, &filter, limit).try_collect().await.unwrap();
+            let hits = hits.iter().map(|m| m.session.handle.session.to_string()).collect();
+            assert_eq!(sorted(hits), expected, "search {query:?}");
+        }
+    }
+
     /// With roots only, a group passes when any of its sessions does, and shows as its root.
     #[rstest]
     #[tokio::test]
@@ -4858,6 +4992,165 @@ mod tests {
         // Only roots have groups.
         assert!(children("fork").await.is_empty());
         assert!(children("missing").await.is_empty());
+    }
+
+    // --- previews -------------------------------------------------------------------------------
+
+    fn text(t: &str) -> Content {
+        Content::Text(t.to_owned())
+    }
+
+    fn tool_use() -> Content {
+        Content::ToolUse(ToolUse {
+            id: ToolCallId::from("call".to_owned()),
+            name: "bash".to_owned(),
+            input: serde_json::json!({ "command": "ls" }),
+        })
+    }
+
+    /// Break the stored content of `session`'s message at `index`, so reading it fails.
+    async fn corrupt(db: &AiSessionDatabase, session: &HarnessSession, index: i64) {
+        db::query(
+            "UPDATE messages SET content = '', content_z = x'00' WHERE session = (SELECT id FROM \
+             sessions WHERE session_id = ?) AND source_id = ?",
+        )
+        .bind(session.session.as_ref())
+        .bind(format!("source-{index}"))
+        .execute(db.db.pool())
+        .await
+        .unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn preview_parts_read_only_the_first_prompt_and_the_last_reply_with_text() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        let long = "a long reply ".repeat(COMPRESS_THRESHOLD);
+        let messages = [
+            message_with(&s, 0, Role::System, vec![text("system prompt")]),
+            message_with(&s, 1, Role::User, vec![text("first prompt")]),
+            message_with(&s, 2, Role::Assistant, vec![text("an early reply")]),
+            message_with(&s, 3, Role::User, vec![text("second prompt")]),
+            message_with(&s, 4, Role::Assistant, vec![text(&long), tool_use()]),
+            // The tail: nothing to show.
+            message_with(&s, 5, Role::Assistant, vec![tool_use()]),
+            message_with(&s, 6, Role::Tool, vec![text("tool output")]),
+            message_with(&s, 7, Role::Assistant, vec![Content::Reasoning("hmm".to_owned())]),
+            message_with(&s, 8, Role::Assistant, vec![text("  \n "), tool_use()]),
+            message_with(&s, 9, Role::Assistant, vec![Content::Error("overloaded".to_owned())]),
+        ];
+        for m in &messages {
+            db.append(m).await.unwrap();
+        }
+        // Content the preview must not need: reading it would fail. Nor are the other messages'
+        // roles read: these two aren't JSON.
+        for index in [0, 2, 3, 6] {
+            corrupt(&db, &s, index).await;
+        }
+        for index in [0, 6] {
+            db::query(
+                "UPDATE messages SET role = 'not json' WHERE session = (SELECT id FROM sessions \
+                 WHERE session_id = ?) AND source_id = ?",
+            )
+            .bind(s.session.as_ref())
+            .bind(format!("source-{index}"))
+            .execute(db.db.pool())
+            .await
+            .unwrap();
+        }
+
+        let parts = db.preview_parts(&s).await.unwrap();
+        assert_eq!(parts.first_user, Some(vec![text("first prompt")]));
+        // Compressed, and with a tool call beside the text: the whole content, for the caller
+        // to render.
+        assert_eq!(parts.last_assistant, Some(vec![text(&long), tool_use()]));
+    }
+
+    /// Messages at the same time are in the order they were recorded (their ids'), and the walk
+    /// back to a reply with text passes over the newer ones at that time, and only those.
+    #[rstest]
+    #[tokio::test]
+    async fn preview_parts_order_messages_at_one_time_by_id() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        let at = |index, role, content, source: &str| {
+            let mut m = message_with(&s, index, role, content);
+            m.source_id = SourceId::from(source.to_owned());
+            m
+        };
+        // Ids are UUIDv7s, so these are recorded in this order.
+        for m in [
+            at(1, Role::User, vec![text("the first prompt")], "a"),
+            at(1, Role::User, vec![text("a later prompt, at the same time")], "b"),
+            at(2, Role::Assistant, vec![text("an older reply")], "c"),
+            at(3, Role::Assistant, vec![text("the reply")], "d"),
+            at(3, Role::Assistant, vec![tool_use()], "e"),
+            at(3, Role::Assistant, vec![Content::Reasoning("hmm".to_owned())], "f"),
+        ] {
+            db.append(&m).await.unwrap();
+        }
+        let parts = db.preview_parts(&s).await.unwrap();
+        assert_eq!(parts.first_user, Some(vec![text("the first prompt")]));
+        assert_eq!(parts.last_assistant, Some(vec![text("the reply")]));
+    }
+
+    /// The preview's queries walk the session's messages by time through the index, rather
+    /// than scanning the table.
+    #[rstest]
+    #[tokio::test]
+    async fn preview_parts_use_the_session_time_index() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for sql in [
+            "SELECT content, content_z FROM messages WHERE session = 1 AND role = '\"User\"' \
+             ORDER BY timestamp, id LIMIT 1",
+            "SELECT timestamp, id, content, content_z FROM messages WHERE session = 1 AND role = \
+             '\"Assistant\"' AND (timestamp < 5 OR (timestamp = 5 AND id < x'00')) ORDER BY \
+             timestamp DESC, id DESC LIMIT 1",
+        ] {
+            let plan: Vec<(i64, i64, i64, String)> =
+                db::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                    .fetch_all(db.db.pool())
+                    .await
+                    .unwrap();
+            let plan: Vec<&str> = plan.iter().map(|(_, _, _, detail)| detail.as_str()).collect();
+            assert!(
+                plan.iter().any(|d| d.contains("USING INDEX messages_session_timestamp")),
+                "{plan:?}"
+            );
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_summary_is_reply_text() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        db.append(&message_with(&s, 0, Role::Assistant, vec![text("before")])).await.unwrap();
+        let summary = vec![Content::Summary("compacted".to_owned())];
+        db.append(&message_with(&s, 1, Role::Assistant, summary.clone())).await.unwrap();
+
+        let parts = db.preview_parts(&s).await.unwrap();
+        assert_eq!(parts.last_assistant, Some(summary));
+        assert_eq!(parts.first_user, None, "no user message");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn preview_parts_without_a_reply_or_a_session() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        // The first user message is the first prompt, even without text.
+        db.append(&message_with(&s, 0, Role::User, vec![tool_use()])).await.unwrap();
+        db.append(&message_with(&s, 1, Role::Assistant, vec![tool_use()])).await.unwrap();
+        db.append(&message_with(&s, 2, Role::User, vec![text("second")])).await.unwrap();
+
+        let parts = db.preview_parts(&s).await.unwrap();
+        assert_eq!(parts.first_user, Some(vec![tool_use()]));
+        assert_eq!(parts.last_assistant, None);
+
+        let missing = handle(HarnessKind::Codex, "missing");
+        assert_eq!(db.preview_parts(&missing).await.unwrap(), super::PreviewParts::default());
     }
 
     // --- schema ---------------------------------------------------------------------------------

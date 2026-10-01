@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
 use crate::utils::home_dir;
 
@@ -26,5 +27,20 @@ impl Harness for Codex {
         let config_path = home_dir().join(".codex").join("hooks.json");
         json_hooks::install(&config_path, "^Bash$", self.name()).await?;
         Ok(config_path)
+    }
+
+    /// `codex resume <id>`. Codex finds the id from any directory, but asks whether to work in
+    /// the session's directory or the current one when they differ.
+    fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
+        let id = session::resume_id(&target.id);
+        Ok(resume::plan(target, CwdRequirement::Preferred, "codex", [
+            "resume".to_owned(),
+            id.to_owned(),
+        ]))
+    }
+
+    async fn locate(&self, id: &str) -> Option<PathBuf> {
+        let (root, id) = (session::default_root(), id.to_owned());
+        resume::blocking(move || session::locate(&root, &id)).await
     }
 }

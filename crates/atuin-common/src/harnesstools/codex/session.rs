@@ -35,13 +35,32 @@ pub struct CodexSessions {
 
 impl CodexSessions {
     fn resolve_root(&self) -> PathBuf {
-        self.root.clone().unwrap_or_else(|| {
-            env_nonempty("CODEX_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home_dir().join(".codex"))
-                .join("sessions")
-        })
+        self.root.clone().unwrap_or_else(default_root)
     }
+}
+
+/// Codex's live rollouts: `$CODEX_HOME/sessions`, else `~/.codex/sessions`.
+pub(crate) fn default_root() -> PathBuf {
+    env_nonempty("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".codex"))
+        .join("sessions")
+}
+
+/// The rollout of session `id` under `root` (`<yyyy>/<mm>/<dd>/rollout-<timestamp>-<id>.jsonl`).
+/// Archived rollouts are not looked for: codex refuses to resume one until it is unarchived.
+pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
+    if !crate::harnesstools::resume::is_plain_name(id) {
+        return None;
+    }
+    crate::harnesstools::resume::find_file(root, |path| {
+        CodexListener::session_id(path).is_some_and(|found| found.as_ref() == id)
+    })
+}
+
+/// The id `codex resume` takes for session `id`: its thread's (see [`thread_of`]).
+pub(crate) fn resume_id(id: &str) -> &str {
+    id.split_once('_').map_or(id, |(thread, _)| thread)
 }
 
 /// Where Codex moves the rollouts of a thread the user archives: `archived_sessions/` beside
@@ -146,8 +165,7 @@ fn session_id_of(stem: &str) -> SessionId {
 /// The thread a session belongs to: its id, or for a reverted thread's rollout the thread
 /// part of it (see [`session_id_of`]).
 fn thread_of(session: &SessionId) -> &str {
-    let id: &str = session.as_ref();
-    id.split_once('_').map_or(id, |(thread, _)| thread)
+    resume_id(session.as_ref())
 }
 
 #[derive(Debug, Clone)]
@@ -1580,6 +1598,42 @@ mod tests {
         let usage: Vec<&CodexMessage> = lines.iter().filter(|m| m.usage().is_some()).collect();
         assert_eq!(usage.len(), 9);
         assert!(usage.iter().all(|m| m.kind == TOKEN_USAGE_RECORD && m.turn_id().is_some()));
+    }
+
+    /// The usage counted per model call adds up to the thread's running total in the last
+    /// `token_count` snapshot, with all its input (`input_tokens` counts the cached input too)
+    /// split into [`Usage::input`] and the cache: nothing counted twice, nothing left out.
+    #[rstest]
+    #[case::recorded("session1.jsonl")]
+    #[case::compacted_with_empty_snapshots("paginated-compacted.jsonl")]
+    #[tokio::test]
+    async fn per_call_usage_adds_up_to_the_running_total(#[case] name: &str) {
+        let lines = read_session("s", fixture(name)).await;
+        let calls: Vec<Usage> = lines.iter().filter_map(CodexMessage::usage).collect();
+        let sum = |f: fn(&Usage) -> Option<u64>| calls.iter().filter_map(f).sum::<u64>();
+
+        let raw = std::fs::read_to_string(fixture(name)).unwrap();
+        let total = raw
+            .lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find_map(|v| {
+                let info = &v["payload"]["info"];
+                (v["payload"]["type"] == "token_count" && info.is_object())
+                    .then(|| info["total_token_usage"].clone())
+            })
+            .unwrap();
+        let field = |name: &str| total[name].as_u64().unwrap();
+
+        assert!(calls.len() > 1);
+        assert_eq!(sum(Usage::total_input), field("input_tokens"));
+        assert_eq!(sum(|u| u.cache_read), field("cached_input_tokens"));
+        assert_eq!(
+            sum(|u| u.input),
+            field("input_tokens") - field("cached_input_tokens"),
+            "uncached input"
+        );
+        assert_eq!(sum(|u| u.output), field("output_tokens"));
     }
 
     #[rstest]
