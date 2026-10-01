@@ -394,6 +394,135 @@ fn a_checkout_named_twice_resumes_where_the_current_directory_is(
     assert_eq!(restore.cwd, expected);
 }
 
+/// A source whose sessions call a tool and reason, as captured.
+struct Worked;
+
+#[async_trait]
+impl SessionSource for Worked {
+    async fn search(&self, _: &SessionFilter) -> eyre::Result<Vec<SessionRow>> {
+        Ok(Vec::new())
+    }
+
+    async fn find_by_id(&self, _: &str) -> eyre::Result<Vec<SessionRow>> {
+        Ok(Vec::new())
+    }
+
+    async fn preview(&self, _: &HarnessSession) -> eyre::Result<SessionPreview> {
+        Ok(SessionPreview::default())
+    }
+
+    async fn children(&self, _: &HarnessSession) -> eyre::Result<Vec<SessionRow>> {
+        Ok(Vec::new())
+    }
+
+    async fn rehydrate(
+        &self,
+        session: &HarnessSession,
+        cwd: &Path,
+    ) -> eyre::Result<RehydrateSession> {
+        use atuin_common::harnesstools::rehydrate::RehydrateMessage;
+        use atuin_common::harnesstools::session::{Content, Role, ToolUse};
+        let row = |n: i64, role, content| RehydrateMessage {
+            source_id: format!("r{n}"),
+            parent_source_id: None,
+            timestamp: OffsetDateTime::from_unix_timestamp(n).unwrap(),
+            role,
+            content,
+            model: None,
+            usage: None,
+            stop_reason: None,
+            turn_id: None,
+            cwd: None,
+            git_branch: None,
+        };
+        let mut synced = Synced.rehydrate(session, cwd).await?;
+        synced.messages = vec![
+            row(1, Role::User, vec![Content::Text("fix it".into())]),
+            row(2, Role::Assistant, vec![
+                Content::ReasoningSummary { tokens: None },
+                Content::ToolUse(ToolUse {
+                    id: "t1".to_owned().into(),
+                    name: "Bash".to_owned(),
+                    input: serde_json::json!({"command": "cargo test"}),
+                }),
+            ]),
+            row(3, Role::Assistant, vec![Content::Text("fixed".into())]),
+        ];
+        Ok(synced)
+    }
+}
+
+/// Continuing writes a new session of the target, never the original's id, where the session
+/// ran, and plans resuming it with the target's own command; the status says what was
+/// flattened.
+#[rstest]
+#[tokio::test]
+async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
+    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi).await.unwrap();
+
+    let written = machine.written.lock().clone();
+    let [new] = written.as_slice() else {
+        panic!("one session written: {written:?}");
+    };
+    assert_ne!(new.id, "abc-123");
+    assert_eq!(new.cwd, dirs.elsewhere);
+    assert_eq!(continued.target, HarnessKind::Pi);
+    let path = format!("/restored/{}.jsonl", new.id);
+    assert_eq!(continued.plan.program, "pi");
+    assert_eq!(continued.plan.args, ["--session", path.as_str()]);
+    assert_eq!(continued.plan.cwd.as_deref(), Some(dirs.elsewhere.as_path()));
+    assert_eq!(
+        continued.status(),
+        "continuing in Pi: 1 tool call becomes a note, reasoning dropped"
+    );
+}
+
+/// A target's template using `{path}` still offers it, and the continuation resumes with the
+/// path its transcript was written to.
+#[rstest]
+#[tokio::test]
+async fn a_path_template_target_is_offered_and_resumes_the_written_session(dirs: Dirs) {
+    let machine = FakeMachine::default();
+    let templates = AiSessionResume {
+        pi: Some("pi --session {path}".to_owned()),
+        ..AiSessionResume::default()
+    };
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone());
+    let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
+    assert!(resumer.continue_targets(&session).contains(&HarnessKind::Pi));
+
+    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi).await.unwrap();
+    let written = machine.written.lock().clone();
+    let path = format!("/restored/{}.jsonl", written[0].id);
+    assert_eq!(continued.plan.args, ["--session", path.as_str()]);
+}
+
+/// Only the other harnesses that are installed are offered; continuing in one that isn't, or in
+/// the session's own, writes nothing.
+#[rstest]
+#[tokio::test]
+async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
+    let machine = FakeMachine {
+        missing_programs: vec!["opencode"],
+        ..FakeMachine::default()
+    };
+    let resumer = resumer(&dirs, &machine);
+    let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
+    assert_eq!(resumer.continue_targets(&session), [HarnessKind::Codex, HarnessKind::Pi]);
+
+    let err = resumer.continue_in(&Worked, &session, HarnessKind::Opencode).await.unwrap_err();
+    assert_eq!(err, NotResumable::NotInstalled("opencode".to_owned()));
+    let err = resumer.continue_in(&Worked, &session, HarnessKind::ClaudeCode).await.unwrap_err();
+    assert!(matches!(err, NotResumable::Continue("Claude Code", _)), "{err}");
+    assert!(machine.written.lock().is_empty());
+
+    let copilot = row(HarnessKind::Copilot, "cp-1", &dirs.here, false);
+    assert!(resumer.continue_targets(&copilot).is_empty());
+}
+
 #[rstest]
 fn finds_programs_on_path() {
     assert!(!on_path("definitely-not-a-program-atuin"));

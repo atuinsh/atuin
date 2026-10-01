@@ -353,6 +353,12 @@ enter_accept = true
 ## Height of the inline picker. Defaults to the top-level inline_height.
 # inline_height = 40
 
+## Ask where to resume a session once it's chosen: in its own agent (the default
+## choice, so enter-enter resumes it), or continued in another agent installed here.
+## When false, enter and tab resume in its own agent straight away; the chooser still
+## opens for a session that can't be resumed there.
+# resume_chooser = true
+
 ## Take the mouse: the wheel scrolls the preview under it, or moves the selection over the
 ## list. While the picker has it, most terminals select text with shift held while dragging.
 ## Defaults to the top-level no_mouse (so on, unless that is set).
