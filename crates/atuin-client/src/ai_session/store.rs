@@ -245,6 +245,8 @@ impl AiSessionStore {
             tracing::info!("ai-session watermarks were not made with this key: replaying all");
         }
 
+        // A session's heads are worked out once it is replayed, not once per row of it.
+        let deferral = db.defer_heads();
         let mut stats = Reprojected::default();
         let mut result = None;
         for _ in 0..REPROJECT_PASSES {
@@ -262,10 +264,27 @@ impl AiSessionStore {
                 }
             }
         }
+        drop(deferral);
+        // Whatever was replayed, even if not all of it: the marks would wait for the next open.
+        // Failing to fails only a reprojection that otherwise succeeded: one that failed or was
+        // cut short reports why (callers act on that), and its marks stay for the next.
+        let refreshed = db.refresh_heads().await;
+
         match result {
-            Some(Err(err)) => Err(err),
-            Some(Ok(())) => Ok(stats),
+            Some(Err(err)) => {
+                if let Err(e) = refreshed {
+                    warn!(?e, "failed to work out ai-session heads after a reprojection");
+                }
+                Err(err)
+            }
+            Some(Ok(())) => {
+                refreshed?;
+                Ok(stats)
+            }
             None => {
+                if let Err(e) = refreshed {
+                    warn!(?e, "failed to work out ai-session heads after a reprojection");
+                }
                 warn!(
                     "ai-session projection kept being invalidated, leaving the rest for the next \
                      one"

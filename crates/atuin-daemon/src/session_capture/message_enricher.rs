@@ -49,21 +49,38 @@ impl MessageEnricher {
     /// read from past its start: its row (parent, and the title when no title change is
     /// stored), every title change its lines made (replayed, so each source's title is known
     /// and a later clear falls back to the next), its newest stored message (the timestamp an
-    /// untimed line takes) and the source ids of its stored content-addressed rows (so
-    /// identical id-less lines keep counting where the earlier read left off).
+    /// untimed line takes) and the source ids of its stored content-addressed rows, each with
+    /// whether this host captured it (so identical id-less lines keep counting where the earlier
+    /// read left off).
+    ///
+    /// Only this host's rows (and rows of no recorded host, which predate hosts and so are this
+    /// host's) count toward a line's ordinal: the ids are what this host's reading of its own
+    /// transcript minted. Another host's rows may be ones this transcript never held (the other
+    /// host went on without it), and counting them would number this host's next identical line
+    /// past what a read from the start numbers it, so a later such read would push it again.
+    /// Every host's rows count toward the [alias](Message::alias) ordinals, which name ids
+    /// another host minted: an alias numbered too high merely misses.
     pub fn resume(
         &mut self,
         session: &SessionId,
         row: Option<&Session>,
         titles: &[TitleChange],
         last: Option<&Message>,
-        synthetic: &[SourceId],
+        synthetic: &[(SourceId, bool)],
     ) {
         let mut occurrences = HashMap::new();
-        for id in synthetic {
+        let mut bases = HashMap::new();
+        for (id, here) in synthetic {
             if let Some((hash, ordinal)) = parse_synthetic(id) {
-                let next = occurrences.entry(hash).or_insert(0);
-                *next = (*next).max(ordinal + 1);
+                let counts = if *here {
+                    vec![&mut occurrences, &mut bases]
+                } else {
+                    vec![&mut bases]
+                };
+                for counts in counts {
+                    let next = counts.entry(hash).or_insert(0);
+                    *next = (*next).max(ordinal + 1);
+                }
             }
         }
         let mut replayed = BTreeMap::new();
@@ -82,6 +99,7 @@ impl MessageEnricher {
             parent: row.and_then(|r| r.parent.clone()),
             parent_kind: row.and_then(|r| r.parent_kind),
             occurrences,
+            bases,
             untimed: Vec::new(),
         });
     }
@@ -159,7 +177,7 @@ impl MessageEnricher {
     pub fn source_id(session: &SessionId, m: &AnyMessage) -> SourceId {
         match m.id() {
             Some(id) => SourceId::from(String::from(id)),
-            None => synthetic_id(content_hash(session, m), 0),
+            None => synthetic_id(content_hash(session, m, m.timestamp()), 0),
         }
     }
 }
@@ -197,14 +215,24 @@ fn build(
         return None;
     }
 
-    let source_id = match m.id() {
-        Some(id) => SourceId::from(String::from(id)),
+    let (source_id, alias) = match m.id() {
+        Some(id) => (SourceId::from(String::from(id)), None),
         None => {
-            let hash = content_hash(session, m);
+            let timestamp = m.timestamp();
+            let hash = content_hash(session, m, timestamp);
             let ordinal = state.occurrences.entry(hash).or_insert(0);
             let id = synthetic_id(hash, *ordinal);
             *ordinal += 1;
-            id
+            // Every id-less line is also counted by its hash without the timestamp, which is
+            // what it was keyed on if it was first captured from a transcript that did not stamp
+            // it (a Codex rollout from before 0.32) and has since been written back out stamped
+            // (a rehydrated rollout stamps every line). Untimed lines come first in any
+            // transcript, so the nth line of a timestamp-free hash is the nth there too.
+            let base = timestamp.map_or(hash, |_| content_hash(session, m, None));
+            let nth = state.bases.entry(base).or_insert(0);
+            let alias = timestamp.map(|_| synthetic_id(base, *nth));
+            *nth += 1;
+            (id, alias)
         }
     };
     Some(
@@ -212,6 +240,8 @@ fn build(
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(handle)
             .source_id(source_id)
+            .alias(alias)
+            .seq(m.seq())
             .parent(state.parent.clone())
             .parent_kind(state.parent_kind)
             .parent_source_id(m.parent_id().map(|id| SourceId::from(String::from(id))))
@@ -240,11 +270,16 @@ fn apply(titles: &mut BTreeMap<TitleSource, String>, change: TitleChange) {
 }
 
 /// A hash of everything a row takes from an id-less line, so lines that differ in any of it
-/// (two usage records written in one millisecond) never share an id.
-fn content_hash(session: &SessionId, m: &AnyMessage) -> u64 {
+/// (two usage records written in one millisecond) never share an id. `timestamp` is the line's
+/// own, or `None` for the hash it would have without one.
+///
+/// Never extend this: every id-less row ever captured is keyed on it, and a line that hashed
+/// differently when read again would be pushed again. (`Message::seq`, captured since, is left
+/// out for that reason.)
+fn content_hash(session: &SessionId, m: &AnyMessage, timestamp: Option<OffsetDateTime>) -> u64 {
     let canonical = serde_json::json!([
         session.as_ref(),
-        m.timestamp().map(OffsetDateTime::unix_timestamp_nanos).map(|ns| ns.to_string()),
+        timestamp.map(OffsetDateTime::unix_timestamp_nanos).map(|ns| ns.to_string()),
         m.role(),
         m.content(),
         m.title(),
@@ -299,6 +334,9 @@ struct SessionState {
     /// How many rows each content hash has produced, so identical id-less lines (the same
     /// prompt twice in one millisecond) get distinct, re-read-stable ids.
     occurrences: HashMap<u64, u32>,
+    /// How many id-less lines each timestamp-free hash has seen, timed or not: the ordinal of
+    /// each row's [alias](Message::alias).
+    bases: HashMap<u64, u32>,
     /// Rows from before the first timestamped line, waiting to take its timestamp: the session
     /// started no earlier, and capture time would make an old session look new.
     untimed: Vec<Message>,
@@ -703,7 +741,10 @@ mod tests {
         let untimed = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Renamed"}));
         let first = MessageEnricher::source_id(&session(), &untimed);
         let (hash, _) = parse_synthetic(&first).unwrap();
-        n.resume(&session(), Some(&row), &[], Some(&last), &[first, synthetic_id(hash, 1)]);
+        n.resume(&session(), Some(&row), &[], Some(&last), &[
+            (first, true),
+            (synthetic_id(hash, 1), true),
+        ]);
 
         let msg = n.capture(&session(), &untimed).pop().unwrap();
         assert_eq!(msg.timestamp, ts);
@@ -775,6 +816,77 @@ mod tests {
         let (hash, _) = parse_synthetic(&first).unwrap();
         let ids: Vec<_> = rows.into_iter().map(|m| m.source_id).collect();
         assert_eq!(ids, vec![first, synthetic_id(hash, 1)]);
+    }
+
+    /// A Codex line's ordinal rides its row.
+    #[rstest]
+    #[case::numbered(Some(12))]
+    #[case::unnumbered(None)]
+    fn codex_rows_carry_the_lines_ordinal(#[case] ordinal: Option<u64>) {
+        let mut raw = serde_json::json!({
+            "type": "response_item", "timestamp": "2026-09-18T10:00:00.123Z",
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}]},
+        });
+        if let Some(ordinal) = ordinal {
+            raw["ordinal"] = serde_json::json!(ordinal);
+        }
+        assert_eq!(one(HarnessKind::Codex, &codex(&raw)).unwrap().seq, ordinal);
+    }
+
+    /// An id-less line with a timestamp is aliased to the id it has without one: the id it was
+    /// keyed on when first captured from a Codex rollout from before 0.32, which stamped no
+    /// line, and which a rehydrated rollout stamps. Identical lines keep counting apart.
+    #[rstest]
+    fn a_stamped_idless_line_is_aliased_to_its_unstamped_id() {
+        let bare = codex(&serde_json::json!({
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "list the files"}],
+        }));
+        let stamped = codex(&serde_json::json!({
+            "timestamp": "2025-07-24T10:00:00.123Z", "type": "response_item",
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "list the files"}]},
+        }));
+        let meta = codex(&serde_json::json!({
+            "id": "5973b6c0-94b8-487b-a530-2aeb6098ae0e", "timestamp": "2025-07-24T10:00:00.123Z",
+        }));
+        let original = rows(&mut MessageEnricher::new(HarnessKind::Codex), &session(), &[
+            meta.clone(),
+            bare.clone(),
+            bare,
+        ]);
+        let again = rows(&mut MessageEnricher::new(HarnessKind::Codex), &session(), &[
+            meta,
+            stamped.clone(),
+            stamped,
+        ]);
+        assert!(original.iter().all(|m| m.alias.is_none()), "an unstamped line is its own id");
+        let original: Vec<_> = original[1..].iter().map(|m| Some(m.source_id.clone())).collect();
+        let aliases: Vec<_> = again[1..].iter().map(|m| m.alias.clone()).collect();
+        assert_eq!(aliases, original);
+        assert_ne!(again[1].source_id, again[2].source_id);
+    }
+
+    /// Resumed past its start, a session numbers its id-less lines on from this host's rows
+    /// only: another host's may be rows its transcript never held, and counting them would
+    /// number the next line past what a read from the start numbers it.
+    #[rstest]
+    fn another_hosts_rows_do_not_number_this_hosts_lines() {
+        let untimed = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Renamed"}));
+        let first = MessageEnricher::source_id(&session(), &untimed);
+        let (hash, _) = parse_synthetic(&first).unwrap();
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        n.resume(&session(), None, &[], None, &[
+            (first, true),
+            (synthetic_id(hash, 1), false),
+            (synthetic_id(hash, 2), false),
+        ]);
+        let msg = n
+            .capture(&session(), &untimed)
+            .pop()
+            .unwrap_or_else(|| n.finish(&session()).pop().unwrap());
+        assert_eq!(msg.source_id, synthetic_id(hash, 1));
     }
 }
 

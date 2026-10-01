@@ -317,7 +317,8 @@ struct Warmed {
     row: Option<Session>,
     titles: Vec<TitleChange>,
     last: Option<Message>,
-    synthetic: Vec<SourceId>,
+    /// Each with whether this host captured it (see [`MessageEnricher::resume`]).
+    synthetic: Vec<(SourceId, bool)>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -350,7 +351,10 @@ async fn read_warm(
     let last = sink.sidecar.last_message(handle).await?;
     #[cfg(test)]
     inject(sink, WarmStep::Synthetic).await?;
-    let synthetic = sink.sidecar.source_ids_with_prefix(handle, SYNTHETIC).await?;
+    let synthetic = sink
+        .sidecar
+        .source_ids_with_prefix_by_host(handle, SYNTHETIC, sink.records.host_id())
+        .await?;
     #[cfg(test)]
     inject(sink, WarmStep::Titles).await?;
     let titles = sink.sidecar.title_changes(handle).await?;

@@ -23,7 +23,7 @@
 //!   its `uuid` (capture already holds it: nothing is pushed), and the lines merged away and the
 //!   results are not there to capture again. The line records which synced rows went into it
 //!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), as does the line a row
-//!   with nothing to write hangs from, so the transcript says which synced rows it holds.
+//!   with nothing to write hangs from, so catching the transcript up later knows it holds them.
 //! - **Tool output**: capture keeps none now; a call kept with its input (older records) gets
 //!   [`UNCAPTURED_OUTPUT`] as its `tool_result` content, which says so to the model.
 //! - **Pasted images and documents**: capture keeps what they were, not their bytes. Each becomes
@@ -45,7 +45,7 @@ use time::macros::format_description;
 
 use super::session::{default_root, locate};
 use crate::harnesstools::rehydrate::{
-    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
+    Flatten, Held, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
     flatten_uncaptured_calls, record_merged,
 };
 use crate::harnesstools::resume;
@@ -143,19 +143,8 @@ fn timestamp(at: OffsetDateTime) -> String {
 
 /// The whole transcript, one JSON line per written row.
 fn transcript(session: &RehydrateSession) -> String {
-    let session = &RehydrateSession {
-        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
-        ..session.clone()
-    };
-    let mut writer = Writer::new(session);
-    for message in &session.messages {
-        writer.push(message);
-    }
-    let mut lines = writer.lines;
-    // The rows written as no line of their own, on the lines they went into.
-    record_merged(&mut lines, &writer.merged, |l| l["uuid"].as_str().map(str::to_owned));
     let mut out = String::new();
-    for line in lines {
+    for line in lines(session, None, None) {
         out.push_str(&line.to_string());
         out.push('\n');
     }
@@ -167,9 +156,36 @@ fn transcript(session: &RehydrateSession) -> String {
     out
 }
 
+/// The lines for `session`'s rows, calls captured without their input flattened into notes
+/// ([`Flatten::Runs`]): for a whole transcript, or, given what a transcript already holds
+/// (`present`) and the line it ends on (`after`), for rows appended to it, which then hang from
+/// the lines already there (or from the line a row they hang from was merged into). The rows
+/// written as no line of their own are recorded on the lines as merged into their nearest written
+/// ancestor ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)).
+pub(crate) fn lines(
+    session: &RehydrateSession,
+    present: Option<Held<'_>>,
+    after: Option<&str>,
+) -> Vec<Value> {
+    let session = &RehydrateSession {
+        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
+        ..session.clone()
+    };
+    let mut writer = Writer::new(session, present, after);
+    for message in &session.messages {
+        writer.push(message);
+    }
+    let mut lines = writer.lines;
+    record_merged(&mut lines, &writer.merged, |l| l["uuid"].as_str().map(str::to_owned));
+    lines
+}
+
 struct Writer<'a> {
     session: &'a RehydrateSession,
     lines: Vec<Value>,
+    /// What the transcript already holds, when appending to one: a row hangs from its lines as
+    /// from a written row.
+    present: Option<Held<'a>>,
     /// Every row, by source id.
     by_id: HashMap<&'a str, &'a RehydrateMessage>,
     /// The rows that are written (the rest have nothing a line can carry).
@@ -185,7 +201,11 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(session: &'a RehydrateSession) -> Self {
+    fn new(
+        session: &'a RehydrateSession,
+        present: Option<Held<'a>>,
+        after: Option<&'a str>,
+    ) -> Self {
         let by_id: HashMap<&'a str, &'a RehydrateMessage> =
             session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect();
         let boundaries = session
@@ -212,9 +232,10 @@ impl<'a> Writer<'a> {
         let mut writer = Self {
             session,
             lines: Vec::new(),
+            present,
             by_id,
             writable: HashSet::new(),
-            last: None,
+            last: after,
             boundaries,
             server_tools,
             merged: Vec::new(),
@@ -229,7 +250,8 @@ impl<'a> Writer<'a> {
     }
 
     /// The written line `m` hangs from: its nearest written ancestor, however the rows are
-    /// ordered; `None` at the root. A parent that was never synced stands for the line before.
+    /// ordered (a row the transcript holds merged into a line standing for that line); `None` at
+    /// the root. A parent that was never synced stands for the line before.
     fn parent(&self, m: &'a RehydrateMessage) -> Option<&'a str> {
         let mut parent = m.parent_source_id.as_deref();
         // At most one step per row: a cycle ends it.
@@ -237,6 +259,9 @@ impl<'a> Writer<'a> {
             let p = parent?;
             if self.writable.contains(p) {
                 return Some(p);
+            }
+            if let Some(line) = self.present.and_then(|present| present.line_of(p)) {
+                return Some(line).filter(|line| !line.is_empty());
             }
             match self.by_id.get(p) {
                 Some(row) => parent = row.parent_source_id.as_deref(),

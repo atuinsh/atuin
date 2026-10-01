@@ -21,13 +21,16 @@
 //! (its model and original cwd), `compacted` summaries, and a turn's failure (`turn_aborted`, or
 //! a `task_complete` carrying an error). What they cannot get back is a line that had no
 //! timestamp of its own (only rollouts from before Codex 0.32 have those): it now has one, so it
-//! hashes differently and is captured again as a new row.
+//! hashes differently, and capture finds it under the id it had without one (its alias).
 //!
 //! # The format
 //!
 //! The rollout is written in Codex's paginated history mode, as Codex writes one since 0.156
-//! (`session_meta.history_mode: "paginated"`): every line numbered (`ordinal`) from 0 on, which
-//! Codex keeps numbering from when it continues the rollout.
+//! (`session_meta.history_mode: "paginated"`): every line numbered (`ordinal`), the rows back at
+//! the numbers they were captured at (see `number`), so Codex continues numbering where the
+//! synced rollout left off, and a later segment of the thread can continue it (`sync::codex`).
+//! (A rollout in the legacy mode stays unnumbered when Codex continues it, so the rows it adds
+//! there carry no number to tell two hosts' continuations apart by.)
 //!
 //! Codex shows a paginated rollout's history from its turn and item events, which the rows are
 //! written between (see `rows`): `task_started`, `item_completed` for each prompt and answer,
@@ -53,8 +56,8 @@
 //!   to capture again. A line keyed on its content (`syn-`) would hash differently once changed:
 //!   a note never joins one, and a call keyed so (none in practice: every call has a `call_id`)
 //!   is left out. The line of the written row before them records the rows written as no line
-//!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), so the rollout says which
-//!   synced rows it holds.
+//!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), so catching the rollout
+//!   up later knows it holds them.
 //! - **Tool output**: capture keeps none now; a call kept with its input (older records) gets
 //!   [`UNCAPTURED_OUTPUT`] as its output (an empty `tools` list for a tool search).
 //! - Rows whose line carries nothing Codex needs back: thread names (Codex keeps those in its
@@ -213,24 +216,21 @@ enum CallKind {
     ToolSearch,
 }
 
-/// The rollout's lines: its `session_meta` (ordinal 0), then each message's, numbered on from
-/// it.
+/// The rollout's lines: its `session_meta` (ordinal 0), then each message's, numbered as
+/// [`number`] numbers them.
 fn rollout(session: &RehydrateSession) -> Vec<Value> {
     let mut header = header(session);
     header["ordinal"] = json!(0);
     let mut lines = vec![header];
-    for row in rows(session, &session.messages) {
-        lines.extend(row.before.into_iter().chain(row.lines));
-    }
-    for (ordinal, line) in lines.iter_mut().enumerate().skip(1) {
-        line["ordinal"] = json!(ordinal);
-    }
+    let rows = rows(session, &session.messages, HistoryMode::Paginated);
+    lines.extend(number(&rows, Some(1)).lines);
     lines
 }
 
 /// A new rollout's `session_meta` line (without its ordinal), in Codex's paginated history mode:
 /// every line numbered (`ordinal`), which Codex keeps numbering from the last line's when it
-/// continues the rollout.
+/// continues the rollout, and which a later segment of the thread can continue from (see
+/// `sync::codex`).
 ///
 /// The meta is the session as it is resumed here: its cwd is this machine's. It names no
 /// `model_provider`, which capture does not keep: Codex takes a rollout without one for its
@@ -257,13 +257,25 @@ pub(crate) fn header(session: &RehydrateSession) -> Value {
     line(&stamp(session.started_at), "session_meta", meta)
 }
 
+/// How the rollout written to keeps its history (codex-rs `ThreadHistoryMode`), which decides
+/// what Codex shows a resumed session's history from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryMode {
+    /// Numbered lines; Codex shows the history from its turn and item events (`task_started`,
+    /// `item_completed`, `task_complete`: codex-rs `thread_history_projection.rs`).
+    Paginated,
+    /// Unnumbered lines; Codex shows the history from `user_message` / `agent_message` events.
+    Legacy,
+}
+
 /// The lines one captured row is written as (none for a row the rollout cannot carry): `lines`,
 /// the first of them the one capture reads the row back from, and `before` it, events that go
 /// ahead of it.
-struct Row {
-    source_id: String,
-    before: Vec<Value>,
-    lines: Vec<Value>,
+pub(crate) struct Row {
+    pub source_id: String,
+    pub seq: Option<u64>,
+    pub before: Vec<Value>,
+    pub lines: Vec<Value>,
 }
 
 /// The lines `messages` are written as, row by row, unnumbered. Calls captured without their
@@ -272,15 +284,18 @@ struct Row {
 /// The rows written as no line are recorded on the line of the written row before them as merged
 /// into it ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)).
 ///
-/// Besides each row's own line, the events Codex shows a paginated rollout's history from
-/// (`task_started`, `item_completed`, `task_complete`: codex-rs `thread_history_projection.rs`),
-/// none of which capture keeps a row of. Those are turns: each user prompt's
+/// Besides each row's own line, the events Codex shows the history from (see [`HistoryMode`]),
+/// none of which capture keeps a row of. In paginated mode those are turns: each user prompt's
 /// turn starts (`task_started`) at the context and `turn_context` rows just before the prompt,
 /// holds the prompt and the model's answers as items (`item_completed`, the prompt's after it
 /// and each answer's ahead of it, as Codex writes them), and ends (`task_complete`, or the
 /// turn's own failure, which gets its turn id) after its last row. Capture keeps no turn ids,
 /// so each turn is named after its prompt's row, the same every time.
-fn rows(session: &RehydrateSession, messages: &[RehydrateMessage]) -> Vec<Row> {
+pub(crate) fn rows(
+    session: &RehydrateSession,
+    messages: &[RehydrateMessage],
+    mode: HistoryMode,
+) -> Vec<Row> {
     let mut calls = HashMap::new();
     // A line keyed on its content would be captured again as a new row once its content changes.
     let keyed = |m: &RehydrateMessage| !m.source_id.starts_with("syn-");
@@ -292,12 +307,31 @@ fn rows(session: &RehydrateSession, messages: &[RehydrateMessage]) -> Vec<Row> {
         .iter()
         .map(|message| Row {
             source_id: message.source_id.clone(),
+            seq: message.seq,
             before: Vec::new(),
             lines: message_lines(session, message, &mut calls),
         })
         .collect();
     record_rows_merged(&mut rows);
-    turns(session, &messages, &mut rows);
+    match mode {
+        HistoryMode::Legacy => {
+            for (row, message) in rows.iter_mut().zip(&messages) {
+                let Some(said) = said(message).filter(|_| !row.lines.is_empty()) else {
+                    continue;
+                };
+                let at = stamp(message.timestamp);
+                row.lines.push(match message.role {
+                    Role::User => line(
+                        &at,
+                        "event_msg",
+                        json!({"type": "user_message", "message": said, "images": []}),
+                    ),
+                    _ => line(&at, "event_msg", json!({"type": "agent_message", "message": said})),
+                });
+            }
+        }
+        HistoryMode::Paginated => turns(session, &messages, &mut rows),
+    }
     rows
 }
 
@@ -325,7 +359,7 @@ fn record_rows_merged(rows: &mut [Row]) {
     }
 }
 
-/// The turn events (see [`rows`]).
+/// The turn events of paginated mode (see [`rows`]).
 fn turns(session: &RehydrateSession, messages: &[RehydrateMessage], rows: &mut [Row]) {
     let thread = session::resume_id(&session.id);
     let written: Vec<bool> = rows.iter().map(|row| !row.lines.is_empty()).collect();
@@ -419,6 +453,111 @@ fn turns(session: &RehydrateSession, messages: &[RehydrateMessage], rows: &mut [
 fn turn_id(thread: &str, prompt: &str) -> String {
     let hash = xxhash_rust::xxh3::xxh3_128(format!("{thread}\0{prompt}").as_bytes());
     uuid::Uuid::from_u128(hash).to_string()
+}
+
+/// Lines numbered, and the rows written.
+pub(crate) struct Numbered {
+    pub lines: Vec<Value>,
+    /// The source ids of the rows that were written, in order.
+    pub written: Vec<String>,
+}
+
+/// `rows`' lines, numbered on from ordinal `next` (codex-rs `RolloutLine.ordinal`), or left
+/// unnumbered with none (a rollout in Codex's legacy history mode, which numbers nothing).
+///
+/// A row captured with its line's number (`seq`) is written at exactly that number, so the
+/// rollout numbers its lines as the one it was captured from did: Codex continues it from its last
+/// line's number, as the host it was captured on would have (the synced rows' numbers are how
+/// two hosts continuing one rollout tell they went two ways). The numbers between were lines
+/// capture keeps no row of (events); the events written besides a row take free ones next to
+/// it (those ahead of it the free ones before its number, the rest those after), and are left
+/// out where none is free. A row captured without its number (captured before numbers were, or
+/// a new session's) takes the next free one, the same for the same rows every time, so numbers
+/// never repeat; with none free before the next row's, it is written unnumbered (Codex leaves
+/// such a line out of its turn list, but not out of the model's history; capture reads it back
+/// unnumbered, as it was synced).
+pub(crate) fn number(rows: &[Row], next: Option<u64>) -> Numbered {
+    let mut out = Numbered {
+        lines: Vec::new(),
+        written: Vec::new(),
+    };
+    let Some(mut next) = next else {
+        for row in rows.iter().filter(|row| !row.lines.is_empty()) {
+            out.written.push(row.source_id.clone());
+            out.lines.extend(row.before.iter().chain(&row.lines).cloned());
+        }
+        return out;
+    };
+    // For each row, the first written row after it that carries a number; and how many written
+    // rows without one come before each row (they need numbers too, ahead of any event).
+    let mut numbered_after = vec![None; rows.len()];
+    for i in (0..rows.len().saturating_sub(1)).rev() {
+        let later = &rows[i + 1];
+        numbered_after[i] = if later.seq.is_some() && !later.lines.is_empty() {
+            Some(i + 1)
+        } else {
+            numbered_after[i + 1]
+        };
+    }
+    let mut unnumbered_before = vec![0usize; rows.len() + 1];
+    for (i, row) in rows.iter().enumerate() {
+        let unnumbered = row.seq.is_none() && !row.lines.is_empty();
+        unnumbered_before[i + 1] = unnumbered_before[i] + usize::from(unnumbered);
+    }
+    for (i, row) in rows.iter().enumerate() {
+        if row.lines.is_empty() {
+            continue;
+        }
+        out.written.push(row.source_id.clone());
+        // The next row to take a number of its own, which nothing before it may take (a number
+        // at or below one taken already is no longer that row's to take), and the numbers left
+        // before it once the rows between without one have theirs: what events may take.
+        let room = |next: u64| -> Option<u64> {
+            let mut at = numbered_after[i];
+            while let Some(later) = at
+                && rows[later].seq.is_some_and(|seq| seq < next)
+            {
+                at = numbered_after[later];
+            }
+            let later = at?;
+            let between = unnumbered_before[later] - unnumbered_before[i + 1];
+            let seq = rows[later].seq?;
+            Some(seq.saturating_sub(next).saturating_sub(between as u64))
+        };
+        let own = row.seq.filter(|seq| *seq >= next);
+        // The events ahead of the row: in the numbers free before its own, or before the next
+        // one taken, leaving itself one.
+        for line in &row.before {
+            let free = match own {
+                Some(seq) => next < seq,
+                None => room(next).is_none_or(|room| room > 1),
+            };
+            if !free {
+                continue;
+            }
+            let mut line = line.clone();
+            line["ordinal"] = json!(next);
+            next += 1;
+            out.lines.push(line);
+        }
+        for (k, line) in row.lines.iter().enumerate() {
+            let ordinal = match own {
+                Some(seq) if k == 0 => Some(seq),
+                _ => room(next).is_none_or(|room| room > 0).then_some(next),
+            };
+            let mut line = line.clone();
+            match ordinal {
+                Some(ordinal) => {
+                    line["ordinal"] = json!(ordinal);
+                    next = ordinal + 1;
+                }
+                None if k > 0 => continue,
+                None => {}
+            }
+            out.lines.push(line);
+        }
+    }
+    out
 }
 
 /// The id a line is written under: capture's source id, unless it keyed the line on something
@@ -800,6 +939,7 @@ pub(crate) mod tests {
                 turn_id: m.turn_id(),
                 cwd,
                 git_branch: m.git_branch(),
+                seq: m.seq(),
             });
         }
         rows
@@ -860,6 +1000,14 @@ pub(crate) mod tests {
         let again = captured(&id, &read(&id, path).await);
         let expected: Vec<RehydrateMessage> = original.into_iter().filter(carried).collect();
         pretty_assertions::assert_eq!(keys(&again), keys(&expected));
+        // Each row is back at the number it was captured at (the unnumbered, from rollouts
+        // Codex numbered nothing in, at numbers of their own).
+        for (again, expected) in again.iter().zip(&expected) {
+            assert!(again.seq.is_some(), "{} is unnumbered", again.source_id);
+            if expected.seq.is_some() {
+                assert_eq!(again.seq, expected.seq, "{} moved", again.source_id);
+            }
+        }
     }
 
     /// The rollout at `path` is in Codex's paginated history mode, its lines numbered from 0 on
@@ -873,6 +1021,50 @@ pub(crate) mod tests {
             lines.iter().map(|l| l["ordinal"].as_u64().expect("every line numbered")).collect();
         assert!(ordinals.windows(2).all(|w| w[0] < w[1]), "ordinals {ordinals:?} not increasing");
         ordinals
+    }
+
+    /// Rows are written at the numbers they were captured at; the lines written besides them
+    /// take free numbers after them, and rows captured unnumbered free ones in order, the same
+    /// ones every time, never one a numbered row holds.
+    #[rstest]
+    // The turn's start, the prompt, its item, the answer's item, the answer, the turn context,
+    // the turn's end: events where numbers are free.
+    #[case::all_numbered(vec![Some(3), Some(6), Some(7)], vec![0, 1, 3, 4, 5, 6, 7, 8])]
+    #[case::none_numbered(vec![None, None, None], vec![0, 1, 2, 3, 4, 5, 6, 7])]
+    // Rows without a number come ahead of events.
+    #[case::numbered_after_unnumbered(vec![None, None, Some(4)], vec![0, 1, 2, 3, 4, 5])]
+    #[case::no_room_for_the_events(vec![None, Some(2), Some(3)], vec![0, 1, 2, 3, 4])]
+    // The answer has no number free: it is written unnumbered.
+    #[case::no_room_at_all(vec![Some(1), None, Some(2)], vec![0, 1, 2, 3])]
+    fn rows_keep_their_numbers(#[case] seqs: Vec<Option<u64>>, #[case] expected: Vec<u64>) {
+        // A prompt and its answer, then a turn context (a line of its own), in one turn.
+        let mut rows = vec![
+            row("msg_u", 1, Role::User, vec![Content::Text("go".to_owned())]),
+            row("msg_a", 2, Role::Assistant, vec![Content::Text("went".to_owned())]),
+            row("syn-1", 3, Role::Other("turn_context".to_owned()), vec![]),
+        ];
+        for (row, seq) in rows.iter_mut().zip(&seqs) {
+            row.seq = *seq;
+        }
+        let write_once = || {
+            let root = tempfile::tempdir().unwrap();
+            let path = write(root.path(), &session(ID, rows.clone())).unwrap();
+            std::fs::read_to_string(&path).unwrap()
+        };
+        let text = write_once();
+        assert_eq!(text, write_once(), "numbered the same every time");
+        let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let ordinals: Vec<Option<u64>> = lines.iter().map(|l| l["ordinal"].as_u64()).collect();
+        let numbered: Vec<u64> = ordinals.iter().flatten().copied().collect();
+        assert_eq!(numbered, expected);
+        // Every row is written, at its own number where it has one.
+        for (row, seq) in ["msg_u", "msg_a"].iter().zip(&seqs) {
+            let line = lines.iter().find(|l| l["payload"]["id"] == *row).unwrap();
+            if let Some(seq) = seq {
+                assert_eq!(line["ordinal"].as_u64(), Some(*seq));
+            }
+        }
+        assert_eq!(lines.iter().filter(|l| l["type"] == "turn_context").count(), 1);
     }
 
     /// Codex shows a paginated rollout's history from its turn and item events: each prompt's
@@ -894,7 +1086,8 @@ pub(crate) mod tests {
             row("msg_u2", 6, Role::User, text("second")),
             failed,
         ];
-        let lines = turn_lines(&messages);
+        let written = rows(&session(ID, messages.clone()), &messages, HistoryMode::Paginated);
+        let lines = number(&written, Some(1)).lines;
         let event = |l: &Value| l["payload"]["type"].as_str().unwrap_or_default().to_owned();
         let kinds: Vec<String> = lines
             .iter()
@@ -929,15 +1122,11 @@ pub(crate) mod tests {
         assert_eq!(lines[4]["payload"]["item"]["type"], "UserMessage");
         assert_eq!(lines[5]["payload"]["item"]["type"], "AgentMessage");
         assert_eq!(lines[7]["payload"]["last_agent_message"], "one");
-        assert_eq!(turn_lines(&messages), lines, "the same turns every time");
-    }
-
-    /// The lines `messages` are written as, in order, unnumbered.
-    fn turn_lines(messages: &[RehydrateMessage]) -> Vec<Value> {
-        rows(&session(ID, messages.to_vec()), messages)
-            .into_iter()
-            .flat_map(|row| row.before.into_iter().chain(row.lines))
-            .collect()
+        let again = number(
+            &rows(&session(ID, messages.clone()), &messages, HistoryMode::Paginated),
+            Some(1),
+        );
+        assert_eq!(again.lines, lines, "the same turns every time");
     }
 
     /// Usage rows come back as the lines they were captured from, counted the same.
@@ -973,6 +1162,7 @@ pub(crate) mod tests {
             turn_id: None,
             cwd: None,
             git_branch: None,
+            seq: None,
         }
     }
 

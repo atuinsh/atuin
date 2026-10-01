@@ -255,6 +255,9 @@ fn row(
         turn_id: None,
         cwd: None,
         git_branch: None,
+        // A new session, numbered afresh: a writer that numbers its lines (Codex) numbers these
+        // on from its first line, 0, as the harness numbers a rollout it starts.
+        seq: None,
     }
 }
 

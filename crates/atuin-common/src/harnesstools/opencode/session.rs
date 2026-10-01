@@ -119,6 +119,7 @@ use crate::os::fs::FdIdentity;
 use crate::sync::BlockingPool;
 use crate::utils::{env_nonempty, home_dir};
 
+pub(crate) mod projection;
 mod v2;
 
 #[derive(Debug, Clone, TypedBuilder)]

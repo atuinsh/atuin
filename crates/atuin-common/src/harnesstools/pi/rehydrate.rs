@@ -26,7 +26,7 @@
 //!   already holds it: nothing is pushed), and the entries merged away and the results are not
 //!   there to capture again. The entry records which synced rows went into it
 //!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), as does the entry a row
-//!   with nothing to write hangs from, so the file says which synced rows it holds.
+//!   with nothing to write hangs from, so catching the file up later knows it holds them.
 //! - **Tool results** keep their output; their tool's name comes from the call they answer. With
 //!   none captured (capture keeps none now), a result says [`UNCAPTURED_OUTPUT`], as does a
 //!   `!command`'s output.
@@ -43,7 +43,7 @@ use time::macros::format_description;
 
 use super::session::{default_root, locate, new_session_dir};
 use crate::harnesstools::rehydrate::{
-    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
+    Flatten, Held, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
     flatten_uncaptured_calls, record_merged,
 };
 use crate::harnesstools::resume;
@@ -92,7 +92,7 @@ pub(crate) fn rehydrate_into(
 }
 
 /// A timestamp as pi writes one (`Date.toISOString`): UTC, to the millisecond.
-fn timestamp(at: OffsetDateTime) -> String {
+pub(crate) fn timestamp(at: OffsetDateTime) -> String {
     let format =
         format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
     at.to_offset(time::UtcOffset::UTC).format(&format).unwrap_or_default()
@@ -111,30 +111,58 @@ fn transcript(session: &RehydrateSession) -> String {
         "timestamp": timestamp(session.started_at),
         "cwd": session.cwd,
     });
-    let session = &RehydrateSession {
-        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
-        ..session.clone()
-    };
-    let mut writer = Writer::new(session);
-    for message in &session.messages {
-        writer.push(message);
-    }
-    writer.title();
-    let mut lines = writer.lines;
-    // The rows written as no entry of their own, on the entries they went into.
-    record_merged(&mut lines, &writer.merged, |l| l["id"].as_str().map(str::to_owned));
     let mut out = header.to_string();
     out.push('\n');
-    for line in lines {
+    for line in lines(session, &Continuing::default(), true) {
         out.push_str(&line.to_string());
         out.push('\n');
     }
     out
 }
 
+/// A session file rows are appended to: what [`lines`] needs to know of it.
+#[derive(Default)]
+pub(crate) struct Continuing<'a> {
+    /// What the file already holds: a row hangs from its entries as from a written row (and
+    /// from a row merged into one as from that entry).
+    pub present: Option<Held<'a>>,
+    /// The entry the file ends on.
+    pub after: Option<&'a str>,
+    /// The first entry since the last compaction on the path the rows continue: a compaction
+    /// among them keeps from it.
+    pub kept_from: Option<&'a str>,
+}
+
+/// The entries for `session`'s rows, calls captured without their input flattened into notes
+/// ([`Flatten::Runs`]), and its title when `title`: for a whole session, or for rows appended to
+/// the file `continuing` describes. The rows written as no entry of their own are recorded on the
+/// entries as merged into their nearest written ancestor ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)).
+pub(crate) fn lines(
+    session: &RehydrateSession,
+    continuing: &Continuing<'_>,
+    title: bool,
+) -> Vec<Value> {
+    let session = &RehydrateSession {
+        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
+        ..session.clone()
+    };
+    let mut writer = Writer::new(session, continuing);
+    for message in &session.messages {
+        writer.push(message);
+    }
+    if title {
+        writer.title();
+    }
+    let mut lines = writer.lines;
+    record_merged(&mut lines, &writer.merged, |l| l["id"].as_str().map(str::to_owned));
+    lines
+}
+
 struct Writer<'a> {
     session: &'a RehydrateSession,
     lines: Vec<Value>,
+    /// What the file already holds, when appending to one.
+    present: Option<Held<'a>>,
     /// Every row, by source id.
     by_id: HashMap<&'a str, &'a RehydrateMessage>,
     /// The rows that are written (the rest have nothing an entry can carry).
@@ -150,7 +178,7 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(session: &'a RehydrateSession) -> Self {
+    fn new(session: &'a RehydrateSession, continuing: &Continuing<'a>) -> Self {
         let tools = session
             .messages
             .iter()
@@ -163,10 +191,11 @@ impl<'a> Writer<'a> {
         let mut writer = Self {
             session,
             lines: Vec::new(),
+            present: continuing.present,
             by_id: session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect(),
             writable: HashSet::new(),
-            last: None,
-            kept_from: None,
+            last: continuing.after,
+            kept_from: continuing.kept_from,
             tools,
             merged: Vec::new(),
         };
@@ -179,8 +208,9 @@ impl<'a> Writer<'a> {
         writer
     }
 
-    /// The entry `m` hangs from: its nearest written ancestor, however the rows are ordered;
-    /// `None` at the root. A parent that was never synced stands for the entry before.
+    /// The entry `m` hangs from: its nearest written ancestor, however the rows are ordered (a
+    /// row the file holds merged into an entry standing for that entry); `None` at the root. A
+    /// parent that was never synced stands for the entry before.
     fn parent(&self, m: &'a RehydrateMessage) -> Option<&'a str> {
         let mut parent = m.parent_source_id.as_deref();
         // At most one step per row: a cycle ends it.
@@ -188,6 +218,9 @@ impl<'a> Writer<'a> {
             let p = parent?;
             if self.writable.contains(p) {
                 return Some(p);
+            }
+            if let Some(entry) = self.present.and_then(|present| present.line_of(p)) {
+                return Some(entry).filter(|entry| !entry.is_empty());
             }
             match self.by_id.get(p) {
                 Some(row) => parent = row.parent_source_id.as_deref(),

@@ -119,13 +119,27 @@ pub(crate) async fn import(
             session.cwd.display()
         )));
     }
-    let file = export_file(&export(session))?;
+    let stdout = run_import(program, db, &session.cwd, &export(session)).await?;
+    session::locate(db, &session.id).await.ok_or_else(|| {
+        RehydrateError::Other(format!("opencode import did not write the session: {stdout}"))
+    })
+}
+
+/// Run `opencode import` of `export` into `db`, from `cwd` (which becomes the session's directory
+/// and project), handing back what it printed.
+pub(crate) async fn run_import(
+    program: &Path,
+    db: &Path,
+    cwd: &Path,
+    export: &Value,
+) -> Result<String, RehydrateError> {
+    let file = export_file(export)?;
     let mut command = tokio::process::Command::new(program);
     command
         .arg("import")
         .arg("--pure")
         .arg(&*file)
-        .current_dir(&session.cwd)
+        .current_dir(cwd)
         .env("OPENCODE_DB", db)
         .env_remove("OPENCODE_AUTO_SHARE")
         .envs(QUIET_ENV.iter().copied())
@@ -143,12 +157,7 @@ pub(crate) async fn import(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    session::locate(db, &session.id).await.ok_or_else(|| {
-        RehydrateError::Other(format!(
-            "opencode import did not write the session: {}",
-            String::from_utf8_lossy(&output.stdout).trim()
-        ))
-    })
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 /// `export`, written to a file of its own in the temporary directory for `opencode import` to
@@ -724,12 +733,14 @@ pub(crate) mod tests {
     /// session under its id, in the directory import runs in; each message under its id, stamped
     /// with its creation time, its info without `id` and `sessionID` as its data; each part
     /// under its id, in the message its `messageID` names, stamped with the time of the import.
+    /// A session already there only moves to the directory import runs in; a message or part
+    /// already there is left as it is.
     pub async fn opencode_import(conn: &mut SqliteConnection, export: &Value, cwd: &str) {
         let info = &export["info"];
         let now = millis(OffsetDateTime::now_utc());
         crate::db::query::<sqlx::Sqlite>(
             "INSERT INTO session (id, directory, title, time_created, time_updated) VALUES (?1, \
-             ?2, ?3, ?4, ?5)",
+             ?2, ?3, ?4, ?5) ON CONFLICT (id) DO UPDATE SET directory = excluded.directory",
         )
         .bind(info["id"].as_str())
         .bind(cwd)
@@ -806,6 +817,7 @@ pub(crate) mod tests {
                     turn_id: m.turn_id(),
                     cwd: m.cwd(),
                     git_branch: m.git_branch(),
+                    seq: None,
                 });
             }
         }
@@ -952,6 +964,7 @@ pub(crate) mod tests {
             turn_id: None,
             cwd: None,
             git_branch: None,
+            seq: None,
         }
     }
 

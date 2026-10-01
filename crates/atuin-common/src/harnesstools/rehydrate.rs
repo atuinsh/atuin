@@ -25,6 +25,11 @@ pub struct RehydrateMessage {
     pub turn_id: Option<String>,
     pub cwd: Option<PathBuf>,
     pub git_branch: Option<String>,
+    /// The line's position in its transcript, for a harness that numbers its lines (a Codex
+    /// rollout line's `ordinal`, capture's `Message::seq`); `None` where it numbers none, and for
+    /// rows captured before numbers were. A writer that numbers its lines writes the row back at
+    /// this number, so the harness continues from where the synced transcript left off.
+    pub seq: Option<u64>,
 }
 
 /// A session to write back out.
@@ -301,8 +306,10 @@ fn join_notes(
 ///
 /// Capture reads a line's id, never this, so it pushes nothing new; the harnesses ignore a field
 /// they don't know. It is what lets a transcript written from sync say which synced rows it holds
-/// beyond its lines' own ids. Recorded by the writer itself, it holds however the transcript is
-/// written after (the harness extending it): lines are only ever added.
+/// beyond its lines' own ids ([`LocalTip`](crate::harnesstools::sync::LocalTip)), so catching it
+/// up again appends none of them twice, and a row hanging from one is written hanging from the
+/// line it went into. Recorded by the writer itself, it holds however the transcript is written
+/// after (the harness extending it, a branch appended beside it): lines are only ever added.
 pub const MERGED_FIELD: &str = "atuinMerged";
 
 /// Record `merged` (row id, the line id it went into) on `lines`, the JSON lines a writer wrote,
@@ -324,6 +331,40 @@ pub fn record_merged(
             .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
         if let Some(field) = field.as_object_mut() {
             field.insert(row.clone(), serde_json::Value::String(into.clone()));
+        }
+    }
+}
+
+/// The rows a written line records as merged into lines ([`MERGED_FIELD`]).
+pub fn merged_of(line: &serde_json::Value) -> impl Iterator<Item = (String, String)> + '_ {
+    line.get(MERGED_FIELD)
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(row, into)| Some((row.clone(), into.as_str()?.to_owned())))
+}
+
+/// What a transcript being appended to already holds, as its writer places rows: its lines, and
+/// the synced rows merged into them ([`MERGED_FIELD`]).
+#[derive(Clone, Copy, Debug)]
+pub struct Held<'a> {
+    /// The ids of the transcript's lines, and of the rows merged into them.
+    pub known: &'a HashSet<String>,
+    /// Each row merged into a line, with that line's id.
+    pub merged: &'a std::collections::HashMap<String, String>,
+}
+
+impl<'a> Held<'a> {
+    /// The line that holds row `id`: its own, or the one it was merged into (`""` for one merged
+    /// before any line); `None` when the transcript holds neither.
+    #[must_use]
+    pub fn line_of<'b>(&self, id: &'b str) -> Option<&'b str>
+    where
+        'a: 'b,
+    {
+        match self.merged.get(id) {
+            Some(into) => Some(into.as_str()),
+            None => self.known.contains(id).then_some(id),
         }
     }
 }
@@ -368,6 +409,61 @@ pub(crate) mod testing {
             row.content = sanitize(&row.role, &row.content);
         }
         rows
+    }
+
+    /// Where the first stretch of `rows` a writer flattening them `how` merges away ends: just
+    /// past it, so that `rows[..end]` written out ends on rows written as no line. `None` when
+    /// it merges none, or they run to the end.
+    pub fn after_merged(rows: &[RehydrateMessage], how: &Flatten<'_>) -> Option<usize> {
+        let flat = flatten_uncaptured_calls(rows, how);
+        let first =
+            (0..rows.len()).find(|&i| flat[i].content.is_empty() && !rows[i].content.is_empty())?;
+        (first..rows.len()).find(|&i| !flat[i].content.is_empty())
+    }
+
+    /// The rows of `path` (root to head) a transcript read as `tip` lacks, as catching up takes
+    /// them: those after the last it holds, the first hanging from that one when it names
+    /// nothing itself (Codex's rows name no parent).
+    pub fn missing(
+        path: &[RehydrateMessage],
+        tip: &crate::harnesstools::sync::LocalTip,
+    ) -> Vec<RehydrateMessage> {
+        let Some(last) = path.iter().rposition(|m| tip.known_source_ids.contains(&m.source_id))
+        else {
+            return path.to_vec();
+        };
+        let mut rows = path[last + 1..].to_vec();
+        if let Some(first) = rows.first_mut()
+            && first.parent_source_id.is_none()
+        {
+            first.parent_source_id = Some(path[last].source_id.clone());
+        }
+        rows
+    }
+
+    /// A transcript caught up with `synced` (read as `tip`, whose lines capture reads back as
+    /// `lines`) holds every one of them once: as a line of its own or merged into one, never
+    /// both, none twice; and catching it up again takes nothing but rows keyed on their content
+    /// (`syn-`), which only the writer finds by content (and skips).
+    pub fn assert_caught_up(
+        synced: &[RehydrateMessage],
+        tip: &crate::harnesstools::sync::LocalTip,
+        lines: &[String],
+    ) {
+        assert_nothing_new(synced, lines.iter().map(String::as_str));
+        for id in lines {
+            assert!(!tip.merged.contains_key(id), "{id} is written and merged");
+        }
+        for (row, into) in &tip.merged {
+            let line = into.is_empty() || lines.contains(into);
+            assert!(line, "{row} is merged into {into}, which isn't a line");
+        }
+        let again: Vec<String> = missing(synced, tip)
+            .into_iter()
+            .map(|m| m.source_id)
+            .filter(|id| !id.starts_with("syn-"))
+            .collect();
+        assert!(again.is_empty(), "caught up again: {again:?}");
     }
 
     /// How many calls `rows` hold without their input.

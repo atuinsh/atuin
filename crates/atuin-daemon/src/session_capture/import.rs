@@ -102,6 +102,8 @@ impl SessionImporter {
             let Ok(existing) = sessions.existing() else {
                 return;
             };
+            // Work each session's heads out once it is imported, not once per row of it.
+            let deferral = sink.sidecar.defer_heads();
             let mut imports = existing
                 .map(|item| {
                     let sink = sink.clone();
@@ -155,6 +157,11 @@ impl SessionImporter {
                 .buffer_unordered(concurrency);
             while let Some(event) = imports.next().await {
                 yield event;
+            }
+            drop(imports);
+            drop(deferral);
+            if let Err(err) = sink.sidecar.refresh_heads().await {
+                tracing::warn!(?err, "failed to work out ai-session heads after an import");
             }
         }
     }

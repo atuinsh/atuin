@@ -181,6 +181,13 @@ impl Sink {
         if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
             return Ok(Appended::Duplicate);
         }
+        // A content-addressed row may be stored under its alias instead: the id its line had
+        // before a rehydrated transcript stamped it (see `Message::alias`).
+        if let Some(alias) = &msg.alias
+            && self.sidecar.contains_message(&msg.session, alias).await?
+        {
+            return Ok(Appended::Duplicate);
+        }
 
         // Pending from before the push: should the push fail, or this task panic, once the
         // record may be stored, the next capture's repair finds out whether it was, and projects
@@ -1555,6 +1562,75 @@ mod tests {
         assert_eq!(stored.len(), 1, "nothing was pushed twice");
     }
 
+    /// A session's heads, stored as capture appends its rows, go with them when the coordinator
+    /// wipes them, by a rebuild and then (with a watermark to be rewritten under) by forgetting
+    /// this host's rewritten series, and the replay that ends each wipe stores them again: the
+    /// same branches, worked out, not left for the next open.
+    #[rstest]
+    #[tokio::test]
+    async fn a_wipe_and_its_replay_store_a_sessions_heads_again(
+        #[values(false, true)] rewritten: bool,
+    ) {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let (key, host) = (Key::generate(), HostId(atuin_common::utils::uuid_v7()));
+        let records =
+            AiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build();
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records.clone(),
+            sidecar.clone(),
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        // A prompt, answered, then rewound and answered again: two heads parting at the prompt.
+        let prompt = message_of("forked", "u1");
+        let session = prompt.session.clone();
+        assert_eq!(capture.sink.append(prompt).await.unwrap(), Appended::New);
+        for (n, source) in [(1, "a1"), (2, "a2")] {
+            let mut reply = message_of("forked", source);
+            reply.role = Role::Assistant;
+            reply.content = vec![Content::Text(format!("answer {n}"))];
+            reply.timestamp = OffsetDateTime::UNIX_EPOCH + Duration::from_secs(n);
+            reply.parent_source_id = Some(SourceId::from("u1".to_owned()));
+            assert_eq!(capture.sink.append(reply).await.unwrap(), Appended::New);
+        }
+        let stored = || async { sidecar.get_session(&session).await.unwrap().unwrap() };
+        let before = stored().await;
+        let tips: Vec<_> = before.heads.iter().map(|h| h.source_id.as_ref().to_owned()).collect();
+        assert_eq!(tips, ["a2", "a1"]);
+        assert_eq!(before.branch_point.as_ref().map(AsRef::as_ref), Some("u1"));
+
+        capture.rebuild().await.unwrap();
+        assert!(capture.ready().await);
+        let rebuilt = stored().await;
+        assert_eq!(rebuilt.heads, before.heads, "stored again, not left dirty");
+        assert_eq!(rebuilt.branch_point, before.branch_point);
+        assert_eq!(rebuilt.messages, before.messages);
+
+        if rewritten {
+            rewrite_series(&store, &key, host).await;
+            let mut state = capture.state.clone();
+            state.borrow_and_update();
+            let projector = crate::sync::spawn_ai_session_projector(
+                records,
+                sidecar.clone(),
+                capture.recovery(),
+            );
+            projector.send(()).unwrap();
+            // The coordinator says it is recovering before it forgets anything.
+            tokio::time::timeout(Duration::from_secs(10), state.changed())
+                .await
+                .expect("the sync worker never had the series forgotten")
+                .unwrap();
+            assert!(capture.ready().await);
+            let after = stored().await;
+            assert_eq!(after.heads, before.heads, "stored again after the forget");
+            assert_eq!(after.branch_point, before.branch_point);
+            assert_eq!(after.messages, before.messages);
+        }
+    }
+
     /// Counts the replays that gave up, invalidated pass after pass, and has the coordinator
     /// back off between them for a short while.
     #[derive(Debug, Default)]
@@ -2753,8 +2829,10 @@ mod pipeline_tests {
 
     /// A Codex session written back out from its synced rows (rehydrated, to be resumed on
     /// another machine) and captured again there pushes no record: every line resolves to a row
-    /// already synced.
+    /// already synced. That includes the id-less lines of a rollout from before Codex 0.32,
+    /// which stamped none of them, where a rehydrated rollout stamps every line.
     #[rstest]
+    #[case::legacy_unstamped("legacy-bare.jsonl")]
     #[case::legacy_forked_subagent("legacy-forked-subagent.jsonl")]
     #[case::paginated_with_compaction("paginated-compacted.jsonl")]
     #[case::custom_tools_and_records("session1.jsonl")]
@@ -2788,11 +2866,27 @@ mod pipeline_tests {
         let home = tempfile::tempdir().unwrap();
         let path = rehydrate_codex(&session, home.path()).await;
 
-        // Written in Codex's paginated history mode.
+        // Written in Codex's paginated history mode, each row back at the number it was synced
+        // with, so Codex continues numbering where the synced rollout left off.
         let text = std::fs::read_to_string(&path).unwrap();
         let header: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
         assert_eq!(header["payload"]["history_mode"], "paginated");
+        let stored: Vec<Message> =
+            futures::TryStreamExt::try_collect(sink.sidecar.messages(&handle)).await.unwrap();
         let again = codex_rollout(&id, path).await;
+        for line in &again {
+            use atuin_common::harnesstools::session::Message as _;
+            let Some(row) = line
+                .id()
+                .map(String::from)
+                .and_then(|id| stored.iter().find(|m| m.source_id.as_ref() == id.as_str()))
+            else {
+                continue;
+            };
+            if row.seq.is_some() {
+                assert_eq!(line.seq(), row.seq, "{} moved", row.source_id.as_ref());
+            }
+        }
         let mut enricher = MessageEnricher::new(HarnessKind::Codex);
         let outcomes = capture_all(&sink, &mut enricher, &sid(&id), &again).await;
         let new = outcomes.iter().filter(|o| **o == Appended::New).count();
