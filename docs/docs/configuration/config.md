@@ -587,6 +587,24 @@ corresponding keymap mode. Also, the terminal's cursor style is reset to the
 one associated with the keymap mode corresponding to the shell's keymap on the
 termination of the Atuin search.
 
+### `keymap_sequence_timeout_ms`
+
+Default: `100`
+
+How long, in milliseconds, emacs and vim-insert mode wait for the second key of
+a [multi-key sequence](advanced-key-binding.md#multi-key-sequences) before
+handling the first key on its own, which in these modes usually types it. This
+makes a typing escape like `"j k"` usable: a `j` that isn't followed by `k`
+in time is typed as usual. `0` waits indefinitely. Vim-normal mode always waits,
+so commands like `g g` are never timed.
+
+```toml
+keymap_sequence_timeout_ms = 100
+
+[keymap.vim-insert]
+"j k" = "vim-enter-normal"
+```
+
 ### `prefers_reduced_motion`
 
 Default: `false`
