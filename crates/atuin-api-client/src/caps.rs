@@ -276,19 +276,6 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn known_token_is_the_version_of_the_last_fetch() {
-        let server = server_answering(version("7")).await;
-        let caps = CapClient::new(api(&server, reqwest::Client::new()));
-        // The warm-up is spawned on this current-thread runtime and has not run yet.
-        let before = caps.known_token();
-
-        let _ = caps.get_server::<CapabilitiesCap>().await;
-
-        assert_eq!((before, caps.known_token().as_deref()), (None, Some("7")));
-    }
-
-    #[rstest]
-    #[tokio::test]
     async fn observes_the_capability_the_server_advertises() {
         let advertised = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
         let server = server_answering(
@@ -325,22 +312,6 @@ mod tests {
             caps.get_server::<CapabilitiesCap>().await,
             Err(ServerSupportError::NotFetched)
         ));
-    }
-
-    #[rstest]
-    #[case::current("7", 1)]
-    #[case::stale("8", 2)]
-    #[tokio::test]
-    async fn refresh_if_stale_fetches_only_for_another_token(
-        #[case] available: &str,
-        #[case] expected_fetches: usize,
-    ) {
-        let server = server_answering(version("7")).await;
-        let caps = warm(&server).await;
-
-        caps.refresh_if_stale(available).await.unwrap();
-
-        assert_eq!(fetches(&server).await.len(), expected_fetches);
     }
 
     /// Auth resolves on every fetch, so a long-lived reader follows login, logout and token

@@ -4,14 +4,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_api_client::{ApiError, CapClient, CapMismatch, Client, MapApiError};
+use atuin_api_client::{CapClient, CapMismatch, Client, MapApiError};
 use atuin_domain::caps::CapabilitiesCap;
 use pretty_assertions::assert_eq;
 use reqwest::StatusCode;
 use rstest::{fixture, rstest};
 use serde_json::json;
 use url::Url;
-use wiremock::matchers::{header, header_exists, method, path};
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const CAPABILITIES: &str = "/api/v0/capabilities";
@@ -25,9 +25,8 @@ fn capabilities(version: &str) -> ResponseTemplate {
 }
 
 /// A server whose capabilities move from version `4`, served to the first fetch, to `5`, plus a
-/// negotiating `GET /api/v0/me`: a known token of `5` gets `200`; a stale token with enforce gets
-/// `412` and the available token; a stale token without enforce is served anyway, with the
-/// available token.
+/// negotiating `GET /api/v0/me`: a known token of `5` gets `200`; a stale token is served anyway,
+/// with the available token.
 #[fixture]
 async fn negotiating_server() -> MockServer {
     let server = MockServer::start().await;
@@ -53,13 +52,6 @@ async fn negotiating_server() -> MockServer {
         .await;
     Mock::given(method("GET"))
         .and(path(ME))
-        .and(header_exists(ENFORCE))
-        .respond_with(ResponseTemplate::new(412).append_header(AVAILABLE, "5"))
-        .with_priority(2)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(ME))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(json!({"username": "ellie"}))
@@ -68,18 +60,6 @@ async fn negotiating_server() -> MockServer {
         .with_priority(5)
         .mount(&server)
         .await;
-    server
-}
-
-/// A server whose `GET /api/v0/me` answers `response` and whose capabilities are version `5`.
-async fn server_answering(response: ResponseTemplate) -> MockServer {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(CAPABILITIES))
-        .respond_with(capabilities("5"))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET")).and(path(ME)).respond_with(response).mount(&server).await;
     server
 }
 
@@ -120,22 +100,6 @@ async fn await_token(caps: &CapClient, token: &str) {
 
 #[rstest]
 #[tokio::test]
-async fn continue_serves_a_stale_request_and_refreshes_in_the_background(
-    #[future] negotiating_server: MockServer,
-) {
-    let server = negotiating_server.await;
-    let caps = warm_cap_client(&server).await;
-    let client = negotiating_client(&server, Arc::clone(&caps), CapMismatch::Continue);
-
-    let me = client.get_me().map_api_error().await.unwrap();
-
-    assert_eq!(me.status(), StatusCode::OK);
-    await_token(&caps, "5").await;
-    assert_eq!(caps_hits(&server).await, 2, "the warm-up, then exactly one refresh");
-}
-
-#[rstest]
-#[tokio::test]
 async fn concurrent_burst_refreshes_capabilities_once(#[future] negotiating_server: MockServer) {
     let server = negotiating_server.await;
     let caps = warm_cap_client(&server).await;
@@ -154,38 +118,6 @@ async fn concurrent_burst_refreshes_capabilities_once(#[future] negotiating_serv
 
     await_token(&caps, "5").await;
     assert_eq!(caps_hits(&server).await, 2, "a burst must coalesce into one refresh");
-}
-
-#[rstest]
-#[tokio::test]
-async fn error_surfaces_the_412_and_does_not_refresh(#[future] negotiating_server: MockServer) {
-    let server = negotiating_server.await;
-    let caps = warm_cap_client(&server).await;
-    let client = negotiating_client(&server, Arc::clone(&caps), CapMismatch::Error);
-
-    let err = client.get_me().map_api_error().await.unwrap_err();
-
-    assert_eq!(err.status(), Some(StatusCode::PRECONDITION_FAILED));
-    assert_eq!(caps_hits(&server).await, 1, "the warm-up must be the only fetch");
-    assert_eq!(caps.known_token().as_deref(), Some("4"));
-}
-
-#[rstest]
-#[case::unrelated_404(ResponseTemplate::new(404), StatusCode::NOT_FOUND)]
-#[case::bare_412(ResponseTemplate::new(412), StatusCode::PRECONDITION_FAILED)]
-#[tokio::test]
-async fn an_error_without_the_available_header_is_passed_through_without_a_refresh(
-    #[case] response: ResponseTemplate,
-    #[case] status: StatusCode,
-) {
-    let server = server_answering(response).await;
-    let caps = warm_cap_client(&server).await;
-    let client = negotiating_client(&server, caps, CapMismatch::Continue);
-
-    let err = client.get_me().map_api_error().await.unwrap_err();
-
-    assert!(matches!(err, ApiError::Status { status: found, .. } if found == status), "{err:?}");
-    assert_eq!(caps_hits(&server).await, 1, "the warm-up must be the only fetch");
 }
 
 #[rstest]

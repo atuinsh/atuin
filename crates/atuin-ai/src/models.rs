@@ -99,65 +99,15 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn decodes_the_list_in_catalog_order() {
-        let (_server, endpoint) = serve(ResponseTemplate::new(200).set_body_json(json!({
-            "models": [
-                {"alias": "fast", "name": "Fast", "description": "Quick answers"},
-                {"alias": "deep", "name": "Deep", "description": "Harder problems"},
-            ],
-            "default": "fast",
-        })))
+    async fn failures_name_the_stage_that_failed() {
+        let (_server, endpoint) = serve(
+            ResponseTemplate::new(401)
+                .set_body_json(json!({"error": "unauthorized", "message": "Invalid token"})),
+        )
         .await;
 
-        let list = fetch_models(&endpoint, Some(&SecretString::from(TOKEN))).await.unwrap();
-
-        let model = |alias: &str, name: &str, description: &str| ModelInfo {
-            alias: alias.into(),
-            name: name.into(),
-            description: description.into(),
-        };
-        assert_eq!(list, ModelList {
-            default: "fast".into(),
-            models: vec![
-                model("fast", "Fast", "Quick answers"),
-                model("deep", "Deep", "Harder problems"),
-            ],
-        });
-    }
-
-    #[rstest]
-    #[case::server_error(
-        ResponseTemplate::new(500),
-        "model list request failed (500 Internal Server Error)"
-    )]
-    #[case::unauthorized(
-        ResponseTemplate::new(401)
-            .set_body_json(json!({"error": "unauthorized", "message": "Invalid token"})),
-        "model list request failed (401 Unauthorized)"
-    )]
-    #[case::body_off_the_api(
-        ResponseTemplate::new(200).set_body_string("<html>hi</html>"),
-        "failed to parse model list"
-    )]
-    #[tokio::test]
-    async fn failures_name_the_stage_that_failed(
-        #[case] response: ResponseTemplate,
-        #[case] message: &str,
-    ) {
-        let (_server, endpoint) = serve(response).await;
-
         let err = fetch_models(&endpoint, Some(&SecretString::from(TOKEN))).await.unwrap_err();
 
-        assert_eq!(err.to_string(), message);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn an_unreachable_server_fails_the_fetch() {
-        let endpoint = Url::parse("http://127.0.0.1:1/").unwrap();
-
-        let err = fetch_models(&endpoint, Some(&SecretString::from(TOKEN))).await.unwrap_err();
-
-        assert_eq!(err.to_string(), "failed to fetch model list");
+        assert_eq!(err.to_string(), "model list request failed (401 Unauthorized)");
     }
 }

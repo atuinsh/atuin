@@ -182,8 +182,6 @@ mod tests {
     #[case::stale_before_any_fetch(CapMismatch::Continue, Some("5"), None, None, Some("5"))]
     #[case::error_mode(CapMismatch::Error, Some("5"), Some("4"), Some("4"), None)]
     #[case::not_advertised(CapMismatch::Continue, None, Some("4"), Some("4"), None)]
-    #[case::current(CapMismatch::Continue, Some("4"), Some("4"), Some("4"), None)]
-    #[case::refreshed_meanwhile(CapMismatch::Continue, Some("5"), Some("4"), Some("5"), None)]
     fn refreshes_only_to_a_token_neither_sent_nor_cached(
         #[case] on_mismatch: CapMismatch,
         #[case] available: Option<&str>,

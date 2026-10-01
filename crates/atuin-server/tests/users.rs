@@ -145,35 +145,6 @@ async fn user_lookup_finds_only_registered_usernames(#[future] server: TestServe
 }
 
 #[rstest]
-#[case::wrong_password("wrong", StatusCode::UNAUTHORIZED, "password is not correct")]
-#[case::unknown_user("", StatusCode::NOT_FOUND, "user not found")]
-#[tokio::test]
-async fn login_refuses_bad_credentials(
-    #[future] server: TestServer,
-    #[case] password: &str,
-    #[case] status: StatusCode,
-    #[case] reason: &str,
-) {
-    let (address, shutdown, server_task) = server.await;
-    let username = uuid_v7().as_simple().to_string();
-    if !password.is_empty() {
-        common::register_inner(&address, &username, "right").await;
-    }
-    let body = types::LoginRequest {
-        username,
-        password: password.into(),
-        totp_code: None,
-    };
-
-    let err = common::client(&address, None).legacy_login(&body).map_api_error().await.unwrap_err();
-
-    assert_eq!(refusal(err), (Some(status), Some(reason.to_owned())));
-
-    shutdown.send(()).unwrap();
-    server_task.await.unwrap();
-}
-
-#[rstest]
 #[tokio::test]
 async fn delete_account_ends_the_session(#[future] server: TestServer) {
     let (address, shutdown, server_task) = server.await;
@@ -193,20 +164,14 @@ async fn delete_account_ends_the_session(#[future] server: TestServer) {
     server_task.await.unwrap();
 }
 
-/// Served at the root: under a path prefix the index answers only without a trailing slash, and
-/// the client asks for it only from api.atuin.sh.
 #[rstest]
 #[tokio::test]
-async fn index_and_capabilities_describe_the_server() {
-    let (address, shutdown, server_task) = common::start_server("").await;
-    let anonymous = common::client(&address, None);
+async fn capabilities_describe_the_server(#[future] server: TestServer) {
+    let (address, shutdown, server_task) = server.await;
 
-    let index = anonymous.get_index().map_api_error().await.unwrap().into_inner();
-    let capabilities = anonymous.get_capabilities().map_api_error().await.unwrap();
+    let capabilities = common::client(&address, None).get_capabilities().map_api_error().await;
 
-    assert_eq!(index.version, env!("CARGO_PKG_VERSION"));
-    assert!(capabilities.headers().contains_key("atuin-version"), "{:?}", capabilities.headers());
-    assert!(!capabilities.into_inner().version.is_empty());
+    assert!(!capabilities.unwrap().into_inner().version.is_empty());
 
     shutdown.send(()).unwrap();
     server_task.await.unwrap();

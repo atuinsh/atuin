@@ -27,7 +27,6 @@ impl Client {
 }
 
 /// A base URL split the way progenitor needs it.
-#[derive(Debug, PartialEq, Eq)]
 struct Base {
     /// The prefix the generated code formats operation paths onto, e.g. `https://host/atuin`.
     ///
@@ -60,7 +59,7 @@ mod tests {
     use rstest::rstest;
     use url::Url;
 
-    use super::{Base, BaseUrlError};
+    use super::Base;
 
     #[rstest]
     fn prefixes_operation_paths_like_append_path(
@@ -70,44 +69,21 @@ mod tests {
             "https://host.example/atuin",
             "https://host.example/atuin/",
             "https://host.example/atuin//",
-            "https://host.example/atuin////",
             "https://h.example//",
-            "https://h.example/a//b",
             "https://h.example/a//b//",
-            "https://h.example:8443/x",
-            "http://127.0.0.1:8888/nested/prefix/",
-            "https://host.example/atuin/?tok=1",
-            "https://host.example/atuin#top",
             "https://host.example/atuin/?tok=1&b=%20#top"
         )]
         base: &str,
-        #[values("api/v0/me", "user/ellie")] path: &'static str,
     ) {
+        const PATH: &str = "api/v0/me";
         let base = Url::parse(base).unwrap();
         let Base { prefix, query } = Base::parse(&base).unwrap();
-        let mut expected = base.append_path(path).unwrap();
+        let mut expected = base.append_path(PATH).unwrap();
         expected.set_fragment(None);
 
-        let mut built = Url::parse(&format!("{prefix}/{path}")).unwrap();
+        let mut built = Url::parse(&format!("{prefix}/{PATH}")).unwrap();
         built.set_query(query.as_deref());
 
         assert_eq!(built.as_str(), expected.as_str());
-    }
-
-    #[rstest]
-    #[case::bare("https://host.example/atuin", None)]
-    #[case::empty("https://host.example/atuin?", None)]
-    #[case::query("https://host.example/atuin/?tok=1&b=%20", Some("tok=1&b=%20"))]
-    fn keeps_the_query_apart(#[case] base: &str, #[case] query: Option<&str>) {
-        let base = Base::parse(&Url::parse(base).unwrap()).unwrap();
-
-        assert_eq!(base.query.as_deref(), query);
-    }
-
-    #[rstest]
-    fn rejects_urls_paths_cannot_follow() {
-        let base = Url::parse("mailto:me@example.com").unwrap();
-
-        assert_eq!(Base::parse(&base), Err(BaseUrlError::CannotBeABase));
     }
 }

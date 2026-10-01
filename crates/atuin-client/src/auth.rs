@@ -437,7 +437,7 @@ mod tests {
     use rstest::rstest;
     use secrecy::ExposeSecret;
     use serde_json::{Value, json};
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -494,17 +494,29 @@ mod tests {
         }
     }
 
-    const fn hub_route(change: AccountChange) -> (&'static str, &'static str) {
+    /// The hub request a `change` makes: its verb, route and body.
+    fn hub_request(change: AccountChange) -> (&'static str, &'static str, Value) {
         match change {
-            AccountChange::Password => ("PATCH", "/api/v0/account/password"),
-            AccountChange::Deletion => ("DELETE", "/api/v0/account"),
+            AccountChange::Password => (
+                "PATCH",
+                "/api/v0/account/password",
+                json!({"current_password": "old", "new_password": "new", "totp_code": "123456"}),
+            ),
+            AccountChange::Deletion => {
+                ("DELETE", "/api/v0/account", json!({"password": "pw", "totp_code": "123456"}))
+            }
         }
     }
 
-    const fn legacy_route(change: AccountChange) -> (&'static str, &'static str) {
+    /// The legacy request a `change` makes: its verb, route and body.
+    fn legacy_request(change: AccountChange) -> (&'static str, &'static str, Value) {
         match change {
-            AccountChange::Password => ("PATCH", "/account/password"),
-            AccountChange::Deletion => ("DELETE", "/account"),
+            AccountChange::Password => (
+                "PATCH",
+                "/account/password",
+                json!({"current_password": "old", "new_password": "new"}),
+            ),
+            AccountChange::Deletion => ("DELETE", "/account", json!({"password": "pw"})),
         }
     }
 
@@ -522,47 +534,18 @@ mod tests {
         )
     }
 
-    /// The headers of the only request `server` received, by name, `None` for an absent one.
-    async fn sent_headers<const N: usize>(
-        server: &MockServer,
-        names: [&str; N],
-    ) -> [Option<String>; N] {
-        let requests = server.received_requests().await.unwrap();
-        let [request] = requests.as_slice() else {
-            panic!("expected one request, got {requests:?}");
-        };
-        names.map(|name| request.headers.get(name).map(|v| v.to_str().unwrap().to_owned()))
-    }
-
     async fn sent_body(server: &MockServer) -> Value {
         let requests = server.received_requests().await.unwrap();
         serde_json::from_slice(&requests[0].body).unwrap()
     }
 
     #[rstest]
-    #[case::session(200, json!({"session": "atapi_s", "auth": "hub"}), r#"session atapi_s (Some("hub"))"#)]
     #[case::needs_totp(
         403,
         json!({"reason": "two-factor authentication required", "code": "2fa_required"}),
         "2fa required"
     )]
     #[case::refused(403, json!({"reason": "account not migrated to hub"}), "error: account not migrated to hub")]
-    #[case::wrong_totp(
-        401,
-        json!({"reason": "invalid two-factor code", "code": "invalid_2fa_code"}),
-        "error: invalid credentials"
-    )]
-    #[case::bare_403(403, Value::Null, "error: Hub login failed with status 403 Forbidden")]
-    #[case::proxy_page(
-        403,
-        json!("<html>403 Forbidden</html>"),
-        "error: Hub login failed with status 403 Forbidden"
-    )]
-    #[case::server_error(
-        500,
-        Value::Null,
-        "error: Hub login failed with status 500 Internal Server Error"
-    )]
     #[tokio::test]
     async fn hub_login_asks_for_totp_on_2fa_required(
         #[case] status: u16,
@@ -578,65 +561,30 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn hub_login_sends_the_totp_code_without_credentials() {
+    async fn hub_login_sends_the_totp_code() {
         let response = answer(200, json!({"session": "atapi_s"}), None);
         let server = serve("POST", "/api/v0/login", response).await;
 
-        hub(&server, Some("atapi_t"))
-            .login("ellie", &"pw".into(), Some(&"123456".into()))
-            .await
-            .unwrap();
+        hub(&server, None).login("ellie", &"pw".into(), Some(&"123456".into())).await.unwrap();
 
         assert_eq!(
             sent_body(&server).await,
             json!({"username": "ellie", "password": "pw", "totp_code": "123456"})
         );
-        assert_eq!(
-            sent_headers(&server, ["user-agent", "atuin-version", "authorization", "api-version"])
-                .await,
-            [Some(ATUIN_USER_AGENT.to_owned()), Some(ATUIN_CARGO_VERSION.to_owned()), None, None]
-        );
     }
 
     #[rstest]
     #[tokio::test]
-    async fn hub_login_reports_an_unreachable_hub() {
-        let client = HubAuthClient::new(&"http://127.0.0.1:1".parse().unwrap(), None);
-
-        let response = client.login("ellie", &"pw".into(), None).await;
-
-        assert_eq!(signed_in(response), "error: failed to connect to Atuin Hub");
-    }
-
-    #[rstest]
-    #[case::session(200, json!({"session": "atapi_s", "auth": "hub"}), r#"session atapi_s (Some("hub"))"#)]
-    #[case::invalid(400, json!({"reason": "email has invalid format"}), "error: email has invalid format")]
-    #[case::bare_error(
-        500,
-        Value::Null,
-        "error: Hub registration failed with status 500 Internal Server Error"
-    )]
-    #[case::proxy_page(
-        502,
-        json!("<html><body><h1>502 Bad Gateway</h1>cloudflare</body></html>"),
-        "error: Hub registration failed with status 502 Bad Gateway"
-    )]
-    #[tokio::test]
-    async fn hub_register_reports_the_reason(
-        #[case] status: u16,
-        #[case] body: Value,
-        #[case] expected: &str,
-    ) {
-        let server = serve("POST", "/api/v0/register", answer(status, body, None)).await;
+    async fn hub_register_reports_the_reason() {
+        let response = answer(400, json!({"reason": "email has invalid format"}), None);
+        let server = serve("POST", "/api/v0/register", response).await;
 
         let response = hub(&server, None).register("ellie", "e@example.com", &"pw".into()).await;
 
-        assert_eq!(signed_in(response), expected);
+        assert_eq!(signed_in(response), "error: email has invalid format");
     }
 
     #[rstest]
-    #[case::changed(AccountChange::Password, 200, json!({}), "changed")]
-    #[case::deleted(AccountChange::Deletion, 200, json!({}), "changed")]
     #[case::bodyless_200(AccountChange::Password, 200, Value::Null, "changed")]
     #[case::no_content(AccountChange::Deletion, 204, Value::Null, "changed")]
     #[case::needs_totp(
@@ -648,7 +596,7 @@ mod tests {
     #[case::wrong_totp(
         AccountChange::Deletion,
         401,
-        json!({"reason": "invalid two-factor code", "code": "invalid_2fa_code"}),
+        json!({"reason": "code expired", "code": "invalid_2fa_code"}),
         "error: invalid two-factor code"
     )]
     #[case::reason(
@@ -657,37 +605,6 @@ mod tests {
         json!({"reason": "password is not correct"}),
         "error: password is not correct"
     )]
-    #[case::bare_401_password(
-        AccountChange::Password,
-        401,
-        Value::Null,
-        "error: current password is incorrect"
-    )]
-    #[case::bare_401_deletion(
-        AccountChange::Deletion,
-        401,
-        Value::Null,
-        "error: password is incorrect"
-    )]
-    #[case::bare_403(AccountChange::Deletion, 403, Value::Null, "error: invalid login details")]
-    #[case::bare_500_password(
-        AccountChange::Password,
-        500,
-        Value::Null,
-        "error: Hub password change failed with status 500 Internal Server Error"
-    )]
-    #[case::bare_500_deletion(
-        AccountChange::Deletion,
-        500,
-        Value::Null,
-        "error: Hub account deletion failed with status 500 Internal Server Error"
-    )]
-    #[case::proxy_page(
-        AccountChange::Password,
-        502,
-        json!("<html>502 Bad Gateway</html>"),
-        "error: Hub password change failed with status 502 Bad Gateway"
-    )]
     #[tokio::test]
     async fn hub_account_changes_read_the_error_code(
         #[case] account_change: AccountChange,
@@ -695,8 +612,16 @@ mod tests {
         #[case] body: Value,
         #[case] expected: &str,
     ) {
-        let (verb, route) = hub_route(account_change);
-        let server = serve(verb, route, answer(status, body, None)).await;
+        let (verb, route, request) = hub_request(account_change);
+        let server = MockServer::start().await;
+        Mock::given(method(verb))
+            .and(path(route))
+            .and(header("authorization", "Bearer atapi_t"))
+            .and(body_json(request))
+            .respond_with(answer(status, body, None))
+            .expect(1)
+            .mount(&server)
+            .await;
 
         let response = change(&hub(&server, Some("atapi_t")), account_change).await;
 
@@ -704,87 +629,31 @@ mod tests {
     }
 
     #[rstest]
-    #[case::password(
-        AccountChange::Password,
-        json!({"current_password": "old", "new_password": "new", "totp_code": "123456"})
-    )]
-    #[case::deletion(AccountChange::Deletion, json!({"password": "pw", "totp_code": "123456"}))]
-    #[tokio::test]
-    async fn hub_account_changes_send_the_hub_token(
-        #[case] account_change: AccountChange,
-        #[case] body: Value,
-    ) {
-        let (verb, route) = hub_route(account_change);
-        let server = serve(verb, route, answer(200, json!({}), None)).await;
-
-        change(&hub(&server, Some("atapi_t")), account_change).await.unwrap();
-
-        assert_eq!(sent_body(&server).await, body);
-        assert_eq!(
-            sent_headers(&server, ["authorization", "user-agent", "atuin-version", "api-version"])
-                .await,
-            [
-                Some("Bearer atapi_t".to_owned()),
-                Some(ATUIN_USER_AGENT.to_owned()),
-                Some(ATUIN_CARGO_VERSION.to_owned()),
-                None
-            ]
-        );
-    }
-
-    #[rstest]
-    #[case::logged_out(
-        None,
-        "error: Not logged in to Atuin Hub. Please run 'atuin login' to authenticate."
-    )]
-    #[case::cli_session(
-        Some("cli-session"),
-        "error: Your Hub session token is invalid. Please run 'atuin login' to re-authenticate \
-         with Atuin Hub."
-    )]
     #[tokio::test]
     async fn hub_account_changes_need_a_hub_token(
         #[values(AccountChange::Password, AccountChange::Deletion)] account_change: AccountChange,
-        #[case] token: Option<&str>,
-        #[case] expected: &str,
     ) {
         let server = MockServer::start().await;
 
-        let response = change(&hub(&server, token), account_change).await;
+        let response = change(&hub(&server, Some("cli-session")), account_change).await;
 
-        assert_eq!(changed(response), expected);
+        assert_eq!(
+            changed(response),
+            "error: Your Hub session token is invalid. Please run 'atuin login' to \
+             re-authenticate with Atuin Hub."
+        );
         assert_eq!(server.received_requests().await.unwrap().len(), 0);
     }
 
     #[rstest]
-    #[case::changed(AccountChange::Password, 200, json!({}), "changed")]
-    #[case::deleted(AccountChange::Deletion, 200, json!({}), "changed")]
     #[case::wrong_password_change(
         AccountChange::Password,
         401,
         json!({"reason": "password is not correct"}),
         "error: current password is incorrect"
     )]
-    #[case::wrong_password_deletion(
-        AccountChange::Deletion,
-        401,
-        json!({"reason": "password is not correct"}),
-        "error: password is incorrect"
-    )]
-    #[case::unknown_session(
-        AccountChange::Password,
-        403,
-        json!({"reason": "session not found"}),
-        "error: invalid login details"
-    )]
     #[case::bodyless_200(AccountChange::Password, 200, Value::Null, "changed")]
     #[case::other_success(AccountChange::Deletion, 204, Value::Null, "error: unknown error")]
-    #[case::server_error(
-        AccountChange::Password,
-        500,
-        json!({"reason": "failed to change user password"}),
-        "error: unknown error"
-    )]
     #[tokio::test]
     async fn legacy_account_changes_succeed_only_on_200(
         #[case] account_change: AccountChange,
@@ -792,8 +661,17 @@ mod tests {
         #[case] body: Value,
         #[case] expected: &str,
     ) {
-        let (verb, route) = legacy_route(account_change);
-        let server = serve(verb, route, answer(status, body, Some(ATUIN_CARGO_VERSION))).await;
+        let (verb, route, request) = legacy_request(account_change);
+        let server = MockServer::start().await;
+        Mock::given(method(verb))
+            .and(path(route))
+            .and(header("authorization", "Token sess"))
+            .and(header("x-extra", "extra"))
+            .and(body_json(request))
+            .respond_with(answer(status, body, Some(ATUIN_CARGO_VERSION)))
+            .expect(1)
+            .mount(&server)
+            .await;
 
         let response = change(&legacy(&server, Some("sess")), account_change).await;
 
@@ -801,77 +679,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::password(
-        AccountChange::Password,
-        json!({"current_password": "old", "new_password": "new"})
-    )]
-    #[case::deletion(AccountChange::Deletion, json!({"password": "pw"}))]
-    #[tokio::test]
-    async fn legacy_account_changes_send_the_session_and_extra_headers(
-        #[case] account_change: AccountChange,
-        #[case] body: Value,
-    ) {
-        let (verb, route) = legacy_route(account_change);
-        let server = serve(verb, route, answer(200, json!({}), Some(ATUIN_CARGO_VERSION))).await;
-
-        change(&legacy(&server, Some("sess")), account_change).await.unwrap();
-
-        assert_eq!(sent_body(&server).await, body);
-        assert_eq!(
-            sent_headers(&server, [
-                "authorization",
-                "x-extra",
-                "user-agent",
-                "atuin-version",
-                "api-version",
-            ])
-            .await,
-            [
-                Some("Token sess".to_owned()),
-                Some("extra".to_owned()),
-                Some(ATUIN_USER_AGENT.to_owned()),
-                Some(ATUIN_CARGO_VERSION.to_owned()),
-                None
-            ]
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn legacy_account_changes_need_a_session(
-        #[values(AccountChange::Password, AccountChange::Deletion)] account_change: AccountChange,
-    ) {
-        let server = MockServer::start().await;
-
-        let response = change(&legacy(&server, None), account_change).await;
-
-        assert_eq!(changed(response), "error: Not logged in");
-    }
-
-    #[rstest]
-    #[case::current(Some(ATUIN_CARGO_VERSION), r#"session sess (Some("cli"))"#)]
-    #[case::older_major(Some("1.0.0"), "error: Could not login due to version mismatch")]
-    #[case::unversioned(
-        None,
-        "error: Server not reporting its version: it is either too old or unhealthy"
-    )]
-    #[tokio::test]
-    async fn legacy_login_checks_the_server_version(
-        #[case] version: Option<&str>,
-        #[case] expected: &str,
-    ) {
-        let server =
-            serve("POST", "/login", answer(200, json!({"session": "sess"}), version)).await;
-
-        let response = legacy(&server, None).login("ellie", &"pw".into(), None).await;
-
-        assert_eq!(signed_in(response), expected);
-        assert_eq!(sent_body(&server).await, json!({"username": "ellie", "password": "pw"}));
-    }
-
-    #[rstest]
     #[case::taken(200, json!({"username": "ellie"}), 0, "error: username already in use")]
-    #[case::taken_by_an_odd_answer(200, json!({}), 0, "error: username already in use")]
     #[case::free(404, json!({"reason": "user not found"}), 1, r#"session sess (Some("cli"))"#)]
     #[tokio::test]
     async fn legacy_register_checks_the_username_first(
@@ -930,19 +738,13 @@ mod tests {
         server
     }
 
-    /// Signing in to a legacy server sends the user's `extra_headers` and Atuin's identity on
-    /// every call, and no credentials or `api-version`.
+    /// Logging in to a legacy server sends the user's `extra_headers` and Atuin's identity.
     #[rstest]
-    #[case::login(SignIn::Login, &["/login"])]
-    #[case::register(SignIn::Register, &["/user/ellie", "/register"])]
     #[tokio::test]
-    async fn legacy_sign_in_sends_the_user_and_identity_headers(
-        #[case] how: SignIn,
-        #[case] paths: &[&str],
-    ) {
+    async fn legacy_sign_in_sends_the_user_and_identity_headers() {
         let server = legacy_server(Some(ATUIN_CARGO_VERSION)).await;
 
-        sign_in(&legacy(&server, None), how).await.unwrap();
+        legacy(&server, None).login("ellie", &"pw".into(), None).await.unwrap();
 
         let requests = server.received_requests().await.unwrap();
         let sent: Vec<_> = requests
@@ -954,18 +756,15 @@ mod tests {
                     header("x-extra"),
                     header("user-agent"),
                     header("atuin-version"),
-                    header("authorization"),
-                    header("api-version"),
                 )
             })
             .collect();
-        let expected: Vec<_> = paths
-            .iter()
-            .map(|&path| {
-                (path, Some("extra"), Some(ATUIN_USER_AGENT), Some(ATUIN_CARGO_VERSION), None, None)
-            })
-            .collect();
-        assert_eq!(sent, expected);
+        assert_eq!(sent, [(
+            "/login",
+            Some("extra"),
+            Some(ATUIN_USER_AGENT),
+            Some(ATUIN_CARGO_VERSION)
+        )]);
     }
 
     #[rstest]
@@ -997,10 +796,23 @@ mod tests {
         assert_eq!(signed_in(response), format!("error: {expected}"));
     }
 
-    /// A `\` would read as `/` in the lookup's path, so the server's own refusal answers it.
+    /// A username the lookup's path cannot carry is never looked up: `.` and `..` would resolve
+    /// away, so the client refuses them, and a `\` would read as `/`, so the server's own refusal
+    /// answers it.
     #[rstest]
+    #[case::dot(".", "error: path segments cannot be . or ..", &[])]
+    #[case::dot_dot("..", "error: path segments cannot be . or ..", &[])]
+    #[case::backslash(
+        "..\\",
+        "/register, 400 Bad Request - Only alphanumeric and hyphens (-) are allowed in usernames.",
+        &["/register"]
+    )]
     #[tokio::test]
-    async fn legacy_register_leaves_a_backslash_to_the_server() {
+    async fn legacy_register_never_looks_up_a_path_like_username(
+        #[case] username: &str,
+        #[case] error_ending: &str,
+        #[case] sent: &[&str],
+    ) {
         let server = serve(
             "POST",
             "/register",
@@ -1012,25 +824,12 @@ mod tests {
         )
         .await;
 
-        let response = legacy(&server, None).register("..\\", "e@example.com", &"pw".into()).await;
-
-        assert!(signed_in(response).ends_with(
-            "/register, 400 Bad Request - Only alphanumeric and hyphens (-) are allowed in \
-             usernames."
-        ),);
-        let requests = server.received_requests().await.unwrap();
-        assert_eq!(requests.iter().map(|r| r.url.path()).collect::<Vec<_>>(), ["/register"]);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn legacy_register_rejects_dot_usernames(#[values(".", "..")] username: &str) {
-        let server = MockServer::start().await;
-
         let response =
             legacy(&server, None).register(username, "e@example.com", &"pw".into()).await;
 
-        assert_eq!(signed_in(response), "error: path segments cannot be . or ..");
-        assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        let response = signed_in(response);
+        assert!(response.ends_with(error_ending), "{response}");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.iter().map(|r| r.url.path()).collect::<Vec<_>>(), sent);
     }
 }

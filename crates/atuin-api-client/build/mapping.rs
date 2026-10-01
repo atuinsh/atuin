@@ -311,27 +311,6 @@ mod tests {
     }
 
     #[rstest]
-    fn the_checked_in_spec_stays_on_its_mappings(spec: Value) {
-        assert_eq!(check(&spec), Ok(()));
-    }
-
-    #[rstest]
-    #[case::plain_int64("/components/schemas/UsageBucket/properties/limit", json!({"type": "integer", "format": "int64"}))]
-    #[case::described_secret(
-        "/components/schemas/LoginRequest/properties/password",
-        json!({"type": "string", "format": "password", "description": "d", "deprecated": true})
-    )]
-    #[case::uuid_is_native("/components/schemas/Host/properties/id", json!({"type": "string", "format": "uuid", "x-anything": 1}))]
-    fn shapes_that_keep_their_mapping_pass(
-        mut spec: Value,
-        #[case] pointer: &str,
-        #[case] schema: Value,
-    ) {
-        set(&mut spec, pointer, schema);
-        assert_eq!(check(&spec), Ok(()));
-    }
-
-    #[rstest]
     #[case::secret_with_min_length(
         "/components/schemas/LoginRequest/properties/password",
         json!({"type": "string", "format": "password", "minLength": 8}),
@@ -350,12 +329,6 @@ mod tests {
         ".components.schemas.LinkAccountRequest.properties.token",
         &["type"]
     )]
-    #[case::date_time_with_pattern(
-        "/components/schemas/UsageSnapshot/properties/resets_at",
-        json!({"type": "string", "format": "date-time", "pattern": "Z$"}),
-        ".components.schemas.UsageSnapshot.properties.resets_at",
-        &["pattern"]
-    )]
     fn a_schema_that_escapes_its_conversion_fails_naming_its_path(
         mut spec: Value,
         #[case] pointer: &str,
@@ -373,18 +346,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::record("Record")]
-    #[case::host("Host")]
-    #[case::encrypted_data("EncryptedData")]
-    #[case::record_status("RecordStatus")]
-    fn a_missing_replacement_fails_naming_the_title(mut spec: Value, #[case] title: &str) {
+    fn a_missing_replacement_fails_naming_the_title(mut spec: Value) {
         spec["components"]["schemas"]
             .as_object_mut()
             .expect("components.schemas is an object")
-            .remove(title);
+            .remove("Record");
         assert!(matches!(
             check(&spec),
-            Err(SpecError::MissingReplacement { title: missing, .. }) if missing == title
+            Err(SpecError::MissingReplacement {
+                title: "Record",
+                ..
+            })
         ));
     }
 

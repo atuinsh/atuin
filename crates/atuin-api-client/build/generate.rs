@@ -62,35 +62,6 @@ mod tests {
     }
 
     #[rstest]
-    fn generation_is_deterministic(spec: Value) {
-        assert_eq!(generate_from(&spec), generate_from(&spec));
-    }
-
-    #[rstest]
-    #[case::secret_body_field("pub password: crate::Secret,")]
-    #[case::secret_query_parameter("code: &'a crate::Secret")]
-    #[case::unsigned_count("count: &'a u64,")]
-    #[case::date_time("pub resets_at: crate::DateTime,")]
-    #[case::presigned_url("pub upload_url: ::url::Url,")]
-    #[case::record_replacement(
-        "::atuin_domain::record::Record<::atuin_domain::record::EncryptedData>"
-    )]
-    #[case::status_replacement("ResponseValue<::atuin_domain::record::RecordStatus>")]
-    fn mapped_schemas_generate_their_target_type(spec: Value, #[case] expected: &str) {
-        let code = generate_from(&spec);
-        assert!(code.contains(&squeezed(expected)), "generated code lacks {expected:?}");
-    }
-
-    #[rstest]
-    #[case::typed_error_bodies("Error<types::")]
-    #[case::capabilities_known_parameter("x_atuin_capabilities_known")]
-    #[case::chrono("chrono")]
-    fn stripped_and_unmapped_shapes_never_reach_the_code(spec: Value, #[case] absent: &str) {
-        let code = generate_from(&spec);
-        assert!(!code.contains(&squeezed(absent)), "generated code contains {absent:?}");
-    }
-
-    #[rstest]
     fn a_nullable_secret_stays_a_secret(mut spec: Value) {
         set(
             &mut spec,

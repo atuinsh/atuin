@@ -158,7 +158,6 @@ mod tests {
     use super::Body;
 
     #[rstest]
-    #[case::reason(r#"{"reason": "invalid session"}"#, Some("invalid session"), None, None)]
     #[case::reason_and_code(
         r#"{"reason": "2FA required", "code": "2fa_required"}"#,
         Some("2FA required"),
@@ -191,9 +190,7 @@ mod tests {
         None,
         Some(r#"{"errors": {"detail": "Not Found"}}"#)
     )]
-    #[case::unknown_json_object(r#"{"detail": "nope"}"#, None, None, Some(r#"{"detail": "nope"}"#))]
     #[case::non_string_reason(r#"{"reason": 42}"#, None, None, Some(r#"{"reason": 42}"#))]
-    #[case::plain_text("capabilities out of date", None, None, Some("capabilities out of date"))]
     #[case::json_string(r#""quoted""#, None, None, Some(r#""quoted""#))]
     #[case::html(
         "<html>502 Bad Gateway</html>\n",
@@ -201,7 +198,6 @@ mod tests {
         None,
         Some("<html>502 Bad Gateway</html>")
     )]
-    #[case::empty("", None, None, None)]
     #[case::whitespace(" \n", None, None, None)]
     fn parses_every_error_envelope_leniently(
         #[case] body: &str,

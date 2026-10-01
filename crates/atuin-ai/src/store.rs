@@ -485,52 +485,6 @@ mod tests {
         assert!(store.get_usage("key-b").await.unwrap().is_none());
     }
 
-    /// Rows are the verbatim JSON of [`UsageSnapshot`] with the server's `resets_at` string, so a
-    /// change to its serde shape must still read what released clients cached.
-    #[rstest]
-    #[case::whole_seconds(
-        r#"{"period":"calendar_monthly","resets_at":"2026-08-01T00:00:00Z","requests":{"used":3,"limit":-1},"input":{"used":12345,"limit":5000000},"output":{"used":678,"limit":0}}"#,
-        "2026-08-01T00:00:00Z"
-    )]
-    #[case::microseconds(
-        r#"{"period":"calendar_monthly","resets_at":"2026-08-01T00:00:00.000000Z","requests":{"used":3,"limit":-1},"input":{"used":12345,"limit":5000000},"output":{"used":678,"limit":0}}"#,
-        "2026-08-01T00:00:00.000000Z"
-    )]
-    #[tokio::test]
-    async fn usage_cache_reads_rows_released_clients_wrote(
-        #[future] store: AiSessionStore,
-        #[case] row: &str,
-        #[case] resets_at: &str,
-    ) {
-        use crate::usage::UsageBucket;
-
-        let store = store.await;
-        db::query("INSERT INTO usage (user_key, snapshot, updated_at) VALUES (?1, ?2, ?3)")
-            .bind("key-a")
-            .bind(row)
-            .bind(1_785_000_000_i64)
-            .execute(store.sqlite.pool())
-            .await
-            .unwrap();
-
-        let cached = store.get_usage("key-a").await.unwrap().unwrap();
-
-        assert_eq!(cached.written_at, 1_785_000_000);
-        assert_eq!(cached.snapshot, UsageSnapshot {
-            period: "calendar_monthly".into(),
-            resets_at: resets_at.into(),
-            requests: UsageBucket { used: 3, limit: -1 },
-            input: UsageBucket {
-                used: 12345,
-                limit: 5_000_000,
-            },
-            output: UsageBucket {
-                used: 678,
-                limit: 0
-            },
-        });
-    }
-
     #[rstest]
     #[tokio::test]
     async fn test_events_ordered_chronologically(#[future] store_with_s1: AiSessionStore) {

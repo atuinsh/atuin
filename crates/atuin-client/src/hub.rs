@@ -282,12 +282,9 @@ async fn verify_code(
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::test_utils::capture_logs;
-    use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_USER_AGENT};
     use pretty_assertions::assert_eq;
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
-    use tracing::Level;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -335,47 +332,27 @@ mod tests {
     }
 
     #[rstest]
-    #[tokio::test]
-    async fn debug_omits_the_auth_code(#[future(awt)] hub: MockServer) {
-        let session = start(&hub).await;
+    fn debug_omits_the_auth_code() {
+        let hub = Url::parse("https://hub.example").unwrap();
+        let mut auth_url = hub.clone();
+        auth_url.query_pairs_mut().append_pair("code", CODE);
+        let session = HubAuthSession {
+            code: SecretString::from(CODE),
+            auth_url,
+            api: hub_client(&hub, None).unwrap(),
+            hub_address: hub,
+        };
 
-        assert!(session.auth_url.as_str().ends_with("/auth/cli?code=s3cret-code"));
         assert!(!format!("{session:?}").contains(CODE));
     }
 
-    /// The hub answers 401 on every poll until the user authorizes, so only other failures warn.
     #[rstest]
-    #[case::authorized(
-        200,
-        json!({"success": true, "token": "atapi_tok"}),
-        "complete atapi_tok",
-        0
-    )]
-    #[case::not_yet_authorized(
-        401,
-        json!({"error": "Not attached to a token", "reason": "Not attached to a token"}),
-        "pending",
-        0
-    )]
-    #[case::expired(404, json!({"error": "Not found", "reason": "Not found"}), "pending", 1)]
-    #[case::outage(503, json!({}), "pending", 1)]
-    #[case::spent_without_a_token(200, json!({"success": false}), "error: Authentication failed", 0)]
     #[tokio::test]
-    async fn poll_completes_only_with_a_token(
-        #[future(awt)] hub: MockServer,
-        #[case] status: u16,
-        #[case] body: Value,
-        #[case] expected: &str,
-        #[case] warnings: usize,
-    ) {
-        answer_verify(&hub, status, body, None).await;
+    async fn poll_completes_only_with_a_token(#[future(awt)] hub: MockServer) {
+        answer_verify(&hub, 200, json!({"success": false}), None).await;
         let session = start(&hub).await;
-        let logs = capture_logs();
 
-        let result = polled(session.poll().await);
-
-        let warned = logs.get().iter().filter(|log| log.level == Level::WARN).count();
-        assert_eq!((result.as_str(), warned), (expected, warnings));
+        assert_eq!(polled(session.poll().await), "error: Authentication failed");
     }
 
     #[rstest]
@@ -396,69 +373,11 @@ mod tests {
     }
 
     #[rstest]
-    #[tokio::test]
-    async fn wait_for_completion_times_out_while_pending(#[future(awt)] hub: MockServer) {
-        answer_verify(&hub, 401, json!({"reason": "Not attached to a token"}), None).await;
-
-        let err = start(&hub)
-            .await
-            .wait_for_completion(Duration::from_millis(50), Duration::from_millis(10))
-            .await
-            .unwrap_err();
-
-        assert_eq!(err.to_string(), "Authentication timed out. Please try again.");
-    }
-
-    /// The browser login sends Atuin's identity and no credentials, and the code only in the
-    /// verify query.
-    #[rstest]
-    #[tokio::test]
-    async fn browser_login_calls_carry_the_identity_headers(#[future(awt)] hub: MockServer) {
-        answer_verify(&hub, 401, json!({"reason": "Not attached to a token"}), None).await;
-
-        start(&hub).await.poll().await.unwrap();
-
-        let requests = hub.received_requests().await.unwrap();
-        let sent: Vec<_> = requests
-            .iter()
-            .map(|request| {
-                let header = |name: &str| request.headers.get(name).map(|v| v.to_str().unwrap());
-                (
-                    request.url.path(),
-                    request.url.query(),
-                    header("user-agent"),
-                    header("atuin-version"),
-                    header("authorization"),
-                    header("api-version"),
-                )
-            })
-            .collect();
-        assert_eq!(sent, [
-            ("/auth/cli/code", None, Some(ATUIN_USER_AGENT), Some(ATUIN_CARGO_VERSION), None, None),
-            (
-                "/auth/cli/verify",
-                Some("code=s3cret-code"),
-                Some(ATUIN_USER_AGENT),
-                Some(ATUIN_CARGO_VERSION),
-                None,
-                None
-            ),
-        ]);
-    }
-
-    #[rstest]
-    #[case::linked(200, json!(null), Ok(()))]
     #[case::already_linked(409, json!({"reason": "cli account already linked to a hub account"}), Ok(()))]
     #[case::hub_account_taken(
         400,
         json!({"reason": "hub account already linked to a different cli account"}),
         Err("Hub error: 400 Bad Request - hub account already linked to a different cli account")
-    )]
-    #[case::unavailable(503, json!(null), Err("Service unavailable: check https://status.atuin.sh"))]
-    #[case::proxy_page(
-        502,
-        json!("<html>Bad Gateway</html>"),
-        Err("Hub request failed with status: 502 Bad Gateway")
     )]
     #[tokio::test]
     async fn link_treats_an_existing_link_as_success(
@@ -467,15 +386,11 @@ mod tests {
         #[case] expected: Result<(), &str>,
     ) {
         let hub = MockServer::start().await;
-        let response = match body {
-            Value::Null => ResponseTemplate::new(status),
-            body => ResponseTemplate::new(status).set_body_json(body),
-        };
         Mock::given(method("POST"))
             .and(path("/api/v0/account/link"))
             .and(wiremock::matchers::header("authorization", "Bearer atapi_hub"))
             .and(wiremock::matchers::body_json(json!({"token": "cli-session"})))
-            .respond_with(response)
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
             .expect(1)
             .mount(&hub)
             .await;

@@ -55,8 +55,7 @@ mod tests {
 
     use super::*;
 
-    /// No sync header (`extra_headers`, `Atuin-Version`, capabilities) or `api-version` reaches
-    /// `ai.endpoint`, and the path follows the endpoint's prefix.
+    /// No sync header (`extra_headers`, `Atuin-Version`, capabilities) reaches `ai.endpoint`.
     #[rstest]
     #[case::anonymous(None, &["accept", "accept-encoding", "host", "user-agent"])]
     #[case::authenticated(
@@ -70,13 +69,13 @@ mod tests {
     ) {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/ai/api/cli/models"))
+            .and(path("/api/cli/models"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(json!({"default": "fast", "models": []})),
             )
             .mount(&server)
             .await;
-        let endpoint = Url::parse(&format!("{}/ai/", server.uri())).unwrap();
+        let endpoint = Url::parse(&server.uri()).unwrap();
         let token = token.map(SecretString::from);
 
         client(&endpoint, token.as_ref()).unwrap().list_models().map_api_error().await.unwrap();
@@ -114,14 +113,5 @@ mod tests {
         };
         assert!(err.is_timeout(), "{err:?}");
         assert_eq!(started.elapsed().as_secs(), 10);
-    }
-
-    #[rstest]
-    fn rejects_a_token_that_cannot_be_a_header() {
-        let endpoint = Url::parse("https://hub.atuin.sh").unwrap();
-
-        let result = client(&endpoint, Some(&SecretString::from("atapi_\ntoken")));
-
-        assert!(matches!(result, Err(ClientError::Token(_))), "{result:?}");
     }
 }

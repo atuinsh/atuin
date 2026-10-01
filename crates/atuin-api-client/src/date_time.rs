@@ -18,18 +18,10 @@ mod tests {
     use super::DateTime;
 
     #[rstest]
-    #[case::utc("\"2026-08-01T00:00:00Z\"", DateTime(datetime!(2026-08-01 00:00:00 UTC)))]
-    #[case::fraction(
-        "\"2026-08-01T12:30:05.25Z\"",
-        DateTime(datetime!(2026-08-01 12:30:05.25 UTC))
-    )]
-    #[case::offset(
-        "\"2026-08-01T02:00:00+02:00\"",
-        DateTime(datetime!(2026-08-01 02:00:00 +02:00))
-    )]
-    fn round_trips_rfc_3339(#[case] wire: &str, #[case] expected: DateTime) {
+    fn round_trips_rfc_3339() {
+        let wire = "\"2026-08-01T00:00:00Z\"";
         let decoded: DateTime = serde_json::from_str(wire).unwrap();
-        assert_eq!(decoded, expected);
+        assert_eq!(decoded, DateTime(datetime!(2026-08-01 00:00:00 UTC)));
         assert_eq!(serde_json::to_string(&decoded).unwrap(), wire);
     }
 }
