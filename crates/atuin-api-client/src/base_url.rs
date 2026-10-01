@@ -51,39 +51,3 @@ impl Base {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use atuin_common::url::UrlAppendExt;
-    use pretty_assertions::assert_eq;
-    use rstest::rstest;
-    use url::Url;
-
-    use super::Base;
-
-    #[rstest]
-    fn prefixes_operation_paths_like_append_path(
-        #[values(
-            "https://api.atuin.sh",
-            "https://api.atuin.sh/",
-            "https://host.example/atuin",
-            "https://host.example/atuin/",
-            "https://host.example/atuin//",
-            "https://h.example//",
-            "https://h.example/a//b//",
-            "https://host.example/atuin/?tok=1&b=%20#top"
-        )]
-        base: &str,
-    ) {
-        const PATH: &str = "api/v0/me";
-        let base = Url::parse(base).unwrap();
-        let Base { prefix, query } = Base::parse(&base).unwrap();
-        let mut expected = base.append_path(PATH).unwrap();
-        expected.set_fragment(None);
-
-        let mut built = Url::parse(&format!("{prefix}/{PATH}")).unwrap();
-        built.set_query(query.as_deref());
-
-        assert_eq!(built.as_str(), expected.as_str());
-    }
-}

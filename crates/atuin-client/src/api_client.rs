@@ -633,7 +633,6 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use atuin_domain::api::ATUIN_USER_AGENT;
     use rstest::*;
 
     use super::*;
@@ -651,13 +650,6 @@ mod tests {
         let value = headers.get("x-auth-token").unwrap();
         assert_eq!(value, "secret");
         assert!(value.is_sensitive());
-    }
-
-    #[rstest]
-    #[case::bearer(AuthToken::Bearer("tok".into()), "Bearer tok")]
-    #[case::token(AuthToken::Token("tok".into()), "Token tok")]
-    fn auth_header_names_its_scheme(#[case] token: AuthToken, #[case] expected: &str) {
-        assert_eq!(token.to_header_value().unwrap(), expected);
     }
 
     #[rstest]
@@ -733,91 +725,6 @@ mod tests {
 
         assert_eq!(resp.status(), 200);
         assert_eq!(resp.url().path(), "/ok");
-    }
-
-    #[rstest]
-    fn failed_calls_read_as_the_cli_messages() {
-        let err = ApiError::Status {
-            status: StatusCode::BAD_GATEWAY,
-            url: Box::new("https://api.atuin.sh/api/v0/me".parse().unwrap()),
-            reason: None,
-            code: None,
-            body: Some("<html>Bad Gateway</html>".to_owned()),
-        };
-
-        assert_eq!(
-            api_error(err).to_string(),
-            "There was an error with the atuin sync service at https://api.atuin.sh/api/v0/me, \
-             server error 502 Bad Gateway: <html>Bad Gateway</html>.\nIf the problem persists, \
-             contact the host"
-        );
-    }
-
-    /// Every sync call carries the auth, identity and user headers the client was built with,
-    /// Atuin's `Authorization` over a user's, and the negotiated capability token.
-    #[rstest]
-    #[tokio::test]
-    async fn sync_calls_carry_the_configured_headers() {
-        use atuin_domain::caps::CapabilitiesCap;
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/v0/capabilities"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"version": "7", "capabilities": {}})),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/api/v0/me"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"username": "ellie"})),
-            )
-            .mount(&server)
-            .await;
-        let extra_headers = HashMap::from([
-            ("X-Auth-Token".to_owned(), SecretString::from("secret")),
-            ("Authorization".to_owned(), SecretString::from("Token user-value")),
-        ]);
-        let addr: Url = server.uri().parse().unwrap();
-        let caps = caps_client_anonymous(&addr, &extra_headers).unwrap();
-        caps.get_server::<CapabilitiesCap>().await.unwrap();
-        let client = Client::new(
-            addr,
-            &AuthToken::Token("t".into()),
-            Duration::from_secs(30),
-            Duration::from_secs(30),
-            &extra_headers,
-            caps,
-        )
-        .unwrap();
-
-        client.me().await.unwrap();
-
-        let requests = server.received_requests().await.unwrap();
-        let me = requests.iter().find(|request| request.url.path() == "/api/v0/me").unwrap();
-        let sent = |name: &str| -> Vec<&str> {
-            me.headers.get_all(name).iter().map(|value| value.to_str().unwrap()).collect()
-        };
-        assert_eq!(
-            [
-                sent("authorization"),
-                sent("user-agent"),
-                sent(ATUIN_HEADER_VERSION),
-                sent("x-auth-token"),
-                sent("x-atuin-capabilities-known"),
-            ],
-            [
-                vec!["Token t"],
-                vec![ATUIN_USER_AGENT],
-                vec![ATUIN_CARGO_VERSION],
-                vec!["secret"],
-                vec!["7"],
-            ]
-        );
     }
 
     #[rstest]

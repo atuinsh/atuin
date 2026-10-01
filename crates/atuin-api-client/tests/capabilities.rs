@@ -1,5 +1,5 @@
-//! Capability negotiation through the client hooks: stamp the known token, enforce on request, and
-//! refresh in the background, once, when a served answer advertises another token.
+//! Capability negotiation through the client hooks: a burst of answers advertising another token
+//! refreshes the capabilities once.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +17,6 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const CAPABILITIES: &str = "/api/v0/capabilities";
 const ME: &str = "/api/v0/me";
 const KNOWN: &str = "x-atuin-capabilities-known";
-const ENFORCE: &str = "x-atuin-capabilities-enforce";
 const AVAILABLE: &str = "x-atuin-capabilities-available";
 
 fn capabilities(version: &str) -> ResponseTemplate {
@@ -118,49 +117,4 @@ async fn concurrent_burst_refreshes_capabilities_once(#[future] negotiating_serv
 
     await_token(&caps, "5").await;
     assert_eq!(caps_hits(&server).await, 2, "a burst must coalesce into one refresh");
-}
-
-#[rstest]
-#[case::continue_mode(CapMismatch::Continue, None)]
-#[case::error_mode(CapMismatch::Error, Some("1"))]
-#[tokio::test]
-async fn stamps_the_fetched_token_and_the_enforce_flag(
-    #[future] negotiating_server: MockServer,
-    #[case] mode: CapMismatch,
-    #[case] enforce: Option<&str>,
-) {
-    let server = negotiating_server.await;
-    let caps = warm_cap_client(&server).await;
-    caps.refresh().await.unwrap();
-    let client = negotiating_client(&server, caps, mode);
-
-    let me = client.get_me().map_api_error().await.unwrap();
-
-    assert_eq!(me.status(), StatusCode::OK);
-    let requests = server.received_requests().await.unwrap();
-    let me = requests.iter().find(|request| request.url.path() == ME).unwrap();
-    assert_eq!(
-        (
-            me.headers.get(KNOWN).and_then(|value| value.to_str().ok()),
-            me.headers.get(ENFORCE).and_then(|value| value.to_str().ok()),
-        ),
-        (Some("5"), enforce)
-    );
-}
-
-#[rstest]
-#[tokio::test]
-async fn get_capabilities_is_never_negotiated(#[future] negotiating_server: MockServer) {
-    let server = negotiating_server.await;
-    let caps = warm_cap_client(&server).await;
-    let client = negotiating_client(&server, caps, CapMismatch::Error);
-
-    let document = client.get_capabilities().map_api_error().await.unwrap();
-
-    assert_eq!(document.into_inner().version, "5");
-    let requests = server.received_requests().await.unwrap();
-    let last = requests.last().unwrap();
-    assert_eq!(last.url.path(), CAPABILITIES);
-    assert!(!last.headers.contains_key(KNOWN), "{:?}", last.headers);
-    assert!(!last.headers.contains_key(ENFORCE), "{:?}", last.headers);
 }

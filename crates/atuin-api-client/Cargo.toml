@@ -14,6 +14,7 @@ version.workspace = true
 [dependencies]
 atuin-domain = { workspace = true }
 
+derive_more = { workspace = true }
 parking_lot = { workspace = true }
 progenitor-client = { workspace = true }
 reqwest = { workspace = true }
@@ -35,15 +36,13 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-atuin-common = { workspace = true }
 pretty_assertions = { workspace = true }
 rstest = { workspace = true }
 wiremock = { workspace = true }
-# tests/codegen.rs compiles the generator in build/ again to run its unit tests.
-openapiv3 = { workspace = true }
-progenitor-impl = { workspace = true }
-quote = { workspace = true }
-schemars08 = { workspace = true }
+
+[package.metadata.cargo-machete]
+# The client generated into OUT_DIR uses uuid; machete scans src/ only.
+ignored = ["uuid"]
 
 [lints]
 workspace = true

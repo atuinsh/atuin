@@ -1,5 +1,9 @@
 //! Typed client for the Atuin sync, hub and AI HTTP APIs.
 
+use derive_more::{Deref, From, Into};
+use secrecy::{ExposeSecret, SecretString};
+use serde::{Deserialize, Serialize, Serializer};
+
 mod base_url;
 mod caps;
 mod date_time;
@@ -18,7 +22,6 @@ mod generated {
 }
 mod header;
 mod hooks;
-mod secret;
 
 pub use base_url::BaseUrlError;
 pub use caps::{AuthHeaderFuture, AuthHeaderProvider, CapClient, CapMismatch, ServerSupportError};
@@ -27,4 +30,13 @@ pub use error::{ApiError, MapApiError};
 pub use generated::{Client, ResponseValue, types};
 pub use header::authorization;
 pub use hooks::HookState;
-pub use secret::Secret;
+
+/// A secret the API carries in plaintext; its `Debug` stays redacted.
+#[derive(Clone, Debug, Deserialize, Serialize, From, Into, Deref)]
+#[from(SecretString, String, &str)]
+#[serde(transparent)]
+pub struct Secret(#[serde(serialize_with = "expose")] SecretString);
+
+fn expose<S: Serializer>(secret: &SecretString, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(secret.expose_secret())
+}

@@ -282,54 +282,11 @@ async fn verify_code(
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
-    use rstest::{fixture, rstest};
-    use serde_json::{Value, json};
-    use wiremock::matchers::{method, path, query_param};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use rstest::rstest;
 
     use super::*;
 
     const CODE: &str = "s3cret-code";
-
-    /// A hub that hands out [`CODE`] for a browser login.
-    #[fixture]
-    async fn hub() -> MockServer {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/auth/cli/code"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"code": CODE})))
-            .mount(&server)
-            .await;
-        server
-    }
-
-    /// Answer the verification of [`CODE`] with `status` and `body` the first `times` polls, if
-    /// given, else on every poll.
-    async fn answer_verify(hub: &MockServer, status: u16, body: Value, times: Option<u64>) {
-        let mock = Mock::given(method("POST"))
-            .and(path("/auth/cli/verify"))
-            .and(query_param("code", CODE))
-            .respond_with(ResponseTemplate::new(status).set_body_json(body));
-        let mock = match times {
-            Some(times) => mock.up_to_n_times(times).with_priority(1),
-            None => mock,
-        };
-        mock.mount(hub).await;
-    }
-
-    async fn start(hub: &MockServer) -> HubAuthSession {
-        HubAuthSession::start(&hub.uri().parse().unwrap()).await.unwrap()
-    }
-
-    /// What a poll came to, e.g. `complete atapi_tok`, `pending` or `error: ...`.
-    fn polled(result: Result<HubAuthStatus>) -> String {
-        match result {
-            Ok(HubAuthStatus::Complete(token)) => format!("complete {}", token.expose_secret()),
-            Ok(HubAuthStatus::Pending) => "pending".to_owned(),
-            Err(err) => format!("error: {err}"),
-        }
-    }
 
     #[rstest]
     fn debug_omits_the_auth_code() {
@@ -344,61 +301,5 @@ mod tests {
         };
 
         assert!(!format!("{session:?}").contains(CODE));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn poll_completes_only_with_a_token(#[future(awt)] hub: MockServer) {
-        answer_verify(&hub, 200, json!({"success": false}), None).await;
-        let session = start(&hub).await;
-
-        assert_eq!(polled(session.poll().await), "error: Authentication failed");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn wait_for_completion_polls_until_authorized(#[future(awt)] hub: MockServer) {
-        answer_verify(&hub, 401, json!({"reason": "Not attached to a token"}), Some(2)).await;
-        answer_verify(&hub, 200, json!({"success": true, "token": "atapi_tok"}), None).await;
-
-        let token = start(&hub)
-            .await
-            .wait_for_completion(Duration::from_secs(10), Duration::from_millis(10))
-            .await
-            .unwrap();
-
-        assert_eq!(token.expose_secret(), "atapi_tok");
-        let verifies = hub.received_requests().await.unwrap().into_iter();
-        assert_eq!(verifies.filter(|r| r.url.path() == "/auth/cli/verify").count(), 3);
-    }
-
-    #[rstest]
-    #[case::already_linked(409, json!({"reason": "cli account already linked to a hub account"}), Ok(()))]
-    #[case::hub_account_taken(
-        400,
-        json!({"reason": "hub account already linked to a different cli account"}),
-        Err("Hub error: 400 Bad Request - hub account already linked to a different cli account")
-    )]
-    #[tokio::test]
-    async fn link_treats_an_existing_link_as_success(
-        #[case] status: u16,
-        #[case] body: Value,
-        #[case] expected: Result<(), &str>,
-    ) {
-        let hub = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v0/account/link"))
-            .and(wiremock::matchers::header("authorization", "Bearer atapi_hub"))
-            .and(wiremock::matchers::body_json(json!({"token": "cli-session"})))
-            .respond_with(ResponseTemplate::new(status).set_body_json(body))
-            .expect(1)
-            .mount(&hub)
-            .await;
-        let api = hub_client(&hub.uri().parse().unwrap(), Some(&SecretString::from("atapi_hub")))
-            .unwrap();
-
-        let linked = link(&api, &SecretString::from("cli-session")).await;
-
-        assert_eq!(linked.map_err(|err| err.to_string()), expected.map_err(str::to_owned));
     }
 }

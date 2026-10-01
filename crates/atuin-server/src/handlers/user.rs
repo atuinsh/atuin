@@ -103,7 +103,7 @@ pub async fn register(
         }
     }
 
-    let hashed = hash_secret(&register.password);
+    let hashed = hash_secret(&*register.password);
 
     let new_user = NewUser {
         email: register.email.clone(),
@@ -176,14 +176,14 @@ pub async fn change_password(
 ) -> Result<Json<Map<String, Value>>, ErrorResponseStatus> {
     let db = &state.0.database;
 
-    let verified = verify_str(user.password.as_str(), &change_password.current_password);
+    let verified = verify_str(user.password.as_str(), &*change_password.current_password);
     if !verified {
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
         );
     }
 
-    let hashed = hash_secret(&change_password.new_password);
+    let hashed = hash_secret(&*change_password.new_password);
     user.password = hashed;
 
     if let Err(e) = db.update_user_password(&user).await {
@@ -231,7 +231,7 @@ pub async fn login(
         }
     };
 
-    let verified = verify_str(user.password.as_str(), &login.password);
+    let verified = verify_str(user.password.as_str(), &*login.password);
 
     if !verified {
         warn!(user.id = user.id, "login failed: incorrect password");

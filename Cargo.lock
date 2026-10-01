@@ -403,7 +403,6 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.2",
  "uuid",
- "wiremock",
  "xxhash-rust",
  "yaml-rust2",
 ]
@@ -412,8 +411,8 @@ dependencies = [
 name = "atuin-api-client"
 version = "18.23.0"
 dependencies = [
- "atuin-common",
  "atuin-domain",
+ "derive_more",
  "openapiv3",
  "parking_lot",
  "pretty_assertions",

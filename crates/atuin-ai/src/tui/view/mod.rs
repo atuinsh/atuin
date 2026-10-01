@@ -771,10 +771,7 @@ const USAGE_BAR_WIDTH: usize = 5;
 /// One-line status bar under the input box: current model on the left;
 /// on the right, once usage crosses the threshold, a small bar chart with
 /// the percentage and time until the period resets.
-pub fn status_bar_view(
-    model: Option<&str>,
-    usage: Option<&UsageSnapshot>,
-) -> AnyElement<'static> {
+pub fn status_bar_view(model: Option<&str>, usage: Option<&UsageSnapshot>) -> AnyElement<'static> {
     let usage = usage.and_then(|snapshot| {
         let pct = snapshot.as_percentage()?;
         if pct < USAGE_BAR_THRESHOLD_PCT {

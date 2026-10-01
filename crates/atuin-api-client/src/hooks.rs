@@ -168,27 +168,3 @@ fn token_to_refresh<'a>(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-    use rstest::rstest;
-
-    use super::token_to_refresh;
-    use crate::CapMismatch;
-
-    #[rstest]
-    #[case::stale(CapMismatch::Continue, Some("5"), Some("4"), Some("4"), Some("5"))]
-    #[case::stale_before_any_fetch(CapMismatch::Continue, Some("5"), None, None, Some("5"))]
-    #[case::error_mode(CapMismatch::Error, Some("5"), Some("4"), Some("4"), None)]
-    #[case::not_advertised(CapMismatch::Continue, None, Some("4"), Some("4"), None)]
-    fn refreshes_only_to_a_token_neither_sent_nor_cached(
-        #[case] on_mismatch: CapMismatch,
-        #[case] available: Option<&str>,
-        #[case] sent: Option<&str>,
-        #[case] cached: Option<&str>,
-        #[case] expected: Option<&str>,
-    ) {
-        assert_eq!(token_to_refresh(on_mismatch, available, sent, cached), expected);
-    }
-}

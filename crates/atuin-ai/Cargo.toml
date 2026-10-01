@@ -87,9 +87,6 @@ arboard = { workspace = true, optional = true, features = ["wayland-data-control
 eye_declare_engine = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
-# Paused time, so the 10 s request timeout test runs instantly.
-tokio = { workspace = true, features = ["test-util"] }
-wiremock = { workspace = true }
 
 [lints]
 workspace = true

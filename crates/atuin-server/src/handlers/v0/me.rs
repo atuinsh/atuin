@@ -6,9 +6,7 @@ use crate::handlers::ErrorResponseStatus;
 use crate::router::UserAuth;
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
-pub async fn get(
-    UserAuth(user): UserAuth,
-) -> Result<Json<MeResponse>, ErrorResponseStatus> {
+pub async fn get(UserAuth(user): UserAuth) -> Result<Json<MeResponse>, ErrorResponseStatus> {
     Ok(Json(MeResponse {
         username: Some(user.username),
     }))

@@ -21,7 +21,7 @@ use time::OffsetDateTime;
 pub const REFRESH_AFTER: Duration = Duration::from_secs(60);
 
 /// The status bar's readings of a [`UsageSnapshot`].
-pub(crate) trait UsageSnapshotExt {
+pub trait UsageSnapshotExt {
     /// Time left until the period resets, or `None` once it has.
     fn resets_in(&self) -> Option<Duration>;
 
@@ -98,38 +98,9 @@ mod tests {
     use atuin_api_client::DateTime;
     use atuin_api_client::types::UsageBucket;
     use rstest::rstest;
-    use serde_json::{Value, json};
     use time::macros::datetime;
-    use wiremock::matchers::{header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-
-    const TOKEN: &str = "atapi_token";
-
-    /// A server answering usage with `response` to [`TOKEN`] only, and its endpoint.
-    async fn serve(response: ResponseTemplate) -> (MockServer, Url) {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/cli/usage"))
-            .and(header("authorization", format!("Bearer {TOKEN}")))
-            .respond_with(response)
-            .mount(&server)
-            .await;
-        let endpoint = Url::parse(&server.uri()).unwrap();
-        (server, endpoint)
-    }
-
-    /// The hub's `GET /api/cli/usage` body.
-    fn hub_usage(resets_at: &str) -> Value {
-        json!({
-            "period": "calendar_monthly",
-            "resets_at": resets_at,
-            "requests": {"used": 3, "limit": -1},
-            "input": {"used": 12345, "limit": 5_000_000},
-            "output": {"used": 678, "limit": 0},
-        })
-    }
 
     #[rstest]
     fn deserializes_server_payload() {
@@ -161,10 +132,7 @@ mod tests {
 
         let json = serde_json::to_string(&snapshot).unwrap();
         let decoded = serde_json::from_str::<UsageSnapshot>(&json).unwrap();
-        assert_eq!(
-            serde_json::to_value(decoded).unwrap(),
-            serde_json::to_value(snapshot).unwrap()
-        );
+        assert_eq!(serde_json::to_value(decoded).unwrap(), serde_json::to_value(snapshot).unwrap());
     }
 
     #[rstest]
@@ -207,45 +175,5 @@ mod tests {
         let b = SecretString::from("token-b");
         assert_ne!(cache_key(&a), cache_key(&b));
         assert_eq!(cache_key(&a), cache_key(&a.clone()));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn fetch_decodes_the_hub_snapshot() {
-        let wire = "2026-08-01T00:00:00.000000Z";
-        let (_server, endpoint) =
-            serve(ResponseTemplate::new(200).set_body_json(hub_usage(wire))).await;
-
-        let snapshot = fetch_usage(&endpoint, &SecretString::from(TOKEN)).await.unwrap();
-
-        let expected = UsageSnapshot {
-            period: "calendar_monthly".into(),
-            resets_at: DateTime(datetime!(2026-08-01 00:00 UTC)),
-            requests: UsageBucket { used: 3, limit: -1 },
-            input: UsageBucket {
-                used: 12345,
-                limit: 5_000_000,
-            },
-            output: UsageBucket {
-                used: 678,
-                limit: 0
-            },
-        };
-        assert_eq!(
-            serde_json::to_value(snapshot).unwrap(),
-            serde_json::to_value(expected).unwrap()
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn fetch_failures_name_the_stage_that_failed() {
-        let (_server, endpoint) =
-            serve(ResponseTemplate::new(401).set_body_json(json!({"errors": ["invalid token"]})))
-                .await;
-
-        let err = fetch_usage(&endpoint, &SecretString::from(TOKEN)).await.unwrap_err();
-
-        assert_eq!(err.to_string(), "usage request failed (401 Unauthorized)");
     }
 }

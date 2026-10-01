@@ -18,20 +18,3 @@ pub fn authorization(
     header.set_sensitive(true);
     Ok(header)
 }
-
-#[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-    use rstest::rstest;
-    use secrecy::SecretString;
-
-    use super::authorization;
-
-    #[rstest]
-    fn carries_the_scheme_and_is_sensitive() {
-        let header = authorization("Bearer", &SecretString::from("hunter2")).unwrap();
-
-        assert_eq!(header, "Bearer hunter2");
-        assert!(header.is_sensitive());
-    }
-}

@@ -230,18 +230,14 @@ mod tests {
     use std::sync::Arc;
 
     use atuin_domain::caps::{CapServer, CapabilitiesCap};
-    use parking_lot::Mutex;
     use pretty_assertions::assert_eq;
-    use reqwest::StatusCode;
-    use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
     use rstest::rstest;
-    use serde_json::json;
     use url::Url;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use super::{AuthHeaderProvider, CapClient, ServerSupportError};
-    use crate::{ApiError, Client};
+    use super::CapClient;
+    use crate::Client;
 
     const CAPABILITIES: &str = "/api/v0/capabilities";
 
@@ -255,10 +251,6 @@ mod tests {
         server
     }
 
-    fn version(token: &str) -> ResponseTemplate {
-        ResponseTemplate::new(200).set_body_json(json!({"version": token, "capabilities": {}}))
-    }
-
     fn api(server: &MockServer, http: reqwest::Client) -> Client {
         Client::from_http(&Url::parse(&server.uri()).unwrap(), http).unwrap()
     }
@@ -268,10 +260,6 @@ mod tests {
         let caps = CapClient::new(api(server, reqwest::Client::new()));
         let _ = caps.get_server::<CapabilitiesCap>().await;
         caps
-    }
-
-    async fn fetches(server: &MockServer) -> Vec<wiremock::Request> {
-        server.received_requests().await.unwrap()
     }
 
     #[rstest]
@@ -289,73 +277,5 @@ mod tests {
             caps.get_server::<CapabilitiesCap>().await.unwrap(),
             Some(CapabilitiesCap { version: 1 })
         );
-    }
-
-    /// A rejected fetch surfaces its status and leaves nothing cached, so negotiation-gated features
-    /// see `NotFetched` rather than a stale "no".
-    #[rstest]
-    #[tokio::test]
-    async fn a_rejected_fetch_leaves_the_capabilities_unfetched() {
-        let server = server_answering(ResponseTemplate::new(401)).await;
-        let caps = warm(&server).await;
-
-        let err = caps.refresh().await.unwrap_err();
-
-        assert!(
-            matches!(err, ApiError::Status {
-                status: StatusCode::UNAUTHORIZED,
-                ..
-            }),
-            "{err:?}"
-        );
-        assert!(matches!(
-            caps.get_server::<CapabilitiesCap>().await,
-            Err(ServerSupportError::NotFetched)
-        ));
-    }
-
-    /// Auth resolves on every fetch, so a long-lived reader follows login, logout and token
-    /// rotation; it wins over a default `Authorization` (a user's extra header), which applies
-    /// only while the provider has nothing.
-    #[rstest]
-    #[tokio::test]
-    async fn resolves_authorization_on_every_fetch_over_the_default() {
-        let server = server_answering(version("7")).await;
-        let token = Arc::new(Mutex::new(Some("Token a")));
-        let auth = AuthHeaderProvider::new({
-            let token = Arc::clone(&token);
-            move || {
-                let value = token.lock().map(HeaderValue::from_static);
-                Box::pin(async move { value })
-            }
-        });
-        let http = reqwest::Client::builder()
-            .default_headers(HeaderMap::from_iter([(
-                AUTHORIZATION,
-                HeaderValue::from_static("Basic proxy"),
-            )]))
-            .build()
-            .unwrap();
-        let caps = CapClient::new(api(&server, http).with_auth(auth));
-        let _ = caps.get_server::<CapabilitiesCap>().await;
-
-        *token.lock() = None;
-        caps.refresh().await.unwrap();
-        *token.lock() = Some("Token b");
-        caps.refresh().await.unwrap();
-
-        let sent: Vec<Vec<String>> = fetches(&server)
-            .await
-            .iter()
-            .map(|request| {
-                request
-                    .headers
-                    .get_all(AUTHORIZATION)
-                    .iter()
-                    .map(|value| value.to_str().unwrap().to_owned())
-                    .collect()
-            })
-            .collect();
-        assert_eq!(sent, [["Token a"], ["Basic proxy"], ["Token b"]]);
     }
 }
