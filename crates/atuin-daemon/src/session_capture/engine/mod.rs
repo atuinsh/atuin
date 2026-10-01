@@ -186,7 +186,7 @@ pub(super) async fn store(
 
 /// Append `msg`, waiting (not retrying hot) for the store to be ready whenever it is refused as
 /// unavailable. Gives up only if the store's state can no longer change (the facade is gone).
-async fn append(sink: &Sink, msg: Message) -> Result<Appended, AppendError> {
+pub(super) async fn append(sink: &Sink, msg: Message) -> Result<Appended, AppendError> {
     let mut state = sink.state.clone();
     loop {
         match sink.append(msg.clone()).await {
