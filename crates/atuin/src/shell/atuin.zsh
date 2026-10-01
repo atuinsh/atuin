@@ -240,6 +240,44 @@ _atuin_up_search_viins() {
     _atuin_up_search --keymap-mode=vim-insert
 }
 
+# `atuin ai resume`: pick a captured AI coding-agent session. The result uses
+# the same protocol as the history search: `__atuin_accept__:` runs it.
+_atuin_ai_resume() {
+    emulate -L zsh
+    zle -I
+
+    local output __atuin_status
+    output=$(ATUIN_SHELL=zsh ATUIN_QUERY=$BUFFER atuin ai resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-)
+    __atuin_status=$?
+
+    zle reset-prompt
+    # re-enable bracketed paste
+    # shellcheck disable=SC2154
+    echo -n ${zle_bracketed_paste[1]} >/dev/tty
+
+    if (( __atuin_status != 0 )); then
+        [[ -n $output ]] && print -r -- "$output" >/dev/tty
+        return $__atuin_status
+    fi
+
+    if [[ -n $output ]]; then
+        RBUFFER=""
+        LBUFFER=$output
+
+        if [[ $LBUFFER == __atuin_accept__:* ]]
+        then
+            LBUFFER=${LBUFFER#__atuin_accept__:}
+            zle accept-line
+        fi
+    fi
+}
+_atuin_ai_resume_vicmd() {
+    _atuin_ai_resume --keymap-mode=vim-normal
+}
+_atuin_ai_resume_viins() {
+    _atuin_ai_resume --keymap-mode=vim-insert
+}
+
 add-zsh-hook preexec _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
 add-zsh-hook zshaddhistory _atuin_zshaddhistory
@@ -250,6 +288,9 @@ zle -N atuin-search-viins _atuin_search_viins
 zle -N atuin-up-search _atuin_up_search
 zle -N atuin-up-search-vicmd _atuin_up_search_vicmd
 zle -N atuin-up-search-viins _atuin_up_search_viins
+zle -N atuin-ai-resume _atuin_ai_resume
+zle -N atuin-ai-resume-vicmd _atuin_ai_resume_vicmd
+zle -N atuin-ai-resume-viins _atuin_ai_resume_viins
 
 # These are compatibility widget names for "atuin <= 17.2.1" users.
 zle -N _atuin_search_widget _atuin_search

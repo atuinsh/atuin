@@ -358,7 +358,7 @@ enter_accept = true
 ## Defaults to the top-level no_mouse (so on, unless that is set).
 # mouse = true
 
-## Per-harness resume commands, in place of the built-in ones (run after `cd -- <cwd> &&`).
+## Per-agent resume commands, in place of the built-in ones (run after `cd -- <cwd> &&`).
 ## {id} is the native session id, {path} its transcript on this machine and {cwd} its
 ## working directory. Each is substituted within its word, unquoted, so don't quote them.
 ## Don't pass them through another shell either (e.g. `sh -c "cd {cwd} && ..."`): that

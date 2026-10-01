@@ -12,7 +12,7 @@ pub const PROMPT: &str = "E2E_PROMPT>";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShellConfig {
-    shell: String,
+    pub shell: String,
     #[serde(default)]
     args: Vec<String>,
     rc: PathBuf,

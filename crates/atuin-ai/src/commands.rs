@@ -5,6 +5,7 @@ use atuin_common::shell::Shell;
 use clap::{Args, Subcommand};
 use secrecy::SecretString;
 pub(crate) mod inline;
+pub(crate) mod resume;
 pub(crate) mod session;
 
 #[derive(Args, Debug)]
@@ -47,6 +48,9 @@ pub enum Command {
 
     /// Browse AI sessions captured by the daemon
     Session(session::Cmd),
+
+    /// Pick a captured AI coding-agent session and resume it
+    Resume(resume::Cmd),
 }
 
 impl Command {
@@ -55,6 +59,11 @@ impl Command {
             Self::Inline { args, .. } => Some(LogConfig {
                 file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
                 stderr: args.verbose.then(StderrConfig::default),
+            }),
+            // File only: the shell widget reads the result from stderr.
+            Self::Resume(_) => Some(LogConfig {
+                file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
+                stderr: None,
             }),
             Self::Init { .. } | Self::Session(_) => None,
         }
@@ -79,6 +88,7 @@ pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
             Ok(())
         }
         Command::Session(cmd) => session::run(cmd, settings).await,
+        Command::Resume(cmd) => resume::run(cmd, settings).await,
     }
 }
 
