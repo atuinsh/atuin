@@ -18,12 +18,18 @@
 //! [`AiSessionStore::reproject_beside_capture`]: atuin_client::ai_session::AiSessionStore::reproject_beside_capture
 //!
 //! Its decisions are a pure transition function, [`CoordState::step`], from an [`Event`] to the
-//! [`Effect`]s the coordinator then carries out; a wipe's outcome is fed back as an event. The
-//! tests below check the protocol's invariants over every event sequence up to a bound, and over
-//! random longer ones.
+//! [`Effect`]s the coordinator then carries out; a wipe's outcome is fed back as an event, and so
+//! is a backoff running out. The tests below check the protocol's invariants over every event
+//! sequence up to a bound, and over random longer ones.
+//!
+//! A replay that gave up because invalidations kept landing ([`ReplayResult::Incomplete`]) is
+//! replayed again, however often, after a backoff growing with each one in a row: nothing is
+//! wrong with the store, so it must not be left unavailable, and the invalidations stop sooner or
+//! later (each forget clears the rewrite it handled). A wipe meanwhile cuts the backoff short.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use atuin_client::ai_session::{BuildError, DbError, ReprojectProgress};
 use atuin_domain::record::HostId;
@@ -59,9 +65,31 @@ pub(super) enum ReplayResult {
     Incomplete,
 }
 
-/// How many times in a row a replay ending [`ReplayResult::Incomplete`] at one generation is
-/// replayed again, before the store is left unavailable.
-pub(super) const INCOMPLETE_RETRIES: u32 = 2;
+/// Names one backoff, so a backoff the coordinator no longer waits out is ignored when it ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Wait(u64);
+
+/// How long to wait before replaying again after replays ended [`ReplayResult::Incomplete`] in a
+/// row: `first` after the first, doubling with each after it, up to `max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backoff {
+    pub first: Duration,
+    pub max: Duration,
+}
+
+impl Backoff {
+    pub const DEFAULT: Self = Self {
+        first: Duration::from_millis(100),
+        max: Duration::from_secs(30),
+    };
+
+    /// The wait before replaying again after `retry` incomplete replays in a row (from 1).
+    pub(super) fn delay(self, retry: u32) -> Duration {
+        let doublings = retry.saturating_sub(1);
+        let factor = 1_u32.checked_shl(doublings).filter(|_| doublings < 32);
+        factor.map_or(self.max, |factor| self.first.saturating_mul(factor)).min(self.max)
+    }
+}
 
 /// What a wipe empties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +129,10 @@ pub(super) enum Event {
         replay: Replay,
         result: ReplayResult,
     },
+    /// A backoff an [`Effect::ReplayAfter`] asked for ran out.
+    WaitedOut {
+        wait: Wait,
+    },
 }
 
 /// What the coordinator does, in order.
@@ -112,6 +144,12 @@ pub(super) enum Effect {
     Wipe(Scope),
     /// Spawn a replay.
     StartReplay(Replay),
+    /// Wait out the backoff after `retry` incomplete replays in a row (see [`Backoff::delay`]),
+    /// then report [`Event::WaitedOut`]. The coordinator takes other messages meanwhile.
+    ReplayAfter {
+        wait: Wait,
+        retry: u32,
+    },
     /// Answer the request being handled (a rebuild, or the sync worker's).
     Reply(Result<(), Refusal>),
 }
@@ -124,6 +162,8 @@ pub(super) struct CoordState {
     pub(super) generation: u64,
     /// The replay running, if any: at most one.
     pub(super) replay: Option<Replay>,
+    /// The backoff being waited out before replaying again, if any: only with no replay running.
+    pub(super) backoff: Option<Wait>,
     /// Whether a replay has made the store ready: then capture started, and a store left
     /// unavailable by a failed replay can be rebuilt again. Until then, a failed startup recovery
     /// leaves it unavailable until restart.
@@ -131,7 +171,8 @@ pub(super) struct CoordState {
     /// While a rebuild's wipe runs: the state it replaced, restored should the wipe fail with no
     /// replay running.
     pub(super) wiping: Option<StoreState>,
-    /// Replays in a row ended [`ReplayResult::Incomplete`] at this generation and replayed again.
+    /// Replays in a row ended [`ReplayResult::Incomplete`] at this generation: what the backoff
+    /// grows with. Reset when the store settles, and by a wipe.
     pub(super) retries: u32,
     next_id: u64,
 }
@@ -147,6 +188,7 @@ impl CoordState {
             state: StoreState::Recovering,
             generation: 0,
             replay: Some(replay),
+            backoff: None,
             recovered: false,
             wiping: None,
             retries: 0,
@@ -167,6 +209,7 @@ impl CoordState {
             Event::SeriesRewritten => self.rebuild(Scope::Host),
             Event::WipeDone { ok } => self.wiped(ok),
             Event::ReplayDone { replay, result } => self.replayed(replay, result),
+            Event::WaitedOut { wait } => self.waited_out(wait),
         }
     }
 
@@ -190,9 +233,9 @@ impl CoordState {
         };
         let mut effects = Vec::new();
         if !ok {
-            // Nothing was deleted. A replay running settles the state; otherwise the store is as
-            // it was: ready, or unavailable.
-            if self.replay.is_none() {
+            // Nothing was deleted. A replay running (or waited for) settles the state; otherwise
+            // the store is as it was: ready, or unavailable.
+            if self.replay.is_none() && self.backoff.is_none() {
                 self.state = before;
                 effects.push(Effect::Broadcast(before));
             }
@@ -200,8 +243,12 @@ impl CoordState {
             return effects;
         }
         self.generation += 1;
-        // A replay running notices the wipe when it reports, and is replayed again.
+        // A new generation: whatever kept invalidating the replays before may be over.
+        self.retries = 0;
+        // A replay running notices the wipe when it reports, and is replayed again. One waited
+        // for starts now: what it waited out is moot.
         if self.replay.is_none() {
+            self.backoff = None;
             effects.push(self.start_replay());
         }
         effects.push(Effect::Reply(Ok(())));
@@ -220,10 +267,18 @@ impl CoordState {
             self.retries = 0;
             return vec![self.start_replay()];
         }
-        if result == ReplayResult::Incomplete && self.retries < INCOMPLETE_RETRIES {
-            // Invalidations kept it from finishing: another go may get through.
-            self.retries += 1;
-            return vec![self.start_replay()];
+        if result == ReplayResult::Incomplete {
+            // Invalidations kept it from finishing, which is no fault of the store: replay again,
+            // still recovering, once they have had a while to stop. Never unavailable for it, or
+            // a burst of them at startup would leave the store so until restart.
+            self.retries = self.retries.saturating_add(1);
+            let wait = Wait(self.next_id);
+            self.next_id += 1;
+            self.backoff = Some(wait);
+            return vec![Effect::ReplayAfter {
+                wait,
+                retry: self.retries,
+            }];
         }
         self.retries = 0;
         self.state = match result {
@@ -231,15 +286,24 @@ impl CoordState {
                 self.recovered = true;
                 StoreState::Ready
             }
-            ReplayResult::Failed | ReplayResult::Panicked | ReplayResult::Incomplete => {
-                StoreState::Unavailable
-            }
+            ReplayResult::Failed | ReplayResult::Panicked => StoreState::Unavailable,
+            ReplayResult::Incomplete => unreachable!("replayed again above"),
         };
         vec![Effect::Broadcast(self.state)]
     }
 
+    fn waited_out(&mut self, wait: Wait) -> Vec<Effect> {
+        if self.backoff != Some(wait) {
+            // Cut short by a wipe, which started the replay already.
+            return Vec::new();
+        }
+        self.backoff = None;
+        vec![self.start_replay()]
+    }
+
     fn start_replay(&mut self) -> Effect {
         debug_assert!(self.replay.is_none(), "a second replay");
+        debug_assert!(self.backoff.is_none(), "a replay while waiting to replay");
         let replay = Replay {
             id: ReplayId(self.next_id),
             started_gen: self.generation,
@@ -262,6 +326,8 @@ pub(super) enum Msg {
         replay: Replay,
         result: ReplayResult,
     },
+    /// From a backoff's timer: see [`Event::WaitedOut`].
+    WaitedOut(Wait),
 }
 
 /// The actor carrying out [`CoordState`]'s decisions. See the module docs.
@@ -274,15 +340,18 @@ pub(super) struct Coordinator {
     state: watch::Sender<StoreState>,
     sink: Arc<Sink>,
     progress: ReprojectProgress,
+    backoff: Backoff,
     /// The replay running, aborted with the coordinator.
     running: Option<AbortHandle>,
+    /// The timer of the backoff being waited out, aborted with the coordinator or once moot.
+    waiting: Option<AbortHandle>,
 }
 
 impl Drop for Coordinator {
     fn drop(&mut self) {
         // Only stops the task: nothing is left to report to.
-        if let Some(running) = &self.running {
-            running.abort();
+        for task in self.running.iter().chain(&self.waiting) {
+            task.abort();
         }
     }
 }
@@ -293,6 +362,7 @@ impl Coordinator {
         sink: Arc<Sink>,
         state: watch::Sender<StoreState>,
         progress: ReprojectProgress,
+        backoff: Backoff,
     ) -> (mpsc::UnboundedSender<Msg>, tokio::task::JoinHandle<()>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let (core, boot) = CoordState::boot();
@@ -303,7 +373,9 @@ impl Coordinator {
             state,
             sink,
             progress,
+            backoff,
             running: None,
+            waiting: None,
         };
         let task = tokio::spawn(coordinator.run(boot));
         (tx, task)
@@ -326,6 +398,13 @@ impl Coordinator {
                         self.running = None;
                     }
                     let effects = self.core.step(Event::ReplayDone { replay, result });
+                    self.apply(effects, None, None).await;
+                }
+                Msg::WaitedOut(wait) => {
+                    if self.core.backoff == Some(wait) {
+                        self.waiting = None;
+                    }
+                    let effects = self.core.step(Event::WaitedOut { wait });
                     self.apply(effects, None, None).await;
                 }
             }
@@ -354,7 +433,14 @@ impl Coordinator {
                     }
                     effects.extend(self.core.step(Event::WipeDone { ok }));
                 }
-                Effect::StartReplay(replay) => self.start_replay(replay),
+                Effect::StartReplay(replay) => {
+                    #[cfg(test)]
+                    if self.waiting.is_some() {
+                        self.sink.hook(Point::BackoffCutShort).await;
+                    }
+                    self.start_replay(replay);
+                }
+                Effect::ReplayAfter { wait, retry } => self.wait_out(wait, retry),
                 Effect::Reply(result) => {
                     let result = result.map_err(|refusal| match refusal {
                         Refusal::Unavailable => RebuildError::Unavailable,
@@ -427,6 +513,10 @@ impl Coordinator {
             // The facade is gone: nobody is left to serve.
             return;
         };
+        // A backoff a wipe cut short: its timer is moot.
+        if let Some(waiting) = self.waiting.take() {
+            waiting.abort();
+        }
         self.progress.clear();
         let task = tokio::spawn(run_replay(self.sink.clone(), self.progress.clone()));
         self.running = Some(task.abort_handle());
@@ -440,6 +530,30 @@ impl Coordinator {
             };
             let _ = tx.send(Msg::ReplayDone { replay, result });
         });
+    }
+
+    /// Report [`Event::WaitedOut`] once the backoff after `retry` incomplete replays in a row is
+    /// over. Holds the mailbox open meanwhile, as a replay does: the coordinator still has to
+    /// replay.
+    fn wait_out(&mut self, wait: Wait, retry: u32) {
+        let Some(tx) = self.tx.upgrade() else {
+            return;
+        };
+        let delay = self.backoff.delay(retry);
+        tracing::info!(
+            ?delay,
+            retry,
+            "the ai-session sidecar replay kept being invalidated; replaying again after a backoff"
+        );
+        #[cfg(test)]
+        let sink = self.sink.clone();
+        let timer = tokio::spawn(async move {
+            #[cfg(test)]
+            sink.hook(Point::BackoffStarted).await;
+            tokio::time::sleep(delay).await;
+            let _ = tx.send(Msg::WaitedOut(wait));
+        });
+        self.waiting = Some(timer.abort_handle());
     }
 }
 
@@ -492,9 +606,9 @@ mod tests {
 
     use super::*;
 
-    /// The world around the coordinator's pure core: which replays run, what each rebuild was
-    /// answered, and the last replay the coordinator heard from. Checks the protocol's invariants
-    /// after every step.
+    /// The world around the coordinator's pure core: which replays run, which backoffs are
+    /// waited out, what each rebuild was answered, and the last replay the coordinator heard
+    /// from. Checks the protocol's invariants after every step.
     #[derive(Debug, Clone)]
     struct World {
         core: CoordState,
@@ -502,6 +616,10 @@ mod tests {
         live: BTreeSet<u64>,
         /// Every replay ever started, to report stale ones.
         started: Vec<Replay>,
+        /// Backoff timers alive (started, not yet reported).
+        timers: BTreeSet<u64>,
+        /// Every backoff ever started, to report stale ones.
+        waits: Vec<Wait>,
         /// Rebuilds asked for and not answered yet.
         unanswered: usize,
         /// The last replay the coordinator acted on: how it ended, and the generation it started
@@ -523,6 +641,8 @@ mod tests {
                 core,
                 live: BTreeSet::new(),
                 started: Vec::new(),
+                timers: BTreeSet::new(),
+                waits: Vec::new(),
                 unanswered: 0,
                 last_done: None,
                 incomplete: (0, 0),
@@ -534,8 +654,8 @@ mod tests {
             world
         }
 
-        /// The events that can happen next. Stale reports come from replays that already
-        /// reported, and from made-up ones.
+        /// The events that can happen next. Stale reports come from replays (and backoffs) that
+        /// already reported, and from made-up ones.
         fn enabled(&self) -> Vec<Event> {
             if self.core.wiping.is_some() {
                 return vec![Event::WipeDone { ok: true }, Event::WipeDone { ok: false }];
@@ -550,6 +670,9 @@ mod tests {
                 ] {
                     events.push(Event::ReplayDone { replay, result });
                 }
+            }
+            if let Some(wait) = self.core.backoff {
+                events.push(Event::WaitedOut { wait });
             }
             // One that reported already, if any, and one never started.
             if let Some(&replay) = self.started.iter().rev().find(|r| Some(**r) != self.core.replay)
@@ -566,6 +689,10 @@ mod tests {
                 },
                 result: ReplayResult::Ok,
             });
+            // A backoff a wipe cut short, its timer firing all the same.
+            if let Some(&wait) = self.waits.iter().rev().find(|w| Some(**w) != self.core.backoff) {
+                events.push(Event::WaitedOut { wait });
+            }
             events
         }
 
@@ -574,12 +701,16 @@ mod tests {
             match event {
                 Event::Rebuild => self.asked = Some(Scope::All),
                 Event::SeriesRewritten => self.asked = Some(Scope::Host),
-                Event::WipeDone { .. } | Event::ReplayDone { .. } => {}
+                Event::WipeDone { .. } | Event::ReplayDone { .. } | Event::WaitedOut { .. } => {}
             }
             if matches!(event, Event::Rebuild | Event::SeriesRewritten) {
                 self.unanswered += 1;
             }
-            let current = matches!(event, Event::ReplayDone { replay, .. } if Some(replay) == self.core.replay);
+            let current = match event {
+                Event::ReplayDone { replay, .. } => Some(replay) == self.core.replay,
+                Event::WaitedOut { wait } => Some(wait) == self.core.backoff,
+                _ => true,
+            };
             if let Event::ReplayDone { replay, result } = event
                 && current
             {
@@ -591,12 +722,37 @@ mod tests {
                     _ => (replay.started_gen, 0),
                 };
             }
+            if let Event::WaitedOut { wait } = event
+                && current
+            {
+                assert!(self.timers.remove(&wait.0), "a backoff over that never started");
+            }
             let effects = self.core.step(event);
-            if matches!(event, Event::ReplayDone { .. }) && !current {
+            if !current {
                 assert_eq!(self.core, before, "a stale report changed the coordinator");
                 assert!(effects.is_empty(), "a stale report did something");
             }
+            // A wipe makes every backoff moot: the shell aborts its timer when the replay starts.
+            if effects.iter().any(|e| matches!(e, Effect::StartReplay(_))) {
+                self.timers.clear();
+            }
             self.run(&effects);
+            if event == (Event::WipeDone { ok: true }) {
+                // A wipe replays at once: a backoff it found is moot, a new generation.
+                assert!(self.core.replay.is_some(), "no replay after a wipe");
+                assert!(self.core.backoff.is_none(), "a backoff waited out after a wipe");
+            }
+            if let Event::ReplayDone {
+                result: ReplayResult::Incomplete,
+                ..
+            } = event
+                && current
+            {
+                // An incomplete replay never settles the store: it is replayed again, now or
+                // after a backoff, still recovering.
+                assert_eq!(self.core.state, StoreState::Recovering, "settled on an incomplete");
+                assert!(self.core.replay.is_some() || self.core.backoff.is_some());
+            }
             self.check();
         }
 
@@ -621,11 +777,26 @@ mod tests {
                         assert_eq!(Some(scope), self.asked, "wiped what was not asked");
                     }
                     Effect::StartReplay(replay) => {
-                        // I4: at most one replay.
+                        // I4: at most one replay, and none while a backoff is waited out.
                         assert!(self.live.is_empty(), "a second replay started: {:?}", self.live);
+                        assert!(self.timers.is_empty(), "a replay while waiting to replay");
                         assert_eq!(replay.started_gen, self.core.generation);
                         self.live.insert(replay.id.0);
                         self.started.push(replay);
+                    }
+                    Effect::ReplayAfter { wait, retry } => {
+                        // Only after an incomplete replay of this generation, with none running.
+                        assert!(self.live.is_empty(), "a backoff beside a replay");
+                        assert!(self.timers.is_empty(), "a second backoff");
+                        assert_eq!(
+                            self.last_done,
+                            Some((self.core.generation, ReplayResult::Incomplete))
+                        );
+                        // The backoff grows with each incomplete replay in a row, and starts
+                        // over with a new generation.
+                        assert_eq!((self.core.generation, retry), self.incomplete);
+                        self.timers.insert(wait.0);
+                        self.waits.push(wait);
                     }
                     Effect::Reply(_) => {
                         assert!(self.unanswered > 0, "an answer to no rebuild");
@@ -642,19 +813,19 @@ mod tests {
 
         fn check(&self) {
             let core = &self.core;
-            // The core's replay is the live one.
+            // The core's replay is the live one, and its backoff the one waited out.
             assert_eq!(core.replay.map(|r| r.id.0).into_iter().collect::<BTreeSet<_>>(), self.live);
-            // I4.
-            assert!(self.live.len() <= 1);
+            assert_eq!(core.backoff.map(|w| w.0).into_iter().collect::<BTreeSet<_>>(), self.timers);
+            // I4, with a replay waited for counted as running.
+            assert!(self.live.len() + self.timers.len() <= 1);
             // The last state said is the core's.
             assert_eq!(self.broadcasts.last(), Some(&core.state));
             // A replay runs only while recovering: capture is held off, so a replay may forget
             // what a series rewritten under its watermark projected, this host's rows included.
-            if core.replay.is_some() {
+            if core.replay.is_some() || core.backoff.is_some() {
                 assert_eq!(core.state, StoreState::Recovering, "a replay beside capture");
             }
-            // Retries are bounded, and counted only while recovering.
-            assert!(core.retries <= INCOMPLETE_RETRIES);
+            // Incomplete replays are counted only while recovering.
             if core.state != StoreState::Recovering {
                 assert_eq!(core.retries, 0);
             }
@@ -674,79 +845,106 @@ mod tests {
                     assert!(core.recovered);
                     assert!(core.replay.is_none());
                 }
-                // L2: no stall. Recovering always has a replay running to end it.
-                StoreState::Recovering => assert!(core.replay.is_some(), "stalled: {core:?}"),
+                // L2: no stall. Recovering always has a replay running, or one waited for, to
+                // end it.
+                StoreState::Recovering => {
+                    assert!(core.replay.is_some() || core.backoff.is_some(), "stalled: {core:?}");
+                }
                 // Unavailable only if the last replay heard from started at the current generation
-                // and failed: one that started before a wipe is replayed again rather than end a
-                // rebuild that was answered ok (which would wait on a replay that never comes, or
-                // be refused as unavailable with none running).
+                // and failed (never as incomplete): one that started before a wipe is replayed
+                // again rather than end a rebuild that was answered ok (which would wait on a
+                // replay that never comes, or be refused as unavailable with none running).
                 StoreState::Unavailable => {
                     assert!(core.replay.is_none());
                     assert!(
                         matches!(
                             self.last_done,
-                            Some((
-                                generation,
-                                ReplayResult::Failed
-                                    | ReplayResult::Panicked
-                                    | ReplayResult::Incomplete
-                            )) if generation == core.generation
+                            Some((generation, ReplayResult::Failed | ReplayResult::Panicked))
+                                if generation == core.generation
                         ),
                         "unavailable on {:?} at generation {}",
                         self.last_done,
                         core.generation
                     );
-                    // Given up as incomplete only once the retries ran out.
-                    if matches!(self.last_done, Some((_, ReplayResult::Incomplete))) {
-                        assert_eq!(
-                            self.incomplete,
-                            (core.generation, INCOMPLETE_RETRIES + 1),
-                            "unavailable on an incomplete replay not retried"
-                        );
-                    }
                 }
             }
         }
 
-        /// Once events stop: a wipe running reports (failing unless `result` is ok), the replay
-        /// running, if any, ends with `result`, and the store settles after at most one more.
-        fn settle(mut self, result: ReplayResult) -> Self {
+        /// Run whatever is in flight to its next report: a wipe (failing unless `result` is
+        /// ok), a backoff, or the replay running (ending with `result`). False if nothing is.
+        fn advance(&mut self, result: ReplayResult) -> bool {
             if self.core.wiping.is_some() {
                 self.apply(Event::WipeDone {
                     ok: result == ReplayResult::Ok,
                 });
+            } else if let Some(wait) = self.core.backoff {
+                self.apply(Event::WaitedOut { wait });
+            } else if let Some(replay) = self.core.replay {
+                self.apply(Event::ReplayDone { replay, result });
+            } else {
+                return false;
             }
-            // The replay running, then (if a wipe came after it started) one more, then (if
-            // incomplete) the retries.
-            let most = 2 + INCOMPLETE_RETRIES;
+            true
+        }
+
+        /// Once events stop: what is in flight ends with `result` (not incomplete), and the
+        /// store settles after at most a wipe, a backoff, the replay running and one more (if a
+        /// wipe came after it started).
+        fn settle(mut self, result: ReplayResult) -> Self {
+            assert_ne!(result, ReplayResult::Incomplete, "an incomplete replay never settles");
+            let most = 4;
             for _ in 0..most {
-                if let Some(replay) = self.core.replay {
-                    self.apply(Event::ReplayDone { replay, result });
-                }
+                self.advance(result);
             }
-            assert!(self.core.replay.is_none(), "settling needs at most {most} replays");
+            assert!(!self.advance(result), "settling needs at most {most} steps");
             assert_ne!(self.core.state, StoreState::Recovering);
             self
         }
 
-        /// L1: once rebuilds stop and nothing fails, the store ends ready. (A failed startup
-        /// recovery excepted: that store stays unavailable until restart.) A store left
-        /// unavailable by a failed rebuild takes one more rebuild.
-        fn check_liveness(&self) {
-            let settled = self.clone().settle(ReplayResult::Ok);
-            match settled.core.state {
-                StoreState::Ready => {}
-                StoreState::Unavailable if !settled.core.recovered => {
-                    let mut again = settled.clone();
-                    again.apply(Event::Rebuild);
-                    assert_eq!(again.core, settled.core, "a rebuild after a failed startup");
+        /// An invalidation storm: `n` replays in a row end incomplete. The store stays
+        /// recovering throughout, each waiting out a longer backoff.
+        fn storm(mut self, n: u32) -> Self {
+            if self.core.wiping.is_some() {
+                self.apply(Event::WipeDone { ok: true });
+            }
+            let recovering = self.core.state == StoreState::Recovering;
+            let mut replays = 0;
+            while replays < n && self.core.state == StoreState::Recovering {
+                if self.core.replay.is_some() {
+                    replays += 1;
                 }
-                _ => {
-                    let mut again = settled;
-                    again.apply(Event::Rebuild);
-                    again.apply(Event::WipeDone { ok: true });
-                    let again = again.settle(ReplayResult::Ok);
-                    assert_eq!(again.core.state, StoreState::Ready);
+                assert!(self.advance(ReplayResult::Incomplete), "stalled in a storm");
+            }
+            if recovering {
+                assert_eq!(self.core.state, StoreState::Recovering, "a storm settled the store");
+            }
+            self
+        }
+
+        /// L1: once rebuilds stop and nothing fails, the store ends ready, however long an
+        /// invalidation storm kept its replays incomplete first. (A failed startup recovery
+        /// excepted: that store stays unavailable until restart.) A store left unavailable by a
+        /// failed rebuild takes one more rebuild.
+        fn check_liveness(&self) {
+            for storm in [0, 3] {
+                let settled = self.clone().storm(storm).settle(ReplayResult::Ok);
+                if self.core.state == StoreState::Recovering {
+                    assert_eq!(settled.core.state, StoreState::Ready, "after a storm of {storm}");
+                }
+                match settled.core.state {
+                    StoreState::Ready => {}
+                    StoreState::Unavailable if !settled.core.recovered => {
+                        let mut again = settled.clone();
+                        again.apply(Event::Rebuild);
+                        assert_eq!(again.core, settled.core, "a rebuild after a failed startup");
+                    }
+                    _ => {
+                        let mut again = settled;
+                        again.apply(Event::Rebuild);
+                        again.apply(Event::WipeDone { ok: true });
+                        let again = again.storm(storm).settle(ReplayResult::Ok);
+                        assert_eq!(again.core.state, StoreState::Ready);
+                    }
                 }
             }
         }
@@ -771,7 +969,7 @@ mod tests {
     fn every_short_event_sequence_keeps_the_invariants() {
         let depth = std::env::var("ATUIN_RECOVERY_DEPTH").ok().and_then(|d| d.parse().ok());
         let mut visited = 0;
-        explore(&World::boot(), depth.unwrap_or(10), &mut visited);
+        explore(&World::boot(), depth.unwrap_or(9), &mut visited);
         assert!(visited > 100_000, "explored {visited} states");
         eprintln!("explored {visited} event sequences");
     }
@@ -788,15 +986,24 @@ mod tests {
             cases: 2_000,
             ..ProptestConfig::default()
         };
-        proptest!(config, |(choices in proptest::collection::vec(any::<usize>(), 0..200))| {
+        proptest!(config, |(
+            choices in proptest::collection::vec(any::<usize>(), 0..200),
+            storm in 0_u32..40,
+        )| {
             let mut world = World::boot();
             for choice in choices {
                 let event = pick(&world, choice);
                 world.apply(event);
                 world.check_liveness();
             }
-            let incomplete = world.clone().settle(ReplayResult::Incomplete);
-            prop_assert_ne!(incomplete.core.state, StoreState::Recovering);
+            // However long a storm of invalidations lasts, the store recovers through it, and
+            // is ready once it is over.
+            let recovering = world.core.state == StoreState::Recovering;
+            let stormy = world.clone().storm(storm);
+            if recovering {
+                prop_assert_eq!(stormy.core.state, StoreState::Recovering);
+                prop_assert_eq!(stormy.settle(ReplayResult::Ok).core.state, StoreState::Ready);
+            }
             let settled = world.settle(ReplayResult::Failed);
             prop_assert_ne!(settled.core.state, StoreState::Recovering);
         });
@@ -849,20 +1056,52 @@ mod tests {
         Event::SeriesRewritten,
         Event::WipeDone { ok: false },
     ], StoreState::Ready)]
-    // A replay invalidated pass after pass is replayed again, a bounded number of times.
+    // A replay invalidated pass after pass is replayed again after a backoff, still recovering.
     #[case::incomplete_is_retried(&[
         Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Incomplete },
     ], StoreState::Recovering)]
     #[case::incomplete_retried_then_ready(&[
         Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Incomplete },
-        Event::ReplayDone { replay: Replay { id: ReplayId(1), started_gen: 0 }, result: ReplayResult::Ok },
+        Event::WaitedOut { wait: Wait(1) },
+        Event::ReplayDone { replay: Replay { id: ReplayId(2), started_gen: 0 }, result: ReplayResult::Ok },
     ], StoreState::Ready)]
-    // Never ready on an incomplete replay: unavailable once the retries run out.
-    #[case::incomplete_until_unavailable(&[
+    // However often, at startup included: never unavailable for it (nor ready).
+    #[case::incomplete_never_unavailable(&[
         Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Incomplete },
-        Event::ReplayDone { replay: Replay { id: ReplayId(1), started_gen: 0 }, result: ReplayResult::Incomplete },
+        Event::WaitedOut { wait: Wait(1) },
         Event::ReplayDone { replay: Replay { id: ReplayId(2), started_gen: 0 }, result: ReplayResult::Incomplete },
-    ], StoreState::Unavailable)]
+        Event::WaitedOut { wait: Wait(3) },
+        Event::ReplayDone { replay: Replay { id: ReplayId(4), started_gen: 0 }, result: ReplayResult::Incomplete },
+        Event::WaitedOut { wait: Wait(5) },
+        Event::ReplayDone { replay: Replay { id: ReplayId(6), started_gen: 0 }, result: ReplayResult::Incomplete },
+    ], StoreState::Recovering)]
+    // A rebuild during a backoff cuts it short: its replay starts at once, the timer firing
+    // later is ignored, and that replay settles the store.
+    #[case::rebuild_during_a_backoff(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Incomplete },
+        Event::Rebuild,
+        Event::WipeDone { ok: true },
+        Event::WaitedOut { wait: Wait(1) },
+        Event::ReplayDone { replay: Replay { id: ReplayId(2), started_gen: 1 }, result: ReplayResult::Ok },
+    ], StoreState::Ready)]
+    // As does the sync worker's forget.
+    #[case::series_rewritten_during_a_backoff(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Ok },
+        Event::SeriesRewritten,
+        Event::WipeDone { ok: true },
+        Event::ReplayDone { replay: Replay { id: ReplayId(1), started_gen: 1 }, result: ReplayResult::Incomplete },
+        Event::SeriesRewritten,
+        Event::WipeDone { ok: true },
+        Event::ReplayDone { replay: Replay { id: ReplayId(3), started_gen: 2 }, result: ReplayResult::Ok },
+    ], StoreState::Ready)]
+    // A failed wipe during a backoff leaves it waited out, still recovering.
+    #[case::failed_wipe_during_a_backoff(&[
+        Event::ReplayDone { replay: Replay { id: ReplayId(0), started_gen: 0 }, result: ReplayResult::Incomplete },
+        Event::Rebuild,
+        Event::WipeDone { ok: false },
+        Event::WaitedOut { wait: Wait(1) },
+        Event::ReplayDone { replay: Replay { id: ReplayId(2), started_gen: 0 }, result: ReplayResult::Ok },
+    ], StoreState::Ready)]
     fn named_interleavings(#[case] events: &[Event], #[case] expected: StoreState) {
         let mut world = World::boot();
         for &event in events {
@@ -870,5 +1109,17 @@ mod tests {
         }
         assert_eq!(world.core.state, expected);
         world.check_liveness();
+    }
+
+    /// 100ms, doubling with each incomplete replay in a row, up to 30s.
+    #[rstest]
+    #[case::first(1, Duration::from_millis(100))]
+    #[case::second(2, Duration::from_millis(200))]
+    #[case::fifth(5, Duration::from_millis(1_600))]
+    #[case::capped(10, Duration::from_secs(30))]
+    #[case::far_past_the_cap(40, Duration::from_secs(30))]
+    #[case::the_last_retry(u32::MAX, Duration::from_secs(30))]
+    fn the_backoff_doubles_up_to_its_cap(#[case] retry: u32, #[case] expected: Duration) {
+        assert_eq!(Backoff::DEFAULT.delay(retry), expected);
     }
 }

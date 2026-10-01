@@ -2,16 +2,17 @@
 //! sidecar, the real coordinator, capture's sink, the sync worker's reprojection and the gRPC
 //! rebuild, on a multi-thread runtime. Test hooks (see [`super::hooks`]) delay every step of the
 //! protocol at random, fail wipes, fail, panic or give up replays, and storm replays and sync
-//! reprojections with invalidations (toward their pass cap), while rebuilds, captures (of lines
-//! already persisted and new ones), sync reprojections, rewrites of this host's and another's
-//! record series under their watermarks, and reads run at once. Once it quiesces, it checks the
-//! protocol's invariants.
+//! reprojections with invalidations (toward their pass cap; at startup too, and with rebuilds
+//! and forgets landing in the backoffs between incomplete replays), while rebuilds, captures (of
+//! lines already persisted and new ones), sync reprojections, rewrites of this host's and
+//! another's record series under their watermarks, and reads run at once. Once it quiesces, it
+//! checks the protocol's invariants.
 //!
 //! `ATUIN_CHAOS_ITERATIONS` sets how many seeds to run: by default 100, a few seconds in all, as
 //! each takes some 50ms of in-memory SQLite.
 
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use atuin_client::ai_session::{NativeSessionId, SourceId};
 use atuin_domain::record::{RecordId, RecordTag};
@@ -23,6 +24,7 @@ use time::OffsetDateTime;
 use tonic::Request;
 
 use super::hooks::{Fault, Hooks, INJECTED_PANIC, Point, Section};
+use super::recovery::Backoff;
 use super::*;
 use crate::grpc::ai::session::pb::ai_session_server::AiSession as _;
 use crate::grpc::ai::session::pb::{ListSessionsRequest, RebuildSessionsRequest};
@@ -59,13 +61,34 @@ struct Totals {
     injected_incomplete: AtomicU64,
     /// Sync reprojections that gave up, invalidated every pass.
     syncs_incomplete: AtomicU64,
+    /// Storms over startup recovery, stopping on their own; and the replays they made give up,
+    /// every one while they lasted.
+    startup_storms: AtomicU64,
+    startup_storm_incomplete: AtomicU64,
+    /// Backoffs the coordinator began waiting out before replaying again, after an incomplete
+    /// replay; and those a wipe cut short.
+    backoffs: AtomicU64,
+    backoffs_cut_short: AtomicU64,
+    /// Rebuilds, and forgets of this host's sessions, asked for during a backoff.
+    rebuilds_in_backoff: AtomicU64,
+    forgets_in_backoff: AtomicU64,
 }
+
+/// How the last replay to end did, as the chaos made it (see [`Chaos::last_outcome`]).
+const OUTCOME_NONE: u8 = 0;
+const OUTCOME_OK: u8 = 1;
+const OUTCOME_INCOMPLETE: u8 = 2;
+const OUTCOME_FAILED: u8 = 3;
+const OUTCOME_PANICKED: u8 = 4;
 
 #[derive(Debug)]
 struct Chaos {
     rng: parking_lot::Mutex<StdRng>,
     /// Whether to fail and panic things, besides delaying them.
     faults: AtomicBool,
+    /// How many replays a storm over startup recovery still makes give up as incomplete: every
+    /// one, while it lasts.
+    relentless: Arc<AtomicU32>,
     replays: Arc<AtomicUsize>,
     wipes: Arc<AtomicUsize>,
     captures: Arc<AtomicUsize>,
@@ -78,6 +101,13 @@ struct Chaos {
     emptied: Arc<AtomicU64>,
     /// How many wipes had gone ahead when the last replay to end began.
     last_replayed_from: Arc<AtomicU64>,
+    /// How the replay running is ending, and how the last one to end did: an `OUTCOME_*`.
+    outcome: Arc<AtomicU8>,
+    last_outcome: Arc<AtomicU8>,
+    /// The coordinator's mailbox, to ask for rebuilds and forgets during backoffs, and how many
+    /// such requests are still on their way.
+    coordinator: parking_lot::Mutex<Option<mpsc::WeakUnboundedSender<Msg>>>,
+    requests: Arc<AtomicUsize>,
 }
 
 /// What [`Chaos::check_complete`] looks at.
@@ -104,6 +134,8 @@ struct Leave {
     replayed_from: Option<(Arc<AtomicU64>, u64)>,
     /// A storm of invalidations over a replay, to stop.
     storm: Option<Arc<AtomicBool>>,
+    /// A replay's: how it ended, and where to say so.
+    outcome: Option<(Arc<AtomicU8>, Arc<AtomicU8>)>,
 }
 
 impl Drop for Leave {
@@ -113,6 +145,9 @@ impl Drop for Leave {
         }
         if let Some((last, from)) = &self.replayed_from {
             last.store(*from, Ordering::SeqCst);
+        }
+        if let Some((outcome, last)) = &self.outcome {
+            last.store(outcome.load(Ordering::SeqCst), Ordering::SeqCst);
         }
         self.counter.fetch_sub(1, Ordering::SeqCst);
     }
@@ -130,6 +165,7 @@ fn storm(probe: Probe, rewriting: bool, stop: Arc<AtomicBool>, storming: Arc<Ato
             counter: storming,
             replayed_from: None,
             storm: None,
+            outcome: None,
         };
         while !stop.load(Ordering::SeqCst) {
             if rewriting {
@@ -151,6 +187,7 @@ impl Chaos {
         Self {
             rng: parking_lot::Mutex::new(StdRng::seed_from_u64(seed)),
             faults: AtomicBool::new(true),
+            relentless: Arc::default(),
             replays: Arc::default(),
             wipes: Arc::default(),
             captures: Arc::default(),
@@ -160,7 +197,56 @@ impl Chaos {
             storming: Arc::default(),
             emptied: Arc::default(),
             last_replayed_from: Arc::new(AtomicU64::new(NONE_REPLAYED)),
+            outcome: Arc::new(AtomicU8::new(OUTCOME_NONE)),
+            last_outcome: Arc::new(AtomicU8::new(OUTCOME_NONE)),
+            coordinator: parking_lot::Mutex::default(),
+            requests: Arc::default(),
         }
+    }
+
+    /// Ask the coordinator, a moment from now, for a rebuild or (as the sync worker does) a
+    /// forget of this host's sessions: to land during the backoff just begun.
+    fn request_in_backoff(&self) {
+        let (Some(coordinator), Some(probe)) = (
+            self.coordinator.lock().as_ref().and_then(mpsc::WeakUnboundedSender::upgrade),
+            self.probe.lock().clone(),
+        ) else {
+            return;
+        };
+        let (forget, ms) = {
+            let mut rng = self.rng.lock();
+            (rng.gen_bool(0.5), rng.gen_range(0..4))
+        };
+        let asked = if forget {
+            &self.totals.forgets_in_backoff
+        } else {
+            &self.totals.rebuilds_in_backoff
+        };
+        asked.fetch_add(1, Ordering::Relaxed);
+        let requests = self.requests.clone();
+        requests.fetch_add(1, Ordering::SeqCst);
+        tokio::spawn(async move {
+            let _done = Leave {
+                counter: requests,
+                replayed_from: None,
+                storm: None,
+                outcome: None,
+            };
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            let (reply, answer) = oneshot::channel();
+            let msg = if forget {
+                Msg::SeriesRewritten {
+                    host: probe.host,
+                    reply,
+                }
+            } else {
+                Msg::Rebuild(reply)
+            };
+            if coordinator.send(msg).is_ok() {
+                drop(coordinator);
+                let _ = answer.await;
+            }
+        });
     }
 
     /// I1 where it matters: the sidecar holds every line of this host pushed so far. Called
@@ -178,8 +264,10 @@ impl Chaos {
     }
 
     /// Watch the store's state: it settles only on a replay that began after the last wipe (the
-    /// last replay to end, as one runs at a time and the coordinator settles only once it has).
-    /// A settled state read with no wipe or replay ending around the read is checked.
+    /// last replay to end, as one runs at a time and the coordinator settles only once it has),
+    /// ready only on one that succeeded, and unavailable only on one that failed or panicked,
+    /// never on one that gave up as incomplete (that one is replayed again). A settled state
+    /// read with no wipe or replay ending around the read is checked.
     async fn watch_settling(&self, mut state: watch::Receiver<StoreState>) {
         while state.changed().await.is_ok() {
             let before = self.settling();
@@ -187,17 +275,34 @@ impl Chaos {
             if now == StoreState::Recovering || self.settling() != before {
                 continue;
             }
-            let (emptied, replayed_from) = before;
+            let (emptied, replayed_from, outcome) = before;
             if replayed_from != NONE_REPLAYED && replayed_from != emptied {
                 self.violation(format!(
                     "{now:?} on a replay begun after {replayed_from} wipes, of {emptied}"
                 ));
             }
+            self.check_outcome(now, outcome);
         }
     }
 
-    fn settling(&self) -> (u64, u64) {
-        (self.emptied.load(Ordering::SeqCst), self.last_replayed_from.load(Ordering::SeqCst))
+    /// The store settled `state` on a replay that ended `outcome`.
+    fn check_outcome(&self, state: StoreState, outcome: u8) {
+        let expected: &[u8] = match state {
+            StoreState::Ready => &[OUTCOME_OK],
+            StoreState::Unavailable => &[OUTCOME_FAILED, OUTCOME_PANICKED],
+            StoreState::Recovering => return,
+        };
+        if !expected.contains(&outcome) {
+            self.violation(format!("{state:?} on a replay that ended {outcome}"));
+        }
+    }
+
+    fn settling(&self) -> (u64, u64, u8) {
+        (
+            self.emptied.load(Ordering::SeqCst),
+            self.last_replayed_from.load(Ordering::SeqCst),
+            self.last_outcome.load(Ordering::SeqCst),
+        )
     }
 
     fn violation(&self, what: String) {
@@ -254,20 +359,45 @@ impl Hooks for Chaos {
                     self.emptied.fetch_add(1, Ordering::SeqCst);
                     Fault::None
                 }
+                Point::ReplayBeforeSettle
+                    if self
+                        .relentless
+                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                        .is_ok() =>
+                {
+                    self.totals.startup_storm_incomplete.fetch_add(1, Ordering::Relaxed);
+                    self.outcome.store(OUTCOME_INCOMPLETE, Ordering::SeqCst);
+                    Fault::Incomplete
+                }
                 Point::ReplayBeforeSettle if self.fault(0.1) => {
                     self.totals.replay_panics.fetch_add(1, Ordering::Relaxed);
+                    self.outcome.store(OUTCOME_PANICKED, Ordering::SeqCst);
                     Fault::Panic
                 }
                 Point::ReplayBeforeSettle if self.fault(0.1) => {
                     self.totals.replay_failures.fetch_add(1, Ordering::Relaxed);
+                    self.outcome.store(OUTCOME_FAILED, Ordering::SeqCst);
                     Fault::Fail
                 }
                 Point::ReplayBeforeSettle if self.fault(0.05) => {
                     self.totals.injected_incomplete.fetch_add(1, Ordering::Relaxed);
+                    self.outcome.store(OUTCOME_INCOMPLETE, Ordering::SeqCst);
                     Fault::Incomplete
                 }
                 Point::ReplayIncomplete => {
                     self.totals.replays_incomplete.fetch_add(1, Ordering::Relaxed);
+                    self.outcome.store(OUTCOME_INCOMPLETE, Ordering::SeqCst);
+                    Fault::None
+                }
+                Point::BackoffStarted => {
+                    self.totals.backoffs.fetch_add(1, Ordering::Relaxed);
+                    if self.fault(0.5) {
+                        self.request_in_backoff();
+                    }
+                    Fault::None
+                }
+                Point::BackoffCutShort => {
+                    self.totals.backoffs_cut_short.fetch_add(1, Ordering::Relaxed);
                     Fault::None
                 }
                 Point::SyncForgetHeldOff => {
@@ -322,6 +452,10 @@ impl Hooks for Chaos {
         }
         let replayed_from = matches!(section, Section::Replay)
             .then(|| (self.last_replayed_from.clone(), self.emptied.load(Ordering::SeqCst)));
+        let outcome = matches!(section, Section::Replay).then(|| {
+            self.outcome.store(OUTCOME_OK, Ordering::SeqCst);
+            (self.outcome.clone(), self.last_outcome.clone())
+        });
         let storm = if matches!(section, Section::Replay) && self.fault(0.1) {
             self.storm()
         } else {
@@ -331,7 +465,17 @@ impl Hooks for Chaos {
             counter: counter.clone(),
             replayed_from,
             storm,
+            outcome,
         })
+    }
+
+    /// Short, so storms of incomplete replays back off often within an iteration, but long
+    /// enough for rebuilds and forgets to land during the backoffs.
+    fn backoff(&self) -> Backoff {
+        Backoff {
+            first: Duration::from_millis(4),
+            max: Duration::from_millis(32),
+        }
     }
 }
 
@@ -417,7 +561,6 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
         records.push(msg).await.unwrap();
     }
     remote.push(&line("r", "r0")).await.unwrap();
-
     let pushed = Arc::new(parking_lot::Mutex::new(persisted.iter().map(key_of).collect()));
     let chaos = Arc::new(Chaos::new(seed, totals.clone()));
     let remote_writes = Arc::new(tokio::sync::Mutex::new(()));
@@ -430,6 +573,24 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
         remote_writes: remote_writes.clone(),
         pushed: pushed.clone(),
     });
+    // A storm of invalidations over startup recovery (an invalidation burst at startup), which
+    // stops on its own: every replay meanwhile gives up, some of them for real (the sidecar's
+    // watermarks cleared, or the other host's series rewritten, over and over). Recovery replays
+    // through it, recovering, backing off longer each time, and settles once it is over: never
+    // unavailable for it (see `Chaos::check_outcome`), which at startup would last until restart.
+    if rng.gen_bool(0.3)
+        && let Some(stop) = chaos.storm()
+    {
+        chaos.totals.startup_storms.fetch_add(1, Ordering::Relaxed);
+        chaos.relentless.store(rng.gen_range(1..=6), Ordering::SeqCst);
+        let relentless = chaos.relentless.clone();
+        tokio::spawn(async move {
+            while relentless.load(Ordering::SeqCst) > 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            stop.store(true, Ordering::SeqCst);
+        });
+    }
     let capture = Arc::new(AiHarnessSessionCapture::open_with(
         records.clone(),
         sidecar.clone(),
@@ -437,6 +598,7 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
         BlockingPool::new(NonZeroUsize::MIN),
         Some(chaos.clone() as Arc<dyn Hooks>),
     ));
+    *chaos.coordinator.lock() = capture.coordinator.as_ref().map(mpsc::UnboundedSender::downgrade);
     let watching = tokio::spawn({
         let (chaos, state) = (chaos.clone(), capture.state.clone());
         async move { chaos.watch_settling(state).await }
@@ -595,12 +757,30 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
     // No stall: the store settles (L2).
     let mut state = capture.state.clone();
     let settled = tokio::time::timeout(TIMEOUT, state.wait_for(|s| *s != StoreState::Recovering));
-    let settled =
-        *settled.await.unwrap_or_else(|_| panic!("seed {seed}: stalled recovering")).unwrap();
+    settled.await.unwrap_or_else(|_| panic!("seed {seed}: stalled recovering")).unwrap();
+
+    // Settled on how the last replay ended: never on an incomplete one, however long a storm
+    // kept them so. (Checked unless a replay ended around the read: the sync worker, or a
+    // request made during a backoff, may still have the coordinator wipe.)
+    let before = chaos.settling();
+    let now = *capture.state.borrow();
+    if now != StoreState::Recovering && chaos.settling() == before {
+        chaos.check_outcome(now, before.2);
+    }
 
     // Healthy from here: a store left unavailable by a failed rebuild comes back with one more
     // (L1); one whose startup recovery failed stays unavailable, refusing rebuilds.
     chaos.faults.store(false, Ordering::SeqCst);
+    // Once the requests made during backoffs are in, and their replays done.
+    let requested = tokio::time::timeout(TIMEOUT, async {
+        while chaos.requests.load(Ordering::SeqCst) > 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    });
+    assert!(requested.await.is_ok(), "seed {seed}: a request was never answered");
+    let settled = tokio::time::timeout(TIMEOUT, state.wait_for(|s| *s != StoreState::Recovering));
+    let settled =
+        *settled.await.unwrap_or_else(|_| panic!("seed {seed}: stalled recovering")).unwrap();
     let mut recoverable = true;
     if settled == StoreState::Unavailable {
         match capture.rebuild().await {

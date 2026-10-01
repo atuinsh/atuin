@@ -24,7 +24,7 @@ use engine::SessionCaptureEngine;
 use futures::{FutureExt, Stream, StreamExt};
 pub use import::ImportProgress;
 use import::SessionImporter;
-use recovery::{Coordinator, Msg};
+use recovery::{Backoff, Coordinator, Msg};
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
@@ -414,8 +414,13 @@ impl AiHarnessSessionCapture {
         }
         let sink = Arc::new(sink);
         let progress = ReprojectProgress::default();
+        // Tests (the chaos test above all) wait out shorter backoffs.
+        #[cfg(test)]
+        let backoff = sink.hooks.as_ref().map_or(Backoff::DEFAULT, |hooks| hooks.backoff());
+        #[cfg(not(test))]
+        let backoff = Backoff::DEFAULT;
         let (coordinator, coordinating) =
-            Coordinator::spawn(sink.clone(), state_tx, progress.clone());
+            Coordinator::spawn(sink.clone(), state_tx, progress.clone(), backoff);
 
         // Capture is opt-in. When disabled we still serve existing sessions, but never spawn the
         // listeners that copy new transcripts into the synced record store. It starts once the
@@ -1515,13 +1520,41 @@ mod tests {
         assert_eq!(stored.len(), 1, "nothing was pushed twice");
     }
 
-    /// A replay whose reprojection keeps being invalidated, pass after pass, until it gives up
-    /// leaves the store unavailable, however often it is replayed again: never ready with the
-    /// sidecar possibly missing records. At startup that is until restart; after a rebuild,
-    /// until a rebuild gets through.
+    /// Counts the replays that gave up, invalidated pass after pass, and has the coordinator
+    /// back off between them for a short while.
+    #[derive(Debug, Default)]
+    struct CountIncomplete {
+        incomplete: std::sync::atomic::AtomicUsize,
+    }
+
+    impl hooks::Hooks for CountIncomplete {
+        fn at(&self, point: hooks::Point) -> futures::future::BoxFuture<'_, hooks::Fault> {
+            if point == hooks::Point::ReplayIncomplete {
+                self.incomplete.fetch_add(1, Ordering::SeqCst);
+            }
+            Box::pin(async { hooks::Fault::None })
+        }
+
+        fn enter(&self, _: hooks::Section) -> Box<dyn Send> {
+            Box::new(())
+        }
+
+        fn backoff(&self) -> recovery::Backoff {
+            recovery::Backoff {
+                first: Duration::from_millis(5),
+                max: Duration::from_millis(40),
+            }
+        }
+    }
+
+    /// A replay whose reprojection keeps being invalidated, pass after pass, until it gives up is
+    /// replayed again and again, backing off between them, for as long as the invalidations last:
+    /// the store stays recovering meanwhile (never ready with the sidecar possibly missing
+    /// records, nor unavailable, which at startup would last until restart), and capture waits.
+    /// Once they stop, the store is ready.
     #[rstest]
     #[tokio::test]
-    async fn a_replay_that_keeps_being_invalidated_is_never_ready(
+    async fn an_invalidation_storm_keeps_the_store_recovering_until_it_stops(
         #[values(false, true)] at_startup: bool,
     ) {
         let dir = tempfile::tempdir().unwrap();
@@ -1550,29 +1583,47 @@ mod tests {
         if at_startup {
             invalidate().await;
         }
-        let capture = AiHarnessSessionCapture::open(
+        let hooks = Arc::new(CountIncomplete::default());
+        let capture = AiHarnessSessionCapture::open_with(
             records,
             sidecar.clone(),
             false,
             BlockingPool::new(NonZeroUsize::MIN),
+            Some(hooks.clone() as Arc<dyn hooks::Hooks>),
         );
         if !at_startup {
             assert!(capture.ready().await);
             invalidate().await;
             capture.rebuild().await.unwrap();
         }
-        let settled = tokio::time::timeout(Duration::from_secs(10), capture.ready());
-        assert!(!settled.await.expect("never settled"), "ready, though incomplete");
-        assert!(matches!(capture.sink.append(msg.clone()).await, Err(AppendError::Unavailable)));
+        let again = tokio::spawn({
+            let (sink, msg) = (capture.sink.clone(), msg.clone());
+            async move { sink.append(msg).await.unwrap() }
+        });
+
+        // Recovering throughout the storm, however many replays it makes give up.
+        let mut state = capture.state.clone();
+        let storm = tokio::time::timeout(
+            Duration::from_secs(10),
+            state.wait_for(|state| *state != StoreState::Recovering),
+        );
+        let stormed = async {
+            while hooks.incomplete.load(Ordering::SeqCst) < 5 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        tokio::select! {
+            settled = storm => panic!("settled during the storm: {:?}", settled.map(|s| *s.unwrap())),
+            () = stormed => {}
+        }
+        assert!(capture.is_recovering());
+        assert!(!again.is_finished(), "capture waits out the storm");
 
         atuin_common::db::query("DROP TRIGGER invalidate").execute(fault.pool()).await.unwrap();
-        if at_startup {
-            assert!(matches!(capture.rebuild().await, Err(RebuildError::Unavailable)));
-            return;
-        }
-        capture.rebuild().await.unwrap();
-        assert!(capture.ready().await);
-        assert_eq!(capture.sink.append(msg).await.unwrap(), Appended::Duplicate);
+        let ready = tokio::time::timeout(Duration::from_secs(10), capture.ready());
+        assert!(ready.await.expect("never settled"), "ready once the storm is over");
+        let again = tokio::time::timeout(Duration::from_secs(10), again).await;
+        assert_eq!(again.expect("capture never resumed").unwrap(), Appended::Duplicate);
         let stored = store.all_tagged(&RecordTag::AiSession).await.unwrap();
         assert_eq!(stored.len(), 1, "nothing was pushed twice");
     }

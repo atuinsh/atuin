@@ -31,6 +31,11 @@ pub enum Point {
     SyncForgetHeldOff,
     /// The sync worker's reprojection gave up, invalidated pass after pass.
     SyncIncomplete,
+    /// The coordinator began waiting out a backoff before replaying again, after an incomplete
+    /// replay.
+    BackoffStarted,
+    /// A wipe cut that backoff short: the coordinator replays at once.
+    BackoffCutShort,
 }
 
 /// The payload of a panic [`Fault::Panic`] injects.
@@ -62,4 +67,9 @@ pub trait Hooks: Send + Sync + Debug {
 
     /// Entered `section`, until the guard returned is dropped.
     fn enter(&self, section: Section) -> Box<dyn Send>;
+
+    /// The backoff the coordinator waits out between incomplete replays.
+    fn backoff(&self) -> super::recovery::Backoff {
+        super::recovery::Backoff::DEFAULT
+    }
 }
