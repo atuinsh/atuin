@@ -576,7 +576,7 @@ impl AiHarnessSessionCapture {
     /// replayed in the background, recovering as at startup meanwhile: reads are refused as
     /// rebuilding with the replay's progress, and capture and import wait (their dedup gate
     /// trusts the sidecar). During startup recovery, or another rebuild, the replay running
-    /// replays again after this reset before the store is ready (see [`recovery`]).
+    /// replays again after this reset before the store is ready (see the `recovery` module).
     ///
     /// Runs to the end once asked for, even if the caller stops waiting (a client
     /// disconnecting): the coordinator carries it out, not the caller.

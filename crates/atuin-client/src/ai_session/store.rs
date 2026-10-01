@@ -55,7 +55,7 @@ pub enum BuildError {
     Store(#[from] eyre::Report),
     #[error(transparent)]
     Db(#[from] DbError),
-    /// Invalidations kept landing in the middle of it: after [`REPROJECT_PASSES`] passes the
+    /// Invalidations kept landing in the middle of it: after `REPROJECT_PASSES` passes the
     /// sidecar may still be missing records. The next reprojection replays what this one left.
     #[error("the ai-session projection kept being invalidated, and is incomplete")]
     Incomplete,
@@ -199,7 +199,7 @@ impl AiSessionStore {
     /// Beside capture, see [`Self::reproject_beside_capture`].
     ///
     /// An invalidation landing meanwhile is noticed, and the reprojection starts over, up to
-    /// [`REPROJECT_PASSES`] times, then fails with [`BuildError::Incomplete`]. Continues past a
+    /// `REPROJECT_PASSES` times, then fails with [`BuildError::Incomplete`]. Continues past a
     /// failed series, but reports it so callers do not enable capture against a projection
     /// missing already-persisted messages; that series' watermark stays below the failure, so
     /// the next reprojection retries it.
