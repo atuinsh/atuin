@@ -62,6 +62,11 @@ pub enum RebuildError {
     Aborted,
 }
 
+/// Capture's locks, as [`Sink::lock_ready`] takes them: the record pushed but not projected yet,
+/// and the sidecar's local projection lock.
+type CaptureLocks<'a> =
+    (tokio::sync::MutexGuard<'a, Option<Message>>, tokio::sync::OwnedMutexGuard<()>);
+
 pub(crate) struct Sink {
     records: AiSessionStore,
     sidecar: AiSessionDatabase,
@@ -122,36 +127,8 @@ impl Sink {
         sanitize_message(&mut msg);
         // Captured here, so on this host; a reproject reads the same from the record envelope.
         msg.host = Some(self.records.host_id());
-        let mut state = self.state.clone();
-        let (mut pending, local) = loop {
-            // The dedup gate below trusts the sidecar, which a rebuild empties and refills:
-            // checked meanwhile, a message already in the record store would be pushed again. So
-            // wait out a rebuild (capture and import only start once startup recovery is over),
-            // and refuse while the store is unavailable: a failed replay leaves a sidecar that
-            // may be missing persisted messages.
-            if Self::settled(&mut state).await != StoreState::Ready {
-                return Err(AppendError::Unavailable);
-            }
-            let pending = self.pending_projection.lock().await;
-            // Keeps a reprojection of this host's records (after a sync) from projecting the
-            // record pushed below before this does, and a rebuild from emptying the sidecar
-            // between the check below and the push. Taken after `pending`, never the other way
-            // round.
-            let local = self.sidecar.lock_local_projection().await;
-            // Checked again under the lock: a rebuild says it is recovering before it takes the
-            // lock to empty the sidecar, so one that began while this waited for the locks may
-            // have emptied it already. Ready here, no rebuild can empty it until this is done.
-            let now = *state.borrow();
-            match now {
-                StoreState::Ready => break (pending, local),
-                StoreState::Recovering => {}
-                StoreState::Unavailable => return Err(AppendError::Unavailable),
-            }
-        };
-        if let Some(previous) = pending.as_ref() {
-            self.project_and_broadcast(previous).await?;
-            *pending = None;
-        }
+        let (mut pending, local) = self.lock_ready().await?;
+        self.repair(&mut pending).await?;
         // Dedup gate: if this logical message is already projected it is already in the record
         // store too, so there is nothing to do. Stable source ids (see MessageEnricher::source_id)
         // make this reliable across re-captures and keep the record store free of duplicates.
@@ -171,6 +148,48 @@ impl Sink {
         drop(local);
         drop(pending);
         Ok(appended)
+    }
+
+    /// Take capture's locks with the store ready, so the sidecar holds every record and nothing
+    /// empties it until they are released: what capture needs to trust the sidecar, for its
+    /// dedup gate and for warming a resumed session's bookkeeping (see [`engine::warm`]).
+    ///
+    /// Waits out a rebuild (capture and import only start once startup recovery is over), and
+    /// refuses with [`AppendError::Unavailable`] while the store is unavailable: a failed replay
+    /// leaves a sidecar that may be missing persisted messages.
+    async fn lock_ready(&self) -> Result<CaptureLocks<'_>, AppendError> {
+        let mut state = self.state.clone();
+        loop {
+            if Self::settled(&mut state).await != StoreState::Ready {
+                return Err(AppendError::Unavailable);
+            }
+            let pending = self.pending_projection.lock().await;
+            // Keeps a reprojection of this host's records (after a sync) from projecting a
+            // record capture pushes before capture does, and a rebuild from emptying the sidecar
+            // between capture's check and its push. Taken after `pending`, never the other way
+            // round.
+            let local = self.sidecar.lock_local_projection().await;
+            // Checked again under the lock: a rebuild says it is recovering before it takes the
+            // lock to empty the sidecar, so one that began while this waited for the locks may
+            // have emptied it already. Ready here, no rebuild can empty it until they are
+            // released.
+            let now = *state.borrow();
+            match now {
+                StoreState::Ready => return Ok((pending, local)),
+                StoreState::Recovering => {}
+                StoreState::Unavailable => return Err(AppendError::Unavailable),
+            }
+        }
+    }
+
+    /// Project the record a capture pushed but failed to project, if any: the sidecar is then
+    /// complete again.
+    async fn repair(&self, pending: &mut Option<Message>) -> Result<(), AppendError> {
+        if let Some(previous) = pending.as_ref() {
+            self.project_and_broadcast(previous).await?;
+            *pending = None;
+        }
+        Ok(())
     }
 
     /// Wait out a rebuild or recovery, and say how it ended. A closed channel (the coordinator
@@ -2037,6 +2056,118 @@ mod pipeline_tests {
         let third = capture_all(&sink, &mut after, &session, &[prompt]).await;
         assert_eq!(third, vec![Appended::New]);
         assert_eq!(count().await, 3);
+    }
+
+    /// An id-less Codex prompt: identical lines of it are told apart by their ordinal alone.
+    fn continue_prompt() -> AnyMessage {
+        codex(serde_json::json!({
+            "type": "response_item", "timestamp": "2026-09-18T10:00:00.123Z",
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "continue"}]},
+        }))
+    }
+
+    /// A facade over a fresh in-memory store, ready, holding a Codex session `s1` of two
+    /// identical id-less prompts (ordinals 0 and 1); and its record store.
+    async fn two_prompts() -> (AiHarnessSessionCapture, SqliteStore) {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(store.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar,
+            false,
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        let mut first = MessageEnricher::new(HarnessKind::Codex);
+        let twice = [continue_prompt(), continue_prompt()];
+        let outcomes = capture_all(&capture.sink, &mut first, &sid("s1"), &twice).await;
+        assert_eq!(outcomes, vec![Appended::New, Appended::New]);
+        (capture, store)
+    }
+
+    /// A third identical prompt, captured with `enricher` (warmed on resuming `s1`), is a third
+    /// row: stored once, never dropped as a duplicate of the first two.
+    async fn third_prompt_is_stored(
+        capture: &AiHarnessSessionCapture,
+        store: &SqliteStore,
+        mut enricher: MessageEnricher,
+    ) {
+        let (session, lines) = (sid("s1"), [continue_prompt()]);
+        let third = capture_all(&capture.sink, &mut enricher, &session, &lines);
+        let third = tokio::time::timeout(Duration::from_secs(10), third).await;
+        assert_eq!(third.expect("capture never resumed"), vec![Appended::New], "dropped");
+        let handle = handle(HarnessKind::Codex, "s1");
+        let row = capture.sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(row.message_count, 3);
+        let stored = store.all_tagged(&atuin_domain::record::RecordTag::AiSession).await.unwrap();
+        assert_eq!(stored.len(), 3, "each line pushed once");
+    }
+
+    /// A transcript resumed while a rebuild has emptied the sidecar and not replayed it yet: its
+    /// warm-up waits for the replay, rather than read a sidecar missing the session's rows,
+    /// which would count the identical prompts from ordinal 0 again and have the next one taken
+    /// for a duplicate of the first, and dropped.
+    ///
+    /// The replay refills the sidecar without a new generation, so the generation a warm-up read
+    /// at is the one capture finds under its lock once the store is ready: a check of the
+    /// generation alone would not tell this warm-up was stale.
+    #[rstest]
+    #[tokio::test]
+    async fn a_session_resumed_during_a_rebuild_is_warmed_once_replayed() {
+        let (capture, store) = two_prompts().await;
+        let replay = capture.sink.sidecar.lock_reprojection().await;
+        capture.rebuild().await.unwrap();
+        let wiped = capture.sink.sidecar.projection_generation().await.unwrap();
+        let warming = tokio::spawn({
+            let sink = capture.sink.clone();
+            async move {
+                let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+                warm(&sink, &mut enricher, &sid("s1"), Start::Resumed).await;
+                enricher
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let early = warming.is_finished();
+
+        drop(replay);
+        let warmed = tokio::time::timeout(Duration::from_secs(10), warming).await;
+        let enricher = warmed.expect("the warm-up never ended").unwrap();
+        assert!(capture.ready().await);
+        let generation = capture.sink.sidecar.projection_generation().await.unwrap();
+        assert_eq!(generation, wiped, "the replay refilled the sidecar in the wipe's generation");
+        third_prompt_is_stored(&capture, &store, enricher).await;
+        assert!(!early, "the warm-up waits for the replay");
+    }
+
+    /// A wipe landing between a warm-up and the capture after it (the rebuild done by then, or
+    /// still replaying while capture waits) leaves the warmed bookkeeping right: the replay
+    /// restores every row it was warmed from.
+    #[rstest]
+    #[tokio::test]
+    async fn a_wipe_between_warm_up_and_capture_keeps_the_ordinals(
+        #[values(false, true)] replaying: bool,
+    ) {
+        let (capture, store) = two_prompts().await;
+        let enricher = resumed(&capture.sink, HarnessKind::Codex, &sid("s1")).await;
+        let replay = capture.sink.sidecar.lock_reprojection().await;
+        capture.rebuild().await.unwrap();
+        if replaying {
+            let released = async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                drop(replay);
+            };
+            tokio::join!(third_prompt_is_stored(&capture, &store, enricher), released);
+        } else {
+            drop(replay);
+            assert!(capture.ready().await);
+            third_prompt_is_stored(&capture, &store, enricher).await;
+        }
     }
 
     /// Which of a parent and its fork (or subagent replay) were captured, in what order.
