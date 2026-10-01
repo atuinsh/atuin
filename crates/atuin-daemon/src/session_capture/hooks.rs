@@ -15,10 +15,14 @@ pub enum Point {
     ReplayIncomplete,
     /// A replay has reprojected, before reporting. A panic fault panics it.
     ReplayBeforeSettle,
+    /// Capture made its record pending, before pushing it. A panic fault panics the capture.
+    CapturePushing,
+    /// Capture pushed its record, before projecting it. A panic fault panics the capture.
+    CapturePushed,
 }
 
 /// The payload of a panic [`Fault::Panic`] injects.
-pub const INJECTED_PANIC: &str = "injected replay panic";
+pub const INJECTED_PANIC: &str = "injected panic";
 
 /// What a hook has the step do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
