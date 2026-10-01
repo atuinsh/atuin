@@ -24,6 +24,10 @@ pub enum Point {
     CaptureOvertaken,
     /// Capture found the store ready under its lock, before its dedup check and push.
     CaptureChecked,
+    /// Capture made its record pending, before pushing it. A panic fault panics the capture.
+    CapturePushing,
+    /// Capture pushed its record, before projecting it. A panic fault panics the capture.
+    CapturePushed,
     /// The sync worker, before reprojecting downloaded records.
     SyncReproject,
     /// The sync worker's reprojection found a series it must not forget beside capture, before
@@ -42,7 +46,7 @@ pub enum Point {
 }
 
 /// The payload of a panic [`Fault::Panic`] injects.
-pub const INJECTED_PANIC: &str = "injected replay panic";
+pub const INJECTED_PANIC: &str = "injected panic";
 
 /// What a hook has the step do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

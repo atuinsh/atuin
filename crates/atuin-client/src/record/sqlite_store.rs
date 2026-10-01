@@ -303,6 +303,16 @@ impl SqliteStore {
         Ok(ours_present)
     }
 
+    /// Whether a record with this id is stored.
+    pub async fn contains(&self, id: RecordId) -> Result<bool> {
+        let found = db::query("select 1 from store where id = ?1 limit 1")
+            .bind(id.0.as_hyphenated().to_string())
+            .fetch_optional(self.sqlite.pool())
+            .await?;
+
+        Ok(found.is_some())
+    }
+
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn get(&self, id: RecordId) -> Result<Record<paseto_v4::EncryptedData>> {
         let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(

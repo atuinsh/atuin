@@ -100,6 +100,11 @@ impl AiSessionStore {
         self.host_id
     }
 
+    /// Whether the record [`Self::push`] writes for a message with this id is stored.
+    pub async fn holds(&self, id: RecordId) -> Result<bool, PushError> {
+        Ok(self.store.contains(id).await?)
+    }
+
     pub async fn push(&self, msg: &Message) -> Result<RecordId, PushError> {
         let id = msg.id;
 

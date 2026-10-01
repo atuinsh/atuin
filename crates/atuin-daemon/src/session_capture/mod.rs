@@ -48,6 +48,9 @@ pub enum AppendError {
     /// persisted messages, so the dedup gate cannot be trusted and nothing is written.
     #[error("the AI session store is unavailable")]
     Unavailable,
+    /// The append panicked, or the runtime is shutting down.
+    #[error("the AI session capture stopped unexpectedly")]
+    Aborted,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -64,18 +67,23 @@ pub enum RebuildError {
     Aborted,
 }
 
-/// Capture's locks, as [`Sink::lock_ready`] takes them: the record pushed but not projected yet,
-/// and the sidecar's local projection lock.
-type CaptureLocks<'a> =
-    (tokio::sync::MutexGuard<'a, Option<Message>>, tokio::sync::OwnedMutexGuard<()>);
+/// Capture's locks, as [`Sink::lock_ready`] takes them: the record being pushed or pushed but
+/// not projected yet, and the sidecar's local projection lock. Owned, so a capture can hand them
+/// to the task that finishes it (see [`Sink::append`]).
+type CaptureLocks =
+    (tokio::sync::OwnedMutexGuard<Option<Message>>, tokio::sync::OwnedMutexGuard<()>);
 
+/// Cheap to clone: every clone shares the stores, the tail, the pending projection and the
+/// state.
+#[derive(Clone)]
 pub(crate) struct Sink {
     records: AiSessionStore,
     sidecar: AiSessionDatabase,
     tail: broadcast::Sender<SessionTailEvent>,
     // Serialize the dedup gate + persistence across live capture and import. At most one record
-    // can be waiting for projection; repair it before admitting another capture.
-    pending_projection: Mutex<Option<Message>>,
+    // can be waiting for projection (or, after a push that failed or panicked, for finding out
+    // whether it was stored); repair it before admitting another capture.
+    pending_projection: Arc<Mutex<Option<Message>>>,
     /// The store's state: capture and import wait out a rebuild, and are refused while the store
     /// is unavailable (see `append`).
     state: watch::Receiver<StoreState>,
@@ -99,7 +107,7 @@ impl Sink {
             records,
             sidecar,
             tail,
-            pending_projection: Mutex::new(None),
+            pending_projection: Arc::default(),
             state,
             #[cfg(test)]
             hooks: None,
@@ -128,13 +136,40 @@ impl Sink {
     /// Only while the store is [`StoreState::Ready`]: this waits out a rebuild, and refuses with
     /// [`AppendError::Unavailable`] (writing nothing) while the store is unavailable, as the
     /// sidecar the dedup gate trusts may then be missing persisted messages.
+    ///
+    /// Cancel-safe: dropped while it waits for the store or its locks, it has written nothing;
+    /// once it has them, its dedup check, push and projection run to the end in a task of their
+    /// own, which dropping this does not stop. (Stopped between its push and its projection, the
+    /// record would be in the record store but neither projected nor pending, so the next
+    /// capture of the line would find it missing from the sidecar and push it again.)
     pub(crate) async fn append(&self, mut msg: Message) -> Result<Appended, AppendError> {
         // Apply capture policy before either persistence path or the live tail. Keep structural
         // rows (even with no content) so parent links and usage accounting remain intact.
         sanitize_message(&mut msg);
         // Captured here, so on this host; a reproject reads the same from the record envelope.
         msg.host = Some(self.records.host_id());
-        let (mut pending, local) = self.lock_ready().await?;
+        let locks = self.lock_ready().await?;
+        let sink = self.clone();
+        // The locks go with the task: released when it ends, however it ends (a panic unwinding
+        // included, which leaves a tokio mutex usable).
+        let section = tokio::spawn(async move { sink.append_locked(locks, msg).await });
+        match section.await {
+            Ok(appended) => appended,
+            // A panic: what it may have pushed is pending (see `append_locked`). Cancelled: the
+            // runtime is shutting down, and startup recovery projects whatever it pushed.
+            Err(err) => {
+                tracing::error!(?err, "an ai-session capture stopped unexpectedly");
+                Err(AppendError::Aborted)
+            }
+        }
+    }
+
+    /// [`Self::append`] holding capture's locks, with the store found ready under them.
+    async fn append_locked(
+        self,
+        (mut pending, local): CaptureLocks,
+        msg: Message,
+    ) -> Result<Appended, AppendError> {
         #[cfg(test)]
         let section = self.enter(hooks::Section::Capture);
         #[cfg(test)]
@@ -147,13 +182,24 @@ impl Sink {
             return Ok(Appended::Duplicate);
         }
 
+        // Pending from before the push: should the push fail, or this task panic, once the
+        // record may be stored, the next capture's repair finds out whether it was, and projects
+        // it if so (see `repair`). Nothing else stops this task between its push and its
+        // projection.
+        *pending = Some(msg.clone());
         // Write the record store first: it is the synced source of truth and the sidecar is a
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
         // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
         // never synced.
+        #[cfg(test)]
+        if self.hook(hooks::Point::CapturePushing).await == hooks::Fault::Panic {
+            std::panic::panic_any(hooks::INJECTED_PANIC);
+        }
         self.records.push(&msg).await?;
-
-        *pending = Some(msg.clone());
+        #[cfg(test)]
+        if self.hook(hooks::Point::CapturePushed).await == hooks::Fault::Panic {
+            std::panic::panic_any(hooks::INJECTED_PANIC);
+        }
         let appended = self.project_and_broadcast(&msg).await?;
         *pending = None;
         #[cfg(test)]
@@ -170,7 +216,7 @@ impl Sink {
     /// Waits out a rebuild (capture and import only start once startup recovery is over), and
     /// refuses with [`AppendError::Unavailable`] while the store is unavailable: a failed replay
     /// leaves a sidecar that may be missing persisted messages.
-    async fn lock_ready(&self) -> Result<CaptureLocks<'_>, AppendError> {
+    async fn lock_ready(&self) -> Result<CaptureLocks, AppendError> {
         let mut state = self.state.clone();
         loop {
             if Self::settled(&mut state).await != StoreState::Ready {
@@ -178,7 +224,7 @@ impl Sink {
             }
             #[cfg(test)]
             self.hook(hooks::Point::CaptureWaited).await;
-            let pending = self.pending_projection.lock().await;
+            let pending = self.pending_projection.clone().lock_owned().await;
             // Keeps a reprojection of this host's records (after a sync) from projecting a
             // record capture pushes before capture does, and a rebuild from emptying the sidecar
             // between capture's check and its push. Taken after `pending`, never the other way
@@ -200,11 +246,13 @@ impl Sink {
         }
     }
 
-    /// Project the record a capture pushed but failed to project, if any: the sidecar is then
-    /// complete again.
+    /// Settle the record a capture was pushing when it failed or panicked, if any: projected if
+    /// the record store holds it, dropped if not. The sidecar then holds every record again.
     async fn repair(&self, pending: &mut Option<Message>) -> Result<(), AppendError> {
         if let Some(previous) = pending.as_ref() {
-            self.project_and_broadcast(previous).await?;
+            if self.records.holds(previous.id).await? {
+                self.project_and_broadcast(previous).await?;
+            }
             *pending = None;
         }
         Ok(())
@@ -1861,6 +1909,126 @@ mod tests {
             sink.sidecar.get_session(&sample_handle()).await.unwrap().unwrap().message_count,
             1
         );
+    }
+
+    /// Says when the future polled with it was woken.
+    #[derive(Debug, Default)]
+    struct Woken(AtomicBool);
+
+    impl std::task::Wake for Woken {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// A capture dropped once its push is stored (as the import RPC drops its stream, appends in
+    /// flight and all, when its client disconnects) still projects its record: captured again,
+    /// under a new record id as a re-read captures it, the line is a duplicate, stored once.
+    ///
+    /// The append is polled by hand, only once woken, and dropped as soon as a second handle on
+    /// the record store sees its record, without being polled again. Were the dedup check, push
+    /// and projection run in the caller's future, it would then be dropped between its push and
+    /// its projection every time (the wake that tells the push is done comes once it is stored),
+    /// leaving the record neither projected nor pending; the next capture of the line would push
+    /// it again.
+    #[rstest]
+    #[tokio::test]
+    async fn an_append_dropped_once_pushed_is_not_pushed_again() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        const ITERATIONS: usize = 50;
+        let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(raw.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sink = Sink::new(records, AiSessionDatabase::in_memory().await.unwrap());
+        let seen = raw.clone();
+
+        let mut dropped = 0;
+        for i in 0..ITERATIONS {
+            let msg = message_of("dropped", &format!("m{i}"));
+            let woken = Arc::new(Woken(AtomicBool::new(true)));
+            let waker = Waker::from(woken.clone());
+            let mut cx = Context::from_waker(&waker);
+            let mut append = Box::pin(sink.append(msg.clone()));
+            let mut ended = false;
+            while !seen.contains(msg.id).await.unwrap() {
+                if woken.0.swap(false, Ordering::SeqCst)
+                    && let Poll::Ready(appended) = append.as_mut().poll(&mut cx)
+                {
+                    assert_eq!(appended.unwrap(), Appended::New);
+                    ended = true;
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            drop(append);
+            dropped += usize::from(!ended);
+
+            let mut again = msg.clone();
+            again.id = RecordId(atuin_common::utils::uuid_v7());
+            assert_eq!(sink.append(again).await.unwrap(), Appended::Duplicate, "iteration {i}");
+            let stored = raw.all_tagged(&RecordTag::AiSession).await.unwrap();
+            assert_eq!(stored.len(), i + 1, "iteration {i}: the line pushed twice");
+        }
+        assert!(dropped > ITERATIONS / 2, "only {dropped} appends dropped once pushed");
+        let session = sink.sidecar.get_session(&message_of("dropped", "").session).await;
+        assert_eq!(session.unwrap().unwrap().message_count, ITERATIONS as u64);
+    }
+
+    /// Panics a capture before its push, or once pushed before projecting, as the test says.
+    #[derive(Debug)]
+    struct PanicCapture(hooks::Point);
+
+    impl hooks::Hooks for PanicCapture {
+        fn at(&self, point: hooks::Point) -> futures::future::BoxFuture<'_, hooks::Fault> {
+            let fault = if point == self.0 {
+                hooks::Fault::Panic
+            } else {
+                hooks::Fault::None
+            };
+            Box::pin(async move { fault })
+        }
+
+        fn enter(&self, _: hooks::Section) -> Box<dyn Send> {
+            Box::new(())
+        }
+    }
+
+    /// A capture that panics leaves capture's locks usable and the line stored once. Its record
+    /// is left pending either way: pushed, the next capture's repair projects it, and the line
+    /// is then a duplicate; not pushed yet, the repair finds it missing from the record store and
+    /// drops it, and the next capture pushes the line.
+    #[rstest]
+    #[case::before_its_push(hooks::Point::CapturePushing, Appended::New)]
+    #[case::once_pushed(hooks::Point::CapturePushed, Appended::Duplicate)]
+    #[tokio::test]
+    async fn a_capture_that_panics_leaves_the_line_stored_once(
+        #[case] at: hooks::Point,
+        #[case] again: Appended,
+    ) {
+        let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(raw.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let mut sink = Sink::new(records, AiSessionDatabase::in_memory().await.unwrap());
+        let msg = message_of("panicked", "m");
+        sink.hooks = Some(Arc::new(PanicCapture(at)));
+        assert!(matches!(sink.append(msg.clone()).await, Err(AppendError::Aborted)));
+        sink.hooks = None;
+
+        let mut retry = msg.clone();
+        retry.id = RecordId(atuin_common::utils::uuid_v7());
+        let appended = tokio::time::timeout(Duration::from_secs(10), sink.append(retry));
+        assert_eq!(appended.await.expect("capture's locks left held").unwrap(), again);
+        assert_eq!(raw.all_tagged(&RecordTag::AiSession).await.unwrap().len(), 1);
+        let row = sink.sidecar.get_session(&msg.session).await.unwrap().unwrap();
+        assert_eq!(row.message_count, 1);
     }
 }
 
