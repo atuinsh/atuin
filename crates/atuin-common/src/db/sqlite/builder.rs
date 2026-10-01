@@ -32,7 +32,6 @@ pub struct SqliteBuilder<'a> {
     foreign_keys: bool,
     restrict_permissions: bool,
     regexp: bool,
-    read_only: bool,
 }
 
 impl<'a> SqliteBuilder<'a> {
@@ -82,7 +81,6 @@ impl<'a> SqliteBuilder<'a> {
             foreign_keys: true,
             restrict_permissions: false,
             regexp: false,
-            read_only: false,
         }
     }
 
@@ -116,16 +114,6 @@ impl<'a> SqliteBuilder<'a> {
         self
     }
 
-    /// Open an existing database without writing to it, for a reader beside another process that
-    /// owns it. The file must exist; its journal mode is left as its owner set it (a WAL reader
-    /// still needs the `-shm` file, which sqlite creates if the directory is writable), and no
-    /// WAL compactor or `PRAGMA optimize` runs.
-    #[must_use]
-    pub fn read_only(mut self) -> Self {
-        self.read_only = true;
-        self
-    }
-
     #[must_use]
     pub fn regexp(mut self) -> Self {
         self.regexp = true;
@@ -143,15 +131,12 @@ impl<'a> SqliteBuilder<'a> {
 
         let mut opts = SqliteConnectOptions::from_str(path_str)
             .map_err(SqliteOpenOrCreateError::ConenctOptionsParsing)?
-            .optimize_on_close(!self.read_only, None)
+            .optimize_on_close(true, None)
             .synchronous(self.synchronous)
             .foreign_keys(self.foreign_keys)
-            .read_only(self.read_only)
-            .create_if_missing(!self.read_only);
+            .create_if_missing(true);
 
         match self.journal {
-            // The journal mode is the owner's to set: changing it needs a write.
-            _ if self.read_only => {}
             Some(Journaling::Wal { max_size_hint }) => {
                 opts = opts
                     .journal_mode(SqliteJournalMode::Wal)
@@ -177,8 +162,7 @@ impl<'a> SqliteBuilder<'a> {
                 return Err(SqliteOpenOrCreateError::BadSymlink(fs_path.clone()));
             }
 
-            if !self.read_only
-                && !fs_path.exists()
+            if !fs_path.exists()
                 && let Some(dir) = fs_path.parent()
             {
                 std::fs::create_dir_all(dir).map_err(SqliteOpenOrCreateError::FailedToCreateDir)?;
@@ -187,13 +171,12 @@ impl<'a> SqliteBuilder<'a> {
 
         let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
 
-        if matches!(self.journal, Some(Journaling::Wal { .. })) && !is_memory && !self.read_only {
+        if matches!(self.journal, Some(Journaling::Wal { .. })) && !is_memory {
             sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone()).await;
         }
 
         #[cfg(unix)]
         if self.restrict_permissions
-            && !self.read_only
             && let Some(fs_path) = &on_disk
             && fs_path.exists()
         {

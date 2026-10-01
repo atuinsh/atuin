@@ -223,11 +223,15 @@ async fn stale_ai_session_index(env: &FreshEnv) -> PathBuf {
     path
 }
 
-/// How many sessions the AI session index at `path` lists.
+/// How many sessions the AI session index at `path` holds.
 async fn indexed_sessions(path: &Path) -> usize {
-    let db = atuin_client::ai_session::AiSessionDatabase::open_read_only(path).await.unwrap();
-    let filter = atuin_client::ai_session::SessionFilter::default();
-    db.list_sessions(&filter).await.unwrap().len()
+    use atuin_common::db::sqlite::Sqlite;
+    let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
+    let sessions: i64 = atuin_common::db::query_scalar::<_, i64>("SELECT count(*) FROM sessions")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    usize::try_from(sessions).unwrap()
 }
 
 /// `atuin store rebuild ai-session` has the daemon rebuild the index, starting it as other AI

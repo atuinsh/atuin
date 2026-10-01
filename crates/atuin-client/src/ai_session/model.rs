@@ -188,10 +188,6 @@ pub struct Session {
     /// [`SessionFilter::roots_only`]); 0 elsewhere.
     #[builder(default)]
     pub child_count: u64,
-    /// The newest `updated_at` across this session and the sessions grouped under it, which is
-    /// what roots-only queries order by. Only set by roots-only queries.
-    #[builder(default)]
-    pub group_updated_at: Option<OffsetDateTime>,
 }
 
 impl Session {
@@ -273,10 +269,6 @@ pub enum SearchTerms {
     /// Every term, each as a whole word (`app` finds `app`, not `apple`).
     #[default]
     All,
-    /// [`Self::All`] for search as you type: the last term also matches as a prefix, unless
-    /// the query ends in whitespace (see
-    /// [`atuin_common::db::sqlite::fts::prefix_match_expression`]).
-    Typed,
     /// Any term, each as a prefix: the fallback when no message holds every term (see
     /// [`atuin_common::db::sqlite::fts::match_any_expression`]).
     Any,
@@ -285,10 +277,8 @@ pub enum SearchTerms {
 #[derive(Clone, Debug)]
 pub struct SessionMatch {
     pub session: Session,
-    /// `session`'s title, with the query's matches highlighted when the best-matching message is
-    /// `session`'s own; plain when it is in [`Self::matched`].
     pub title: HighlightedString,
-    /// A snippet of the best-matching message, with the query's matches highlighted.
+    /// A snippet of the best-matching message.
     pub preview: HighlightedString,
     /// Position of the best-matching message within the session holding it (`session`, or
     /// [`Self::matched`]), in transcript order.
@@ -304,7 +294,6 @@ pub struct SessionMatch {
 #[derive(Clone, Debug)]
 pub struct MatchedSession {
     pub handle: HarnessSession,
-    /// Its title, with the query's matches highlighted.
     pub title: HighlightedString,
 }
 

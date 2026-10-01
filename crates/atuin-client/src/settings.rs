@@ -1210,8 +1210,7 @@ impl Settings {
     }
 
     /// The AI harness session sidecar database, under the [effective data
-    /// dir](Self::effective_data_dir). The daemon owns and writes it; other readers open it
-    /// read-only (`AiSessionDatabase::open_read_only`).
+    /// dir](Self::effective_data_dir). The daemon owns and writes it.
     #[must_use]
     pub fn ai_session_sidecar_path() -> PathBuf {
         Self::effective_data_dir().join("ai_harness_sessions.db")

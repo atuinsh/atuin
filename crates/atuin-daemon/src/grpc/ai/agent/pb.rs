@@ -231,17 +231,6 @@ fn host_from_repr(host: Option<String>) -> Result<Option<HostId>, ParseError> {
     Ok(host.map(|host| uuid::Uuid::parse_str(&host)).transpose()?.map(HostId))
 }
 
-fn timestamp(at: OffsetDateTime) -> prost_types::Timestamp {
-    prost_types::Timestamp {
-        seconds: at.unix_timestamp(),
-        nanos: at.nanosecond().cast_signed(),
-    }
-}
-
-fn from_timestamp(at: prost_types::Timestamp) -> Result<OffsetDateTime, ParseError> {
-    Ok(OffsetDateTime::from_timespec(at.seconds.into(), at.nanos.into())?)
-}
-
 impl Message {
     fn domain_role(&self) -> Result<DomainRole, ParseError> {
         Ok(match Role::try_from(self.role).map_err(|_| ParseError::UnknownRole(self.role))? {
@@ -337,7 +326,6 @@ impl From<DomainSession> for Session {
             root: value.root.map(Into::into),
             copy_of: value.copy_of.map(Into::into),
             child_count: value.child_count,
-            group_updated_at: value.group_updated_at.map(timestamp),
         }
     }
 }
@@ -372,7 +360,6 @@ impl TryFrom<Session> for DomainSession {
             root: value.root.map(TryInto::try_into).transpose()?,
             copy_of: value.copy_of.map(TryInto::try_into).transpose()?,
             child_count: value.child_count,
-            group_updated_at: value.group_updated_at.map(from_timestamp).transpose()?,
         })
     }
 }
@@ -575,7 +562,6 @@ mod tests {
             prop::option::of(arb_host()),
             prop::option::of(arb_harness_session()),
             any::<u64>(),
-            prop::option::of(arb_timestamp()),
             prop::option::of(arb_harness_session()),
             arb_parent_kind(),
         );
@@ -583,7 +569,7 @@ mod tests {
             |(
                 (handle, parent, cwd, git_branch, model),
                 (started_at, updated_at, message_count, usage, title, preview, last_reply),
-                (host, root, child_count, group_updated_at, copy_of, parent_kind),
+                (host, root, child_count, copy_of, parent_kind),
             )| DomainSession {
                 handle,
                 parent,
@@ -603,7 +589,6 @@ mod tests {
                 root,
                 copy_of,
                 child_count,
-                group_updated_at,
             },
         )
     }
