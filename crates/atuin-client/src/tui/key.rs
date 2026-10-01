@@ -1,6 +1,6 @@
 use std::fmt;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MediaKeyCode};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MediaKeyCode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A single key press with modifiers (e.g. `ctrl-c`, `alt-f`, `enter`).
@@ -46,6 +46,7 @@ pub enum KeyInput {
 
 impl SingleKey {
     /// Convert a crossterm `KeyEvent` into a `SingleKey`.
+    #[must_use]
     pub fn from_event(event: &KeyEvent) -> Option<Self> {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         let alt = event.modifiers.contains(KeyModifiers::ALT);
@@ -59,7 +60,7 @@ impl SingleKey {
                 // we store the uppercase char directly and clear the shift flag
                 // since the case already encodes it.
                 if shift && !ctrl && !alt && !super_key && c.is_ascii_uppercase() {
-                    return Some(SingleKey {
+                    return Some(Self {
                         code: KeyCodeValue::Char(c),
                         ctrl: false,
                         alt: false,
@@ -74,7 +75,7 @@ impl SingleKey {
             KeyCode::Tab => KeyCodeValue::Tab,
             // BackTab is sent by many terminals for Shift+Tab
             KeyCode::BackTab => {
-                return Some(SingleKey {
+                return Some(Self {
                     code: KeyCodeValue::Tab,
                     ctrl,
                     alt,
@@ -98,7 +99,7 @@ impl SingleKey {
             _ => return None,
         };
 
-        Some(SingleKey {
+        Some(Self {
             code,
             ctrl,
             alt,
@@ -185,7 +186,7 @@ impl SingleKey {
                     let c = chars[0];
                     // An uppercase letter implies shift (unless shift already specified)
                     if c.is_ascii_uppercase() && !ctrl && !alt && !super_key {
-                        return Ok(SingleKey {
+                        return Ok(Self {
                             code: KeyCodeValue::Char(c),
                             ctrl: false,
                             alt: false,
@@ -200,7 +201,7 @@ impl SingleKey {
             }
         };
 
-        Ok(SingleKey {
+        Ok(Self {
             code,
             ctrl,
             alt,
@@ -272,9 +273,9 @@ impl KeyInput {
         if parts.len() > 1 {
             let keys: Result<Vec<SingleKey>, String> =
                 parts.iter().map(|p| SingleKey::parse(p)).collect();
-            Ok(KeyInput::Sequence(keys?))
+            Ok(Self::Sequence(keys?))
         } else {
-            Ok(KeyInput::Single(SingleKey::parse(s)?))
+            Ok(Self::Single(SingleKey::parse(s)?))
         }
     }
 }
@@ -282,8 +283,8 @@ impl KeyInput {
 impl fmt::Display for KeyInput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            KeyInput::Single(k) => write!(f, "{k}"),
-            KeyInput::Sequence(keys) => {
+            Self::Single(k) => write!(f, "{k}"),
+            Self::Sequence(keys) => {
                 for (i, k) in keys.iter().enumerate() {
                     if i > 0 {
                         write!(f, " ")?;
@@ -305,13 +306,13 @@ impl Serialize for KeyInput {
 impl<'de> Deserialize<'de> for KeyInput {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        KeyInput::parse(&s).map_err(serde::de::Error::custom)
+        Self::parse(&s).map_err(serde::de::Error::custom)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rstest::rstest;
 
     use super::*;
