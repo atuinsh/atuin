@@ -9,6 +9,7 @@ use atuin_common::harnesstools::session::{
     Checkpoint, Content, ParentKind, Role, TitleChange, TitleSource, Usage,
 };
 use atuin_common::string::TruncateCharsExt;
+use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId, RecordTag};
 use futures::{Stream, StreamExt, TryStreamExt};
 use sqlx::SqliteConnection;
@@ -987,10 +988,10 @@ impl AiSessionDatabase {
     /// first. With [`SessionFilter::roots_only`], a match anywhere in a group is its root's. A
     /// query with no terms returns the sessions [`Self::list_sessions`] does, newest first.
     ///
-    /// Each match carries its title and a snippet of the best message, and where that message is
-    /// in its own session. When that session is not the one returned (a root, whose group it is
-    /// in), the match names it ([`SessionMatch::matched`]). No highlight spans are produced:
-    /// consumers only render the plain text.
+    /// Each match carries its title and a snippet of the best message, with the query's matches
+    /// highlighted, and where that message is in its own session. When that session is not the
+    /// one returned (a root, whose group it is in), the match names it
+    /// ([`SessionMatch::matched`]), with its title highlighted instead of the root's.
     pub fn search(
         &self,
         query: &str,
@@ -1005,7 +1006,6 @@ impl AiSessionDatabase {
 
         async_stream::try_stream! {
             let highlighter = TextHighlighter::default();
-            let plain = |text: &str| highlighter.as_highlighted(highlighter.sanitize(text).into_owned());
             let expr = match terms {
                 SearchTerms::All => match_expression(&query),
                 SearchTerms::Any => match_any_expression(&query),
@@ -1015,8 +1015,9 @@ impl AiSessionDatabase {
                     let title = session.title.clone().unwrap_or_default();
                     let preview = session.preview.clone().unwrap_or_default();
                     yield SessionMatch {
-                        title: plain(&title),
-                        preview: plain(&preview),
+                        title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
+                        preview: highlighter
+                            .as_highlighted(highlighter.sanitize(&preview).into_owned()),
                         session,
                         message_index: 0,
                         matched: None,
@@ -1043,9 +1044,9 @@ impl AiSessionDatabase {
             };
             let limit_clause = if limit == 0 { "" } else { " LIMIT ?" };
 
-            // messages_fts is contentless: it can rank (bm25) but cannot render snippet(), so the
-            // query returns the best message's stored content and the snippet is cut in Rust
-            // below. `best` takes the rowid of each group's top-scoring message
+            // messages_fts is contentless: it can rank (bm25) but cannot render highlight() or
+            // snippet(), so the query returns the best message's stored content and the marking
+            // happens in Rust below. `best` takes the rowid of each group's top-scoring message
             // (SQLite fills bare columns from the max() row).
             let sql = format!(
                 "WITH ranked AS MATERIALIZED (\
@@ -1096,21 +1097,32 @@ impl AiSessionDatabase {
                 });
                 let preview = Self::preview_snippet(&body, &terms, SNIPPET_TOKENS);
 
-                // A match in a session grouped under the root returned names that session.
+                // A match in a session grouped under the root returned: the root's title is
+                // highlighted only when it matches the query itself, and the matched session's
+                // title is given with what matched in it.
                 let matched_handle = HarnessSession {
                     harness: Self::harness_from_repr(row.match_harness)?,
                     session: NativeSessionId::from(row.match_session_id),
                 };
-                let matched_title = row.match_title.unwrap_or_default();
-                let matched = (matched_handle != session.handle).then(|| MatchedSession {
-                    handle: matched_handle,
-                    title: plain(&matched_title),
-                });
+                let (title, matched) = if matched_handle == session.handle {
+                    (terms.highlight(highlighter, &title), None)
+                } else {
+                    let title = if terms.matched_by(&title) {
+                        terms.highlight(highlighter, &title)
+                    } else {
+                        highlighter.as_highlighted(highlighter.sanitize(&title).into_owned())
+                    };
+                    let matched_title = row.match_title.unwrap_or_default();
+                    (title, Some(MatchedSession {
+                        handle: matched_handle,
+                        title: terms.highlight(highlighter, &matched_title),
+                    }))
+                };
 
                 yield SessionMatch {
                     session,
-                    title: plain(&title),
-                    preview: plain(&preview),
+                    title,
+                    preview: terms.highlight(highlighter, &preview),
                     message_index: u64::try_from(row.match_index).unwrap_or(0),
                     matched,
                     score: row.score,
@@ -2256,7 +2268,7 @@ impl Bind {
 }
 
 /// Fold text the way the index's `unicode61` tokenizer does — lowercase with combining marks
-/// stripped — so preview placement agrees with what FTS5 actually matched (e.g. a
+/// stripped — so preview placement and highlights agree with what FTS5 actually matched (e.g. a
 /// query for `cafe` matches a stored `café`).
 fn fts_fold(text: &str) -> String {
     use unicode_normalization::UnicodeNormalization as _;
@@ -2274,6 +2286,28 @@ fn fts_tokens(text: &str) -> impl Iterator<Item = String> + use<> {
         .into_iter()
 }
 
+/// The byte ranges of `text`'s tokens, each with its folded form.
+fn fts_token_spans(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+    use unicode_normalization::char::is_combining_mark;
+    let is_token = |c: char| c.is_alphanumeric() || is_combining_mark(c);
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices().chain(std::iter::once((text.len(), ' '))) {
+        match (start, is_token(c)) {
+            (None, true) => start = Some(i),
+            (Some(from), false) => {
+                start = None;
+                let folded = fts_fold(&text[from..i]);
+                if !folded.is_empty() {
+                    spans.push((from..i, folded));
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
 /// A search query's terms as the index matches them (see [`SearchTerms`]): each
 /// whitespace-separated term is a phrase of folded tokens that must appear consecutively (so
 /// `app` matches the token `app`, not the word `apple`, and `foo-bar` matches `foo bar` across
@@ -2281,17 +2315,19 @@ fn fts_tokens(text: &str) -> impl Iterator<Item = String> + use<> {
 struct QueryTerms {
     /// Each phrase, and whether its last token is a prefix.
     phrases: Vec<(Vec<String>, bool)>,
+    /// Whether a row matches holding any phrase ([`SearchTerms::Any`]), rather than every one.
+    any: bool,
 }
 
 impl QueryTerms {
     fn parse(query: &str, mode: SearchTerms) -> Self {
-        let prefix = mode == SearchTerms::Any;
+        let any = mode == SearchTerms::Any;
         let phrases = query
             .split_whitespace()
-            .map(|term| (fts_tokens(term).collect::<Vec<_>>(), prefix))
+            .map(|term| (fts_tokens(term).collect::<Vec<_>>(), any))
             .filter(|(phrase, _)| !phrase.is_empty())
             .collect();
-        Self { phrases }
+        Self { phrases, any }
     }
 
     /// Where a phrase matches in `tokens`: its first token's index and its length.
@@ -2320,6 +2356,44 @@ impl QueryTerms {
             })
             .map(move |at| (at, phrase.len()))
     }
+
+    /// Whether `text` alone holds what a row must to match the query, as the index tells it:
+    /// every phrase, or with [`SearchTerms::Any`] any of them.
+    fn matched_by(&self, text: &str) -> bool {
+        let tokens: Vec<String> = fts_tokens(text).collect();
+        let mut found = self.phrases.iter().map(|(phrase, prefix)| {
+            Self::phrase_matches(phrase, *prefix, &tokens).next().is_some()
+        });
+        if self.any {
+            found.any(|f| f)
+        } else {
+            !self.phrases.is_empty() && found.all(|f| f)
+        }
+    }
+
+    /// `text` with every token the query matches marked by `highlighter`.
+    fn highlight(&self, highlighter: TextHighlighter, text: &str) -> HighlightedString {
+        let text = highlighter.sanitize(text);
+        let spans = fts_token_spans(&text);
+        let tokens: Vec<String> = spans.iter().map(|(_, t)| t.clone()).collect();
+        let mut marked = vec![false; tokens.len()];
+        for (at, len) in self.matches(&tokens) {
+            marked[at..at + len].fill(true);
+        }
+
+        let [open, close] = highlighter.markers();
+        let mut out = String::with_capacity(text.len());
+        let mut copied = 0;
+        for ((range, _), _) in spans.iter().zip(&marked).filter(|(_, m)| **m) {
+            out.push_str(&text[copied..range.start]);
+            out.push(open);
+            out.push_str(&text[range.clone()]);
+            out.push(close);
+            copied = range.end;
+        }
+        out.push_str(&text[copied..]);
+        highlighter.as_highlighted(out)
+    }
 }
 
 #[cfg(test)]
@@ -2328,6 +2402,7 @@ mod tests {
 
     use atuin_common::db;
     use atuin_common::db::sqlite::Sqlite;
+    use atuin_common::db::sqlite::fts::TextHighlighter;
     use atuin_common::harnesstools::session::{
         Checkpoint, Content, ParentKind, Role, ToolCallId, ToolResult, ToolUse, Usage,
     };
@@ -2336,7 +2411,9 @@ mod tests {
     use rstest::{fixture, rstest};
     use time::OffsetDateTime;
 
-    use super::{AiSessionDatabase, Appended, COMPRESS_THRESHOLD, DbError, TitleSource};
+    use super::{
+        AiSessionDatabase, Appended, COMPRESS_THRESHOLD, DbError, QueryTerms, TitleSource,
+    };
     use crate::ai_session::{
         HarnessKind, HarnessSession, Message, NativeSessionId, SearchTerms, Session, SessionFilter,
         SessionMatch, SourceId,
@@ -3510,6 +3587,117 @@ mod tests {
         assert_eq!(search_with(&db, query, &SessionFilter::default(), 2).await.len(), 2);
     }
 
+    /// The highlighted text of `h`, with matches in brackets.
+    fn marked(h: &atuin_common::string::highlighted::HighlightedString) -> String {
+        h.display_subs(['[', ']']).to_string()
+    }
+
+    /// The byte ranges of `h`'s matches in its plain text, as the gRPC API and CLI JSON give them.
+    fn spans(h: &atuin_common::string::highlighted::HighlightedString) -> Vec<(usize, usize)> {
+        h.to_plain().ranges.iter().map(|r| (r.start, r.end)).collect()
+    }
+
+    #[rstest]
+    #[case::whole_token(
+        SearchTerms::All,
+        "error",
+        "An Error and an error.",
+        "An [Error] and an [error]."
+    )]
+    #[case::no_substring_matches(SearchTerms::All, "app", "apple app", "apple [app]")]
+    #[case::folded_like_the_index(SearchTerms::All, "cafe", "the café opens", "the [café] opens")]
+    #[case::phrase_across_words(
+        SearchTerms::All,
+        "foo-bar",
+        "foo bar foo baz",
+        "[foo] [bar] foo baz"
+    )]
+    #[case::every_term(
+        SearchTerms::All,
+        "build failed",
+        "the build failed",
+        "the [build] [failed]"
+    )]
+    #[case::stray_markers_are_stripped(SearchTerms::All, "x", "a\u{E000}b x", "ab [x]")]
+    #[case::any_prefix_marks_the_whole_token(
+        SearchTerms::Any,
+        "refac",
+        "Refactoring it",
+        "[Refactoring] it"
+    )]
+    #[case::any_term(SearchTerms::Any, "build nothing", "the build failed", "the [build] failed")]
+    #[case::any_every_term_a_prefix(
+        SearchTerms::Any,
+        "build fail",
+        "the builder failed",
+        "the [builder] [failed]"
+    )]
+    #[case::any_phrase_last_token_a_prefix(
+        SearchTerms::Any,
+        "foo-ba",
+        "foo bar fob",
+        "[foo] [bar] fob"
+    )]
+    fn highlights_mark_what_the_index_matched(
+        #[case] mode: SearchTerms,
+        #[case] query: &str,
+        #[case] text: &str,
+        #[case] expected: &str,
+    ) {
+        let highlighted =
+            QueryTerms::parse(query, mode).highlight(TextHighlighter::default(), text);
+        assert_eq!(marked(&highlighted), expected);
+    }
+
+    /// A search's title and snippet carry the spans of what the query matched, which the gRPC
+    /// API and `atuin ai session search --format json` pass on.
+    #[rstest]
+    #[case::all(
+        SearchTerms::All,
+        "parser",
+        "[Parser] refactor",
+        (0, 6),
+        "we refactored the [parser]",
+        "parser"
+    )]
+    #[case::any(
+        SearchTerms::Any,
+        "refac nothing",
+        "Parser [refactor]",
+        (7, 15),
+        "we [refactored] the parser",
+        "refactored"
+    )]
+    #[tokio::test]
+    async fn search_highlights_the_title_and_snippet(
+        #[case] mode: SearchTerms,
+        #[case] query: &str,
+        #[case] title: &str,
+        #[case] title_span: (usize, usize),
+        #[case] snippet: &str,
+        #[case] snippet_match: &str,
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let filler: String = (0..200).map(|i| format!("filler-{i:03} ")).collect();
+        let mut m = message_in(&sample_handle(), 0, &format!("{filler}we refactored the parser"));
+        m.session_title = Some("Parser refactor".to_owned());
+        db.append(&m).await.unwrap();
+
+        let hits: Vec<SessionMatch> =
+            db.search(query, mode, &SessionFilter::default(), 0).try_collect().await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(marked(&hits[0].title), title);
+        assert_eq!(spans(&hits[0].title), [title_span]);
+        let preview = marked(&hits[0].preview);
+        assert!(preview.contains(snippet), "{preview:?}");
+        assert!(!preview.contains("filler-000"), "{preview:?}");
+        let plain = hits[0].preview.to_plain();
+        let [span] = plain.ranges.as_slice() else {
+            panic!("one match in the snippet: {plain:?}");
+        };
+        assert_eq!(&plain.text[span.clone()], snippet_match);
+    }
+
     #[rstest]
     #[tokio::test]
     async fn a_title_match_outranks_a_body_match() {
@@ -4229,7 +4417,7 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session.handle, handle(HarnessKind::ClaudeCode, "root"));
         assert_eq!(hits[0].session.child_count, 2);
-        assert!(hits[0].preview.to_plain().text.contains("needle"));
+        assert!(marked(&hits[0].preview).contains("[needle]"));
 
         // Every session of a group matching counts once, as its root.
         let hits = search_with(&db, "words", &roots_only(), 0).await;
@@ -4239,7 +4427,8 @@ mod tests {
     }
 
     /// A root whose group matches only in a child names that child, with the matched message's
-    /// place in it and the child's title.
+    /// place in it and the child's title highlighted; the root's title, which only shares a word
+    /// with the query, is not highlighted as if it matched.
     #[rstest]
     #[tokio::test]
     async fn a_match_in_a_child_names_the_child() {
@@ -4262,16 +4451,47 @@ mod tests {
         assert_eq!(hit.session.handle, handle(HarnessKind::ClaudeCode, "root"));
         let matched = hit.matched.as_ref().expect("the match is the child's");
         assert_eq!(matched.handle, handle(HarnessKind::ClaudeCode, "fork"));
-        assert_eq!(matched.title.to_plain().text, "needle hunt");
-        assert_eq!(hit.title.to_plain().text, "haystack plans");
+        assert_eq!(marked(&matched.title), "[needle] hunt");
+        assert_eq!(spans(&matched.title), [(0, 6)]);
+        assert_eq!(marked(&hit.title), "haystack plans", "the root's title did not match");
         assert_eq!(hit.message_index, 1, "the message's place in the child");
-        assert!(hit.preview.to_plain().text.contains("haystack"));
+        assert!(marked(&hit.preview).contains("[haystack]"));
 
         // Without grouping, the child is returned itself, and names nothing else.
         let hits = search_with(&db, "needle haystack", &SessionFilter::default(), 0).await;
         assert_eq!(hits[0].session.handle, handle(HarnessKind::ClaudeCode, "fork"));
         assert!(hits[0].matched.is_none());
         assert_eq!(hits[0].message_index, 1);
+        assert_eq!(marked(&hits[0].title), "[needle] hunt");
+
+        // With any term, the root's title holds one, so it is highlighted too.
+        let hits: Vec<SessionMatch> = db
+            .search("needle haystack", SearchTerms::Any, &roots_only(), 0)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(marked(&hits[0].title), "[haystack] plans");
+        let matched = hits[0].matched.as_ref().expect("the match is the child's");
+        assert_eq!(marked(&matched.title), "[needle] hunt");
+    }
+
+    /// Whether a title alone matches the query as the index would: every term, or any with
+    /// [`SearchTerms::Any`], each as a prefix.
+    #[rstest]
+    #[case::every_term("needle haystack", SearchTerms::All, "a haystack needle", true)]
+    #[case::one_term_short("needle haystack", SearchTerms::All, "haystack plans", false)]
+    #[case::whole_word("needle hay", SearchTerms::All, "needle haystack", false)]
+    #[case::any_term("needle haystack", SearchTerms::Any, "haystack plans", true)]
+    #[case::any_prefix("nee hay", SearchTerms::Any, "haystack plans", true)]
+    #[case::no_term("needle haystack", SearchTerms::Any, "other plans", false)]
+    fn a_title_matches_the_query_alone(
+        #[case] query: &str,
+        #[case] mode: SearchTerms,
+        #[case] title: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(QueryTerms::parse(query, mode).matched_by(title), expected);
     }
 
     // --- filters --------------------------------------------------------------------------------

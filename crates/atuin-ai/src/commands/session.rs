@@ -1591,4 +1591,32 @@ mod tests {
         assert_eq!(v["matched"]["session"]["session_id"], "child");
         assert_eq!(v["matched"]["title"]["matches"], json!([[0, 5]]));
     }
+
+    /// The match ranges in the JSON are those of what a real search matched.
+    #[rstest]
+    #[case::all(SearchTerms::All, "build", json!([[8, 13]]), json!([[4, 9]]))]
+    #[case::any(SearchTerms::Any, "build nothing", json!([[8, 13]]), json!([[4, 9]]))]
+    #[tokio::test]
+    async fn search_match_json_ranges_come_from_the_search(
+        #[case] mode: SearchTerms,
+        #[case] query: &str,
+        #[case] title: Value,
+        #[case] preview: Value,
+    ) {
+        let db = atuin_client::ai_session::AiSessionDatabase::in_memory().await.unwrap();
+        let mut m = msg(Role::User, vec![Content::Text("the build broke".to_owned())]);
+        m.session_title = Some("Fix the build".to_owned());
+        db.append(&m).await.unwrap();
+
+        let hits: Vec<SessionMatch> =
+            db.search(query, mode, &SessionFilter::default(), 0).try_collect().await.unwrap();
+        let [hit] = hits.as_slice() else {
+            panic!("one match: {hits:?}");
+        };
+        let v = serde_json::to_value(SearchMatchJson::from(hit)).unwrap();
+        assert_eq!(v["title"]["text"], "Fix the build");
+        assert_eq!(v["title"]["matches"], title);
+        assert_eq!(v["preview"]["text"], "the build broke");
+        assert_eq!(v["preview"]["matches"], preview);
+    }
 }

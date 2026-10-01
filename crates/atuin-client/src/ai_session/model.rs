@@ -277,8 +277,10 @@ pub enum SearchTerms {
 #[derive(Clone, Debug)]
 pub struct SessionMatch {
     pub session: Session,
+    /// `session`'s title, with the query's matches highlighted when the best-matching message is
+    /// `session`'s own; plain when it is in [`Self::matched`].
     pub title: HighlightedString,
-    /// A snippet of the best-matching message.
+    /// A snippet of the best-matching message, with the query's matches highlighted.
     pub preview: HighlightedString,
     /// Position of the best-matching message within the session holding it (`session`, or
     /// [`Self::matched`]), in transcript order.
@@ -294,6 +296,7 @@ pub struct SessionMatch {
 #[derive(Clone, Debug)]
 pub struct MatchedSession {
     pub handle: HarnessSession,
+    /// Its title, with the query's matches highlighted.
     pub title: HighlightedString,
 }
 
