@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -34,7 +34,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -120,8 +120,9 @@ macro_rules! group_columns {
 ///   harnesstools `opencode::session` `turn_of` and `v2` `turn`). opencode records a fork's
 ///   original as its parent anyway.
 ///
-/// Usage is still counted once per turn id whatever its form: this only keeps the id from
-/// linking sessions.
+/// The same rule decides how far a call's usage is deduplicated (see
+/// [`AiSessionDatabase::attribute_call`]): across every session holding a harness-given id, but
+/// only within one lineage of sessions for an id derived from content.
 macro_rules! linkable_turn {
     () => {
         "(m.turn_id IS NOT NULL AND NOT ((m.harness = 2 AND (m.turn_id GLOB 'token_count:*' OR \
@@ -328,8 +329,10 @@ impl Claimant {
     }
 }
 
-#[derive(sqlx::FromRow)]
+/// A `calls` row: one count of a model call, in `scope`, owned by `session_id`.
+#[derive(sqlx::FromRow, PartialEq, Eq)]
 struct CallRow {
+    scope: String,
     session_id: String,
     usage_input: i64,
     usage_output: i64,
@@ -467,7 +470,50 @@ impl AiSessionDatabase {
     async fn migrate(&self) -> Result<(), DbError> {
         let pool = self.db.pool();
         db::migrate!(pool, "./src/ai_session/migrations").await?;
-        self.group_migrated().await
+        self.group_migrated().await?;
+        self.recount_migrated().await
+    }
+
+    /// Attribute the usage stored before the `session_scoped_calls` migration afresh from the
+    /// stored rows: that migration empties `calls`, whose rows were attributed by a rule that
+    /// merged unrelated sessions' calls sharing a content-derived turn id. Each session's usage
+    /// starts over from its rows outside any model call, and every call is attributed as rows
+    /// arriving later are ([`Self::attribute_call`]), which depends only on the rows stored. Runs
+    /// until it has committed once, and then never again.
+    async fn recount_migrated(&self) -> Result<(), DbError> {
+        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let recount: i64 =
+            db::query_scalar("SELECT recount_calls FROM projection_state WHERE id = 0")
+                .fetch_one(&mut *tx)
+                .await?;
+        if recount == 0 {
+            return Ok(());
+        }
+        db::query("DELETE FROM calls").execute(&mut *tx).await?;
+        db::query(
+            "UPDATE sessions SET (usage_input, usage_output, usage_cache_read, usage_cache_write, \
+             usage_reasoning) = (SELECT COALESCE(SUM(m.usage_input), 0), \
+             COALESCE(SUM(m.usage_output), 0), COALESCE(SUM(m.usage_cache_read), 0), \
+             COALESCE(SUM(m.usage_cache_write), 0), COALESCE(SUM(m.usage_reasoning), 0) FROM \
+             messages m WHERE m.session = sessions.id AND m.usage_present = 1 AND m.turn_id IS \
+             NULL)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        let turns: Vec<(i64, String)> = db::query_as(
+            "SELECT DISTINCT harness, turn_id FROM messages WHERE usage_present = 1 AND turn_id \
+             IS NOT NULL",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        for (harness, turn) in &turns {
+            Self::attribute_call(&mut tx, *harness, turn).await?;
+        }
+        db::query("UPDATE projection_state SET recount_calls = 0 WHERE id = 0")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Link and group the sessions stored before the `incremental_sidecar` migration, which
@@ -2149,6 +2195,11 @@ impl AiSessionDatabase {
     /// so start times alone may tie. That depends only on the rows and sessions stored, never on
     /// the order they arrived in, so capture, import and a rebuild from records on any host all
     /// agree; [`Self::append`] calls this again whenever a claimant's start or parent moves.
+    ///
+    /// Only a turn id the harness gave the call (see [`linkable_turn`]) is the same call wherever
+    /// it is held. One capture derived from the line's content can be shared by unrelated
+    /// sessions, so it is counted once per lineage: the claimants under each top-most claimant
+    /// (by parent links) share one count, owned by that top, and the `calls` row is scoped to it.
     async fn attribute_call(
         conn: &mut SqliteConnection,
         harness: i64,
@@ -2168,64 +2219,149 @@ impl AiSessionDatabase {
         .fetch_all(&mut *conn)
         .await?;
 
-        let tokens = claimants.iter().fold([0; 5], |acc: Tokens, c| {
-            let row = c.tokens();
-            std::array::from_fn(|i| acc[i].max(row[i]))
-        });
-        let ids: HashSet<&str> = claimants.iter().map(|c| c.session_id.as_str()).collect();
-        let mut eligible = Vec::with_capacity(claimants.len());
-        for claimant in &claimants {
-            if claimants.len() == 1
-                || !Self::descends_from(&mut *conn, harness, claimant, &ids).await?
-            {
-                eligible.push(claimant);
+        // Each scope the call is counted in, with the claimants counting toward it.
+        let mut scopes: BTreeMap<String, Vec<&Claimant>> = BTreeMap::new();
+        if Self::is_linkable_turn(&mut *conn, harness, turn).await? {
+            scopes.insert(String::new(), claimants.iter().collect());
+        } else {
+            for claimant in &claimants {
+                let top = Self::top_claimant(&mut *conn, harness, claimant, &claimants).await?;
+                scopes.entry(top.session_id.clone()).or_default().push(claimant);
             }
         }
-        // Only a parent cycle leaves nobody; fall back to the plain ranking.
-        if eligible.is_empty() {
-            eligible.extend(&claimants);
+
+        let mut calls = Vec::with_capacity(scopes.len());
+        for (scope, members) in scopes {
+            let tokens = members.iter().fold([0; 5], |acc: Tokens, c| {
+                let row = c.tokens();
+                std::array::from_fn(|i| acc[i].max(row[i]))
+            });
+            let owner = if scope.is_empty() {
+                let ids: HashSet<&str> = members.iter().map(|c| c.session_id.as_str()).collect();
+                let mut eligible = Vec::with_capacity(members.len());
+                for claimant in &members {
+                    if members.len() == 1
+                        || !Self::descends_from(&mut *conn, harness, claimant, &ids).await?
+                    {
+                        eligible.push(*claimant);
+                    }
+                }
+                // Only a parent cycle leaves nobody; fall back to the plain ranking.
+                if eligible.is_empty() {
+                    eligible.extend(&members);
+                }
+                let Some(owner) = eligible.into_iter().min_by(|a, b| {
+                    (a.started_at, &a.session_id).cmp(&(b.started_at, &b.session_id))
+                }) else {
+                    continue;
+                };
+                owner.session_id.clone()
+            } else {
+                scope.clone()
+            };
+            calls.push(CallRow {
+                scope,
+                session_id: owner,
+                usage_input: tokens[0],
+                usage_output: tokens[1],
+                usage_cache_read: tokens[2],
+                usage_cache_write: tokens[3],
+                usage_reasoning: tokens[4],
+            });
         }
-        let Some(owner) = eligible
-            .into_iter()
-            .min_by(|a, b| (a.started_at, &a.session_id).cmp(&(b.started_at, &b.session_id)))
-        else {
+
+        let previous: Vec<CallRow> = db::query_as(
+            "SELECT scope, session_id, usage_input, usage_output, usage_cache_read, \
+             usage_cache_write, usage_reasoning FROM calls WHERE harness = ? AND turn_id = ? \
+             ORDER BY scope",
+        )
+        .bind(harness)
+        .bind(turn)
+        .fetch_all(&mut *conn)
+        .await?;
+        if previous == calls {
             return Ok(());
-        };
-
-        let previous: Option<CallRow> = db::query_as(
-            "SELECT session_id, usage_input, usage_output, usage_cache_read, usage_cache_write, \
-             usage_reasoning FROM calls WHERE harness = ? AND turn_id = ?",
-        )
-        .bind(harness)
-        .bind(turn)
-        .fetch_optional(&mut *conn)
-        .await?;
-        if let Some(previous) = &previous {
-            if previous.session_id == owner.session_id && previous.tokens() == tokens {
-                return Ok(());
-            }
-            Self::add_usage(&mut *conn, harness, &previous.session_id, previous.tokens(), -1)
-                .await?;
         }
-        Self::add_usage(&mut *conn, harness, &owner.session_id, tokens, 1).await?;
+        for call in &previous {
+            Self::add_usage(&mut *conn, harness, &call.session_id, call.tokens(), -1).await?;
+        }
+        db::query("DELETE FROM calls WHERE harness = ? AND turn_id = ?")
+            .bind(harness)
+            .bind(turn)
+            .execute(&mut *conn)
+            .await?;
+        for call in &calls {
+            Self::add_usage(&mut *conn, harness, &call.session_id, call.tokens(), 1).await?;
+            db::query(
+                "INSERT INTO calls (harness, turn_id, scope, session_id, usage_input, \
+                 usage_output, usage_cache_read, usage_cache_write, usage_reasoning) VALUES (?, \
+                 ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(harness)
+            .bind(turn)
+            .bind(&call.scope)
+            .bind(&call.session_id)
+            .bind(call.usage_input)
+            .bind(call.usage_output)
+            .bind(call.usage_cache_read)
+            .bind(call.usage_cache_write)
+            .bind(call.usage_reasoning)
+            .execute(&mut *conn)
+            .await?;
+        }
+        Ok(())
+    }
 
-        let [input, output, cache_read, cache_write, reasoning] = tokens;
-        db::query(
-            "INSERT OR REPLACE INTO calls (harness, turn_id, session_id, usage_input, \
-             usage_output, usage_cache_read, usage_cache_write, usage_reasoning) VALUES (?, ?, ?, \
-             ?, ?, ?, ?, ?)",
-        )
+    /// Whether `turn` is an id `harness` gave the model call: [`linkable_turn`], asked of it alone.
+    async fn is_linkable_turn(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        turn: &str,
+    ) -> Result<bool, DbError> {
+        Ok(db::query_scalar(concat!(
+            "SELECT EXISTS (SELECT 1 FROM (SELECT ? AS harness, ? AS turn_id) m WHERE ",
+            linkable_turn!(),
+            ")"
+        ))
         .bind(harness)
         .bind(turn)
-        .bind(&owner.session_id)
-        .bind(input)
-        .bind(output)
-        .bind(cache_read)
-        .bind(cache_write)
-        .bind(reasoning)
-        .execute(conn)
-        .await?;
-        Ok(())
+        .fetch_one(conn)
+        .await?)
+    }
+
+    /// The top-most of `claimants` that `claimant` descends from by stored parent links within
+    /// the harness, or `claimant` itself when it descends from none. A parent cycle has no top:
+    /// one holding claimants is headed by its least-ranked claimant, whichever member a walk up
+    /// entered it by.
+    async fn top_claimant<'a>(
+        conn: &mut SqliteConnection,
+        harness: i64,
+        claimant: &'a Claimant,
+        claimants: &'a [Claimant],
+    ) -> Result<&'a Claimant, DbError> {
+        let mut top = claimant;
+        let mut walked = vec![claimant.session_id.clone()];
+        let mut next = claimant.parent_of(harness);
+        while let Some(parent) = next {
+            if let Some(entry) = walked.iter().position(|id| *id == parent) {
+                let cycle = &walked[entry..];
+                return Ok(claimants
+                    .iter()
+                    .filter(|c| cycle.contains(&c.session_id))
+                    .min_by(|a, b| {
+                        (a.started_at, &a.session_id).cmp(&(b.started_at, &b.session_id))
+                    })
+                    .unwrap_or(top));
+            }
+            if let Some(found) = claimants.iter().find(|c| c.session_id == parent) {
+                top = found;
+            }
+            next = Self::session_key(&mut *conn, harness, &parent).await?.and_then(|key| {
+                key.parent_session_id.filter(|_| key.parent_harness == Some(harness))
+            });
+            walked.push(parent);
+        }
+        Ok(top)
     }
 
     /// Whether another of `claimants` is an ancestor of `claimant`, following stored parent
@@ -4472,6 +4608,116 @@ mod tests {
         }
     }
 
+    /// [`turn_row`] reporting `output` tokens, in a session naming `parent` (if any).
+    fn usage_row(
+        harness: HarnessKind,
+        id: &str,
+        parent: Option<&str>,
+        seconds: i64,
+        turn: &str,
+        output: u64,
+    ) -> Message {
+        let mut m = turn_row(harness, id, seconds, turn);
+        m.parent = parent.map(|p| handle(harness, p));
+        m.usage = Some(Usage {
+            input: Some(1),
+            output: Some(output),
+            cache_read: Some(0),
+            cache_write: Some(0),
+            reasoning: None,
+        });
+        m
+    }
+
+    async fn output_in(db: &AiSessionDatabase, harness: HarnessKind, id: &str) -> u64 {
+        let session = db.get_session(&handle(harness, id)).await.unwrap().unwrap();
+        session.usage.output.unwrap()
+    }
+
+    /// Two unrelated sessions holding one call count it once, with the earlier, only when the
+    /// harness gave the call its id: one derived from content (two fresh Codex sessions sent the
+    /// same first prompt report the same `token_count:` totals) is each session's own call.
+    #[rstest]
+    #[tokio::test]
+    async fn only_a_harness_given_turn_id_shares_usage_across_unrelated_sessions() {
+        for (harness, turn, shared) in turn_forms() {
+            for reversed in [false, true] {
+                let db = AiSessionDatabase::in_memory().await.unwrap();
+                let mut rows = vec![
+                    usage_row(harness, "first", None, 0, turn, 10),
+                    usage_row(harness, "second", None, 10, turn, 7),
+                ];
+                if reversed {
+                    rows.reverse();
+                }
+                for row in &rows {
+                    db.append(row).await.unwrap();
+                }
+                let got = [
+                    output_in(&db, harness, "first").await,
+                    output_in(&db, harness, "second").await,
+                ];
+                let expected = if shared {
+                    [10, 0]
+                } else {
+                    [10, 7]
+                };
+                assert_eq!(got, expected, "{harness:?} {turn} reversed={reversed}");
+            }
+        }
+    }
+
+    /// A content-derived call a fork copied from its parent (a Codex fork copies the parent's
+    /// `token_count` lines) still counts once, with the parent, while an unrelated session
+    /// holding the same id keeps its own, in any arrival order.
+    #[rstest]
+    fn a_content_derived_call_counts_once_per_lineage() {
+        let turn = "token_count:12000.0.40.0.12040";
+        let rows = vec![
+            usage_row(HarnessKind::Codex, "parent", None, 10, turn, 40),
+            usage_row(HarnessKind::Codex, "fork", Some("parent"), 20, turn, 40),
+            usage_row(HarnessKind::Codex, "forkfork", Some("fork"), 30, turn, 40),
+            usage_row(HarnessKind::Codex, "stranger", None, 5, turn, 9),
+        ];
+        let shuffled = proptest::strategy::Strategy::prop_shuffle(proptest::strategy::Just(rows));
+        proptest::proptest!(|(rows in shuffled)| {
+            let totals = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let db = AiSessionDatabase::in_memory().await.unwrap();
+                    for m in &rows {
+                        db.append(m).await.unwrap();
+                    }
+                    let mut totals = Vec::new();
+                    for id in ["parent", "fork", "forkfork", "stranger"] {
+                        totals.push(output_in(&db, HarnessKind::Codex, id).await);
+                    }
+                    totals
+                });
+            proptest::prop_assert_eq!(totals, vec![40, 0, 0, 9]);
+        });
+    }
+
+    /// A Claude Code `--resume` copy holds the original's calls under their API message ids:
+    /// each counts once, with the earliest holder, whichever arrives first.
+    #[rstest]
+    #[tokio::test]
+    async fn a_resumed_copy_counts_shared_calls_once() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for m in [
+            claude_row("resumed", None, "a1", 1, Some("msg_A"), 10),
+            claude_row("resumed", None, "a2", 5, Some("msg_B"), 3),
+            claude_row("original", None, "a1", 1, Some("msg_A"), 10),
+            claude_row("original", None, "u0", 0, None, 0),
+        ] {
+            db.append(&m).await.unwrap();
+        }
+        assert_eq!(output_in(&db, HarnessKind::ClaudeCode, "original").await, 10);
+        assert_eq!(output_in(&db, HarnessKind::ClaudeCode, "resumed").await, 3);
+    }
+
     /// Migrating links the copies stored before by the same rule as rows arriving later.
     #[rstest]
     #[tokio::test]
@@ -5298,6 +5544,107 @@ mod tests {
         db.append(&claude_row("twice", None, "a1", 5, Some("msg_A"), 1)).await.unwrap();
         let links = copy_links(&db).await;
         assert_eq!(links.iter().find(|(s, ..)| s == "twice").unwrap().1, "original");
+    }
+
+    /// The version before the `session_scoped_calls` migration.
+    const BEFORE_SCOPED_CALLS: i64 = 6;
+
+    /// Migrating attributes the usage already stored afresh from the stored rows: unrelated
+    /// Codex sessions whose content-derived call the old rule merged into one get theirs back,
+    /// a call shared under a harness-given id still counts once, and rows outside any call
+    /// keep counting.
+    #[rstest]
+    #[tokio::test]
+    async fn migrating_recounts_stored_usage() {
+        let db = sidecar_at(BEFORE_SCOPED_CALLS, &[]).await;
+        let codex = HarnessKind::Codex as i64;
+        let claude = HarnessKind::ClaudeCode as i64;
+        let token_count = "token_count:12000.0.40.0.12040";
+        // (harness, session, started, output as the old rule attributed it)
+        let sessions = [
+            (codex, "first", 0, 10 + 4),
+            (codex, "second", 5, 0),
+            (claude, "original", 0, 20),
+            (claude, "resumed", 5, 0),
+        ];
+        for (harness, id, at, output) in sessions {
+            db::query(
+                "INSERT INTO sessions (harness, session_id, started_at, updated_at, usage_output, \
+                 root_harness, root_session_id) VALUES (?1, ?2, ?3, ?3, ?4, ?1, ?2)",
+            )
+            .bind(harness)
+            .bind(id)
+            .bind(at)
+            .bind(output)
+            .execute(db.db.pool())
+            .await
+            .unwrap();
+        }
+        // (harness, session, source, turn, output)
+        let rows = [
+            (codex, "first", "c1", Some(token_count), 10),
+            (codex, "first", "c2", None, 4),
+            (codex, "second", "c1", Some(token_count), 7),
+            (claude, "original", "a1", Some("msg_A"), 20),
+            (claude, "resumed", "a1", Some("msg_A"), 20),
+        ];
+        for (i, (harness, id, source, turn, output)) in rows.into_iter().enumerate() {
+            db::query(
+                "INSERT INTO messages (id, harness, session, source_id, timestamp, role, content, \
+                 turn_id, usage_output, usage_present) VALUES (?1, ?2, (SELECT id FROM sessions \
+                 WHERE harness = ?2 AND session_id = ?3), ?4, ?5, '\"Assistant\"', '[]', ?6, ?7, \
+                 1)",
+            )
+            .bind(vec![u8::try_from(i).unwrap(); 16])
+            .bind(harness)
+            .bind(id)
+            .bind(source)
+            .bind(i64::try_from(i).unwrap())
+            .bind(turn)
+            .bind(output)
+            .execute(db.db.pool())
+            .await
+            .unwrap();
+        }
+        for (harness, turn, owner, output) in
+            [(codex, token_count, "first", 10), (claude, "msg_A", "original", 20)]
+        {
+            db::query(
+                "INSERT INTO calls (harness, turn_id, session_id, usage_input, usage_output, \
+                 usage_cache_read, usage_cache_write, usage_reasoning) VALUES (?, ?, ?, 0, ?, 0, \
+                 0, 0)",
+            )
+            .bind(harness)
+            .bind(turn)
+            .bind(owner)
+            .bind(output)
+            .execute(db.db.pool())
+            .await
+            .unwrap();
+        }
+
+        db.migrate().await.unwrap();
+
+        let sessions = [
+            (HarnessKind::Codex, "first"),
+            (HarnessKind::Codex, "second"),
+            (HarnessKind::ClaudeCode, "original"),
+            (HarnessKind::ClaudeCode, "resumed"),
+        ];
+        let mut got = Vec::new();
+        for (harness, id) in sessions {
+            got.push(output_in(&db, harness, id).await);
+        }
+        assert_eq!(got, vec![14, 7, 20, 0]);
+
+        // Once: migrating again leaves the recount alone, and attribution carries on from it.
+        db.migrate().await.unwrap();
+        db.append(&usage_row(HarnessKind::Codex, "second", None, 6, token_count, 8)).await.unwrap();
+        let mut got = Vec::new();
+        for (harness, id) in sessions {
+            got.push(output_in(&db, harness, id).await);
+        }
+        assert_eq!(got, vec![14, 8, 20, 0]);
     }
 
     // --- read-only open -------------------------------------------------------------------------

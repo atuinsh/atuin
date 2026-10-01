@@ -174,7 +174,9 @@ pub struct Session {
     pub message_count: u64,
     /// Usage attributed to this session: each model call counted once across every session
     /// holding a copy of it, at the most its rows reported, and owned by the earliest-started
-    /// session holding it that does not descend from another.
+    /// session holding it that does not descend from another. A call whose id capture derived
+    /// from content, not one its harness gave it, is only shared along parent links: unrelated
+    /// sessions holding the same such id each count their own.
     pub usage: Usage,
     #[builder(default)]
     pub title: Option<String>,
