@@ -225,6 +225,7 @@ $env.config = (
 | Alt + 1 to Alt + 9                        | Select item by the number located near it                                     |
 | Ctrl + c / Ctrl + d / Ctrl + g / Esc      | Return original                                                               |
 | Ctrl + y                                  | Copy selected item to clipboard                                               |
+| Ctrl + v                                  | Edit selected item in `$FCEDIT`/`$VISUAL`/`$EDITOR`, then execute on save     |
 | Ctrl + ← / Alt + b                        | Move the cursor to the previous word                                          |
 | Ctrl + → / Alt + f                        | Move the cursor to the next word                                              |
 | Ctrl + b / ←                              | Move the cursor to the left                                                   |
