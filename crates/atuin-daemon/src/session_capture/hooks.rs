@@ -19,6 +19,23 @@ pub enum Point {
     CapturePushing,
     /// Capture pushed its record, before projecting it. A panic fault panics the capture.
     CapturePushed,
+    /// The warm-up of a resumed session, before one of its steps. A fault fails the step.
+    WarmRead(WarmStep),
+}
+
+/// A step of the warm-up of a resumed session (see [`Point::WarmRead`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarmStep {
+    /// Projecting the record a capture pushed but did not project.
+    Repair,
+    /// Reading the session row.
+    Session,
+    /// Reading its last message.
+    Last,
+    /// Reading its synthetic ids.
+    Synthetic,
+    /// Reading its title changes.
+    Titles,
 }
 
 /// The payload of a panic [`Fault::Panic`] injects.
@@ -28,6 +45,7 @@ pub const INJECTED_PANIC: &str = "injected panic";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fault {
     None,
+    Fail,
     Panic,
 }
 
@@ -36,6 +54,11 @@ pub trait Hooks: Send + Sync + Debug {
 
     /// The backoff the coordinator waits out between incomplete replays.
     fn backoff(&self) -> super::recovery::Backoff {
+        super::recovery::Backoff::DEFAULT
+    }
+
+    /// The backoff a warm-up waits out between failed attempts.
+    fn warm_backoff(&self) -> super::recovery::Backoff {
         super::recovery::Backoff::DEFAULT
     }
 }

@@ -120,6 +120,17 @@ impl Sink {
         }
     }
 
+    /// The backoff a warm-up of a resumed session waits out between failed attempts (see
+    /// [`engine::warm`]).
+    #[cfg_attr(not(test), expect(clippy::unused_self))]
+    fn warm_backoff(&self) -> Backoff {
+        #[cfg(test)]
+        if let Some(hooks) = &self.hooks {
+            return hooks.warm_backoff();
+        }
+        Backoff::DEFAULT
+    }
+
     pub(crate) fn subscribe(&self) -> BroadcastStream<SessionTailEvent> {
         BroadcastStream::new(self.tail.subscribe())
     }
@@ -2234,6 +2245,13 @@ mod pipeline_tests {
     /// A facade over a fresh in-memory store, ready, holding a Codex session `s1` of two
     /// identical id-less prompts (ordinals 0 and 1); and its record store.
     async fn two_prompts() -> (AiHarnessSessionCapture, SqliteStore) {
+        two_prompts_with(None).await
+    }
+
+    /// [`two_prompts`], with test hooks.
+    async fn two_prompts_with(
+        hooks: Option<Arc<dyn hooks::Hooks>>,
+    ) -> (AiHarnessSessionCapture, SqliteStore) {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
         let records = AiSessionStore::builder()
             .store(store.clone())
@@ -2241,11 +2259,12 @@ mod pipeline_tests {
             .key(Key::generate())
             .build();
         let sidecar = AiSessionDatabase::in_memory().await.unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let capture = AiHarnessSessionCapture::open_with(
             records,
             sidecar,
             false,
             BlockingPool::new(NonZeroUsize::MIN),
+            hooks,
         );
         assert!(capture.ready().await);
         let mut first = MessageEnricher::new(HarnessKind::Codex);
@@ -2332,6 +2351,85 @@ mod pipeline_tests {
             assert!(capture.ready().await);
             third_prompt_is_stored(&capture, &store, enricher).await;
         }
+    }
+
+    /// Fails one step of a warm-up, the first time it runs.
+    #[derive(Debug)]
+    struct FailWarmStep {
+        step: hooks::WarmStep,
+        failed: std::sync::atomic::AtomicUsize,
+    }
+
+    impl hooks::Hooks for FailWarmStep {
+        fn at(&self, point: hooks::Point) -> futures::future::BoxFuture<'_, hooks::Fault> {
+            use std::sync::atomic::Ordering;
+
+            let fault = if point == hooks::Point::WarmRead(self.step)
+                && self.failed.fetch_add(1, Ordering::SeqCst) == 0
+            {
+                hooks::Fault::Fail
+            } else {
+                hooks::Fault::None
+            };
+            Box::pin(async move { fault })
+        }
+
+        fn warm_backoff(&self) -> Backoff {
+            Backoff {
+                first: Duration::from_millis(1),
+                max: Duration::from_millis(10),
+            }
+        }
+    }
+
+    /// A warm-up whose repair or read fails once is retried, not taken from a partial view: a
+    /// synthetic-id read taken for none would count the identical prompts from ordinal 0 again,
+    /// and the third be taken for a duplicate of the first, and dropped. Warmed so, the
+    /// bookkeeping is the same as a warm-up that never failed.
+    #[rstest]
+    #[tokio::test]
+    async fn a_warm_up_whose_read_fails_is_retried(
+        #[values(
+            hooks::WarmStep::Repair,
+            hooks::WarmStep::Session,
+            hooks::WarmStep::Last,
+            hooks::WarmStep::Synthetic,
+            hooks::WarmStep::Titles
+        )]
+        step: hooks::WarmStep,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        let hooks = Arc::new(FailWarmStep {
+            step,
+            failed: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let (capture, store) = two_prompts_with(Some(hooks.clone())).await;
+        let session = sid("s1");
+        let warming = resumed(&capture.sink, HarnessKind::Codex, &session);
+        let mut retried = tokio::time::timeout(Duration::from_secs(10), warming)
+            .await
+            .expect("the warm-up never ended");
+        let attempts = hooks.failed.load(Ordering::SeqCst);
+        let mut clean = resumed(&capture.sink, HarnessKind::Codex, &session).await;
+
+        let rows = retried.capture(&session, &continue_prompt());
+        for row in rows.clone() {
+            assert_eq!(capture.sink.append(row).await.unwrap(), Appended::New, "dropped");
+        }
+        let stored = store.all_tagged(&atuin_domain::record::RecordTag::AiSession).await.unwrap();
+        assert_eq!(stored.len(), 3, "each line pushed once");
+        let without_ids = |rows: Vec<Message>| -> Vec<Message> {
+            rows.into_iter()
+                .map(|mut row| {
+                    row.id = atuin_domain::record::RecordId(uuid::Uuid::nil());
+                    row
+                })
+                .collect()
+        };
+        let expected = clean.capture(&session, &continue_prompt());
+        assert_eq!(without_ids(rows), without_ids(expected), "warmed the same");
+        assert_eq!(attempts, 2, "failed once, then read again");
     }
 
     /// Which of a parent and its fork (or subagent replay) were captured, in what order.
