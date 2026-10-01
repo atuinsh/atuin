@@ -447,7 +447,17 @@ async fn a_thread_codex_holds_is_refused(#[future] synced: Synced, home: TempDir
     assert!(matches!(refused, Err(SyncError::Live(_))), "{refused:?}");
     assert_eq!(std::fs::read(&path).unwrap(), before);
     drop(held);
-    append_in(home.path(), &synced.id, &base, &missing, &options).await.unwrap();
+    // A process another test spawns meanwhile holds a copy of the descriptor until it execs.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match append_in(home.path(), &synced.id, &base, &missing, &options).await {
+            Ok(_) => break,
+            Err(SyncError::Live(_)) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+    }
     assert!(!locks.join(format!("{}.lock", synced.id)).exists(), "the lock is let go");
 }
 

@@ -162,6 +162,11 @@ fn a_held_flock_is_a_writer(dir: TempDir) {
     };
     assert_eq!(flock_holder(&lock, &procs), Liveness::Live { pid: expected });
     drop(held);
+    // A process another test spawns meanwhile holds a copy of the descriptor until it execs.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while flock_holder(&lock, &procs) != Liveness::NotLive && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     assert_eq!(flock_holder(&lock, &procs), Liveness::NotLive);
 }
 
