@@ -1,57 +1,42 @@
-//! Server-side credit usage: fetching and the done-event snapshot type.
+//! Server-side credit usage: fetching, and the readings the status bar shows.
 //!
 //! The hub reports the user's period credit totals two ways: a `credits`
 //! object on the chat `done` event, and `GET /api/cli/usage` for reading it
-//! outside a chat. Both share the same shape: the done event deserializes
-//! into [`UsageSnapshot`], and the fetch converts the generated client's
-//! `types::UsageSnapshot` into it. Snapshots are cached in ai.db (see
-//! `store`) so the TUI can render usage immediately on open, then refreshed
-//! in the background.
+//! outside a chat. Both decode into the generated [`UsageSnapshot`].
+//! Snapshots are cached in ai.db (see `store`) so the TUI can render usage
+//! immediately on open, then refreshed in the background. The cache holds the
+//! snapshot's JSON unversioned, so a spec change to `UsageSnapshot` changes
+//! what it reads; a row that no longer decodes is a cache miss.
 
 use std::time::Duration;
 
-use atuin_api_client::{ApiError, MapApiError, types};
+use atuin_api_client::types::UsageSnapshot;
+use atuin_api_client::{ApiError, MapApiError};
 use eyre::{Context, Result};
 use reqwest::Url;
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
-use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 /// Cached usage older than this triggers a background refresh on TUI open.
 pub const REFRESH_AFTER: Duration = Duration::from_secs(60);
 
-/// Used/limit pair in credits (billable tokens × model multiplier).
-/// Limits use the server's sentinels: -1 unlimited, 0 disabled.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UsageBucket {
-    pub used: i64,
-    pub limit: i64,
+/// The status bar's readings of a [`UsageSnapshot`].
+pub(crate) trait UsageSnapshotExt {
+    /// Time left until the period resets, or `None` once it has.
+    fn resets_in(&self) -> Option<Duration>;
+
+    /// The fuller of the input and output buckets, in percent, or `None` when neither is limited.
+    ///
+    /// A bucket's `limit` uses the server's sentinels: -1 unlimited, 0 disabled.
+    fn as_percentage(&self) -> Option<f64>;
 }
 
-/// The user's credit totals against their limits for the current period.
-///
-/// Also the JSON of the ai.db usage cache, which has no version: its serde
-/// shape must keep reading the rows released clients wrote.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UsageSnapshot {
-    /// e.g. "calendar_monthly"
-    pub period: String,
-    /// RFC 3339 timestamp of the next period reset.
-    pub resets_at: String,
-    pub requests: UsageBucket,
-    pub input: UsageBucket,
-    pub output: UsageBucket,
-}
-
-impl UsageSnapshot {
-    pub(crate) fn resets_in(&self) -> Option<Duration> {
-        let reset_time = chrono::DateTime::parse_from_rfc3339(&self.resets_at).ok()?;
-        let now = chrono::Utc::now().fixed_offset();
-        let duration = reset_time - now;
-        duration.to_std().ok()
+impl UsageSnapshotExt for UsageSnapshot {
+    fn resets_in(&self) -> Option<Duration> {
+        Duration::try_from(self.resets_at.0 - OffsetDateTime::now_utc()).ok()
     }
 
-    pub(crate) fn as_percentage(&self) -> Option<f64> {
+    fn as_percentage(&self) -> Option<f64> {
         let input_percentage = if self.input.limit > 0 {
             Some(self.input.used as f64 / self.input.limit as f64 * 100.0)
         } else {
@@ -70,31 +55,6 @@ impl UsageSnapshot {
             (Some(input), None) => Some(input),
             (None, Some(output)) => Some(output),
             (None, None) => None,
-        }
-    }
-}
-
-impl TryFrom<types::UsageSnapshot> for UsageSnapshot {
-    type Error = time::error::Format;
-
-    /// Fails only for a `resets_at` outside RFC 3339's years, which no answer decodes to.
-    fn try_from(wire: types::UsageSnapshot) -> Result<Self, Self::Error> {
-        Ok(Self {
-            period: wire.period,
-            resets_at: wire.resets_at.0.format(&Rfc3339)?,
-            requests: wire.requests.into(),
-            input: wire.input.into(),
-            output: wire.output.into(),
-        })
-    }
-}
-
-impl From<types::UsageBucket> for UsageBucket {
-    /// Saturates a `used` past `i64::MAX`, which reads as over any limit.
-    fn from(wire: types::UsageBucket) -> Self {
-        Self {
-            used: i64::try_from(wire.used).unwrap_or(i64::MAX),
-            limit: wire.limit,
         }
     }
 }
@@ -124,9 +84,7 @@ pub fn cache_key(token: &SecretString) -> String {
 pub async fn fetch_usage(endpoint: &Url, token: &SecretString) -> Result<UsageSnapshot> {
     let client = crate::api::client(endpoint, Some(token))?;
     match client.get_usage().map_api_error().await {
-        Ok(usage) => {
-            UsageSnapshot::try_from(usage.into_inner()).context("failed to parse usage response")
-        }
+        Ok(usage) => Ok(usage.into_inner()),
         Err(ApiError::Status { status, .. }) => eyre::bail!("usage request failed ({status})"),
         Err(err @ ApiError::Decode(_)) => Err(err).context("failed to parse usage response"),
         Err(err @ (ApiError::Transport(_) | ApiError::NotSent(_))) => {
@@ -137,8 +95,11 @@ pub async fn fetch_usage(endpoint: &Url, token: &SecretString) -> Result<UsageSn
 
 #[cfg(test)]
 mod tests {
+    use atuin_api_client::DateTime;
+    use atuin_api_client::types::UsageBucket;
     use rstest::rstest;
     use serde_json::{Value, json};
+    use time::macros::datetime;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -192,21 +153,25 @@ mod tests {
     fn snapshot_roundtrips_through_json() {
         let snapshot = UsageSnapshot {
             period: "calendar_monthly".into(),
-            resets_at: "2026-08-01T00:00:00Z".into(),
+            resets_at: DateTime(datetime!(2026-08-01 00:00 UTC)),
             requests: UsageBucket { used: 1, limit: 10 },
             input: UsageBucket { used: 2, limit: 20 },
             output: UsageBucket { used: 3, limit: 0 },
         };
 
         let json = serde_json::to_string(&snapshot).unwrap();
-        assert_eq!(serde_json::from_str::<UsageSnapshot>(&json).unwrap(), snapshot);
+        let decoded = serde_json::from_str::<UsageSnapshot>(&json).unwrap();
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap(),
+            serde_json::to_value(snapshot).unwrap()
+        );
     }
 
     #[rstest]
     fn as_percentage_uses_higher_limited_bucket() {
         let mut snapshot = UsageSnapshot {
             period: "calendar_monthly".into(),
-            resets_at: "2026-08-01T00:00:00Z".into(),
+            resets_at: DateTime(datetime!(2026-08-01 00:00 UTC)),
             requests: UsageBucket { used: 3, limit: -1 },
             input: UsageBucket {
                 used: 50,
@@ -253,9 +218,9 @@ mod tests {
 
         let snapshot = fetch_usage(&endpoint, &SecretString::from(TOKEN)).await.unwrap();
 
-        assert_eq!(snapshot, UsageSnapshot {
+        let expected = UsageSnapshot {
             period: "calendar_monthly".into(),
-            resets_at: "2026-08-01T00:00:00Z".into(),
+            resets_at: DateTime(datetime!(2026-08-01 00:00 UTC)),
             requests: UsageBucket { used: 3, limit: -1 },
             input: UsageBucket {
                 used: 12345,
@@ -265,10 +230,10 @@ mod tests {
                 used: 678,
                 limit: 0
             },
-        });
+        };
         assert_eq!(
-            chrono::DateTime::parse_from_rfc3339(&snapshot.resets_at).unwrap(),
-            chrono::DateTime::parse_from_rfc3339(wire).unwrap()
+            serde_json::to_value(snapshot).unwrap(),
+            serde_json::to_value(expected).unwrap()
         );
     }
 

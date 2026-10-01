@@ -2,52 +2,21 @@
 //!
 //! The hub exposes the models available to this user at `/api/cli/models`.
 //! Aliases are what we send on the wire; names and descriptions are for
-//! display in the `/model` picker.
+//! display in the `/model` picker. The list's `default` is the alias the
+//! server uses when a request doesn't specify a model.
 
-use atuin_api_client::{ApiError, MapApiError, types};
+use atuin_api_client::types::ModelList;
+use atuin_api_client::{ApiError, MapApiError};
 use eyre::{Context, Result};
 use reqwest::Url;
 use secrecy::SecretString;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelInfo {
-    pub alias: String,
-    pub name: String,
-    pub description: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelList {
-    /// Alias the server uses when a request doesn't specify a model.
-    pub default: String,
-    pub models: Vec<ModelInfo>,
-}
-
-impl From<types::ModelInfo> for ModelInfo {
-    fn from(wire: types::ModelInfo) -> Self {
-        Self {
-            alias: wire.alias,
-            name: wire.name,
-            description: wire.description,
-        }
-    }
-}
-
-impl From<types::ModelList> for ModelList {
-    fn from(wire: types::ModelList) -> Self {
-        Self {
-            default: wire.default,
-            models: wire.models.into_iter().map(ModelInfo::from).collect(),
-        }
-    }
-}
 
 /// Fetch the models available to this user. Sent authenticated because the
 /// server includes feature-flag-gated models only for entitled users.
 pub async fn fetch_models(endpoint: &Url, token: Option<&SecretString>) -> Result<ModelList> {
     let client = crate::api::client(endpoint, token)?;
     match client.list_models().map_api_error().await {
-        Ok(list) => Ok(list.into_inner().into()),
+        Ok(list) => Ok(list.into_inner()),
         Err(ApiError::Status { status, .. }) => eyre::bail!("model list request failed ({status})"),
         Err(err @ ApiError::Decode(_)) => Err(err).context("failed to parse model list"),
         Err(err @ (ApiError::Transport(_) | ApiError::NotSent(_))) => {

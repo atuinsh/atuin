@@ -17,7 +17,7 @@ pub async fn post(
     UserAuth(user): UserAuth,
     state: State<AppState>,
     Json(records): Json<Vec<Record<EncryptedData>>>,
-) -> Result<(), ErrorResponseStatus<'static>> {
+) -> Result<(), ErrorResponseStatus> {
     let State(AppState {
         database, settings, ..
     }) = state;
@@ -52,7 +52,7 @@ pub async fn post(
 pub async fn index(
     UserAuth(user): UserAuth,
     state: State<AppState>,
-) -> Result<Json<RecordStatus>, ErrorResponseStatus<'static>> {
+) -> Result<Json<RecordStatus>, ErrorResponseStatus> {
     let State(AppState { database, .. }) = state;
 
     let record_index = match database.status(&user).await {
@@ -83,7 +83,7 @@ pub async fn next(
     params: Query<NextParams>,
     UserAuth(user): UserAuth,
     state: State<AppState>,
-) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus<'static>> {
+) -> Result<Json<Vec<Record<EncryptedData>>>, ErrorResponseStatus> {
     let State(AppState { database, .. }) = state;
     let params = params.0;
     let series = RecordSeriesKey::new(params.host, params.tag);

@@ -1,7 +1,7 @@
 [package]
 name = "atuin-domain"
 edition = "2024"
-description = "Core domain types shared across Atuin's client, daemon, and server, and the server's API types"
+description = "Core domain types shared across Atuin's client, daemon, and server"
 
 authors.workspace = true
 homepage.workspace = true
@@ -18,7 +18,6 @@ axum = { workspace = true, optional = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
 parking_lot = { workspace = true }
-secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

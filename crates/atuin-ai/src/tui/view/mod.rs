@@ -5,6 +5,7 @@
 //! pushed to scrollback with the same code. Message emission lives in the
 //! app's keymap, not here — elements are display-only.
 
+use atuin_api_client::types::{ModelList, UsageSnapshot};
 use atuin_common::path::DisplayRichExt;
 use easy_cast::{Cast, CastFloat, Conv};
 use eye_declare::{
@@ -18,6 +19,7 @@ use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
 use crate::tui::events::PermissionResult;
 use crate::tui::select;
 use crate::tui::tips::Tip;
+use crate::usage::UsageSnapshotExt as _;
 
 pub mod input;
 mod trunc;
@@ -733,7 +735,7 @@ pub fn permission_prompt_view(
 /// `current` is the session's explicit selection; when unset, the server
 /// default is what's actually in use, so mark that row instead.
 pub fn model_picker_view(
-    list: &crate::models::ModelList,
+    list: &ModelList,
     current: Option<&str>,
     cursor: usize,
 ) -> AnyElement<'static> {
@@ -771,7 +773,7 @@ const USAGE_BAR_WIDTH: usize = 5;
 /// the percentage and time until the period resets.
 pub fn status_bar_view(
     model: Option<&str>,
-    usage: Option<&crate::usage::UsageSnapshot>,
+    usage: Option<&UsageSnapshot>,
 ) -> AnyElement<'static> {
     let usage = usage.and_then(|snapshot| {
         let pct = snapshot.as_percentage()?;

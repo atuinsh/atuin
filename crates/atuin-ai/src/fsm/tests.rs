@@ -1,5 +1,6 @@
 //! Pure FSM transition tests. No IO, no async.
 
+use atuin_api_client::types::ModelInfo;
 use effects::{Effect, ExitAction};
 use events::{Event, PermissionChoice, PermissionResponse};
 use rstest::{fixture, rstest};
@@ -916,16 +917,16 @@ fn user_interrupt_clears_timeout_mappings_for_aborted_tools(
 // Model picker
 // ============================================================================
 
-fn model_list() -> crate::models::ModelList {
-    crate::models::ModelList {
+fn model_list() -> ModelList {
+    ModelList {
         default: "fast".to_string(),
         models: vec![
-            crate::models::ModelInfo {
+            ModelInfo {
                 alias: "fast".to_string(),
                 name: "Comet".to_string(),
                 description: "Fastest model".to_string(),
             },
-            crate::models::ModelInfo {
+            ModelInfo {
                 alias: "deep".to_string(),
                 name: "Constellation".to_string(),
                 description: "Deeper reasoning".to_string(),
@@ -934,11 +935,16 @@ fn model_list() -> crate::models::ModelList {
     }
 }
 
+/// `list` as JSON, since the generated `ModelList` has no `PartialEq`.
+fn list_json(list: &ModelList) -> Value {
+    serde_json::to_value(list).unwrap()
+}
+
 #[rstest]
 fn open_model_picker_fetches_when_uncached(#[from(new_fsm)] mut fsm: AgentFsm) {
     let effects = fsm.handle(Event::OpenModelPicker);
 
-    assert_eq!(fsm.ctx.model_picker, Some(ModelPicker::Loading));
+    assert!(matches!(fsm.ctx.model_picker, Some(ModelPicker::Loading)));
     assert!(matches!(effects[..], [Effect::FetchModels]));
 }
 
@@ -948,7 +954,10 @@ fn open_model_picker_reuses_cache_without_fetching(#[from(new_fsm)] mut fsm: Age
 
     let effects = fsm.handle(Event::OpenModelPicker);
 
-    assert_eq!(fsm.ctx.model_picker, Some(ModelPicker::Ready(model_list())));
+    assert!(matches!(
+        &fsm.ctx.model_picker,
+        Some(ModelPicker::Ready(list)) if list_json(list) == list_json(&model_list())
+    ));
     assert!(effects.is_empty());
 }
 
@@ -958,8 +967,11 @@ fn model_list_loaded_populates_picker_and_cache(#[from(new_fsm)] mut fsm: AgentF
 
     let effects = fsm.handle(Event::ModelListLoaded(Ok(model_list())));
 
-    assert_eq!(fsm.ctx.models_cache, Some(model_list()));
-    assert_eq!(fsm.ctx.model_picker, Some(ModelPicker::Ready(model_list())));
+    assert_eq!(fsm.ctx.models_cache.as_ref().map(list_json), Some(list_json(&model_list())));
+    assert!(matches!(
+        &fsm.ctx.model_picker,
+        Some(ModelPicker::Ready(list)) if list_json(list) == list_json(&model_list())
+    ));
     assert!(effects.is_empty());
 }
 
@@ -972,8 +984,8 @@ fn model_list_loaded_after_dismissal_caches_but_keeps_picker_closed(
 
     let _ = fsm.handle(Event::ModelListLoaded(Ok(model_list())));
 
-    assert_eq!(fsm.ctx.models_cache, Some(model_list()));
-    assert_eq!(fsm.ctx.model_picker, None);
+    assert_eq!(fsm.ctx.models_cache.as_ref().map(list_json), Some(list_json(&model_list())));
+    assert!(fsm.ctx.model_picker.is_none());
 }
 
 #[rstest]
@@ -982,7 +994,7 @@ fn model_list_load_failure_closes_picker_with_message(#[from(new_fsm)] mut fsm: 
 
     let _ = fsm.handle(Event::ModelListLoaded(Err("boom".to_string())));
 
-    assert_eq!(fsm.ctx.model_picker, None);
+    assert!(fsm.ctx.model_picker.is_none());
     assert!(fsm.ctx.models_cache.is_none());
     assert!(fsm.ctx.events.iter().any(|e| matches!(
         e,
@@ -998,7 +1010,7 @@ fn model_selected_sets_model_and_persists(#[from(new_fsm)] mut fsm: AgentFsm) {
     let effects = fsm.handle(Event::ModelSelected("deep".to_string()));
 
     assert_eq!(fsm.ctx.model, Some("deep".to_string()));
-    assert_eq!(fsm.ctx.model_picker, None);
+    assert!(fsm.ctx.model_picker.is_none());
     assert!(matches!(
         &effects[..],
         [Effect::SaveModelSelection { alias }] if alias == "deep"
@@ -1016,7 +1028,7 @@ fn cancel_closes_picker_instead_of_exiting(#[from(new_fsm)] mut fsm: AgentFsm) {
 
     let effects = fsm.handle(Event::Cancel);
 
-    assert_eq!(fsm.ctx.model_picker, None);
+    assert!(fsm.ctx.model_picker.is_none());
     assert!(effects.is_empty());
 
     // A second Cancel with no picker open exits as usual
@@ -1030,7 +1042,7 @@ fn user_submit_dismisses_loading_picker(#[from(new_fsm)] mut fsm: AgentFsm) {
 
     let _ = fsm.handle(Event::UserSubmit("hello".into()));
 
-    assert_eq!(fsm.ctx.model_picker, None);
+    assert!(fsm.ctx.model_picker.is_none());
 }
 
 #[rstest]
@@ -1042,5 +1054,5 @@ fn selected_model_survives_new_session(#[from(new_fsm)] mut fsm: AgentFsm) {
     let _ = fsm.handle(Event::NewSession);
 
     assert_eq!(fsm.ctx.model, Some("deep".to_string()));
-    assert_eq!(fsm.ctx.models_cache, Some(model_list()));
+    assert_eq!(fsm.ctx.models_cache.as_ref().map(list_json), Some(list_json(&model_list())));
 }

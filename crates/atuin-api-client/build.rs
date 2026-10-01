@@ -1,8 +1,6 @@
 //! Generates the client from `openapi.json` into `$OUT_DIR/generated.rs`, which `src/lib.rs`
 //! includes.
 
-#![warn(clippy::pedantic, clippy::nursery)]
-
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 

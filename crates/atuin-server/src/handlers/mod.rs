@@ -1,6 +1,6 @@
 use std::fmt;
 
-use atuin_domain::api::{ErrorResponse, IndexResponse};
+use atuin_api_client::types::{ErrorResponse, IndexResponse};
 use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::{Json, http};
@@ -26,39 +26,44 @@ pub async fn index(state: State<AppState>) -> Json<IndexResponse> {
     })
 }
 
-impl fmt::Display for ErrorResponseStatus<'_> {
+impl fmt::Display for ErrorResponseStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "status={} reason={}", self.status, self.error.reason)
     }
 }
 
-impl IntoResponse for ErrorResponseStatus<'_> {
+impl IntoResponse for ErrorResponseStatus {
     fn into_response(self) -> axum::response::Response {
         (self.status, Json(self.error)).into_response()
     }
 }
 
-pub struct ErrorResponseStatus<'a> {
-    pub error: ErrorResponse<'a>,
+pub struct ErrorResponseStatus {
+    pub error: ErrorResponse,
     pub status: http::StatusCode,
 }
 
-pub trait RespExt<'a> {
-    fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a>;
-    fn reply(reason: &'a str) -> Self;
+pub trait RespExt {
+    fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus;
+    fn reply(reason: &str) -> Self;
 }
 
-impl<'a> RespExt<'a> for ErrorResponse<'a> {
-    fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus<'a> {
+impl RespExt for ErrorResponse {
+    fn with_status(self, status: http::StatusCode) -> ErrorResponseStatus {
         ErrorResponseStatus {
             error: self,
             status,
         }
     }
 
-    fn reply(reason: &'a str) -> Self {
+    /// A bare `reason`: `code` and the deprecated `error` and `errors` stay unset, which keeps
+    /// them off the wire.
+    fn reply(reason: &str) -> Self {
         Self {
             reason: reason.into(),
+            code: None,
+            error: None,
+            errors: Vec::new(),
         }
     }
 }

@@ -1,8 +1,8 @@
 //! Events (inputs) to the agent FSM.
 
+use atuin_api_client::types::ModelList;
 use serde_json::Value;
 
-use crate::models::ModelList;
 use crate::tools::ToolOutcome;
 
 /// Events that drive state transitions in the agent FSM.

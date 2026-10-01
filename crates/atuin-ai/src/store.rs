@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::time::Duration;
 
+use atuin_api_client::types::UsageSnapshot;
 use atuin_common::db;
 use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
 use atuin_common::time::NonZeroDuration;
@@ -8,7 +9,6 @@ use eyre::Result;
 use time::OffsetDateTime;
 
 use crate::session::CachedUsageSnapshot;
-use crate::usage::UsageSnapshot;
 
 // Database row mappings — all columns are kept even if not yet read in
 // non-test code, since they're part of the schema and used in tests.
@@ -292,10 +292,12 @@ impl AiSessionStore {
 
 #[cfg(test)]
 mod tests {
+    use atuin_api_client::DateTime;
+    use atuin_api_client::types::UsageBucket;
     use rstest::*;
+    use time::macros::datetime;
 
     use super::*;
-    use crate::usage::UsageSnapshot;
 
     #[fixture]
     async fn store() -> AiSessionStore {
@@ -452,15 +454,13 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn test_usage_cache_roundtrip(#[future] store: AiSessionStore) {
-        use crate::usage::UsageBucket;
-
         let store = store.await;
 
         assert!(store.get_usage("key-a").await.unwrap().is_none());
 
         let snapshot = UsageSnapshot {
             period: "calendar_monthly".into(),
-            resets_at: "2026-08-01T00:00:00Z".into(),
+            resets_at: DateTime(datetime!(2026-08-01 00:00 UTC)),
             requests: UsageBucket { used: 1, limit: 10 },
             input: UsageBucket { used: 2, limit: 20 },
             output: UsageBucket { used: 3, limit: 0 },
@@ -469,7 +469,10 @@ mod tests {
 
         let cached = store.get_usage("key-a").await.unwrap().unwrap();
         assert!(cached.written_at > 0);
-        assert_eq!(cached.snapshot, snapshot);
+        assert_eq!(
+            serde_json::to_value(cached.snapshot).unwrap(),
+            serde_json::to_value(&snapshot).unwrap()
+        );
 
         // Upsert replaces the snapshot for the same key
         let updated = UsageSnapshot {
@@ -479,7 +482,10 @@ mod tests {
         store.set_usage("key-a", &updated).await.unwrap();
 
         let cached = store.get_usage("key-a").await.unwrap().unwrap();
-        assert_eq!(cached.snapshot, updated);
+        assert_eq!(
+            serde_json::to_value(cached.snapshot).unwrap(),
+            serde_json::to_value(updated).unwrap()
+        );
 
         // Other keys are independent
         assert!(store.get_usage("key-b").await.unwrap().is_none());

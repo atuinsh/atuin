@@ -15,7 +15,7 @@ pub async fn delete(
     _params: Query<DeleteParams>,
     UserAuth(user): UserAuth,
     state: State<AppState>,
-) -> Result<(), ErrorResponseStatus<'static>> {
+) -> Result<(), ErrorResponseStatus> {
     let State(AppState { database, .. }) = state;
 
     if let Err(e) = database.delete_store(&user).await {

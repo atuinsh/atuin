@@ -25,6 +25,8 @@ path = "src/bin/main.rs"
 vendored-tls = ["reqwest/native-tls-vendored"]
 
 [dependencies]
+# The handlers' request and response types are the ones generated from openapi.json.
+atuin-api-client = { workspace = true }
 atuin-common = { workspace = true, features = ["db"] }
 atuin-domain = { workspace = true, features = ["axum"] }
 
@@ -43,6 +45,7 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", "tls-native-tls"] }
 time = { workspace = true }
 tokio = { workspace = true }
@@ -58,7 +61,6 @@ uuid = { workspace = true }
 # sync session. atuin-client is only a dev dependency here so the client
 # binary crate stays free of server/postgres deps (see issue #2884).
 [dev-dependencies]
-atuin-api-client = { workspace = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 atuin-client = {
     path = "../atuin-client",

@@ -8,13 +8,13 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use atuin_api_client::types::UsageSnapshot;
 use atuin_common::time::NonZeroDuration;
 use eyre::Result;
 
 use crate::event_serde;
 use crate::store::{AiSessionStore, StoredEvent, StoredSession};
 use crate::tui::ConversationEvent;
-use crate::usage::UsageSnapshot;
 
 // ---------------------------------------------------------------------------
 // Trait

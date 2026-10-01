@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ErrorResponse};
+use atuin_api_client::types::ErrorResponse;
+use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION};
 use atuin_domain::caps::axum::{CapabilitiesRouterExt, get as capabilities_endpoint};
 use atuin_domain::caps::{CapServer, CapabilitiesCap, PageSizeCap};
 use axum::Router;
@@ -25,7 +26,7 @@ use crate::settings::Settings;
 pub struct UserAuth(pub User);
 
 impl FromRequestParts<AppState> for UserAuth {
-    type Rejection = ErrorResponseStatus<'static>;
+    type Rejection = ErrorResponseStatus;
 
     #[tracing::instrument(name = "auth", skip_all)]
     async fn from_request_parts(

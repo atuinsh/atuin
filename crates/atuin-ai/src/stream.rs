@@ -2,6 +2,7 @@
 // SSE streaming
 // ───────────────────────────────────────────────────────────────────
 
+use atuin_api_client::types::UsageSnapshot;
 use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
 use atuin_common::url::UrlAppendExt;
@@ -22,7 +23,7 @@ pub enum StreamControl {
     Done {
         session_id: String,
         /// Period credit totals from the server, when it sends them.
-        credits: Option<crate::usage::UsageSnapshot>,
+        credits: Option<UsageSnapshot>,
     },
     Error(String),
     StatusChanged(String),

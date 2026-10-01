@@ -11,7 +11,7 @@ atuin-api-client       HTTP client for the sync, hub and AI APIs, generated from
 atuin-client           Client library: local DB, encryption, sync, settings, client-facing domain types
 atuin-common           Low-level cross-crate utilities (not a home for client-facing domain types)
 atuin-daemon           Background gRPC daemon (tonic) for shell hooks
-atuin-domain           Record and capability types shared by client, daemon and server; the server's API types
+atuin-domain           Record and capability types shared by client, daemon and server
 atuin-dotfiles         Legacy read-only alias/var listing via record store
 atuin-history          Sorting algorithms, stats
 atuin-kv               Key-value store (synced)

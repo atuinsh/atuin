@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use atuin_api_client::types::UsageSnapshot;
 use atuin_client::settings::Settings;
 use crossterm::event::{KeyCode, KeyEventKind};
 use eye_declare::{
@@ -30,7 +31,6 @@ use crate::tui::state::ConversationEvent;
 use crate::tui::tips::{Tip, TipContext, TipRotation};
 use crate::tui::view;
 use crate::tui::view::turn::{TurnBuilder, UiTurn, UiTurnKind};
-use crate::usage::UsageSnapshot;
 
 /// What the TUI resolves to, for the shell hook.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1284,10 +1284,13 @@ fn capitalize(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use atuin_api_client::DateTime;
+    use atuin_api_client::types::{ModelInfo, ModelList, UsageBucket};
     use crossterm::event::{KeyEvent, KeyModifiers};
     use eye_declare::Runtime;
     use eye_declare_engine::test_terminal::TestTerminal;
     use rstest::{fixture, rstest};
+    use time::macros::datetime;
 
     use super::*;
     use crate::tui::state::ConversationEvent;
@@ -1742,16 +1745,19 @@ mod tests {
     #[rstest]
     fn usage_snapshot_is_stored() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
-        let bucket = crate::usage::UsageBucket { used: 1, limit: 10 };
-        let snapshot = crate::usage::UsageSnapshot {
+        let bucket = UsageBucket { used: 1, limit: 10 };
+        let snapshot = UsageSnapshot {
             period: "calendar_monthly".into(),
-            resets_at: "2026-08-01T00:00:00Z".into(),
+            resets_at: DateTime(datetime!(2026-08-01 00:00 UTC)),
             requests: bucket.clone(),
             input: bucket.clone(),
             output: bucket,
         };
         h.process(Msg::Usage(snapshot.clone()));
-        assert_eq!(h.app().usage, Some(snapshot));
+        assert_eq!(
+            serde_json::to_value(&h.app().usage).unwrap(),
+            serde_json::to_value(Some(snapshot)).unwrap()
+        );
     }
 
     /// Drive a turn to the point where a shell tool awaits permission.
@@ -1927,16 +1933,16 @@ mod tests {
         assert!(all.contains("what is atuin?"), "prompt missing:\n{all}");
     }
 
-    fn model_list() -> crate::models::ModelList {
-        crate::models::ModelList {
+    fn model_list() -> ModelList {
+        ModelList {
             default: "smart".into(),
             models: vec![
-                crate::models::ModelInfo {
+                ModelInfo {
                     alias: "smart".into(),
                     name: "Smart".into(),
                     description: "balanced".into(),
                 },
-                crate::models::ModelInfo {
+                ModelInfo {
                     alias: "fast".into(),
                     name: "Fast".into(),
                     description: "quick answers".into(),
@@ -2005,18 +2011,18 @@ mod tests {
     #[rstest]
     fn status_bar_shows_usage_over_threshold() {
         let mut h = Harness::new(app_with(AgentFsm::new(vec![], "t".into())));
-        let bucket_hot = crate::usage::UsageBucket {
+        let bucket_hot = UsageBucket {
             used: 92,
             limit: 100,
         };
-        let bucket_cool = crate::usage::UsageBucket {
+        let bucket_cool = UsageBucket {
             used: 1,
             limit: 100,
         };
-        h.process(Msg::Usage(crate::usage::UsageSnapshot {
+        h.process(Msg::Usage(UsageSnapshot {
             period: "calendar_monthly".into(),
-            resets_at: "2099-01-01T00:00:00Z".into(),
-            requests: crate::usage::UsageBucket { used: 0, limit: -1 },
+            resets_at: DateTime(datetime!(2099-01-01 00:00 UTC)),
+            requests: UsageBucket { used: 0, limit: -1 },
             input: bucket_cool,
             output: bucket_hot,
         }));

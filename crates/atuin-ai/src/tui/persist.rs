@@ -7,11 +7,11 @@
 //! task gives both properties without locks; the old driver got them by
 //! blocking its thread.
 
+use atuin_api_client::types::UsageSnapshot;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::session::SessionManager;
 use crate::tui::state::ConversationEvent;
-use crate::usage::UsageSnapshot;
 
 #[derive(Debug)]
 pub enum PersistJob {

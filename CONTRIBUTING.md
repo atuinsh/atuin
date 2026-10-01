@@ -111,12 +111,6 @@ To reproduce a CI failure:
    cargo nextest run -p <crate> <test-name>
    ```
 
-## API client
-
-The CLI talks to the sync server, Atuin Hub and the AI server through `crates/atuin-api-client`,
-which its `build.rs` generates at build time from the crate's `openapi.json`. The hub owns that
-spec and writes it with `mix api.spec`, so never edit it by hand.
-
 ## Documentation
 
 Docs live in `docs/docs/` and are built with mkdocs. To preview them:

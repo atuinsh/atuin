@@ -1,31 +1,4 @@
-#![deny(unsafe_code)]
-#![warn(clippy::pedantic, clippy::nursery)]
-
 //! Typed client for the Atuin sync, hub and AI HTTP APIs.
-//!
-//! The hub owns the contract: `mix api.spec` writes it to this crate's `openapi.json`, and
-//! `build.rs` turns that into the client with progenitor at build time. Everything else here is the
-//! hand-written runtime the generated code calls into: [`Secret`] and [`DateTime`] for the mapped
-//! schema formats, the hooks behind [`Client::with_capabilities`] and [`Client::with_auth`], the
-//! [`CapClient`] they negotiate with, the base URL handling of [`Client::from_http`],
-//! [`authorization`] for the token header callers configure, and [`ApiError`], which every failed
-//! call maps into.
-//!
-//! One [`Client`] serves one base URL with one HTTP policy: build it from a configured
-//! [`reqwest::Client`] with [`Client::from_http`], never with the generated `Client::new`, whose
-//! 15 s timeouts are not Atuin's, or `Client::new_with_client`, which skips the base URL handling.
-//! clippy.toml bans both.
-//!
-//! ```no_run
-//! # async fn run(base: url::Url, http: reqwest::Client) -> Result<(), Box<dyn std::error::Error>> {
-//! use atuin_api_client::{Client, MapApiError};
-//!
-//! let client = Client::from_http(&base, http)?;
-//! let me = client.get_me().map_api_error().await?;
-//! println!("{:?} (server {:?})", me.username, me.headers().get("atuin-version"));
-//! # Ok(())
-//! # }
-//! ```
 
 mod base_url;
 mod caps;

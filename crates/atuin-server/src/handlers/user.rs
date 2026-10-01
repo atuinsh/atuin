@@ -5,18 +5,19 @@ use std::time::Duration;
 
 use argon2::password_hash::SaltString;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
-use atuin_common::utils::crypto_random_string;
-use atuin_domain::api::{
-    ChangePasswordRequest, ChangePasswordResponse, DeleteUserResponse, LoginRequest, LoginResponse,
-    RegisterRequest, RegisterResponse, UserResponse,
+use atuin_api_client::types::{
+    ChangePasswordRequest, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse,
+    UserResponse,
 };
+use atuin_common::utils::crypto_random_string;
 use axum::Json;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::StatusCode;
 use metrics::counter;
 use rand::rngs::OsRng;
 use reqwest::header::CONTENT_TYPE;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::ExposeSecret;
+use serde_json::{Map, Value};
 use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
@@ -24,7 +25,7 @@ use crate::db::DbError;
 use crate::db::models::NewUser;
 use crate::router::{AppState, UserAuth};
 
-pub fn verify_str(hash: &str, password: &SecretString) -> bool {
+pub fn verify_str(hash: &str, password: &impl ExposeSecret<str>) -> bool {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
     let Ok(hash) = PasswordHash::new(hash) else {
         return false;
@@ -60,7 +61,7 @@ async fn send_register_hook(url: &url::Url, username: String, registered: String
 pub async fn get(
     Path(username): Path<String>,
     state: State<AppState>,
-) -> Result<Json<UserResponse>, ErrorResponseStatus<'static>> {
+) -> Result<Json<UserResponse>, ErrorResponseStatus> {
     let db = &state.0.database;
     let user = match db.get_user(username.as_ref()).await {
         Ok(user) => user,
@@ -84,7 +85,7 @@ pub async fn get(
 pub async fn register(
     state: State<AppState>,
     Json(register): Json<RegisterRequest>,
-) -> Result<Json<RegisterResponse>, ErrorResponseStatus<'static>> {
+) -> Result<Json<RegisterResponse>, ErrorResponseStatus> {
     if !state.settings.open_registration {
         return Err(ErrorResponse::reply("this server is not open for registrations")
             .with_status(StatusCode::BAD_REQUEST));
@@ -140,7 +141,7 @@ pub async fn register(
     counter!("atuin_users_registered").increment(1);
 
     Ok(Json(RegisterResponse {
-        session: token,
+        session: token.into(),
         auth: Some("cli".into()),
     }))
 }
@@ -149,7 +150,7 @@ pub async fn register(
 pub async fn delete(
     UserAuth(user): UserAuth,
     state: State<AppState>,
-) -> Result<Json<DeleteUserResponse>, ErrorResponseStatus<'static>> {
+) -> Result<Json<Map<String, Value>>, ErrorResponseStatus> {
     debug!("request to delete user {}", user.id);
 
     let db = &state.0.database;
@@ -164,7 +165,7 @@ pub async fn delete(
 
     info!(user.id = user.id, "deleted user account");
 
-    Ok(Json(DeleteUserResponse {}))
+    Ok(Json(Map::new()))
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(user.id = user.id))]
@@ -172,7 +173,7 @@ pub async fn change_password(
     UserAuth(mut user): UserAuth,
     state: State<AppState>,
     Json(change_password): Json<ChangePasswordRequest>,
-) -> Result<Json<ChangePasswordResponse>, ErrorResponseStatus<'static>> {
+) -> Result<Json<Map<String, Value>>, ErrorResponseStatus> {
     let db = &state.0.database;
 
     let verified = verify_str(user.password.as_str(), &change_password.current_password);
@@ -194,7 +195,7 @@ pub async fn change_password(
 
     info!(user.id = user.id, "changed user password");
 
-    Ok(Json(ChangePasswordResponse {}))
+    Ok(Json(Map::new()))
 }
 
 #[instrument(skip_all, err(level = "warn"), fields(client.ip = %addr.ip(), user.username = login.username.as_str()))]
@@ -202,7 +203,7 @@ pub async fn login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     state: State<AppState>,
     login: Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
+) -> Result<Json<LoginResponse>, ErrorResponseStatus> {
     let db = &state.0.database;
     let user = match db.get_user(login.username.borrow()).await {
         Ok(u) => u,
@@ -242,12 +243,12 @@ pub async fn login(
     info!(user.id = user.id, "login succeeded");
 
     Ok(Json(LoginResponse {
-        session: session.token,
+        session: session.token.into(),
         auth: Some("cli".into()),
     }))
 }
 
-fn hash_secret(password: &SecretString) -> String {
+fn hash_secret(password: &impl ExposeSecret<str>) -> String {
     let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
     let salt = SaltString::generate(&mut OsRng);
     let hash = arg2.hash_password(password.expose_secret().as_bytes(), &salt).unwrap();

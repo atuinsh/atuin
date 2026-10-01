@@ -15,6 +15,7 @@ mod tests;
 
 use std::collections::HashMap;
 
+use atuin_api_client::types::ModelList;
 use effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
 use events::{Event, PermissionChoice, PermissionResponse};
 use serde_json::Value;
@@ -107,10 +108,10 @@ pub struct PendingConfirmation {
 ///
 /// While `Loading` the input box stays visible (there'd be no focusable
 /// component otherwise); `Ready` swaps it for the selection list.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum ModelPicker {
     Loading,
-    Ready(crate::models::ModelList),
+    Ready(ModelList),
 }
 
 // ============================================================================
@@ -146,7 +147,7 @@ pub struct AgentContext {
     pub model: Option<String>,
     /// Model list fetched this invocation. Later /model calls reuse it
     /// instead of re-hitting the server.
-    pub models_cache: Option<crate::models::ModelList>,
+    pub models_cache: Option<ModelList>,
     /// Open /model picker, if any.
     pub model_picker: Option<ModelPicker>,
 
@@ -703,12 +704,12 @@ impl AgentFsm {
                 match result {
                     Ok(list) => {
                         self.ctx.models_cache = Some(list.clone());
-                        if self.ctx.model_picker == Some(ModelPicker::Loading) {
+                        if matches!(self.ctx.model_picker, Some(ModelPicker::Loading)) {
                             self.ctx.model_picker = Some(ModelPicker::Ready(list));
                         }
                     }
                     Err(e) => {
-                        if self.ctx.model_picker == Some(ModelPicker::Loading) {
+                        if matches!(self.ctx.model_picker, Some(ModelPicker::Loading)) {
                             self.ctx.model_picker = None;
                             self.handle_slash_command(
                                 "/model",
