@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use std::io::Read as _;
 use std::io::{IsTerminal, Write, stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use atuin_client::database::{Context, Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
@@ -165,6 +165,11 @@ pub struct State {
     current_cursor: Option<CursorStyle>,
     tab_index: usize,
     pending_vim_key: Option<char>,
+    /// When `pending_vim_key` was set, for `keymap_sequence_timeout_ms`.
+    pending_vim_key_since: Option<Instant>,
+    /// A key that arrived while a sequence was pending and has to wait for the
+    /// event loop, because the pending key's own action did (a redraw, say).
+    queued_key: Option<super::keybindings::key::SingleKey>,
     original_input_empty: bool,
 
     pub inspecting_state: InspectingState,
@@ -362,8 +367,7 @@ impl State {
 
     #[must_use]
     fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
-        use super::keybindings::Action;
-        use super::keybindings::key::{KeyCodeValue, KeyInput, SingleKey};
+        use super::keybindings::key::SingleKey;
 
         // Skip release events
         if input.kind == event::KeyEventKind::Release {
@@ -373,19 +377,50 @@ impl State {
         // Reset switched_search_mode at start of each key event
         self.switched_search_mode = false;
 
-        let ctx = self.eval_context();
-
         // Convert KeyEvent to SingleKey
         let Some(single) = SingleKey::from_event(input) else {
             return InputAction::Continue;
         };
 
-        // Take pending key before any immutable borrows of self
-        let pending = self.pending_vim_key.take();
+        self.handle_key(single, settings)
+    }
+
+    /// Resolve and run one key: complete or start a multi-key sequence, use the
+    /// prefix keymap in prefix mode, or handle the key on its own.
+    #[must_use]
+    fn handle_key(
+        &mut self,
+        single: super::keybindings::key::SingleKey,
+        settings: &Settings,
+    ) -> InputAction {
+        use super::keybindings::Action;
+        use super::keybindings::key::{KeyCodeValue, KeyInput};
+
+        if let Some(pending_char) = self.take_pending_key() {
+            // We have a pending key from a previous press (e.g., first 'g' of 'gg')
+            let pending_single = Self::plain_char_key(pending_char);
+            let seq = KeyInput::Sequence(vec![pending_single.clone(), single.clone()]);
+            let ctx = self.eval_context();
+            if let Some(action) = self.mode_keymap().resolve(&seq, &ctx) {
+                return self.execute_action(&action, settings);
+            }
+
+            // Not a sequence: handle the pending key on its own, then this key from
+            // the start, so a prefix mode or sequence the pending key began applies
+            // to it. If the pending key's action has to go back to the event loop
+            // first (a redraw, say), this key is queued and handled next.
+            let result = self.handle_single_key(&pending_single, settings);
+            if !matches!(result, InputAction::Continue) {
+                self.queued_key = Some(single);
+                return result;
+            }
+            return self.handle_key(single, settings);
+        }
 
         // If in prefix mode, try prefix keymap first (single keys only)
         if self.prefix {
             let ki = KeyInput::Single(single.clone());
+            let ctx = self.eval_context();
             if let Some(action) = self.keymaps.prefix.resolve(&ki, &ctx) {
                 // Reset prefix (before execute, so EnterPrefixMode can re-set it)
                 self.prefix = false;
@@ -393,22 +428,6 @@ impl State {
             }
         }
         self.prefix = false;
-
-        if let Some(pending_char) = pending {
-            // We have a pending key from a previous press (e.g., first 'g' of 'gg')
-            let pending_single = Self::plain_char_key(pending_char);
-            let seq = KeyInput::Sequence(vec![pending_single.clone(), single.clone()]);
-            if let Some(action) = self.mode_keymap().resolve(&seq, &ctx) {
-                return self.execute_action(&action, settings);
-            }
-
-            // Not a sequence: the pending key gets handled on its own first, as
-            // if no sequence started with it, then this key does.
-            let result = self.handle_single_key(&pending_single, settings);
-            if !matches!(result, InputAction::Continue) {
-                return result;
-            }
-        }
 
         if self.mode_keymap().has_sequence_starting_with(&single)
             && matches!(single.code, KeyCodeValue::Char(_))
@@ -420,10 +439,29 @@ impl State {
                 unreachable!()
             };
             self.pending_vim_key = Some(c);
+            self.pending_vim_key_since = Some(Instant::now());
             return self.execute_action(&Action::Noop, settings);
         }
 
         self.handle_single_key(&single, settings)
+    }
+
+    fn take_pending_key(&mut self) -> Option<char> {
+        self.pending_vim_key_since = None;
+        self.pending_vim_key.take()
+    }
+
+    fn has_queued_key(&self) -> bool {
+        self.queued_key.is_some()
+    }
+
+    /// Handle the key queued behind a pending key's action, if any.
+    #[must_use]
+    fn handle_queued_key(&mut self, settings: &Settings) -> InputAction {
+        self.switched_search_mode = false;
+        self.queued_key
+            .take()
+            .map_or(InputAction::Continue, |single| self.handle_key(single, settings))
     }
 
     fn plain_char_key(c: char) -> super::keybindings::key::SingleKey {
@@ -470,18 +508,25 @@ impl State {
     /// handling the pending key on its own. Only insert-capable modes time out,
     /// where the pending key is usually text being typed; vim-normal waits, so
     /// commands like `g g` are not timed. `None` when nothing should time out.
+    /// The time is counted from the key press, so it is not restarted when the
+    /// event loop wakes for other work.
     fn pending_key_timeout(&self, settings: &Settings) -> Option<Duration> {
-        (self.pending_vim_key.is_some()
-            && self.is_insert_mode()
-            && settings.keymap_sequence_timeout_ms > 0)
-            .then(|| Duration::from_millis(settings.keymap_sequence_timeout_ms))
+        if self.pending_vim_key.is_none()
+            || !self.is_insert_mode()
+            || settings.keymap_sequence_timeout_ms == 0
+        {
+            return None;
+        }
+        let timeout = Duration::from_millis(settings.keymap_sequence_timeout_ms);
+        let waited = self.pending_vim_key_since.map_or(Duration::ZERO, |t| t.elapsed());
+        Some(timeout.saturating_sub(waited))
     }
 
     /// The rest of a sequence did not arrive in time: handle the pending key on
     /// its own.
     #[must_use]
     fn flush_pending_key(&mut self, settings: &Settings) -> InputAction {
-        self.pending_vim_key.take().map_or(InputAction::Continue, |c| {
+        self.take_pending_key().map_or(InputAction::Continue, |c| {
             self.handle_single_key(&Self::plain_char_key(c), settings)
         })
     }
@@ -2002,6 +2047,8 @@ pub async fn history(
         },
         prefix: false,
         pending_vim_key: None,
+        pending_vim_key_since: None,
+        queued_key: None,
         original_input_empty: original_query.is_empty(),
     };
 
@@ -2046,15 +2093,23 @@ pub async fn history(
         let initial_custom_context = app.search.custom_context;
 
         let pending_key_timeout = app.pending_key_timeout(settings);
-        let poll_for = pending_key_timeout.unwrap_or(Duration::from_millis(250));
+        let poll_for = if app.has_queued_key() {
+            Duration::ZERO
+        } else {
+            pending_key_timeout.unwrap_or(Duration::from_millis(250))
+        };
         let event_ready = tokio::task::spawn_blocking(move || event::poll(poll_for));
 
         tokio::select! {
             event_ready = event_ready => {
-                let timed_out = !event_ready??;
-                if !timed_out || pending_key_timeout.is_some() {
+                let event_ready = event_ready??;
+                let timed_out =
+                    !event_ready && !app.has_queued_key() && pending_key_timeout.is_some();
+                if event_ready || timed_out || app.has_queued_key() {
                     loop {
-                        let input_action = if timed_out {
+                        let input_action = if app.has_queued_key() {
+                            app.handle_queued_key(settings)
+                        } else if timed_out {
                             app.flush_pending_key(settings)
                         } else {
                             app.handle_input(settings, &event::read()?)
@@ -2164,7 +2219,7 @@ pub async fn history(
                                 break 'render r;
                             },
                         }
-                        if timed_out || !event::poll(Duration::ZERO)? {
+                        if timed_out || (!app.has_queued_key() && !event::poll(Duration::ZERO)?) {
                             break;
                         }
                     }
@@ -2395,6 +2450,8 @@ mod tests {
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
+            pending_vim_key_since: None,
+            queued_key: None,
             original_input_empty: false,
             inspecting_state: InspectingState::default(),
             keymaps: KeymapSet::defaults(&Settings::utc()),
@@ -2728,15 +2785,75 @@ mod tests {
         let mut state = state_with_jk_escape(state);
         assert_eq!(state.pending_key_timeout(&settings), None);
         type_chars(&mut state, &settings, "j");
-        assert_eq!(
-            state.pending_key_timeout(&settings),
-            Some(std::time::Duration::from_millis(100))
-        );
+        let left = state.pending_key_timeout(&settings).unwrap();
+        assert!(left <= std::time::Duration::from_millis(100), "{left:?}");
 
         assert!(matches!(state.flush_pending_key(&settings), InputAction::Continue));
         assert_eq!(state.search.input.as_str(), "j");
         assert_eq!(state.pending_vim_key, None);
         assert_eq!(state.keymap_mode, KeymapMode::VimInsert);
+    }
+
+    // The timeout counts from the key press, so waking for other work in between
+    // doesn't restart it.
+    #[rstest]
+    fn test_insert_sequence_timeout_counts_from_key_press(
+        #[with(KeymapMode::VimInsert)] state: State,
+        settings: Settings,
+    ) {
+        let mut state = state_with_jk_escape(state);
+        type_chars(&mut state, &settings, "j");
+        state.pending_vim_key_since = Some(
+            std::time::Instant::now().checked_sub(std::time::Duration::from_millis(60)).unwrap(),
+        );
+        let left = state.pending_key_timeout(&settings).unwrap();
+        assert!(left <= std::time::Duration::from_millis(40), "{left:?}");
+
+        state.pending_vim_key_since = Some(
+            std::time::Instant::now().checked_sub(std::time::Duration::from_millis(500)).unwrap(),
+        );
+        assert_eq!(state.pending_key_timeout(&settings), Some(std::time::Duration::ZERO));
+    }
+
+    // When the pending key's own action needs the event loop (here a redraw), the
+    // key after it is queued, not lost.
+    #[rstest]
+    fn test_sequence_mismatch_queues_key_after_redraw(
+        #[with(KeymapMode::VimInsert)] state: State,
+        settings: Settings,
+    ) {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        use super::super::keybindings::key::KeyInput;
+
+        let mut state = state_with_jk_escape(state);
+        state.keymaps.vim_insert.bind(KeyInput::parse("j").unwrap(), Action::ToggleTab);
+        type_chars(&mut state, &settings, "j");
+
+        let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(matches!(state.handle_key_input(&settings, &a), InputAction::Redraw));
+        assert_eq!(state.tab_index, 1);
+        assert!(state.has_queued_key());
+
+        let _ = state.handle_queued_key(&settings);
+        assert!(!state.has_queued_key());
+    }
+
+    // A pending key that turns out to enter prefix mode sends the next key to the
+    // prefix keymap: `a` there is cursor-start, not an inserted `a`.
+    #[rstest]
+    fn test_sequence_mismatch_into_prefix_mode(
+        #[with(KeymapMode::VimInsert)] state: State,
+        settings: Settings,
+    ) {
+        use super::super::keybindings::key::KeyInput;
+
+        let mut state = state_with_jk_escape(state);
+        state.keymaps.vim_insert.bind(KeyInput::parse("j").unwrap(), Action::EnterPrefixMode);
+        type_chars(&mut state, &settings, "xyja");
+        assert_eq!(state.search.input.as_str(), "xy");
+        assert_eq!(state.search.input.position(), 0);
+        assert!(!state.prefix);
     }
 
     #[rstest]
