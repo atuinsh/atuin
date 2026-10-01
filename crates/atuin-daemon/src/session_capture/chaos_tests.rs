@@ -4,9 +4,9 @@
 //! protocol at random, fail wipes, fail, panic or give up replays, and storm replays and sync
 //! reprojections with invalidations (toward their pass cap; at startup too, and with rebuilds
 //! and forgets landing in the backoffs between incomplete replays), while rebuilds, captures (of
-//! lines already persisted and new ones), sync reprojections, rewrites of this host's and
-//! another's record series under their watermarks, and reads run at once. Once it quiesces, it
-//! checks the protocol's invariants.
+//! lines already persisted and new ones, and of a resumed transcript warmed from the sidecar),
+//! sync reprojections, rewrites of this host's and another's record series under their
+//! watermarks, and reads run at once. Once it quiesces, it checks the protocol's invariants.
 //!
 //! `ATUIN_CHAOS_ITERATIONS` sets how many seeds to run: by default 100, a few seconds in all, as
 //! each takes some 50ms of in-memory SQLite.
@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use atuin_client::ai_session::{NativeSessionId, SourceId};
+use atuin_common::harnesstools::session::{AnyMessage, SessionId};
 use atuin_domain::record::{RecordId, RecordTag};
 use futures::future::BoxFuture;
 use rand::rngs::StdRng;
@@ -23,7 +24,9 @@ use rstest::rstest;
 use time::OffsetDateTime;
 use tonic::Request;
 
+use super::engine::{Start, warm};
 use super::hooks::{Fault, Hooks, INJECTED_PANIC, Point, Section};
+use super::message_enricher::MessageEnricher;
 use super::recovery::Backoff;
 use super::*;
 use crate::grpc::ai::session::pb::ai_session_server::AiSession as _;
@@ -72,6 +75,11 @@ struct Totals {
     /// Rebuilds, and forgets of this host's sessions, asked for during a backoff.
     rebuilds_in_backoff: AtomicU64,
     forgets_in_backoff: AtomicU64,
+    /// Warm-ups of the resumed transcript that read the sidecar, those begun while the store was
+    /// recovering (a wipe not replayed yet: they wait for the replay), and its lines captured new.
+    warm_ups: AtomicU64,
+    warm_ups_recovering: AtomicU64,
+    resumed_captured: AtomicU64,
 }
 
 /// How the last replay to end did, as the chaos made it (see [`Chaos::last_outcome`]).
@@ -400,6 +408,12 @@ impl Hooks for Chaos {
                     self.totals.backoffs_cut_short.fetch_add(1, Ordering::Relaxed);
                     Fault::None
                 }
+                Point::WarmChecked => {
+                    self.totals.warm_ups.fetch_add(1, Ordering::Relaxed);
+                    // Where the warm-up trusts the sidecar, as capture's dedup gate does.
+                    self.check_complete("a warm-up read the sidecar").await;
+                    Fault::None
+                }
                 Point::SyncForgetHeldOff => {
                     self.totals.forgets_held_off.fetch_add(1, Ordering::Relaxed);
                     Fault::None
@@ -510,6 +524,22 @@ fn line(session: &str, source: &str) -> Message {
         .build()
 }
 
+/// An id-less Codex prompt: identical lines of it are told apart by their ordinal alone, which
+/// a resumed transcript's warm-up reads back from the sidecar.
+fn prompt() -> AnyMessage {
+    AnyMessage::Codex(
+        serde_json::from_value(serde_json::json!({
+            "type": "response_item", "timestamp": "2026-09-18T10:00:00.123Z",
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "continue"}]},
+        }))
+        .unwrap(),
+    )
+}
+
+/// The resumed transcript's session.
+const RESUMED: &str = "w";
+
 type LineKey = (String, String);
 
 fn key_of(msg: &Message) -> LineKey {
@@ -561,7 +591,20 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
         records.push(msg).await.unwrap();
     }
     remote.push(&line("r", "r0")).await.unwrap();
-    let pushed = Arc::new(parking_lot::Mutex::new(persisted.iter().map(key_of).collect()));
+    // A transcript of identical id-less prompts, two read before the daemon (re)started.
+    let resumed = SessionId::from(RESUMED.to_owned());
+    let mut before = MessageEnricher::new(HarnessKind::Codex);
+    let mut persisted_resumed = Vec::new();
+    for _ in 0..2 {
+        for msg in before.capture(&resumed, &prompt()) {
+            records.push(&msg).await.unwrap();
+            persisted_resumed.push(key_of(&msg));
+        }
+    }
+
+    let pushed = Arc::new(parking_lot::Mutex::new(
+        persisted.iter().map(key_of).chain(persisted_resumed.iter().cloned()).collect(),
+    ));
     let chaos = Arc::new(Chaos::new(seed, totals.clone()));
     let remote_writes = Arc::new(tokio::sync::Mutex::new(()));
     *chaos.probe.lock() = Some(Probe {
@@ -746,6 +789,45 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
         });
     }
 
+    // The resumed transcript: reopened before each new prompt (as after a restart, or a
+    // listener reopening it), so its bookkeeping is warmed from the sidecar each time, across
+    // rebuilds' wipes, forgets of this host's sessions and replays. Each prompt is new: one taken
+    // for a duplicate was given the id of a stored one, by a warm-up that read a sidecar missing
+    // the rows it counts.
+    let resumed_new = 4;
+    {
+        let (capture, chaos, pushed) = (capture.clone(), chaos.clone(), pushed.clone());
+        captures.spawn(async move {
+            let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+            for _ in 0..resumed_new {
+                chaos.pause().await;
+                // Often right after a wipe, while its replay refills the sidecar.
+                if chaos.rng.lock().gen_bool(0.5) {
+                    let mut state = capture.state.clone();
+                    let wiped = state.wait_for(|state| *state == StoreState::Recovering);
+                    let _ = tokio::time::timeout(Duration::from_millis(20), wiped).await;
+                }
+                if capture.is_recovering() {
+                    chaos.totals.warm_ups_recovering.fetch_add(1, Ordering::Relaxed);
+                }
+                warm(&capture.sink, &mut enricher, &resumed, Start::Resumed).await;
+                for msg in enricher.capture(&resumed, &prompt()) {
+                    let key = key_of(&msg);
+                    match engine::append(&capture.sink, msg).await {
+                        Ok(Appended::New) => {
+                            chaos.totals.resumed_captured.fetch_add(1, Ordering::Relaxed);
+                            pushed.lock().push(key);
+                        }
+                        Ok(Appended::Duplicate) => {
+                            chaos.violation(format!("a new resumed prompt dropped: {key:?}"));
+                        }
+                        Err(err) => chaos.violation(format!("capture failed: {err}")),
+                    }
+                }
+            }
+        });
+    }
+
     // Everything but capture ends.
     let ended = tokio::time::timeout(TIMEOUT, async {
         while let Some(task) = tasks.join_next().await {
@@ -830,7 +912,8 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
     assert_eq!(local, distinct, "seed {seed}");
     if recoverable {
         // Every line captured, once.
-        assert_eq!(local.len(), persisted.len() + new.len(), "seed {seed}");
+        let lines = persisted.len() + new.len() + persisted_resumed.len() + resumed_new;
+        assert_eq!(local.len(), lines, "seed {seed}");
         // Ready: every record projected (I1), this host's at once, downloads once the sync
         // worker is done.
         assert!(local.is_subset(&keys(&sidecar, Some(local_host)).await), "seed {seed}");
@@ -842,7 +925,8 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
         });
         assert!(synced.await.is_ok(), "seed {seed}: downloads never projected");
     } else {
-        assert_eq!(local.len(), persisted.len(), "seed {seed}: captured while unavailable");
+        let persisted = persisted.len() + persisted_resumed.len();
+        assert_eq!(local.len(), persisted, "seed {seed}: captured while unavailable");
     }
 }
 

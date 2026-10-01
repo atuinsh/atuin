@@ -36,6 +36,9 @@ pub enum Point {
     BackoffStarted,
     /// A wipe cut that backoff short: the coordinator replays at once.
     BackoffCutShort,
+    /// Capture's warm-up of a resumed session found the store ready under capture's lock,
+    /// before reading the sidecar.
+    WarmChecked,
 }
 
 /// The payload of a panic [`Fault::Panic`] injects.

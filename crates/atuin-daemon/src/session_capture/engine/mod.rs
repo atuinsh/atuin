@@ -240,6 +240,19 @@ type Opened = Arc<Mutex<HashMap<SessionId, Option<Checkpoint>>>>;
 /// Set a session's bookkeeping up for a fresh read of its transcript: empty for one read from
 /// the beginning, whose every line replays; warmed from the sidecar for one resumed past its
 /// start, which replays none of the lines before it.
+///
+/// The sidecar is read as capture's dedup gate reads it: with the store ready, under capture's
+/// locks (see [`Sink::lock_ready`]), waiting out a rebuild or a forget of this host's rows, and
+/// pausing while the store is unavailable. Read while a wipe had emptied it and no replay had
+/// refilled it yet, the bookkeeping would be warmed from a sidecar missing the session's rows:
+/// identical id-less lines would count from ordinal 0 again, so a genuinely new one would take
+/// the id of one stored before and be dropped as its duplicate, and rows would be pushed (and
+/// synced) with the session's title, parent or last timestamp missing. Read whole under the
+/// locks, it is also never half from before a wipe and half from after.
+///
+/// A wipe after the warm-up does not make it stale: the replay that ends it restores every row
+/// of the session from the record store, which is all the warm-up read, along with the rows
+/// capture pushed since, which the enricher has counted itself.
 pub(super) async fn warm(
     sink: &Sink,
     enricher: &mut MessageEnricher,
@@ -251,6 +264,25 @@ pub(super) async fn warm(
         return;
     }
     let handle = enricher.handle(session);
+    let mut state = sink.state.clone();
+    let (mut pending, local) = loop {
+        match sink.lock_ready().await {
+            Ok(locks) => break locks,
+            Err(_) => {
+                tracing::debug!(%session, "ai-session store unavailable; warm-up paused until ready");
+                if state.wait_for(|state| *state == StoreState::Ready).await.is_err() {
+                    // The store's state can no longer change: nothing will be appended either.
+                    return;
+                }
+            }
+        }
+    };
+    #[cfg(test)]
+    sink.hook(super::hooks::Point::WarmChecked).await;
+    // A row capture pushed but did not project is one of the session's the reads must see.
+    if let Err(e) = sink.repair(&mut pending).await {
+        tracing::warn!(?e, %session, "failed to project a pending ai-session message");
+    }
     let row = sink.sidecar.get_session(&handle).await.unwrap_or_else(|e| {
         tracing::warn!(?e, %session, "failed to load the ai-session row");
         None
@@ -268,6 +300,8 @@ pub(super) async fn warm(
         tracing::warn!(?e, %session, "failed to load the ai-session title changes");
         Vec::new()
     });
+    drop(local);
+    drop(pending);
     enricher.resume(session, row.as_ref(), &titles, last.as_ref(), &synthetic);
 }
 
