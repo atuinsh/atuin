@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_stream::try_stream;
 use atuin_api_client::{
     ApiError, AuthHeaderProvider, CapClient, CapMismatch, MapApiError, ResponseValue,
-    authorization, types,
+    authorization, identity_headers, types,
 };
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::url::UrlAppendError;
@@ -23,7 +23,6 @@ use secrecy::{ExposeSecret, SecretString};
 use semver::Version;
 use tracing::{Instrument, instrument};
 
-use crate::http::identity_headers;
 use crate::packfile::PackedPackfile;
 use crate::settings::Settings;
 

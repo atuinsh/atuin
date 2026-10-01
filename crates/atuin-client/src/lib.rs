@@ -7,8 +7,6 @@ extern crate tracing;
 pub mod api_client;
 #[cfg(feature = "sync")]
 pub mod auth;
-#[cfg(any(feature = "sync", feature = "hub"))]
-mod http;
 #[cfg(feature = "hub")]
 pub mod hub;
 

@@ -8,7 +8,6 @@ use reqwest::{StatusCode, Url};
 use secrecy::SecretString;
 
 use crate::api_client::{AuthToken, authenticated_http};
-use crate::http::hub_client;
 use crate::meta::is_hub_token;
 use crate::settings::Settings;
 
@@ -236,7 +235,7 @@ impl HubAuthClient {
             );
         }
 
-        hub_client(&self.address, Some(hub_token))
+        Ok(atuin_api_client::Client::for_hub(&self.address, Some(hub_token))?)
     }
 }
 
@@ -253,7 +252,7 @@ impl AuthClient for HubAuthClient {
             totp_code: totp_code.cloned().map(Into::into),
         };
 
-        match hub_client(&self.address, None)?.login(&body).map_api_error().await {
+        match atuin_api_client::Client::for_hub(&self.address, None)?.login(&body).map_api_error().await {
             Ok(resp) => {
                 let login = resp.into_inner();
                 Ok(AuthResponse::Success {
@@ -294,7 +293,7 @@ impl AuthClient for HubAuthClient {
             password: password.clone().into(),
         };
 
-        match hub_client(&self.address, None)?.register(&body).map_api_error().await {
+        match atuin_api_client::Client::for_hub(&self.address, None)?.register(&body).map_api_error().await {
             Ok(resp) => {
                 let reg = resp.into_inner();
                 Ok(AuthResponse::Success {

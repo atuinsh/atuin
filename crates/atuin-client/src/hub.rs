@@ -19,7 +19,6 @@ use reqwest::{StatusCode, Url};
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 
-use crate::http::hub_client;
 use crate::settings::Settings;
 
 /// The result of starting a hub authentication flow
@@ -105,7 +104,7 @@ impl HubAuthSession {
     pub async fn start(hub_address: &Url) -> Result<Self> {
         debug!("Starting Hub authentication process...");
 
-        let api = hub_client(hub_address, None)?;
+        let api = atuin_api_client::Client::for_hub(hub_address, None)?;
         let code_response = request_code(&api).await?;
 
         debug!("Received code from Hub");
@@ -236,7 +235,7 @@ pub async fn link_account(hub_address: &Url, cli_token: &SecretString) -> Result
 
     debug!("Linking CLI account to Hub at {}", hub_address);
 
-    link(&hub_client(hub_address, Some(&hub_token))?, cli_token).await?;
+    link(&atuin_api_client::Client::for_hub(hub_address, Some(&hub_token))?, cli_token).await?;
 
     info!("Successfully linked CLI account to Hub");
     Ok(())
@@ -296,7 +295,7 @@ mod tests {
         let session = HubAuthSession {
             code: SecretString::from(CODE),
             auth_url,
-            api: hub_client(&hub, None).unwrap(),
+            api: atuin_api_client::Client::for_hub(&hub, None).unwrap(),
             hub_address: hub,
         };
 
