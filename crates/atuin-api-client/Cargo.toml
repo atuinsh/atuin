@@ -2,8 +2,6 @@
 name = "atuin-api-client"
 edition = "2024"
 description = "Low-level clients for the Atuin APIs"
-# The generator has its own workspace and lockfile and never ships.
-exclude = ["codegen"]
 
 authors.workspace = true
 homepage.workspace = true
@@ -28,11 +26,24 @@ tokio = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
+[build-dependencies]
+openapiv3 = { workspace = true }
+progenitor-impl = { workspace = true }
+quote = { workspace = true }
+schemars08 = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
 [dev-dependencies]
 atuin-common = { workspace = true }
 pretty_assertions = { workspace = true }
 rstest = { workspace = true }
 wiremock = { workspace = true }
+# tests/codegen.rs compiles the generator in build/ again to run its unit tests.
+openapiv3 = { workspace = true }
+progenitor-impl = { workspace = true }
+quote = { workspace = true }
+schemars08 = { workspace = true }
 
 [lints]
 workspace = true

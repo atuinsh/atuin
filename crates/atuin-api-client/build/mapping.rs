@@ -8,9 +8,9 @@
 
 use std::iter;
 
-use progenitor::{GenerationSettings, InterfaceStyle, TypeImpl};
+use progenitor_impl::{GenerationSettings, InterfaceStyle, TypeImpl};
 use quote::quote;
-use schemars::schema::{InstanceType, NumberValidation, SchemaObject};
+use schemars08::schema::{InstanceType, NumberValidation, SchemaObject};
 use serde_json::{Map, Value};
 
 /// A component schema the client (de)serializes through a hand-written type.
@@ -143,7 +143,7 @@ pub enum SpecError {
     },
 }
 
-/// The progenitor settings the checked-in client is generated with.
+/// The progenitor settings the client is generated with.
 pub fn settings() -> GenerationSettings {
     let mut settings = GenerationSettings::new();
     settings.with_interface(InterfaceStyle::Positional).with_inner_type(quote!(crate::HookState));
@@ -301,7 +301,7 @@ mod tests {
     #[fixture]
     fn spec() -> Value {
         let mut spec =
-            serde_json::from_str(include_str!("../../openapi.json")).expect("openapi.json is JSON");
+            serde_json::from_str(include_str!("../openapi.json")).expect("openapi.json is JSON");
         crate::prepare::strip(&mut spec).expect("openapi.json has paths");
         spec
     }

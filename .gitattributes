@@ -4,6 +4,5 @@
 
 *.sql eol=lf
 
-# Generated; CI regenerates generated.rs and fails on a diff, byte for byte.
+# Written by the hub's `mix api.spec`.
 crates/atuin-api-client/openapi.json linguist-generated eol=lf
-crates/atuin-api-client/src/generated.rs linguist-generated eol=lf

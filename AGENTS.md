@@ -91,6 +91,5 @@ cargo +nightly fmt --check
 RUSTDOCFLAGS="-D warnings" cargo doc --document-private-items --no-deps --workspace
 ```
 
-```sh
-cargo run --locked --manifest-path crates/atuin-api-client/codegen/Cargo.toml
-```
+`crates/atuin-api-client` generates its client at build time from `openapi.json`, which the hub
+writes with `mix api.spec`; never edit that file by hand.

@@ -4,7 +4,7 @@
 //! Typed client for the Atuin sync, hub and AI HTTP APIs.
 //!
 //! The hub owns the contract: `mix api.spec` writes it to this crate's `openapi.json`, and
-//! `codegen/` turns that into `src/generated.rs` with progenitor. Everything else here is the
+//! `build.rs` turns that into the client with progenitor at build time. Everything else here is the
 //! hand-written runtime the generated code calls into: [`Secret`] and [`DateTime`] for the mapped
 //! schema formats, the hooks behind [`Client::with_capabilities`] and [`Client::with_auth`], the
 //! [`CapClient`] they negotiate with, the base URL handling of [`Client::from_http`],
@@ -31,17 +31,18 @@ mod base_url;
 mod caps;
 mod date_time;
 mod error;
-#[rustfmt::skip]
-#[allow(
-    clippy::disallowed_methods,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::must_use_candidate,
-    clippy::struct_field_names,
-    clippy::unnecessary_trailing_comma,
-    reason = "generated from openapi.json by progenitor"
-)]
-mod generated;
+mod generated {
+    #![allow(
+        clippy::disallowed_methods,
+        clippy::missing_errors_doc,
+        clippy::missing_panics_doc,
+        clippy::must_use_candidate,
+        clippy::struct_field_names,
+        clippy::unnecessary_trailing_comma,
+        reason = "generated from openapi.json by progenitor"
+    )]
+    include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+}
 mod header;
 mod hooks;
 mod secret;

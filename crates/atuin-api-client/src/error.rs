@@ -220,6 +220,8 @@ mod tests {
     /// returns one, which holds while codegen strips every documented error response.
     #[rstest]
     fn no_generated_operation_returns_a_documented_error() {
-        assert!(!include_str!("generated.rs").contains("Error::ErrorResponse("));
+        let code: String =
+            include_str!(concat!(env!("OUT_DIR"), "/generated.rs")).split_whitespace().collect();
+        assert!(!code.contains("Error::ErrorResponse("));
     }
 }

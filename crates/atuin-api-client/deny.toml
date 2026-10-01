@@ -7,8 +7,7 @@
 #
 # (see the `deny` step in .buildkite/pipeline.yml). The workspace-wide policy
 # lives in the repo-root deny.toml; this file only adds the eyre/anyhow ban for
-# atuin-api-client's own dependency subgraph. The generator in codegen/ is a
-# separate workspace and never part of this graph.
+# atuin-api-client's own dependency subgraph.
 
 [graph]
 all-features = true
