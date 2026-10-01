@@ -2,10 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, NativeSessionId};
+use atuin_client::ai_session::{
+    Appended, DbError, HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
+};
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::session::{
-    AnyMessage, CaptureError, Checkpoint, RuntimeError, SessionEvent, SessionId,
+    AnyMessage, CaptureError, Checkpoint, RuntimeError, SessionEvent, SessionId, TitleChange,
 };
 use atuin_common::sync::BlockingPool;
 use futures::{Stream, StreamExt};
@@ -13,8 +15,10 @@ use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use super::Sink;
+#[cfg(test)]
+use super::hooks::WarmStep;
 use super::message_enricher::{MessageEnricher, SYNTHETIC};
+use super::{AppendError, CaptureLocks, Sink, StoreState};
 
 /// Backoff bounds for retrying a harness listener whose session directory does not exist yet.
 const LISTENER_RETRY_START: Duration = Duration::from_secs(2);
@@ -155,7 +159,12 @@ async fn capture(
 
 /// Append a session's rows, then checkpoint just past the line that completed them unless an
 /// append failed.
-async fn store(
+///
+/// A row refused because the store is unavailable (see [`Sink::append`]) pauses the listener
+/// until the store is ready again (a rebuild succeeding), then is retried, so the line is neither
+/// lost nor checkpointed past meanwhile. Should the store stay unavailable, a restart re-reads it
+/// from the checkpoint.
+pub(super) async fn store(
     sink: &Sink,
     enricher: &MessageEnricher,
     stuck: &mut HashSet<SessionId>,
@@ -164,7 +173,7 @@ async fn store(
     checkpoint: Checkpoint,
 ) {
     for msg in rows {
-        if let Err(e) = sink.append(msg).await {
+        if let Err(e) = append(sink, msg).await {
             tracing::warn!(?e, "failed to capture ai-session message");
             stuck.insert(session.clone());
         }
@@ -176,6 +185,23 @@ async fn store(
     // profiles.
     if let Err(e) = sink.sidecar.set_checkpoint(&enricher.handle(session), checkpoint).await {
         tracing::warn!(?e, "failed to record ai-session checkpoint");
+    }
+}
+
+/// Append `msg`, waiting (not retrying hot) for the store to be ready whenever it is refused as
+/// unavailable. Gives up only if the store's state can no longer change (the facade is gone).
+pub(super) async fn append(sink: &Sink, msg: Message) -> Result<Appended, AppendError> {
+    let mut state = sink.state.clone();
+    loop {
+        match sink.append(msg.clone()).await {
+            Err(AppendError::Unavailable) => {
+                tracing::debug!("ai-session store unavailable; capture paused until it is ready");
+                if state.wait_for(|state| *state == StoreState::Ready).await.is_err() {
+                    return Err(AppendError::Unavailable);
+                }
+            }
+            appended => return appended,
+        }
     }
 }
 
@@ -218,6 +244,25 @@ type Opened = Arc<Mutex<HashMap<SessionId, Option<Checkpoint>>>>;
 /// Set a session's bookkeeping up for a fresh read of its transcript: empty for one read from
 /// the beginning, whose every line replays; warmed from the sidecar for one resumed past its
 /// start, which replays none of the lines before it.
+///
+/// The sidecar is read as capture's dedup gate reads it: with the store ready, under capture's
+/// locks (see [`Sink::lock_ready`]), waiting out a rebuild or a forget of this host's rows, and
+/// pausing while the store is unavailable. Read while a wipe had emptied it and no replay had
+/// refilled it yet, the bookkeeping would be warmed from a sidecar missing the session's rows:
+/// identical id-less lines would count from ordinal 0 again, so a genuinely new one would take
+/// the id of one stored before and be dropped as its duplicate, and rows would be pushed (and
+/// synced) with the session's title, parent or last timestamp missing. Read whole under the
+/// locks, it is also never half from before a wipe and half from after.
+///
+/// For the same reason a warm-up whose repair or any read fails is not taken as a partial (or
+/// empty) view: it releases the locks, waits a backoff and warms up again, until it has every
+/// read, as capture waits out an unavailable store rather than read past it. Nothing of the
+/// session is captured (or checkpointed) meanwhile, so no line is lost; a sidecar that keeps
+/// failing holds this harness's capture, as an unavailable store does.
+///
+/// A wipe after the warm-up does not make it stale: the replay that ends it restores every row
+/// of the session from the record store, which is all the warm-up read, along with the rows
+/// capture pushed since, which the enricher has counted itself.
 pub(super) async fn warm(
     sink: &Sink,
     enricher: &mut MessageEnricher,
@@ -229,24 +274,103 @@ pub(super) async fn warm(
         return;
     }
     let handle = enricher.handle(session);
-    let row = sink.sidecar.get_session(&handle).await.unwrap_or_else(|e| {
-        tracing::warn!(?e, %session, "failed to load the ai-session row");
-        None
-    });
-    let last = sink.sidecar.last_message(&handle).await.unwrap_or_else(|e| {
-        tracing::warn!(?e, %session, "failed to load the last ai-session message");
-        None
-    });
-    let synthetic =
-        sink.sidecar.source_ids_with_prefix(&handle, SYNTHETIC).await.unwrap_or_else(|e| {
-            tracing::warn!(?e, %session, "failed to load the ai-session synthetic ids");
-            Vec::new()
-        });
-    let titles = sink.sidecar.title_changes(&handle).await.unwrap_or_else(|e| {
-        tracing::warn!(?e, %session, "failed to load the ai-session title changes");
-        Vec::new()
-    });
-    enricher.resume(session, row.as_ref(), &titles, last.as_ref(), &synthetic);
+    let backoff = sink.warm_backoff();
+    let mut state = sink.state.clone();
+    let mut failures = 0;
+    loop {
+        let Ok(locks) = sink.lock_ready().await else {
+            tracing::debug!(%session, "ai-session store unavailable; warm-up paused until ready");
+            if state.wait_for(|state| *state == StoreState::Ready).await.is_err() {
+                // The store's state can no longer change: nothing will be appended either.
+                return;
+            }
+            continue;
+        };
+        match read_warm(sink, &handle, locks).await {
+            Ok(warmed) => {
+                let Warmed {
+                    row,
+                    titles,
+                    last,
+                    synthetic,
+                } = warmed;
+                enricher.resume(session, row.as_ref(), &titles, last.as_ref(), &synthetic);
+                return;
+            }
+            Err(e) => {
+                failures += 1;
+                let delay = backoff.delay(failures);
+                tracing::warn!(
+                    ?e,
+                    %session,
+                    ?delay,
+                    "failed to warm a resumed ai-session up from the sidecar; retrying"
+                );
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+}
+
+/// What a resumed session's warm-up reads from the sidecar.
+struct Warmed {
+    row: Option<Session>,
+    titles: Vec<TitleChange>,
+    last: Option<Message>,
+    synthetic: Vec<SourceId>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum WarmError {
+    #[error(transparent)]
+    Repair(#[from] AppendError),
+    #[error(transparent)]
+    Read(#[from] DbError),
+    #[cfg(test)]
+    #[error("injected warm-up failure")]
+    Injected,
+}
+
+/// Read what [`warm`] needs from the sidecar, holding capture's `locks` (released on return,
+/// whether the reads failed or not).
+async fn read_warm(
+    sink: &Sink,
+    handle: &HarnessSession,
+    (mut pending, local): CaptureLocks,
+) -> Result<Warmed, WarmError> {
+    // A row capture pushed but did not project is one of the session's the reads must see.
+    #[cfg(test)]
+    inject(sink, WarmStep::Repair).await?;
+    sink.repair(&mut pending).await?;
+    #[cfg(test)]
+    inject(sink, WarmStep::Session).await?;
+    let row = sink.sidecar.get_session(handle).await?;
+    #[cfg(test)]
+    inject(sink, WarmStep::Last).await?;
+    let last = sink.sidecar.last_message(handle).await?;
+    #[cfg(test)]
+    inject(sink, WarmStep::Synthetic).await?;
+    let synthetic = sink.sidecar.source_ids_with_prefix(handle, SYNTHETIC).await?;
+    #[cfg(test)]
+    inject(sink, WarmStep::Titles).await?;
+    let titles = sink.sidecar.title_changes(handle).await?;
+    drop(local);
+    drop(pending);
+    Ok(Warmed {
+        row,
+        titles,
+        last,
+        synthetic,
+    })
+}
+
+/// Fail the warm-up's `step` if the test hooks say so.
+#[cfg(test)]
+async fn inject(sink: &Sink, step: WarmStep) -> Result<(), WarmError> {
+    match sink.hook(super::hooks::Point::WarmRead(step)).await {
+        super::hooks::Fault::None => Ok(()),
+        _ => Err(WarmError::Injected),
+    }
 }
 
 /// The checkpoint stored for a session, if any; the session checks it against its source itself.

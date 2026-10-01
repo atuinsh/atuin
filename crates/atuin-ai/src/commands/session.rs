@@ -8,7 +8,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, Message, Session, SessionMatch};
+use atuin_client::ai_session::{
+    HarnessKind, HarnessSession, Message, SearchTerms, Session, SessionFilter, SessionMatch,
+};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
@@ -141,12 +143,23 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let style = cmd.style.resolve();
     let mut client = AiClient::from_settings(settings).await?;
 
-    // Right after the daemon starts it rebuilds its AI sessions and refuses reads until done,
-    // rather than answer from a partial set. Tail only streams what happens from now on.
+    // Right after the daemon starts, and when a store command asks it to, it rebuilds its AI
+    // sessions and refuses reads until done, rather than answer from a partial set. Tail only
+    // streams what happens from now on.
     if !matches!(cmd.cmd, SubCmd::Tail) {
+        let mut reported = None;
         client
-            .wait_for_sessions(|| {
-                eprintln!("AI sessions are being rebuilt after the daemon started; waiting...");
+            .wait_for_sessions(|progress| {
+                if reported.is_none() {
+                    eprintln!("AI sessions are being rebuilt from the record store; waiting...");
+                }
+                if let Some((replayed, pending)) = progress
+                    && reported != Some(progress)
+                    && pending > 0
+                {
+                    eprintln!("  {replayed} of {pending} records replayed");
+                }
+                reported = Some(progress);
             })
             .await?;
     }
@@ -310,7 +323,15 @@ async fn search(
     style: Style,
 ) -> Result<()> {
     let matches: Vec<SessionMatch> = client
-        .search_sessions(query, harness, None, false, limit)
+        .search_sessions(
+            query,
+            SearchTerms::All,
+            &SessionFilter {
+                harness,
+                ..SessionFilter::default()
+            },
+            limit,
+        )
         .await?
         .map(|m| Ok::<_, eyre::Report>(SessionMatch::try_from(m?)?))
         .try_collect()
@@ -543,7 +564,7 @@ async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Styl
 /// (the harness is only known from the listing, so an id alone cannot address a session).
 async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession> {
     let mut stream = client
-        .list_sessions(None, None)
+        .list_sessions(&SessionFilter::default())
         .await?
         .map(|session| Ok::<_, eyre::Report>(Session::try_from(session?)?));
     // `latest` only needs the newest session, which the daemon streams first, so take a single
@@ -1096,8 +1117,18 @@ struct SearchMatchJson {
     score: f64,
     title: HighlightJson,
     preview: HighlightJson,
-    /// Position of the best-matching message in the session, as numbered by `show`.
+    /// Position of the best-matching message in the session holding it (`session`, else
+    /// `matched`), as numbered by `show`.
     message_index: u64,
+    /// The session holding the best-matching message, when it is not `session`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched: Option<MatchedJson>,
+}
+
+#[derive(Serialize)]
+struct MatchedJson {
+    session: HandleJson,
+    title: HighlightJson,
 }
 
 impl From<&HighlightedString> for HighlightJson {
@@ -1118,6 +1149,10 @@ impl From<&SessionMatch> for SearchMatchJson {
             title: HighlightJson::from(&m.title),
             preview: HighlightJson::from(&m.preview),
             message_index: m.message_index,
+            matched: m.matched.as_ref().map(|matched| MatchedJson {
+                session: handle_json(&matched.handle),
+                title: HighlightJson::from(&matched.title),
+            }),
         }
     }
 }
@@ -1529,6 +1564,7 @@ mod tests {
             title: highlighter.as_highlighted("the \u{E000}build\u{E001}".to_owned()),
             preview: highlighter.as_highlighted(String::new()),
             message_index: 4,
+            matched: None,
             score: 2.5,
         };
 
@@ -1539,5 +1575,48 @@ mod tests {
         assert_eq!(v["title"]["text"], "the build");
         assert_eq!(v["title"]["matches"], json!([[4, 9]]));
         assert!(v["preview"].get("matches").is_none(), "no matches are omitted, not empty");
+        assert!(v.get("matched").is_none(), "a match in the session itself names no other");
+
+        let child = SessionMatch {
+            matched: Some(atuin_client::ai_session::MatchedSession {
+                handle: HarnessSession {
+                    harness: HarnessKind::ClaudeCode,
+                    session: "child".to_owned().into(),
+                },
+                title: highlighter.as_highlighted("\u{E000}build\u{E001} fix".to_owned()),
+            }),
+            ..m
+        };
+        let v = serde_json::to_value(SearchMatchJson::from(&child)).unwrap();
+        assert_eq!(v["matched"]["session"]["session_id"], "child");
+        assert_eq!(v["matched"]["title"]["matches"], json!([[0, 5]]));
+    }
+
+    /// The match ranges in the JSON are those of what a real search matched.
+    #[rstest]
+    #[case::all(SearchTerms::All, "build", json!([[8, 13]]), json!([[4, 9]]))]
+    #[case::any(SearchTerms::Any, "build nothing", json!([[8, 13]]), json!([[4, 9]]))]
+    #[tokio::test]
+    async fn search_match_json_ranges_come_from_the_search(
+        #[case] mode: SearchTerms,
+        #[case] query: &str,
+        #[case] title: Value,
+        #[case] preview: Value,
+    ) {
+        let db = atuin_client::ai_session::AiSessionDatabase::in_memory().await.unwrap();
+        let mut m = msg(Role::User, vec![Content::Text("the build broke".to_owned())]);
+        m.session_title = Some("Fix the build".to_owned());
+        db.append(&m).await.unwrap();
+
+        let hits: Vec<SessionMatch> =
+            db.search(query, mode, &SessionFilter::default(), 0).try_collect().await.unwrap();
+        let [hit] = hits.as_slice() else {
+            panic!("one match: {hits:?}");
+        };
+        let v = serde_json::to_value(SearchMatchJson::from(hit)).unwrap();
+        assert_eq!(v["title"]["text"], "Fix the build");
+        assert_eq!(v["title"]["matches"], title);
+        assert_eq!(v["preview"]["text"], "the build broke");
+        assert_eq!(v["preview"]["matches"], preview);
     }
 }

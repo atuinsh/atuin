@@ -4,7 +4,8 @@
 
 mod common;
 
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use atuin_daemon::client::HistoryClient;
 use common::{FreshEnv, Process, SESSION, TIMEOUT, marker, output, wait_until};
@@ -194,4 +195,96 @@ async fn history_falls_back_to_local_when_daemon_not_running(
     list.env("ATUIN_SESSION", SESSION);
     let expected = format!("{id}\t7\t{command}");
     assert!(output(list).lines().any(|line| line == expected), "history was not saved locally");
+}
+
+/// The AI session index with one session no record backs, as a purge leaves it: a replay only
+/// adds, so only a rebuild takes it out.
+async fn stale_ai_session_index(env: &FreshEnv) -> PathBuf {
+    use atuin_client::ai_session::{
+        AiSessionDatabase, HarnessKind, HarnessSession, Message, NativeSessionId, SourceId,
+    };
+    use atuin_common::harnesstools::session::{Content, Role};
+
+    std::fs::create_dir_all(env.data_dir()).unwrap();
+    let path = env.data_dir().join("ai_harness_sessions.db");
+    let db = AiSessionDatabase::open(&path).await.unwrap();
+    let msg = Message::builder()
+        .id(atuin_domain::record::RecordId(atuin_common::utils::uuid_v7()))
+        .session(HarnessSession {
+            harness: HarnessKind::ClaudeCode,
+            session: NativeSessionId::from("stale".to_owned()),
+        })
+        .source_id(SourceId::from("stale-1".to_owned()))
+        .timestamp(time::OffsetDateTime::now_utc())
+        .role(Role::User)
+        .content(vec![Content::Text("purged long ago".to_owned())])
+        .build();
+    db.append(&msg).await.unwrap();
+    path
+}
+
+/// How many sessions the AI session index at `path` holds.
+async fn indexed_sessions(path: &Path) -> usize {
+    use atuin_common::db::sqlite::Sqlite;
+    let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
+    let sessions: i64 = atuin_common::db::query_scalar::<_, i64>("SELECT count(*) FROM sessions")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    usize::try_from(sessions).unwrap()
+}
+
+/// `atuin store rebuild ai-session` has the daemon rebuild the index, starting it as other AI
+/// session commands do: the session no record backs leaves it.
+#[rstest]
+#[tokio::test]
+async fn ai_session_rebuild_goes_through_the_daemon(daemon: Daemon) {
+    daemon.env.write_config("local_timeout = 15\n[daemon]\nenabled = true\nautostart = true\n");
+    let index = stale_ai_session_index(&daemon.env).await;
+
+    let out = daemon.env.run(&["store", "rebuild", "ai-session"]);
+    assert!(out.contains("The daemon is rebuilding"), "{out}");
+    assert!(daemon.env.socket().exists(), "the daemon was started for it");
+    let deadline = Instant::now() + TIMEOUT;
+    while indexed_sessions(&index).await != 0 {
+        assert!(Instant::now() < deadline, "the stale session stayed in the index");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// With the daemon disabled, or enabled but not running and not to be started, nothing may
+/// delete the index (a daemon could be using it): the rebuild fails, and so does a purge that
+/// has already deleted records, saying the index is stale and how to fix it. The index is left
+/// as it was.
+#[rstest]
+#[tokio::test]
+async fn ai_session_rebuild_without_the_daemon_fails_and_touches_nothing(
+    daemon: Daemon,
+    #[values(false, true)] enabled: bool,
+    #[values(false, true)] purge: bool,
+) {
+    daemon.env.write_config(&format!(
+        "local_timeout = 15\n[daemon]\nenabled = {enabled}\nautostart = false\n"
+    ));
+    let index = stale_ai_session_index(&daemon.env).await;
+    atuin_common::encryption::paseto_v4::Key::generate()
+        .try_write_path(&daemon.env.data_dir().join("key"))
+        .unwrap();
+
+    let args: &[&str] = if purge {
+        &["store", "purge"]
+    } else {
+        &["store", "rebuild", "ai-session"]
+    };
+    let out = Process::spawn(daemon.env.atuin(args)).wait();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    if !enabled {
+        assert!(stderr.contains("AI sessions need the daemon"), "{stderr}");
+    }
+    if purge {
+        assert!(stderr.contains("atuin store rebuild ai-session"), "{stderr}");
+    }
+    assert!(!daemon.env.socket().exists(), "the daemon should not have been started");
+    assert_eq!(indexed_sessions(&index).await, 1, "the index was touched");
 }

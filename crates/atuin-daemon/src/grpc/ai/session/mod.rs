@@ -3,6 +3,7 @@ pub mod pb;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use atuin_client::ai_session::SearchTerms;
 use futures::StreamExt;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -14,13 +15,16 @@ use crate::grpc::ai::session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
     HarnessFilterRequest, ImportSessionsEvent, ImportSessionsProgress, ImportSessionsRequest,
-    ImportSessionsSummary, ListSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
-    SessionRefRequest, TailSessionsEvent, TailSessionsRequest, get_session_event,
-    import_sessions_event, tail_sessions_event,
+    ImportSessionsSummary, ListSessionsRequest, RebuildSessionsReply, RebuildSessionsRequest,
+    SearchSessionsMatch, SearchSessionsRequest, SessionFilterRequest, SessionRefRequest,
+    TailSessionsEvent, TailSessionsRequest, get_session_event, import_sessions_event,
+    tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
-use crate::session_capture::{AiHarnessSessionCapture, ImportProgress, SessionTailEvent};
+use crate::session_capture::{
+    AiHarnessSessionCapture, ImportProgress, RebuildError, SessionTailEvent,
+};
 
 #[derive(Clone)]
 pub struct Service {
@@ -33,11 +37,11 @@ impl Service {
         Self { capture }
     }
 
-    /// Refuse while startup recovery is still restoring sessions: a read would succeed with
-    /// sessions or messages silently missing.
+    /// Refuse while startup recovery or a rebuild is still restoring sessions: a read would
+    /// succeed with sessions or messages silently missing.
     fn ensure_recovered(&self) -> Result<(), Status> {
         if self.capture.is_recovering() {
-            return Err(rebuilding_status());
+            return Err(rebuilding_status(self.capture.recovery_progress()));
         }
         Ok(())
     }
@@ -48,12 +52,33 @@ impl Service {
 /// is worth waiting out.
 const REBUILDING_METADATA: &str = "atuin-ai-sessions-rebuilding";
 
-fn rebuilding_status() -> Status {
-    let mut status = Status::unavailable(
-        "AI sessions are being rebuilt after the daemon started; try again shortly",
-    );
-    status.metadata_mut().insert(REBUILDING_METADATA, MetadataValue::from_static("1"));
+/// Metadata key on the rebuilding status carrying how far the rebuild has got, as
+/// `<replayed>/<to replay>` records.
+const REBUILD_PROGRESS_METADATA: &str = "atuin-ai-sessions-rebuild-progress";
+
+fn rebuilding_status((replayed, pending): (u64, u64)) -> Status {
+    let mut status = Status::unavailable(format!(
+        "AI sessions are being rebuilt from the record store ({replayed} of {pending} records); \
+         try again shortly"
+    ));
+    let metadata = status.metadata_mut();
+    metadata.insert(REBUILDING_METADATA, MetadataValue::from_static("1"));
+    if let Ok(progress) = MetadataValue::try_from(format!("{replayed}/{pending}")) {
+        metadata.insert(REBUILD_PROGRESS_METADATA, progress);
+    }
     status
+}
+
+/// How far the rebuild `status` reports has got: records replayed, and roughly how many there are
+/// to replay. `None` for any other status, or a daemon that does not say.
+#[must_use]
+pub fn rebuild_progress(status: &Status) -> Option<(u64, u64)> {
+    if !is_rebuilding(status) {
+        return None;
+    }
+    let value = status.metadata().get(REBUILD_PROGRESS_METADATA)?.to_str().ok()?;
+    let (replayed, pending) = value.split_once('/')?;
+    Some((replayed.parse().ok()?, pending.parse().ok()?))
 }
 
 /// Whether `status` says the daemon is still rebuilding AI sessions after starting.
@@ -79,13 +104,11 @@ impl GrpcService for Service {
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<Self::ListSessionsStream>, Status> {
         self.ensure_recovered()?;
-        let request = request.into_inner();
-        let harness = HarnessFilterRequest::harness(&request)?;
-        let updated_since = request.updated_since_time()?;
+        let filter = request.into_inner().filter()?;
 
         let sessions = self
             .capture
-            .list_sessions(harness, updated_since)
+            .list_sessions(&filter)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -150,18 +173,16 @@ impl GrpcService for Service {
     ) -> Result<Response<Self::SearchSessionsStream>, Status> {
         self.ensure_recovered()?;
         let request = request.into_inner();
-        let harness = HarnessFilterRequest::harness(&request)?;
+        let filter = request.filter()?;
 
-        let stream = self
-            .capture
-            .search(
-                &request.query,
-                harness,
-                request.cwd.as_deref(),
-                request.any_term,
-                request.limit,
-            )
-            .map(|result| {
+        let terms = if request.any_term {
+            SearchTerms::Any
+        } else {
+            SearchTerms::All
+        };
+
+        let stream =
+            self.capture.search(&request.query, terms, &filter, request.limit).map(|result| {
                 result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
             });
 
@@ -213,6 +234,21 @@ impl GrpcService for Service {
             });
 
         Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn rebuild_sessions(
+        &self,
+        _request: Request<RebuildSessionsRequest>,
+    ) -> Result<Response<RebuildSessionsReply>, Status> {
+        match self.capture.rebuild().await {
+            Ok(()) => Ok(Response::new(RebuildSessionsReply {})),
+            Err(err @ RebuildError::Unavailable) => {
+                Err(Status::failed_precondition(err.to_string()))
+            }
+            Err(err @ (RebuildError::Sidecar(_) | RebuildError::Aborted)) => {
+                Err(Status::internal(err.to_string()))
+            }
+        }
     }
 
     async fn import_sessions(
@@ -296,6 +332,7 @@ mod tests {
                 harness: None,
                 cwd: None,
                 any_term: false,
+                filter: None,
             }))
             .await
             .expect("search over an empty sidecar succeeds");
@@ -317,6 +354,7 @@ mod tests {
                 harness: Some(9999),
                 cwd: None,
                 any_term: false,
+                filter: None,
             }))
             .await;
 
@@ -332,6 +370,7 @@ mod tests {
             svc.list_sessions(Request::new(ListSessionsRequest {
                 harness: None,
                 updated_since: None,
+                filter: None,
             }))
         };
         let search = || {
@@ -341,6 +380,7 @@ mod tests {
                 harness: None,
                 cwd: None,
                 any_term: false,
+                filter: None,
             }))
         };
         let import = || svc.import_sessions(Request::new(ImportSessionsRequest { harness: None }));
@@ -367,6 +407,7 @@ mod tests {
             svc.list_sessions(Request::new(ListSessionsRequest {
                 harness: None,
                 updated_since: None,
+                filter: None,
             }))
             .await
             .is_ok()
@@ -389,8 +430,14 @@ mod tests {
 
     #[rstest]
     fn only_the_marked_status_is_rebuilding() {
-        assert!(is_rebuilding(&rebuilding_status()));
+        assert!(is_rebuilding(&rebuilding_status((0, 0))));
         // What a dropped connection looks like: must not be waited on.
         assert!(!is_rebuilding(&Status::unavailable("transport error")));
+    }
+
+    #[rstest]
+    fn the_rebuilding_status_carries_its_progress() {
+        assert_eq!(rebuild_progress(&rebuilding_status((12, 340))), Some((12, 340)));
+        assert_eq!(rebuild_progress(&Status::unavailable("transport error")), None);
     }
 }

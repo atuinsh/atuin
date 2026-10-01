@@ -23,7 +23,7 @@ use atuin_common::harnesstools::session::{
 };
 use atuin_common::string::highlighted::FromHighlightedTextProtoError;
 use atuin_common::time::{OffsetDateTimeExt, TimespecOutOfRange};
-use atuin_domain::record::RecordId;
+use atuin_domain::record::{HostId, RecordId};
 pub use codegen::*;
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -218,8 +218,17 @@ impl From<DomainMessage> for Message {
             stop_reason: value.stop_reason.map(|reason| StopReason::from(reason) as i32),
             role_label,
             stop_reason_label,
+            host_id: value.host.map(host_repr),
         }
     }
+}
+
+fn host_repr(host: HostId) -> String {
+    host.as_hyphenated().to_string()
+}
+
+fn host_from_repr(host: Option<String>) -> Result<Option<HostId>, ParseError> {
+    Ok(host.map(|host| uuid::Uuid::parse_str(&host)).transpose()?.map(HostId))
 }
 
 impl Message {
@@ -286,6 +295,7 @@ impl TryFrom<Message> for DomainMessage {
             session_title_source: None,
             title_change: None,
             turn_id: None,
+            host: host_from_repr(value.host_id)?,
         })
     }
 }
@@ -312,6 +322,10 @@ impl From<DomainSession> for Session {
             preview: value.preview,
             last_reply: value.last_reply,
             parent_kind: value.parent_kind.map(|kind| ParentKind::from(kind) as i32),
+            host_id: value.host.map(host_repr),
+            root: value.root.map(Into::into),
+            copy_of: value.copy_of.map(Into::into),
+            child_count: value.child_count,
         }
     }
 }
@@ -342,6 +356,10 @@ impl TryFrom<Session> for DomainSession {
             preview: value.preview,
             last_reply: value.last_reply,
             parent_kind: domain_parent_kind(value.parent_kind),
+            host: host_from_repr(value.host_id)?,
+            root: value.root.map(TryInto::try_into).transpose()?,
+            copy_of: value.copy_of.map(TryInto::try_into).transpose()?,
+            child_count: value.child_count,
         })
     }
 }
@@ -393,6 +411,10 @@ mod tests {
                 reasoning,
             }
         })
+    }
+
+    fn arb_host() -> impl Strategy<Value = HostId> {
+        any::<u128>().prop_map(|id| HostId(uuid::Uuid::from_u128(id)))
     }
 
     fn arb_role() -> impl Strategy<Value = DomainRole> {
@@ -484,13 +506,17 @@ mod tests {
             prop::option::of("[a-z]{1,8}"),
             prop::option::of("[a-z]{1,8}"),
         );
-        let outcome =
-            (prop::option::of(arb_usage()), prop::option::of(arb_stop_reason()), arb_parent_kind());
+        let outcome = (
+            prop::option::of(arb_usage()),
+            prop::option::of(arb_stop_reason()),
+            arb_parent_kind(),
+            prop::option::of(arb_host()),
+        );
         (handles, body, outcome).prop_map(
             |(
                 (id, session, source_id, parent, parent_source_id),
                 (timestamp, role, content, cwd, git_branch, model),
-                (usage, stop_reason, parent_kind),
+                (usage, stop_reason, parent_kind, host),
             )| DomainMessage {
                 id: RecordId(uuid::Uuid::from_u128(id)),
                 session,
@@ -510,6 +536,7 @@ mod tests {
                 session_title_source: None,
                 title_change: None,
                 turn_id: None,
+                host,
             },
         )
     }
@@ -531,11 +558,18 @@ mod tests {
             prop::option::of(".{0,8}"),
             prop::option::of(".{0,8}"),
         );
-        (handles, summary, arb_parent_kind()).prop_map(
+        let grouping = (
+            prop::option::of(arb_host()),
+            prop::option::of(arb_harness_session()),
+            any::<u64>(),
+            prop::option::of(arb_harness_session()),
+            arb_parent_kind(),
+        );
+        (handles, summary, grouping).prop_map(
             |(
                 (handle, parent, cwd, git_branch, model),
                 (started_at, updated_at, message_count, usage, title, preview, last_reply),
-                parent_kind,
+                (host, root, child_count, copy_of, parent_kind),
             )| DomainSession {
                 handle,
                 parent,
@@ -551,28 +585,36 @@ mod tests {
                 title_source: None,
                 preview,
                 last_reply,
+                host,
+                root,
+                copy_of,
+                child_count,
             },
         )
     }
 
-    proptest! {
-        #[test]
-        fn harness_session_roundtrips(hs in arb_harness_session()) {
+    #[rstest]
+    fn harness_session_roundtrips() {
+        proptest!(|(hs in arb_harness_session())| {
             let pb: HarnessSession = hs.clone().into();
             prop_assert_eq!(DomainHarnessSession::try_from(pb).unwrap(), hs);
-        }
+        });
+    }
 
-        #[test]
-        fn message_roundtrips(message in arb_message()) {
+    #[rstest]
+    fn message_roundtrips() {
+        proptest!(|(message in arb_message())| {
             let pb = Message::from(message.clone());
             prop_assert_eq!(DomainMessage::try_from(pb).unwrap(), message);
-        }
+        });
+    }
 
-        #[test]
-        fn session_roundtrips(session in arb_session()) {
+    #[rstest]
+    fn session_roundtrips() {
+        proptest!(|(session in arb_session())| {
             let pb = Session::from(session.clone());
             prop_assert_eq!(DomainSession::try_from(pb).unwrap(), session);
-        }
+        });
     }
 
     #[fixture]

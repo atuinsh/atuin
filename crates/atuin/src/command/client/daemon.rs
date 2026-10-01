@@ -471,6 +471,15 @@ pub async fn rebuild_history(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+/// Have the daemon rebuild its AI sessions from the record store (see
+/// `AiClient::rebuild_sessions`), first starting or replacing it (via [`ready_client`]) as the
+/// other AI session commands do.
+pub async fn rebuild_ai_sessions(settings: &Settings) -> Result<()> {
+    ready_client(settings).await?;
+    let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
+    client.rebuild_sessions().await
+}
+
 pub async fn compact_store(settings: &Settings) -> Result<u64> {
     let reply = try_with_restart(settings, async |client| client.compact_store().await).await?;
     Ok(reply.rewritten)

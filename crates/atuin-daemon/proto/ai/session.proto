@@ -5,10 +5,35 @@ import "ai/agent.proto";
 import "common.proto";
 import "google/protobuf/timestamp.proto";
 
+// Which sessions a listing or search returns. An absent field is not a filter;
+// every present one must hold.
+message SessionFilter {
+  // Captured on this host (a hyphenated host id).
+  optional string host_id = 1;
+  // Working directory at or under this path.
+  optional string workspace = 2;
+  // Working directory exactly this path.
+  optional string directory = 3;
+  // On exactly this git branch.
+  optional string branch = 4;
+  optional ai.agent.HarnessKind harness = 5;
+  // Model name containing this, ignoring ASCII case.
+  optional string model = 6;
+  // Return only the roots of session groups (forks and subagents grouped under
+  // their top-most ancestor), each with its child_count; a group passes when
+  // any of its sessions does.
+  bool roots_only = 7;
+  // Active (updated) at or after this time.
+  google.protobuf.Timestamp updated_since = 8;
+}
+
 message ListSessionsRequest {
+  // Superseded by filter.harness, which wins when both are set.
   optional ai.agent.HarnessKind harness = 1;
   // Only sessions active at or after this time.
+  // Superseded by filter.updated_since, which wins when both are set.
   google.protobuf.Timestamp updated_since = 2;
+  SessionFilter filter = 3;
 }
 
 message GetSessionRequest {
@@ -41,21 +66,37 @@ message SearchSessionsRequest {
   // (the full match set is scored before the first result), so prefer a bound.
   uint32 limit = 2;
   // Only search sessions from this harness. Absent searches every harness.
+  // Superseded by filter.harness, which wins when both are set.
   optional ai.agent.HarnessKind harness = 3;
   // Only match sessions whose directory is this one or beneath it. Absent searches everywhere.
+  // Superseded by filter.workspace, which wins when both are set.
   optional string cwd = 4;
   // Match messages containing any of the query's terms, each as a prefix, instead of all of them
   // as whole words.
   bool any_term = 5;
+  SessionFilter filter = 6;
 }
 
 message SearchSessionsMatch {
   ai.agent.Session session = 1;
+  // The session's title, highlighted where the query matched it. When the match is in
+  // `matched`, only highlighted if the title matches the query itself.
   common.HighlightedText title = 2;
   common.HighlightedText preview = 3;
   double score = 4;
-  // Position of the best-matching message in the session, in GetSession message order.
+  // Position of the best-matching message in the session holding it (`session`, or `matched`
+  // when set), in GetSession message order.
   uint64 message_index = 5;
+  // The session holding the best-matching message, when it is not `session`: in a roots-only
+  // search, a session grouped under the root returned.
+  MatchedSession matched = 6;
+}
+
+// The session of a group holding a search match, when it is not the group's root.
+message MatchedSession {
+  ai.agent.HarnessSession session = 1;
+  // Its title, highlighted where the query matched it.
+  common.HighlightedText title = 2;
 }
 
 // Which sessions to follow. An absent field is not a filter.
@@ -101,6 +142,10 @@ message ImportSessionsSummary {
   uint64 failed = 4;
 }
 
+message RebuildSessionsRequest {}
+
+message RebuildSessionsReply {}
+
 message ImportSessionsEvent {
   oneof event {
     ImportSessionsProgress progress = 1;
@@ -121,7 +166,9 @@ service AiSession {
   // Render one session as a plain-text transcript, streamed in chunks.
   rpc GetTranscript(GetTranscriptRequest) returns (stream GetTranscriptChunk);
 
-  // Fuzzy-search sessions, streamed most-relevant-first.
+  // Full-text search sessions (every term as a whole word, or any term as a
+  // prefix with any_term), streamed most-relevant-first (bm25 blended with
+  // recency). An empty query streams sessions newest first.
   rpc SearchSessions(SearchSessionsRequest) returns (stream SearchSessionsMatch);
 
   // Follow sessions and messages as they are recorded.
@@ -130,4 +177,11 @@ service AiSession {
   // Import every already-existing on-disk session, streaming per-session
   // progress and a final summary.
   rpc ImportSessions(ImportSessionsRequest) returns (stream ImportSessionsEvent);
+
+  // Rebuild the sessions from the record store, after records were deleted
+  // under them: everything projected is deleted before this returns, then
+  // replayed in the background, reads meanwhile failing as rebuilding (as after
+  // the daemon starts). FAILED_PRECONDITION when the store failed to open or
+  // recover at startup.
+  rpc RebuildSessions(RebuildSessionsRequest) returns (RebuildSessionsReply);
 }

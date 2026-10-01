@@ -267,6 +267,7 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
 
     println!("\n{}", fl!("login-reencrypting"));
     store.re_encrypt(&current_key, key).await?;
+    crate::command::client::store::invalidate_ai_sessions().await;
 
     println!("{}", fl!("login-writing-key"));
     key.overwrite_path(key_path)?;
