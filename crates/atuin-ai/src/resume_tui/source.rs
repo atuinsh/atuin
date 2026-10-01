@@ -5,10 +5,11 @@
 //! `super::fake::FakeSource`.
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SessionFilter as DbFilter};
+use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::Usage;
 use time::OffsetDateTime;
 
@@ -131,6 +132,16 @@ pub trait SessionSource: Send + Sync {
     /// The forks grouped under a root, newest first: the [listed](Relation::is_listed) sessions
     /// among its children, never its subagents.
     async fn children(&self, session: &HarnessSession) -> eyre::Result<Vec<SessionRow>>;
+
+    /// Session `session` with every message it holds, as its harness can write it back out to be
+    /// resumed in `cwd` (see [`super::resumer::Resumer::restore`]).
+    async fn rehydrate(
+        &self,
+        _session: &HarnessSession,
+        _cwd: &Path,
+    ) -> eyre::Result<RehydrateSession> {
+        eyre::bail!("this source can't restore sessions")
+    }
 }
 
 /// How a session's host shows: `this machine` when it is `here`, and another by a short form of

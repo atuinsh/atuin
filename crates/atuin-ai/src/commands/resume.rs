@@ -5,8 +5,11 @@
 //!   a session that can't be resumed opens the picker on it, so the reason shows. An id that
 //!   names several sessions (a prefix of several, or one id several agents have) opens the
 //!   picker on them, to pick one; without a terminal to run it on, it fails, listing them.
-//! - A session whose transcript isn't on this machine (recorded on another host, or deleted)
-//!   can be viewed, but not resumed: named by id, the picker opens on it, saying so.
+//! - A session whose transcript isn't on this machine (recorded on another host, or deleted) is
+//!   restored from the synced messages first: the harness's own transcript is written out, then
+//!   resumed with the usual command. That happens only once a session is chosen (enter or tab in
+//!   the picker, or named by id), in this process, before the command is run or handed to the
+//!   shell widget, so the command the widget puts on the command line works as it stands.
 //! - From the shell widget (`--shell-widget`), the result goes to stderr using the history
 //!   search's protocol: `__atuin_accept__:<cmd>` to run it, plain `<cmd>` to edit it, nothing to
 //!   leave the command line alone.
@@ -25,7 +28,7 @@ use clap::Args;
 use eyre::{Result, bail};
 
 use super::session::one_line;
-use crate::resume_tui::resumer::{HarnessResumer, shell_line};
+use crate::resume_tui::resumer::{HarnessResumer, Resume, shell_line};
 use crate::resume_tui::sidecar::SidecarSource;
 use crate::resume_tui::source::{Relation, harness_label};
 use crate::resume_tui::{
@@ -237,7 +240,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let path = Settings::ai_session_sidecar_path();
     let source: Arc<dyn SessionSource> = Arc::new(SidecarSource::open(&path, &context).await?);
     let resumer: Arc<dyn Resumer> =
-        Arc::new(HarnessResumer::new(settings.ai.sessions.resume.clone()));
+        Arc::new(HarnessResumer::new(context.clone(), settings.ai.sessions.resume.clone()));
 
     let mut preselect = None;
     let target = direct_target(source.as_ref(), query.trim()).await?;
@@ -254,7 +257,31 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         {
             eprintln!("atuin: {note}");
         }
-        match resumer.plan(&row).await {
+        let plan = match resumer.plan(&row).await {
+            Ok(Resume {
+                plan,
+                restore: None,
+            }) => Ok(plan),
+            Ok(Resume {
+                restore: Some(restore),
+                ..
+            }) => {
+                let plan = resumer.restore(source.as_ref(), &row, &restore).await;
+                // The widget reads stderr for the command: nothing else may go there.
+                if plan.is_ok()
+                    && output != Output::Widget
+                    && let Some(note) = &restore.note
+                {
+                    eprintln!(
+                        "atuin: restored the session from sync; {}",
+                        note.escape_non_printable()
+                    );
+                }
+                plan
+            }
+            Err(why) => Err(why),
+        };
+        match plan {
             Ok(plan) => return finish(direct_outcome(plan, output, settings.enter_accept), output),
             // Open the picker on it instead, so the reason shows (and another can be picked).
             Err(why) => preselect = Some((row, why)),

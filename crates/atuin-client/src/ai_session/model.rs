@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
+use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use atuin_common::harnesstools::session::{
     Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage,
 };
@@ -154,6 +155,24 @@ where
     })
 }
 
+impl From<Message> for RehydrateMessage {
+    fn from(m: Message) -> Self {
+        Self {
+            source_id: m.source_id.into(),
+            parent_source_id: m.parent_source_id.map(Into::into),
+            timestamp: m.timestamp,
+            role: m.role,
+            content: m.content,
+            model: m.model,
+            usage: m.usage,
+            stop_reason: m.stop_reason,
+            turn_id: m.turn_id,
+            cwd: m.cwd,
+            git_branch: m.git_branch,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct Session {
     pub handle: HarnessSession,
@@ -211,6 +230,26 @@ pub struct Session {
 }
 
 impl Session {
+    /// This session and its `messages` (in transcript order), as its harness can write them back
+    /// out to be resumed in `cwd` (see [`atuin_common::harnesstools::Harness::rehydrate`]).
+    #[must_use]
+    pub fn rehydrate(
+        &self,
+        messages: impl IntoIterator<Item = Message>,
+        cwd: PathBuf,
+    ) -> RehydrateSession {
+        RehydrateSession {
+            id: self.handle.session.to_string(),
+            title: self.title.clone(),
+            cwd,
+            original_cwd: self.cwd.clone(),
+            git_branch: self.git_branch.clone(),
+            model: self.model.clone(),
+            started_at: self.started_at,
+            messages: messages.into_iter().map(RehydrateMessage::from).collect(),
+        }
+    }
+
     /// Whether this session is a root: no stored ancestor.
     #[must_use]
     pub fn is_root(&self) -> bool {

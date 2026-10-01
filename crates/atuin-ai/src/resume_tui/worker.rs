@@ -5,9 +5,10 @@
 //!   typing), and the UI drops answers for any generation but the newest, keeping the old list on
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
-//!   kind is kept: while the selection moves, the sessions it passed over are never loaded. The
-//!   plan an enter or tab is waiting on goes first, and is never dropped for another session's
-//!   (see [`Request::Accept`]).
+//!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
+//!   Restoring a session from sync, which only an enter or tab asks for, goes first, then the plan
+//!   an enter or tab is waiting on, which is never dropped for another session's (see
+//!   [`Request::Accept`]).
 
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ use atuin_client::ai_session::HarnessSession;
 use atuin_client::settings::AiSessionFilterMode as FilterMode;
 use tokio::sync::mpsc;
 
-use super::resumer::{NotResumable, ResumePlan, Resumer};
+use super::resumer::{NotResumable, Restore, Resume, ResumePlan, Resumer};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -34,6 +35,8 @@ pub enum Request {
     /// a plan for another session (the selection's, as it settles) can't take the place of. Only
     /// a newer accept can, which the picker then waits on instead.
     Accept(Box<SessionRow>),
+    /// Write out the transcript of a session planned with a restore, and plan resuming it.
+    Restore(Box<SessionRow>, Restore),
 }
 
 #[derive(Debug)]
@@ -45,7 +48,9 @@ pub enum Response {
     },
     Preview(HarnessSession, SessionPreview),
     Children(HarnessSession, Vec<SessionRow>),
-    Plan(HarnessSession, Result<ResumePlan, NotResumable>),
+    Plan(HarnessSession, Result<Resume, NotResumable>),
+    /// The session is restored (or couldn't be): the plan that resumes it.
+    Restored(HarnessSession, Result<ResumePlan, NotResumable>),
 }
 
 /// Sends requests to the worker's lanes. The worker stops when this is dropped.
@@ -122,6 +127,7 @@ struct Latest {
     children: Option<Request>,
     plan: Option<Request>,
     accept: Option<Request>,
+    restore: Option<Request>,
 }
 
 impl Latest {
@@ -131,16 +137,18 @@ impl Latest {
             Request::Children(_) => &mut self.children,
             Request::Plan(_) => &mut self.plan,
             Request::Accept(_) => &mut self.accept,
+            Request::Restore(..) => &mut self.restore,
             Request::Search { .. } => return,
         };
         *slot = Some(request);
     }
 
-    /// The next to answer: the plan an enter is waiting on, then the selection's plan (one may
-    /// soon be), then children, then the preview.
+    /// The next to answer: a restore, then the plan an enter is waiting on (an enter waits on
+    /// either), then the selection's plan (one may soon be), then children, then the preview.
     fn take(&mut self) -> Option<Request> {
-        self.accept
+        self.restore
             .take()
+            .or_else(|| self.accept.take())
             .or_else(|| self.plan.take())
             .or_else(|| self.children.take())
             .or_else(|| self.preview.take())
@@ -184,6 +192,10 @@ async fn details(
             Request::Plan(row) | Request::Accept(row) => {
                 Response::Plan(row.handle.clone(), resumer.plan(&row).await)
             }
+            Request::Restore(row, restore) => Response::Restored(
+                row.handle.clone(),
+                resumer.restore(source.as_ref(), &row, &restore).await,
+            ),
             Request::Search { .. } => continue,
         };
         if responses.send(response).is_err() {
@@ -247,7 +259,7 @@ mod tests {
             panic!("expected a plan");
         };
         assert_eq!(handle, root.handle);
-        assert_eq!(plan.unwrap().program, "claude");
+        assert_eq!(plan.unwrap().plan.program, "claude");
     }
 
     /// A source whose previews wait for a permit, recording which sessions were previewed.

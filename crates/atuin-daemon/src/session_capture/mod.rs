@@ -1838,6 +1838,41 @@ mod tests {
         assert_eq!(sink.append(msg).await.unwrap(), Appended::Duplicate);
     }
 
+    /// A restored transcript writes a call captured without its input back as a note in its
+    /// row's text. Re-captured, that row comes back under the source id already synced, with
+    /// other content: it is a duplicate, never pushed again, and the synced row stands.
+    #[rstest]
+    #[tokio::test]
+    async fn a_row_back_with_other_content_is_a_duplicate() {
+        let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let records = AiSessionStore::builder()
+            .store(raw.clone())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let sink = Sink::new(records, AiSessionDatabase::in_memory().await.unwrap());
+        let mut synced = sample_message();
+        synced.role = Role::Assistant;
+        synced.content = vec![Content::ToolUse(ToolUse {
+            id: ToolCallId::from("c1".to_owned()),
+            name: "Bash".to_owned(),
+            input: serde_json::json!({"command": "ls"}),
+        })];
+        let mut restored = synced.clone();
+        restored.id = RecordId(atuin_common::utils::uuid_v7());
+        restored.content = vec![Content::Text("Looking.\n\n[ran a shell command]".to_owned())];
+
+        assert_eq!(sink.append(synced).await.unwrap(), Appended::New);
+        assert_eq!(sink.append(restored).await.unwrap(), Appended::Duplicate);
+        assert_eq!(raw.all_tagged(&RecordTag::AiSession).await.unwrap().len(), 1);
+        let messages: Vec<Message> =
+            sink.sidecar.messages(&sample_handle()).map(Result::unwrap).collect().await;
+        assert_eq!(messages.len(), 1);
+        assert!(
+            matches!(messages[0].content.as_slice(), [Content::ToolUse(u)] if u.input.is_null())
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn append_without_subscriber_does_not_error() {
@@ -2659,5 +2694,86 @@ mod pipeline_tests {
         assert_eq!(row.updated_at.year(), 2020, "updated_at = {}", row.updated_at);
         assert_eq!(row.started_at, row.updated_at);
         assert_eq!(row.title.as_deref(), Some("Old work"));
+    }
+
+    /// Serializes the tests that point `CODEX_HOME` somewhere: the variable is process-wide, and
+    /// a rehydrate that found it unset would write to the real `~/.codex`.
+    static CODEX_HOME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Write `session` out as Codex would find it, under a temporary `CODEX_HOME`.
+    async fn rehydrate_codex(
+        session: &atuin_common::harnesstools::rehydrate::RehydrateSession,
+        home: &std::path::Path,
+    ) -> std::path::PathBuf {
+        let _env = CODEX_HOME.lock().await;
+        // SAFETY: no other thread of these tests reads or writes the environment meanwhile.
+        unsafe { std::env::set_var("CODEX_HOME", home) };
+        let written = atuin_common::harnesstools::codex::rehydrate::rehydrate(session).await;
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("CODEX_HOME") };
+        let path = written.unwrap();
+        assert!(path.starts_with(home), "{} is outside the test's CODEX_HOME", path.display());
+        path
+    }
+
+    /// A Codex rollout's lines, read as capture reads them.
+    async fn codex_rollout(id: &str, path: std::path::PathBuf) -> Vec<AnyMessage> {
+        use atuin_common::harnesstools::codex::session::CodexSession;
+        use atuin_common::harnesstools::session::Session as _;
+        use futures::TryStreamExt;
+        CodexSession::open(sid(id), path, BlockingPool::new(NonZeroUsize::MIN))
+            .read()
+            .map_ok(AnyMessage::from)
+            .try_collect()
+            .await
+            .unwrap()
+    }
+
+    /// A Codex session written back out from its synced rows (rehydrated, to be resumed on
+    /// another machine) and captured again there pushes no record: every line resolves to a row
+    /// already synced.
+    #[rstest]
+    #[case::legacy_forked_subagent("legacy-forked-subagent.jsonl")]
+    #[case::paginated_with_compaction("paginated-compacted.jsonl")]
+    #[case::custom_tools_and_records("session1.jsonl")]
+    #[tokio::test]
+    async fn a_rehydrated_codex_session_recaptures_as_nothing_new(
+        #[future] sink: Sink,
+        #[case] name: &str,
+    ) {
+        let sink = sink.await;
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../atuin-common/tests/fixtures/codex")
+            .join(name);
+        let first: serde_json::Value = serde_json::from_str(
+            std::fs::read_to_string(&fixture).unwrap().lines().next().unwrap(),
+        )
+        .unwrap();
+        let id = first["payload"]["id"].as_str().or(first["id"].as_str()).unwrap().to_owned();
+
+        let lines = codex_rollout(&id, fixture).await;
+        let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+        let captured = capture_all(&sink, &mut enricher, &sid(&id), &lines).await;
+        assert!(captured.contains(&Appended::New));
+
+        let handle = handle(HarnessKind::Codex, &id);
+        let session = sink
+            .sidecar
+            .rehydrate_session(&handle, std::path::PathBuf::from("/elsewhere"))
+            .await
+            .unwrap()
+            .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let path = rehydrate_codex(&session, home.path()).await;
+
+        // Written in Codex's paginated history mode.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let header: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(header["payload"]["history_mode"], "paginated");
+        let again = codex_rollout(&id, path).await;
+        let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+        let outcomes = capture_all(&sink, &mut enricher, &sid(&id), &again).await;
+        let new = outcomes.iter().filter(|o| **o == Appended::New).count();
+        assert_eq!(new, 0, "re-capturing the rehydrated rollout pushed {new} records");
     }
 }
