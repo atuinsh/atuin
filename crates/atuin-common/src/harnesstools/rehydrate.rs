@@ -47,7 +47,7 @@ pub enum RehydrateError {
     Unsupported(&'static str),
     #[error("a transcript for this session already exists at {0}")]
     AlreadyExists(PathBuf),
-    #[error("the harness's data directory could not be found")]
+    #[error("the agent's data directory could not be found")]
     NoDataDir,
     #[error("rehydrating failed: {0}")]
     Other(String),

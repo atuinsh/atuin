@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{AiSessionDatabase, HarnessSession, SearchTerms, Session};
+use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{Content, ParentKind};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_common::utils::in_git_repo;
@@ -168,6 +169,13 @@ impl SessionSource for SidecarSource {
             .map(|s| self.row(s))
             .filter(|r| r.relation.is_listed())
             .collect())
+    }
+
+    async fn rehydrate(&self, session: &HarnessSession, cwd: &Path) -> Result<RehydrateSession> {
+        self.db
+            .rehydrate_session(session, cwd.to_owned())
+            .await?
+            .ok_or_else(|| eyre::eyre!("the session isn't in the AI session database"))
     }
 }
 

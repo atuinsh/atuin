@@ -102,8 +102,8 @@ async fn rows_show_time_badge_title_and_count() {
     assert!(!out.contains("Explore: find"), "{out}");
 }
 
-/// Other hosts' sessions look like this host's in the list: only the preview says where one
-/// ran.
+/// Other hosts' sessions look like this host's: they resume by being restored from sync,
+/// behind the scenes. Only the preview says where one ran.
 #[rstest]
 #[tokio::test]
 async fn other_hosts_rows_look_like_this_hosts() {
@@ -125,6 +125,7 @@ async fn other_hosts_rows_look_like_this_hosts() {
     state.list.selected = remote;
     let out = text(&render(&mut state, &settings(), 100, 30));
     assert!(out.contains("│       atuin · main · @00000002"), "{out}");
+    assert!(!out.contains("from sync"), "{out}");
 }
 
 /// The preview's first line says where the session ran and what forked off it, in place of a
@@ -149,16 +150,17 @@ async fn the_preview_says_where_a_session_ran() {
     assert_eq!(section(&out, "atuin", "╰")[0], "       atuin · main", "{out}");
 }
 
-/// Inspecting another host's session says it can't be resumed here, and why.
+/// Inspecting another host's session says how it resumes, hinting that it comes from sync.
 #[rstest]
 #[tokio::test]
-async fn inspect_says_a_remote_session_cant_resume_here() {
+async fn inspect_says_a_remote_session_is_restored() {
     let mut s = settings();
     s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "aarch64", 1).await;
     let out = text(&render(&mut state, &s, 120, 30));
-    let line = out.lines().find(|l| l.contains("Resume    ")).unwrap();
-    assert!(line.contains("not resumable: its transcript isn't on this machine"), "{out}");
+    let line = out.lines().find(|l| l.contains("Resume    cd -- ")).unwrap();
+    assert!(line.contains(" && claude --resume d4e6f8a0-2c3d-4e4f-8a7b-8c9d0e1f2a3b  from sync"));
+    assert!(!out.contains("Restore"), "{out}");
 }
 
 #[rstest]
@@ -474,6 +476,46 @@ async fn enter_and_tab_resume_straight_away() {
     assert_eq!(accept(&mut state, Pending::Resume, &requests), None);
     let (status, _) = state.status.clone().unwrap();
     assert!(status.starts_with("can't resume: "), "{status}");
+}
+
+/// A session recorded on another machine is restored from sync (by the worker) only once it is
+/// chosen, and then resumed from where it was written; ctrl-y copies `atuin ai resume <id>`,
+/// which restores it when run, and writes nothing.
+#[rstest]
+#[tokio::test]
+async fn a_session_from_another_machine_is_restored_first() {
+    use std::sync::Arc;
+
+    use super::state::{Pending, RESTORE};
+    use super::worker::Response;
+    use super::{Outcome, accept, apply_response, resume_line, worker};
+
+    let mut s = settings();
+    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    let resumer = Arc::new(FakeResumer::default());
+    let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+
+    let mut state = loaded(&s, "aarch64 release build", 0).await;
+    let row = state.selected().unwrap().clone();
+    assert_ne!(row.host_id, fake::THIS_HOST_ID, "another machine's session");
+    let resume = state.plans[&row.handle].clone().unwrap();
+    assert!(resume.restore.is_some());
+    let id = row.handle.session.to_string();
+    assert_eq!(resume_line(&row, &resume), format!("atuin ai resume {id}"));
+
+    let outcome = accept(&mut state, Pending::Resume, &requests);
+    assert_eq!(outcome, None, "waits for the restore");
+    assert!(state.requested.contains(&(row.handle.clone(), RESTORE)));
+    assert!(state.status.as_ref().is_some_and(|(s, _)| s.starts_with("restoring from sync")));
+
+    let restore = resume.restore.clone().unwrap();
+    let plan = resumer.restore(&FakeSource::new(), &row, &restore).await;
+    apply_response(&mut state, Response::Restored(row.handle.clone(), plan), &requests);
+    let outcome = accept(&mut state, Pending::Resume, &requests);
+    let Some(Outcome::Resume(plan)) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(plan.native_path, Some(std::path::PathBuf::from(format!("/restored/{id}.jsonl"))));
 }
 
 /// The picker's host id is compared with the rows' in their (simple) form, however it was
@@ -970,7 +1012,7 @@ async fn an_accept_always_gets_its_plan() {
         if let Some((handle, pending)) = state.pending.clone()
             && state.plans.contains_key(&handle)
         {
-            break complete(&mut state, pending);
+            break complete(&mut state, pending, &requests);
         }
     };
     let Some(Outcome::Resume(plan)) = outcome else {

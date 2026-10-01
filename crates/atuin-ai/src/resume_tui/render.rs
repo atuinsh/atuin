@@ -306,6 +306,8 @@ impl StatefulWidget for SessionList<'_> {
                 x: list_area.left(),
                 right: list_area.right(),
                 y: cy,
+                // Another host's session looks like any other: it resumes by being restored
+                // from sync, behind the scenes.
                 row_modifier: if self.alternate_highlight && selected {
                     Modifier::REVERSED
                 } else {
@@ -1294,10 +1296,21 @@ impl State {
         }
         lines.push(match self.plans.get(&row.handle) {
             None => field("Resume", vec![Span::styled("…", key)]),
-            Some(Ok(plan)) => field("Resume", vec![Span::styled(
-                shell_line(plan),
-                style(theme, Meaning::Important).add_modifier(Modifier::BOLD),
-            )]),
+            Some(Ok(resume)) => field("Resume", vec![
+                Span::styled(
+                    shell_line(&resume.plan),
+                    style(theme, Meaning::Important).add_modifier(Modifier::BOLD),
+                ),
+                // Its transcript is written from the synced messages first.
+                Span::styled(
+                    if resume.restore.is_some() {
+                        "  from sync"
+                    } else {
+                        ""
+                    },
+                    key,
+                ),
+            ]),
             Some(Err(why)) => field("Resume", vec![Span::styled(
                 format!("not resumable: {why}"),
                 style(theme, Meaning::AlertError),

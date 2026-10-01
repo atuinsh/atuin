@@ -123,13 +123,15 @@ mouse = false
 `enter_accept`, puts the command on your command line), and ++tab++ puts the
 command on your command line to edit first. ++ctrl+y++ copies it.
 
-If the session's own agent can't resume it here, the picker says why and stays
-open: a session recorded on another machine (or whose transcript was deleted)
-isn't on this machine to resume, and nor is a Copilot session, a session whose
-directory is gone, or one whose agent isn't installed. Inspect says so too.
+If the session was recorded on another machine, or its transcript was deleted,
+Atuin first writes the transcript back out from the synced messages (Inspect
+says "from sync"). If the session's own agent can't resume it here (a Copilot
+session, a directory that's gone, an agent that isn't installed), the picker
+says why and stays open; Inspect says so too.
 
 From the command line, `atuin ai resume <id>` resumes a session directly (an
-id prefix works too). `--print` prints the command instead of running it.
+id prefix works too), writing it out from sync first when it isn't on this
+machine. `--print` prints the command instead of running it.
 
 ## Settings
 
