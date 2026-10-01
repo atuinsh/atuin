@@ -218,8 +218,9 @@ impl AiSessionStore {
     /// It forgets only series whose forgetting deletes no row of this host: capture dedups a line
     /// it captured again against the row of this host it pushed for it. A series whose forgetting
     /// would (this host's own, rewritten or deleted under its watermark, or another host's that
-    /// added rows to this host's sessions) stops it with [`BuildError::ForgetHeldOff`],
-    /// forgetting nothing.
+    /// added rows to this host's sessions) is skipped, forgetting nothing, and once the other
+    /// series are projected this fails with [`BuildError::ForgetHeldOff`] naming its host (the
+    /// first, if several).
     pub async fn reproject_beside_capture(
         &self,
         db: &AiSessionDatabase,
@@ -303,14 +304,18 @@ impl AiSessionStore {
 
         let mut pass = Pass::Done;
         let mut failure = None;
+        // A series this must not forget (beside capture) is skipped, and left to the caller once
+        // the rest is projected.
+        let mut held_off = None;
         for (series, last) in series {
             let mark = marks.remove(&series);
             match self.reproject_series(db, &series, last, mark, stats, progress, forgetting).await
             {
                 Ok(Pass::Done) => {}
                 Ok(Pass::Invalidated) => pass = Pass::Invalidated,
-                // Left to the caller at once: the rest is replayed once it is forgotten.
-                Err(err @ BuildError::ForgetHeldOff(_)) => return Err(err),
+                Err(BuildError::ForgetHeldOff(host)) => {
+                    held_off.get_or_insert(host);
+                }
                 Err(err) => {
                     warn!(?err, host = %series.host_id, "failed to reproject ai-session records");
                     failure = Some(err);
@@ -323,13 +328,22 @@ impl AiSessionStore {
         for (series, _) in marks {
             if series.tag == RecordTag::AiSession {
                 warn!(host = %series.host_id, "ai-session records vanished from the record store");
-                if self.forget_host(db, series.host_id, forgetting).await? {
-                    pass = Pass::Invalidated;
+                match self.forget_host(db, series.host_id, forgetting).await {
+                    Ok(true) => pass = Pass::Invalidated,
+                    Ok(false) => {}
+                    Err(BuildError::ForgetHeldOff(host)) => {
+                        held_off.get_or_insert(host);
+                        continue;
+                    }
+                    Err(err) => return Err(err),
                 }
                 stats.restarted += 1;
             }
         }
 
+        if let Some(host) = held_off {
+            return Err(BuildError::ForgetHeldOff(host));
+        }
         failure.map_or(Ok(pass), Err)
     }
 
@@ -1110,12 +1124,16 @@ mod tests {
         assert_eq!(count(&db, &theirs).await, None);
         assert_eq!(count(&db, &session_named("again")).await, Some(1));
 
-        // Host b's: forgetting it would delete a's row in `shared`.
+        // Host b's: forgetting it would delete a's row in `shared`. It is skipped, and the other
+        // series projected.
         delete_all_of(b.host_id).await;
         push_range(&b, &session_named("anew"), 40..41).await;
+        push_range(&c, &session_named("again"), 31..32).await;
         let err = a.reproject_beside_capture(&db).await.unwrap_err();
         assert!(matches!(err, BuildError::ForgetHeldOff(host) if host == b.host_id), "{err:?}");
         assert_eq!(count(&db, &shared).await, Some(3), "nothing was forgotten");
+        assert_eq!(count(&db, &session_named("anew")).await, None);
+        assert_eq!(count(&db, &session_named("again")).await, Some(2));
         // With capture held off, it is.
         a.reproject(&db).await.unwrap();
         assert_eq!(count(&db, &shared).await, Some(1), "a's row alone came back");
