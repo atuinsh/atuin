@@ -91,9 +91,6 @@ cargo +nightly fmt --check
 RUSTDOCFLAGS="-D warnings" cargo doc --document-private-items --no-deps --workspace
 ```
 
-`crates/atuin-api-client/openapi.json` comes from the hub (`mix api.spec`); never edit it or
-`src/generated.rs` by hand. After the spec changes, regenerate the client (CI fails on a diff):
-
 ```sh
 cargo run --locked --manifest-path crates/atuin-api-client/codegen/Cargo.toml
 ```

@@ -119,8 +119,6 @@ pretty_assertions = "1"
 proptest = "1"
 prost = "0.14"
 prost-types = "0.14"
-# Runtime of the client crates/atuin-api-client/codegen generates; keep it on the generator's
-# progenitor minor version, which the generator's tests check.
 progenitor-client = "0.15"
 protox = "0.9"
 pulldown-cmark = "0.13"
