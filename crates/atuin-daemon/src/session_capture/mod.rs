@@ -2660,6 +2660,28 @@ mod pipeline_tests {
         assert!(!msg.content.is_empty(), "summary text retained");
     }
 
+    /// A continuation's marker (`atuin ai resume --in`) is harness-injected text, which is not
+    /// synced; the link it makes is, as every row's parent, so it survives sync and reprojection.
+    #[rstest]
+    fn a_continuation_marker_is_dropped_but_its_parent_is_kept() {
+        use atuin_common::harnesstools::{AnyHarness, continuation};
+        let marker = continuation::marker_text(AnyHarness::from_name("pi").unwrap(), "0199-orig");
+        let m = ccode(serde_json::json!({
+            "type": "user", "uuid": "c1", "isMeta": true, "timestamp": "2026-09-18T10:00:00.000Z",
+            "message": {"role": "user", "content": marker},
+        }));
+        let mut msg =
+            MessageEnricher::new(HarnessKind::ClaudeCode).capture(&sid("s1"), &m).pop().unwrap();
+        sanitize_message(&mut msg);
+        assert!(msg.content.is_empty(), "{:?}", msg.content);
+        let parent = msg.parent.clone().expect("the marker names the parent");
+        assert_eq!(parent.harness, HarnessKind::Pi);
+        assert_eq!(parent.session.as_ref(), "0199-orig");
+        let record = atuin_client::ai_session::AiSessionRecord::Message(msg).serialize();
+        let back = atuin_client::ai_session::AiSessionRecord::deserialize(&record).unwrap();
+        assert!(format!("{back:?}").contains("0199-orig"), "the record carries the parent");
+    }
+
     /// Execution payloads that Claude Code records as user text (`<local-command-stdout>`) must
     /// not be synced. The parser strips them; capture policy stays harness-agnostic.
     #[rstest]
