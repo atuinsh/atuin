@@ -2,15 +2,17 @@ syntax = "proto3";
 
 package atuin.api.v1;
 
+import "buf/validate/validate.proto";
+
 // Represents a UUIDv7 value.
 message UuidV7 {
-  bytes value = 1;
+  bytes value = 1 [(buf.validate.field).bytes.len = 16];
 }
 
 // The machine and account a command ran on.
 message CmdOrigin {
   // The machine's hostname, e.g. `laptop`. Never contains a `:`.
-  string host = 1;
+  string host = 1 [(buf.validate.field).string.not_contains = ":"];
   // The account on that machine, e.g. `alice`.
   string user = 2;
 }
@@ -20,7 +22,10 @@ message Author {
   // e.g. `alice` or `claude-code`.
   string name = 1;
   // Logically required; the hub rejects `AUTHOR_KIND_UNSPECIFIED`.
-  AuthorKind kind = 2;
+  AuthorKind kind = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
 }
 
 // Whether a person or an agent decided to run a command.

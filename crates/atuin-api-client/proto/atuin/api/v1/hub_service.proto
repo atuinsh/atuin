@@ -3,6 +3,7 @@ syntax = "proto3";
 package atuin.api.v1;
 
 import "atuin/api/v1/history.proto";
+import "buf/validate/validate.proto";
 
 // The hub's user-facing API.
 service HubService {
@@ -19,7 +20,7 @@ service HubService {
 
 message InsertHistoryRequest {
   // Logically required.
-  History history = 1;
+  History history = 1 [(buf.validate.field).required = true];
 }
 
 message InsertHistoryResponse {}
@@ -28,5 +29,5 @@ message WatchHistoryRequest {}
 
 message WatchHistoryResponse {
   // An entry the user stored.
-  History history = 1;
+  History history = 1 [(buf.validate.field).required = true];
 }
