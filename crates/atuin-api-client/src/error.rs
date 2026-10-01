@@ -1,6 +1,6 @@
 use std::fmt;
 
-use progenitor_client::Error;
+use progenitor_client::{Error, ResponseValue};
 use reqwest::StatusCode;
 use serde_json::{Map, Value};
 use url::Url;
@@ -100,6 +100,21 @@ where
             Ok(value) => Ok(value),
             Err(err) => Err(ApiError::from_error(err).await),
         }
+    }
+}
+
+/// The body of a [`Client`](crate::Client) call whose caller needs no status or headers.
+pub trait ApiBody<T>: Future<Output = Result<ResponseValue<T>, Error>> + Sized {
+    /// Await the call and return its body, failing as [`MapApiError::map_api_error`] does.
+    fn body(self) -> impl Future<Output = Result<T, ApiError>>;
+}
+
+impl<T, F> ApiBody<T> for F
+where
+    F: Future<Output = Result<ResponseValue<T>, Error>>,
+{
+    async fn body(self) -> Result<T, ApiError> {
+        self.map_api_error().await.map(ResponseValue::into_inner)
     }
 }
 

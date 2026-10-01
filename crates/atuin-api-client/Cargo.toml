@@ -16,6 +16,7 @@ atuin-domain = { workspace = true }
 
 derive_more = { workspace = true }
 parking_lot = { workspace = true }
+progenitor = { workspace = true }
 progenitor-client = { workspace = true }
 reqwest = { workspace = true }
 secrecy = { workspace = true }
@@ -28,10 +29,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [build-dependencies]
-openapiv3 = { workspace = true }
-progenitor-impl = { workspace = true }
-quote = { workspace = true }
-schemars08 = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 

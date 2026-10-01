@@ -1,17 +1,11 @@
-//! Generates the client from `openapi.json` into `$OUT_DIR/generated.rs`, which `src/lib.rs`
-//! includes.
+//! Writes `openapi.json`, prepared for the client (see `build/prepare.rs`), to
+//! `$OUT_DIR/openapi.json`, where `src/lib.rs`'s `generate_api!` reads it.
 
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
-#[path = "build/generate.rs"]
-mod generate;
-#[path = "build/mapping.rs"]
-mod mapping;
 #[path = "build/prepare.rs"]
 mod prepare;
-
-use generate::GenerateError;
 
 #[derive(Debug, thiserror::Error)]
 enum BuildError {
@@ -21,8 +15,10 @@ enum BuildError {
         #[source]
         source: io::Error,
     },
+    #[error("openapi.json is not JSON: {0}")]
+    Json(#[from] serde_json::Error),
     #[error(transparent)]
-    Generate(#[from] GenerateError),
+    Spec(#[from] prepare::SpecError),
 }
 
 fn main() {
@@ -38,14 +34,15 @@ fn main() {
 fn run() -> Result<(), BuildError> {
     let spec_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("openapi.json");
     let out_path =
-        PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).join("generated.rs");
+        PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).join("openapi.json");
 
     let spec = fs::read(&spec_path).map_err(|source| BuildError::Io {
         path: spec_path,
         source,
     })?;
-    let code = generate::generate(&spec)?;
-    fs::write(&out_path, code).map_err(|source| BuildError::Io {
+    let mut spec = serde_json::from_slice(&spec)?;
+    prepare::strip(&mut spec)?;
+    fs::write(&out_path, serde_json::to_vec(&spec)?).map_err(|source| BuildError::Io {
         path: out_path,
         source,
     })

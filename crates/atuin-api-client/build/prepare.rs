@@ -13,7 +13,14 @@
 
 use serde_json::{Map, Value};
 
-use crate::mapping::SpecError;
+/// Errors returned by [`strip`].
+#[derive(Debug, thiserror::Error)]
+pub enum SpecError {
+    #[error("the spec has no {0} object")]
+    Missing(&'static str),
+    #[error("{0} is not an object")]
+    NotAnObject(String),
+}
 
 const METHODS: [&str; 8] = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
 const CAPABILITIES_KNOWN: &str = "x-atuin-capabilities-known";

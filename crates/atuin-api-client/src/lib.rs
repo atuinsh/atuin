@@ -18,7 +18,31 @@ mod generated {
         clippy::unnecessary_trailing_comma,
         reason = "generated from openapi.json by progenitor"
     )]
-    include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+    progenitor::generate_api!(
+        spec = { path = "openapi.json", relative_to = OutDir },
+        interface = Positional,
+        inner_type = crate::HookState,
+        // The record types carry invariants and the frozen field names of the PASETO implicit
+        // assertion, so the client uses atuin-domain's rather than generating look-alikes.
+        replace = {
+            EncryptedData = ::atuin_domain::record::EncryptedData: ?FromStr + ?Display,
+            Host = ::atuin_domain::record::Host: ?FromStr + ?Display,
+            Record = ::atuin_domain::record::Record<::atuin_domain::record::EncryptedData>: ?FromStr + ?Display,
+            RecordStatus = ::atuin_domain::record::RecordStatus: ?FromStr + ?Display,
+        },
+        convert = {
+            { type = "string", format = "password" } = crate::Secret: ?FromStr + ?Display,
+            { type = "integer", format = "int64", minimum = 0 } = u64: Default,
+            { type = "string", format = "date-time" } = crate::DateTime: ?FromStr + ?Display,
+            { type = "string", format = "uri" } = ::url::Url,
+        },
+        patch = {
+            ModelInfo = { derives = [PartialEq, Eq] },
+            ModelList = { derives = [PartialEq, Eq] },
+            UsageBucket = { derives = [PartialEq, Eq] },
+            UsageSnapshot = { derives = [PartialEq, Eq] },
+        },
+    );
 }
 mod header;
 mod hooks;
@@ -26,7 +50,7 @@ mod hooks;
 pub use base_url::BaseUrlError;
 pub use caps::{AuthHeaderFuture, AuthHeaderProvider, CapClient, CapMismatch, ServerSupportError};
 pub use date_time::DateTime;
-pub use error::{ApiError, MapApiError};
+pub use error::{ApiBody, ApiError, MapApiError};
 pub use generated::{Client, ResponseValue, types};
 pub use header::authorization;
 pub use hooks::HookState;

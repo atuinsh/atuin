@@ -5,24 +5,16 @@
 //! display in the `/model` picker. The list's `default` is the alias the
 //! server uses when a request doesn't specify a model.
 
+use atuin_api_client::ApiBody;
 use atuin_api_client::types::ModelList;
-use atuin_api_client::{ApiError, MapApiError};
-use eyre::{Context, Result};
+use eyre::Result;
 use reqwest::Url;
 use secrecy::SecretString;
 
 /// Fetch the models available to this user. Sent authenticated because the
 /// server includes feature-flag-gated models only for entitled users.
 pub async fn fetch_models(endpoint: &Url, token: Option<&SecretString>) -> Result<ModelList> {
-    let client = crate::api::client(endpoint, token)?;
-    match client.list_models().map_api_error().await {
-        Ok(list) => Ok(list.into_inner()),
-        Err(ApiError::Status { status, .. }) => eyre::bail!("model list request failed ({status})"),
-        Err(err @ ApiError::Decode(_)) => Err(err).context("failed to parse model list"),
-        Err(err @ (ApiError::Transport(_) | ApiError::NotSent(_))) => {
-            Err(err).context("failed to fetch model list")
-        }
-    }
+    Ok(crate::api::client(endpoint, token)?.list_models().body().await?)
 }
 
 /// Persist the chosen alias to `ai.model` in config.toml so it becomes the

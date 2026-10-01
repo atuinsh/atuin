@@ -10,9 +10,9 @@
 
 use std::time::Duration;
 
+use atuin_api_client::ApiBody;
 use atuin_api_client::types::UsageSnapshot;
-use atuin_api_client::{ApiError, MapApiError};
-use eyre::{Context, Result};
+use eyre::Result;
 use reqwest::Url;
 use secrecy::{ExposeSecret, SecretString};
 use time::OffsetDateTime;
@@ -82,15 +82,7 @@ pub fn cache_key(token: &SecretString) -> String {
 /// Fetch current usage from the hub. Mirrors the `credits` object on the
 /// chat `done` event, for refreshing without starting a chat.
 pub async fn fetch_usage(endpoint: &Url, token: &SecretString) -> Result<UsageSnapshot> {
-    let client = crate::api::client(endpoint, Some(token))?;
-    match client.get_usage().map_api_error().await {
-        Ok(usage) => Ok(usage.into_inner()),
-        Err(ApiError::Status { status, .. }) => eyre::bail!("usage request failed ({status})"),
-        Err(err @ ApiError::Decode(_)) => Err(err).context("failed to parse usage response"),
-        Err(err @ (ApiError::Transport(_) | ApiError::NotSent(_))) => {
-            Err(err).context("failed to fetch usage")
-        }
-    }
+    Ok(crate::api::client(endpoint, Some(token))?.get_usage().body().await?)
 }
 
 #[cfg(test)]

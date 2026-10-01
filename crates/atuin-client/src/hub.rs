@@ -11,7 +11,7 @@
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use atuin_api_client::{ApiError, MapApiError, Secret, types};
+use atuin_api_client::{ApiBody, ApiError, MapApiError, Secret, types};
 use atuin_common::futures::Backoff;
 use atuin_common::url::UrlAppendExt;
 use eyre::{Context, Result};
@@ -266,7 +266,7 @@ async fn link(api: &atuin_api_client::Client, cli_token: &SecretString) -> Resul
 async fn request_code(api: &atuin_api_client::Client) -> Result<types::CliCodeResponse, HubError> {
     debug!("Requesting code from Hub");
 
-    Ok(api.create_cli_auth_code().map_api_error().await?.into_inner())
+    Ok(api.create_cli_auth_code().body().await?)
 }
 
 /// Poll to verify the CLI auth code and get the session token
@@ -277,7 +277,7 @@ async fn verify_code(
     debug!("Verifying code with Hub");
 
     let code = Secret::from(code.clone());
-    Ok(api.verify_cli_auth_code(&code).map_api_error().await?.into_inner())
+    Ok(api.verify_cli_auth_code(&code).body().await?)
 }
 
 #[cfg(test)]
