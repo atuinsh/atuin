@@ -1,7 +1,8 @@
 //! A chaos test of the recovery protocol on the real components: an in-memory record store and
 //! sidecar, the real coordinator, capture's sink, the sync worker's reprojection and the gRPC
 //! rebuild, on a multi-thread runtime. Test hooks (see [`super::hooks`]) delay every step of the
-//! protocol at random, fail wipes, fail, panic or give up replays, and storm replays and sync
+//! protocol at random, fail wipes, fail, panic or give up replays, panic captures, fail the
+//! warm-up's reads, drop appends at random points, and storm replays and sync
 //! reprojections with invalidations (toward their pass cap; at startup too, and with rebuilds
 //! and forgets landing in the backoffs between incomplete replays), while rebuilds, captures (of
 //! lines already persisted and new ones, and of a resumed transcript warmed from the sidecar),
@@ -80,6 +81,17 @@ struct Totals {
     warm_ups: AtomicU64,
     warm_ups_recovering: AtomicU64,
     resumed_captured: AtomicU64,
+    /// Appends dropped at a random point (as the import RPC drops its stream's on a disconnect)
+    /// and captured again; those whose record was stored by the time they were dropped (or just
+    /// after, by the rest of their capture running on); those whose line was then a duplicate
+    /// (the dropped one had pushed it, or another capture had); and captures panicked before or
+    /// after their push.
+    appends_dropped: AtomicU64,
+    dropped_once_pushed: AtomicU64,
+    dropped_then_duplicate: AtomicU64,
+    capture_panics: AtomicU64,
+    /// Warm-up steps (its repair or a read) failed, which the warm-up retries.
+    warm_read_failures: AtomicU64,
 }
 
 /// How the last replay to end did, as the chaos made it (see [`Chaos::last_outcome`]).
@@ -408,6 +420,14 @@ impl Hooks for Chaos {
                     self.totals.backoffs_cut_short.fetch_add(1, Ordering::Relaxed);
                     Fault::None
                 }
+                Point::WarmRead(_) if self.fault(0.1) => {
+                    self.totals.warm_read_failures.fetch_add(1, Ordering::Relaxed);
+                    Fault::Fail
+                }
+                Point::CapturePushing | Point::CapturePushed if self.fault(0.1) => {
+                    self.totals.capture_panics.fetch_add(1, Ordering::Relaxed);
+                    Fault::Panic
+                }
                 Point::WarmChecked => {
                     self.totals.warm_ups.fetch_add(1, Ordering::Relaxed);
                     // Where the warm-up trusts the sidecar, as capture's dedup gate does.
@@ -485,6 +505,13 @@ impl Hooks for Chaos {
 
     /// Short, so storms of incomplete replays back off often within an iteration, but long
     /// enough for rebuilds and forgets to land during the backoffs.
+    fn warm_backoff(&self) -> Backoff {
+        Backoff {
+            first: Duration::from_millis(1),
+            max: Duration::from_millis(8),
+        }
+    }
+
     fn backoff(&self) -> Backoff {
         Backoff {
             first: Duration::from_millis(4),
@@ -507,6 +534,142 @@ impl Chaos {
         let stop = Arc::new(AtomicBool::new(false));
         storm(probe, rewriting, stop.clone(), self.storming.clone());
         Some(stop)
+    }
+}
+
+impl Chaos {
+    /// The listener's append of `msg`, which the chaos may drop at a random point: waiting for
+    /// the store or capture's locks, or in the middle of its push and projection. A dropped (or
+    /// panicked) append is captured again, as a re-read of the line captures it: under a new
+    /// record id. Also says whether one was.
+    async fn append(&self, sink: &Sink, msg: Message) -> (Result<Appended, AppendError>, bool) {
+        let mut again = false;
+        loop {
+            let mut attempt = msg.clone();
+            if again {
+                attempt.id = RecordId(atuin_common::utils::uuid_v7());
+            }
+            let id = attempt.id;
+            let cut = self.fault(0.5).then(|| {
+                let mut rng = self.rng.lock();
+                (rng.gen_range(0..3), rng.gen_range(1..100))
+            });
+            let appended = engine::append(sink, attempt);
+            let appended = match cut {
+                None => Some(appended.await),
+                // At a random point of the runtime's.
+                Some((0, yields)) => {
+                    let cut = async {
+                        for _ in 0..yields {
+                            tokio::task::yield_now().await;
+                        }
+                    };
+                    tokio::select! {
+                        appended = appended => Some(appended),
+                        () = cut => None,
+                    }
+                }
+                // At a random point of its own: woken for the `nth` time, before it observes the
+                // await that just completed.
+                Some((1, nth)) => drop_at_wake(appended, DropAt::Wake(nth)).await,
+                // Woken once its record is stored, before it observes so: as the import RPC's
+                // stream is dropped, the push it was awaiting done, on a client's disconnect.
+                Some(_) => drop_at_wake(appended, DropAt::Stored(&sink.records, id)).await,
+            };
+            let Some(appended) = appended else {
+                self.totals.appends_dropped.fetch_add(1, Ordering::Relaxed);
+                if sink.records.holds(id).await.unwrap_or(false) {
+                    self.totals.dropped_once_pushed.fetch_add(1, Ordering::Relaxed);
+                }
+                again = true;
+                continue;
+            };
+            match appended {
+                // An injected panic (see `Point::CapturePushed`).
+                Err(AppendError::Aborted) => again = true,
+                appended => {
+                    if again && matches!(appended, Ok(Appended::Duplicate)) {
+                        self.totals.dropped_then_duplicate.fetch_add(1, Ordering::Relaxed);
+                    }
+                    return (appended, again);
+                }
+            }
+        }
+    }
+}
+
+/// Says when the future polled with it was woken, and wakes the task polling that future.
+#[derive(Debug, Default)]
+struct Wakes {
+    woken: AtomicBool,
+    outer: parking_lot::Mutex<Option<std::task::Waker>>,
+}
+
+impl std::task::Wake for Wakes {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, Ordering::SeqCst);
+        if let Some(outer) = self.outer.lock().as_ref() {
+            outer.wake_by_ref();
+        }
+    }
+}
+
+/// Which wake of a future [`drop_at_wake`] drops it at (past its first poll).
+enum DropAt<'a> {
+    /// The `nth`.
+    Wake(usize),
+    /// The first once the record store holds the record with this id.
+    Stored(&'a AiSessionStore, RecordId),
+}
+
+/// Run `inner`, but drop it at a wake (see [`DropAt`]), before polling it again: just after
+/// something it awaits completed (a query, a lock, a task), and before it observed so.
+async fn drop_at_wake<F: Future>(inner: F, mut at: DropAt<'_>) -> Option<F::Output> {
+    use std::task::{Context, Poll, Waker};
+
+    let wakes = Arc::new(Wakes::default());
+    let waker = Waker::from(wakes.clone());
+    let mut inner = std::pin::pin!(inner);
+    let mut first = true;
+    loop {
+        if !first {
+            std::future::poll_fn(|cx| {
+                *wakes.outer.lock() = Some(cx.waker().clone());
+                if wakes.woken.swap(false, Ordering::SeqCst) {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+            let now = match &mut at {
+                DropAt::Wake(nth) => {
+                    *nth = nth.saturating_sub(1);
+                    *nth == 0
+                }
+                DropAt::Stored(records, id) => records.holds(*id).await.unwrap_or(false),
+            };
+            if now {
+                return None;
+            }
+        }
+        first = false;
+        if let Poll::Ready(output) = inner.as_mut().poll(&mut Context::from_waker(&waker)) {
+            return Some(output);
+        }
+    }
+}
+
+/// Note a line of this host captured: reported new, or a duplicate after a dropped append,
+/// which may have pushed it (and so may not have been reported new).
+fn note_pushed(pushed: &parking_lot::Mutex<Vec<LineKey>>, key: LineKey, new: bool) {
+    let mut pushed = pushed.lock();
+    if new || !pushed.contains(&key) {
+        pushed.push(key);
     }
 }
 
@@ -776,11 +939,14 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
             for (session, source) in lines {
                 chaos.delay().await;
                 // The listener's append: paused while unavailable, retried once ready.
-                let appended = engine::append(&capture.sink, line(&session, &source)).await;
+                let (appended, again) = chaos.append(&capture.sink, line(&session, &source)).await;
                 match appended {
                     Ok(Appended::New) => {
                         chaos.totals.captured.fetch_add(1, Ordering::Relaxed);
-                        pushed.lock().push((session, source));
+                        note_pushed(&pushed, (session, source), true);
+                    }
+                    Ok(Appended::Duplicate) if again => {
+                        note_pushed(&pushed, (session, source), false);
                     }
                     Ok(Appended::Duplicate) => {}
                     Err(err) => chaos.violation(format!("capture failed: {err}")),
@@ -813,15 +979,17 @@ async fn iteration(seed: u64, totals: Arc<Totals>) {
                 warm(&capture.sink, &mut enricher, &resumed, Start::Resumed).await;
                 for msg in enricher.capture(&resumed, &prompt()) {
                     let key = key_of(&msg);
-                    match engine::append(&capture.sink, msg).await {
-                        Ok(Appended::New) => {
+                    match chaos.append(&capture.sink, msg).await {
+                        (Ok(Appended::New), _) => {
                             chaos.totals.resumed_captured.fetch_add(1, Ordering::Relaxed);
-                            pushed.lock().push(key);
+                            note_pushed(&pushed, key, true);
                         }
-                        Ok(Appended::Duplicate) => {
+                        // The dropped append had pushed it.
+                        (Ok(Appended::Duplicate), true) => note_pushed(&pushed, key, false),
+                        (Ok(Appended::Duplicate), false) => {
                             chaos.violation(format!("a new resumed prompt dropped: {key:?}"));
                         }
-                        Err(err) => chaos.violation(format!("capture failed: {err}")),
+                        (Err(err), _) => chaos.violation(format!("capture failed: {err}")),
                     }
                 }
             }
