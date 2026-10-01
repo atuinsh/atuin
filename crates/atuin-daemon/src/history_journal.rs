@@ -84,13 +84,14 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atuin_api_client::CapClient;
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
 use atuin_client::settings::{OutputCapture, Search};
 use atuin_common::sync::AsyncShardedMutex;
-use atuin_domain::caps::{CapClient, PackfileCap};
+use atuin_domain::caps::PackfileCap;
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
 use tokio::sync::broadcast;
@@ -684,6 +685,7 @@ mod tests {
     use atuin_common::filter::OrFilter;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{CmdOrigin, HostId};
+    use rstest::rstest;
     use tokio::sync::RwLock;
 
     use super::*;
@@ -698,7 +700,13 @@ mod tests {
         let store = SqliteStore::new(tmp.path().join("records.db"), timeout).await.unwrap();
         let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
         let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
-        let caps = CapClient::new("http://127.0.0.1:1".parse().unwrap(), reqwest::Client::new());
+        let caps = CapClient::new(
+            atuin_api_client::Client::from_http(
+                &"http://127.0.0.1:1".parse().unwrap(),
+                reqwest::Client::new(),
+            )
+            .unwrap(),
+        );
         let journal =
             HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);
         (journal, tmp)
@@ -719,6 +727,7 @@ mod tests {
 
     /// A broken output store must not sink a deletion: the entry the user asked to forget is still
     /// removed rather than the whole delete being refused.
+    #[rstest]
     #[tokio::test]
     async fn delete_survives_a_broken_output_store() {
         let (journal, _tmp) = journal(OutputCaptureEngine::failing()).await;

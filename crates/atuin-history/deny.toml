@@ -20,10 +20,10 @@ wildcards = "allow"
 
 [[bans.deny]]
 crate = "eyre"
-wrappers = ["atuin-client", "atuin-common"]
+wrappers = ["atuin-client"]
 reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-history is a library crate."
 
 [[bans.deny]]
 crate = "anyhow"
-wrappers = ["reqwest-middleware", "sql-builder"]
+wrappers = ["sql-builder"]
 reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-history is a library crate."

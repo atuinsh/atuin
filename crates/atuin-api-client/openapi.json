@@ -1,0 +1,2437 @@
+{
+  "components": {
+    "headers": {
+      "AtuinVersion": {
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "style": "simple"
+      },
+      "CapabilitiesAvailable": {
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "style": "simple"
+      }
+    },
+    "parameters": {
+      "CapabilitiesKnown": {
+        "in": "header",
+        "name": "x-atuin-capabilities-known",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "CapabilitiesOutOfDate": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": "",
+        "headers": {
+          "atuin-version": {
+            "$ref": "#/components/headers/AtuinVersion"
+          },
+          "x-atuin-capabilities-available": {
+            "$ref": "#/components/headers/CapabilitiesAvailable"
+          }
+        }
+      },
+      "Unauthorized": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": ""
+      },
+      "UnauthorizedV0": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": "",
+        "headers": {
+          "atuin-version": {
+            "$ref": "#/components/headers/AtuinVersion"
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AiErrorResponse": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ],
+        "title": "AiErrorResponse",
+        "type": "object"
+      },
+      "CapabilitiesResponse": {
+        "properties": {
+          "capabilities": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "capabilities"
+        ],
+        "title": "CapabilitiesResponse",
+        "type": "object"
+      },
+      "ChangePasswordRequest": {
+        "properties": {
+          "current_password": {
+            "format": "password",
+            "type": "string"
+          },
+          "new_password": {
+            "format": "password",
+            "type": "string"
+          },
+          "totp_code": {
+            "format": "password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "ChangePasswordRequest",
+        "type": "object"
+      },
+      "CliCodeResponse": {
+        "properties": {
+          "code": {
+            "format": "password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "CliCodeResponse",
+        "type": "object"
+      },
+      "CliVerifyResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "token": {
+            "format": "password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "token"
+        ],
+        "title": "CliVerifyResponse",
+        "type": "object"
+      },
+      "CurrentUser": {
+        "properties": {
+          "orgs": {
+            "items": {
+              "properties": {
+                "avatar_url": {
+                  "type": "string"
+                },
+                "id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "name": {
+                  "nullable": true,
+                  "type": "string"
+                },
+                "slug": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "slug",
+                "avatar_url"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "user": {
+            "properties": {
+              "avatar_url": {
+                "type": "string"
+              },
+              "display_name": {
+                "nullable": true,
+                "type": "string"
+              },
+              "id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "username",
+              "display_name",
+              "avatar_url"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "user",
+          "orgs"
+        ],
+        "title": "CurrentUser",
+        "type": "object"
+      },
+      "DeleteUserRequest": {
+        "properties": {
+          "password": {
+            "format": "password",
+            "type": "string"
+          },
+          "totp_code": {
+            "format": "password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "DeleteUserRequest",
+        "type": "object"
+      },
+      "EncryptedData": {
+        "properties": {
+          "content_encryption_key": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "content_encryption_key"
+        ],
+        "title": "EncryptedData",
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "error": {
+            "deprecated": true,
+            "type": "string"
+          },
+          "errors": {
+            "deprecated": true,
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      },
+      "Host": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "Host",
+        "type": "object"
+      },
+      "IndexResponse": {
+        "properties": {
+          "homage": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "homage",
+          "version"
+        ],
+        "title": "IndexResponse",
+        "type": "object"
+      },
+      "LinkAccountRequest": {
+        "properties": {
+          "token": {
+            "format": "password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "LinkAccountRequest",
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "format": "password",
+            "type": "string"
+          },
+          "totp_code": {
+            "format": "password",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "LoginResponse": {
+        "properties": {
+          "auth": {
+            "type": "string"
+          },
+          "session": {
+            "format": "password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "LoginResponse",
+        "type": "object"
+      },
+      "MeResponse": {
+        "properties": {
+          "username": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "title": "MeResponse",
+        "type": "object"
+      },
+      "ModelInfo": {
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "name",
+          "description"
+        ],
+        "title": "ModelInfo",
+        "type": "object"
+      },
+      "ModelList": {
+        "properties": {
+          "default": {
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models",
+          "default"
+        ],
+        "title": "ModelList",
+        "type": "object"
+      },
+      "PackfileConfirmResponse": {
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "PackfileConfirmResponse",
+        "type": "object"
+      },
+      "PackfileCreateRequest": {
+        "properties": {
+          "manifest_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "packfile_size_bytes": {
+            "format": "int64",
+            "maximum": 536870912,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "records": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "manifest_id",
+          "packfile_size_bytes"
+        ],
+        "title": "PackfileCreateRequest",
+        "type": "object"
+      },
+      "PackfileDownloadResponse": {
+        "properties": {
+          "download_url": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "download_url"
+        ],
+        "title": "PackfileDownloadResponse",
+        "type": "object"
+      },
+      "PackfileResponse": {
+        "properties": {
+          "packfile_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "upload_url": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "packfile_id",
+          "upload_url"
+        ],
+        "title": "PackfileResponse",
+        "type": "object"
+      },
+      "Record": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/EncryptedData"
+          },
+          "host": {
+            "$ref": "#/components/schemas/Host"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "idx": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "idx",
+          "host",
+          "timestamp",
+          "version",
+          "tag",
+          "data"
+        ],
+        "title": "Record",
+        "type": "object"
+      },
+      "RecordStatus": {
+        "properties": {
+          "hosts": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "hosts"
+        ],
+        "title": "RecordStatus",
+        "type": "object"
+      },
+      "RegisterRequest": {
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "username",
+          "password"
+        ],
+        "title": "RegisterRequest",
+        "type": "object"
+      },
+      "RegisterResponse": {
+        "properties": {
+          "auth": {
+            "type": "string"
+          },
+          "session": {
+            "format": "password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "RegisterResponse",
+        "type": "object"
+      },
+      "UsageBucket": {
+        "properties": {
+          "limit": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "used": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "used",
+          "limit"
+        ],
+        "title": "UsageBucket",
+        "type": "object"
+      },
+      "UsageSnapshot": {
+        "properties": {
+          "input": {
+            "$ref": "#/components/schemas/UsageBucket"
+          },
+          "output": {
+            "$ref": "#/components/schemas/UsageBucket"
+          },
+          "period": {
+            "type": "string"
+          },
+          "requests": {
+            "$ref": "#/components/schemas/UsageBucket"
+          },
+          "resets_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "period",
+          "resets_at",
+          "requests",
+          "input",
+          "output"
+        ],
+        "title": "UsageSnapshot",
+        "type": "object"
+      },
+      "UserResponse": {
+        "properties": {
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "title": "UserResponse",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "hubApiKey": {
+        "in": "header",
+        "name": "x-atuin-hub-api-key",
+        "type": "apiKey"
+      },
+      "token": {
+        "in": "header",
+        "name": "Authorization",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "title": "Atuin",
+    "version": "1.0.0"
+  },
+  "openapi": "3.0.0",
+  "paths": {
+    "/": {
+      "get": {
+        "callbacks": {},
+        "deprecated": false,
+        "operationId": "getIndex",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "meta"
+        ]
+      }
+    },
+    "/account": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "legacyDeleteAccount",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "legacy-auth"
+        ]
+      }
+    },
+    "/account/password": {
+      "patch": {
+        "callbacks": {},
+        "operationId": "legacyChangePassword",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "legacy-auth"
+        ]
+      }
+    },
+    "/api/cli/models": {
+      "get": {
+        "callbacks": {},
+        "operationId": "listModels",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer": []
+          },
+          {
+            "hubApiKey": []
+          }
+        ],
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/cli/usage": {
+      "get": {
+        "callbacks": {},
+        "operationId": "getUsage",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSnapshot"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "hubApiKey": []
+          }
+        ],
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/me": {
+      "get": {
+        "callbacks": {},
+        "operationId": "getCurrentUser",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentUser"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "hubApiKey": []
+          }
+        ],
+        "tags": [
+          "hub-auth"
+        ]
+      }
+    },
+    "/api/v0/account": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "deleteAccount",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "hub-auth"
+        ]
+      }
+    },
+    "/api/v0/account/link": {
+      "post": {
+        "callbacks": {},
+        "operationId": "linkAccount",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "hubApiKey": []
+          }
+        ],
+        "tags": [
+          "hub-auth"
+        ]
+      }
+    },
+    "/api/v0/account/password": {
+      "patch": {
+        "callbacks": {},
+        "operationId": "changePassword",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "hub-auth"
+        ]
+      }
+    },
+    "/api/v0/capabilities": {
+      "get": {
+        "callbacks": {},
+        "operationId": "getCapabilities",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "sync"
+        ]
+      }
+    },
+    "/api/v0/login": {
+      "post": {
+        "callbacks": {},
+        "operationId": "login",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [],
+        "tags": [
+          "hub-auth"
+        ]
+      }
+    },
+    "/api/v0/me": {
+      "get": {
+        "callbacks": {},
+        "operationId": "getMe",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedV0"
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "sync"
+        ]
+      }
+    },
+    "/api/v0/packfiles": {
+      "post": {
+        "callbacks": {},
+        "operationId": "createPackfile",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackfileCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackfileResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedV0"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "packfiles"
+        ]
+      }
+    },
+    "/api/v0/packfiles/{manifest_id}": {
+      "get": {
+        "callbacks": {},
+        "operationId": "getPackfile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "manifest_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackfileDownloadResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedV0"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "packfiles"
+        ]
+      }
+    },
+    "/api/v0/packfiles/{manifest_id}/confirm": {
+      "post": {
+        "callbacks": {},
+        "operationId": "confirmPackfile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "manifest_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackfileConfirmResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedV0"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "packfiles"
+        ]
+      }
+    },
+    "/api/v0/record": {
+      "get": {
+        "callbacks": {},
+        "operationId": "getRecordStatus",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordStatus"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedV0"
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "sync"
+        ]
+      },
+      "post": {
+        "callbacks": {},
+        "operationId": "postRecords",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "$ref": "#/components/schemas/Record"
+                },
+                "type": "array"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedV0"
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "sync"
+        ]
+      }
+    },
+    "/api/v0/record/next": {
+      "get": {
+        "callbacks": {},
+        "operationId": "getNextRecords",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "count",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Record"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedV0"
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "sync"
+        ]
+      }
+    },
+    "/api/v0/register": {
+      "post": {
+        "callbacks": {},
+        "operationId": "register",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [],
+        "tags": [
+          "hub-auth"
+        ]
+      }
+    },
+    "/api/v0/store": {
+      "delete": {
+        "callbacks": {},
+        "operationId": "deleteStore",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilitiesKnown"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedV0"
+          },
+          "412": {
+            "$ref": "#/components/responses/CapabilitiesOutOfDate"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "token": []
+          }
+        ],
+        "tags": [
+          "sync"
+        ]
+      }
+    },
+    "/auth/cli/code": {
+      "post": {
+        "callbacks": {},
+        "operationId": "createCliAuthCode",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliCodeResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [],
+        "tags": [
+          "hub-auth"
+        ]
+      }
+    },
+    "/auth/cli/verify": {
+      "post": {
+        "callbacks": {},
+        "operationId": "verifyCliAuthCode",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "format": "password",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliVerifyResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [],
+        "tags": [
+          "hub-auth"
+        ]
+      }
+    },
+    "/login": {
+      "post": {
+        "callbacks": {},
+        "operationId": "legacyLogin",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [],
+        "tags": [
+          "legacy-auth"
+        ]
+      }
+    },
+    "/register": {
+      "post": {
+        "callbacks": {},
+        "operationId": "legacyRegister",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [],
+        "tags": [
+          "legacy-auth"
+        ]
+      }
+    },
+    "/user/{username}": {
+      "get": {
+        "callbacks": {},
+        "operationId": "legacyGetUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "",
+            "headers": {
+              "atuin-version": {
+                "$ref": "#/components/headers/AtuinVersion"
+              }
+            }
+          }
+        },
+        "security": [],
+        "tags": [
+          "legacy-auth"
+        ]
+      }
+    }
+  },
+  "security": [],
+  "servers": [
+    {
+      "url": "https://api.atuin.sh",
+      "variables": {}
+    }
+  ],
+  "tags": []
+}

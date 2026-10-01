@@ -4,51 +4,56 @@
 //! Aliases are what we send on the wire; names and descriptions are for
 //! display in the `/model` picker.
 
-use std::time::Duration;
-
-use atuin_common::url::UrlAppendExt;
+use atuin_api_client::{ApiError, MapApiError, types};
 use eyre::{Context, Result};
-use reqwest::header::USER_AGENT;
-use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use reqwest::Url;
+use secrecy::SecretString;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelInfo {
     pub alias: String,
     pub name: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelList {
     /// Alias the server uses when a request doesn't specify a model.
     pub default: String,
     pub models: Vec<ModelInfo>,
 }
 
+impl From<types::ModelInfo> for ModelInfo {
+    fn from(wire: types::ModelInfo) -> Self {
+        Self {
+            alias: wire.alias,
+            name: wire.name,
+            description: wire.description,
+        }
+    }
+}
+
+impl From<types::ModelList> for ModelList {
+    fn from(wire: types::ModelList) -> Self {
+        Self {
+            default: wire.default,
+            models: wire.models.into_iter().map(ModelInfo::from).collect(),
+        }
+    }
+}
+
 /// Fetch the models available to this user. Sent authenticated because the
 /// server includes feature-flag-gated models only for entitled users.
-pub async fn fetch_models(
-    endpoint: &reqwest::Url,
-    token: Option<&SecretString>,
-) -> Result<ModelList> {
-    let url = endpoint.append_path("api/cli/models")?;
-
-    let mut request = reqwest::Client::new()
-        .get(url)
-        .header(USER_AGENT, crate::stream::APP_USER_AGENT)
-        .timeout(Duration::from_secs(10));
-    if let Some(token) = token {
-        request = request.bearer_auth(token.expose_secret());
+pub async fn fetch_models(endpoint: &Url, token: Option<&SecretString>) -> Result<ModelList> {
+    let client = crate::api::client(endpoint, token)?;
+    match client.list_models().map_api_error().await {
+        Ok(list) => Ok(list.into_inner().into()),
+        Err(ApiError::Status { status, .. }) => eyre::bail!("model list request failed ({status})"),
+        Err(err @ ApiError::Decode(_)) => Err(err).context("failed to parse model list"),
+        Err(err @ (ApiError::Transport(_) | ApiError::NotSent(_))) => {
+            Err(err).context("failed to fetch model list")
+        }
     }
-    let response = request.send().await.context("failed to fetch model list")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        eyre::bail!("model list request failed ({status})");
-    }
-
-    response.json::<ModelList>().await.context("failed to parse model list")
 }
 
 /// Persist the chosen alias to `ai.model` in config.toml so it becomes the
@@ -66,4 +71,93 @@ pub async fn save_model_selection(alias: &str) -> Result<()> {
 
     tokio::fs::write(&config_file, doc.to_string()).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    const TOKEN: &str = "atapi_token";
+
+    /// A server answering the model list with `response` to [`TOKEN`] only, and its endpoint.
+    async fn serve(response: ResponseTemplate) -> (MockServer, Url) {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/cli/models"))
+            .and(header("authorization", format!("Bearer {TOKEN}")))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+        let endpoint = Url::parse(&server.uri()).unwrap();
+        (server, endpoint)
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn decodes_the_list_in_catalog_order() {
+        let (_server, endpoint) = serve(ResponseTemplate::new(200).set_body_json(json!({
+            "models": [
+                {"alias": "fast", "name": "Fast", "description": "Quick answers"},
+                {"alias": "deep", "name": "Deep", "description": "Harder problems"},
+            ],
+            "default": "fast",
+        })))
+        .await;
+
+        let list = fetch_models(&endpoint, Some(&SecretString::from(TOKEN))).await.unwrap();
+
+        let model = |alias: &str, name: &str, description: &str| ModelInfo {
+            alias: alias.into(),
+            name: name.into(),
+            description: description.into(),
+        };
+        assert_eq!(list, ModelList {
+            default: "fast".into(),
+            models: vec![
+                model("fast", "Fast", "Quick answers"),
+                model("deep", "Deep", "Harder problems"),
+            ],
+        });
+    }
+
+    #[rstest]
+    #[case::server_error(
+        ResponseTemplate::new(500),
+        "model list request failed (500 Internal Server Error)"
+    )]
+    #[case::unauthorized(
+        ResponseTemplate::new(401)
+            .set_body_json(json!({"error": "unauthorized", "message": "Invalid token"})),
+        "model list request failed (401 Unauthorized)"
+    )]
+    #[case::body_off_the_api(
+        ResponseTemplate::new(200).set_body_string("<html>hi</html>"),
+        "failed to parse model list"
+    )]
+    #[tokio::test]
+    async fn failures_name_the_stage_that_failed(
+        #[case] response: ResponseTemplate,
+        #[case] message: &str,
+    ) {
+        let (_server, endpoint) = serve(response).await;
+
+        let err = fetch_models(&endpoint, Some(&SecretString::from(TOKEN))).await.unwrap_err();
+
+        assert_eq!(err.to_string(), message);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_unreachable_server_fails_the_fetch() {
+        let endpoint = Url::parse("http://127.0.0.1:1/").unwrap();
+
+        let err = fetch_models(&endpoint, Some(&SecretString::from(TOKEN))).await.unwrap_err();
+
+        assert_eq!(err.to_string(), "failed to fetch model list");
+    }
 }

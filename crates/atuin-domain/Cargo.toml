@@ -1,7 +1,7 @@
 [package]
 name = "atuin-domain"
 edition = "2024"
-description = "Core domain and API types shared across Atuin's client, daemon, and server"
+description = "Core domain types shared across Atuin's client, daemon, and server, and the server's API types"
 
 authors.workspace = true
 homepage.workspace = true
@@ -14,14 +14,10 @@ version.workspace = true
 [dependencies]
 atuin-common = { workspace = true }
 
-async-trait = { workspace = true }
 axum = { workspace = true, optional = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
-http = { workspace = true }
 parking_lot = { workspace = true }
-reqwest = { workspace = true }
-reqwest-middleware = { workspace = true }
 secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
@@ -31,9 +27,7 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
-tokio = { workspace = true }
 typed-builder = { workspace = true }
-url = { workspace = true }
 uuid = { workspace = true }
 whoami = { workspace = true }
 xxhash-rust = { workspace = true }
@@ -46,8 +40,8 @@ axum = ["dep:axum"]
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
+tokio = { workspace = true }
 tower = { workspace = true, features = ["util"] }
-wiremock = { workspace = true }
 
 [lints]
 workspace = true

@@ -269,6 +269,8 @@ steps:
     command:
       - *toolchain
       - 'section ":art: cargo fmt --check" cargo fmt -- --check'
+      # The API client generator is a workspace of its own, which `cargo fmt` does not reach.
+      - 'section ":art: cargo fmt --check (codegen)" cargo fmt --manifest-path crates/atuin-api-client/codegen/Cargo.toml -- --check'
 
   - label: ":no_entry: cargo-deny"
     key: deny
@@ -288,6 +290,32 @@ steps:
       - 'section ":no_entry: bans: atuin-history" cargo deny --log-level warn --manifest-path crates/atuin-history/Cargo.toml --all-features check bans'
       - 'section ":no_entry: bans: atuin-domain" cargo deny --log-level warn --manifest-path crates/atuin-domain/Cargo.toml --all-features check bans'
       - 'section ":no_entry: bans: atuin-pty-proxy" cargo deny --log-level warn --manifest-path crates/atuin-pty-proxy/Cargo.toml --all-features check bans'
+      - 'section ":no_entry: bans: atuin-api-client" cargo deny --log-level warn --manifest-path crates/atuin-api-client/Cargo.toml --all-features check bans'
+
+  # crates/atuin-api-client/src/generated.rs is checked in, generated from the
+  # crate's openapi.json by crates/atuin-api-client/codegen. The generator is a
+  # workspace of its own with its own lockfile, so no other step builds or lints
+  # it: lint it, rebuild it locked, regenerate, and fail if the checked-in file
+  # differs. Its tests also fail when its progenitor and atuin's
+  # progenitor-client drift apart.
+  - label: ":gear: API client codegen"
+    key: codegen
+    notify: [github_check: {name: buildkite/codegen}]
+    timeout_in_minutes: 15
+    env:
+      RUST_COMPONENTS: clippy
+      # Into the cached target/ rather than codegen/target.
+      CARGO_TARGET_DIR: target
+    command:
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      - 'section ":paperclip: codegen clippy" cargo clippy --locked --all-targets --manifest-path crates/atuin-api-client/codegen/Cargo.toml -- -D warnings'
+      - 'section ":test_tube: codegen tests" cargo test --locked --manifest-path crates/atuin-api-client/codegen/Cargo.toml'
+      - 'section ":gear: regenerate" cargo run --locked --manifest-path crates/atuin-api-client/codegen/Cargo.toml'
+      - 'section ":mag: generated.rs is current" git diff --exit-code -- crates/atuin-api-client/src/generated.rs'
+      - *prune
+      - *save-target
 
   - label: ":package: Package"
     key: package

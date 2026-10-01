@@ -1,0 +1,234 @@
+//! Capability negotiation through the client hooks: stamp the known token, enforce on request, and
+//! refresh in the background, once, when a served answer advertises another token.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use atuin_api_client::{ApiError, CapClient, CapMismatch, Client, MapApiError};
+use atuin_domain::caps::CapabilitiesCap;
+use pretty_assertions::assert_eq;
+use reqwest::StatusCode;
+use rstest::{fixture, rstest};
+use serde_json::json;
+use url::Url;
+use wiremock::matchers::{header, header_exists, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+const CAPABILITIES: &str = "/api/v0/capabilities";
+const ME: &str = "/api/v0/me";
+const KNOWN: &str = "x-atuin-capabilities-known";
+const ENFORCE: &str = "x-atuin-capabilities-enforce";
+const AVAILABLE: &str = "x-atuin-capabilities-available";
+
+fn capabilities(version: &str) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({"version": version, "capabilities": {}}))
+}
+
+/// A server whose capabilities move from version `4`, served to the first fetch, to `5`, plus a
+/// negotiating `GET /api/v0/me`: a known token of `5` gets `200`; a stale token with enforce gets
+/// `412` and the available token; a stale token without enforce is served anyway, with the
+/// available token.
+#[fixture]
+async fn negotiating_server() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(CAPABILITIES))
+        .respond_with(capabilities("4"))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(CAPABILITIES))
+        .respond_with(capabilities("5"))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(ME))
+        .and(header(KNOWN, "5"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"username": "ellie"})))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(ME))
+        .and(header_exists(ENFORCE))
+        .respond_with(ResponseTemplate::new(412).append_header(AVAILABLE, "5"))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(ME))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"username": "ellie"}))
+                .append_header(AVAILABLE, "5"),
+        )
+        .with_priority(5)
+        .mount(&server)
+        .await;
+    server
+}
+
+/// A server whose `GET /api/v0/me` answers `response` and whose capabilities are version `5`.
+async fn server_answering(response: ResponseTemplate) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(CAPABILITIES))
+        .respond_with(capabilities("5"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET")).and(path(ME)).respond_with(response).mount(&server).await;
+    server
+}
+
+/// A capability reader for `server` whose eager warm-up fetch has finished.
+async fn warm_cap_client(server: &MockServer) -> Arc<CapClient> {
+    let base = Url::parse(&server.uri()).unwrap();
+    let caps = CapClient::new(Client::from_http(&base, reqwest::Client::new()).unwrap());
+    // `get_server` waits for the warm-up fetch.
+    caps.get_server::<CapabilitiesCap>().await.unwrap();
+    caps
+}
+
+fn negotiating_client(server: &MockServer, caps: Arc<CapClient>, mode: CapMismatch) -> Client {
+    let base = Url::parse(&server.uri()).unwrap();
+    Client::from_http(&base, reqwest::Client::new()).unwrap().with_capabilities(caps, mode)
+}
+
+async fn caps_hits(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == CAPABILITIES)
+        .count()
+}
+
+/// Wait (bounded) for the background refresh to cache `token`, failing with what it saw.
+async fn await_token(caps: &CapClient, token: &str) {
+    for _ in 0..200 {
+        if caps.known_token().as_deref() == Some(token) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("the refresh never cached {token:?}; the cache holds {:?}", caps.known_token());
+}
+
+#[rstest]
+#[tokio::test]
+async fn continue_serves_a_stale_request_and_refreshes_in_the_background(
+    #[future] negotiating_server: MockServer,
+) {
+    let server = negotiating_server.await;
+    let caps = warm_cap_client(&server).await;
+    let client = negotiating_client(&server, Arc::clone(&caps), CapMismatch::Continue);
+
+    let me = client.get_me().map_api_error().await.unwrap();
+
+    assert_eq!(me.status(), StatusCode::OK);
+    await_token(&caps, "5").await;
+    assert_eq!(caps_hits(&server).await, 2, "the warm-up, then exactly one refresh");
+}
+
+#[rstest]
+#[tokio::test]
+async fn concurrent_burst_refreshes_capabilities_once(#[future] negotiating_server: MockServer) {
+    let server = negotiating_server.await;
+    let caps = warm_cap_client(&server).await;
+    let client = negotiating_client(&server, Arc::clone(&caps), CapMismatch::Continue);
+
+    let mut handles = Vec::new();
+    for _ in 0..20 {
+        let client = client.clone();
+        handles.push(tokio::spawn(async move {
+            client.get_me().map_api_error().await.map(|me| me.status())
+        }));
+    }
+    for handle in handles {
+        assert_eq!(handle.await.unwrap().unwrap(), StatusCode::OK);
+    }
+
+    await_token(&caps, "5").await;
+    assert_eq!(caps_hits(&server).await, 2, "a burst must coalesce into one refresh");
+}
+
+#[rstest]
+#[tokio::test]
+async fn error_surfaces_the_412_and_does_not_refresh(#[future] negotiating_server: MockServer) {
+    let server = negotiating_server.await;
+    let caps = warm_cap_client(&server).await;
+    let client = negotiating_client(&server, Arc::clone(&caps), CapMismatch::Error);
+
+    let err = client.get_me().map_api_error().await.unwrap_err();
+
+    assert_eq!(err.status(), Some(StatusCode::PRECONDITION_FAILED));
+    assert_eq!(caps_hits(&server).await, 1, "the warm-up must be the only fetch");
+    assert_eq!(caps.known_token().as_deref(), Some("4"));
+}
+
+#[rstest]
+#[case::unrelated_404(ResponseTemplate::new(404), StatusCode::NOT_FOUND)]
+#[case::bare_412(ResponseTemplate::new(412), StatusCode::PRECONDITION_FAILED)]
+#[tokio::test]
+async fn an_error_without_the_available_header_is_passed_through_without_a_refresh(
+    #[case] response: ResponseTemplate,
+    #[case] status: StatusCode,
+) {
+    let server = server_answering(response).await;
+    let caps = warm_cap_client(&server).await;
+    let client = negotiating_client(&server, caps, CapMismatch::Continue);
+
+    let err = client.get_me().map_api_error().await.unwrap_err();
+
+    assert!(matches!(err, ApiError::Status { status: found, .. } if found == status), "{err:?}");
+    assert_eq!(caps_hits(&server).await, 1, "the warm-up must be the only fetch");
+}
+
+#[rstest]
+#[case::continue_mode(CapMismatch::Continue, None)]
+#[case::error_mode(CapMismatch::Error, Some("1"))]
+#[tokio::test]
+async fn stamps_the_fetched_token_and_the_enforce_flag(
+    #[future] negotiating_server: MockServer,
+    #[case] mode: CapMismatch,
+    #[case] enforce: Option<&str>,
+) {
+    let server = negotiating_server.await;
+    let caps = warm_cap_client(&server).await;
+    caps.refresh().await.unwrap();
+    let client = negotiating_client(&server, caps, mode);
+
+    let me = client.get_me().map_api_error().await.unwrap();
+
+    assert_eq!(me.status(), StatusCode::OK);
+    let requests = server.received_requests().await.unwrap();
+    let me = requests.iter().find(|request| request.url.path() == ME).unwrap();
+    assert_eq!(
+        (
+            me.headers.get(KNOWN).and_then(|value| value.to_str().ok()),
+            me.headers.get(ENFORCE).and_then(|value| value.to_str().ok()),
+        ),
+        (Some("5"), enforce)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn get_capabilities_is_never_negotiated(#[future] negotiating_server: MockServer) {
+    let server = negotiating_server.await;
+    let caps = warm_cap_client(&server).await;
+    let client = negotiating_client(&server, caps, CapMismatch::Error);
+
+    let document = client.get_capabilities().map_api_error().await.unwrap();
+
+    assert_eq!(document.into_inner().version, "5");
+    let requests = server.received_requests().await.unwrap();
+    let last = requests.last().unwrap();
+    assert_eq!(last.url.path(), CAPABILITIES);
+    assert!(!last.headers.contains_key(KNOWN), "{:?}", last.headers);
+    assert!(!last.headers.contains_key(ENFORCE), "{:?}", last.headers);
+}

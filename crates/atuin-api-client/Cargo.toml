@@ -2,6 +2,8 @@
 name = "atuin-api-client"
 edition = "2024"
 description = "Low-level clients for the Atuin APIs"
+# The generator has its own workspace and lockfile and never ships.
+exclude = ["codegen"]
 
 authors.workspace = true
 homepage.workspace = true
@@ -10,6 +12,27 @@ readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+
+[dependencies]
+atuin-domain = { workspace = true }
+
+parking_lot = { workspace = true }
+progenitor-client = { workspace = true }
+reqwest = { workspace = true }
+secrecy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+atuin-common = { workspace = true }
+pretty_assertions = { workspace = true }
+rstest = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

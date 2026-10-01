@@ -1,38 +1,31 @@
 use std::collections::HashMap;
-use std::env;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::try_stream;
-use atuin_common::range::{Chunks, RangeExt};
-use atuin_common::url::UrlAppendExt;
-use atuin_domain::api::{
-    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
-    LoginRequest, LoginResponse, MeResponse, PackfileDownloadResponse, PackfileResponse,
-    RegisterRequest, RegisterResponse,
+use atuin_api_client::{
+    ApiError, AuthHeaderProvider, CapClient, CapMismatch, MapApiError, ResponseValue,
+    authorization, types,
 };
-use atuin_domain::caps::{AuthHeaderProvider, CapClient, CapMismatch, CapabilitiesExt};
+use atuin_common::range::{Chunks, RangeExt};
+use atuin_common::url::UrlAppendError;
+use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION};
 use atuin_domain::record::{
     EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus,
 };
 use easy_cast::Conv;
-use eyre::{Result, bail};
+use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, stream};
-use reqwest::header::{
-    AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, USER_AGENT,
-};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue};
 use reqwest::{Response, StatusCode, Url};
-use reqwest_middleware::ClientWithMiddleware;
-use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretString};
 use semver::Version;
 use tracing::{Instrument, instrument};
 
+use crate::http::identity_headers;
 use crate::packfile::PackedPackfile;
 use crate::settings::Settings;
-
-static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"),);
 
 /// How many record pages to download in parallel. See [`Client::records`].
 const MAX_RECORDS_CONCURRENT_DOWNLOAD: usize = 8;
@@ -59,22 +52,18 @@ pub enum AuthToken {
 impl AuthToken {
     /// Format the token as a sensitive Authorization header value.
     pub(crate) fn to_header_value(&self) -> Result<HeaderValue, InvalidHeaderValue> {
-        let (scheme, token) = match self {
-            Self::Bearer(token) => ("Bearer", token),
-            Self::Token(token) => ("Token", token),
-        };
-        let value = Zeroizing::new(format!("{scheme} {}", token.expose_secret()));
-        let mut header = HeaderValue::from_str(&value)?;
-        header.set_sensitive(true);
-        Ok(header)
+        match self {
+            Self::Bearer(token) => authorization("Bearer", token),
+            Self::Token(token) => authorization("Token", token),
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct Client {
-    sync_addr: Arc<Url>,
-    client: ClientWithMiddleware,
-    /// Used for uploading "LFS" data to S3. Carries no default headers, unlike [`Self::client`].
+    /// The sync API, negotiating capabilities through [`Self::caps`].
+    api: atuin_api_client::Client,
+    /// Used for uploading "LFS" data to S3. Carries no default headers, unlike [`Self::api`].
     lfs_client: reqwest::Client,
     caps: Arc<CapClient>,
 }
@@ -86,9 +75,7 @@ pub struct Client {
 /// headers would be forwarded as-is. Since those often carry credentials
 /// (e.g. Cloudflare Access secrets), refuse cross-origin redirects entirely
 /// whenever extra headers are configured.
-pub(crate) fn client_builder(
-    extra_headers: &HashMap<String, SecretString>,
-) -> reqwest::ClientBuilder {
+fn client_builder(extra_headers: &HashMap<String, SecretString>) -> reqwest::ClientBuilder {
     let builder = reqwest::Client::builder();
 
     if extra_headers.is_empty() {
@@ -120,9 +107,7 @@ pub(crate) fn client_builder(
 /// after these so that Atuin's values win.
 ///
 /// Every value is marked sensitive, since these often carry credentials.
-pub(crate) fn extra_headers_map(
-    extra_headers: &HashMap<String, SecretString>,
-) -> Result<HeaderMap> {
+fn extra_headers_map(extra_headers: &HashMap<String, SecretString>) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     for (name, value) in extra_headers {
         let name = HeaderName::from_bytes(name.as_bytes())
@@ -135,6 +120,39 @@ pub(crate) fn extra_headers_map(
     Ok(headers)
 }
 
+/// The HTTP client for authenticated calls to the sync server: the user's `extra_headers`, with
+/// `auth` and Atuin's identity over them.
+pub(crate) fn authenticated_http(
+    auth: &AuthToken,
+    connect_timeout: Duration,
+    timeout: Duration,
+    extra_headers: &HashMap<String, SecretString>,
+) -> Result<reqwest::Client> {
+    let mut headers = extra_headers_map(extra_headers)?;
+    headers.extend(identity_headers());
+    headers.insert(AUTHORIZATION, auth.to_header_value()?);
+
+    Ok(client_builder(extra_headers)
+        .default_headers(headers)
+        .connect_timeout(connect_timeout)
+        .timeout(timeout)
+        .build()?)
+}
+
+/// A client for the sync server at `sync_addr` that sends the user's `extra_headers` and Atuin's
+/// identity but no credentials of its own, with no timeouts.
+fn anonymous_api(
+    sync_addr: &Url,
+    extra_headers: &HashMap<String, SecretString>,
+) -> Result<atuin_api_client::Client> {
+    let mut headers = extra_headers_map(extra_headers)?;
+    headers.extend(identity_headers());
+
+    let http = client_builder(extra_headers).default_headers(headers).build()?;
+    Ok(atuin_api_client::Client::from_http(sync_addr, http)?)
+}
+
+/// Create the account `username` on the sync server at `address`, unless the name is taken.
 #[instrument(level = "trace", skip_all, err)]
 pub async fn register(
     address: &Url,
@@ -142,80 +160,98 @@ pub async fn register(
     email: &str,
     password: &SecretString,
     extra_headers: &HashMap<String, SecretString>,
-) -> Result<RegisterResponse> {
-    let req = RegisterRequest {
-        email: email.to_owned(),
-        username: username.to_owned(),
-        password: password.clone(),
-    };
+) -> Result<types::RegisterResponse> {
+    let api = anonymous_api(address, extra_headers)?;
 
-    let mut headers = extra_headers_map(extra_headers)?;
-    headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
-    headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
-
-    let client = client_builder(extra_headers).build()?;
-
-    let url = address.append(["user", username])?;
-    let resp = client.get(url).headers(headers.clone()).send().await?;
-
-    if resp.status().is_success() {
+    if username_taken(&api, username).await? {
         bail!("username already in use");
     }
 
-    let url = address.append(["register"])?;
-    let resp = client.post(url).headers(headers).json(&req).send().await?;
-    let resp = handle_resp_error(resp).await?;
+    let body = types::RegisterRequest {
+        email: email.to_owned(),
+        username: username.to_owned(),
+        password: password.clone().into(),
+    };
+    let resp = api_call(api.legacy_register(&body)).await?;
 
-    if !ensure_version(&resp)? {
+    if !server_version_compatible(resp.headers())? {
         bail!("could not register user due to version mismatch");
     }
 
-    let session = resp.json::<RegisterResponse>().await?;
-    Ok(session)
+    Ok(resp.into_inner())
 }
 
+/// Whether the sync server answers its lookup of `username` with any 2xx.
+///
+/// A name with a `\` is never looked up, since the path would read it as `/`; no server accepts
+/// one, so its registration gets the server's own refusal.
+async fn username_taken(api: &atuin_api_client::Client, username: &str) -> Result<bool> {
+    // The lookup puts `username` in the path, where the client would resolve these away.
+    if matches!(username, "." | "..") {
+        return Err(UrlAppendError::DotSegment.into());
+    }
+    if username.contains('\\') {
+        return Ok(false);
+    }
+
+    match api.legacy_get_user(username).map_api_error().await {
+        // A 200 whose body is not a user still names a taken account.
+        Ok(_) | Err(ApiError::Decode(_)) => Ok(true),
+        Err(ApiError::Status { status, .. }) => Ok(status.is_success()),
+        Err(err @ (ApiError::Transport(_) | ApiError::NotSent(_))) => Err(api_error(err)),
+    }
+}
+
+/// Log in to the sync server at `address` as `username`.
 #[instrument(level = "trace", skip_all, err)]
 pub async fn login(
     address: &Url,
-    req: LoginRequest,
+    username: &str,
+    password: &SecretString,
     extra_headers: &HashMap<String, SecretString>,
-) -> Result<LoginResponse> {
-    let url = address.append(["login"])?;
-    let client = client_builder(extra_headers).build()?;
+) -> Result<types::LoginResponse> {
+    let api = anonymous_api(address, extra_headers)?;
 
-    let mut headers = extra_headers_map(extra_headers)?;
-    headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
+    let body = types::LoginRequest {
+        username: username.to_owned(),
+        password: password.clone().into(),
+        totp_code: None,
+    };
+    let resp = api_call(api.legacy_login(&body)).await?;
 
-    let resp = client.post(url).headers(headers).json(&req).send().await?;
-    let resp = handle_resp_error(resp).await?;
-
-    if !ensure_version(&resp)? {
+    if !server_version_compatible(resp.headers())? {
         bail!("Could not login due to version mismatch");
     }
 
-    let session = resp.json::<LoginResponse>().await?;
-    Ok(session)
+    Ok(resp.into_inner())
 }
 
 #[cfg(feature = "check-update")]
 #[instrument(level = "trace", skip_all, err)]
 pub async fn latest_version() -> Result<Version> {
-    use atuin_domain::api::IndexResponse;
+    let http = reqwest::Client::builder()
+        .default_headers(HeaderMap::from_iter([(
+            reqwest::header::USER_AGENT,
+            HeaderValue::from_static(atuin_domain::api::ATUIN_USER_AGENT),
+        )]))
+        .build()?;
+    let api = atuin_api_client::Client::from_http(&crate::settings::DEFAULT_SYNC_URL, http)?;
 
-    let url = crate::settings::DEFAULT_SYNC_URL.clone();
-    let client = reqwest::Client::new();
-
-    let resp = client.get(url).header(USER_AGENT, APP_USER_AGENT).send().await?;
-    let resp = handle_resp_error(resp).await?;
-
-    let index = resp.json::<IndexResponse>().await?;
+    let index = api_call(api.get_index()).await?.into_inner();
     let version = Version::parse(index.version.as_str())?;
 
     Ok(version)
 }
 
-pub fn ensure_version(response: &Response) -> Result<bool> {
-    let version = response.headers().get(ATUIN_HEADER_VERSION);
+/// Whether the server whose answer carried `headers` is new enough to sync with.
+///
+/// Prints the mismatch when it is not.
+///
+/// # Errors
+///
+/// When `headers` do not carry a parseable `Atuin-Version`.
+pub fn server_version_compatible(headers: &HeaderMap) -> Result<bool> {
+    let version = headers.get(ATUIN_HEADER_VERSION);
 
     let version = if let Some(version) = version {
         match version.to_str() {
@@ -243,46 +279,51 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
     Ok(true)
 }
 
+/// `resp` if it answered 2xx, else the CLI's message for the failure.
 #[instrument(level = "trace", skip_all, err)]
 async fn handle_resp_error(resp: Response) -> Result<Response> {
-    let status = resp.status();
-    // Presigned packfile URLs carry their signature in the query string.
-    let mut url = resp.url().clone();
-    url.set_query(None);
+    if resp.status().is_success() {
+        return Ok(resp);
+    }
+    Err(api_error(ApiError::from_response(resp).await))
+}
 
-    if status == StatusCode::SERVICE_UNAVAILABLE {
-        bail!(
+/// Await `call`, turning its failure into the CLI's message for it.
+async fn api_call<T>(call: impl MapApiError<ResponseValue<T>>) -> Result<ResponseValue<T>> {
+    call.map_api_error().await.map_err(api_error)
+}
+
+/// The CLI's message for a failed call to the sync server or its object storage.
+fn api_error(err: ApiError) -> eyre::Report {
+    let ApiError::Status {
+        status,
+        url,
+        reason,
+        body,
+        ..
+    } = err
+    else {
+        return err.into();
+    };
+    match (status, reason.or(body)) {
+        (StatusCode::SERVICE_UNAVAILABLE, _) => eyre!(
             "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
-        );
-    }
-
-    if status == StatusCode::TOO_MANY_REQUESTS {
-        bail!("Rate limited; please wait before doing that again");
-    }
-
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-
-        if let Ok(error) = serde_json::from_str::<ErrorResponse>(&body) {
-            let reason = error.reason;
-
-            if status.is_client_error() {
-                bail!("Invalid request to the service at {url}, {status} - {reason}.");
-            }
-
-            bail!(
-                "There was an error with the atuin sync service at {url}, server error {status}: \
-                 {reason}.\nIf the problem persists, contact the host"
-            );
+        ),
+        (StatusCode::TOO_MANY_REQUESTS, _) => {
+            eyre!("Rate limited; please wait before doing that again")
         }
-
-        bail!(
-            "There was an error with the atuin sync service at {url}, Status \
-             {status:?}.\nResponse body: {body}\nIf the problem persists, contact the host"
-        );
+        (status, Some(reason)) if status.is_client_error() => {
+            eyre!("Invalid request to the service at {url}, {status} - {reason}.")
+        }
+        (status, Some(reason)) => eyre!(
+            "There was an error with the atuin sync service at {url}, server error {status}: \
+             {reason}.\nIf the problem persists, contact the host"
+        ),
+        (status, None) => eyre!(
+            "There was an error with the atuin sync service at {url}, Status {status:?}.\nIf the \
+             problem persists, contact the host"
+        ),
     }
-
-    Ok(resp)
 }
 
 /// Build the capability reader for a sync server.
@@ -297,10 +338,8 @@ pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
         })
     });
 
-    Ok(CapClient::new_with_auth(
-        settings.sync_address.append_path("api/v0/capabilities")?,
-        caps_http(&settings.extra_headers)?,
-        Some(auth),
+    Ok(CapClient::new(
+        anonymous_api(&settings.sync_address, &settings.extra_headers)?.with_auth(auth),
     ))
 }
 
@@ -310,15 +349,7 @@ pub fn caps_client_anonymous(
     sync_addr: &Url,
     extra_headers: &HashMap<String, SecretString>,
 ) -> Result<Arc<CapClient>> {
-    Ok(CapClient::new(sync_addr.append_path("api/v0/capabilities")?, caps_http(extra_headers)?))
-}
-
-fn caps_http(extra_headers: &HashMap<String, SecretString>) -> Result<reqwest::Client> {
-    let mut headers = extra_headers_map(extra_headers)?;
-    headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
-    headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
-
-    Ok(client_builder(extra_headers).default_headers(headers).build()?)
+    Ok(CapClient::new(anonymous_api(sync_addr, extra_headers)?))
 }
 
 /// A pending records download for one series, produced by [`Client::records`].
@@ -419,23 +450,15 @@ impl RecordsRequest {
     /// `page.start`.
     #[instrument(level = "trace", skip(self), err)]
     async fn page(&self, page: Range<RecordIdx>) -> Result<Vec<Record<EncryptedData>>> {
-        let base_url = self.client.sync_addr.append_path("api/v0/record/next")?;
         let width = page.end - page.start;
-        let resp = self
-            .client
-            .client
-            .get(base_url)
-            .query(&[
-                ("host", self.series.host_id.to_string()),
-                ("tag", self.series.tag.as_str().to_owned()),
-                ("start", page.start.to_string()),
-                ("count", width.to_string()),
-            ])
-            .send()
-            .await?;
-        let resp = handle_resp_error(resp).await?;
-        let records = resp.json::<Vec<Record<EncryptedData>>>().await?;
-        Ok(records)
+        let records = api_call(self.client.api.get_next_records(
+            &width,
+            &self.series.host_id.0,
+            Some(&page.start),
+            self.series.tag.as_str(),
+        ))
+        .await?;
+        Ok(records.into_inner())
     }
 }
 
@@ -451,24 +474,12 @@ impl Client {
     ) -> Result<Self> {
         let sync_addr: Arc<Url> = sync_addr.into();
 
-        let mut headers = extra_headers_map(extra_headers)?;
-        headers.insert(AUTHORIZATION, auth.to_header_value()?);
-        headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
-
-        // used for semver server check
-        headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
-
-        // Wrap the authenticated client in the capability-negotiation middleware.
-        let client = client_builder(extra_headers)
-            .default_headers(headers)
-            .connect_timeout(connect_timeout)
-            .timeout(timeout)
-            .build()?
-            .with_capabilities(caps.clone(), CapMismatch::Continue);
+        let http = authenticated_http(auth, connect_timeout, timeout, extra_headers)?;
+        let api = atuin_api_client::Client::from_http(&sync_addr, http)?
+            .with_capabilities(Arc::clone(&caps), CapMismatch::Continue);
 
         Ok(Self {
-            sync_addr,
-            client,
+            api,
             lfs_client: reqwest::Client::builder()
                 .connect_timeout(connect_timeout)
                 .timeout(timeout)
@@ -485,37 +496,21 @@ impl Client {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn me(&self) -> Result<MeResponse> {
-        let url = self.sync_addr.append_path("api/v0/me")?;
-
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        let status = resp.json::<MeResponse>().await?;
-
-        Ok(status)
+    pub async fn me(&self) -> Result<types::MeResponse> {
+        Ok(api_call(self.api.get_me()).await?.into_inner())
     }
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn delete_store(&self) -> Result<()> {
-        let url = self.sync_addr.append_path("api/v0/store")?;
-
-        let resp = self.client.delete(url).send().await?;
-
-        handle_resp_error(resp).await?;
-
+        api_call(self.api.delete_store()).await?;
         Ok(())
     }
 
+    #[allow(clippy::ptr_arg, reason = "the generated post_records takes a &Vec")]
     #[instrument(level = "trace", skip_all, fields(count = records.len()), err)]
-    pub async fn post_records(&self, records: &[Record<EncryptedData>]) -> Result<()> {
-        let url = self.sync_addr.append_path("api/v0/record")?;
-
-        debug!("uploading {} records to {url}", records.len());
-
-        let resp = self.client.post(url).json(records).send().await?;
-        handle_resp_error(resp).await?;
-
+    pub async fn post_records(&self, records: &Vec<Record<EncryptedData>>) -> Result<()> {
+        debug!("uploading {} records", records.len());
+        api_call(self.api.post_records(records)).await?;
         Ok(())
     }
 
@@ -551,19 +546,14 @@ impl Client {
         record_ids: &[RecordId],
         packfile: impl AsRef<[u8]> + Into<reqwest::Body>,
     ) -> Result<()> {
-        let url = self.sync_addr.append_path("api/v0/packfiles")?;
-        let body = serde_json::json!({
-            "manifest_id": manifest_id,
-            "records": record_ids,
-            "packfile_size_bytes": packfile.as_ref().len(),
-        });
-        let resp = self.client.post(url).json(&body).send().await?;
-        let resp = handle_resp_error(resp).await?;
+        let body = types::PackfileCreateRequest {
+            manifest_id: manifest_id.0,
+            packfile_size_bytes: u64::conv(packfile.as_ref().len()),
+            records: record_ids.iter().map(|id| id.0).collect(),
+        };
+        let created = api_call(self.api.create_packfile(&body)).await?.into_inner();
 
-        let parsed: PackfileResponse = resp.json().await?;
-
-        // Awesome, we got the packfile response, let's proceed uploading it up now.
-        self.put_packfile(parsed.upload_url, packfile).await?;
+        self.put_packfile(created.upload_url, packfile).await?;
 
         self.confirm_packfile(manifest_id).await?;
 
@@ -573,10 +563,7 @@ impl Client {
     /// Confirm a packfile body upload with the server.
     #[instrument(level = "trace", skip_all, fields(id = ?manifest_id), err)]
     async fn confirm_packfile(&self, manifest_id: RecordId) -> Result<()> {
-        let path = format!("api/v0/packfiles/{}/confirm", manifest_id.0);
-        let url = self.sync_addr.append(path.split('/').filter(|s| !s.is_empty()))?;
-        let resp = self.client.post(url).send().await?;
-        handle_resp_error(resp).await?;
+        api_call(self.api.confirm_packfile(&manifest_id.0)).await?;
         Ok(())
     }
 
@@ -601,14 +588,8 @@ impl Client {
 
     #[instrument(level = "trace", skip_all, fields(id = ?manifest_id), err)]
     async fn get_packfile_download_url(&self, manifest_id: RecordId) -> Result<Url> {
-        // `append_path` takes `&'static str`; the manifest id is dynamic, so inline its logic.
-        let path = format!("api/v0/packfiles/{}", manifest_id.0);
-        let url = self.sync_addr.append(path.split('/').filter(|s| !s.is_empty()))?;
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        let parsed: PackfileDownloadResponse = resp.json().await?;
-        Ok(parsed.download_url)
+        let packfile = api_call(self.api.get_packfile(&manifest_id.0)).await?;
+        Ok(packfile.into_inner().download_url)
     }
 
     /// Download the packfile for the given manifest id.
@@ -636,70 +617,23 @@ impl Client {
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn record_status(&self) -> Result<RecordStatus> {
-        let url = self.sync_addr.append_path("api/v0/record")?;
+        let resp = api_call(self.api.get_record_status()).await?;
 
-        let resp = self.client.get(url).send().await?;
-        let resp = handle_resp_error(resp).await?;
-
-        if !ensure_version(&resp)? {
+        if !server_version_compatible(resp.headers())? {
             bail!("could not sync records due to version mismatch");
         }
 
-        let index = resp.json().await?;
+        let index = resp.into_inner();
 
         debug!("got remote index {index:?}");
 
         Ok(index)
     }
-
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn delete(&self) -> Result<()> {
-        let url = self.sync_addr.append(["account"])?;
-
-        let resp = self.client.delete(url).send().await?;
-
-        if resp.status() == 403 {
-            bail!("invalid login details");
-        } else if resp.status() == 200 {
-            Ok(())
-        } else {
-            bail!("Unknown error");
-        }
-    }
-
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn change_password(
-        &self,
-        current_password: &SecretString,
-        new_password: &SecretString,
-    ) -> Result<()> {
-        let url = self.sync_addr.append_path("account/password")?;
-
-        let resp = self
-            .client
-            .patch(url)
-            .json(&ChangePasswordRequest {
-                current_password: current_password.clone(),
-                new_password: new_password.clone(),
-                totp_code: None,
-            })
-            .send()
-            .await?;
-
-        if resp.status() == 401 {
-            bail!("current password is incorrect");
-        } else if resp.status() == 403 {
-            bail!("invalid login details");
-        } else if resp.status() == 200 {
-            Ok(())
-        } else {
-            bail!("Unknown error");
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use atuin_domain::api::ATUIN_USER_AGENT;
     use rstest::*;
 
     use super::*;
@@ -829,6 +763,157 @@ mod tests {
         let err = handle_resp_error(resp).await.unwrap_err();
 
         assert!(!format!("{err:#}").contains("sekrit"), "{err:#}");
+    }
+
+    #[rstest]
+    #[case::unavailable(
+        503,
+        Some("down"),
+        None,
+        "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
+    )]
+    #[case::rate_limited(429, None, None, "Rate limited; please wait before doing that again")]
+    #[case::client_error(
+        403,
+        Some("session not found"),
+        None,
+        "Invalid request to the service at https://api.atuin.sh/api/v0/me, 403 Forbidden - \
+         session not found."
+    )]
+    #[case::server_error(
+        500,
+        Some("database error"),
+        None,
+        "There was an error with the atuin sync service at https://api.atuin.sh/api/v0/me, server \
+         error 500 Internal Server Error: database error.\nIf the problem persists, contact the \
+         host"
+    )]
+    #[case::text_body(
+        502,
+        None,
+        Some("<html>Bad Gateway</html>"),
+        "There was an error with the atuin sync service at https://api.atuin.sh/api/v0/me, server \
+         error 502 Bad Gateway: <html>Bad Gateway</html>.\nIf the problem persists, contact the \
+         host"
+    )]
+    #[case::empty_body(
+        502,
+        None,
+        None,
+        "There was an error with the atuin sync service at https://api.atuin.sh/api/v0/me, Status \
+         502.\nIf the problem persists, contact the host"
+    )]
+    fn failed_calls_read_as_the_cli_messages(
+        #[case] status: u16,
+        #[case] reason: Option<&str>,
+        #[case] body: Option<&str>,
+        #[case] message: &str,
+    ) {
+        let err = ApiError::Status {
+            status: StatusCode::from_u16(status).unwrap(),
+            url: Box::new("https://api.atuin.sh/api/v0/me".parse().unwrap()),
+            reason: reason.map(str::to_owned),
+            code: None,
+            body: body.map(str::to_owned),
+        };
+
+        assert_eq!(api_error(err).to_string(), message);
+    }
+
+    /// An unreachable server reads as reqwest's own error, its cause chained once.
+    #[rstest]
+    #[tokio::test]
+    async fn an_unreachable_server_names_the_request_once() {
+        // Port 1 (tcpmux) is privileged and unserved, so the connection is refused.
+        let addr: Url = "http://127.0.0.1:1/".parse().unwrap();
+        let client = Client::new(
+            addr.clone(),
+            &AuthToken::Token("t".into()),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            &HashMap::new(),
+            caps_client_anonymous(&addr, &HashMap::new()).unwrap(),
+        )
+        .unwrap();
+
+        let err = client.me().await.unwrap_err();
+
+        let report = format!("{err:#}");
+        assert!(
+            report.starts_with("error sending request for url (http://127.0.0.1:1/api/v0/me)"),
+            "{report}"
+        );
+        assert_eq!(report.matches("error sending request").count(), 1, "{report}");
+    }
+
+    /// Every sync call carries the auth, identity and user headers the client was built with,
+    /// Atuin's `Authorization` over a user's, and the negotiated capability token; never
+    /// progenitor's `api-version`.
+    #[rstest]
+    #[tokio::test]
+    async fn sync_calls_carry_the_configured_headers() {
+        use atuin_domain::caps::CapabilitiesCap;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/capabilities"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"version": "7", "capabilities": {}})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/me"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"username": "ellie"})),
+            )
+            .mount(&server)
+            .await;
+        let extra_headers = HashMap::from([
+            ("X-Auth-Token".to_owned(), SecretString::from("secret")),
+            ("Authorization".to_owned(), SecretString::from("Token user-value")),
+        ]);
+        let addr: Url = server.uri().parse().unwrap();
+        let caps = caps_client_anonymous(&addr, &extra_headers).unwrap();
+        caps.get_server::<CapabilitiesCap>().await.unwrap();
+        let client = Client::new(
+            addr,
+            &AuthToken::Token("t".into()),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            &extra_headers,
+            caps,
+        )
+        .unwrap();
+
+        client.me().await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let me = requests.iter().find(|request| request.url.path() == "/api/v0/me").unwrap();
+        let sent = |name: &str| -> Vec<&str> {
+            me.headers.get_all(name).iter().map(|value| value.to_str().unwrap()).collect()
+        };
+        assert_eq!(
+            [
+                sent("authorization"),
+                sent("user-agent"),
+                sent(ATUIN_HEADER_VERSION),
+                sent("x-auth-token"),
+                sent("x-atuin-capabilities-known"),
+                sent("api-version"),
+            ],
+            [
+                vec!["Token t"],
+                vec![ATUIN_USER_AGENT],
+                vec![ATUIN_CARGO_VERSION],
+                vec!["secret"],
+                vec!["7"],
+                vec![],
+            ]
+        );
     }
 
     #[rstest]

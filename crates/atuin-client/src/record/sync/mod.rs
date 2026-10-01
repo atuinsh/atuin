@@ -1552,6 +1552,7 @@ mod packfile_sync_tests {
         Mock::given(method("POST"))
             .and(path("/api/v0/packfiles"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "packfile_id": uuid_v7(),
                 "upload_url": format!("{}/upload/abc", server.uri()),
             })))
             .expect(1)
@@ -1585,6 +1586,7 @@ mod packfile_sync_tests {
             .unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
     async fn upload_packfiles_transfers_every_item() {
         // Two items each drive create -> put -> confirm exactly once (asserted via `.expect(2)`), so
@@ -1593,6 +1595,7 @@ mod packfile_sync_tests {
         Mock::given(method("POST"))
             .and(path("/api/v0/packfiles"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "packfile_id": uuid_v7(),
                 "upload_url": format!("{}/upload/abc", server.uri()),
             })))
             .expect(2)

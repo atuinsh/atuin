@@ -1,11 +1,13 @@
 use std::env;
 use std::time::Duration;
 
-use atuin_client::api_client;
+use atuin_api_client::{Client, MapApiError, types};
 use atuin_common::utils::uuid_v7;
 use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use futures_util::TryFutureExt;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use secrecy::{ExposeSecret, SecretString};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -68,61 +70,53 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
     (url, shutdown_tx, server)
 }
 
-pub async fn register_inner(
-    address: &url::Url,
-    username: &str,
-    password: &str,
-) -> api_client::Client {
-    let email = format!("{}@example.com", uuid_v7().as_simple());
+/// A client for the server at `address`, authenticated with the CLI session `session`, if any.
+pub fn client(address: &url::Url, session: Option<&SecretString>) -> Client {
+    let mut headers = HeaderMap::new();
+    if let Some(session) = session {
+        let mut value =
+            HeaderValue::from_str(&format!("Token {}", session.expose_secret())).unwrap();
+        value.set_sensitive(true);
+        headers.insert(AUTHORIZATION, value);
+    }
+    let http = reqwest::Client::builder().default_headers(headers).build().unwrap();
+    Client::from_http(address, http).unwrap()
+}
 
-    // registration works
-    let registration_response =
-        api_client::register(address, username, &email, &password.into(), &Default::default())
-            .await
-            .unwrap();
+/// Register `username`, and return a client authenticated as them.
+pub async fn register_inner(address: &url::Url, username: &str, password: &str) -> Client {
+    let body = types::RegisterRequest {
+        email: format!("{}@example.com", uuid_v7().as_simple()),
+        username: username.to_owned(),
+        password: password.into(),
+    };
+    let registered = client(address, None).legacy_register(&body).map_api_error().await.unwrap();
 
-    let caps = api_client::caps_client_anonymous(address, &Default::default()).unwrap();
-    api_client::Client::new(
-        address.clone(),
-        &api_client::AuthToken::Token(registration_response.session),
-        std::time::Duration::from_secs(5),
-        std::time::Duration::from_secs(30),
-        &Default::default(),
-        caps,
-    )
-    .unwrap()
+    assert!(registered.headers().contains_key("atuin-version"), "{:?}", registered.headers());
+    client(address, Some(&registered.into_inner().session.into()))
 }
 
 #[allow(dead_code)]
-pub async fn login(address: &url::Url, username: String, password: String) -> api_client::Client {
-    // registration works
-    let login_response = api_client::login(
-        address,
-        atuin_domain::api::LoginRequest {
-            username,
-            password: password.into(),
-            totp_code: None,
-        },
-        &Default::default(),
-    )
-    .await
-    .unwrap();
+pub async fn login(address: &url::Url, username: String, password: String) -> Client {
+    let body = types::LoginRequest {
+        username,
+        password: password.into(),
+        totp_code: None,
+    };
+    let session =
+        client(address, None).legacy_login(&body).map_api_error().await.unwrap().into_inner();
 
-    let caps = api_client::caps_client_anonymous(address, &Default::default()).unwrap();
-    api_client::Client::new(
-        address.clone(),
-        &api_client::AuthToken::Token(login_response.session),
-        std::time::Duration::from_secs(5),
-        std::time::Duration::from_secs(30),
-        &Default::default(),
-        caps,
-    )
-    .unwrap()
+    client(address, Some(&session.session.into()))
 }
 
 #[allow(dead_code)]
-pub async fn register(address: &url::Url) -> api_client::Client {
+pub async fn register(address: &url::Url) -> Client {
     let username = uuid_v7().as_simple().to_string();
     let password = uuid_v7().as_simple().to_string();
     register_inner(address, &username, &password).await
+}
+
+/// The username `client` is authenticated as.
+pub async fn username(client: &Client) -> Option<String> {
+    client.get_me().map_api_error().await.unwrap().into_inner().username
 }

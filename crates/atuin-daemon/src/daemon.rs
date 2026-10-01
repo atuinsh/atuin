@@ -11,12 +11,12 @@
 
 use std::sync::Arc;
 
+use atuin_api_client::CapClient;
 use atuin_client::api_client::caps_client;
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::caps::CapClient;
 use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, broadcast};

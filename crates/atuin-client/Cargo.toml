@@ -14,8 +14,8 @@ version.workspace = true
 
 [features]
 default = ["sync", "hub", "daemon"]
-sync = ["reqwest", "dep:reqwest-middleware"]
-hub = ["reqwest"]
+sync = ["reqwest", "dep:atuin-api-client"]
+hub = ["reqwest", "dep:atuin-api-client"]
 daemon = []
 check-update = []
 # Derive the protobuf enum traits on domain enums the daemon extern-paths into its codegen.
@@ -25,6 +25,7 @@ proto = ["dep:prost"]
 vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
+atuin-api-client = { workspace = true, optional = true }
 atuin-common = { workspace = true, features = ["ai", "os", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
@@ -77,7 +78,6 @@ rusty_paseto = { workspace = true }
 # sync
 indicatif = { workspace = true }
 reqwest = { workspace = true, optional = true }
-reqwest-middleware = { workspace = true, optional = true, features = ["json", "query"] }
 
 # theme
 crossterm = { workspace = true, features = ["serde"] }

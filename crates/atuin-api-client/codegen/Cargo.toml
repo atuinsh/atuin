@@ -1,0 +1,32 @@
+[package]
+name = "atuin-api-client-codegen"
+version = "0.0.0"
+edition = "2024"
+description = "Generates atuin-api-client's src/generated.rs from its openapi.json"
+license = "MIT"
+publish = false
+
+# A workspace of its own: progenitor's generator stack (typify, schemars 0.8, syn 3) stays out of
+# atuin's Cargo.lock and cargo-deny graph, and nothing that builds atuin compiles it.
+[workspace]
+
+[dependencies]
+openapiv3 = "2.2"
+prettyplease = "0.3"
+progenitor = { version = "0.15", default-features = false }
+quote = "1"
+# The schema type progenitor's with_conversion takes.
+schemars = "0.8"
+serde_json = "1"
+syn = { version = "3", default-features = false, features = ["full", "parsing"] }
+thiserror = "2"
+
+[dev-dependencies]
+rstest = "0.27"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }

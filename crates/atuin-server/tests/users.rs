@@ -1,4 +1,6 @@
+use atuin_api_client::{ApiError, MapApiError, types};
 use atuin_common::utils::uuid_v7;
+use reqwest::StatusCode;
 use rstest::{fixture, rstest};
 
 mod common;
@@ -9,6 +11,14 @@ type TestServer = (url::Url, tokio::sync::oneshot::Sender<()>, tokio::task::Join
 async fn server() -> TestServer {
     let path = format!("/{}", uuid_v7().as_simple());
     common::start_server(&path).await
+}
+
+/// The status and reason `err` reports, if the server answered with one.
+fn refusal(err: ApiError) -> (Option<StatusCode>, Option<String>) {
+    match err {
+        ApiError::Status { status, reason, .. } => (Some(status), reason),
+        ApiError::Transport(_) | ApiError::Decode(_) | ApiError::NotSent(_) => (None, None),
+    }
 }
 
 #[rstest]
@@ -23,16 +33,14 @@ async fn registration(#[future] server: TestServer) {
     let client = common::register_inner(&address, &username, &password).await;
 
     // the session token works
-    let status = client.me().await.unwrap();
-    assert_eq!(status.username, username);
+    assert_eq!(common::username(&client).await, Some(username.clone()));
 
     // -- LOGIN --
 
     let client = common::login(&address, username.clone(), password).await;
 
     // the session token works
-    let status = client.me().await.unwrap();
-    assert_eq!(status.username, username);
+    assert_eq!(common::username(&client).await, Some(username));
 
     shutdown.send(()).unwrap();
     server_task.await.unwrap();
@@ -50,26 +58,24 @@ async fn change_password(#[future] server: TestServer) {
     let client = common::register_inner(&address, &username, &password).await;
 
     // the session token works
-    let status = client.me().await.unwrap();
-    assert_eq!(status.username, username);
+    assert_eq!(common::username(&client).await, Some(username.clone()));
 
     // -- PASSWORD CHANGE --
 
-    let current_password = password;
     let new_password = uuid_v7().as_simple().to_string();
-    let result =
-        client.change_password(&current_password.into(), &new_password.clone().into()).await;
-
-    // the password change request succeeded
-    assert!(result.is_ok());
+    let change = types::ChangePasswordRequest {
+        current_password: password.into(),
+        new_password: new_password.clone().into(),
+        totp_code: None,
+    };
+    client.legacy_change_password(&change).map_api_error().await.unwrap();
 
     // -- LOGIN --
 
     let client = common::login(&address, username.clone(), new_password).await;
 
     // login with new password yields a working token
-    let status = client.me().await.unwrap();
-    assert_eq!(status.username, username);
+    assert_eq!(common::username(&client).await, Some(username));
 
     shutdown.send(()).unwrap();
     server_task.await.unwrap();
@@ -87,26 +93,24 @@ async fn multi_user_test(#[future] server: TestServer) {
     let client_one = common::register_inner(&address, &user_one, &password_one).await;
 
     // the session token works
-    let status = client_one.me().await.unwrap();
-    assert_eq!(status.username, user_one);
+    assert_eq!(common::username(&client_one).await, Some(user_one.clone()));
 
     let user_two = uuid_v7().as_simple().to_string();
     let password_two = uuid_v7().as_simple().to_string();
     let client_two = common::register_inner(&address, &user_two, &password_two).await;
 
     // the session token works
-    let status = client_two.me().await.unwrap();
-    assert_eq!(status.username, user_two);
+    assert_eq!(common::username(&client_two).await, Some(user_two.clone()));
 
     // check that we can change user one's password, and _this does not affect user two_
 
-    let current_password = password_one;
     let new_password = uuid_v7().as_simple().to_string();
-    let result =
-        client_one.change_password(&current_password.into(), &new_password.clone().into()).await;
-
-    // the password change request succeeded
-    assert!(result.is_ok());
+    let change = types::ChangePasswordRequest {
+        current_password: password_one.into(),
+        new_password: new_password.clone().into(),
+        totp_code: None,
+    };
+    client_one.legacy_change_password(&change).map_api_error().await.unwrap();
 
     // -- LOGIN --
 
@@ -114,12 +118,95 @@ async fn multi_user_test(#[future] server: TestServer) {
     let client_two = common::login(&address, user_two.clone(), password_two).await;
 
     // login with new password yields a working token
-    let status = client_one.me().await.unwrap();
-    assert_eq!(status.username, user_one);
-    assert_ne!(status.username, user_two);
+    assert_eq!(common::username(&client_one).await, Some(user_one));
+    assert_eq!(common::username(&client_two).await, Some(user_two));
 
-    let status = client_two.me().await.unwrap();
-    assert_eq!(status.username, user_two);
+    shutdown.send(()).unwrap();
+    server_task.await.unwrap();
+}
+
+/// `atuin register` treats any 2xx to the lookup as a taken username, so an unknown one must 404.
+#[rstest]
+#[tokio::test]
+async fn user_lookup_finds_only_registered_usernames(#[future] server: TestServer) {
+    let (address, shutdown, server_task) = server.await;
+    let username = uuid_v7().as_simple().to_string();
+    common::register_inner(&address, &username, "pw").await;
+    let anonymous = common::client(&address, None);
+
+    let found = anonymous.legacy_get_user(&username).map_api_error().await.unwrap().into_inner();
+    let missing = anonymous.legacy_get_user("nobody").map_api_error().await.unwrap_err();
+
+    assert_eq!(found.username, username);
+    assert_eq!(refusal(missing), (Some(StatusCode::NOT_FOUND), Some("user not found".to_owned())));
+
+    shutdown.send(()).unwrap();
+    server_task.await.unwrap();
+}
+
+#[rstest]
+#[case::wrong_password("wrong", StatusCode::UNAUTHORIZED, "password is not correct")]
+#[case::unknown_user("", StatusCode::NOT_FOUND, "user not found")]
+#[tokio::test]
+async fn login_refuses_bad_credentials(
+    #[future] server: TestServer,
+    #[case] password: &str,
+    #[case] status: StatusCode,
+    #[case] reason: &str,
+) {
+    let (address, shutdown, server_task) = server.await;
+    let username = uuid_v7().as_simple().to_string();
+    if !password.is_empty() {
+        common::register_inner(&address, &username, "right").await;
+    }
+    let body = types::LoginRequest {
+        username,
+        password: password.into(),
+        totp_code: None,
+    };
+
+    let err = common::client(&address, None).legacy_login(&body).map_api_error().await.unwrap_err();
+
+    assert_eq!(refusal(err), (Some(status), Some(reason.to_owned())));
+
+    shutdown.send(()).unwrap();
+    server_task.await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn delete_account_ends_the_session(#[future] server: TestServer) {
+    let (address, shutdown, server_task) = server.await;
+    let username = uuid_v7().as_simple().to_string();
+    let client = common::register_inner(&address, &username, "pw").await;
+
+    let body = types::DeleteUserRequest {
+        password: "pw".into(),
+        totp_code: None,
+    };
+    client.legacy_delete_account(&body).map_api_error().await.unwrap();
+    let after = client.get_me().map_api_error().await.unwrap_err();
+
+    assert_eq!(refusal(after), (Some(StatusCode::FORBIDDEN), Some("session not found".to_owned())));
+
+    shutdown.send(()).unwrap();
+    server_task.await.unwrap();
+}
+
+/// Served at the root: under a path prefix the index answers only without a trailing slash, and
+/// the client asks for it only from api.atuin.sh.
+#[rstest]
+#[tokio::test]
+async fn index_and_capabilities_describe_the_server() {
+    let (address, shutdown, server_task) = common::start_server("").await;
+    let anonymous = common::client(&address, None);
+
+    let index = anonymous.get_index().map_api_error().await.unwrap().into_inner();
+    let capabilities = anonymous.get_capabilities().map_api_error().await.unwrap();
+
+    assert_eq!(index.version, env!("CARGO_PKG_VERSION"));
+    assert!(capabilities.headers().contains_key("atuin-version"), "{:?}", capabilities.headers());
+    assert!(!capabilities.into_inner().version.is_empty());
 
     shutdown.send(()).unwrap();
     server_task.await.unwrap();

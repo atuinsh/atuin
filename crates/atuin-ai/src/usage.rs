@@ -2,17 +2,20 @@
 //!
 //! The hub reports the user's period credit totals two ways: a `credits`
 //! object on the chat `done` event, and `GET /api/cli/usage` for reading it
-//! outside a chat. Both share the same shape, deserialized here as
-//! [`UsageSnapshot`]. Snapshots are cached in ai.db (see `store`) so the TUI
-//! can render usage immediately on open, then refreshed in the background.
+//! outside a chat. Both share the same shape: the done event deserializes
+//! into [`UsageSnapshot`], and the fetch converts the generated client's
+//! `types::UsageSnapshot` into it. Snapshots are cached in ai.db (see
+//! `store`) so the TUI can render usage immediately on open, then refreshed
+//! in the background.
 
 use std::time::Duration;
 
-use atuin_common::url::UrlAppendExt;
+use atuin_api_client::{ApiError, MapApiError, types};
 use eyre::{Context, Result};
-use reqwest::header::USER_AGENT;
+use reqwest::Url;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use time::format_description::well_known::Rfc3339;
 
 /// Cached usage older than this triggers a background refresh on TUI open.
 pub const REFRESH_AFTER: Duration = Duration::from_secs(60);
@@ -26,6 +29,9 @@ pub struct UsageBucket {
 }
 
 /// The user's credit totals against their limits for the current period.
+///
+/// Also the JSON of the ai.db usage cache, which has no version: its serde
+/// shape must keep reading the rows released clients wrote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageSnapshot {
     /// e.g. "calendar_monthly"
@@ -68,6 +74,31 @@ impl UsageSnapshot {
     }
 }
 
+impl TryFrom<types::UsageSnapshot> for UsageSnapshot {
+    type Error = time::error::Format;
+
+    /// Fails only for a `resets_at` outside RFC 3339's years, which no answer decodes to.
+    fn try_from(wire: types::UsageSnapshot) -> Result<Self, Self::Error> {
+        Ok(Self {
+            period: wire.period,
+            resets_at: wire.resets_at.0.format(&Rfc3339)?,
+            requests: wire.requests.into(),
+            input: wire.input.into(),
+            output: wire.output.into(),
+        })
+    }
+}
+
+impl From<types::UsageBucket> for UsageBucket {
+    /// Saturates a `used` past `i64::MAX`, which reads as over any limit.
+    fn from(wire: types::UsageBucket) -> Self {
+        Self {
+            used: i64::try_from(wire.used).unwrap_or(i64::MAX),
+            limit: wire.limit,
+        }
+    }
+}
+
 /// Format a reset delta as its largest sensible unit: "4d", "23h", or "56m".
 /// Sub-minute deltas render as "1m" — "0m" would read as already reset.
 pub fn format_reset_delta(delta: Duration) -> String {
@@ -90,31 +121,54 @@ pub fn cache_key(token: &SecretString) -> String {
 
 /// Fetch current usage from the hub. Mirrors the `credits` object on the
 /// chat `done` event, for refreshing without starting a chat.
-pub async fn fetch_usage(endpoint: &reqwest::Url, token: &SecretString) -> Result<UsageSnapshot> {
-    let url = endpoint.append_path("api/cli/usage")?;
-
-    let response = reqwest::Client::new()
-        .get(url)
-        .header(USER_AGENT, crate::stream::APP_USER_AGENT)
-        .bearer_auth(token.expose_secret())
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .context("failed to fetch usage")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        eyre::bail!("usage request failed ({status})");
+pub async fn fetch_usage(endpoint: &Url, token: &SecretString) -> Result<UsageSnapshot> {
+    let client = crate::api::client(endpoint, Some(token))?;
+    match client.get_usage().map_api_error().await {
+        Ok(usage) => {
+            UsageSnapshot::try_from(usage.into_inner()).context("failed to parse usage response")
+        }
+        Err(ApiError::Status { status, .. }) => eyre::bail!("usage request failed ({status})"),
+        Err(err @ ApiError::Decode(_)) => Err(err).context("failed to parse usage response"),
+        Err(err @ (ApiError::Transport(_) | ApiError::NotSent(_))) => {
+            Err(err).context("failed to fetch usage")
+        }
     }
-
-    response.json::<UsageSnapshot>().await.context("failed to parse usage response")
 }
 
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use serde_json::{Value, json};
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    const TOKEN: &str = "atapi_token";
+
+    /// A server answering usage with `response` to [`TOKEN`] only, and its endpoint.
+    async fn serve(response: ResponseTemplate) -> (MockServer, Url) {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/cli/usage"))
+            .and(header("authorization", format!("Bearer {TOKEN}")))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+        let endpoint = Url::parse(&server.uri()).unwrap();
+        (server, endpoint)
+    }
+
+    /// The hub's `GET /api/cli/usage` body.
+    fn hub_usage(resets_at: &str) -> Value {
+        json!({
+            "period": "calendar_monthly",
+            "resets_at": resets_at,
+            "requests": {"used": 3, "limit": -1},
+            "input": {"used": 12345, "limit": 5_000_000},
+            "output": {"used": 678, "limit": 0},
+        })
+    }
 
     #[rstest]
     fn deserializes_server_payload() {
@@ -188,5 +242,87 @@ mod tests {
         let b = SecretString::from("token-b");
         assert_ne!(cache_key(&a), cache_key(&b));
         assert_eq!(cache_key(&a), cache_key(&a.clone()));
+    }
+
+    #[rstest]
+    #[case::whole_seconds("2026-08-01T00:00:00Z", "2026-08-01T00:00:00Z")]
+    #[case::microseconds("2026-08-01T00:00:00.000000Z", "2026-08-01T00:00:00Z")]
+    #[case::fraction("2026-08-01T00:00:00.250Z", "2026-08-01T00:00:00.25Z")]
+    #[case::offset("2026-08-01T02:00:00+02:00", "2026-08-01T02:00:00+02:00")]
+    #[tokio::test]
+    async fn fetch_decodes_the_hub_snapshot(#[case] wire: &str, #[case] resets_at: &str) {
+        let (_server, endpoint) =
+            serve(ResponseTemplate::new(200).set_body_json(hub_usage(wire))).await;
+
+        let snapshot = fetch_usage(&endpoint, &SecretString::from(TOKEN)).await.unwrap();
+
+        assert_eq!(snapshot, UsageSnapshot {
+            period: "calendar_monthly".into(),
+            resets_at: resets_at.into(),
+            requests: UsageBucket { used: 3, limit: -1 },
+            input: UsageBucket {
+                used: 12345,
+                limit: 5_000_000,
+            },
+            output: UsageBucket {
+                used: 678,
+                limit: 0
+            },
+        });
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(&snapshot.resets_at).unwrap(),
+            chrono::DateTime::parse_from_rfc3339(wire).unwrap()
+        );
+    }
+
+    #[rstest]
+    #[case::server_error(
+        ResponseTemplate::new(500),
+        "usage request failed (500 Internal Server Error)"
+    )]
+    #[case::unauthorized(
+        ResponseTemplate::new(401).set_body_json(json!({"errors": ["invalid token"]})),
+        "usage request failed (401 Unauthorized)"
+    )]
+    #[case::body_off_the_api(
+        ResponseTemplate::new(200).set_body_string("<html>hi</html>"),
+        "failed to parse usage response"
+    )]
+    #[case::reset_not_rfc_3339(
+        ResponseTemplate::new(200).set_body_json(hub_usage("next month")),
+        "failed to parse usage response"
+    )]
+    #[tokio::test]
+    async fn fetch_failures_name_the_stage_that_failed(
+        #[case] response: ResponseTemplate,
+        #[case] message: &str,
+    ) {
+        let (_server, endpoint) = serve(response).await;
+
+        let err = fetch_usage(&endpoint, &SecretString::from(TOKEN)).await.unwrap_err();
+
+        assert_eq!(err.to_string(), message);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn fetch_from_an_unreachable_server_fails_the_fetch() {
+        let endpoint = Url::parse("http://127.0.0.1:1/").unwrap();
+
+        let err = fetch_usage(&endpoint, &SecretString::from(TOKEN)).await.unwrap_err();
+
+        assert_eq!(err.to_string(), "failed to fetch usage");
+    }
+
+    #[rstest]
+    #[case::in_range(12_345, 12_345)]
+    #[case::past_i64(u64::MAX, i64::MAX)]
+    fn bucket_saturates_used(#[case] wire: u64, #[case] used: i64) {
+        let bucket = UsageBucket::from(types::UsageBucket {
+            used: wire,
+            limit: 10,
+        });
+
+        assert_eq!(bucket, UsageBucket { used, limit: 10 });
     }
 }

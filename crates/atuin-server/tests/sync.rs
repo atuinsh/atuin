@@ -1,6 +1,7 @@
 use std::env::temp_dir;
 use std::time::Duration;
 
+use atuin_api_client::{MapApiError, types};
 use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
@@ -29,23 +30,18 @@ struct TestServer {
 impl TestServer {
     /// Register a fresh user, and return a client authenticated as them.
     async fn register(&self) -> api_client::Client {
-        let username = uuid_v7().as_simple().to_string();
-        let password = uuid_v7().as_simple().to_string();
-        let email = format!("{}@example.com", uuid_v7().as_simple());
-
-        let resp = api_client::register(
-            &self.address,
-            &username,
-            &email,
-            &password.into(),
-            &Default::default(),
-        )
-        .await
-        .unwrap();
+        let body = types::RegisterRequest {
+            email: format!("{}@example.com", uuid_v7().as_simple()),
+            username: uuid_v7().as_simple().to_string(),
+            password: uuid_v7().as_simple().to_string().into(),
+        };
+        let api =
+            atuin_api_client::Client::from_http(&self.address, reqwest::Client::new()).unwrap();
+        let resp = api.legacy_register(&body).map_api_error().await.unwrap().into_inner();
 
         api_client::Client::new(
             self.address.clone(),
-            &api_client::AuthToken::Token(resp.session),
+            &api_client::AuthToken::Token(resp.session.into()),
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(30),
             &Default::default(),
@@ -219,7 +215,7 @@ async fn upload(
     store.push_batch(records.iter()).await.unwrap();
 
     if let Some(remote_max) = remote_max {
-        client.post_records(&records[..=usize::conv(remote_max)]).await.unwrap();
+        client.post_records(&records[..=usize::conv(remote_max)].to_vec()).await.unwrap();
     }
 
     let key = key();

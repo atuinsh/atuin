@@ -6,17 +6,19 @@ Shell history tool. Replaces your shell's built-in history with a SQLite databas
 
 ```
 atuin                  CLI binary + TUI (clap, ratatui, crossterm)
+atuin-ai               AI integration for the CLI (`atuin ai`)
+atuin-api-client       HTTP client for the sync, hub and AI APIs, generated from openapi.json
 atuin-client           Client library: local DB, encryption, sync, settings, client-facing domain types
-atuin-common           Low-level cross-crate utilities and API models (not a home for client-facing domain types)
+atuin-common           Low-level cross-crate utilities (not a home for client-facing domain types)
 atuin-daemon           Background gRPC daemon (tonic) for shell hooks
+atuin-domain           Record and capability types shared by client, daemon and server; the server's API types
 atuin-dotfiles         Legacy read-only alias/var listing via record store
 atuin-history          Sorting algorithms, stats
 atuin-kv               Key-value store (synced)
+atuin-pty-proxy        PTY proxy
 atuin-scripts          Script management (minijinja)
-atuin-server           HTTP sync server (axum) - lib + standalone binary
-atuin-server-database  Database trait for server
-atuin-server-postgres  Postgres implementation (sqlx)
-atuin-server-sqlite    SQLite implementation (sqlx)
+atuin-search-bench     Search benchmarks (not published)
+atuin-server           HTTP sync server (axum) - lib + standalone binary, Postgres or SQLite
 ```
 
 ## Two sync protocols
@@ -87,4 +89,11 @@ cargo clippy -- -D warnings
 cargo clippy --tests -- -D warnings
 cargo +nightly fmt --check
 RUSTDOCFLAGS="-D warnings" cargo doc --document-private-items --no-deps --workspace
+```
+
+`crates/atuin-api-client/openapi.json` comes from the hub (`mix api.spec`); never edit it or
+`src/generated.rs` by hand. After the spec changes, regenerate the client (CI fails on a diff):
+
+```sh
+cargo run --locked --manifest-path crates/atuin-api-client/codegen/Cargo.toml
 ```

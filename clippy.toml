@@ -62,3 +62,11 @@ path = "sqlx::migrate"
 reason = """use atuin_common::db::migrate!, which runs the migrator and then clears the \
     connection's prepared-statement cache so a later query can't reuse pre-migration column \
     metadata"""
+
+[[disallowed-methods]]
+path = "atuin_api_client::Client::new"
+reason = "hard-codes 15 s timeouts and panics if the TLS backend fails; use Client::from_http"
+
+[[disallowed-methods]]
+path = "atuin_api_client::Client::new_with_client"
+reason = "skips the base URL normalisation; use Client::from_http"

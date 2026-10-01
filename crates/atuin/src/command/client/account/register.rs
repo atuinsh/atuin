@@ -128,7 +128,7 @@ impl Cmd {
             .await?;
 
             let meta = Settings::meta_store().await?;
-            meta.save_session(&session.session).await?;
+            meta.save_session(&session.session.into()).await?;
 
             let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 

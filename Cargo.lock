@@ -348,6 +348,7 @@ dependencies = [
  "arboard",
  "async-stream",
  "async-trait",
+ "atuin-api-client",
  "atuin-client",
  "atuin-common",
  "atuin-daemon",
@@ -402,6 +403,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.2",
  "uuid",
+ "wiremock",
  "xxhash-rust",
  "yaml-rust2",
 ]
@@ -409,6 +411,24 @@ dependencies = [
 [[package]]
 name = "atuin-api-client"
 version = "18.23.0"
+dependencies = [
+ "atuin-common",
+ "atuin-domain",
+ "parking_lot",
+ "pretty_assertions",
+ "progenitor-client",
+ "reqwest",
+ "rstest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "url",
+ "uuid",
+ "wiremock",
+]
 
 [[package]]
 name = "atuin-client"
@@ -416,6 +436,7 @@ version = "18.23.0"
 dependencies = [
  "async-stream",
  "async-trait",
+ "atuin-api-client",
  "atuin-common",
  "atuin-domain",
  "atuin-vt100",
@@ -445,7 +466,6 @@ dependencies = [
  "rand 0.8.7",
  "regex",
  "reqwest",
- "reqwest-middleware",
  "rmp-serde",
  "rstest",
  "rusty_paserk",
@@ -546,6 +566,7 @@ name = "atuin-daemon"
 version = "18.23.0"
 dependencies = [
  "async-stream",
+ "atuin-api-client",
  "atuin-client",
  "atuin-common",
  "atuin-domain",
@@ -597,17 +618,13 @@ dependencies = [
 name = "atuin-domain"
 version = "18.23.0"
 dependencies = [
- "async-trait",
  "atuin-common",
  "axum",
  "derive_more",
  "easy-cast",
- "http",
  "parking_lot",
  "pretty_assertions",
  "proptest",
- "reqwest",
- "reqwest-middleware",
  "rstest",
  "secrecy",
  "semver",
@@ -621,10 +638,8 @@ dependencies = [
  "tokio",
  "tower",
  "typed-builder",
- "url",
  "uuid",
  "whoami",
- "wiremock",
  "xxhash-rust",
 ]
 
@@ -750,6 +765,7 @@ version = "18.23.0"
 dependencies = [
  "argon2",
  "async-trait",
+ "atuin-api-client",
  "atuin-client",
  "atuin-common",
  "atuin-domain",
@@ -4320,6 +4336,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "progenitor-client"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53034c7e99439e366d243ed9847977d349243a862284d2e509a2abba7d003654"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+]
+
+[[package]]
 name = "proptest"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4834,21 +4865,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
-]
-
-[[package]]
-name = "reqwest-middleware"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07bc3f1384cffa4f274dad2d4ddd73aed32fed8f786d96c6be8aa4e5fd3c3b58"
-dependencies = [
- "anyhow",
- "async-trait",
- "http",
- "reqwest",
- "serde",
- "thiserror 2.0.19",
- "tower-service",
 ]
 
 [[package]]

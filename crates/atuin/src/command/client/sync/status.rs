@@ -49,7 +49,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
     if settings.auto_sync {
         println!("{}", fl!("sync-status-remote").green());
         println!("{}", fl!("sync-status-address", address = settings.sync_address.to_string()));
-        println!("{}", fl!("sync-status-username", username = me.username));
+        println!("{}", fl!("sync-status-username", username = me.username.unwrap_or_default()));
     }
 
     Ok(())

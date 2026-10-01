@@ -9,6 +9,12 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+  # The API client generator keeps its own lockfile; its tests fail when its progenitor and the
+  # root's progenitor-client drift apart.
+  - package-ecosystem: "cargo"
+    directory: "/crates/atuin-api-client/codegen"
+    schedule:
+      interval: "weekly"
   - package-ecosystem: "docker" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:

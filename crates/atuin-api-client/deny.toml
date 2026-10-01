@@ -1,0 +1,28 @@
+# cargo-deny config scoped to atuin-api-client.
+#
+# atuin-api-client is a library crate, so it must not depend on eyre or anyhow.
+# This is enforced in CI with a dedicated, crate-scoped invocation:
+#
+#   cargo deny --manifest-path crates/atuin-api-client/Cargo.toml check bans
+#
+# (see the `deny` step in .buildkite/pipeline.yml). The workspace-wide policy
+# lives in the repo-root deny.toml; this file only adds the eyre/anyhow ban for
+# atuin-api-client's own dependency subgraph. The generator in codegen/ is a
+# separate workspace and never part of this graph.
+
+[graph]
+all-features = true
+
+[bans]
+# This config exists solely to ban eyre/anyhow; leave the rest permissive so it
+# never fails for reasons unrelated to that ban.
+multiple-versions = "allow"
+wildcards = "allow"
+
+[[bans.deny]]
+crate = "eyre"
+reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-api-client is a library crate."
+
+[[bans.deny]]
+crate = "anyhow"
+reason = "eyre and anyhow are considered anti-patterns for library crates. atuin-api-client is a library crate."

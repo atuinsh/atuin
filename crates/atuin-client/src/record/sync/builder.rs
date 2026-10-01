@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use atuin_domain::caps::CapClient;
+use atuin_api_client::CapClient;
 use eyre::Result;
 use tracing::instrument;
 use typed_builder::TypedBuilder;

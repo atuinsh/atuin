@@ -54,9 +54,11 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 # Integration tests in tests/ spin up a real server and drive it with the
-# client's api_client. atuin-client is only a dev dependency here so the client
+# generated API client, which checks it against openapi.json, and the client's
+# sync session. atuin-client is only a dev dependency here so the client
 # binary crate stays free of server/postgres deps (see issue #2884).
 [dev-dependencies]
+atuin-api-client = { workspace = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 atuin-client = {
     path = "../atuin-client",

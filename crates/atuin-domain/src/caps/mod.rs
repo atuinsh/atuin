@@ -29,9 +29,10 @@
 //!
 //! # Implementation
 //!
-//! The client side is implemented as reqwest middleware in [`client::CapClient`].
-//! The server side is implemented as a plain struct that can be embedded in any server, in
-//! `client::CapServer`.
+//! The client side lives in `atuin-api-client`, whose `CapClient` fetches and caches the server's
+//! capabilities and whose generated client negotiates in its request hooks. The server side is
+//! [`CapServer`], a plain struct that can be embedded in any server, plus the axum layer in the
+//! `axum` module behind the feature of that name.
 //!
 //! # TODO
 //!
@@ -53,24 +54,10 @@ pub mod http;
 pub mod axum;
 
 mod all;
-mod client;
-mod middleware;
 mod server;
 
 pub use all::{CapabilitiesCap, PackfileCap, PageSizeCap};
-pub use client::{AuthHeaderProvider, CapClient, ServerSupportError};
-pub use middleware::{CapMiddleware, CapMismatch, CapabilitiesExt};
 pub use server::{CapServer, Negotiation};
-
-/// A capability is always indexed by a String key.
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, derive_more::AsRef)]
-struct CapKey(String);
-
-impl Borrow<str> for CapKey {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
 
 /// A capability which two peers may negotiate.
 ///

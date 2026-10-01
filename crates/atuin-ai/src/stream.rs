@@ -5,6 +5,7 @@
 use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
 use atuin_common::url::UrlAppendExt;
+use atuin_domain::api::ATUIN_USER_AGENT;
 use easy_cast::Conv;
 use eventsource_stream::Eventsource;
 use eyre::Result;
@@ -14,8 +15,6 @@ use reqwest::header::USER_AGENT;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::context::{ClientContext, capability_strings};
-
-pub static APP_USER_AGENT: &str = concat!("atuin/", env!("CARGO_PKG_VERSION"));
 
 /// Frames that alter the stream lifecycle — terminal or state-changing.
 #[derive(Debug, Clone)]
@@ -148,7 +147,7 @@ pub fn create_chat_stream(
         let mut request_builder = client
             .post(endpoint.clone())
             .header("Accept", "text/event-stream")
-            .header(USER_AGENT, APP_USER_AGENT)
+            .header(USER_AGENT, ATUIN_USER_AGENT)
             .json(&request_body);
         if let Some(token) = &token {
             request_builder = request_builder.bearer_auth(token.expose_secret());

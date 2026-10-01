@@ -20,7 +20,7 @@ pub enum Negotiation {
 pub struct CapServer {
     /// Opaque version token (xxh3 of the canonical capability set), rebaked on every mutation.
     token: String,
-    /// Pre-serialized capabilities document (a `CapabilitiesResponse` as JSON), rebaked with it.
+    /// Pre-serialized capabilities document, `{version, capabilities}`, rebaked with it.
     body: String,
     /// The advertised capabilities, exposed for typed introspection via `caps`.
     caps: CapsBundle,
@@ -94,8 +94,8 @@ impl CapServer {
         &self.token
     }
 
-    /// The pre-serialized capabilities document, served verbatim by the capabilities endpoint.
-    /// Deserializes into a [`crate::api::CapabilitiesResponse`].
+    /// The pre-serialized capabilities document, served verbatim by the capabilities endpoint:
+    /// `{"version": <token>, "capabilities": {<name>: <value>, ..}}`.
     pub fn body(&self) -> &str {
         &self.body
     }
@@ -129,8 +129,14 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::api::CapabilitiesResponse;
     use crate::caps::{CapabilitiesCap, Capability};
+
+    /// The capabilities document as the client decodes it.
+    #[derive(Debug, Deserialize)]
+    struct CapabilitiesResponse {
+        version: String,
+        capabilities: serde_json::Map<String, Value>,
+    }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestCap {
