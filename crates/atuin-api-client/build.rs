@@ -1,11 +1,11 @@
-//! Writes `openapi.json`, prepared for the client (see `build/prepare.rs`), to
+//! Writes `openapi.json`, prepared for the client (see `build/preprocess_openapi_json.rs`), to
 //! `$OUT_DIR/openapi.json`, where `src/lib.rs`'s `generate_api!` reads it.
 
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
-#[path = "build/prepare.rs"]
-mod prepare;
+#[path = "build/preprocess_openapi_json.rs"]
+mod preprocess_openapi_json;
 
 #[derive(Debug, thiserror::Error)]
 enum BuildError {
@@ -18,7 +18,7 @@ enum BuildError {
     #[error("openapi.json is not JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
-    Spec(#[from] prepare::SpecError),
+    Spec(#[from] preprocess_openapi_json::SpecError),
 }
 
 fn main() {
@@ -41,7 +41,7 @@ fn run() -> Result<(), BuildError> {
         source,
     })?;
     let mut spec = serde_json::from_slice(&spec)?;
-    prepare::strip(&mut spec)?;
+    preprocess_openapi_json::strip(&mut spec)?;
     fs::write(&out_path, serde_json::to_vec(&spec)?).map_err(|source| BuildError::Io {
         path: out_path,
         source,
