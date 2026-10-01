@@ -52,7 +52,7 @@ pub use caps::{AuthHeaderFuture, AuthHeaderProvider, CapClient, CapMismatch, Ser
 pub use date_time::DateTime;
 pub use error::{ApiBody, ApiError, MapApiError};
 pub use generated::{Client, ResponseValue, types};
-pub use header::{ClientBuildError, authorization, identity_headers};
+pub use header::{AuthToken, ClientBuildError};
 pub use hooks::HookState;
 
 /// A secret the API carries in plaintext; its `Debug` stays redacted.

@@ -1,7 +1,7 @@
 use std::env::temp_dir;
 use std::time::Duration;
 
-use atuin_api_client::{MapApiError, types};
+use atuin_api_client::{AuthToken, MapApiError, types};
 use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
@@ -41,7 +41,7 @@ impl TestServer {
 
         api_client::Client::new(
             self.address.clone(),
-            &api_client::AuthToken::Token(resp.session.into()),
+            &AuthToken::Token(resp.session.into()),
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(30),
             &Default::default(),

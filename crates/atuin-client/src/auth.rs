@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use atuin_api_client::{ApiError, MapApiError, types};
+use atuin_api_client::{ApiError, AuthToken, MapApiError, types};
 use enum_dispatch::enum_dispatch;
 use eyre::{Result, bail, eyre};
 use reqwest::{StatusCode, Url};
 use secrecy::SecretString;
 
-use crate::api_client::{AuthToken, authenticated_http};
 use crate::meta::is_hub_token;
 use crate::settings::Settings;
 
@@ -129,13 +128,13 @@ impl LegacyAuthClient {
 
     fn authenticated_api(&self) -> Result<atuin_api_client::Client> {
         let token = self.session_token.clone().ok_or_else(|| eyre!("Not logged in"))?;
-        let http = authenticated_http(
+        Ok(atuin_api_client::Client::for_sync(
+            &self.address,
             &AuthToken::Token(token),
+            &self.extra_headers,
             self.connect_timeout,
             self.timeout,
-            &self.extra_headers,
-        )?;
-        Ok(atuin_api_client::Client::from_http(&self.address, http)?)
+        )?)
     }
 }
 

@@ -937,6 +937,7 @@ mod tests {
 mod packfile_sync_tests {
     use std::collections::HashMap;
 
+    use atuin_api_client::AuthToken;
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{
@@ -947,7 +948,7 @@ mod packfile_sync_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::api_client::{AuthToken, Client, caps_client_anonymous};
+    use crate::api_client::{Client, caps_client_anonymous};
     use crate::packfile::record::PackManifestDataV1;
     use crate::packfile::{PackManifestRecordView, try_pack};
     use crate::record::sqlite_store::SqliteStore;

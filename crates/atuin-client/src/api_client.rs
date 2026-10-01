@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use async_stream::try_stream;
 use atuin_api_client::{
-    ApiError, AuthHeaderProvider, CapClient, CapMismatch, MapApiError, ResponseValue,
-    authorization, identity_headers, types,
+    ApiError, AuthHeaderProvider, AuthToken, CapClient, CapMismatch, MapApiError, ResponseValue,
+    types,
 };
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::url::UrlAppendError;
@@ -17,9 +17,9 @@ use atuin_domain::record::{
 use easy_cast::Conv;
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, stream};
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue};
+use reqwest::header::HeaderMap;
 use reqwest::{Response, StatusCode, Url};
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use semver::Version;
 use tracing::{Instrument, instrument};
 
@@ -32,32 +32,6 @@ const MAX_RECORDS_CONCURRENT_DOWNLOAD: usize = 8;
 /// How many packfile blobs [`Client::upload_packfiles`] transfers concurrently.
 const MAX_CONCURRENT_PACKFILE_UPLOADS: usize = 16;
 
-/// Authentication token for sync API requests.
-///
-/// The sync API supports two authentication methods:
-/// - `Bearer`: Hub API tokens (for users authenticated via Atuin Hub)
-/// - `Token`: Legacy CLI session tokens (for users registered via CLI or self-hosted)
-///
-/// When both are available, Hub tokens are preferred as they provide unified
-/// authentication across CLI and Hub features.
-#[derive(Debug, Clone)]
-pub enum AuthToken {
-    /// Hub API token, used with "Bearer {token}" header
-    Bearer(SecretString),
-    /// Legacy CLI session token, used with "Token {token}" header
-    Token(SecretString),
-}
-
-impl AuthToken {
-    /// Format the token as a sensitive Authorization header value.
-    pub(crate) fn to_header_value(&self) -> Result<HeaderValue, InvalidHeaderValue> {
-        match self {
-            Self::Bearer(token) => authorization("Bearer", token),
-            Self::Token(token) => authorization("Token", token),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct Client {
     /// The sync API, negotiating capabilities through [`Self::caps`].
@@ -65,90 +39,6 @@ pub struct Client {
     /// Used for uploading "LFS" data to S3. Carries no default headers, unlike [`Self::api`].
     lfs_client: reqwest::Client,
     caps: Arc<CapClient>,
-}
-
-/// A [`reqwest::ClientBuilder`] appropriate for the given extra headers.
-///
-/// reqwest only strips its own well-known sensitive headers (Authorization,
-/// Cookie, ...) when following a cross-host redirect; user-configured extra
-/// headers would be forwarded as-is. Since those often carry credentials
-/// (e.g. Cloudflare Access secrets), refuse cross-origin redirects entirely
-/// whenever extra headers are configured.
-fn client_builder(extra_headers: &HashMap<String, SecretString>) -> reqwest::ClientBuilder {
-    let builder = reqwest::Client::builder();
-
-    if extra_headers.is_empty() {
-        return builder;
-    }
-
-    builder.redirect(reqwest::redirect::Policy::custom(|attempt| {
-        let same_origin = attempt.previous().last().is_some_and(|prev| {
-            prev.scheme() == attempt.url().scheme()
-                && prev.host_str() == attempt.url().host_str()
-                && prev.port_or_known_default() == attempt.url().port_or_known_default()
-        });
-
-        if !same_origin {
-            attempt.error(
-                "refusing to follow cross-origin redirect: extra_headers are configured and will \
-                 not be sent to a different origin",
-            )
-        } else if attempt.previous().len() > 10 {
-            attempt.error("too many redirects")
-        } else {
-            attempt.follow()
-        }
-    }))
-}
-
-/// Build a [`HeaderMap`] from user-configured extra headers (the
-/// `extra_headers` setting). Headers Atuin sets itself should be inserted
-/// after these so that Atuin's values win.
-///
-/// Every value is marked sensitive, since these often carry credentials.
-fn extra_headers_map(extra_headers: &HashMap<String, SecretString>) -> Result<HeaderMap> {
-    let mut headers = HeaderMap::new();
-    for (name, value) in extra_headers {
-        let name = HeaderName::from_bytes(name.as_bytes())
-            .map_err(|e| eyre::eyre!("invalid extra_headers name {name:?}: {e}"))?;
-        let mut value = HeaderValue::from_str(value.expose_secret())
-            .map_err(|e| eyre::eyre!("invalid extra_headers value for {name:?}: {e}"))?;
-        value.set_sensitive(true);
-        headers.insert(name, value);
-    }
-    Ok(headers)
-}
-
-/// The HTTP client for authenticated calls to the sync server: the user's `extra_headers`, with
-/// `auth` and Atuin's identity over them.
-pub(crate) fn authenticated_http(
-    auth: &AuthToken,
-    connect_timeout: Duration,
-    timeout: Duration,
-    extra_headers: &HashMap<String, SecretString>,
-) -> Result<reqwest::Client> {
-    let mut headers = extra_headers_map(extra_headers)?;
-    headers.extend(identity_headers());
-    headers.insert(AUTHORIZATION, auth.to_header_value()?);
-
-    Ok(client_builder(extra_headers)
-        .default_headers(headers)
-        .connect_timeout(connect_timeout)
-        .timeout(timeout)
-        .build()?)
-}
-
-/// A client for the sync server at `sync_addr` that sends the user's `extra_headers` and Atuin's
-/// identity but no credentials of its own, with no timeouts.
-fn anonymous_api(
-    sync_addr: &Url,
-    extra_headers: &HashMap<String, SecretString>,
-) -> Result<atuin_api_client::Client> {
-    let mut headers = extra_headers_map(extra_headers)?;
-    headers.extend(identity_headers());
-
-    let http = client_builder(extra_headers).default_headers(headers).build()?;
-    Ok(atuin_api_client::Client::from_http(sync_addr, http)?)
 }
 
 /// Create the account `username` on the sync server at `address`, unless the name is taken.
@@ -160,7 +50,7 @@ pub async fn register(
     password: &SecretString,
     extra_headers: &HashMap<String, SecretString>,
 ) -> Result<types::RegisterResponse> {
-    let api = anonymous_api(address, extra_headers)?;
+    let api = atuin_api_client::Client::for_sync_anonymous(address, extra_headers)?;
 
     if username_taken(&api, username).await? {
         bail!("username already in use");
@@ -209,7 +99,7 @@ pub async fn login(
     password: &SecretString,
     extra_headers: &HashMap<String, SecretString>,
 ) -> Result<types::LoginResponse> {
-    let api = anonymous_api(address, extra_headers)?;
+    let api = atuin_api_client::Client::for_sync_anonymous(address, extra_headers)?;
 
     let body = types::LoginRequest {
         username: username.to_owned(),
@@ -231,7 +121,7 @@ pub async fn latest_version() -> Result<Version> {
     let http = reqwest::Client::builder()
         .default_headers(HeaderMap::from_iter([(
             reqwest::header::USER_AGENT,
-            HeaderValue::from_static(atuin_domain::api::ATUIN_USER_AGENT),
+            reqwest::header::HeaderValue::from_static(atuin_domain::api::ATUIN_USER_AGENT),
         )]))
         .build()?;
     let api = atuin_api_client::Client::from_http(&crate::settings::DEFAULT_SYNC_URL, http)?;
@@ -337,9 +227,11 @@ pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
         })
     });
 
-    Ok(CapClient::new(
-        anonymous_api(&settings.sync_address, &settings.extra_headers)?.with_auth(auth),
-    ))
+    let api = atuin_api_client::Client::for_sync_anonymous(
+        &settings.sync_address,
+        &settings.extra_headers,
+    )?;
+    Ok(CapClient::new(api.with_auth(auth)))
 }
 
 /// Build an anonymous capability reader: every fetch sees the server-global
@@ -348,7 +240,7 @@ pub fn caps_client_anonymous(
     sync_addr: &Url,
     extra_headers: &HashMap<String, SecretString>,
 ) -> Result<Arc<CapClient>> {
-    Ok(CapClient::new(anonymous_api(sync_addr, extra_headers)?))
+    Ok(CapClient::new(atuin_api_client::Client::for_sync_anonymous(sync_addr, extra_headers)?))
 }
 
 /// A pending records download for one series, produced by [`Client::records`].
@@ -473,9 +365,14 @@ impl Client {
     ) -> Result<Self> {
         let sync_addr: Arc<Url> = sync_addr.into();
 
-        let http = authenticated_http(auth, connect_timeout, timeout, extra_headers)?;
-        let api = atuin_api_client::Client::from_http(&sync_addr, http)?
-            .with_capabilities(Arc::clone(&caps), CapMismatch::Continue);
+        let api = atuin_api_client::Client::for_sync(
+            &sync_addr,
+            auth,
+            extra_headers,
+            connect_timeout,
+            timeout,
+        )?
+        .with_capabilities(Arc::clone(&caps), CapMismatch::Continue);
 
         Ok(Self {
             api,
@@ -635,96 +532,6 @@ mod tests {
     use rstest::*;
 
     use super::*;
-
-    #[fixture]
-    fn extra_headers() -> HashMap<String, SecretString> {
-        let mut extra = HashMap::new();
-        extra.insert("X-Auth-Token".to_string(), "secret".into());
-        extra
-    }
-
-    #[rstest]
-    fn extra_headers_map_parses_headers(extra_headers: HashMap<String, SecretString>) {
-        let headers = extra_headers_map(&extra_headers).unwrap();
-        let value = headers.get("x-auth-token").unwrap();
-        assert_eq!(value, "secret");
-        assert!(value.is_sensitive());
-    }
-
-    #[rstest]
-    fn extra_headers_map_rejects_invalid_names() {
-        let mut extra = HashMap::new();
-        extra.insert("bad header".to_string(), "value".into());
-        assert!(extra_headers_map(&extra).is_err());
-    }
-
-    /// Serve a single connection with a canned HTTP response.
-    async fn serve_one(listener: &tokio::net::TcpListener, response: String) {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (mut sock, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = sock.read(&mut buf).await;
-        sock.write_all(response.as_bytes()).await.unwrap();
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn cross_origin_redirects_refused_with_extra_headers(
-        extra_headers: HashMap<String, SecretString>,
-    ) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        // A different port on the same host is a different origin
-        tokio::spawn(async move {
-            serve_one(
-                &listener,
-                format!(
-                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/\r\nContent-Length: \
-                     0\r\nConnection: close\r\n\r\n",
-                    port + 1
-                ),
-            )
-            .await;
-        });
-
-        let client = client_builder(&extra_headers).build().unwrap();
-        let err = client.get(format!("http://127.0.0.1:{port}/")).send().await.unwrap_err();
-
-        assert!(err.is_redirect(), "expected a redirect policy error: {err:?}");
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn same_origin_redirects_followed_with_extra_headers(
-        extra_headers: HashMap<String, SecretString>,
-    ) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        tokio::spawn(async move {
-            serve_one(
-                &listener,
-                format!(
-                    "HTTP/1.1 302 Found\r\nLocation: \
-                     http://127.0.0.1:{port}/ok\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                ),
-            )
-            .await;
-            serve_one(
-                &listener,
-                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
-            )
-            .await;
-        });
-
-        let client = client_builder(&extra_headers).build().unwrap();
-        let resp = client.get(format!("http://127.0.0.1:{port}/")).send().await.unwrap();
-
-        assert_eq!(resp.status(), 200);
-        assert_eq!(resp.url().path(), "/ok");
-    }
 
     #[rstest]
     #[tokio::test]

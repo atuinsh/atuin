@@ -415,8 +415,8 @@ impl SyncAuth {
     /// Convert into the auth token type used by the API client.
     ///
     /// Returns an error with an actionable message for `NotLoggedIn`.
-    pub fn into_auth_token(self) -> Result<crate::api_client::AuthToken> {
-        use crate::api_client::AuthToken;
+    pub fn into_auth_token(self) -> Result<atuin_api_client::AuthToken> {
+        use atuin_api_client::AuthToken;
         match self {
             Self::Legacy { token } => Ok(AuthToken::Token(token)),
             Self::Hub { token } => Ok(AuthToken::Bearer(token)),
@@ -1402,7 +1402,7 @@ impl Settings {
     /// (e.g. to show different UI) should call `resolve_sync_auth` directly.
     #[cfg(feature = "sync")]
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn sync_auth_token(&self) -> Result<crate::api_client::AuthToken> {
+    pub async fn sync_auth_token(&self) -> Result<atuin_api_client::AuthToken> {
         self.resolve_sync_auth().await.into_auth_token()
     }
 
