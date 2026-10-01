@@ -121,7 +121,6 @@ proptest = "1"
 prost = "0.14"
 prost-types = "0.14"
 progenitor-client = "0.15"
-# Generates the code progenitor-client runs; bump both together.
 progenitor-impl = "0.15"
 protox = "0.9"
 pulldown-cmark = "0.13"
