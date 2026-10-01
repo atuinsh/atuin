@@ -810,6 +810,16 @@ impl AgentFsm {
 
     /// Handle a client-side tool call from the stream.
     fn handle_stream_tool_call(&mut self, id: String, name: String, input: Value) -> Vec<Effect> {
+        // Server-side tools (web search, scrape) are executed by the server,
+        // which streams their results and continues the turn itself. Record
+        // the call for history and rendering, but don't answer or track it:
+        // that would add a spurious error result and trigger a continuation
+        // that makes the model answer a second time.
+        if crate::tools::descriptor::by_name(&name).is_some_and(|d| !d.is_client) {
+            self.ctx.events.push(ConversationEvent::ToolCall { id, name, input });
+            return vec![];
+        }
+
         // Parse the tool call
         let tool = match crate::tools::ClientToolCall::try_from((name.as_str(), &input)) {
             Ok(tool) => tool,
