@@ -2,11 +2,7 @@ syntax = "proto3";
 
 package atuin.api.v1;
 
-// A UUID, carried as its 16 raw bytes.
-message Uuid {
-  bytes value = 1;
-}
-
+// Represents a UUIDv7 value.
 message UuidV7 {
   bytes value = 1;
 }
