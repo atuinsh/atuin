@@ -108,8 +108,9 @@ search):
 mouse = false
 ```
 
-- Forks of a session (including Claude Code `--resume` copies) are grouped
-  under it. Inspect (++ctrl+o++) lists them, and ++c++ there expands the list.
+- Forks of a session (including Claude Code `--resume` copies, and
+  continuations in another agent) are grouped under it. Inspect (++ctrl+o++)
+  lists them, and ++c++ there expands the list.
 
 - Subagents aren't listed at all, as they can't be resumed. A search that
   matches something a subagent said still finds the session it worked for, and
@@ -119,19 +120,51 @@ mouse = false
   nearly all such children are subagents, so the picker treats them as such
   (they still resume by id).
 
-++enter++ resumes the selected session in its own agent (or, without
-`enter_accept`, puts the command on your command line), and ++tab++ puts the
-command on your command line to edit first. ++ctrl+y++ copies it.
+Once you choose a session, with ++enter++ (or ++tab++ to edit the command
+first), Atuin asks where to resume it:
 
-If the session was recorded on another machine, or its transcript was deleted,
-Atuin first writes the transcript back out from the synced messages (Inspect
-says "from sync"). If the session's own agent can't resume it here (a Copilot
-session, a directory that's gone, an agent that isn't installed), the picker
-says why and stays open; Inspect says so too.
+```
+╭ Resume in ──────────────────────────────────────────────────────────────────╮
+│ > 1 CC Claude Code  original                                                │
+│   2 CX Codex        continue, 42 tool calls become notes, reasoning dropped │
+│   3 OC opencode     continue, 42 tool calls become notes, reasoning dropped │
+│ <enter>: resume  <tab>: edit  <esc>: back                                   │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
 
-From the command line, `atuin ai resume <id>` resumes a session directly (an
-id prefix works too), writing it out from sync first when it isn't on this
-machine. `--print` prints the command instead of running it.
+- The session's own agent comes first and is already selected, so
+  ++enter++ ++enter++ resumes it. If the session was recorded on another
+  machine, or its transcript was deleted, Atuin writes the transcript back out
+  from the synced messages before resuming it ("from sync").
+- Every other agent installed on this machine follows. Picking one continues
+  the session there as a new session: the conversation carries over, but that
+  agent can't replay the original's tool calls, so they become notes in the
+  text, and reasoning is dropped. The line says how much. Agents that aren't
+  installed aren't listed, and with no other agent installed there is nothing
+  to choose, so ++enter++ resumes straight away.
+- If the session's own agent can't resume it here (a Copilot session, a
+  directory that's gone, an agent that isn't installed), its line is
+  dimmed with the reason, and the next one is selected instead.
+
+In the chooser, ++up++ / ++down++ (or ++k++ / ++j++) move, a digit picks that
+line, and ++esc++ goes back to the list. ++enter++ does what the key that
+opened the chooser did: it resumes (or, without `enter_accept`, puts the
+command on your command line), and after ++tab++ it edits. ++tab++ in the
+chooser always edits. ++ctrl+y++ copies the command.
+
+To resume in the session's own agent straight away, without the chooser:
+
+```toml
+[ai.sessions]
+resume_chooser = false
+```
+
+The chooser still opens for a session its own agent can't resume.
+
+From the command line, `atuin ai resume <id>` resumes a session in its own
+agent directly (an id prefix works too), and `atuin ai resume <id> --in codex`
+continues it in another (`claude`, `codex`, `opencode` or `pi`). `--print`
+prints the command instead of running it.
 
 ## Settings
 

@@ -14,7 +14,9 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use atuin_client::ai_session::HarnessKind;
 use atuin_client::settings::AiSessionResume;
+use atuin_common::harnesstools::continuation::{self, Flattened};
 use atuin_common::harnesstools::rehydrate::{RehydrateError, RehydrateSession};
 pub use atuin_common::harnesstools::resume::{ResumeError, ResumePlan, ResumeTarget, quote};
 use atuin_common::harnesstools::{AnyHarness, Harness as _};
@@ -33,6 +35,9 @@ pub enum NotResumable {
 
     #[error("restoring it from sync failed: {0}")]
     Restore(String),
+
+    #[error("continuing it in {0} failed: {1}")]
+    Continue(&'static str, String),
 
     #[error(transparent)]
     Harness(#[from] ResumeError),
@@ -65,6 +70,30 @@ pub struct Restore {
     pub note: Option<String>,
 }
 
+/// A session continued in another harness: written out as a new session of `target`, ready to
+/// resume with `plan`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Continued {
+    pub target: HarnessKind,
+    pub plan: ResumePlan,
+    /// What the target couldn't take as it was.
+    pub flattened: Flattened,
+    /// Why it resumes somewhere other than the directory the session ran in, when it does.
+    pub note: Option<String>,
+}
+
+impl Continued {
+    /// The status line: `continuing in Codex: 42 tool calls flattened to notes, reasoning
+    /// dropped`.
+    pub fn status(&self) -> String {
+        let label = harness_label(self.target);
+        match self.flattened.summary() {
+            summary if summary.is_empty() => format!("continuing in {label}"),
+            summary => format!("continuing in {label}: {summary}"),
+        }
+    }
+}
+
 /// Plans resuming a session.
 #[async_trait]
 pub trait Resumer: Send + Sync {
@@ -79,6 +108,22 @@ pub trait Resumer: Send + Sync {
         session: &SessionRow,
         restore: &Restore,
     ) -> Result<ResumePlan, NotResumable>;
+
+    /// The harnesses `session` can be continued in here: installed, and not its own.
+    fn continue_targets(&self, _session: &SessionRow) -> Vec<HarnessKind> {
+        Vec::new()
+    }
+
+    /// Write `session`, from what `source` holds of it, out as a new session of `target`
+    /// ([`continuation`]), and plan resuming that. Only once the user has chosen to.
+    async fn continue_in(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        _target: HarnessKind,
+    ) -> Result<Continued, NotResumable> {
+        Err(NotResumable::Unsupported(harness_label(session.handle.harness)))
+    }
 }
 
 /// The shell line for a plan: `cd -- <cwd> && <command>`.
@@ -238,6 +283,62 @@ impl Resumer for HarnessResumer {
             .await
             .map_err(|e| NotResumable::Restore(format!("{e:#}")))?;
         self.write_out(session, &data, restore).await
+    }
+
+    fn continue_targets(&self, session: &SessionRow) -> Vec<HarnessKind> {
+        let own = session.handle.harness;
+        AnyHarness::all()
+            .iter()
+            .map(HarnessKind::from)
+            .filter(|kind| *kind != own && own.harness().is_some())
+            .filter(|kind| {
+                let Some(harness) = kind.harness() else {
+                    return false;
+                };
+                harness
+                    .resume(&ResumeTarget::new("atuin"), self.templates.template(*kind))
+                    .is_ok_and(|plan| self.machine.installed(&plan.program))
+            })
+            .collect()
+    }
+
+    async fn continue_in(
+        &self,
+        source: &dyn SessionSource,
+        session: &SessionRow,
+        target: HarnessKind,
+    ) -> Result<Continued, NotResumable> {
+        let from_kind = session.handle.harness;
+        let from =
+            from_kind.harness().ok_or(NotResumable::Unsupported(harness_label(from_kind)))?;
+        let into = target.harness().ok_or(NotResumable::Unsupported(harness_label(target)))?;
+        let fail = |e: String| NotResumable::Continue(harness_label(target), e);
+        if from_kind == target {
+            return Err(fail("it's that agent's own session".to_owned()));
+        }
+        let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
+        let original = source
+            .rehydrate(&session.handle, &restore.cwd)
+            .await
+            .map_err(|e| fail(format!("{e:#}")))?;
+        let continued = continuation::continue_in(from, &original, into);
+        let id = continued.session.id.clone();
+        let template = self.templates.template(target);
+        // Checked before anything is written.
+        let planned = ResumeTarget::new(&id).with_cwd(&restore.cwd);
+        self.check_installed(&into.resume(&planned, template)?)?;
+        let native = self
+            .machine
+            .rehydrate(into, &continued.session)
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+        let plan = into.resume(&planned.with_native_path(native), template)?.prepare()?;
+        Ok(Continued {
+            target,
+            plan,
+            flattened: continued.flattened,
+            note: restore.note,
+        })
     }
 }
 

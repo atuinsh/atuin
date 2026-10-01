@@ -6,17 +6,19 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use atuin_client::ai_session::HarnessSession;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::{AiSessionFilterMode as FilterMode, KeymapMode, Settings};
 use atuin_client::theme::Meaning;
 use atuin_client::tui::cursor::Cursor;
 use atuin_client::tui::key::{KeyCodeValue, KeyInput, SingleKey};
+use atuin_common::harnesstools::continuation::Flattened;
 use atuin_common::time::OffsetDateTimeExt as _;
 use atuin_domain::record::HostId;
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use time::OffsetDateTime;
 
+use super::chooser::{Chooser, ListAnchor};
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
 use super::rebuild::Rebuilding;
@@ -118,6 +120,9 @@ pub enum InputAction {
     ReturnCommand,
     /// Copy the session's resume command, and stay open.
     Copy,
+    /// A line of the chooser: resume the session in its own harness (`None`), or continue it in
+    /// this one; then do what the key asked.
+    Pick(Option<HarnessKind>, Pending),
     ReturnOriginal,
     Exit,
 }
@@ -216,6 +221,17 @@ pub struct State {
     pub plans: HashMap<HarnessSession, Result<Resume, NotResumable>>,
     /// An enter/tab/ctrl-y waiting for its session's plan.
     pub pending: Option<(HarnessSession, Pending)>,
+    /// The "Resume in" chooser, while it's open.
+    pub chooser: Option<Chooser>,
+    /// Where the selected row was last drawn, for the chooser to open against.
+    pub list_anchor: Option<ListAnchor>,
+    /// What continuing each session elsewhere would flatten, once read (see
+    /// [`Request::Flatten`](super::worker::Request::Flatten)); `Err` when it can't be read.
+    pub flattened: HashMap<HarnessSession, Result<Flattened, String>>,
+    /// The last flattening asked of the worker (which keeps only the newest).
+    pub flattening: Option<HarnessSession>,
+    /// A continuation being written, and what to do once it is.
+    pub continuing: Option<(HarnessSession, HarnessKind, Pending)>,
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
@@ -261,6 +277,11 @@ impl State {
             pinned: None,
             plans: HashMap::new(),
             pending: None,
+            chooser: None,
+            list_anchor: None,
+            flattened: HashMap::new(),
+            flattening: None,
+            continuing: None,
             status: None,
             rebuilding: None,
             now: if settings.prefers_reduced_motion {
@@ -604,6 +625,10 @@ impl State {
     /// selection, as in the history search. The mouse reports screen positions, which is what
     /// the panes' areas are, inline or not.
     fn handle_mouse_input(&mut self, settings: &Settings, event: MouseEvent) -> InputAction {
+        // The chooser is for the session it opened on.
+        if self.chooser.is_some() {
+            return InputAction::Continue;
+        }
         let down = match event.kind {
             MouseEventKind::ScrollDown => true,
             MouseEventKind::ScrollUp => false,
@@ -653,6 +678,9 @@ impl State {
         let Some(single) = SingleKey::from_event(input) else {
             return InputAction::Continue;
         };
+        if self.chooser.is_some() {
+            return self.chooser_key(&single);
+        }
         let ctx = self.input.as_str().is_empty();
         let pending = self.pending_vim_key.take();
         let keymap = self.mode_keymap();
