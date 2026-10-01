@@ -419,9 +419,8 @@ impl AiHarnessSessionCapture {
     /// Serve the sidecar immediately and recover it from the record store in the background.
     ///
     /// Recovery is [`AiSessionStore::reproject`]: only the records past each series' watermark
-    /// are replayed, and everything when the sidecar is fresh (a new install, or one another
-    /// build's migrations made and [`AiSessionDatabase::open`] set aside) or its watermarks were
-    /// cleared (a migration that needs a backfill, a key change).
+    /// are replayed, and everything when the sidecar is fresh (a new install, or one deleted)
+    /// or its watermarks were cleared (a migration that needs a backfill, a key change).
     ///
     /// Capture and import wait for recovery: the dedup gate trusts the sidecar, so writing before
     /// it holds every persisted message would push duplicate records. So does the sync worker's

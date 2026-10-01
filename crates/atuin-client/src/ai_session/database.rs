@@ -15,6 +15,7 @@ use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId, RecordTag};
 use futures::{Stream, StreamExt, TryStreamExt};
 use sqlx::SqliteConnection;
+use sqlx::migrate::MigrateError;
 use time::OffsetDateTime;
 use tracing::warn;
 
@@ -34,11 +35,6 @@ const SNIPPET_TOKENS: usize = 32;
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
 const SCHEMA_VERSION: i64 = 6;
-
-/// The migrations this build runs, read for their versions and checksums only (they are run
-/// through [`db::migrate!`]), to tell a sidecar another build migrated.
-#[allow(clippy::disallowed_macros)]
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./src/ai_session/migrations");
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -198,17 +194,20 @@ pub enum DbError {
         found: i64,
         expected: i64,
     },
-    /// The sidecar was migrated by a build whose migrations differ from this one's (a development
-    /// build): the daemon rebuilds it from the record store when it next starts.
+    /// The sidecar's migration history is not one this build can bring up to date: a migration
+    /// this build knows with other contents, one it does not know (a newer build's), or one that
+    /// failed part way. The sidecar is a projection of the record store, so deleting it is safe:
+    /// the daemon rebuilds it from the records when it next starts.
     #[error(
-        "the AI session database was made by another build of atuin: the atuin daemon rebuilds it \
-         when it starts. Restart the daemon (`atuin daemon restart`), or if it is starting, try \
-         again in a moment"
+        "the AI session database at {} cannot be migrated ({source}). It is rebuilt from the \
+         record store, so to start it over, stop the daemon (`atuin daemon stop`), delete that \
+         file with its -wal and -shm files, and start the daemon again",
+        path.display()
     )]
-    ForeignSchema,
-    /// The sidecar could not be removed, to be rebuilt.
-    #[error("failed to remove the ai-session sqlite database to rebuild it: {0}")]
-    Remove(std::io::Error),
+    IncompatibleSchema {
+        path: PathBuf,
+        source: sqlx::migrate::MigrateError,
+    },
     /// The sidecar is at a newer schema than this build reads: a newer atuin's daemon owns it.
     #[error(
         "the AI session database is at schema version {found}, newer than the version {expected} \
@@ -372,52 +371,26 @@ struct ReindexRow {
     session_title: Option<String>,
 }
 
-/// Which migrations a sidecar has had, next to this build's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Lineage {
-    /// None: the file is new, or no daemon has migrated it yet.
-    Missing,
-    /// This build's migrations, up to the given version.
-    Known(i64),
-    /// This build's migrations and newer ones, up to the given version: a newer atuin's.
-    Newer(i64),
-    /// A migration at a version this build knows with other contents, a version this build skips,
-    /// or one that failed: a development build's, whose numbering has since moved.
-    Foreign,
-}
-
 impl AiSessionDatabase {
     /// Open the sidecar at `path` to write, creating and migrating it as needed.
     ///
-    /// The sidecar is a projection of the record store, so one another build migrated (a
-    /// migration at a version this build knows with other contents, one this build skips, or one
-    /// that failed), which no migration of this build's can bring up to date, is deleted and
-    /// created afresh: with no reproject watermarks, the daemon's next reprojection replays every
-    /// record into it.
+    /// Fails with [`DbError::IncompatibleSchema`], leaving the file as it is, when its migration
+    /// history is not one this build can bring up to date.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let path = path.as_ref();
-        let mut sqlite = Sqlite::builder(path.as_os_str()).restrict_permissions().open().await?;
-        let lineage = match Self::lineage(&sqlite).await {
-            Ok(lineage) => lineage,
-            Err(err) => {
-                sqlite.close().await;
-                return Err(err);
-            }
-        };
-        if lineage == Lineage::Foreign {
-            warn!(
-                ?path,
-                "the ai-session sidecar was migrated by another build of atuin; rebuilding it \
-                 from the record store"
-            );
-            // Every connection, the WAL compactor's too, closed before the files go: Windows
-            // refuses to delete a file that is open.
-            sqlite.close().await;
-            Self::remove(path)?;
-            sqlite = Sqlite::builder(path.as_os_str()).restrict_permissions().open().await?;
-        }
-        let db = Self::from_sqlite(sqlite);
-        db.migrate().await?;
+        let db = Sqlite::builder(path.as_os_str()).restrict_permissions().open().await?;
+        let db = Self::from_sqlite(db);
+        db.migrate().await.map_err(|err| match err {
+            DbError::Migrate(
+                source @ (MigrateError::VersionMismatch(_)
+                | MigrateError::VersionMissing(_)
+                | MigrateError::Dirty(_)),
+            ) => DbError::IncompatibleSchema {
+                path: path.to_owned(),
+                source,
+            },
+            err => err,
+        })?;
         db.reindex().await?;
         Ok(db)
     }
@@ -429,12 +402,7 @@ impl AiSessionDatabase {
     pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let db = Sqlite::builder(path.as_ref().as_os_str()).read_only().open().await?;
         let db = Self::from_sqlite(db);
-        if let Err(err) = db.check_schema().await {
-            // Not left to a drop, which closes it only eventually: the daemon may be about to
-            // delete a sidecar refused here (see `open`), which Windows refuses while it is open.
-            db.db.close().await;
-            return Err(err);
-        }
+        db.check_schema().await?;
         Ok(db)
     }
 
@@ -469,83 +437,28 @@ impl AiSessionDatabase {
         self.reprojection.clone().lock_owned().await
     }
 
+    /// Whether the sidecar is at exactly the schema this build reads, by the newest migration
+    /// applied to it.
     async fn check_schema(&self) -> Result<(), DbError> {
         let expected = SCHEMA_VERSION;
-        match Self::lineage(&self.db).await? {
-            Lineage::Missing => Err(DbError::Uninitialized { expected }),
-            Lineage::Foreign => Err(DbError::ForeignSchema),
-            Lineage::Newer(found) => Err(DbError::UnknownSchema { found, expected }),
-            Lineage::Known(found) if found < expected => {
-                Err(DbError::OutdatedSchema { found, expected })
-            }
-            Lineage::Known(_) => Ok(()),
-        }
-    }
-
-    /// Which migrations the sidecar has had, next to this build's (by version and checksum).
-    async fn lineage(sqlite: &Sqlite) -> Result<Lineage, DbError> {
-        let pool = sqlite.pool();
+        let pool = self.db.pool();
         let tracked: Option<i64> = db::query_scalar(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
         )
         .fetch_optional(pool)
         .await?;
-        if tracked.is_none() {
-            return Ok(Lineage::Missing);
-        }
-        let applied: Vec<(i64, Vec<u8>, bool)> = db::query_as(
-            "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version",
-        )
-        .fetch_all(pool)
-        .await?;
-        Ok(Self::classify(&applied))
-    }
-
-    /// [`Self::lineage`] of the `(version, checksum, success)` rows of `_sqlx_migrations`.
-    fn classify(applied: &[(i64, Vec<u8>, bool)]) -> Lineage {
-        let newest_known = MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0);
-        let mut newest = None;
-        let mut newer = false;
-        for (version, checksum, success) in applied {
-            if !success {
-                return Lineage::Foreign;
+        let found: Option<i64> = match tracked {
+            Some(_) => {
+                db::query_scalar("SELECT max(version) FROM _sqlx_migrations").fetch_one(pool).await?
             }
-            match MIGRATOR.iter().find(|m| m.version == *version) {
-                Some(known) if *known.checksum == **checksum => {}
-                Some(_) => return Lineage::Foreign,
-                None if *version > newest_known => newer = true,
-                None => return Lineage::Foreign,
-            }
-            newest = newest.max(Some(*version));
-        }
-        let Some(newest) = newest else {
-            return Lineage::Missing;
+            None => None,
         };
-        // Every migration of this build's up to the newest applied must be applied too.
-        let skipped = MIGRATOR
-            .iter()
-            .any(|m| m.version <= newest && !applied.iter().any(|(v, ..)| *v == m.version));
-        if skipped {
-            Lineage::Foreign
-        } else if newer {
-            Lineage::Newer(newest)
-        } else {
-            Lineage::Known(newest)
+        match found {
+            None => Err(DbError::Uninitialized { expected }),
+            Some(found) if found > expected => Err(DbError::UnknownSchema { found, expected }),
+            Some(found) if found < expected => Err(DbError::OutdatedSchema { found, expected }),
+            Some(_) => Ok(()),
         }
-    }
-
-    /// Delete the sidecar at `path`, with its WAL and shared-memory files.
-    fn remove(path: &Path) -> Result<(), DbError> {
-        for suffix in ["", "-wal", "-shm"] {
-            let mut file = path.as_os_str().to_owned();
-            file.push(suffix);
-            match std::fs::remove_file(&file) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => return Err(DbError::Remove(err)),
-            }
-        }
-        Ok(())
     }
 
     async fn migrate(&self) -> Result<(), DbError> {
@@ -2652,8 +2565,8 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{
-        AiSessionDatabase, Appended, COMPRESS_THRESHOLD, DbError, Lineage, MIGRATOR, QueryTerms,
-        SCHEMA_VERSION, TitleSource, prefix_successor,
+        AiSessionDatabase, Appended, COMPRESS_THRESHOLD, DbError, QueryTerms, SCHEMA_VERSION,
+        TitleSource, prefix_successor,
     };
     use crate::ai_session::{
         HarnessKind, HarnessSession, Message, NativeSessionId, SearchTerms, Session, SessionFilter,
@@ -5057,50 +4970,6 @@ mod tests {
 
     // --- sidecars from other builds -------------------------------------------------------------
 
-    /// `_sqlx_migrations` rows for this build's migrations up to `version`, as sqlx writes them.
-    fn applied_up_to(version: i64) -> Vec<(i64, Vec<u8>, bool)> {
-        MIGRATOR
-            .iter()
-            .filter(|m| m.version <= version)
-            .map(|m| (m.version, m.checksum.to_vec(), true))
-            .collect()
-    }
-
-    #[rstest]
-    #[case::none(vec![], Lineage::Missing)]
-    #[case::the_first(applied_up_to(1), Lineage::Known(1))]
-    #[case::every_one(applied_up_to(SCHEMA_VERSION), Lineage::Known(SCHEMA_VERSION))]
-    #[case::mains(applied_up_to(BEFORE_INCREMENTAL), Lineage::Known(BEFORE_INCREMENTAL))]
-    #[case::a_development_build(
-        [applied_up_to(2), vec![(3, vec![1], true), (4, vec![2], true)]].concat(),
-        Lineage::Foreign
-    )]
-    #[case::a_newer_build(
-        [applied_up_to(SCHEMA_VERSION), vec![(99, vec![0], true)]].concat(),
-        Lineage::Newer(99)
-    )]
-    #[case::other_contents(
-        [applied_up_to(1), vec![(2, vec![0], true)]].concat(),
-        Lineage::Foreign
-    )]
-    #[case::one_skipped(
-        applied_up_to(SCHEMA_VERSION).into_iter().filter(|(v, ..)| *v != 2).collect(),
-        Lineage::Foreign
-    )]
-    #[case::one_failed(
-        applied_up_to(SCHEMA_VERSION)
-            .into_iter()
-            .map(|(v, c, _)| (v, c, v != SCHEMA_VERSION))
-            .collect(),
-        Lineage::Foreign
-    )]
-    fn a_sidecars_lineage_is_told_from_its_migrations(
-        #[case] applied: Vec<(i64, Vec<u8>, bool)>,
-        #[case] expected: Lineage,
-    ) {
-        assert_eq!(AiSessionDatabase::classify(&applied), expected);
-    }
-
     /// A sidecar a development build migrated with its own numbering: this build's first
     /// migration, then others at versions this build uses for different ones.
     async fn dev_build_sidecar(path: &Path) {
@@ -5131,35 +5000,30 @@ mod tests {
         db.close().await;
     }
 
-    /// A sidecar another build migrated is rebuilt: deleted, then created afresh without
-    /// watermarks, so the daemon's reprojection replays every record into it. A reader is told to
-    /// wait for the daemon until then.
+    /// A sidecar another build migrated fails to open, left as it is, with an error saying how to
+    /// start it over.
     #[rstest]
     #[tokio::test]
-    async fn a_sidecar_from_another_build_is_rebuilt(dir: tempfile::TempDir) {
+    async fn a_sidecar_from_another_build_is_refused(dir: tempfile::TempDir) {
         let path = dir.path().join("sidecar.db");
         dev_build_sidecar(&path).await;
 
-        let err = AiSessionDatabase::open_read_only(&path).await.expect_err("must refuse");
-        assert!(matches!(err, DbError::ForeignSchema), "{err}");
-        assert!(err.to_string().contains("atuin daemon"), "{err}");
+        let err = AiSessionDatabase::open(&path).await.expect_err("must refuse");
+        assert!(matches!(err, DbError::IncompatibleSchema { .. }), "{err}");
+        let message = err.to_string();
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        assert!(message.contains("delete"), "{message}");
 
-        let db = AiSessionDatabase::open(&path).await.unwrap();
-        assert_eq!(
-            AiSessionDatabase::lineage(&db.db).await.unwrap(),
-            Lineage::Known(SCHEMA_VERSION)
-        );
-        assert!(db.list_sessions(&SessionFilter::default()).await.unwrap().is_empty());
-        assert!(db.reproject_watermarks().await.unwrap().is_empty());
-        db.append(&message_in(&sample_handle(), 0, "after the rebuild")).await.unwrap();
-
-        let reader = AiSessionDatabase::open_read_only(&path).await.unwrap();
-        assert_eq!(search(&reader, "rebuild").await.len(), 1);
+        let reader = Sqlite::builder(path.as_os_str()).read_only().open().await.unwrap();
+        let sessions: i64 = db::query_scalar("SELECT count(*) FROM sessions")
+            .fetch_one(reader.pool())
+            .await
+            .unwrap();
+        assert_eq!(sessions, 1, "the sidecar was touched");
     }
 
     /// A sidecar a released daemon left (every migration before `incremental_sidecar`) is
-    /// migrated in place, what
-    /// it holds kept: only a sidecar of another lineage is rebuilt.
+    /// migrated in place, what it holds kept.
     #[rstest]
     #[tokio::test]
     async fn a_sidecar_from_main_is_migrated_in_place(dir: tempfile::TempDir) {
@@ -5186,10 +5050,7 @@ mod tests {
         }
 
         let db = AiSessionDatabase::open(&path).await.unwrap();
-        assert_eq!(
-            AiSessionDatabase::lineage(&db.db).await.unwrap(),
-            Lineage::Known(SCHEMA_VERSION)
-        );
+        db.check_schema().await.unwrap();
         let kept = db.get_session(&handle(HarnessKind::ClaudeCode, "kept")).await.unwrap().unwrap();
         assert_eq!(kept.parent_kind, Some(ParentKind::Fork));
         assert_eq!(kept.relation(), SessionRelation::Fork);
@@ -5213,7 +5074,8 @@ mod tests {
             db.db.close().await;
         }
 
-        assert!(AiSessionDatabase::open(&path).await.is_err());
+        let err = AiSessionDatabase::open(&path).await.expect_err("must refuse");
+        assert!(matches!(err, DbError::IncompatibleSchema { .. }), "{err}");
         let reader = Sqlite::builder(path.as_os_str()).read_only().open().await.unwrap();
         let sessions: i64 = db::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(reader.pool())

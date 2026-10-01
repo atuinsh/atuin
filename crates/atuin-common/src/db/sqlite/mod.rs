@@ -137,13 +137,10 @@ impl Sqlite {
         self.info.get().await
     }
 
-    /// Close every connection to the database -- the pool's and the WAL compactor's -- and wait
-    /// until they are closed. Needed before deleting or replacing the file: a file with a
-    /// connection open cannot be deleted on Windows, and dropping a connection only asks for it
-    /// to be closed.
+    /// Close the underlying connection pool.
+    #[cfg(feature = "test-utils")]
     pub async fn close(&self) {
         self.pool.close().await;
-        self.compactor.close().await;
     }
 }
 
@@ -187,31 +184,5 @@ mod tests {
         let err =
             query::<sqlx::Sqlite>(AssertSqlSafe(sql)).execute(sqlite.pool()).await.unwrap_err();
         assert!(err.to_string().contains("no such column"), "{err}");
-    }
-
-    /// Closing leaves no file of the database open -- not even the WAL compactor's connection or
-    /// its WAL handle -- so the files can be deleted, which Windows refuses while one is open.
-    #[cfg(target_os = "linux")]
-    #[rstest]
-    #[tokio::test]
-    async fn close_closes_every_handle_on_the_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("db.sqlite");
-        let open_files = || {
-            std::fs::read_dir("/proc/self/fd")
-                .unwrap()
-                .filter_map(|fd| std::fs::read_link(fd.ok()?.path()).ok())
-                .filter(|target| target.starts_with(dir.path()))
-                .count()
-        };
-        let sqlite = Sqlite::builder(path.as_os_str()).open().await.unwrap();
-        query::<sqlx::Sqlite>("CREATE TABLE t (id INTEGER)").execute(sqlite.pool()).await.unwrap();
-        // Let the compactor open its WAL handle.
-        let _info = sqlite.info().await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(open_files() > 0);
-
-        sqlite.close().await;
-        assert_eq!(open_files(), 0);
     }
 }
