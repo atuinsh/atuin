@@ -51,7 +51,7 @@ impl Run {
             exit: exit_label(entry.exit),
             duration: Duration::saturating_from_nanos_i64(entry.duration)
                 .display()
-                .largest_unit()
+                .stopwatch()
                 .to_string(),
             origin: origin(entry),
             context: if session {
@@ -294,7 +294,7 @@ impl Browser {
                 19
             }),
             Constraint::Length(8),
-            Constraint::Length(8),
+            Constraint::Length(9),
         ];
         let mut headings = vec!["Time", "Exit", "Duration"];
         if !narrow {
@@ -453,7 +453,7 @@ fn details(selected: &History, settings: &Settings, styles: Styles) -> Paragraph
                 },
             ),
             Span::styled("   Took  ", styles.label),
-            Span::raw(Duration::saturating_from_nanos_i64(selected.duration).display().to_string()),
+            Span::raw(Duration::saturating_from_nanos_i64(selected.duration).display().stopwatch().to_string()),
         ]),
         Line::from(vec![
             Span::styled("Host  ", styles.label),

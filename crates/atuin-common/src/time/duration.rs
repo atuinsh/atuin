@@ -140,7 +140,12 @@ impl DurationDisplay {
         let total_secs = self.duration.as_secs();
         let millis = self.duration.subsec_millis();
 
-        if total_secs >= 3600 {
+        if total_secs >= 3600 * 24 {
+            let days = total_secs / (3600 * 24);
+            let hours = (total_secs % (3600 * 24)) / 3600;
+            let mins = (total_secs % 3600) / 60;
+            write!(f, "{days}d{hours}h{mins}m")
+        } else if total_secs >= 3600 {
             let hours = total_secs / 3600;
             let mins = (total_secs % 3600) / 60;
             let secs = total_secs % 60;
