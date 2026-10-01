@@ -194,37 +194,6 @@ pub struct Session {
     pub group_updated_at: Option<OffsetDateTime>,
 }
 
-/// How a session relates to the session it is grouped under: its [`ParentKind`] where capture
-/// recorded one, else what its harness and id tell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SessionRelation {
-    /// No parent.
-    Root,
-    /// Spawned by its parent to do part of its work ([`ParentKind::Subagent`]).
-    Subagent,
-    /// Branches off its parent's conversation ([`ParentKind::Fork`]; a Claude Code
-    /// `--fork-session`, a pi branch), or a copy of it (see [`Session::copy_of`]).
-    Fork,
-    /// Carries its parent's conversation on under a new session ([`ParentKind::Continuation`]),
-    /// such as a Codex revert recorded as a session of its own, or a session carried on in
-    /// another harness.
-    Continuation,
-    /// Has a parent, but no kind was recorded (a record from before capture recorded one) and
-    /// the harness links subagents and forks alike (Codex, opencode).
-    Child,
-}
-
-impl SessionRelation {
-    /// Whether a session related so is one a person carried on: a root, fork or continuation.
-    /// Subagents are fragments of their parent's work, and so are taken to be the children of
-    /// unknown kind (most of Codex's and opencode's are spawned agents). A group's
-    /// [`Session::child_count`] counts only these.
-    #[must_use]
-    pub fn carries_on(self) -> bool {
-        matches!(self, Self::Root | Self::Fork | Self::Continuation)
-    }
-}
-
 impl Session {
     /// Whether this session is a root: no stored ancestor.
     #[must_use]
@@ -238,33 +207,36 @@ impl Session {
         self.root.as_ref().unwrap_or(&self.handle)
     }
 
-    /// How this session relates to its parent: its [`ParentKind`] when capture recorded one.
+    /// How this session relates to its parent: the [`Self::parent_kind`] capture recorded, else
+    /// the kind its harness and id tell. A parentless copy of another session ([`Self::copy_of`])
+    /// is a [fork](ParentKind::Fork) of it.
     ///
-    /// A parent recorded without a kind (by a build from before kinds were captured) is told
-    /// apart as well as the harness and id allow: another harness's session is only ever named
-    /// by a continuation, and a Claude Code `agent-*` session is a subagent while its other
-    /// children are forks, as are all of pi's; Codex and opencode link both alike
-    /// ([`SessionRelation::Child`]).
+    /// `None` for a session with no parent (and not a copy), and for a child whose kind cannot be
+    /// told. Only forks and continuations count toward a group's [`Self::child_count`]: subagents
+    /// are fragments of their parent's work, and so are taken to be the children of unknown kind
+    /// (most of Codex's and opencode's are spawned agents).
     #[must_use]
-    pub fn relation(&self) -> SessionRelation {
-        let Some(parent) = &self.parent else {
-            return match self.copy_of {
-                Some(_) => SessionRelation::Fork,
-                None => SessionRelation::Root,
-            };
-        };
-        match self.parent_kind {
-            Some(ParentKind::Subagent) => SessionRelation::Subagent,
-            Some(ParentKind::Fork) => SessionRelation::Fork,
-            Some(ParentKind::Continuation) => SessionRelation::Continuation,
-            None if parent.harness != self.handle.harness => SessionRelation::Continuation,
-            None => match self.handle.harness {
-                HarnessKind::ClaudeCode if self.handle.session.as_ref().starts_with("agent-") => {
-                    SessionRelation::Subagent
-                }
-                HarnessKind::ClaudeCode | HarnessKind::Pi => SessionRelation::Fork,
-                _ => SessionRelation::Child,
-            },
+    pub fn inferred_parent_kind(&self) -> Option<ParentKind> {
+        match &self.parent {
+            Some(parent) => self.parent_kind.or_else(|| self.guess_parent_kind(parent)),
+            None => self.copy_of.as_ref().map(|_| ParentKind::Fork),
+        }
+    }
+
+    /// The kind of a parent recorded without one (by a build from before kinds were captured), as
+    /// well as the harness and id tell: another harness's session is only ever named by a
+    /// continuation, and a Claude Code `agent-*` session is a subagent while its other children
+    /// are forks, as are all of pi's. Codex and opencode link subagents and forks alike: `None`.
+    fn guess_parent_kind(&self, parent: &HarnessSession) -> Option<ParentKind> {
+        if parent.harness != self.handle.harness {
+            return Some(ParentKind::Continuation);
+        }
+        match self.handle.harness {
+            HarnessKind::ClaudeCode if self.handle.session.as_ref().starts_with("agent-") => {
+                Some(ParentKind::Subagent)
+            }
+            HarnessKind::ClaudeCode | HarnessKind::Pi => Some(ParentKind::Fork),
+            _ => None,
         }
     }
 }
@@ -470,20 +442,20 @@ mod tests {
         assert_eq!(back.source_id, written.source_id);
     }
 
-    /// Without a recorded kind (records from before capture recorded one), the relation is told
-    /// from the harness and id.
+    /// Without a recorded kind (records from before capture recorded one), the kind is told from
+    /// the harness and id.
     #[rstest]
-    #[case::no_parent(HarnessKind::ClaudeCode, "s", false, SessionRelation::Root)]
-    #[case::claude_subagent(HarnessKind::ClaudeCode, "agent-a1", true, SessionRelation::Subagent)]
-    #[case::claude_fork(HarnessKind::ClaudeCode, "0b3c", true, SessionRelation::Fork)]
-    #[case::pi_branch(HarnessKind::Pi, "s", true, SessionRelation::Fork)]
-    #[case::codex_child(HarnessKind::Codex, "s", true, SessionRelation::Child)]
-    #[case::opencode_child(HarnessKind::Opencode, "ses_1", true, SessionRelation::Child)]
-    fn without_a_kind_relation_follows_the_harness_and_id(
+    #[case::no_parent(HarnessKind::ClaudeCode, "s", false, None)]
+    #[case::claude_subagent(HarnessKind::ClaudeCode, "agent-a1", true, Some(ParentKind::Subagent))]
+    #[case::claude_fork(HarnessKind::ClaudeCode, "0b3c", true, Some(ParentKind::Fork))]
+    #[case::pi_branch(HarnessKind::Pi, "s", true, Some(ParentKind::Fork))]
+    #[case::codex_child(HarnessKind::Codex, "s", true, None)]
+    #[case::opencode_child(HarnessKind::Opencode, "ses_1", true, None)]
+    fn without_a_kind_it_is_told_from_the_harness_and_id(
         #[case] harness: HarnessKind,
         #[case] id: &str,
         #[case] has_parent: bool,
-        #[case] expected: SessionRelation,
+        #[case] expected: Option<ParentKind>,
     ) {
         let handle = |id: &str| HarnessSession {
             harness,
@@ -496,11 +468,12 @@ mod tests {
             .updated_at(OffsetDateTime::UNIX_EPOCH)
             .usage(Usage::default())
             .build();
-        assert_eq!(session.relation(), expected);
+        assert_eq!(session.inferred_parent_kind(), expected);
     }
 
-    /// A session carried on in another harness is a continuation of the one it continues, whatever its own harness calls its children, even in records from
-    /// before capture recorded the kind.
+    /// A session carried on in another harness is a continuation of the one it continues,
+    /// whatever its own harness calls its children, even in records from before capture recorded
+    /// the kind.
     #[rstest]
     fn a_continuation_in_another_harness_is_a_continuation(
         #[values(HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::ClaudeCode)]
@@ -521,36 +494,20 @@ mod tests {
             .updated_at(OffsetDateTime::UNIX_EPOCH)
             .usage(Usage::default())
             .build();
-        assert_eq!(session.relation(), SessionRelation::Continuation);
+        assert_eq!(session.inferred_parent_kind(), Some(ParentKind::Continuation));
     }
 
     /// A recorded kind decides, whatever the harness and id suggest.
     #[rstest]
-    #[case::codex_subagent(
-        HarnessKind::Codex,
-        "s",
-        ParentKind::Subagent,
-        SessionRelation::Subagent
-    )]
-    #[case::codex_fork(HarnessKind::Codex, "s", ParentKind::Fork, SessionRelation::Fork)]
-    #[case::opencode_fork(HarnessKind::Opencode, "ses_1", ParentKind::Fork, SessionRelation::Fork)]
-    #[case::claude_fork_named_like_an_agent(
-        HarnessKind::ClaudeCode,
-        "agent-a1",
-        ParentKind::Fork,
-        SessionRelation::Fork
-    )]
-    #[case::pi_continuation(
-        HarnessKind::Pi,
-        "s",
-        ParentKind::Continuation,
-        SessionRelation::Continuation
-    )]
-    fn a_recorded_kind_decides_the_relation(
+    #[case::codex_subagent(HarnessKind::Codex, "s", ParentKind::Subagent)]
+    #[case::codex_fork(HarnessKind::Codex, "s", ParentKind::Fork)]
+    #[case::opencode_fork(HarnessKind::Opencode, "ses_1", ParentKind::Fork)]
+    #[case::claude_fork_named_like_an_agent(HarnessKind::ClaudeCode, "agent-a1", ParentKind::Fork)]
+    #[case::pi_continuation(HarnessKind::Pi, "s", ParentKind::Continuation)]
+    fn a_recorded_kind_decides(
         #[case] harness: HarnessKind,
         #[case] id: &str,
         #[case] kind: ParentKind,
-        #[case] expected: SessionRelation,
     ) {
         let handle = |id: &str| HarnessSession {
             harness,
@@ -564,7 +521,7 @@ mod tests {
             .updated_at(OffsetDateTime::UNIX_EPOCH)
             .usage(Usage::default())
             .build();
-        assert_eq!(session.relation(), expected);
+        assert_eq!(session.inferred_parent_kind(), Some(kind));
     }
 
     /// A parentless session copied from another (a Claude Code `--fork-session`) is its fork.
@@ -581,7 +538,7 @@ mod tests {
             .updated_at(OffsetDateTime::UNIX_EPOCH)
             .usage(Usage::default())
             .build();
-        assert_eq!(session.relation(), SessionRelation::Fork);
+        assert_eq!(session.inferred_parent_kind(), Some(ParentKind::Fork));
     }
 
     #[rstest]

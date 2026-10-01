@@ -76,9 +76,9 @@ macro_rules! message_columns {
 }
 
 /// Whether the session `c` is a subagent, or a child of unknown kind: what
-/// [`Session::relation`] tells from its parent kind (`ParentKind` as [`parent_kind_repr`] stores
-/// it), else from its harness and id. Such a session is grouped under its root but not counted in
-/// its size.
+/// [`Session::inferred_parent_kind`] tells from its parent kind (`ParentKind` as
+/// [`parent_kind_repr`] stores it), else from its harness and id, in SQL. Such a session is
+/// grouped under its root but not counted in its size.
 ///
 /// [`parent_kind_repr`]: AiSessionDatabase::parent_kind_repr
 macro_rules! subagent_like {
@@ -90,8 +90,9 @@ macro_rules! subagent_like {
 }
 
 /// The group size and newest activity of a root `s`, for roots-only queries. The size counts the
-/// sessions a person carried on ([`crate::ai_session::SessionRelation::carries_on`]): the forks and
-/// continuations, not the subagents, whose activity still counts toward the group's.
+/// sessions a person carried on: the forks and continuations (copies included), not the subagents
+/// or children of unknown kind (see [`subagent_like`]), whose activity still counts toward the
+/// group's.
 macro_rules! group_columns {
     () => {
         concat!(
@@ -449,7 +450,9 @@ impl AiSessionDatabase {
         .await?;
         let found: Option<i64> = match tracked {
             Some(_) => {
-                db::query_scalar("SELECT max(version) FROM _sqlx_migrations").fetch_one(pool).await?
+                db::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+                    .fetch_one(pool)
+                    .await?
             }
             None => None,
         };
@@ -2570,7 +2573,7 @@ mod tests {
     };
     use crate::ai_session::{
         HarnessKind, HarnessSession, Message, NativeSessionId, SearchTerms, Session, SessionFilter,
-        SessionMatch, SessionRelation, SourceId,
+        SessionMatch, SourceId,
     };
 
     fn harness_filter(harness: HarnessKind) -> SessionFilter {
@@ -4049,7 +4052,7 @@ mod tests {
             let s = db.get_session(&handle(harness, id)).await.unwrap().unwrap();
             assert_eq!(s.group(), &original, "{id}");
             assert_eq!(s.parent_kind, kind, "{id}");
-            assert_eq!(s.relation(), SessionRelation::Continuation, "{id}");
+            assert_eq!(s.inferred_parent_kind(), Some(ParentKind::Continuation), "{id}");
         }
         let children: Vec<String> = db
             .children(&original)
@@ -4363,7 +4366,7 @@ mod tests {
             .collect();
         assert_eq!(groups, [("original".to_owned(), 3), ("zeta".to_owned(), 0)]);
         let resumed = db.get_session(&handle(HarnessKind::ClaudeCode, "resumed")).await.unwrap();
-        assert_eq!(resumed.unwrap().relation(), crate::ai_session::SessionRelation::Fork);
+        assert_eq!(resumed.unwrap().inferred_parent_kind(), Some(ParentKind::Fork));
     }
 
     /// A copy that learns its parent after all groups by it, and its own copies find another
@@ -4457,38 +4460,17 @@ mod tests {
     /// harness or id suggest: a Codex subagent is not counted in its root's group size, a Codex
     /// fork is, and so is a Claude Code child named like a subagent that is a fork.
     #[rstest]
-    #[case::codex_subagent(
-        HarnessKind::Codex,
-        "t2",
-        ParentKind::Subagent,
-        SessionRelation::Subagent
-    )]
-    #[case::codex_fork(HarnessKind::Codex, "t2", ParentKind::Fork, SessionRelation::Fork)]
-    #[case::opencode_fork(HarnessKind::Opencode, "ses_2", ParentKind::Fork, SessionRelation::Fork)]
-    #[case::claude_fork(
-        HarnessKind::ClaudeCode,
-        "agent-z",
-        ParentKind::Fork,
-        SessionRelation::Fork
-    )]
-    #[case::claude_subagent(
-        HarnessKind::ClaudeCode,
-        "sub",
-        ParentKind::Subagent,
-        SessionRelation::Subagent
-    )]
-    #[case::codex_continuation(
-        HarnessKind::Codex,
-        "t2",
-        ParentKind::Continuation,
-        SessionRelation::Continuation
-    )]
+    #[case::codex_subagent(HarnessKind::Codex, "t2", ParentKind::Subagent)]
+    #[case::codex_fork(HarnessKind::Codex, "t2", ParentKind::Fork)]
+    #[case::opencode_fork(HarnessKind::Opencode, "ses_2", ParentKind::Fork)]
+    #[case::claude_fork(HarnessKind::ClaudeCode, "agent-z", ParentKind::Fork)]
+    #[case::claude_subagent(HarnessKind::ClaudeCode, "sub", ParentKind::Subagent)]
+    #[case::codex_continuation(HarnessKind::Codex, "t2", ParentKind::Continuation)]
     #[tokio::test]
-    async fn a_recorded_parent_kind_decides_the_relation_and_the_group_size(
+    async fn a_recorded_parent_kind_decides_the_kind_and_the_group_size(
         #[case] harness: HarnessKind,
         #[case] child: &str,
         #[case] kind: ParentKind,
-        #[case] expected: SessionRelation,
     ) {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         db.append(&message_in(&handle(harness, "root"), 0, "root words")).await.unwrap();
@@ -4498,10 +4480,42 @@ mod tests {
         db.append(&m).await.unwrap();
 
         let stored = db.get_session(&handle(harness, child)).await.unwrap().unwrap();
-        assert_eq!(stored.relation(), expected);
+        assert_eq!(stored.inferred_parent_kind(), Some(kind));
         let groups = db.list_sessions(&roots_only()).await.unwrap();
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].child_count, u64::from(expected.carries_on()));
+        assert_eq!(groups[0].child_count, u64::from(kind != ParentKind::Subagent));
+    }
+
+    /// Without a recorded kind, a group's size (counted in SQL) counts a child exactly when
+    /// [`Session::inferred_parent_kind`] makes it a fork or a continuation.
+    #[rstest]
+    #[case::claude_subagent(HarnessKind::ClaudeCode, "agent-z", HarnessKind::ClaudeCode)]
+    #[case::claude_fork(HarnessKind::ClaudeCode, "sub", HarnessKind::ClaudeCode)]
+    #[case::pi_branch(HarnessKind::Pi, "sub", HarnessKind::Pi)]
+    #[case::codex_child(HarnessKind::Codex, "sub", HarnessKind::Codex)]
+    #[case::opencode_child(HarnessKind::Opencode, "ses_2", HarnessKind::Opencode)]
+    #[case::continued_elsewhere(HarnessKind::Codex, "agent-z", HarnessKind::ClaudeCode)]
+    #[tokio::test]
+    async fn without_a_kind_the_group_size_agrees_with_the_inferred_kind(
+        #[case] harness: HarnessKind,
+        #[case] child: &str,
+        #[case] parent_harness: HarnessKind,
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let root = handle(parent_harness, "root");
+        db.append(&message_in(&root, 0, "root words")).await.unwrap();
+        let mut m = message_in(&handle(harness, child), 1, "child words");
+        m.parent = Some(root);
+        db.append(&m).await.unwrap();
+
+        let stored = db.get_session(&handle(harness, child)).await.unwrap().unwrap();
+        let counted = matches!(
+            stored.inferred_parent_kind(),
+            Some(ParentKind::Fork | ParentKind::Continuation)
+        );
+        let groups = db.list_sessions(&roots_only()).await.unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].child_count, u64::from(counted));
     }
 
     /// A match in a nested child is its root's, snippet included.
@@ -5053,7 +5067,7 @@ mod tests {
         db.check_schema().await.unwrap();
         let kept = db.get_session(&handle(HarnessKind::ClaudeCode, "kept")).await.unwrap().unwrap();
         assert_eq!(kept.parent_kind, Some(ParentKind::Fork));
-        assert_eq!(kept.relation(), SessionRelation::Fork);
+        assert_eq!(kept.inferred_parent_kind(), Some(ParentKind::Fork));
     }
 
     /// A newer build's sidecar is left alone: that build owns it, and this one reports it.
