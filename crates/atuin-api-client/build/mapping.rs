@@ -8,7 +8,7 @@
 
 use std::iter;
 
-use progenitor_impl::{GenerationSettings, InterfaceStyle, TypeImpl};
+use progenitor_impl::{GenerationSettings, InterfaceStyle, TypeImpl, TypePatch};
 use quote::quote;
 use schemars08::schema::{InstanceType, NumberValidation, SchemaObject};
 use serde_json::{Map, Value};
@@ -48,14 +48,24 @@ const REPLACEMENTS: [Replacement; 4] = [
 
 /// A primitive schema the client (de)serializes through a chosen type.
 struct Conversion {
+    /// The schema's `type`, as the schemars value `with_conversion` matches on.
     instance_type: InstanceType,
+    /// The same `type` as the spec spells it (`string`, `integer`), for error messages.
     json_type: &'static str,
+    /// The `format` that selects this conversion, e.g. `password`.
     format: &'static str,
     /// The `minimum` the schema must carry, if any; an `int64` without one stays `i64`.
     minimum: Option<i32>,
+    /// Path of the Rust type the schema becomes, e.g. `crate::Secret`.
     target: &'static str,
+    /// Traits `target` implements that generated code may rely on, e.g. `FromStr` for a query
+    /// parameter.
     impls: &'static [TypeImpl],
 }
+
+/// Generated types the client compares with `==`. Types holding a `Secret` cannot be among
+/// them: `SecretString` has no `PartialEq`, by design.
+const COMPARABLE: [&str; 4] = ["ModelInfo", "ModelList", "UsageBucket", "UsageSnapshot"];
 
 const CONVERSIONS: [Conversion; 4] = [
     Conversion {
@@ -156,6 +166,11 @@ pub fn settings() -> GenerationSettings {
             conversion.target,
             conversion.impls.iter().copied(),
         );
+    }
+    let mut comparable = TypePatch::default();
+    comparable.with_derive("PartialEq").with_derive("Eq");
+    for title in COMPARABLE {
+        settings.with_patch(title, &comparable);
     }
     settings
 }

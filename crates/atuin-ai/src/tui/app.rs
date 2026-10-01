@@ -1754,10 +1754,7 @@ mod tests {
             output: bucket,
         };
         h.process(Msg::Usage(snapshot.clone()));
-        assert_eq!(
-            serde_json::to_value(&h.app().usage).unwrap(),
-            serde_json::to_value(Some(snapshot)).unwrap()
-        );
+        assert_eq!(h.app().usage, Some(snapshot));
     }
 
     /// Drive a turn to the point where a shell tool awaits permission.

@@ -108,7 +108,7 @@ pub struct PendingConfirmation {
 ///
 /// While `Loading` the input box stays visible (there'd be no focusable
 /// component otherwise); `Ready` swaps it for the selection list.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelPicker {
     Loading,
     Ready(ModelList),
@@ -704,12 +704,12 @@ impl AgentFsm {
                 match result {
                     Ok(list) => {
                         self.ctx.models_cache = Some(list.clone());
-                        if matches!(self.ctx.model_picker, Some(ModelPicker::Loading)) {
+                        if self.ctx.model_picker == Some(ModelPicker::Loading) {
                             self.ctx.model_picker = Some(ModelPicker::Ready(list));
                         }
                     }
                     Err(e) => {
-                        if matches!(self.ctx.model_picker, Some(ModelPicker::Loading)) {
+                        if self.ctx.model_picker == Some(ModelPicker::Loading) {
                             self.ctx.model_picker = None;
                             self.handle_slash_command(
                                 "/model",

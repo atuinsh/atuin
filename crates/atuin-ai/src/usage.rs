@@ -131,8 +131,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&snapshot).unwrap();
-        let decoded = serde_json::from_str::<UsageSnapshot>(&json).unwrap();
-        assert_eq!(serde_json::to_value(decoded).unwrap(), serde_json::to_value(snapshot).unwrap());
+        assert_eq!(serde_json::from_str::<UsageSnapshot>(&json).unwrap(), snapshot);
     }
 
     #[rstest]

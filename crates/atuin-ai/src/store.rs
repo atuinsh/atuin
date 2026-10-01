@@ -469,10 +469,7 @@ mod tests {
 
         let cached = store.get_usage("key-a").await.unwrap().unwrap();
         assert!(cached.written_at > 0);
-        assert_eq!(
-            serde_json::to_value(cached.snapshot).unwrap(),
-            serde_json::to_value(&snapshot).unwrap()
-        );
+        assert_eq!(cached.snapshot, snapshot);
 
         // Upsert replaces the snapshot for the same key
         let updated = UsageSnapshot {
@@ -482,10 +479,7 @@ mod tests {
         store.set_usage("key-a", &updated).await.unwrap();
 
         let cached = store.get_usage("key-a").await.unwrap().unwrap();
-        assert_eq!(
-            serde_json::to_value(cached.snapshot).unwrap(),
-            serde_json::to_value(updated).unwrap()
-        );
+        assert_eq!(cached.snapshot, updated);
 
         // Other keys are independent
         assert!(store.get_usage("key-b").await.unwrap().is_none());
