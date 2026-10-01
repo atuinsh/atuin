@@ -35,7 +35,7 @@ base64 = { workspace = true }
 clap = { workspace = true }
 config = { workspace = true }
 derive_more = { workspace = true }
-directories = { workspace = true }
+dirs = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
 eyre = { workspace = true }

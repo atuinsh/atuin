@@ -63,7 +63,7 @@ derive_more = {
         "debug",
     ],
 }
-directories = "6"
+dirs = "6"
 divan = "0.1"
 # easy-cast 0.5.5+ raises its MSRV to 1.96.
 #

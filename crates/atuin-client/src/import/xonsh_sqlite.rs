@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use atuin_common::db;
 use atuin_domain::record::CmdOrigin;
-use directories::BaseDirs;
 use easy_cast::{CastFloat, Conv};
 use eyre::{Result, eyre};
 use futures::TryStreamExt;
@@ -75,9 +74,9 @@ fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     }
 
     // otherwise, fall back to default
-    let base = BaseDirs::new().ok_or_else(|| eyre!("Could not determine home directory"))?;
+    let data_dir = dirs::data_dir().ok_or_else(|| eyre!("Could not determine data directory"))?;
 
-    let hist_file = base.data_dir().join("xonsh/xonsh-history.sqlite");
+    let hist_file = data_dir.join("xonsh/xonsh-history.sqlite");
     if hist_file.exists() || cfg!(test) {
         Ok(hist_file)
     } else {

@@ -30,7 +30,6 @@ chrono-humanize = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
 derive_more = { workspace = true }
-directories = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
 eventsource-stream = { workspace = true }

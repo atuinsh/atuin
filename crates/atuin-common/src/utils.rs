@@ -108,9 +108,7 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
 
 #[must_use]
 pub fn home_dir() -> PathBuf {
-    directories::BaseDirs::new()
-        .map(|d| d.home_dir().to_path_buf())
-        .expect("could not determine home directory")
+    dirs::home_dir().expect("could not determine home directory")
 }
 
 /// Read an environment variable that must be nonempty.
