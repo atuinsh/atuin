@@ -277,6 +277,21 @@ fn millis(at: OffsetDateTime) -> i64 {
 /// own ascending ids) the time it stands for in hex, then characters derived from `seed`, so the
 /// same session always mints the same ids.
 fn mint(prefix: &str, at: i64, seed: &str) -> String {
+    mint_at(prefix, u64::try_from(at).unwrap_or_default().wrapping_mul(0x1000), seed)
+}
+
+/// A new part's id, as [`mint`] makes them: parts of one message sort in time order.
+pub(crate) fn mint_part(at: OffsetDateTime, seed: &str) -> String {
+    mint("prt", millis(at), seed)
+}
+
+/// A new session's id, as opencode's own (`Identifier.descending`): [`mint`]'s, its time
+/// inverted so the newest sorts first.
+pub(crate) fn mint_session(at: OffsetDateTime, seed: &str) -> String {
+    mint_at("ses", !u64::try_from(millis(at)).unwrap_or_default().wrapping_mul(0x1000), seed)
+}
+
+fn mint_at(prefix: &str, time: u64, seed: &str) -> String {
     const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     let mut hash = xxhash_rust::xxh3::xxh3_128(seed.as_bytes());
     let tail: String = (0..14)
@@ -286,7 +301,7 @@ fn mint(prefix: &str, at: i64, seed: &str) -> String {
             char::from(c)
         })
         .collect();
-    let time = u64::try_from(at).unwrap_or_default().wrapping_mul(0x1000) & 0xffff_ffff_ffff;
+    let time = time & 0xffff_ffff_ffff;
     format!("{prefix}_{time:012x}{tail}")
 }
 

@@ -3,7 +3,9 @@
 //!
 //! The bindings mirror the history search's defaults wherever an action exists in both, so muscle
 //! memory carries over: ctrl-r cycles the filter, ctrl-o toggles Inspect, tab edits, enter follows
-//! `enter_accept`, and vim users get normal/insert modes.
+//! `enter_accept`, and vim users get normal/insert modes. Where a chosen session resumes (its own
+//! harness, or continued in another) is asked by the chooser, which has keys of its own (see
+//! [`super::chooser`]).
 
 use std::collections::HashMap;
 

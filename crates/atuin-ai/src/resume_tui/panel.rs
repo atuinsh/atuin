@@ -376,7 +376,11 @@ pub fn tree_lines(
             );
             let lead = branch.width();
             let title_w = width.saturating_sub(lead + 2 + tail.width());
-            let title = child.title.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let mut title = child.title.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            // A continuation in another harness (`atuin ai resume --in`) says where it went on.
+            if child.parent.as_ref().is_some_and(|p| p.harness != child.handle.harness) {
+                title = format!("continued in {} · {title}", harness_label(child.handle.harness));
+            }
             let title = title
                 .pad_ellipsize(
                     Measure::Columns(title_w),

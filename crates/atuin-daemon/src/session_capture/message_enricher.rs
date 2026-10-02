@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use atuin_client::ai_session::{
     HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
+use atuin_common::harnesstools::continuation;
 use atuin_common::harnesstools::session::{
     AnyMessage, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
 };
@@ -78,8 +79,11 @@ impl MessageEnricher {
         self.sessions.insert(session.to_string(), SessionState {
             titles: replayed,
             last_ts: last.map(|m| m.timestamp),
-            parent: row.and_then(|r| r.parent.as_ref().map(|p| p.session.clone())),
+            parent: row.and_then(|r| r.parent.clone()),
             parent_kind: row.and_then(|r| r.parent_kind),
+            // What an earlier read settled on: a marker naming another parent was passed over
+            // for it, and one naming the same changes nothing.
+            native_parent: row.is_some_and(|r| r.parent.is_some()),
             occurrences,
             untimed: Vec::new(),
         });
@@ -98,8 +102,29 @@ impl MessageEnricher {
             apply(&mut state.titles, change);
         }
         if let Some(parent) = m.parent_session().filter(|p| p != session) {
-            state.parent = Some(NativeSessionId::from(parent.to_string()));
+            state.parent = Some(HarnessSession {
+                harness: handle.harness,
+                session: NativeSessionId::from(parent.to_string()),
+            });
             state.parent_kind = m.parent_kind();
+            state.native_parent = true;
+        }
+        // A session continued from another (`atuin ai resume --in`), maybe another harness's:
+        // its first line, which the harness wrote itself, names it. Unless the harness names a
+        // parent itself: a fork of a continuation (Claude Code `--fork-session`, Codex and
+        // opencode forks, Pi `/fork`) copies the marker with the rest, but forks the
+        // continuation, not the session the marker names.
+        if !state.native_parent
+            && let Some((harness, parent)) = continuation::continued_from_message(m)
+        {
+            let parent = HarnessSession {
+                harness: HarnessKind::from(&harness),
+                session: NativeSessionId::from(parent),
+            };
+            if parent != handle {
+                state.parent = Some(parent);
+                state.parent_kind = Some(ParentKind::Continuation);
+            }
         }
 
         let row = build(handle, session, m, state);
@@ -191,13 +216,12 @@ fn build(
             id
         }
     };
-    let harness = handle.harness;
     Some(
         Message::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(handle)
             .source_id(source_id)
-            .parent(state.parent.clone().map(|session| HarnessSession { harness, session }))
+            .parent(state.parent.clone())
             .parent_kind(state.parent_kind)
             .parent_source_id(m.parent_id().map(|id| SourceId::from(String::from(id))))
             .turn_id(m.turn_id())
@@ -275,10 +299,15 @@ struct SessionState {
     /// Timestamp of the last line that had one. Lines without (Claude Code `ai-title` and
     /// friends) take it, so a replayed session is not stamped with capture time.
     last_ts: Option<OffsetDateTime>,
-    /// Session this one was spawned from, when it has one (subagents, forks).
-    parent: Option<NativeSessionId>,
-    /// How this session relates to [`Self::parent`], when the line naming it said.
+    /// Session this one was spawned from, when it has one (subagents, forks), or continues
+    /// (maybe another harness's).
+    parent: Option<HarnessSession>,
+    /// How this session relates to [`Self::parent`], when the line naming it said: always
+    /// [`ParentKind::Continuation`] for a continuation's marker.
     parent_kind: Option<ParentKind>,
+    /// Whether [`Self::parent`] is one the harness named (a fork's, a subagent's), which a
+    /// continuation's marker never replaces.
+    native_parent: bool,
     /// How many rows each content hash has produced, so identical id-less lines (the same
     /// prompt twice in one millisecond) get distinct, re-read-stable ids.
     occurrences: HashMap<u64, u32>,
@@ -767,6 +796,7 @@ mod tests {
 mod parser_contract {
     use atuin_common::harnesstools::ccode::session::CcodeMessage;
     use atuin_common::harnesstools::pi::session::PiMessage;
+    use atuin_common::harnesstools::session::Role;
     use rstest::rstest;
 
     use super::*;
@@ -875,5 +905,146 @@ mod parser_contract {
             MessageEnricher::source_id(&s, &pi(&before)),
             MessageEnricher::source_id(&s, &pi(&after))
         );
+    }
+
+    // ---- Continuations (`atuin ai resume --in`) ----
+
+    const ORIGINAL: &str = "019a0d14-f276-77d3-b955-89d5b0151306";
+
+    fn marker() -> String {
+        use atuin_common::harnesstools::AnyHarness;
+        continuation::marker_text(AnyHarness::from_name("codex").unwrap(), ORIGINAL)
+    }
+
+    /// The marker line each target's writer puts first (see `harnesstools::continuation`), then
+    /// a prompt. opencode's (a `synthetic` part) is read back the same way by atuin-common's
+    /// round-trip tests.
+    fn continued(harness: HarnessKind, prompt: &str) -> Vec<AnyMessage> {
+        let marker = marker();
+        match harness {
+            HarnessKind::ClaudeCode => vec![
+                ccode(&serde_json::json!({"type": "user", "uuid": "u0", "parentUuid": null,
+                    "sessionId": "new", "isMeta": true, "timestamp": "2026-09-27T10:00:00Z",
+                    "message": {"role": "user", "content": marker}})),
+                ccode(&serde_json::json!({"type": "user", "uuid": "u1", "parentUuid": "u0",
+                    "sessionId": "new", "timestamp": "2026-09-27T10:00:01Z",
+                    "message": {"role": "user", "content": prompt}})),
+            ],
+            HarnessKind::Pi => vec![
+                pi(&serde_json::json!({"type": "session", "version": 3, "id": "new",
+                    "timestamp": "2026-09-27T10:00:00Z", "cwd": "/w"})),
+                // pi's marker is the first block of the first prompt.
+                pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": null,
+                    "timestamp": "2026-09-27T10:00:01Z",
+                    "message": {"role": "user", "content": [
+                        {"type": "text", "text": marker}, {"type": "text", "text": prompt}]}})),
+                pi(&serde_json::json!({"type": "message", "id": "a2", "parentId": "a1",
+                    "timestamp": "2026-09-27T10:00:02Z",
+                    "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}})),
+            ],
+            _ => unreachable!("no other harness in these tests"),
+        }
+    }
+
+    /// A continuation's rows name the session it continues as their parent, of the harness it
+    /// was recorded in, and say they continue it; a marker the user typed is only text.
+    #[rstest]
+    #[case::claude(HarnessKind::ClaudeCode)]
+    #[case::pi(HarnessKind::Pi)]
+    fn a_continuation_names_the_session_it_continues(#[case] harness: HarnessKind) {
+        let new = SessionId::from("new".to_owned());
+        let mut n = MessageEnricher::new(harness);
+        let rows: Vec<Message> =
+            continued(harness, "go on").iter().flat_map(|m| n.capture(&new, m)).collect();
+        let parent = HarnessSession {
+            harness: HarnessKind::Codex,
+            session: NativeSessionId::from(ORIGINAL.to_owned()),
+        };
+        let prompt = rows.last().unwrap();
+        assert_eq!(prompt.role, Role::User);
+        assert_eq!(prompt.parent, Some(parent));
+        assert_eq!(prompt.parent_kind, Some(ParentKind::Continuation));
+
+        let mut n = MessageEnricher::new(harness);
+        let typed: Vec<Message> = continued(harness, &marker())
+            .iter()
+            .skip(harness_skip(harness))
+            .flat_map(|m| n.capture(&new, m))
+            .collect();
+        assert!(typed.iter().all(|m| m.parent.is_none()), "{typed:?}");
+    }
+
+    /// A fork of a continuation copies its marker along with the rest. The harness names the
+    /// continuation it forked as its parent, and that parent stands: the fork is not a
+    /// continuation of the session the marker names.
+    #[rstest]
+    #[case::claude(HarnessKind::ClaudeCode)]
+    #[case::codex(HarnessKind::Codex)]
+    #[case::pi(HarnessKind::Pi)]
+    fn a_fork_of_a_continuation_keeps_its_own_parent(#[case] harness: HarnessKind) {
+        const CONTINUATION: &str = "0199cccc-0000-7000-8000-000000000003";
+        fn codex(raw: &serde_json::Value) -> AnyMessage {
+            use atuin_common::harnesstools::codex::session::CodexMessage;
+            AnyMessage::Codex(serde_json::from_str::<CodexMessage>(&raw.to_string()).unwrap())
+        }
+        let marker = marker();
+        let lines = match harness {
+            // Every copied line names the session it was forked from.
+            HarnessKind::ClaudeCode => {
+                let forked = serde_json::json!({"sessionId": CONTINUATION, "messageUuid": "u0"});
+                vec![
+                    ccode(&serde_json::json!({"type": "user", "uuid": "u0", "parentUuid": null,
+                        "sessionId": "fork", "isMeta": true, "timestamp": "2026-09-27T10:00:00Z",
+                        "forkedFrom": forked, "message": {"role": "user", "content": marker}})),
+                    ccode(&serde_json::json!({"type": "user", "uuid": "u1", "parentUuid": "u0",
+                        "sessionId": "fork", "timestamp": "2026-09-27T10:00:01Z",
+                        "forkedFrom": forked, "message": {"role": "user", "content": "go on"}})),
+                ]
+            }
+            HarnessKind::Codex => vec![
+                codex(&serde_json::json!({"type": "session_meta",
+                    "timestamp": "2026-09-27T10:00:00Z",
+                    "payload": {"id": "fork", "forked_from_id": CONTINUATION}})),
+                codex(&serde_json::json!({"type": "response_item",
+                    "timestamp": "2026-09-27T10:00:00Z",
+                    "payload": {"type": "message", "role": "developer",
+                        "content": [{"type": "input_text", "text": marker}]}})),
+                codex(&serde_json::json!({"type": "response_item",
+                    "timestamp": "2026-09-27T10:00:01Z",
+                    "payload": {"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "go on"}]}})),
+            ],
+            HarnessKind::Pi => vec![
+                pi(&serde_json::json!({"type": "session", "version": 3, "id": "fork",
+                    "timestamp": "2026-09-27T10:00:00Z", "cwd": "/w",
+                    "parentSession": format!(
+                        "/home/u/.pi/agent/sessions/--w--/2026-09-27T09-00-00-000Z_{CONTINUATION}.jsonl")})),
+                pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": null,
+                    "timestamp": "2026-09-27T10:00:01Z",
+                    "message": {"role": "user", "content": [
+                        {"type": "text", "text": marker}, {"type": "text", "text": "go on"}]}})),
+            ],
+            _ => unreachable!("no other harness in these tests"),
+        };
+        let fork = SessionId::from("fork".to_owned());
+        let mut n = MessageEnricher::new(harness);
+        let rows: Vec<Message> = lines.iter().flat_map(|m| n.capture(&fork, m)).collect();
+        let parent = HarnessSession {
+            harness,
+            session: NativeSessionId::from(CONTINUATION.to_owned()),
+        };
+        assert!(!rows.is_empty());
+        for row in &rows {
+            assert_eq!(row.parent.as_ref(), Some(&parent), "{row:?}");
+            assert_eq!(row.parent_kind, Some(ParentKind::Fork), "{row:?}");
+        }
+    }
+
+    /// How many lines lead up to the marker (Pi's header).
+    fn harness_skip(harness: HarnessKind) -> usize {
+        match harness {
+            HarnessKind::Pi => 2,
+            _ => 1,
+        }
     }
 }
