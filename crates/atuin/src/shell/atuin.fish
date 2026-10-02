@@ -189,6 +189,47 @@ function _atuin_search
     commandline -f repaint
 end
 
+# `atuin ai resume`: pick a captured AI coding-agent session. The result uses
+# the same protocol as the history search: `__atuin_accept__:` runs it.
+function _atuin_ai_resume
+    set -l keymap_mode
+    switch $fish_key_bindings
+        case fish_vi_key_bindings fish_hybrid_key_bindings
+            switch $fish_bind_mode
+                case default
+                    set keymap_mode vim-normal
+                case insert
+                    set keymap_mode vim-insert
+            end
+        case '*'
+            set keymap_mode emacs
+    end
+
+    set -l ATUIN_H (ATUIN_SHELL=fish ATUIN_QUERY=(commandline -b) atuin ai resume --shell-widget --keymap-mode=$keymap_mode $argv 3>&1 1>&2 2>&3 3>&- | string collect)
+    set -l ATUIN_STATUS $pipestatus[1]
+
+    if test "$ATUIN_STATUS" -ne 0
+        test -n "$ATUIN_H"; and printf '%s\n' "$ATUIN_H" >&2
+        commandline -f repaint
+        return "$ATUIN_STATUS"
+    end
+
+    set ATUIN_H (string trim -- $ATUIN_H | string collect)
+
+    if test -n "$ATUIN_H"
+        if string match --quiet '__atuin_accept__:*' "$ATUIN_H"
+            commandline -r (string replace "__atuin_accept__:" "" -- "$ATUIN_H" | string collect)
+            commandline -f repaint
+            commandline -f execute
+            return
+        else
+            commandline -r "$ATUIN_H"
+        end
+    end
+
+    commandline -f repaint
+end
+
 function _atuin_bind_up
     # Fallback to fish's builtin up-or-search if we're in search or paging mode
     if commandline --search-mode; or commandline --paging-mode

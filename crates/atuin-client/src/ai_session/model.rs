@@ -34,6 +34,22 @@ impl From<&AnyHarness> for HarnessKind {
     }
 }
 
+impl HarnessKind {
+    /// The harness tools for this kind. `None` for a kind atuin has none for (Copilot, and
+    /// sessions of no known harness), whose sessions can be viewed but not resumed.
+    #[must_use]
+    pub fn harness(self) -> Option<AnyHarness> {
+        use atuin_common::harnesstools::{ccode, codex, opencode, pi};
+        match self {
+            Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
+            Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
+            Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
+            Self::Pi => Some(AnyHarness::Pi(pi::Pi)),
+            Self::Copilot | Self::Unknown => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into, AsRef, Display)]
 #[as_ref(str)]
 pub struct NativeSessionId(String);
@@ -188,6 +204,10 @@ pub struct Session {
     /// [`SessionFilter::roots_only`]); 0 elsewhere.
     #[builder(default)]
     pub child_count: u64,
+    /// The newest `updated_at` across this session and the sessions grouped under it, which is
+    /// what roots-only queries order by. Only set by roots-only queries.
+    #[builder(default)]
+    pub group_updated_at: Option<OffsetDateTime>,
 }
 
 impl Session {
@@ -247,6 +267,10 @@ impl Session {
 pub struct SessionFilter {
     /// Captured on this host.
     pub host: Option<HostId>,
+    /// With [`Self::host`], also keep sessions with no recorded host, captured before hosts were
+    /// tracked and not yet backfilled. Those can only be this host's, so set it when `host` is
+    /// this one.
+    pub or_unrecorded: bool,
     /// Working directory at or under this path (a workspace or git root).
     pub workspace: Option<PathBuf>,
     /// Working directory exactly this path.
@@ -269,9 +293,24 @@ pub enum SearchTerms {
     /// Every term, each as a whole word (`app` finds `app`, not `apple`).
     #[default]
     All,
+    /// [`Self::All`] for search as you type: the last term also matches as a prefix, unless
+    /// the query ends in whitespace (see
+    /// [`atuin_common::db::sqlite::fts::prefix_match_expression`]).
+    Typed,
     /// Any term, each as a prefix: the fallback when no message holds every term (see
     /// [`atuin_common::db::sqlite::fts::match_any_expression`]).
     Any,
+}
+
+/// What a session's preview shows, read without the content of every message (see
+/// [`crate::ai_session::AiSessionDatabase::preview_parts`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PreviewParts {
+    /// The content of the first user message.
+    pub first_user: Option<Vec<Content>>,
+    /// The content of the last assistant message with conversation text (text or a summary),
+    /// skipping those holding only tool calls or reasoning.
+    pub last_assistant: Option<Vec<Content>>,
 }
 
 #[derive(Clone, Debug)]
@@ -327,6 +366,25 @@ mod tests {
                     .build()
             },
         )
+    }
+
+    /// Every kind with harness tools maps back to itself; the rest have none to resume with.
+    #[rstest]
+    #[case::claude(HarnessKind::ClaudeCode, true)]
+    #[case::codex(HarnessKind::Codex, true)]
+    #[case::opencode(HarnessKind::Opencode, true)]
+    #[case::pi(HarnessKind::Pi, true)]
+    #[case::copilot(HarnessKind::Copilot, false)]
+    #[case::unknown(HarnessKind::Unknown, false)]
+    fn a_kind_has_harness_tools_only_when_atuin_knows_the_harness(
+        #[case] kind: HarnessKind,
+        #[case] resumable: bool,
+    ) {
+        let harness = kind.harness();
+        assert_eq!(harness.is_some(), resumable);
+        if let Some(harness) = harness {
+            assert_eq!(HarnessKind::from(&harness), kind);
+        }
     }
 
     /// Records are named-field msgpack, so a host whose build predates a field (here `turn_id`)

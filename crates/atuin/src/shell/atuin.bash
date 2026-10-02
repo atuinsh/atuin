@@ -429,6 +429,32 @@ __atuin_history() {
     fi
 }
 
+# `atuin ai resume`: pick a captured AI coding-agent session. The result uses
+# the same protocol as the history search: `__atuin_accept__:` runs it.
+__atuin_ai_resume() {
+    # READLINE_LINE and READLINE_POINT are only supported by bash >= 4.0 or
+    # ble.sh.  When it is not supported, we clear them to suppress strange
+    # behaviors.
+    [[ ${BLE_ATTACHED-} ]] || ((BASH_VERSINFO[0] >= 4)) ||
+        local READLINE_LINE="" READLINE_POINT=0
+
+    local __atuin_output
+    if ! __atuin_output=$(ATUIN_SHELL=bash ATUIN_QUERY=$READLINE_LINE atuin ai resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-); then
+        [[ $__atuin_output ]] && printf '%s\n' "$__atuin_output" >&2
+        return 1
+    fi
+
+    # We do nothing when the picker is canceled.
+    [[ $__atuin_output ]] || return 0
+
+    if [[ $__atuin_output == __atuin_accept__:* ]]; then
+        __atuin_output=${__atuin_output#__atuin_accept__:}
+        __atuin_accept_line "$__atuin_output"
+    else
+        __atuin_insert_line "$__atuin_output"
+    fi
+}
+
 __atuin_initialize_blesh() {
     # shellcheck disable=SC2154
     [[ ${BLE_VERSION-} ]] && ((_ble_version >= 400)) || return 0
@@ -731,6 +757,10 @@ atuin-bind() {
         atuin-up-search-emacs) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=emacs} ;;
         atuin-up-search-viins) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=vim-insert} ;;
         atuin-up-search-vicmd) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=vim-normal} ;;
+        atuin-ai-resume)       command=${2/#"$widget"/__atuin_ai_resume} ;;
+        atuin-ai-resume-emacs) command=${2/#"$widget"/__atuin_ai_resume --keymap-mode=emacs} ;;
+        atuin-ai-resume-viins) command=${2/#"$widget"/__atuin_ai_resume --keymap-mode=vim-insert} ;;
+        atuin-ai-resume-vicmd) command=${2/#"$widget"/__atuin_ai_resume --keymap-mode=vim-normal} ;;
     esac
 
     __atuin_bind_impl "$keymap" "$keyseq" "$command"
@@ -757,6 +787,13 @@ if [[ $__atuin_bind_up_arrow == true ]]; then
     atuin-bind -m vi-command '\e[A' atuin-up-search-vicmd
     atuin-bind -m vi-command '\eOA' atuin-up-search-vicmd
     atuin-bind -m vi-command 'k'    atuin-up-search-vicmd
+fi
+
+# shellcheck disable=SC2154
+if [[ ${__atuin_bind_ai_resume-} == true ]]; then
+    atuin-bind -m emacs      '\C-]' atuin-ai-resume-emacs
+    atuin-bind -m vi-insert  '\C-]' atuin-ai-resume-viins
+    atuin-bind -m vi-command '\C-]' atuin-ai-resume-vicmd
 fi
 
 if command -v __atuin_load_builtin_preexec > /dev/null; then

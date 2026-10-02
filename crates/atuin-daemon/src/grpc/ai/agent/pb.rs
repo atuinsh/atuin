@@ -360,6 +360,8 @@ impl TryFrom<Session> for DomainSession {
             root: value.root.map(TryInto::try_into).transpose()?,
             copy_of: value.copy_of.map(TryInto::try_into).transpose()?,
             child_count: value.child_count,
+            // Not carried on the wire.
+            group_updated_at: None,
         })
     }
 }
@@ -589,6 +591,7 @@ mod tests {
                 root,
                 copy_of,
                 child_count,
+                group_updated_at: None,
             },
         )
     }

@@ -542,23 +542,32 @@ impl AiClient {
         mut on_wait: impl FnMut(Option<(u64, u64)>),
     ) -> Result<()> {
         let mut delay = REBUILD_POLL_START;
-        loop {
-            // A listing filtered to the future matches nothing, so the probe costs little beyond
-            // the rebuild check every read makes first.
-            let future = OffsetDateTime::now_utc() + time::Duration::days(365);
-            let probe = list_sessions_request(&SessionFilter {
-                updated_since: Some(future),
-                ..SessionFilter::default()
-            });
-            match self.client.list_sessions(probe).await {
-                Err(status) if crate::grpc::ai::session::is_rebuilding(&status) => {
-                    on_wait(crate::grpc::ai::session::rebuild_progress(&status));
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(REBUILD_POLL_MAX);
-                }
-                Err(status) => return Err(status.into()),
-                Ok(_) => return Ok(()),
+        while let Some(progress) = self.rebuild_status().await? {
+            on_wait(progress);
+            tokio::time::sleep(delay).await;
+            delay = (delay * 2).min(REBUILD_POLL_MAX);
+        }
+        Ok(())
+    }
+
+    /// Whether the daemon is rebuilding AI sessions right now (see [`Self::wait_for_sessions`]),
+    /// without waiting for it to finish: `Some` while it is, with how far it has got (records
+    /// replayed, and roughly how many there are to replay) when the daemon says; `None` when it
+    /// serves reads.
+    pub async fn rebuild_status(&mut self) -> Result<Option<Option<(u64, u64)>>> {
+        // A listing filtered to the future matches nothing, so the probe costs little beyond the
+        // rebuild check every read makes first.
+        let future = OffsetDateTime::now_utc() + time::Duration::days(365);
+        let probe = list_sessions_request(&SessionFilter {
+            updated_since: Some(future),
+            ..SessionFilter::default()
+        });
+        match self.client.list_sessions(probe).await {
+            Err(status) if crate::grpc::ai::session::is_rebuilding(&status) => {
+                Ok(Some(crate::grpc::ai::session::rebuild_progress(&status)))
             }
+            Err(status) => Err(status.into()),
+            Ok(_) => Ok(None),
         }
     }
 
@@ -612,7 +621,7 @@ impl AiClient {
     /// them newest first.
     ///
     /// The daemon matches every term as a whole word, or with [`SearchTerms::Any`] any term as a
-    /// prefix.
+    /// prefix; [`SearchTerms::Typed`] (search as you type) is searched as [`SearchTerms::All`].
     pub async fn search_sessions(
         &mut self,
         query: &str,
@@ -826,5 +835,17 @@ mod rebuild_tests {
         client.wait_for_sessions(|_| announced = true).await.unwrap();
 
         assert!(!announced);
+    }
+
+    /// The status a probe reads without waiting: rebuilding (with its progress) until the
+    /// rebuild ends, then not.
+    #[rstest]
+    #[tokio::test]
+    async fn reads_the_rebuild_status_without_waiting() {
+        let (mut client, state, _dir) = serve(StoreState::Recovering).await;
+        // The test's store replays nothing: the daemon reports that it has none to.
+        assert_eq!(client.rebuild_status().await.unwrap(), Some(Some((0, 0))));
+        state.send_replace(StoreState::Ready);
+        assert_eq!(client.rebuild_status().await.unwrap(), None);
     }
 }

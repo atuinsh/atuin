@@ -804,7 +804,7 @@ mod tests {
         ] {
             let mut matches = Box::pin(sink.sidecar.search(
                 query,
-                SearchTerms::All,
+                SearchTerms::Typed,
                 &SessionFilter::default(),
                 10,
             ));

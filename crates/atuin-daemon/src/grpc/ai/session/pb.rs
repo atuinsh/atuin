@@ -86,6 +86,8 @@ impl TryFrom<SessionFilter> for DomainSessionFilter {
             .transpose()?;
         Ok(Self {
             host: value.host_id.map(|h| uuid::Uuid::parse_str(&h)).transpose()?.map(HostId),
+            // Not on the wire: only the picker sets it, and it reads the sidecar itself.
+            or_unrecorded: false,
             workspace: value.workspace.map(PathBuf::from),
             directory: value.directory.map(PathBuf::from),
             branch: value.branch,
@@ -289,6 +291,7 @@ mod tests {
     fn a_session_filter_round_trips() {
         let original = DomainSessionFilter {
             host: Some(HostId(uuid::Uuid::from_u128(7))),
+            or_unrecorded: false,
             workspace: Some(PathBuf::from("/work/atuin")),
             directory: Some(PathBuf::from("/work/atuin/crates")),
             branch: Some("main".to_owned()),
