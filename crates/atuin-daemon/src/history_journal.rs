@@ -702,7 +702,7 @@ mod tests {
         let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
         let caps = CapClient::new(
             atuin_api_client::Client::from_http(
-                &"http://127.0.0.1:1".parse().unwrap(),
+                "http://127.0.0.1:1".parse().unwrap(),
                 reqwest::Client::new(),
             )
             .unwrap(),

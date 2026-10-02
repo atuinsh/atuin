@@ -65,7 +65,7 @@ async fn negotiating_server() -> MockServer {
 /// A capability reader for `server` whose eager warm-up fetch has finished.
 async fn warm_cap_client(server: &MockServer) -> Arc<CapClient> {
     let base = Url::parse(&server.uri()).unwrap();
-    let caps = CapClient::new(Client::from_http(&base, reqwest::Client::new()).unwrap());
+    let caps = CapClient::new(Client::from_http(base, reqwest::Client::new()).unwrap());
     // `get_server` waits for the warm-up fetch.
     caps.get_server::<CapabilitiesCap>().await.unwrap();
     caps
@@ -73,7 +73,7 @@ async fn warm_cap_client(server: &MockServer) -> Arc<CapClient> {
 
 fn negotiating_client(server: &MockServer, caps: Arc<CapClient>, mode: CapMismatch) -> Client {
     let base = Url::parse(&server.uri()).unwrap();
-    Client::from_http(&base, reqwest::Client::new()).unwrap().with_capabilities(caps, mode)
+    Client::from_http(base, reqwest::Client::new()).unwrap().with_capabilities(caps, mode)
 }
 
 async fn caps_hits(server: &MockServer) -> usize {

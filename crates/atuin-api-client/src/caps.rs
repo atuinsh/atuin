@@ -252,7 +252,7 @@ mod tests {
     }
 
     fn api(server: &MockServer, http: reqwest::Client) -> Client {
-        Client::from_http(&Url::parse(&server.uri()).unwrap(), http).unwrap()
+        Client::from_http(Url::parse(&server.uri()).unwrap(), http).unwrap()
     }
 
     /// A reader for `server` whose warm-up fetch has finished.

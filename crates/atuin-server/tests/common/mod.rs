@@ -80,7 +80,7 @@ pub fn client(address: &url::Url, session: Option<&SecretString>) -> Client {
         headers.insert(AUTHORIZATION, value);
     }
     let http = reqwest::Client::builder().default_headers(headers).build().unwrap();
-    Client::from_http(address, http).unwrap()
+    Client::from_http(address.clone(), http).unwrap()
 }
 
 /// Register `username`, and return a client authenticated as them.

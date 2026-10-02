@@ -36,7 +36,7 @@ impl TestServer {
             password: uuid_v7().as_simple().to_string().into(),
         };
         let api =
-            atuin_api_client::Client::from_http(&self.address, reqwest::Client::new()).unwrap();
+            atuin_api_client::Client::from_http(self.address.clone(), reqwest::Client::new()).unwrap();
         let resp = api.legacy_register(&body).map_api_error().await.unwrap().into_inner();
 
         api_client::Client::new(

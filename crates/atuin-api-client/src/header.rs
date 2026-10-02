@@ -89,7 +89,7 @@ impl Client {
             headers.insert(AUTHORIZATION, authorization("Bearer", token)?);
         }
         let http = reqwest::Client::builder().default_headers(headers).build()?;
-        Self::from_http(endpoint, http)
+        Self::from_http(endpoint.clone(), http)
     }
 
     /// A client for the AI server at `endpoint` that sends `token`, if any, as a bearer.
@@ -111,7 +111,7 @@ impl Client {
             headers.insert(AUTHORIZATION, authorization("Bearer", token)?);
         }
         let http = reqwest::Client::builder().default_headers(headers).timeout(TIMEOUT).build()?;
-        Self::from_http(endpoint, http)
+        Self::from_http(endpoint.clone(), http)
     }
 
     /// A sync client for `base` that sends `auth` and Atuin's identity over `extra_headers`.
@@ -136,7 +136,7 @@ impl Client {
             .connect_timeout(connect_timeout)
             .timeout(timeout)
             .build()?;
-        Self::from_http(base, http)
+        Self::from_http(base.clone(), http)
     }
 
     /// Equivalent to [`Self::for_sync`], but with no credentials of its own and no timeouts.
@@ -153,7 +153,7 @@ impl Client {
         headers.extend(identity_headers());
 
         let http = client_builder(extra_headers).default_headers(headers).build()?;
-        Self::from_http(base, http)
+        Self::from_http(base.clone(), http)
     }
 }
 

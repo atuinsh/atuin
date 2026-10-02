@@ -66,17 +66,18 @@ fn expose<S: Serializer>(secret: &SecretString, serializer: S) -> Result<S::Ok, 
 
 impl Client {
     /// Build a client for the server at `base` that sends every request through `http`.
-    pub fn from_http(base: &Url, http: reqwest::Client) -> Result<Self, ClientBuildError> {
+    pub fn from_http(mut base: Url, http: reqwest::Client) -> Result<Self, ClientBuildError> {
         if base.cannot_be_a_base() {
             return Err(ClientBuildError::CannotBeABase);
         }
         // The generated code formats `{prefix}/api/v0/me` as a string, so a trailing slash would
         // double and a query would land before the path; the query goes back on in the pre hook.
-        let mut url = base.clone();
-        url.set_query(None);
-        url.set_fragment(None);
-        let prefix = url.as_str().trim_end_matches('/');
         let query = base.query().filter(|query| !query.is_empty()).map(str::to_owned);
+        base.set_query(None);
+        base.set_fragment(None);
+
+        let prefix = base.as_str().trim_end_matches('/');
+
         #[allow(clippy::disallowed_methods, reason = "the one place that normalises the base")]
         Ok(Self::new_with_client(prefix, http, HookState::for_base(query)))
     }

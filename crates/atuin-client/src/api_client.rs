@@ -125,7 +125,7 @@ pub async fn latest_version() -> Result<Version> {
             reqwest::header::HeaderValue::from_static(atuin_domain::api::ATUIN_USER_AGENT),
         )]))
         .build()?;
-    let api = atuin_api_client::Client::from_http(&crate::settings::DEFAULT_SYNC_URL, http)?;
+    let api = atuin_api_client::Client::from_http(crate::settings::DEFAULT_SYNC_URL.clone(), http)?;
 
     let index = api_call(api.get_index()).await?.into_inner();
     let version = Version::parse(index.version.as_str())?;
