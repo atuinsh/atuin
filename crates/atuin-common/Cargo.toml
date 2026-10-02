@@ -12,13 +12,27 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-ai = ["dep:shlex", "dep:xxhash-rust", "sqlite"]
+# Enables `atuin_common::harnesstools`.
+ai = ["fs-watcher", "jsonl", "dep:shlex", "dep:xxhash-rust", "sqlite"]
+# Enables `atuin_common::ansi`.
 ansi = ["dep:atuin-vt100"]
+# Enables `atuin_common::db` (but not `db::sqlite`).
 db = ["dep:sqlx"]
-os = ["dep:rustix"]
+# Enables `atuin_common::fs::tree_watcher`.
+fs-watcher = ["os"]
+# Enables `atuin_common::json::jsonl`.
+jsonl = ["io"]
+# Enables `atuin_common::io`.
+io = ["os"]
+# Enables `atuin_common::os`.
+os = ["dep:rustix", "dep:windows-sys"]
+# Enables protobuf derives and conversions throughout the crate.
 proto = ["dep:prost"]
+# Enables `atuin_common::db::sqlite`.
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
+# Enables `atuin_common::test_utils`, for use in tests.
 test-utils = ["dep:tracing-subscriber"]
+# Enables various items in `atuin_common::string` that require Unicode data.
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 
 [dependencies]
@@ -81,7 +95,7 @@ zeroize = { workspace = true }
 rustix = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
+windows-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 divan = { workspace = true }
