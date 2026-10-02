@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
@@ -442,9 +443,11 @@ impl Client {
         record_ids: &[RecordId],
         packfile: impl AsRef<[u8]> + Into<reqwest::Body>,
     ) -> Result<()> {
+        let packfile_size_bytes = NonZeroU64::new(u64::conv(packfile.as_ref().len()))
+            .ok_or_else(|| eyre!("refusing to upload an empty packfile"))?;
         let body = types::PackfileCreateRequest {
             manifest_id: manifest_id.0,
-            packfile_size_bytes: u64::conv(packfile.as_ref().len()),
+            packfile_size_bytes,
             records: record_ids.iter().map(|id| id.0).collect(),
         };
         let created = api_call(self.api.create_packfile(&body)).await?.into_inner();
