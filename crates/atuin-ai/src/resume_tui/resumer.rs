@@ -270,16 +270,21 @@ pub fn resolve_cwd(original: Option<&Path>, context: &ResumeContext) -> Restore 
     let checkout = context.git_root.as_deref().and_then(|root| {
         let name = root.file_name()?;
         let components: Vec<_> = original.components().collect();
-        let at = components.iter().rposition(|c| c.as_os_str() == name)?;
+        let named: Vec<usize> =
+            (0..components.len()).filter(|&i| components[i].as_os_str() == name).collect();
+        if named.is_empty() {
+            return None;
+        }
         // Rebuilt from components, so no trailing separator comes along.
         let root: PathBuf = root.components().collect();
-        let same_place: PathBuf =
-            root.components().chain(components[at + 1..].iter().copied()).collect();
-        Some(if same_place.is_dir() {
-            same_place
-        } else {
-            root
-        })
+        // Below the first component named like the checkout that leads to a directory in it:
+        // the last may be a directory in the repository named like it (`atuin/crates/atuin`).
+        let same_place = named.into_iter().find_map(|at| {
+            let path: PathBuf =
+                root.components().chain(components[at + 1..].iter().copied()).collect();
+            path.is_dir().then_some(path)
+        });
+        Some(same_place.unwrap_or(root))
     });
     match checkout {
         Some(cwd) => Restore {

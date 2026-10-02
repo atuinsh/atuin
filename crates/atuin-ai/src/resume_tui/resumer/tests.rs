@@ -92,7 +92,7 @@ impl SessionSource for Synced {
 }
 
 /// A scratch filesystem: `here` (the current directory, in a checkout named `atuin` with a
-/// `crates` directory) and `elsewhere`, a directory that exists.
+/// `crates/atuin` directory) and `elsewhere`, a directory that exists.
 struct Dirs {
     _tmp: TempDir,
     here: PathBuf,
@@ -106,7 +106,7 @@ fn dirs() -> Dirs {
     let repo = tmp.path().join("checkouts").join("atuin");
     let here = repo.join("docs");
     let elsewhere = tmp.path().join("elsewhere");
-    for dir in [&here, &repo.join("crates"), &elsewhere] {
+    for dir in [&here, &repo.join("crates").join("atuin"), &elsewhere] {
         std::fs::create_dir_all(dir).unwrap();
     }
     Dirs {
@@ -318,6 +318,7 @@ async fn unsupported_sessions_and_subagents_are_not_resumable(dirs: Dirs) {
 enum Expect {
     Original,
     RepoSubdir,
+    RepoNamesake,
     RepoRoot,
     Here,
 }
@@ -329,6 +330,7 @@ enum Expect {
 #[case::same_repo_subdir(Some("/home/u/atuin/crates"), Expect::RepoSubdir, true)]
 #[case::same_repo_gone_subdir(Some("/home/u/atuin/gone"), Expect::RepoRoot, true)]
 #[case::same_repo_root(Some("/home/u/atuin"), Expect::RepoRoot, true)]
+#[case::same_repo_dir_named_like_it(Some("/home/u/atuin/crates/atuin"), Expect::RepoNamesake, true)]
 #[case::other_repo(Some("/home/u/zsh"), Expect::Here, true)]
 #[case::unknown(None, Expect::Here, true)]
 fn resumes_where_it_ran_or_nearest_here(
@@ -348,6 +350,7 @@ fn resumes_where_it_ran_or_nearest_here(
     let expected = match expect {
         Expect::Original => dirs.elsewhere,
         Expect::RepoSubdir => dirs.repo.join("crates"),
+        Expect::RepoNamesake => dirs.repo.join("crates").join("atuin"),
         Expect::RepoRoot => dirs.repo,
         Expect::Here => dirs.here,
     };
