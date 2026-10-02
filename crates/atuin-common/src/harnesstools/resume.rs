@@ -309,6 +309,9 @@ mod tests {
         assert_eq!(quote(word), expected);
     }
 
+    // These run the real shells, which only means anything for the POSIX shells' quoting on Unix: on
+    // Windows the script reaches `bash -c` through the Windows command line, which mangles it.
+    #[cfg(unix)]
     const NASTY: &[&str] = &[
         "plain",
         "",
@@ -331,8 +334,10 @@ mod tests {
         "#comment",
     ];
 
+    #[cfg(unix)]
     const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
+    #[cfg(unix)]
     /// Run `script` in `shell` without its startup files, returning its stdout; `None` when the
     /// shell is not installed here.
     fn run_in(shell: &str, script: &str) -> Option<String> {
@@ -350,6 +355,7 @@ mod tests {
         Some(String::from_utf8(out.stdout).unwrap())
     }
 
+    #[cfg(unix)]
     /// `shell` reads each of `words`, quoted, back as that same word.
     fn assert_reads_back(shell: &str, words: &[&str]) {
         let quoted: Vec<_> = words.iter().map(|word| quote(word)).collect();
@@ -360,11 +366,13 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[rstest]
     fn shells_read_quoted_words_back(#[values("bash", "zsh", "fish")] shell: &str) {
         assert_reads_back(shell, NASTY);
     }
 
+    #[cfg(unix)]
     proptest::proptest! {
         #![proptest_config(proptest::prelude::ProptestConfig::with_cases(16))]
 
@@ -377,6 +385,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     /// The whole rendered command, `cd` included, runs as intended in each shell.
     #[rstest]
     fn shells_run_a_rendered_plan(#[values("bash", "zsh", "fish")] shell: &str) {
