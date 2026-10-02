@@ -125,9 +125,15 @@ command on your command line to edit first. ++ctrl+y++ copies it.
 
 If the session was recorded on another machine, or its transcript was deleted,
 Atuin first writes the transcript back out from the synced messages (Inspect
-says "from sync"). If the session's own agent can't resume it here (a Copilot
-session, a directory that's gone, an agent that isn't installed), the picker
-says why and stays open; Inspect says so too.
+says "from sync"). It resumes in the directory the session ran in when that
+exists here. Otherwise, when you're in a checkout of a repository with the same
+name, it resumes in the same place in that checkout (or at its root), and
+otherwise in the current directory. The picker says which.
+
+If the session's own agent can't resume it here (a Copilot session, an agent
+that isn't installed, or a session whose transcript is here but whose directory
+is gone, for an agent that needs it), the picker says why and stays open;
+Inspect says so too.
 
 From the command line, `atuin ai resume <id>` resumes a session directly (an
 id prefix works too), writing it out from sync first when it isn't on this
@@ -160,7 +166,8 @@ built-in one, give a template per agent under `[ai.sessions.resume]` (`claude`,
 substituted:
 
 - `{id}`: the agent's own id for the session;
-- `{path}`: the session's transcript on this machine;
+- `{path}`: the session's transcript on this machine (for a session written
+  back out from sync, the one Atuin wrote);
 - `{cwd}`: the directory the session worked in.
 
 ```toml
