@@ -137,7 +137,6 @@ impl Machine for ThisMachine {
 /// The real [`Resumer`]: the harness's own resume command (or the user's template), restoring
 /// the session's transcript from sync when it isn't on this machine.
 pub struct HarnessResumer {
-    host_id: String,
     templates: AiSessionResume,
     context: ResumeContext,
     machine: Box<dyn Machine>,
@@ -155,7 +154,6 @@ impl HarnessResumer {
         machine: impl Machine + 'static,
     ) -> Self {
         Self {
-            host_id: context.host_id.clone(),
             templates,
             context,
             machine: Box::new(machine),
@@ -208,11 +206,11 @@ impl Resumer for HarnessResumer {
         // The harness decides first (a subagent is never resumable, whatever is on disk).
         harness.resume_plan(&target)?;
 
-        let local = session.host_id == self.host_id;
         let resume = match self.machine.locate(harness, id).await {
             Some(native) => {
-                // Another host's session restored here before: resume where it was restored to.
-                if !local && !session.cwd.as_deref().is_some_and(Path::is_dir) {
+                // A session restored here before (another host's, or this host's whose directory
+                // is gone too): resume where it was restored to.
+                if !session.cwd.as_deref().is_some_and(Path::is_dir) {
                     target.cwd = Some(resolve_cwd(session.cwd.as_deref(), &self.context).cwd);
                 }
                 let target = target.with_native_path(native);

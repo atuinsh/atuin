@@ -200,17 +200,21 @@ async fn a_local_session_without_its_transcript_is_planned_as_a_restore(dirs: Di
     );
 }
 
-/// A remote session restored here before resumes from that transcript, in the directory it was
-/// restored into.
+/// A session restored here before (another host's, or this host's whose transcript was deleted
+/// and whose directory is gone) resumes from that transcript, in the directory it was restored
+/// into.
 #[rstest]
 #[tokio::test]
-async fn a_remote_session_restored_before_resumes_directly(dirs: Dirs) {
+async fn a_session_restored_before_resumes_directly(
+    dirs: Dirs,
+    #[values(true, false)] remote: bool,
+) {
     let machine = FakeMachine {
         found: HashMap::from([("abc-123".to_owned(), PathBuf::from("/t/abc-123.jsonl"))]),
         ..FakeMachine::default()
     };
-    let remote = row(HarnessKind::ClaudeCode, "abc-123", Path::new("/gone/proj"), true);
-    let resume = resumer(&dirs, &machine).plan(&remote).await.unwrap();
+    let session = row(HarnessKind::ClaudeCode, "abc-123", Path::new("/gone/proj"), remote);
+    let resume = resumer(&dirs, &machine).plan(&session).await.unwrap();
     assert_eq!(resume.restore, None);
     assert_eq!(resume.plan.cwd, Some(dirs.here.clone()));
 }
