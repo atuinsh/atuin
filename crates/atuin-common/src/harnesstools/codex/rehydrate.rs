@@ -19,9 +19,10 @@
 //! Rows capture keyed on their content (`syn-<hash>`: a line without an id) are written back
 //! with the very fields that content hash covers, so they hash the same again: `turn_context`
 //! (its model and original cwd), `compacted` summaries, and a turn's failure (`turn_aborted`, or
-//! a `task_complete` carrying an error). What they cannot get back is a line that had no
-//! timestamp of its own (only rollouts from before Codex 0.32 have those): it now has one, so it
-//! hashes differently and is captured again as a new row.
+//! a `task_complete` carrying an error). A line that had no timestamp of its own (only rollouts
+//! from before Codex 0.32 have those) now has one, so it would hash differently: a `message`
+//! among them (those rollouts' prompts, which had no id) is written under its `syn-` source id,
+//! which capture reads back as it is; any other such line is captured again as a new row.
 //!
 //! # The format
 //!
@@ -520,9 +521,12 @@ fn text_message(message: &RehydrateMessage, at: &str) -> Vec<Value> {
             _ => None,
         })
         .collect();
+    // Under its source id even when capture keyed it on its content (`syn-`: a message from
+    // before Codex 0.32 had no id): the line now has a timestamp, so its content would hash
+    // differently, but capture reads an id the line carries back as it is.
     let item = with_id(
         json!({"type": "message", "role": role, "content": blocks}),
-        item_id(message, None),
+        Some(message.source_id.clone()),
     );
     vec![line(at, "response_item", item)]
 }

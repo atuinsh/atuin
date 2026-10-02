@@ -2736,6 +2736,7 @@ mod pipeline_tests {
     #[case::legacy_forked_subagent("legacy-forked-subagent.jsonl")]
     #[case::paginated_with_compaction("paginated-compacted.jsonl")]
     #[case::custom_tools_and_records("session1.jsonl")]
+    #[case::legacy_without_ids_or_timestamps("legacy-bare.jsonl")]
     #[tokio::test]
     async fn a_rehydrated_codex_session_recaptures_as_nothing_new(
         #[future] sink: Sink,
