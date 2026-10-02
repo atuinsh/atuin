@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package atuin.api.v1;
+
+import "atuin/api/v1/common.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// A finished shell command.
+message History {
+  // Client-generated, unique per user. Logically required.
+  UuidV7 id = 1;
+  // The command string that was ran.
+  string command = 2;
+  // The working directory the command ran in.
+  string cwd = 3;
+  // The exit code of the shell command.
+  int32 exit = 4;
+  // When the command started. Logically required.
+  google.protobuf.Timestamp start_time = 5;
+  // How long the command ran. Logically required, and never negative.
+  google.protobuf.Duration duration = 6;
+  // The terminal session the command ran in. Client-generated, unique per user. Logically
+  // required.
+  Uuid session = 7;
+  // The machine and account the command ran on. Logically required.
+  CmdOrigin cmd_origin = 8;
+  // Who decided to run the command. Logically required.
+  Author author = 9;
+  // Why the command was run, if whatever ran it said so.
+  optional string intent = 10;
+  // The shell that ran the command, e.g. `zsh`, if known.
+  optional string shell = 11;
+  UuidV7 record_id = 12;
+}
