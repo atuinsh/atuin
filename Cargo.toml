@@ -86,6 +86,7 @@ getrandom = "0.4"
 glob-match = "0.2"
 http = "1"
 humantime = "2"
+hyper-tls = "0.6"
 hyper-util = "0.1"
 i18n-embed = { version = "0.16", features = ["fluent-system"] }
 i18n-embed-fl = "0.10"
@@ -105,6 +106,7 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 minijinja = "2"
 minspan = "0.1"
+native-tls = "0.2"
 norm = { version = "0.1", features = ["fzf-v2"] }
 notify = "8"
 notify-debouncer-full = "0.7"
@@ -171,6 +173,7 @@ toml_edit = "0.25"
 tonic = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
+tonic-types = "0.14"
 tower = "0.5"
 # held at 0.6: reqwest 0.13 pins tower-http 0.6; bumping would add a 2nd copy
 tower-http = { version = "0.6", features = ["trace"] }
