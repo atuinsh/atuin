@@ -69,6 +69,7 @@ unicode-normalization = { workspace = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+xxhash-rust = { workspace = true }
 
 # encryption
 rusty_paserk = { workspace = true }
