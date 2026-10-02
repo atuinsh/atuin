@@ -3,14 +3,8 @@
 //! - Removes non-200 responses. This is necessary because self-hosted servers do not match the
 //!   hub's error schemas. We can't just fix the server either, since there are old servers out
 //!   there.
-//!
-//! Every non-2xx response goes. Self-hosted servers, proxies and older hubs send error bodies that
-//! do not match the hub's schemas, and progenitor turns a documented error whose body fails to
-//! parse into an error without its status. Undocumented, every failure reaches the hand-written
-//! `ApiError` as the raw response, status included.
-//!
-//! The `x-atuin-capabilities-known` header parameter goes too: the client's hooks stamp it on
-//! every negotiated call, so no caller passes it.
+//! - Removes `x-atuin-capabilities-known` from the public interface since it always gets stampped,
+//!   effectively not making it part of what clients should pass.
 
 use serde_json::{Map, Value};
 
