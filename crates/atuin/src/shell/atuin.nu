@@ -114,7 +114,9 @@ def _atuin_search_cmd [...flags: string] {
                         ($flags | append [--interactive] | each {|e| $'"($e)"'}),
                         'e>| str trim)',
                     ] | flatten | str join ' '),
-                    'if ($output | str starts-with "__atuin_accept__:") {',
+                    # An empty result (return-original) keeps the command line as typed.
+                    'if ($output | is-empty) {',
+                    '} else if ($output | str starts-with "__atuin_accept__:") {',
                     'commandline edit --accept ($output | str replace "__atuin_accept__:" "")',
                     '} else {',
                     'commandline edit $output',

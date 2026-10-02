@@ -11,7 +11,7 @@ mod shell;
 
 use std::path::PathBuf;
 
-use common::{SESSION, marker, output, wait_until};
+use common::{FreshEnv, SESSION, marker, output, wait_until};
 use pty::PtyShell;
 use rstest::rstest;
 use shell::{PROMPT, Shell};
@@ -23,6 +23,12 @@ fn run_echo_marker(pty: &PtyShell, marker: &str) {
 
 fn search_for_marker(pty: &PtyShell, marker: &str, open_key: &[u8]) {
     pty.send_line("clear");
+    open_search_for(pty, marker, open_key);
+}
+
+/// Unlike `search_for_marker`, runs no command first: ble.sh drops keys typed right after the
+/// first command.
+fn open_search_for(pty: &PtyShell, marker: &str, open_key: &[u8]) {
     pty.send(open_key);
     pty.wait_for(": exit");
     // Search a suffix so the full command can only match a result.
@@ -286,4 +292,157 @@ fn ai_resume_widget_returns_while_a_process_it_left_runs(
     pty.send(&[0x1d]);
     // Within the wait's timeout, well before the process left behind exits.
     pty.wait_for_line(&format!("{marker}-resumed"));
+}
+
+const CTRL_A: &[u8] = b"\x01";
+const CTRL_O: &[u8] = b"\x0f";
+const CTRL_T: &[u8] = b"\x14";
+
+/// Binds `ctrl-t` in every mode a shell setup can start the TUI in, and in the inspector.
+fn bind_ctrl_t(action: &str) -> String {
+    ["emacs", "vim-insert", "inspector"]
+        .map(|keymap| format!("[keymap.{keymap}]\n\"ctrl-t\" = \"{action}\"\n"))
+        .concat()
+}
+
+/// `directory<TAB>command` for every history entry.
+fn history_lines(env: &FreshEnv) -> String {
+    let mut command = env.atuin(&["history", "list", "--format", "{directory}\t{command}"]);
+    command.env("ATUIN_SESSION", SESSION);
+    output(command)
+}
+
+#[rstest]
+fn cd_action_changes_to_entry_directory(
+    #[files("tests/shells/*.toml")] setup: PathBuf,
+    #[values("accept-cd", "return-cd")] action: &str,
+    #[values(false, true)] inspect: bool,
+) {
+    let Some(shell) = Shell::start(&setup, Some(&bind_ctrl_t(action))) else {
+        return;
+    };
+    let (env, pty) = (&shell.env, &shell.pty);
+    let marker = marker();
+    // The trailing `\` quotes differently in POSIX shells and fish.
+    let dir = env.home().join(r#"a b'c"d\e!$x\"#);
+    std::fs::create_dir(&dir).unwrap();
+    env.record(&format!("echo {marker}"), SESSION, &dir);
+
+    open_search_for(pty, &marker, b"\x12");
+    if inspect {
+        pty.send(CTRL_O);
+        pty.wait_for("[r] Runs");
+    }
+    pty.send(CTRL_T);
+    if action == "return-cd" {
+        pty.wait_for_screen("cd inserted at prompt", |s| {
+            !s.contains(": exit") && s.lines().any(|l| l.contains(PROMPT) && l.contains("cd "))
+        });
+        // A line starting with `&&` is a syntax error, so this runs only if the `cd` is still
+        // on the command line.
+        pty.send_str(" && pwd > cwd.txt");
+        pty.send_enter();
+    } else {
+        pty.wait_for_prompt();
+        pty.send_line("pwd > cwd.txt");
+    }
+    // Relative path: the file lands in the entry's directory only if the `cd` ran.
+    wait_until("shell moved to the entry's directory", || dir.join("cwd.txt").exists());
+    wait_until("cd recorded in history", || {
+        history_lines(env).lines().any(|l| l.contains("\tcd -- "))
+    });
+}
+
+#[rstest]
+fn cd_default_prefix_bindings(
+    #[files("tests/shells/*.toml")] setup: PathBuf,
+    #[values(b'g', b'G')] key: u8,
+    #[values(false, true)] inspect: bool,
+) {
+    let Some(shell) = Shell::start(&setup, None) else {
+        return;
+    };
+    let (env, pty) = (&shell.env, &shell.pty);
+    let marker = marker();
+    let dir = env.home().join("prefixed");
+    std::fs::create_dir(&dir).unwrap();
+    env.record(&format!("echo {marker}"), SESSION, &dir);
+
+    open_search_for(pty, &marker, b"\x12");
+    if inspect {
+        pty.send(CTRL_O);
+        pty.wait_for("[r] Runs");
+    }
+    pty.send(CTRL_A);
+    pty.send(&[key]);
+    if key == b'G' {
+        pty.wait_for_screen("cd inserted at prompt", |s| {
+            !s.contains(": exit") && s.lines().any(|l| l.contains(PROMPT) && l.contains("cd "))
+        });
+        pty.send_str(" && pwd > cwd.txt");
+        pty.send_enter();
+    } else {
+        pty.wait_for_prompt();
+        pty.send_line("pwd > cwd.txt");
+    }
+    wait_until("shell moved to the entry's directory", || dir.join("cwd.txt").exists());
+}
+
+#[rstest]
+fn cd_action_extends_command_chain(#[files("tests/shells/*.toml")] setup: PathBuf) {
+    let config = format!("command_chaining = true\n{}", bind_ctrl_t("accept-cd"));
+    let Some(shell) = Shell::start(&setup, Some(&config)) else {
+        return;
+    };
+    let (env, pty) = (&shell.env, &shell.pty);
+    let marker = marker();
+    let dir = env.home().join("chained");
+    std::fs::create_dir(&dir).unwrap();
+    env.record(&format!("echo {marker}"), SESSION, &dir);
+
+    pty.send_str("true &&");
+    open_search_for(pty, &marker, b"\x12");
+    pty.send(CTRL_T);
+    // Chaining returns the extended line for editing instead of running it.
+    pty.wait_for_screen("cd appended to the chain", |s| {
+        !s.contains(": exit")
+            && s.lines().any(|l| l.contains(PROMPT) && l.contains("true && cd -- "))
+    });
+    pty.send_str(" && pwd > cwd.txt");
+    pty.send_enter();
+    wait_until("chained cd ran", || dir.join("cwd.txt").exists());
+}
+
+#[rstest]
+fn cd_action_without_directory_returns_original(#[files("tests/shells/*.toml")] setup: PathBuf) {
+    // Imported entries are tagged `zsh`; `shells = "all"` keeps them visible from every shell.
+    let config = format!("[search]\nshells = \"all\"\n{}", bind_ctrl_t("accept-cd"));
+    let Some(shell) = Shell::start(&setup, Some(&config)) else {
+        return;
+    };
+    let (env, pty) = (&shell.env, &shell.pty);
+    let marker = marker();
+    // Imported entries have no directory; atuin stores `unknown`.
+    let histfile = env.home().join("imported_history");
+    std::fs::write(&histfile, format!(": 1700000000:0;echo {marker}\n")).unwrap();
+    let mut import = env.atuin(&["import", "zsh"]);
+    import.env("HISTFILE", &histfile);
+    output(import);
+
+    open_search_for(pty, &marker, b"\x12");
+    pty.send(CTRL_T);
+    pty.wait_for_prompt();
+    // Text left on the command line would prefix this command and break the exact match below.
+    run_echo_marker(pty, &format!("{marker}-after"));
+    wait_until("follow-up command recorded", || {
+        history_lines(env).lines().any(|l| l.ends_with(&format!("\techo {marker}-after")))
+    });
+    let commands = history_lines(env);
+    assert!(!commands.contains("\tcd "), "cd recorded:\n{commands}");
+    // The imported entry is the only one without a directory; a run would record the shell's cwd.
+    let ran = format!("\techo {marker}");
+    assert!(
+        !commands.lines().any(|l| l.ends_with(&ran) && !l.starts_with("unknown\t")),
+        "entry ran:\n{commands}"
+    );
 }
