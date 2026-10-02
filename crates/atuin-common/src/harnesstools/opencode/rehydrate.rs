@@ -56,9 +56,12 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
+use sqlx::{Connection, Sqlite};
 use time::OffsetDateTime;
 
 use super::session;
+use crate::db::query_scalar;
 use crate::harnesstools::rehydrate::{
     Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
     flatten_uncaptured_calls,
@@ -89,10 +92,13 @@ const QUIET_ENV: &[(&str, &str)] = &[
 /// pointed at it explicitly (`OPENCODE_DB`), so the two cannot disagree. opencode must be on
 /// `PATH`. It is never asked to call a model: import only writes the database.
 ///
-/// Fails with [`RehydrateError::AlreadyExists`] when opencode already holds the session: import
-/// would merge into it rather than refuse. The export goes to opencode in one file, but opencode
-/// inserts it a row at a time (the session first), so an import that fails part-way leaves the
-/// session partly written, where [`locate`](crate::harnesstools::Harness::locate) finds it.
+/// Fails with [`RehydrateError::AlreadyExists`] when opencode already holds the session whole.
+/// The export goes to opencode in one file, but opencode inserts it a row at a time (the session
+/// first), so an import that fails part-way leaves the session partly written, where
+/// [`locate`](crate::harnesstools::Harness::locate) finds it. Such a session is imported again:
+/// import inserts each message and part only if its id is new, so what is there stays as it is
+/// and what is missing is added. A session that has been worked on since (see `Held`) is left
+/// alone, so that a message a revert deleted never comes back.
 pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
     let db = session::default_db().ok_or(RehydrateError::NoDataDir)?;
     import(Path::new("opencode"), &db, session).await
@@ -110,7 +116,10 @@ pub(crate) async fn import(
             session.id
         )));
     }
-    if session::locate(db, &session.id).await.is_some() {
+    let exported = export(session);
+    if session::locate(db, &session.id).await.is_some()
+        && held(db, &session.id, &exported).await != Held::Partly
+    {
         return Err(RehydrateError::AlreadyExists(db.to_path_buf()));
     }
     if !session.cwd.is_dir() {
@@ -119,7 +128,7 @@ pub(crate) async fn import(
             session.cwd.display()
         )));
     }
-    let file = export_file(&export(session))?;
+    let file = export_file(&exported)?;
     let mut command = tokio::process::Command::new(program);
     command
         .arg("import")
@@ -149,6 +158,90 @@ pub(crate) async fn import(
             String::from_utf8_lossy(&output.stdout).trim()
         ))
     })
+}
+
+/// How much of an export opencode's database holds of a session it has a row for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// Every message and part of the export, under its id.
+    Whole,
+    /// Some of them are missing, and nothing else is there: an import that failed part-way.
+    Partly,
+    /// The session has been worked on since it was imported, or can't be read: it has a message
+    /// or part the export doesn't, or a revert pending (`/undo`, which deletes the messages it
+    /// takes back when the next prompt commits it). What is missing may be what a revert took,
+    /// so nothing is imported into it again.
+    Changed,
+}
+
+/// How much of `exported` session `id` in `db` holds, comparing the ids of its messages and
+/// parts with the export's.
+async fn held(db: &Path, id: &str, exported: &Value) -> Held {
+    use std::collections::HashSet;
+
+    let as_ids = |values: Vec<&Value>| -> HashSet<String> {
+        values.into_iter().filter_map(Value::as_str).map(str::to_owned).collect()
+    };
+    let messages = || exported["messages"].as_array().into_iter().flatten();
+    let want_messages = as_ids(messages().map(|m| &m["info"]["id"]).collect());
+    let want_parts = as_ids(
+        messages()
+            .flat_map(|m| m["parts"].as_array().into_iter().flatten())
+            .map(|p| &p["id"])
+            .collect(),
+    );
+
+    let read = async {
+        let opts = SqliteConnectOptions::new()
+            .filename(db)
+            .read_only(true)
+            .busy_timeout(Duration::from_secs(2));
+        let mut conn = SqliteConnection::connect_with(&opts).await?;
+        // Only the `session` table is what `opencode import` writes (opencode 2.0 keeps its own
+        // sessions elsewhere).
+        let exists = query_scalar::<Sqlite, i64>("SELECT 1 FROM session WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut conn)
+            .await?
+            .is_some();
+        if !exists {
+            return Err(sqlx::Error::RowNotFound);
+        }
+        // A database whose `session` table has no `revert` column has nothing to revert.
+        let revert =
+            query_scalar::<Sqlite, Option<String>>("SELECT revert FROM session WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&mut conn)
+                .await
+                .unwrap_or_default();
+        let messages: Vec<String> =
+            query_scalar::<Sqlite, String>("SELECT id FROM message WHERE session_id = ?")
+                .bind(id)
+                .fetch_all(&mut conn)
+                .await?;
+        let parts: Vec<String> =
+            query_scalar::<Sqlite, String>("SELECT id FROM part WHERE session_id = ?")
+                .bind(id)
+                .fetch_all(&mut conn)
+                .await?;
+        let _ = conn.close().await;
+        Ok::<_, sqlx::Error>((revert.flatten(), messages, parts))
+    };
+    let Ok((revert, messages, parts)) = read.await else {
+        return Held::Changed;
+    };
+    if revert.is_some_and(|r| !r.is_empty()) {
+        return Held::Changed;
+    }
+    let (messages, parts): (HashSet<_>, HashSet<_>) =
+        (messages.into_iter().collect(), parts.into_iter().collect());
+    if !messages.is_subset(&want_messages) || !parts.is_subset(&want_parts) {
+        Held::Changed
+    } else if messages == want_messages && parts == want_parts {
+        Held::Whole
+    } else {
+        Held::Partly
+    }
 }
 
 /// `export`, written to a file of its own in the temporary directory for `opencode import` to
@@ -704,7 +797,8 @@ pub(crate) mod tests {
          NULL, type TEXT NOT NULL, data TEXT NOT NULL)",
         "CREATE UNIQUE INDEX event_aggregate_seq_idx ON event (aggregate_id, seq)",
         "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL, \
-         title TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL)",
+         title TEXT NOT NULL, revert TEXT, time_created INTEGER NOT NULL, time_updated INTEGER \
+         NOT NULL)",
         "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created \
          INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)",
         "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT \
@@ -729,7 +823,7 @@ pub(crate) mod tests {
         let now = millis(OffsetDateTime::now_utc());
         crate::db::query::<sqlx::Sqlite>(
             "INSERT INTO session (id, directory, title, time_created, time_updated) VALUES (?1, \
-             ?2, ?3, ?4, ?5)",
+             ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
         )
         .bind(info["id"].as_str())
         .bind(cwd)
@@ -858,7 +952,7 @@ pub(crate) mod tests {
         let s = &fixture["session"];
         crate::db::query::<sqlx::Sqlite>(
             "INSERT INTO session (id, directory, title, time_created, time_updated) VALUES (?1, \
-             ?2, ?3, ?4, ?5)",
+             ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
         )
         .bind(id)
         .bind(s["directory"].as_str())
@@ -1224,6 +1318,112 @@ pub(crate) mod tests {
         let missing = dir.path().join("no-such-opencode");
         let err = import(&missing, &db, &session(SES, None, vec![])).await.unwrap_err();
         assert!(matches!(err, RehydrateError::AlreadyExists(path) if path == db));
+    }
+
+    /// An import that failed part-way (the session written, not all of its messages and parts)
+    /// is told apart from a whole one, and from one worked on since.
+    #[rstest]
+    #[tokio::test]
+    async fn how_much_of_a_session_opencode_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let exported = export(&session(SES, None, every_kind()));
+        let mut conn = database(&db).await;
+        opencode_import(&mut conn, &exported, "/here").await;
+        assert_eq!(held(&db, SES, &exported).await, Held::Whole);
+
+        // The import failed after the first message: the rest of it never came.
+        let first = exported["messages"][0]["info"]["id"].as_str().unwrap();
+        let kept_part = exported["messages"][0]["parts"][0]["id"].as_str().unwrap();
+        for sql in ["DELETE FROM message WHERE id != ?1", "DELETE FROM part WHERE message_id != ?1"]
+        {
+            crate::db::query::<sqlx::Sqlite>(sql).bind(first).execute(&mut conn).await.unwrap();
+        }
+        crate::db::query::<sqlx::Sqlite>("DELETE FROM part WHERE id != ?1")
+            .bind(kept_part)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(held(&db, SES, &exported).await, Held::Partly);
+
+        // Imported again, it is whole.
+        opencode_import(&mut conn, &exported, "/here").await;
+        assert_eq!(held(&db, SES, &exported).await, Held::Whole);
+
+        // A revert pending: what is missing may be what it takes back.
+        crate::db::query::<sqlx::Sqlite>("DELETE FROM part WHERE id = ?1")
+            .bind(kept_part)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        crate::db::query::<sqlx::Sqlite>("UPDATE session SET revert = '{}' WHERE id = ?1")
+            .bind(SES)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(held(&db, SES, &exported).await, Held::Changed);
+
+        // A revert committed and the session carried on: a message the export doesn't have.
+        crate::db::query::<sqlx::Sqlite>("UPDATE session SET revert = NULL WHERE id = ?1")
+            .bind(SES)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(held(&db, SES, &exported).await, Held::Partly);
+        crate::db::query::<sqlx::Sqlite>(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES \
+             ('msg_new', ?1, 0, 0, '{}')",
+        )
+        .bind(SES)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(held(&db, SES, &exported).await, Held::Changed);
+        conn.close().await.unwrap();
+    }
+
+    /// A fake `opencode` that succeeds, saying it ran in `ran`.
+    #[cfg(unix)]
+    fn succeeding_opencode(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("opencode");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh
+touch {}/ran
+",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// A session an earlier import left partly written is imported again, rather than taken for
+    /// one already there; a whole one is not.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn a_partly_imported_session_is_imported_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = succeeding_opencode(dir.path());
+        let db = dir.path().join("opencode.db");
+        let mut s = session(SES, None, every_kind());
+        s.cwd = dir.path().canonicalize().unwrap();
+        let exported = export(&s);
+        let mut conn = database(&db).await;
+        opencode_import(&mut conn, &exported, "/here").await;
+
+        let err = import(&program, &db, &s).await.unwrap_err();
+        assert!(matches!(err, RehydrateError::AlreadyExists(ref path) if *path == db), "{err}");
+        assert!(!dir.path().join("ran").exists(), "a whole session is not imported again");
+
+        crate::db::query::<sqlx::Sqlite>("DELETE FROM part").execute(&mut conn).await.unwrap();
+        conn.close().await.unwrap();
+        assert_eq!(import(&program, &db, &s).await.unwrap(), db);
+        assert!(dir.path().join("ran").exists(), "opencode import ran again");
     }
 
     #[rstest]
