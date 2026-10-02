@@ -55,7 +55,7 @@ daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
 hex = ["pty-proxy"]
-clipboard = ["arboard", "atuin-ai?/clipboard"]
+clipboard = ["dep:arboard", "atuin-ai?/clipboard"]
 check-update = ["atuin-client/check-update"]
 vendored-tls = ["atuin-client?/vendored-tls"]
 # `atuin update`: self-update via the cargo-dist install receipt. Not a
