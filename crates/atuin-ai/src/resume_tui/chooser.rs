@@ -322,6 +322,15 @@ impl State {
 
         let widest = lines.iter().map(Line::width).max().unwrap_or(0);
         let width = u16::try_from(widest + 4).unwrap_or(u16::MAX).min(room);
+        // Too short for every line (a low `inline_height`): the choices before the keys, scrolled
+        // to keep the selected one in sight.
+        let inner = usize::from(area.height.saturating_sub(2));
+        if lines.len() > inner {
+            lines.truncate(choices.len());
+            let shown = inner.min(lines.len());
+            let offset = (chooser.selected + 1).saturating_sub(shown).min(lines.len() - shown);
+            lines = lines.drain(offset..offset + shown).collect();
+        }
         let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX).min(area.height);
         let popup = place(area, anchor, width, height, settings.invert);
 

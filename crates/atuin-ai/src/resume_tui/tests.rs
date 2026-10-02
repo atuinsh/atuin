@@ -1636,3 +1636,24 @@ async fn tiny_terminals_draw_without_panicking(
         }
     }
 }
+
+/// A chooser taller than the picker (`inline_height = 4`) scrolls to keep the selected line in
+/// sight, down and back up.
+#[rstest]
+#[tokio::test]
+async fn a_clipped_chooser_keeps_the_selected_line_in_sight() {
+    use super::state::Pending;
+
+    let s = settings();
+    let mut state = with_chooser(&s, "", Pending::Resume).await;
+    let lines = ["1 CC Claude Code", "2 CX Codex", "3 OC opencode", "4 PI Pi"];
+    let steps = [(None, 0), (Some("down"), 1), (Some("down"), 2), (Some("down"), 3)];
+    let back = [(Some("up"), 2), (Some("up"), 1), (Some("up"), 0)];
+    for (key, n) in steps.into_iter().chain(back) {
+        if let Some(key) = key {
+            press(&mut state, &s, key);
+        }
+        let out = text(&render(&mut state, &s, 100, 4));
+        assert!(out.contains(&format!("> {}", lines[n])), "line {}: {out}", n + 1);
+    }
+}
