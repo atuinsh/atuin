@@ -445,3 +445,13 @@ steps:
       - source .buildkite/scripts/lib.sh
       - 'section ":inbox_tray: Installer via bash" .buildkite/scripts/test-installer.sh bash'
       - 'section ":inbox_tray: Installer via zsh" .buildkite/scripts/test-installer.sh zsh'
+
+  # Tells hub, which keeps atuin's history in its monorepo, that main moved. The
+  # build it triggers takes no input from this one.
+  - label: ":arrows_counterclockwise: Sync to hub"
+    key: sync-to-hub
+    if: *main-only
+    trigger: subtree-sync
+    async: true
+    build:
+      branch: main
