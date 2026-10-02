@@ -1,25 +1,21 @@
-use std::fmt;
-
 use progenitor_client::{Error, ResponseValue};
 use reqwest::StatusCode;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use url::Url;
 
 /// A failed API call.
-///
-/// Displays no secret: error bodies are the server's text, and URLs lose their query, which
-/// carries the CLI login code and presigned signatures.
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     /// The server answered outside 2xx.
-    #[error("{url} answered {status}{}", with_reason(reason.as_deref().or(body.as_deref())))]
+    #[error(
+        "{url} answered {status}{}",
+        reason.as_ref().or(body.as_ref()).map(|reason| format!(": {reason}")).unwrap_or_default()
+    )]
     Status {
         status: StatusCode,
-        /// The URL that answered, without its query. Boxed to keep every `Result` of this crate
-        /// small.
+        /// The URL that answered, without its query.
         url: Box<Url>,
-        /// The reason a JSON body gives: its `reason`, else `message`, `error`, or the first of
-        /// `errors`.
+        /// The reason a JSON body gives: `reason`, `message`, `error`, or the first of `errors`.
         reason: Option<String>,
         /// The body's machine-readable `code`, e.g. `2fa_required`.
         code: Option<String>,
@@ -51,9 +47,14 @@ impl ApiError {
     async fn from_error(err: Error) -> Self {
         match err {
             Error::UnexpectedResponse(response) => Self::from_response(response).await,
-            Error::CommunicationError(err)
-            | Error::InvalidUpgrade(err)
-            | Error::ResponseBodyError(err) => Self::Transport(without_query(err)),
+            Error::CommunicationError(mut err)
+            | Error::InvalidUpgrade(mut err)
+            | Error::ResponseBodyError(mut err) => {
+                if let Some(url) = err.url_mut() {
+                    url.set_query(None);
+                }
+                Self::Transport(err)
+            }
             // The body may be a secret-bearing success, e.g. a login's session: keep it out.
             Error::InvalidResponsePayload(_body, err) => Self::Decode(err),
             Error::InvalidRequest(reason) | Error::Custom(reason) => Self::NotSent(reason),
@@ -64,11 +65,20 @@ impl ApiError {
         }
     }
 
-    /// The error for `response`, which answered outside 2xx, with the reason read from its body.
+    /// `response`, or the error it answers with when its status is outside 2xx.
     ///
-    /// For answers that do not come through a [`Client`](crate::Client) operation, e.g. a
-    /// presigned upload.
-    pub async fn from_response(response: reqwest::Response) -> Self {
+    /// # Errors
+    ///
+    /// [`ApiError::Status`], with the reason read from the body, for a status outside 2xx.
+    pub async fn check(response: reqwest::Response) -> Result<reqwest::Response, Self> {
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        Err(Self::from_response(response).await)
+    }
+
+    /// The error for `response`, whatever its status, with the reason read from its body.
+    async fn from_response(response: reqwest::Response) -> Self {
         let status = response.status();
         let mut url = response.url().clone();
         url.set_query(None);
@@ -118,17 +128,6 @@ where
     }
 }
 
-fn without_query(mut err: reqwest::Error) -> reqwest::Error {
-    if let Some(url) = err.url_mut() {
-        url.set_query(None);
-    }
-    err
-}
-
-fn with_reason(reason: Option<&str>) -> impl fmt::Display {
-    fmt::from_fn(move |f| reason.map_or(Ok(()), |reason| write!(f, ": {reason}")))
-}
-
 /// What an error body says, in any envelope an Atuin server, or a proxy in front of one, sends:
 /// `{reason, code}`, the AI routes' `{error, message}`, Phoenix's `{errors: [..]}`, the older
 /// `{error}`, or text.
@@ -150,17 +149,15 @@ impl Body {
         let reason = object.as_ref().and_then(|object| {
             ["reason", "message", "error"]
                 .into_iter()
-                .find_map(|key| string(object, key))
+                .find_map(|key| object.get(key)?.as_str().map(str::to_owned))
                 .or_else(|| object.get("errors")?.get(0)?.as_str().map(str::to_owned))
         });
         Self {
-            code: object.as_ref().and_then(|object| string(object, "code")),
+            code: object
+                .as_ref()
+                .and_then(|object| object.get("code")?.as_str().map(str::to_owned)),
             text: (reason.is_none() && !text.is_empty()).then(|| text.to_owned()),
             reason,
         }
     }
-}
-
-fn string(object: &Map<String, Value>, key: &str) -> Option<String> {
-    object.get(key)?.as_str().map(str::to_owned)
 }

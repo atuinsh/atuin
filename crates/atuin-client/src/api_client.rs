@@ -17,7 +17,7 @@ use easy_cast::Conv;
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, stream};
 use reqwest::header::HeaderMap;
-use reqwest::{Response, StatusCode, Url};
+use reqwest::{StatusCode, Url};
 use secrecy::SecretString;
 use semver::Version;
 use tracing::{Instrument, instrument};
@@ -165,15 +165,6 @@ pub fn server_version_compatible(headers: &HeaderMap) -> Result<bool> {
     }
 
     Ok(true)
-}
-
-/// `resp` if it answered 2xx, else the CLI's message for the failure.
-#[instrument(level = "trace", skip_all, err)]
-async fn handle_resp_error(resp: Response) -> Result<Response> {
-    if resp.status().is_success() {
-        return Ok(resp);
-    }
-    Err(api_error(ApiError::from_response(resp).await))
 }
 
 /// Await `call`, turning its failure into the CLI's message for it.
@@ -479,7 +470,7 @@ impl Client {
             .send()
             .await
             .map_err(reqwest::Error::without_url)?;
-        handle_resp_error(resp).await?;
+        ApiError::check(resp).await.map_err(api_error)?;
         Ok(())
     }
 
@@ -500,7 +491,7 @@ impl Client {
             .instrument(tracing::trace_span!("lfs_download"))
             .await
             .map_err(reqwest::Error::without_url)?;
-        let resp = handle_resp_error(resp).await?;
+        let resp = ApiError::check(resp).await.map_err(api_error)?;
         Ok(resp.bytes().await.map_err(reqwest::Error::without_url)?.to_vec())
     }
 
