@@ -32,9 +32,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-pretty_assertions = { workspace = true }
 rstest = { workspace = true }
-wiremock = { workspace = true }
 
 [lints]
 workspace = true

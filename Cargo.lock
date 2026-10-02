@@ -413,7 +413,6 @@ version = "18.23.0"
 dependencies = [
  "atuin-domain",
  "derive_more",
- "pretty_assertions",
  "progenitor",
  "progenitor-client",
  "reqwest",
@@ -426,7 +425,6 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
- "wiremock",
 ]
 
 [[package]]
