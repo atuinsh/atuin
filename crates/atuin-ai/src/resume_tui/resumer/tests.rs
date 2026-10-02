@@ -358,6 +358,42 @@ fn resumes_where_it_ran_or_nearest_here(
     assert_eq!(restore.note.is_some(), noted, "{restore:?}");
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Cwd {
+    InOuter,
+    InInner,
+    Elsewhere,
+}
+
+/// A session that ran in a directory naming the checkout twice, both of whose places exist in
+/// this checkout: the one holding the current directory, else the first from the left.
+#[rstest]
+#[case::in_the_first(Cwd::InOuter, "other/atuin/crates")]
+#[case::in_the_second(Cwd::InInner, "crates")]
+#[case::in_neither(Cwd::Elsewhere, "other/atuin/crates")]
+fn a_checkout_named_twice_resumes_where_the_current_directory_is(
+    dirs: Dirs,
+    #[case] cwd: Cwd,
+    #[case] expected: &str,
+) {
+    let outer = dirs.repo.join("other").join("atuin").join("crates");
+    let inner = dirs.repo.join("crates");
+    std::fs::create_dir_all(outer.join("deeper")).unwrap();
+    std::fs::create_dir_all(inner.join("deeper")).unwrap();
+    let context = ResumeContext {
+        cwd: match cwd {
+            Cwd::InOuter => outer.join("deeper"),
+            Cwd::InInner => inner.join("deeper"),
+            Cwd::Elsewhere => dirs.here.clone(),
+        },
+        ..context(&dirs)
+    };
+    let original = Path::new("/work/atuin/other/atuin/crates");
+    let restore = resolve_cwd(Some(original), &context);
+    let expected: PathBuf = expected.split('/').fold(dirs.repo, |p, c| p.join(c));
+    assert_eq!(restore.cwd, expected);
+}
+
 #[rstest]
 fn finds_programs_on_path() {
     assert!(!on_path("definitely-not-a-program-atuin"));

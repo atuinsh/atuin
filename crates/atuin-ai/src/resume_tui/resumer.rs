@@ -254,6 +254,12 @@ impl Resumer for HarnessResumer {
 /// Where to resume a session that ran in `original` on this machine: there, when it exists;
 /// else, when the current directory is in a git repository named like one `original` was in,
 /// the same place in that repository (or its root); else the current directory.
+///
+/// The same place is what follows a component of `original` named like the checkout. When
+/// several are (`/work/atuin/other/atuin/crates` could be `other/atuin/crates` or `crates` in a
+/// checkout named `atuin`), it is the one of those existing here that holds the current
+/// directory (other than the checkout's root, which holds all of it), as the user is likely in
+/// the right one already; else the first from the left that exists.
 pub fn resolve_cwd(original: Option<&Path>, context: &ResumeContext) -> Restore {
     let Some(original) = original else {
         return Restore {
@@ -277,13 +283,16 @@ pub fn resolve_cwd(original: Option<&Path>, context: &ResumeContext) -> Restore 
         }
         // Rebuilt from components, so no trailing separator comes along.
         let root: PathBuf = root.components().collect();
-        // Below the first component named like the checkout that leads to a directory in it:
-        // the last may be a directory in the repository named like it (`atuin/crates/atuin`).
-        let same_place = named.into_iter().find_map(|at| {
-            let path: PathBuf =
-                root.components().chain(components[at + 1..].iter().copied()).collect();
-            path.is_dir().then_some(path)
-        });
+        // Below each component named like the checkout, the directories in it: the last may be
+        // a directory in the repository named like it (`atuin/crates/atuin`).
+        let places: Vec<PathBuf> = named
+            .into_iter()
+            .map(|at| root.components().chain(components[at + 1..].iter().copied()).collect())
+            .filter(|path: &PathBuf| path.is_dir())
+            .collect();
+        // The root holds every directory in the checkout, so says nothing about which is meant.
+        let here = places.iter().position(|place| *place != root && context.cwd.starts_with(place));
+        let same_place = places.into_iter().nth(here.unwrap_or(0));
         Some(same_place.unwrap_or(root))
     });
     match checkout {
