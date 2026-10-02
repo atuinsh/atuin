@@ -136,6 +136,99 @@ impl TryFrom<HistoryEntry> for History {
     }
 }
 
+/// The most of a command one import message carries, well under tonic's 4 MiB message limit.
+const IMPORT_COMMAND_PIECE_BYTES: usize = 1024 * 1024;
+
+/// The messages that stream `histories` to the daemon: one per entry, except that a command too
+/// large for one message is split across its entry and `command_tail` messages after it. See
+/// [`ImportReassembler`] for the other end.
+pub fn import_requests(
+    histories: impl IntoIterator<Item = History>,
+) -> impl Iterator<Item = ImportHistoryRequest> {
+    import_requests_in_pieces(histories, IMPORT_COMMAND_PIECE_BYTES)
+}
+
+fn import_requests_in_pieces(
+    histories: impl IntoIterator<Item = History>,
+    piece_bytes: usize,
+) -> impl Iterator<Item = ImportHistoryRequest> {
+    histories.into_iter().flat_map(move |history| {
+        let mut entry = HistoryEntry::from(history);
+        let mut pieces = split_at_char_boundaries(&entry.command, piece_bytes).into_iter();
+        entry.command = pieces.next().unwrap_or_default();
+
+        std::iter::once(ImportHistoryRequest {
+            entries: vec![entry],
+            command_tail: String::new(),
+        })
+        .chain(pieces.map(|command_tail| ImportHistoryRequest {
+            entries: Vec::new(),
+            command_tail,
+        }))
+    })
+}
+
+/// `s` in pieces of at most `max_bytes`, each ending on a character boundary (proto strings must be
+/// valid UTF-8). `max_bytes` must fit any character: at least 4.
+fn split_at_char_boundaries(s: &str, max_bytes: usize) -> Vec<String> {
+    debug_assert!(max_bytes >= 4, "a piece must fit any character");
+    let mut pieces = Vec::new();
+    let mut rest = s;
+    while rest.len() > max_bytes {
+        let end = (0..=max_bytes).rev().find(|&i| rest.is_char_boundary(i)).unwrap_or(0);
+        pieces.push(rest[..end].to_owned());
+        rest = &rest[end..];
+    }
+    pieces.push(rest.to_owned());
+    pieces
+}
+
+/// The largest command [`ImportReassembler`] will rebuild, so no client can make the daemon buffer
+/// an unbounded amount for one entry.
+const MAX_IMPORT_COMMAND_BYTES: usize = 64 * 1024 * 1024;
+
+/// Errors thrown reassembling a stream of [`ImportHistoryRequest`]s.
+#[derive(Debug, Error)]
+pub enum ImportStreamError {
+    #[error("a command tail arrived before any entry")]
+    TailWithoutEntry,
+    #[error("an imported command is over {} MiB", MAX_IMPORT_COMMAND_BYTES / 1024 / 1024)]
+    CommandTooLarge,
+}
+
+/// Rebuilds the entries [`import_requests`] split across messages.
+///
+/// Holds back the latest entry until a later message shows its command is complete, so a caller
+/// importing what [`Self::push`] returns can never import a command cut short.
+#[derive(Debug, Default)]
+pub struct ImportReassembler {
+    pending: Option<HistoryEntry>,
+}
+
+impl ImportReassembler {
+    /// Take the next message, returning the entries it completes.
+    pub fn push(
+        &mut self,
+        request: ImportHistoryRequest,
+    ) -> Result<Vec<HistoryEntry>, ImportStreamError> {
+        if !request.command_tail.is_empty() {
+            let entry = self.pending.as_mut().ok_or(ImportStreamError::TailWithoutEntry)?;
+            if entry.command.len() + request.command_tail.len() > MAX_IMPORT_COMMAND_BYTES {
+                return Err(ImportStreamError::CommandTooLarge);
+            }
+            entry.command.push_str(&request.command_tail);
+        }
+
+        Ok(request.entries.into_iter().filter_map(|entry| self.pending.replace(entry)).collect())
+    }
+
+    /// The last entry, once the stream has ended.
+    #[must_use]
+    pub fn finish(self) -> Option<HistoryEntry> {
+        self.pending
+    }
+}
+
 /// Errors thrown parsing the [`StartHistoryRequest`].
 #[derive(Debug, Error)]
 pub enum StartHistoryRequestParseError {
@@ -508,6 +601,7 @@ invalid_argument_errors!(
     IdParseError,
     StartHistoryRequestParseError,
     HistoryEntryParseError,
+    ImportStreamError,
     EndHistoryRequestParseError,
     CancelHistoryRequestParseError,
     RegisterCommandOutputRequestParseError,
@@ -535,6 +629,72 @@ mod tests {
     use tonic::Code;
 
     use super::*;
+
+    fn history(command: &str) -> History {
+        History::import().timestamp(OffsetDateTime::UNIX_EPOCH).command(command).build().into()
+    }
+
+    /// Reassemble a whole stream, as the daemon does.
+    fn reassemble(requests: impl IntoIterator<Item = ImportHistoryRequest>) -> Vec<HistoryEntry> {
+        let mut entries = ImportReassembler::default();
+        let mut out = Vec::new();
+        for request in requests {
+            out.extend(entries.push(request).unwrap());
+        }
+        out.extend(entries.finish());
+        out
+    }
+
+    proptest! {
+        /// However long and however multi-byte the commands, no message carries more than a piece
+        /// of one, and the daemon gets every entry back exactly.
+        #[test]
+        fn import_stream_round_trips(
+            commands in proptest::collection::vec("\\PC{0,60}", 0..8),
+            piece_bytes in 4usize..16,
+        ) {
+            let histories: Vec<_> = commands.iter().map(|c| history(c)).collect();
+            let requests: Vec<_> =
+                import_requests_in_pieces(histories.clone(), piece_bytes).collect();
+
+            for request in &requests {
+                let carried = request.entries.iter().map(|e| e.command.len()).sum::<usize>()
+                    + request.command_tail.len();
+                prop_assert!(carried <= piece_bytes, "{carried} > {piece_bytes}");
+            }
+            let expected: Vec<_> = histories.into_iter().map(HistoryEntry::from).collect();
+            prop_assert_eq!(reassemble(requests), expected);
+        }
+    }
+
+    #[rstest]
+    fn an_empty_command_is_one_message() {
+        assert_eq!(import_requests([history("")]).count(), 1);
+    }
+
+    #[rstest]
+    fn a_command_past_the_cap_is_refused() {
+        let mut entries = ImportReassembler::default();
+        let entry = import_requests([history("echo ")]).next().unwrap();
+        entries.push(entry).unwrap();
+
+        let tail = ImportHistoryRequest {
+            entries: Vec::new(),
+            command_tail: "x".repeat(MAX_IMPORT_COMMAND_BYTES),
+        };
+        let err = entries.push(tail).unwrap_err();
+        assert_eq!(Status::from(err).code(), Code::InvalidArgument);
+    }
+
+    #[rstest]
+    fn a_command_tail_needs_an_entry_first() {
+        let tail = ImportHistoryRequest {
+            entries: Vec::new(),
+            command_tail: "orphan".to_owned(),
+        };
+        let err = ImportReassembler::default().push(tail).unwrap_err();
+        assert_eq!(Status::from(err).code(), Code::InvalidArgument);
+    }
     use crate::grpc::common::TooManyItemsError;
 
     fn good_id_proto() -> HistoryId {

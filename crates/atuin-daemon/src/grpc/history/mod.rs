@@ -22,10 +22,10 @@ use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, CompactStoreReply, CompactStoreRequest,
     DeleteHistoryReply, DeleteHistoryRequest, DeleteHistoryStreamExt, EndHistoryReply,
     EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, ImportHistoryReply,
-    ImportHistoryRequest, RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
-    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
-    TailHistoryRequest,
+    ImportHistoryRequest, ImportReassembler, RebuildHistoryReply, RebuildHistoryRequest,
+    RegisterCommandOutputRequest, RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest,
+    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent,
+    TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -173,18 +173,25 @@ impl GrpcService for Service {
                 let mut imported = 0;
                 let mut batch = Vec::new();
                 let mut batch_bytes = 0;
+                let mut entries = ImportReassembler::default();
 
-                while let Some(chunk) = stream.message().await? {
-                    batch_bytes += chunk.encoded_len();
-                    for entry in chunk.entries {
+                while let Some(request) = stream.message().await? {
+                    batch_bytes += request.encoded_len();
+                    for entry in entries.push(request)? {
                         batch.push(History::try_from(entry)?);
                     }
-                    if batch.len() >= BATCH_ENTRIES || batch_bytes >= BATCH_BYTES {
+                    // Bytes can pile up in a long command still arriving, with nothing to import yet.
+                    if !batch.is_empty()
+                        && (batch.len() >= BATCH_ENTRIES || batch_bytes >= BATCH_BYTES)
+                    {
                         imported += journal.import(std::mem::take(&mut batch)).await?;
                         batch_bytes = 0;
                     }
                 }
-                imported += journal.import(batch).await?;
+                batch.extend(entries.finish().map(History::try_from).transpose()?);
+                if !batch.is_empty() {
+                    imported += journal.import(batch).await?;
+                }
 
                 Ok::<_, Status>(imported)
             }

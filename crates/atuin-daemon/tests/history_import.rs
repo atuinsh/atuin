@@ -28,7 +28,7 @@ fn imported(commands: impl IntoIterator<Item = String>) -> Vec<History> {
         .collect()
 }
 
-/// The same entries under the fresh ids an importer mints on every run.
+/// The same entries under other ids, as an older version (or a hook) may have saved them.
 fn reminted(histories: &[History]) -> Vec<History> {
     histories
         .iter()
@@ -61,8 +61,8 @@ async fn import_lands_in_db_store_and_search(#[future(awt)] env: TestEnv) {
     assert_eq!(env.index_count().await, 3);
 }
 
-/// Re-running an import (fresh ids, same entries) adds only what's new: no duplicate rows,
-/// records to sync, or search results.
+/// Re-importing entries the db already has, under any id, adds only what's new: no duplicate
+/// rows, records to sync, or search results.
 #[rstest]
 #[tokio::test]
 async fn reimport_only_adds_new_entries(#[future(awt)] env: TestEnv) {
@@ -91,6 +91,21 @@ async fn import_of_long_commands_is_not_cut_short(#[future(awt)] env: TestEnv) {
     assert_eq!(env.active_rows().await, 100);
 }
 
+/// A single command past the daemon's 4 MiB message limit still imports whole, with its neighbours.
+#[rstest]
+#[tokio::test]
+async fn import_of_a_command_past_4_mib(#[future(awt)] env: TestEnv) {
+    // Multi-byte, so the split has to respect character boundaries.
+    let huge = format!("echo {}", "é".repeat(3 * 1024 * 1024));
+    let histories = imported(["echo before".to_owned(), huge, "echo after".to_owned()]);
+    let mut client = env.history_client().await;
+
+    assert_eq!(client.import_history(histories.clone()).await.unwrap().imported, 3);
+    for h in &histories {
+        assert_eq!(env.history_db.load(h.id).await.unwrap().unwrap().command, h.command);
+    }
+}
+
 /// The daemon imports a long stream a bounded batch at a time; every batch lands.
 #[rstest]
 #[tokio::test]
@@ -103,7 +118,7 @@ async fn import_of_many_entries_spans_batches(#[future(awt)] env: TestEnv) {
     assert_eq!(env.index_count().await, 2500);
 }
 
-/// A failed store write must not leave db rows behind, or a retry would skip them as imported.
+/// A failed store write must not leave db rows behind, or the retry would skip them as imported.
 #[rstest]
 #[tokio::test]
 async fn failed_import_leaves_nothing_for_a_retry_to_skip() {
@@ -115,7 +130,7 @@ async fn failed_import_leaves_nothing_for_a_retry_to_skip() {
     assert_eq!(env.active_rows().await, 0);
     lock.release().await;
 
-    assert_eq!(env.journal.import(reminted(&histories)).await.unwrap(), 3);
+    assert_eq!(env.journal.import(histories).await.unwrap(), 3);
     assert_eq!(env.history_records().await.len(), 3);
     assert_eq!(env.index_count().await, 3);
 }
