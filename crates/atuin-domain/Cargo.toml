@@ -26,7 +26,7 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true }
 whoami = { workspace = true }

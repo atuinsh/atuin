@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use async_stream::try_stream;
 pub use atuin_api_client::Timeouts;
-use atuin_api_client::{ApiError, AuthHeaderProvider, AuthToken, MapApiError, ResponseValue, types};
+use atuin_api_client::{
+    ApiError, AuthHeaderProvider, AuthToken, MapApiError, ResponseValue, types,
+};
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::url::UrlAppendError;
 use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION};
@@ -120,14 +122,12 @@ pub async fn login(
 
 #[cfg(feature = "check-update")]
 #[instrument(level = "trace", skip_all, err)]
-pub async fn latest_version() -> Result<Version> {
-    let http = reqwest::Client::builder()
-        .default_headers(HeaderMap::from_iter([(
-            reqwest::header::USER_AGENT,
-            reqwest::header::HeaderValue::from_static(atuin_domain::api::ATUIN_USER_AGENT),
-        )]))
-        .build()?;
-    let api = atuin_api_client::Client::from_http(crate::settings::DEFAULT_SYNC_URL.clone(), http)?;
+pub async fn latest_version(timeouts: Timeouts) -> Result<Version> {
+    let api = atuin_api_client::Client::connect_unauthenticated(
+        &crate::settings::DEFAULT_SYNC_URL,
+        timeouts,
+        None,
+    )?;
 
     let index = api_call(api.get_index()).await?.into_inner();
     let version = Version::parse(index.version.as_str())?;
@@ -188,7 +188,7 @@ fn api_error(err: ApiError) -> eyre::Report {
     else {
         return err.into();
     };
-    match (status, reason.or(body)) {
+    match (status, reason) {
         (StatusCode::SERVICE_UNAVAILABLE, _) => eyre!(
             "Service unavailable: check https://status.atuin.sh (or get in touch with your host)"
         ),
@@ -202,10 +202,13 @@ fn api_error(err: ApiError) -> eyre::Report {
             "There was an error with the atuin sync service at {url}, server error {status}: \
              {reason}.\nIf the problem persists, contact the host"
         ),
-        (status, None) => eyre!(
-            "There was an error with the atuin sync service at {url}, Status {status:?}.\nIf the \
-             problem persists, contact the host"
-        ),
+        (status, None) => {
+            let body = body.unwrap_or_default();
+            eyre!(
+                "There was an error with the atuin sync service at {url}, Status \
+                 {status:?}.\nResponse body: {body}\nIf the problem persists, contact the host"
+            )
+        }
     }
 }
 
@@ -366,16 +369,14 @@ impl RecordsRequest {
 impl Client {
     #[instrument(level = "trace", skip_all, fields(?timeouts), err)]
     pub fn new(
-        sync_addr: impl Into<Arc<Url>>,
+        sync_addr: &Url,
         auth: &AuthToken,
         timeouts: Timeouts,
         extra_headers: &HashMap<String, SecretString>,
         caps: Arc<CapClient>,
     ) -> Result<Self> {
-        let sync_addr: Arc<Url> = sync_addr.into();
-
         let api = atuin_api_client::Client::connect_authenticated(
-            &sync_addr,
+            sync_addr,
             auth,
             timeouts,
             Some(extra_headers),
@@ -480,7 +481,7 @@ impl Client {
         upload_url: Url,
         packfile: impl Into<reqwest::Body>,
     ) -> Result<()> {
-        // Not self.client: S3 rejects presigned requests that also carry an Authorization header.
+        // Not self.api: S3 rejects presigned requests that also carry an Authorization header.
         let resp = self
             .lfs_client
             .put(upload_url)
@@ -577,7 +578,7 @@ mod tests {
         };
         let caps = caps_client_anonymous(&addr, timeouts, &HashMap::new()).unwrap();
         let client =
-            Client::new(addr, &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps)
+            Client::new(&addr, &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps)
                 .unwrap();
 
         // The client observes the server's advertised packfile cap; a second read stays warm
@@ -632,8 +633,7 @@ mod records_stream_tests {
             total: Duration::from_secs(30),
         };
         let caps = caps_client_anonymous(addr, timeouts, &HashMap::new()).unwrap();
-        Client::new(addr.clone(), &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps)
-            .unwrap()
+        Client::new(addr, &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps).unwrap()
     }
 
     /// Serve `records` in pages of `serve_size`, keyed on the `start` query param

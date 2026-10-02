@@ -1,9 +1,8 @@
 //! The hooks progenitor runs around every generated operation.
 //!
-//! progenitor stamps `api-version: <info.version>` on every request. No Atuin server reads it and
-//! the hand-written clients never sent it, so `pre` removes it. `pre` also puts the base URL's
-//! query ahead of the operation's, and resolves the [`AuthHeaderProvider`] of a
-//! [`Client::with_auth`] client, per request.
+//! progenitor stamps `api-version: <info.version>` on every request; no Atuin server reads it, so
+//! `pre` removes it. `pre` also puts the base URL's query ahead of the operation's, and resolves
+//! the [`AuthHeaderProvider`] of a [`Client::with_auth`] client, per request.
 //!
 //! Capability negotiation stamps the token the [`CapClient`] last fetched as
 //! `x-atuin-capabilities-known` (plus `x-atuin-capabilities-enforce` in [`CapMismatch::Error`]
@@ -20,7 +19,7 @@ use std::sync::Arc;
 
 use atuin_domain::caps::http::{AVAILABLE_HEADER, ENFORCE_HEADER, KNOWN_HEADER};
 use atuin_domain::caps::{CapClient, CapMismatch, CapsDocument, token_to_refresh};
-use progenitor_client::{ClientHooks, Error, OperationInfo};
+use progenitor::progenitor_client::{ClientHooks, Error, OperationInfo};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 
 use crate::{ApiBody, Client};
@@ -36,9 +35,9 @@ pub type AuthHeaderFuture = Pin<Box<dyn Future<Output = Option<HeaderValue>> + S
 
 /// Resolves the `Authorization` header for each request of a [`Client::with_auth`] client.
 ///
-/// Returning `None` sends the request anonymously. Auth is resolved per request, not at
-/// construction, so a long-lived client (e.g. the daemon's capability reader) follows login,
-/// logout, and token rotation without a rebuild.
+/// Returning `None` leaves the client's default `Authorization`, if any, in place. Auth is resolved
+/// per request, not at construction, so a long-lived client (e.g. the daemon's capability reader)
+/// follows login, logout, and token rotation without a rebuild.
 #[derive(Clone)]
 pub struct AuthHeaderProvider(Arc<dyn Fn() -> AuthHeaderFuture + Send + Sync>);
 
@@ -64,7 +63,7 @@ impl fmt::Debug for AuthHeaderProvider {
 pub struct HookState {
     /// The query of the base URL, which progenitor's string-formatted paths cannot carry.
     base_query: Option<String>,
-    negotiation: Option<Negotiation>,
+    negotiator: Option<Negotiator>,
     auth: Option<AuthHeaderProvider>,
 }
 
@@ -78,13 +77,15 @@ impl HookState {
 }
 
 #[derive(Debug, Clone)]
-struct Negotiation {
+struct Negotiator {
     caps: Arc<CapClient>,
     on_mismatch: CapMismatch,
 }
 
 impl Client {
     /// Build a [`CapClient`] that fetches the server's capabilities through this client.
+    ///
+    /// Must run inside a tokio runtime, since it starts the warm-up fetch.
     #[must_use]
     pub fn cap_client(self) -> Arc<CapClient> {
         CapClient::new(move || {
@@ -101,7 +102,7 @@ impl Client {
     /// Negotiate capabilities through `caps` on every operation but [`Client::get_capabilities`].
     #[must_use]
     pub fn with_capabilities(mut self, caps: Arc<CapClient>, on_mismatch: CapMismatch) -> Self {
-        self.inner.negotiation = Some(Negotiation { caps, on_mismatch });
+        self.inner.negotiator = Some(Negotiator { caps, on_mismatch });
         self
     }
 
@@ -140,16 +141,16 @@ impl ClientHooks<HookState> for Client {
         request: reqwest::Request,
         info: &OperationInfo,
     ) -> reqwest::Result<reqwest::Response> {
-        match &self.inner.negotiation {
-            Some(negotiation) if info.operation_id != GET_CAPABILITIES => {
-                negotiation.exec(&self.client, request).await
+        match &self.inner.negotiator {
+            Some(negotiator) if info.operation_id != GET_CAPABILITIES => {
+                negotiator.exec(&self.client, request).await
             }
             Some(_) | None => self.client.execute(request).await,
         }
     }
 }
 
-impl Negotiation {
+impl Negotiator {
     async fn exec(
         &self,
         http: &reqwest::Client,

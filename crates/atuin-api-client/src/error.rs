@@ -1,4 +1,4 @@
-use progenitor_client::{Error, ResponseValue};
+use progenitor::progenitor_client::{Error, ResponseValue};
 use reqwest::StatusCode;
 use serde_json::Value;
 use url::Url;
@@ -6,7 +6,7 @@ use url::Url;
 /// A failed API call.
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
-    /// The server answered outside 2xx.
+    /// The server answered with a status the call does not accept; only a 4xx or 5xx body is read.
     #[error(
         "{url} answered {status}{}",
         reason.as_ref().or(body.as_ref()).map(|reason| format!(": {reason}")).unwrap_or_default()
@@ -19,8 +19,8 @@ pub enum ApiError {
         reason: Option<String>,
         /// The body's machine-readable `code`, e.g. `2fa_required`.
         code: Option<String>,
-        /// The body's trimmed text when it gives no `reason`, e.g. a proxy's HTML page; `None`
-        /// when it is empty or could not be read.
+        /// The start of the body's trimmed text when it gives no `reason`, e.g. a proxy's HTML
+        /// page; `None` when it is empty or could not be read.
         body: Option<String>,
     },
     /// The request got no answer, or its body could not be read: DNS, TLS, connect or timeout.
@@ -35,15 +35,6 @@ pub enum ApiError {
 }
 
 impl ApiError {
-    /// The status the server answered with, if it answered outside 2xx.
-    #[must_use]
-    pub const fn status(&self) -> Option<StatusCode> {
-        match self {
-            Self::Status { status, .. } => Some(*status),
-            Self::Transport(_) | Self::Decode(_) | Self::NotSent(_) => None,
-        }
-    }
-
     async fn from_error(err: Error) -> Self {
         match err {
             Error::UnexpectedResponse(response) => Self::from_response(response).await,
@@ -73,14 +64,18 @@ impl ApiError {
         Err(Self::from_response(response).await)
     }
 
-    /// The error for `response`, whatever its status, with the reason read from its body.
+    /// The error for `response`, whatever its status, reading the reason of a 4xx or 5xx body.
     async fn from_response(response: reqwest::Response) -> Self {
         let status = response.status();
         let mut url = response.url().clone();
         url.set_query(None);
-        // The status is the answer; a body that breaks off only loses its detail.
-        let Body { reason, code, text } =
-            response.text().await.map_or_else(|_| Body::default(), |body| Body::parse(&body));
+        let Body { reason, code, text } = if status.is_client_error() || status.is_server_error() {
+            // The status is the answer; a body that breaks off only loses its detail.
+            response.text().await.map_or_else(|_| Body::default(), |body| Body::parse(&body))
+        } else {
+            // An undocumented 2xx may carry a secret, e.g. a login's session: keep it out.
+            Body::default()
+        };
         Self::Status {
             status,
             url: Box::new(url),
@@ -124,12 +119,15 @@ where
     }
 }
 
+/// How many characters of a body without a `reason` an error keeps, enough for a plain-text one.
+const BODY_TEXT_MAX_CHARS: usize = 512;
+
 /// What an error body says.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Default)]
 struct Body {
     reason: Option<String>,
     code: Option<String>,
-    /// The trimmed body when it gives no `reason` and is not empty.
+    /// The start of the trimmed body when it gives no `reason` and is not empty.
     text: Option<String>,
 }
 
@@ -150,8 +148,16 @@ impl Body {
             code: object
                 .as_ref()
                 .and_then(|object| object.get("code")?.as_str().map(str::to_owned)),
-            text: (reason.is_none() && !text.is_empty()).then(|| text.to_owned()),
+            text: (reason.is_none() && !text.is_empty()).then(|| shortened(text)),
             reason,
         }
+    }
+}
+
+/// `text` cut to [`BODY_TEXT_MAX_CHARS`] characters, ending in `…` when cut.
+fn shortened(text: &str) -> String {
+    match text.char_indices().nth(BODY_TEXT_MAX_CHARS) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
     }
 }

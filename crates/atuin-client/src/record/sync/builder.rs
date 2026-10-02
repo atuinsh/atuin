@@ -48,7 +48,7 @@ impl SyncSessionInit<'_> {
                 };
 
                 Client::new(
-                    settings.sync_address.clone(),
+                    &settings.sync_address,
                     &auth,
                     timeouts(settings),
                     &settings.extra_headers,

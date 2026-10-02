@@ -461,8 +461,9 @@ show_numeric_shortcuts = true
 Default: `30s`
 
 The maximum time to wait for a network request, as a duration like `500ms`,
-`30s`, or `5m`. If any operation with a sync server takes longer than this, it
-fails rather than waiting indefinitely.
+`30s`, or `5m`. If a request to the sync server, Atuin Hub, or the AI endpoint
+(other than a streaming chat) takes longer than this, it fails rather than waiting
+indefinitely.
 
 A bare number is read as a count of seconds (`network_timeout = 30`), for
 backwards compatibility.
@@ -475,9 +476,9 @@ network_timeout = "30s"
 
 Default: `5s`
 
-The maximum time Atuin waits for a connection to a remote sync server to be
-established, as a duration like `500ms`, `5s`, or `1m`. Any longer and the
-request fails.
+The maximum time Atuin waits for a connection to the sync server, Atuin Hub, or
+the AI endpoint (other than a streaming chat) to be established, as a duration
+like `500ms`, `5s`, or `1m`. Any longer and the request fails.
 
 A bare number is read as a count of seconds (`network_connect_timeout = 5`), for
 backwards compatibility.

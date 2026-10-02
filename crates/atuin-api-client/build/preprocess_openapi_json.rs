@@ -1,10 +1,10 @@
 //! Rewrites the hub's spec into the shape the client is generated from.
 //!
-//! - Removes non-200 responses. This is necessary because self-hosted servers do not match the
+//! - Removes non-2xx responses. This is necessary because self-hosted servers do not match the
 //!   hub's error schemas. We can't just fix the server either, since there are old servers out
 //!   there.
-//! - Removes `x-atuin-capabilities-known` from the public interface since it always gets stampped,
-//!   effectively not making it part of what clients should pass.
+//! - Removes `x-atuin-capabilities-known` from the operations' parameters: a negotiating client
+//!   stamps it in its hooks, so callers never pass it.
 
 use serde_json::{Map, Value};
 

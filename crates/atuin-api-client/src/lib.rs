@@ -1,5 +1,7 @@
 //! Typed client for the Atuin sync, hub and AI HTTP APIs.
 
+#![deny(unsafe_code)]
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -19,10 +21,7 @@ mod error;
 mod generated {
     #![allow(
         clippy::disallowed_methods,
-        clippy::missing_errors_doc,
-        clippy::missing_panics_doc,
         clippy::must_use_candidate,
-        clippy::struct_field_names,
         clippy::unnecessary_trailing_comma,
         reason = "generated from openapi.json by progenitor"
     )]
@@ -92,19 +91,12 @@ pub enum ClientBuildError {
     CannotBeABase,
 }
 
-/// Authentication token for sync API requests.
-///
-/// The sync API supports two authentication methods:
-/// - `Bearer`: Hub API tokens (for users authenticated via Atuin Hub)
-/// - `Token`: Legacy CLI session tokens (for users registered via CLI or self-hosted)
-///
-/// When both are available, Hub tokens are preferred as they provide unified
-/// authentication across CLI and Hub features.
+/// The credential a [`Client`] sends as `Authorization`.
 #[derive(Debug, Clone)]
 pub enum AuthToken {
-    /// Hub API token, used with "Bearer {token}" header
+    /// A hub API token, sent as `Bearer <token>`.
     Bearer(SecretString),
-    /// Legacy CLI session token, used with "Token {token}" header
+    /// A legacy CLI session token, sent as `Token <token>`.
     Token(SecretString),
 }
 
@@ -165,15 +157,7 @@ impl Client {
         Self::connect(base, Some(auth), timeouts, extra_headers)
     }
 
-    /// A client for `base` that sends no credentials.
-    ///
-    /// `extra_headers` belong to the user's sync server, so a client for the hub or an AI server
-    /// passes `None`.
-    ///
-    /// # Errors
-    ///
-    /// [`ClientBuildError`] when an extra header cannot be a header, TLS cannot be set up, or
-    /// `base` cannot be a base URL.
+    /// [`Self::connect_authenticated`], sending no credentials.
     pub fn connect_unauthenticated(
         base: &Url,
         timeouts: Timeouts,

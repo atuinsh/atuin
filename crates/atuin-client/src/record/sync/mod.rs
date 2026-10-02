@@ -973,8 +973,7 @@ mod packfile_sync_tests {
             total: std::time::Duration::from_secs(30),
         };
         let caps = caps_client_anonymous(addr, timeouts, &HashMap::new()).unwrap();
-        Client::new(addr.clone(), &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps)
-            .unwrap()
+        Client::new(addr, &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps).unwrap()
     }
 
     /// A fresh in-memory record store.
@@ -1496,7 +1495,7 @@ mod packfile_sync_tests {
             total: std::time::Duration::from_secs(1),
         };
         let caps = caps_client_anonymous(&addr, timeouts, &HashMap::new()).unwrap();
-        Client::new(addr, &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps).unwrap()
+        Client::new(&addr, &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps).unwrap()
     }
 
     /// Building the view rejects an inverted plaintext range (`start_idx > end_idx`) -- the

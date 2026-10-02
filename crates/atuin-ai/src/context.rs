@@ -18,7 +18,7 @@ pub struct AppContext {
     /// Bearer token for `endpoint`. `None` means unauthenticated -- no
     /// Authorization header is sent (an OSS server may not require auth).
     pub token: Option<SecretString>,
-    /// How long calls to `endpoint` wait.
+    /// How long the model-list and usage calls to `endpoint` wait; the chat stream is unbounded.
     pub timeouts: Timeouts,
     /// Whether `endpoint` is an Atuin Hub instance. Hub endpoints report
     /// credit usage; OSS endpoints (e.g. atuin-ai-server) don't have the

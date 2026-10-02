@@ -14,7 +14,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
 
     let caps = api_client::caps_client(settings)?;
     let client = api_client::Client::new(
-        settings.sync_address.clone(),
+        &settings.sync_address,
         &settings.sync_auth_token().await?,
         api_client::timeouts(settings),
         &settings.extra_headers,
@@ -48,7 +48,10 @@ pub async fn run(settings: &Settings) -> Result<()> {
     if settings.auto_sync {
         println!("{}", fl!("sync-status-remote").green());
         println!("{}", fl!("sync-status-address", address = settings.sync_address.to_string()));
-        println!("{}", fl!("sync-status-username", username = me.username.unwrap_or_default()));
+        match me.username {
+            Some(username) => println!("{}", fl!("sync-status-username", username = username)),
+            None => println!("{}", fl!("sync-status-username-unavailable")),
+        }
     }
 
     Ok(())

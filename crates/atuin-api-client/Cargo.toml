@@ -16,7 +16,6 @@ atuin-domain = { workspace = true }
 
 derive_more = { workspace = true }
 progenitor = { workspace = true }
-progenitor-client = { workspace = true }
 reqwest = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }

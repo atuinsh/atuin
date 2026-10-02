@@ -369,7 +369,7 @@ enum AccountChange {
 }
 
 impl AccountChange {
-    /// The message for a 401 that gives no reason of its own.
+    /// The message for a 401 to this change.
     const fn wrong_password(self) -> &'static str {
         match self {
             Self::Password => "current password is incorrect",

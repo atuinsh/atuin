@@ -18,7 +18,7 @@ atuin-kv               Key-value store (synced)
 atuin-pty-proxy        PTY proxy
 atuin-scripts          Script management (minijinja)
 atuin-search-bench     Search benchmarks (not published)
-atuin-server           HTTP sync server (axum) - lib + standalone binary, Postgres or SQLite
+atuin-server           HTTP sync server (axum) - lib + standalone binary, Postgres, MySQL or SQLite
 ```
 
 ## Two sync protocols

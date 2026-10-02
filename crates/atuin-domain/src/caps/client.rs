@@ -46,9 +46,8 @@ pub struct CapsDocument {
 
 /// The server's capabilities, as the client last fetched them.
 ///
-/// They are populated by [`CapClient::refresh`], which runs once on construction and again
-/// whenever negotiation finds the cache stale; [`CapClient::get_server`] is then a read of that
-/// cache.
+/// They are fetched once on construction and again by [`CapClient::refresh_if_stale`] whenever
+/// negotiation finds the cache stale; [`CapClient::get_server`] is then a read of that cache.
 ///
 /// Thread it as an [`Arc`].
 #[derive(derive_more::Debug)]

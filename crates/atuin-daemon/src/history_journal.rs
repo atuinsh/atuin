@@ -683,6 +683,7 @@ mod tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::filter::OrFilter;
     use atuin_common::utils::uuid_v7;
+    use atuin_domain::caps::CapsDocument;
     use atuin_domain::record::{CmdOrigin, HostId};
     use rstest::rstest;
     use tokio::sync::RwLock;
@@ -699,12 +700,9 @@ mod tests {
         let store = SqliteStore::new(tmp.path().join("records.db"), timeout).await.unwrap();
         let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
         let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
-        let caps = atuin_api_client::Client::from_http(
-            "http://127.0.0.1:1".parse().unwrap(),
-            reqwest::Client::new(),
-        )
-        .unwrap()
-        .cap_client();
+        let caps = CapClient::new(|| {
+            std::future::ready(Err::<CapsDocument, _>(std::io::Error::other("offline")))
+        });
         let journal =
             HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);
         (journal, tmp)

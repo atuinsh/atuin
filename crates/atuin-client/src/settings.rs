@@ -1433,7 +1433,9 @@ impl Settings {
         }
 
         #[cfg(feature = "sync")]
-        let latest = crate::api_client::latest_version().await.unwrap_or(current);
+        let latest = crate::api_client::latest_version(crate::api_client::timeouts(self))
+            .await
+            .unwrap_or(current);
 
         #[cfg(not(feature = "sync"))]
         let latest = current;

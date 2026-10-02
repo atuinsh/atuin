@@ -29,8 +29,6 @@ pub struct HubAuthSession {
     /// The URL the user should visit to authenticate. Carries `code` in its query.
     #[debug(skip)]
     pub auth_url: Url,
-    /// The hub address being used
-    pub hub_address: Url,
     /// The hub, called anonymously.
     #[debug(skip)]
     api: atuin_api_client::Client,
@@ -116,7 +114,6 @@ impl HubAuthSession {
         Ok(Self {
             code,
             auth_url,
-            hub_address: hub_address.clone(),
             api,
         })
     }
@@ -310,7 +307,6 @@ mod tests {
             code: SecretString::from(CODE),
             auth_url,
             api: atuin_api_client::Client::connect_unauthenticated(&hub, timeouts, None).unwrap(),
-            hub_address: hub,
         };
 
         assert!(!format!("{session:?}").contains(CODE));

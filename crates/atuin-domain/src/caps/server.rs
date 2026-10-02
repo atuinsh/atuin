@@ -129,14 +129,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::caps::{CapabilitiesCap, Capability};
-
-    /// The capabilities document as the client decodes it.
-    #[derive(Debug, Deserialize)]
-    struct CapabilitiesResponse {
-        version: String,
-        capabilities: serde_json::Map<String, Value>,
-    }
+    use crate::caps::{CapabilitiesCap, Capability, CapsDocument};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestCap {
@@ -204,7 +197,7 @@ mod tests {
 
     #[rstest]
     fn body_deserializes_into_the_client_response_shape(empty: CapServer) {
-        let resp: CapabilitiesResponse = serde_json::from_str(empty.body()).unwrap();
+        let resp: CapsDocument = serde_json::from_str(empty.body()).unwrap();
         assert_eq!(resp.version, empty.token());
         assert!(resp.capabilities.is_empty());
     }
@@ -215,7 +208,7 @@ mod tests {
     #[case::max(u32::MAX)]
     fn body_with_a_capability_round_trips_into_the_client_response_shape(#[case] n: u32) {
         let caps = CapServer::new().add(TestCap { n }).unwrap();
-        let resp: CapabilitiesResponse = serde_json::from_str(caps.body()).unwrap();
+        let resp: CapsDocument = serde_json::from_str(caps.body()).unwrap();
         assert_eq!(resp.version, caps.token());
         assert_eq!(resp.capabilities.get("test/cap"), Some(&serde_json::json!({ "n": n })));
     }

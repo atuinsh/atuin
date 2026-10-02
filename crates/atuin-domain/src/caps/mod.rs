@@ -2,7 +2,7 @@
 //!
 //! # Context
 //!
-//! A node advertises capabilities about itself and, if it is a client, can read the server's.
+//! A server advertises capabilities about itself; a client reads the server's.
 //!
 //! Atuin's client and server versions are not necessarily always compatible. There are features
 //! that clients may support, but outdated servers will not.

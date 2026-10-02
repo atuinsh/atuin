@@ -92,6 +92,7 @@ sync-status-last-sync = Last sync: { $time }
 sync-status-remote = [Remote]
 sync-status-address = Address: { $address }
 sync-status-username = Username: { $username }
+sync-status-username-unavailable = Username: unavailable (the server did not report one)
 cmd-search = Interactive history search
 cmd-stats = Calculate statistics for your history
 cmd-account = Manage your sync account

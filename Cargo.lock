@@ -414,7 +414,6 @@ dependencies = [
  "atuin-domain",
  "derive_more",
  "progenitor",
- "progenitor-client",
  "reqwest",
  "secrecy",
  "serde",
@@ -562,7 +561,6 @@ name = "atuin-daemon"
 version = "18.23.0"
 dependencies = [
  "async-stream",
- "atuin-api-client",
  "atuin-client",
  "atuin-common",
  "atuin-domain",
@@ -587,7 +585,6 @@ dependencies = [
  "protox",
  "rand 0.8.7",
  "regex",
- "reqwest",
  "rstest",
  "serde",
  "serde_json",

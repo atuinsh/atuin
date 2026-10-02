@@ -65,7 +65,8 @@ reason = """use atuin_common::db::migrate!, which runs the migrator and then cle
 
 [[disallowed-methods]]
 path = "atuin_api_client::Client::new"
-reason = "hard-codes 15 s timeouts and panics if the TLS backend fails; use Client::from_http"
+reason = """hard-codes 15 s timeouts and panics if the TLS backend fails; use \
+    Client::connect_authenticated or Client::connect_unauthenticated"""
 
 [[disallowed-methods]]
 path = "atuin_api_client::Client::new_with_client"

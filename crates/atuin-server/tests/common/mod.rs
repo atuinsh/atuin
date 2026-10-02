@@ -1,13 +1,13 @@
 use std::env;
 use std::time::Duration;
 
-use atuin_api_client::{Client, MapApiError, types};
+use atuin_api_client::{AuthToken, Client, MapApiError, Timeouts, types};
 use atuin_common::utils::uuid_v7;
+use atuin_domain::api::ATUIN_HEADER_VERSION;
 use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use futures_util::TryFutureExt;
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -70,17 +70,24 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
     (url, shutdown_tx, server)
 }
 
+/// How long a test client waits on the server before the test fails.
+const TIMEOUTS: Timeouts = Timeouts {
+    connect: Duration::from_secs(5),
+    total: Duration::from_secs(30),
+};
+
 /// A client for the server at `address`, authenticated with the CLI session `session`, if any.
 pub fn client(address: &url::Url, session: Option<&SecretString>) -> Client {
-    let mut headers = HeaderMap::new();
-    if let Some(session) = session {
-        let mut value =
-            HeaderValue::from_str(&format!("Token {}", session.expose_secret())).unwrap();
-        value.set_sensitive(true);
-        headers.insert(AUTHORIZATION, value);
+    match session {
+        Some(session) => Client::connect_authenticated(
+            address,
+            &AuthToken::Token(session.clone()),
+            TIMEOUTS,
+            None,
+        ),
+        None => Client::connect_unauthenticated(address, TIMEOUTS, None),
     }
-    let http = reqwest::Client::builder().default_headers(headers).build().unwrap();
-    Client::from_http(address.clone(), http).unwrap()
+    .unwrap()
 }
 
 /// Register `username`, and return a client authenticated as them.
@@ -92,7 +99,7 @@ pub async fn register_inner(address: &url::Url, username: &str, password: &str) 
     };
     let registered = client(address, None).legacy_register(&body).map_api_error().await.unwrap();
 
-    assert!(registered.headers().contains_key("atuin-version"), "{:?}", registered.headers());
+    assert!(registered.headers().contains_key(ATUIN_HEADER_VERSION), "{:?}", registered.headers());
     client(address, Some(&registered.into_inner().session.into()))
 }
 

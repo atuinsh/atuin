@@ -52,7 +52,7 @@ impl Push {
                 ..atuin_client::api_client::timeouts(settings)
             };
             let client = Client::new(
-                settings.sync_address.clone(),
+                &settings.sync_address,
                 &settings.sync_auth_token().await?,
                 timeouts,
                 &settings.extra_headers,
