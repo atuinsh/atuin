@@ -62,7 +62,6 @@
 //! - Content kinds a line of the kind cannot carry (text inside a tool call, and so on).
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
@@ -92,23 +91,36 @@ const COMPACTION_PREAMBLE: &str =
 /// its path. `codex resume <id>` finds it from any directory.
 ///
 /// Fails with [`RehydrateError::AlreadyExists`] when Codex already has a rollout of the session,
-/// live or archived; the file is written whole under a temporary name and linked into place, so
+/// live or archived; the file is written whole under a temporary name and moved into place, so
 /// no reader ever sees half of it and an existing file is never replaced.
 ///
 /// Where Codex's thread index still names a rollout of the session that is gone (the transcript
 /// was deleted), the index is pointed at the new one, or Codex would find none (see
-/// `codex::state_db`).
+/// `codex::state_db`). Where that fails, the rollout is left where it is, as Codex may have
+/// indexed it itself meanwhile (it is visible from the moment it is written): a stale file is
+/// better than a thread whose rollout is gone.
 pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
     let root = session::default_root();
     let home = root.parent().map(Path::to_path_buf).ok_or(RehydrateError::NoDataDir)?;
-    let session = session.clone();
+    rehydrate_into(&root, &home, session).await
+}
+
+/// [`rehydrate`] under the sessions directory `root` of Codex home `home`.
+pub(crate) async fn rehydrate_into(
+    root: &Path,
+    home: &Path,
+    session: &RehydrateSession,
+) -> Result<PathBuf, RehydrateError> {
+    let (root, session) = (root.to_path_buf(), session.clone());
     let thread = session::resume_id(&session.id).to_owned();
     let path = tokio::task::spawn_blocking(move || write(&root, &session))
         .await
         .map_err(|err| RehydrateError::Other(err.to_string()))??;
-    if let Err(err) = super::state_db::point_at(&home, &thread, None, &path).await {
-        let _ = std::fs::remove_file(&path);
-        return Err(RehydrateError::Other(err.to_string()));
+    if let Err(err) = super::state_db::point_at(home, &thread, None, &path).await {
+        return Err(RehydrateError::Other(format!(
+            "{err} (the rollout is left at {})",
+            path.display()
+        )));
     }
     Ok(path)
 }
@@ -155,40 +167,17 @@ pub(crate) fn write(root: &Path, session: &RehydrateSession) -> Result<PathBuf, 
     Ok(path)
 }
 
-/// Write `path` whole or not at all, and never over an existing file: `bytes` go to a temporary
-/// file beside it (named so that no watcher takes it for a rollout), which is then hard-linked
-/// into place. Where hard links are unsupported, the temporary file is renamed instead, after
-/// checking that nothing is there.
+/// Write `path` whole or not at all, and never over an existing file (see
+/// [`crate::fs::write_new`]): the temporary file it is written as first is named so that no
+/// watcher takes it for a rollout.
 pub(crate) fn create_new(path: &Path, bytes: &[u8]) -> Result<(), RehydrateError> {
-    let dir = path.parent().ok_or(RehydrateError::NoDataDir)?;
-    let name = path.file_name().ok_or(RehydrateError::NoDataDir)?.to_string_lossy();
-    let (tmp, mut file) = (0u32..)
-        .find_map(|n| {
-            let tmp = dir.join(format!(".{name}.atuin-tmp.{n}"));
-            match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
-                Ok(file) => Some(Ok((crate::fs::RemoveOnDropPath(tmp), file))),
-                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => None,
-                Err(err) => Some(Err(err)),
-            }
-        })
-        .expect("an unbounded range always finds a free name")?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    match std::fs::hard_link(&*tmp, path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-            Err(RehydrateError::AlreadyExists(path.to_path_buf()))
+    crate::fs::write_new(path, bytes).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            RehydrateError::AlreadyExists(path.to_path_buf())
+        } else {
+            err.into()
         }
-        Err(err) if err.kind() == std::io::ErrorKind::Unsupported => {
-            if path.exists() {
-                return Err(RehydrateError::AlreadyExists(path.to_path_buf()));
-            }
-            std::fs::rename(&*tmp, path)?;
-            Ok(())
-        }
-        Err(err) => Err(err.into()),
-    }
+    })
 }
 
 /// The time as Codex stamps a line: RFC 3339 in UTC, as precise as it was captured.
@@ -1186,6 +1175,40 @@ pub(crate) mod tests {
             Err(RehydrateError::AlreadyExists(path)) if path == first
         ));
         assert_eq!(std::fs::read(&first).unwrap(), before);
+    }
+
+    /// A rollout whose index row can't be pointed at it is left where it is: Codex may be
+    /// resuming the thread from it already.
+    #[rstest]
+    #[tokio::test]
+    async fn a_rollout_the_index_cant_be_pointed_at_is_left_in_place() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("sessions");
+        let thread = session::resume_id(ID);
+        let other = home.path().join("other.jsonl");
+        std::fs::write(&other, "{}\n").unwrap();
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(home.path().join("state_5.sqlite"))
+            .create_if_missing(true);
+        let mut conn =
+            <sqlx::SqliteConnection as sqlx::Connection>::connect_with(&opts).await.unwrap();
+        for sql in [
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)",
+            "INSERT INTO threads (id, rollout_path) VALUES (?1, ?2)",
+        ] {
+            crate::db::query::<sqlx::Sqlite>(sql)
+                .bind(thread)
+                .bind(other.to_string_lossy().into_owned())
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        <sqlx::SqliteConnection as sqlx::Connection>::close(conn).await.unwrap();
+
+        let err = rehydrate_into(&root, home.path(), &session(ID, vec![])).await.unwrap_err();
+        assert!(matches!(&err, RehydrateError::Other(why) if why.contains("left at")), "{err}");
+        let left = session::locate(&root, ID).expect("the rollout is still there");
+        assert!(left.is_file());
     }
 
     #[rstest]
