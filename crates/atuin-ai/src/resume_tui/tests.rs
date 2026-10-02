@@ -546,36 +546,45 @@ impl Resumer for GatedRestores {
     }
 }
 
+/// Rows `0..n` of a loaded picker as if recorded on another machine, planned as restores.
+async fn from_another_machine(state: &mut State, resumer: &GatedRestores, n: usize) {
+    assert!(state.results.len() >= n);
+    for i in 0..n {
+        state.results[i].host_id = "another-host".to_owned();
+        let row = state.results[i].clone();
+        state.plans.insert(row.handle.clone(), resumer.plan(&row).await);
+    }
+}
+
+fn gated() -> std::sync::Arc<GatedRestores> {
+    std::sync::Arc::new(GatedRestores {
+        inner: FakeResumer::default(),
+        gate: tokio::sync::Semaphore::new(0),
+        started: std::sync::atomic::AtomicUsize::new(0),
+    })
+}
+
 /// An enter on a session from another machine while the worker is busy restoring one, then on a
-/// third, then on the second again: the second's restore, asked for once, still runs, so the
-/// picker doesn't wait on it forever.
+/// third, then on the second again: the second's restore, dropped for the third's before it
+/// started, is asked for again, runs, and the picker resumes it rather than waiting forever.
 #[rstest]
 #[tokio::test]
-async fn a_restore_is_never_dropped_for_another_sessions() {
+async fn a_restore_dropped_for_another_sessions_is_asked_for_again() {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use super::state::Pending;
     use super::worker::Response;
-    use super::{accept, apply_response, worker};
+    use super::{Outcome, accept, respond, worker};
 
     let s = settings();
-    let resumer = Arc::new(GatedRestores {
-        inner: FakeResumer::default(),
-        gate: tokio::sync::Semaphore::new(0),
-        started: std::sync::atomic::AtomicUsize::new(0),
-    });
+    let resumer = gated();
     let (requests, mut responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
 
     let mut state = loaded(&s, "", 0).await;
-    assert!(state.results.len() >= 3);
     // Three sessions (busy, B and C) as if recorded on another machine.
-    for i in 0..3 {
-        state.results[i].host_id = "another-host".to_owned();
-        let row = state.results[i].clone();
-        state.plans.insert(row.handle.clone(), resumer.plan(&row).await);
-    }
+    from_another_machine(&mut state, &resumer, 3).await;
     let handle = |state: &State, i: usize| state.results[i].handle.clone();
     let enter = |state: &mut State, i: usize| {
         state.list.selected = i;
@@ -595,18 +604,82 @@ async fn a_restore_is_never_dropped_for_another_sessions() {
     resumer.gate.add_permits(10);
 
     let mut restored = Vec::new();
-    while !restored.contains(&handle(&state, 1)) {
+    let mut abandoned = Vec::new();
+    let outcome = loop {
         let next = tokio::time::timeout(Duration::from_secs(10), responses.recv());
-        match next.await.expect("B's restore was dropped").expect("the worker stopped") {
+        let response = next.await.expect("the picker is stuck").expect("the worker stopped");
+        match &response {
             Response::Restored(session, plan) => {
                 assert!(plan.is_ok(), "{plan:?}");
                 restored.push(session.clone());
-                apply_response(&mut state, Response::Restored(session, plan), &requests);
             }
+            Response::Abandoned(session) => abandoned.push(session.clone()),
             other => panic!("unexpected {other:?}"),
         }
+        if let Some(outcome) = respond(&mut state, response, &requests) {
+            break outcome;
+        }
+    };
+    let Outcome::Resume(plan) = outcome else {
+        panic!("{outcome:?}");
+    };
+    let b = handle(&state, 1);
+    let id = b.session.to_string();
+    assert_eq!(plan.native_path, Some(std::path::PathBuf::from(format!("/restored/{id}.jsonl"))));
+    assert_eq!(abandoned, vec![b.clone()]);
+    // B's, asked for again once dropped, runs after C's.
+    assert_eq!(restored, vec![handle(&state, 0), handle(&state, 2), b]);
+}
+
+/// Enters on B and then C while the worker is busy restoring another session: B's restore, not
+/// started when C's was asked for, never runs (nothing is written for a session the user left),
+/// and the picker hears that it was dropped.
+#[rstest]
+#[tokio::test]
+async fn an_abandoned_restore_does_not_run() {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use super::state::{Pending, RESTORE};
+    use super::worker::Response;
+    use super::{accept, respond, worker};
+
+    let s = settings();
+    let resumer = gated();
+    let (requests, mut responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+
+    let mut state = loaded(&s, "", 0).await;
+    from_another_machine(&mut state, &resumer, 3).await;
+    let handle = |state: &State, i: usize| state.results[i].handle.clone();
+    for i in 0..3 {
+        state.list.selected = i;
+        assert_eq!(accept(&mut state, Pending::Resume, &requests), None);
+        while resumer.started.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
     }
-    assert!(restored.contains(&handle(&state, 0)), "{restored:?}");
+    resumer.gate.add_permits(10);
+
+    let c = ("restored", handle(&state, 2));
+    let mut answered = Vec::new();
+    while !answered.contains(&c) {
+        let next = tokio::time::timeout(Duration::from_secs(10), responses.recv());
+        let response = next.await.expect("C's restore never came").expect("the worker stopped");
+        answered.push(match &response {
+            Response::Restored(session, _) => ("restored", session.clone()),
+            Response::Abandoned(session) => ("abandoned", session.clone()),
+            other => panic!("unexpected {other:?}"),
+        });
+        let _ = respond(&mut state, response, &requests);
+    }
+    assert_eq!(answered, vec![
+        ("restored", handle(&state, 0)),
+        ("abandoned", handle(&state, 1)),
+        ("restored", handle(&state, 2)),
+    ]);
+    assert_eq!(resumer.started.load(Ordering::SeqCst), 2, "B's restore never ran");
+    assert!(!state.requested.contains(&(handle(&state, 1), RESTORE)));
 }
 
 /// The picker's host id is compared with the rows' in their (simple) form, however it was

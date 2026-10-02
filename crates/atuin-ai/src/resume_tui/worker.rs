@@ -6,12 +6,12 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
-//!   Restoring a session from sync, which only an enter or tab asks for, goes first, and is never
-//!   dropped (the picker asks for each session's restore once, and waits on it), then the plan
-//!   an enter or tab is waiting on, which is never dropped for another session's (see
-//!   [`Request::Accept`]).
+//!   Restoring a session from sync, which only an enter or tab asks for, goes first: only the
+//!   newest accepted session's is kept, and one dropped before it started is reported
+//!   ([`Response::Abandoned`]) so that the picker asks again if the user comes back to it. One
+//!   already running finishes and reports as usual. Then the plan an enter or tab is waiting on,
+//!   which is never dropped for another session's (see [`Request::Accept`]).
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use atuin_client::ai_session::HarnessSession;
@@ -53,6 +53,9 @@ pub enum Response {
     Plan(HarnessSession, Result<Resume, NotResumable>),
     /// The session is restored (or couldn't be): the plan that resumes it.
     Restored(HarnessSession, Result<ResumePlan, NotResumable>),
+    /// The session's restore was dropped before it started, for a newer accepted session's: it
+    /// has to be asked for again.
+    Abandoned(HarnessSession),
 }
 
 /// Sends requests to the worker's lanes. The worker stops when this is dropped.
@@ -122,44 +125,46 @@ async fn searches(
     }
 }
 
-/// The newest unanswered detail request of each kind, and every unanswered restore: the picker
-/// asks for a session's restore only once, so one dropped for another session's would never be
-/// answered, and an enter on it would wait forever.
+/// The newest unanswered detail request of each kind.
 #[derive(Default)]
 struct Latest {
     preview: Option<Request>,
     children: Option<Request>,
     plan: Option<Request>,
     accept: Option<Request>,
-    restores: VecDeque<Request>,
+    restore: Option<Request>,
 }
 
 impl Latest {
-    fn put(&mut self, request: Request) {
-        if let Request::Restore(row, _) = &request {
-            // A newer restore of a session already waiting takes its place; another's waits.
-            let same = |r: &Request| matches!(r, Request::Restore(q, _) if q.handle == row.handle);
-            match self.restores.iter().position(same) {
-                Some(at) => self.restores[at] = request,
-                None => self.restores.push_back(request),
-            }
-            return;
-        }
+    /// Keep `request` in place of the one of its kind. Returns the session whose restore it
+    /// dropped, if it dropped another session's: the picker asks for a session's restore once,
+    /// and waits on it, so it must hear that it won't come.
+    #[must_use]
+    fn put(&mut self, request: Request) -> Option<HarnessSession> {
         let slot = match request {
             Request::Preview(_) => &mut self.preview,
             Request::Children(_) => &mut self.children,
             Request::Plan(_) => &mut self.plan,
             Request::Accept(_) => &mut self.accept,
-            Request::Restore(..) | Request::Search { .. } => return,
+            Request::Restore(..) => &mut self.restore,
+            Request::Search { .. } => return None,
         };
-        *slot = Some(request);
+        let dropped = slot.replace(request)?;
+        match (dropped, &*slot) {
+            (Request::Restore(old, _), Some(Request::Restore(new, _)))
+                if old.handle != new.handle =>
+            {
+                Some(old.handle)
+            }
+            _ => None,
+        }
     }
 
-    /// The next to answer: the oldest restore, then the plan an enter is waiting on (an enter
-    /// waits on either), then the selection's plan (one may soon be), then children, then the preview.
+    /// The next to answer: the restore, then the plan an enter is waiting on (an enter waits on
+    /// either), then the selection's plan (one may soon be), then children, then the preview.
     fn take(&mut self) -> Option<Request> {
-        self.restores
-            .pop_front()
+        self.restore
+            .take()
             .or_else(|| self.accept.take())
             .or_else(|| self.plan.take())
             .or_else(|| self.children.take())
@@ -175,12 +180,19 @@ async fn details(
 ) {
     let mut latest = Latest::default();
     loop {
+        let mut abandoned = Vec::new();
         while let Ok(next) = requests.try_recv() {
-            latest.put(next);
+            abandoned.extend(latest.put(next));
+        }
+        for session in abandoned {
+            if responses.send(Response::Abandoned(session)).is_err() {
+                return;
+            }
         }
         let Some(request) = latest.take() else {
+            // Nothing is waiting, so this drops nothing.
             match requests.recv().await {
-                Some(r) => latest.put(r),
+                Some(r) => _ = latest.put(r),
                 None => return,
             }
             continue;

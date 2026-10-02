@@ -248,7 +248,22 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
             state.requested.remove(&(handle.clone(), RESTORE));
             state.plans.insert(handle, plan.map(Resume::ready));
         }
+        // Dropped for a newer accept's before it started: an enter on the session (or the one
+        // still waiting on it) asks for it again.
+        Response::Abandoned(handle) => {
+            state.requested.remove(&(handle, RESTORE));
+        }
     }
+}
+
+/// Apply a worker response, and finish the enter, tab or ctrl-y waiting on it, if it can now.
+fn respond(state: &mut State, response: Response, requests: &Requests) -> Option<Outcome> {
+    apply_response(state, response, requests);
+    let (handle, pending) = state.pending.clone()?;
+    if !state.plans.contains_key(&handle) {
+        return None;
+    }
+    complete(state, pending, requests)
 }
 
 /// Carry out `action` for the session acted on ([`State::target`]) once its plan is known,
@@ -446,12 +461,7 @@ impl Picker<'_> {
                         tracing::error!("the session picker's workers stopped");
                         break Outcome::Cancelled;
                     };
-                    apply_response(&mut state, response, &requests);
-                    // An enter/tab/ctrl-y waiting on this session's plan can finish now.
-                    if let Some((handle, pending)) = state.pending.clone()
-                        && state.plans.contains_key(&handle)
-                        && let Some(outcome) = complete(&mut state, pending, &requests)
-                    {
+                    if let Some(outcome) = respond(&mut state, response, &requests) {
                         break 'render outcome;
                     }
                 }
