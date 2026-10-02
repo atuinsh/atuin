@@ -69,6 +69,7 @@ usage, self-hosting, and AI features.
 - [Skills](https://docs.atuin.sh/ai/skills/index.md): Reusable instruction sets (skills) for Atuin AI - playbooks, conventions, workflows.
 - [Tools & Permissions](https://docs.atuin.sh/ai/tools-permissions/index.md): Tools the AI can use (shell, filesystem) and permission files to control access.
 - [Reading Command Output](https://docs.atuin.sh/ai/command-output/index.md): Let Atuin AI read command outputs - capture via pty-proxy and the daemon.
+- [Agent sessions](https://docs.atuin.sh/ai/sessions/index.md): Search and resume the AI coding-agent sessions the daemon captures, and rebuild their index.
 - [MCP Server](https://docs.atuin.sh/ai/mcp/index.md): Built-in MCP server exposing history search and command output to Claude Code, Cursor, and other AI tools.
 - [Self Hosting & Local Models](https://docs.atuin.sh/ai/self-hosting/index.md): Self-hosting the Atuin AI backend.
 
