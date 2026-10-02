@@ -518,6 +518,97 @@ async fn a_session_from_another_machine_is_restored_first() {
     assert_eq!(plan.native_path, Some(std::path::PathBuf::from(format!("/restored/{id}.jsonl"))));
 }
 
+/// A [`FakeResumer`] whose restores wait for a permit, so the worker stays busy with one.
+struct GatedRestores {
+    inner: FakeResumer,
+    gate: tokio::sync::Semaphore,
+    started: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl Resumer for GatedRestores {
+    async fn plan(
+        &self,
+        session: &super::source::SessionRow,
+    ) -> Result<super::resumer::Resume, super::resumer::NotResumable> {
+        self.inner.plan(session).await
+    }
+
+    async fn restore(
+        &self,
+        source: &dyn SessionSource,
+        session: &super::source::SessionRow,
+        restore: &super::resumer::Restore,
+    ) -> Result<super::resumer::ResumePlan, super::resumer::NotResumable> {
+        self.started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.gate.acquire().await.unwrap().forget();
+        self.inner.restore(source, session, restore).await
+    }
+}
+
+/// An enter on a session from another machine while the worker is busy restoring one, then on a
+/// third, then on the second again: the second's restore, asked for once, still runs, so the
+/// picker doesn't wait on it forever.
+#[rstest]
+#[tokio::test]
+async fn a_restore_is_never_dropped_for_another_sessions() {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use super::state::Pending;
+    use super::worker::Response;
+    use super::{accept, apply_response, worker};
+
+    let s = settings();
+    let resumer = Arc::new(GatedRestores {
+        inner: FakeResumer::default(),
+        gate: tokio::sync::Semaphore::new(0),
+        started: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let (requests, mut responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+
+    let mut state = loaded(&s, "", 0).await;
+    assert!(state.results.len() >= 3);
+    // Three sessions (busy, B and C) as if recorded on another machine.
+    for i in 0..3 {
+        state.results[i].host_id = "another-host".to_owned();
+        let row = state.results[i].clone();
+        state.plans.insert(row.handle.clone(), resumer.plan(&row).await);
+    }
+    let handle = |state: &State, i: usize| state.results[i].handle.clone();
+    let enter = |state: &mut State, i: usize| {
+        state.list.selected = i;
+        assert_eq!(state.target().unwrap().handle, state.results[i].handle);
+        assert_eq!(accept(state, Pending::Resume, &requests), None, "waits for the restore");
+    };
+
+    // The worker starts restoring the first, and is busy with it.
+    enter(&mut state, 0);
+    while resumer.started.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    // Then B, then C, then B again.
+    enter(&mut state, 1);
+    enter(&mut state, 2);
+    enter(&mut state, 1);
+    resumer.gate.add_permits(10);
+
+    let mut restored = Vec::new();
+    while !restored.contains(&handle(&state, 1)) {
+        let next = tokio::time::timeout(Duration::from_secs(10), responses.recv());
+        match next.await.expect("B's restore was dropped").expect("the worker stopped") {
+            Response::Restored(session, plan) => {
+                assert!(plan.is_ok(), "{plan:?}");
+                restored.push(session.clone());
+                apply_response(&mut state, Response::Restored(session, plan), &requests);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert!(restored.contains(&handle(&state, 0)), "{restored:?}");
+}
+
 /// The picker's host id is compared with the rows' in their (simple) form, however it was
 /// given: a hyphenated one would make every session of this host look like another host's.
 #[rstest]

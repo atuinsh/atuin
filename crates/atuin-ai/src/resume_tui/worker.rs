@@ -6,10 +6,12 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
-//!   Restoring a session from sync, which only an enter or tab asks for, goes first, then the plan
+//!   Restoring a session from sync, which only an enter or tab asks for, goes first, and is never
+//!   dropped (the picker asks for each session's restore once, and waits on it), then the plan
 //!   an enter or tab is waiting on, which is never dropped for another session's (see
 //!   [`Request::Accept`]).
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use atuin_client::ai_session::HarnessSession;
@@ -120,34 +122,44 @@ async fn searches(
     }
 }
 
-/// The newest unanswered detail request of each kind.
+/// The newest unanswered detail request of each kind, and every unanswered restore: the picker
+/// asks for a session's restore only once, so one dropped for another session's would never be
+/// answered, and an enter on it would wait forever.
 #[derive(Default)]
 struct Latest {
     preview: Option<Request>,
     children: Option<Request>,
     plan: Option<Request>,
     accept: Option<Request>,
-    restore: Option<Request>,
+    restores: VecDeque<Request>,
 }
 
 impl Latest {
     fn put(&mut self, request: Request) {
+        if let Request::Restore(row, _) = &request {
+            // A newer restore of a session already waiting takes its place; another's waits.
+            let same = |r: &Request| matches!(r, Request::Restore(q, _) if q.handle == row.handle);
+            match self.restores.iter().position(same) {
+                Some(at) => self.restores[at] = request,
+                None => self.restores.push_back(request),
+            }
+            return;
+        }
         let slot = match request {
             Request::Preview(_) => &mut self.preview,
             Request::Children(_) => &mut self.children,
             Request::Plan(_) => &mut self.plan,
             Request::Accept(_) => &mut self.accept,
-            Request::Restore(..) => &mut self.restore,
-            Request::Search { .. } => return,
+            Request::Restore(..) | Request::Search { .. } => return,
         };
         *slot = Some(request);
     }
 
-    /// The next to answer: a restore, then the plan an enter is waiting on (an enter waits on
-    /// either), then the selection's plan (one may soon be), then children, then the preview.
+    /// The next to answer: the oldest restore, then the plan an enter is waiting on (an enter
+    /// waits on either), then the selection's plan (one may soon be), then children, then the preview.
     fn take(&mut self) -> Option<Request> {
-        self.restore
-            .take()
+        self.restores
+            .pop_front()
             .or_else(|| self.accept.take())
             .or_else(|| self.plan.take())
             .or_else(|| self.children.take())
