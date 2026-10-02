@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use atuin_client::api_client::Client;
+use atuin_client::api_client::{Client, Timeouts};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, Operation, SyncSession};
 use atuin_client::settings::Settings;
@@ -46,12 +46,15 @@ impl Push {
             println!("Clearing remote store");
 
             let caps = atuin_client::api_client::caps_client(settings)?;
+            let timeouts = Timeouts {
+                // we may be deleting a lot of data... so up the timeout
+                total: settings.network_timeout * 10,
+                ..atuin_client::api_client::timeouts(settings)
+            };
             let client = Client::new(
                 settings.sync_address.clone(),
                 &settings.sync_auth_token().await?,
-                settings.network_connect_timeout,
-                settings.network_timeout * 10, // we may be deleting a lot of data... so up the
-                // timeout
+                timeouts,
                 &settings.extra_headers,
                 caps,
             )

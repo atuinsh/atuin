@@ -10,8 +10,8 @@
 
 use std::time::Duration;
 
-use atuin_api_client::{ApiBody, Client};
 use atuin_api_client::types::UsageSnapshot;
+use atuin_api_client::{ApiBody, AuthToken, Client, Timeouts};
 use eyre::Result;
 use reqwest::Url;
 use secrecy::{ExposeSecret, SecretString};
@@ -81,8 +81,13 @@ pub fn cache_key(token: &SecretString) -> String {
 
 /// Fetch current usage from the hub. Mirrors the `credits` object on the
 /// chat `done` event, for refreshing without starting a chat.
-pub async fn fetch_usage(endpoint: &Url, token: &SecretString) -> Result<UsageSnapshot> {
-    Ok(Client::for_ai(endpoint, Some(token))?.get_usage().body().await?)
+pub async fn fetch_usage(
+    endpoint: &Url,
+    token: &SecretString,
+    timeouts: Timeouts,
+) -> Result<UsageSnapshot> {
+    let auth = AuthToken::Bearer(token.clone());
+    Ok(Client::connect_authenticated(endpoint, &auth, timeouts, None)?.get_usage().body().await?)
 }
 
 #[cfg(test)]

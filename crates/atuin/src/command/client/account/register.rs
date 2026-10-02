@@ -123,6 +123,7 @@ impl Cmd {
                 &username,
                 &email,
                 &password,
+                atuin_client::api_client::timeouts(settings),
                 &settings.extra_headers,
             )
             .await?;

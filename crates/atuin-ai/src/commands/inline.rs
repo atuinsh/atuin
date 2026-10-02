@@ -80,6 +80,7 @@ pub async fn run(
     let ctx = AppContext {
         endpoint,
         token,
+        timeouts: atuin_client::api_client::timeouts(settings),
         endpoint_is_hub,
         token_from_hub_session,
         send_cwd,
@@ -127,7 +128,8 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
     debug!("Starting Atuin Hub authentication...");
     println!("Authenticating with Atuin Hub...");
 
-    let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
+    let timeouts = atuin_client::api_client::timeouts(settings);
+    let session = atuin_client::hub::HubAuthSession::start(&hub_address, timeouts).await?;
     println!("Open this URL to continue:");
     println!("{}", session.auth_url);
 
@@ -145,7 +147,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
         && let Ok(Some(cli_token)) = meta.session_token().await
     {
         debug!("CLI session found, attempting to link accounts");
-        if let Err(e) = atuin_client::hub::link_account(&hub_address, &cli_token).await {
+        if let Err(e) = atuin_client::hub::link_account(&hub_address, timeouts, &cli_token).await {
             debug!("Could not link CLI account to Hub: {}", e);
         } else {
             info!("Successfully linked CLI account to Hub");

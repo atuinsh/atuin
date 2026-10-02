@@ -488,10 +488,12 @@ impl AiApp {
                     };
                     let endpoint = io.app_ctx.endpoint.clone();
                     let token = io.app_ctx.token.clone();
+                    let timeouts = io.app_ctx.timeouts;
                     ctx.perform(async move {
-                        let result = crate::models::fetch_models(&endpoint, token.as_ref())
-                            .await
-                            .map_err(|e| e.to_string());
+                        let result =
+                            crate::models::fetch_models(&endpoint, token.as_ref(), timeouts)
+                                .await
+                                .map_err(|e| e.to_string());
                         Msg::Fsm(Event::ModelListLoaded(result))
                     })
                     .detach();
@@ -975,8 +977,9 @@ impl App for AiApp {
             && let Some(token) = io.app_ctx.token.clone()
         {
             let endpoint = io.app_ctx.endpoint.clone();
+            let timeouts = io.app_ctx.timeouts;
             ctx.perform(async move {
-                match crate::usage::fetch_usage(&endpoint, &token).await {
+                match crate::usage::fetch_usage(&endpoint, &token, timeouts).await {
                     Ok(snapshot) => Msg::Usage(snapshot),
                     Err(e) => Msg::UsageFetchFailed(e.to_string()),
                 }

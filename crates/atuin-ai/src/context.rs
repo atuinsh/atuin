@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use atuin_api_client::Timeouts;
 use atuin_client::distro::detect_linux_distribution;
 use atuin_client::history::History;
 use atuin_client::settings::AiCapabilities;
@@ -17,6 +18,8 @@ pub struct AppContext {
     /// Bearer token for `endpoint`. `None` means unauthenticated -- no
     /// Authorization header is sent (an OSS server may not require auth).
     pub token: Option<SecretString>,
+    /// How long calls to `endpoint` wait.
+    pub timeouts: Timeouts,
     /// Whether `endpoint` is an Atuin Hub instance. Hub endpoints report
     /// credit usage; OSS endpoints (e.g. atuin-ai-server) don't have the
     /// usage API, so usage fetching and caching are skipped.

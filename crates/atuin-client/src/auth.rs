@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::time::Duration;
 
-use atuin_api_client::{ApiError, AuthToken, MapApiError, types};
+use atuin_api_client::{ApiError, AuthToken, MapApiError, Timeouts, types};
 use enum_dispatch::enum_dispatch;
 use eyre::{Result, bail, eyre};
 use reqwest::{StatusCode, Url};
@@ -82,15 +81,19 @@ pub enum AnyAuthClient {
 
 /// Resolve the appropriate [`AuthClient`] for the current settings.
 pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
+    let timeouts = crate::api_client::timeouts(settings);
     if settings.is_hub_sync() {
         let endpoint = settings.hub_endpoint();
-        AnyAuthClient::Hub(HubAuthClient::new(&endpoint, settings.hub_session_token().await.ok()))
+        AnyAuthClient::Hub(HubAuthClient::new(
+            &endpoint,
+            settings.hub_session_token().await.ok(),
+            timeouts,
+        ))
     } else {
         AnyAuthClient::Legacy(LegacyAuthClient::new(
             &settings.sync_address,
             settings.session_token().await.ok(),
-            settings.network_connect_timeout,
-            settings.network_timeout,
+            timeouts,
             settings.extra_headers.clone(),
         ))
     }
@@ -103,8 +106,7 @@ pub async fn auth_client(settings: &Settings) -> AnyAuthClient {
 pub struct LegacyAuthClient {
     address: Url,
     session_token: Option<SecretString>,
-    connect_timeout: Duration,
-    timeout: Duration,
+    timeouts: Timeouts,
     extra_headers: HashMap<String, SecretString>,
 }
 
@@ -113,27 +115,24 @@ impl LegacyAuthClient {
     pub fn new(
         address: &Url,
         session_token: Option<SecretString>,
-        connect_timeout: Duration,
-        timeout: Duration,
+        timeouts: Timeouts,
         extra_headers: HashMap<String, SecretString>,
     ) -> Self {
         Self {
             address: address.clone(),
             session_token,
-            connect_timeout,
-            timeout,
+            timeouts,
             extra_headers,
         }
     }
 
     fn authenticated_api(&self) -> Result<atuin_api_client::Client> {
         let token = self.session_token.clone().ok_or_else(|| eyre!("Not logged in"))?;
-        Ok(atuin_api_client::Client::for_sync(
+        Ok(atuin_api_client::Client::connect_authenticated(
             &self.address,
             &AuthToken::Token(token),
-            &self.extra_headers,
-            self.connect_timeout,
-            self.timeout,
+            self.timeouts,
+            Some(&self.extra_headers),
         )?)
     }
 }
@@ -146,8 +145,14 @@ impl AuthClient for LegacyAuthClient {
         _totp_code: Option<&SecretString>,
     ) -> Result<AuthResponse> {
         // The legacy server has no 2FA support; totp_code is ignored.
-        let resp = crate::api_client::login(&self.address, username, password, &self.extra_headers)
-            .await?;
+        let resp = crate::api_client::login(
+            &self.address,
+            username,
+            password,
+            self.timeouts,
+            &self.extra_headers,
+        )
+        .await?;
 
         Ok(AuthResponse::Success {
             session: resp.session.into(),
@@ -166,6 +171,7 @@ impl AuthClient for LegacyAuthClient {
             username,
             email,
             password,
+            self.timeouts,
             &self.extra_headers,
         )
         .await?;
@@ -211,14 +217,16 @@ impl AuthClient for LegacyAuthClient {
 pub struct HubAuthClient {
     address: Url,
     hub_token: Option<SecretString>,
+    timeouts: Timeouts,
 }
 
 impl HubAuthClient {
     #[must_use]
-    pub fn new(address: &Url, hub_token: Option<SecretString>) -> Self {
+    pub fn new(address: &Url, hub_token: Option<SecretString>, timeouts: Timeouts) -> Self {
         Self {
             address: address.clone(),
             hub_token,
+            timeouts,
         }
     }
 
@@ -234,7 +242,16 @@ impl HubAuthClient {
             );
         }
 
-        Ok(atuin_api_client::Client::for_hub(&self.address, Some(hub_token))?)
+        Ok(atuin_api_client::Client::connect_authenticated(
+            &self.address,
+            &AuthToken::Bearer(hub_token.clone()),
+            self.timeouts,
+            None,
+        )?)
+    }
+
+    fn unauthenticated_api(&self) -> Result<atuin_api_client::Client> {
+        Ok(atuin_api_client::Client::connect_unauthenticated(&self.address, self.timeouts, None)?)
     }
 }
 
@@ -251,7 +268,7 @@ impl AuthClient for HubAuthClient {
             totp_code: totp_code.cloned().map(Into::into),
         };
 
-        match atuin_api_client::Client::for_hub(&self.address, None)?.login(&body).map_api_error().await {
+        match self.unauthenticated_api()?.login(&body).map_api_error().await {
             Ok(resp) => {
                 let login = resp.into_inner();
                 Ok(AuthResponse::Success {
@@ -292,7 +309,7 @@ impl AuthClient for HubAuthClient {
             password: password.clone().into(),
         };
 
-        match atuin_api_client::Client::for_hub(&self.address, None)?.register(&body).map_api_error().await {
+        match self.unauthenticated_api()?.register(&body).map_api_error().await {
             Ok(resp) => {
                 let reg = resp.into_inner();
                 Ok(AuthResponse::Success {

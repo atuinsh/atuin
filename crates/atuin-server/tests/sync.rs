@@ -1,7 +1,7 @@
 use std::env::temp_dir;
 use std::time::Duration;
 
-use atuin_api_client::{AuthToken, MapApiError, types};
+use atuin_api_client::{AuthToken, MapApiError, Timeouts, types};
 use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
@@ -39,13 +39,17 @@ impl TestServer {
             atuin_api_client::Client::from_http(self.address.clone(), reqwest::Client::new()).unwrap();
         let resp = api.legacy_register(&body).map_api_error().await.unwrap().into_inner();
 
+        let timeouts = Timeouts {
+            connect: Duration::from_secs(5),
+            total: Duration::from_secs(30),
+        };
         api_client::Client::new(
             self.address.clone(),
             &AuthToken::Token(resp.session.into()),
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_secs(30),
+            timeouts,
             &Default::default(),
-            api_client::caps_client_anonymous(&self.address, &Default::default()).unwrap(),
+            api_client::caps_client_anonymous(&self.address, timeouts, &Default::default())
+                .unwrap(),
         )
         .unwrap()
     }

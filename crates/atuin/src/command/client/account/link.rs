@@ -1,3 +1,4 @@
+use atuin_client::api_client;
 use atuin_client::settings::Settings;
 use eyre::{Result, bail};
 
@@ -14,13 +15,14 @@ pub async fn run(settings: &Settings) -> Result<()> {
     };
 
     let hub_address = settings.hub_endpoint();
+    let timeouts = api_client::timeouts(settings);
 
     if hub_token.is_some() {
         println!("{}", fl!("link-both-sessions"));
     } else {
         println!("{}", fl!("link-hub-login-first"));
 
-        let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
+        let session = atuin_client::hub::HubAuthSession::start(&hub_address, timeouts).await?;
         println!("{}", fl!("account-hub-open-url"));
         println!("{}", session.auth_url);
 
@@ -35,7 +37,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
         println!("{}", fl!("link-hub-complete"));
     }
 
-    atuin_client::hub::link_account(&hub_address, &cli_token).await?;
+    atuin_client::hub::link_account(&hub_address, timeouts, &cli_token).await?;
     println!("{}", fl!("link-success"));
 
     Ok(())

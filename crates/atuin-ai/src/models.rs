@@ -5,16 +5,24 @@
 //! display in the `/model` picker. The list's `default` is the alias the
 //! server uses when a request doesn't specify a model.
 
-use atuin_api_client::{ApiBody, Client};
 use atuin_api_client::types::ModelList;
+use atuin_api_client::{ApiBody, AuthToken, Client, Timeouts};
 use eyre::Result;
 use reqwest::Url;
 use secrecy::SecretString;
 
 /// Fetch the models available to this user. Sent authenticated because the
 /// server includes feature-flag-gated models only for entitled users.
-pub async fn fetch_models(endpoint: &Url, token: Option<&SecretString>) -> Result<ModelList> {
-    Ok(Client::for_ai(endpoint, token)?.list_models().body().await?)
+pub async fn fetch_models(
+    endpoint: &Url,
+    token: Option<&SecretString>,
+    timeouts: Timeouts,
+) -> Result<ModelList> {
+    let api = match token.cloned().map(AuthToken::Bearer) {
+        Some(auth) => Client::connect_authenticated(endpoint, &auth, timeouts, None)?,
+        None => Client::connect_unauthenticated(endpoint, timeouts, None)?,
+    };
+    Ok(api.list_models().body().await?)
 }
 
 /// Persist the chosen alias to `ai.model` in config.toml so it becomes the

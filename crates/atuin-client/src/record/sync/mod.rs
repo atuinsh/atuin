@@ -937,7 +937,7 @@ mod tests {
 mod packfile_sync_tests {
     use std::collections::HashMap;
 
-    use atuin_api_client::AuthToken;
+    use atuin_api_client::{AuthToken, Timeouts};
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{
@@ -968,16 +968,13 @@ mod packfile_sync_tests {
 
     /// A [`Client`] pointed at a wiremock server, authenticated with a dummy token.
     pub(super) fn mock_client(addr: &url::Url) -> Client {
-        let caps = caps_client_anonymous(addr, &HashMap::new()).unwrap();
-        Client::new(
-            addr.clone(),
-            &AuthToken::Token("t".into()),
-            std::time::Duration::from_secs(30),
-            std::time::Duration::from_secs(30),
-            &HashMap::new(),
-            caps,
-        )
-        .unwrap()
+        let timeouts = Timeouts {
+            connect: std::time::Duration::from_secs(30),
+            total: std::time::Duration::from_secs(30),
+        };
+        let caps = caps_client_anonymous(addr, timeouts, &HashMap::new()).unwrap();
+        Client::new(addr.clone(), &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps)
+            .unwrap()
     }
 
     /// A fresh in-memory record store.
@@ -1494,16 +1491,12 @@ mod packfile_sync_tests {
     /// network (already-local skips, parse failures) or that exercise a transport fault.
     fn dead_client() -> Client {
         let addr: url::Url = "http://127.0.0.1:1/".parse().unwrap();
-        let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
-        Client::new(
-            addr,
-            &AuthToken::Token("t".into()),
-            std::time::Duration::from_secs(1),
-            std::time::Duration::from_secs(1),
-            &HashMap::new(),
-            caps,
-        )
-        .unwrap()
+        let timeouts = Timeouts {
+            connect: std::time::Duration::from_secs(1),
+            total: std::time::Duration::from_secs(1),
+        };
+        let caps = caps_client_anonymous(&addr, timeouts, &HashMap::new()).unwrap();
+        Client::new(addr, &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps).unwrap()
     }
 
     /// Building the view rejects an inverted plaintext range (`start_idx > end_idx`) -- the

@@ -11,7 +11,7 @@
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use atuin_api_client::{ApiBody, ApiError, MapApiError, Secret, types};
+use atuin_api_client::{ApiBody, ApiError, AuthToken, MapApiError, Secret, Timeouts, types};
 use atuin_common::futures::Backoff;
 use atuin_common::url::UrlAppendExt;
 use eyre::{Context, Result};
@@ -101,10 +101,10 @@ impl HubAuthSession {
     /// Start a new hub authentication session
     ///
     /// Returns a session containing the code and auth URL that the user should visit.
-    pub async fn start(hub_address: &Url) -> Result<Self> {
+    pub async fn start(hub_address: &Url, timeouts: Timeouts) -> Result<Self> {
         debug!("Starting Hub authentication process...");
 
-        let api = atuin_api_client::Client::for_hub(hub_address, None)?;
+        let api = atuin_api_client::Client::connect_unauthenticated(hub_address, timeouts, None)?;
         let code_response = request_code(&api).await?;
 
         debug!("Received code from Hub");
@@ -228,14 +228,24 @@ pub async fn get_session_token() -> Result<Option<SecretString>> {
 /// - The Hub account is already linked to a different CLI account
 ///
 /// A CLI account that is already linked, to this Hub account or another, is not an error.
-pub async fn link_account(hub_address: &Url, cli_token: &SecretString) -> Result<()> {
+pub async fn link_account(
+    hub_address: &Url,
+    timeouts: Timeouts,
+    cli_token: &SecretString,
+) -> Result<()> {
     let hub_token = get_session_token()
         .await?
         .ok_or_else(|| eyre::eyre!("Not logged in to Hub - cannot link account"))?;
 
     debug!("Linking CLI account to Hub at {}", hub_address);
 
-    link(&atuin_api_client::Client::for_hub(hub_address, Some(&hub_token))?, cli_token).await?;
+    let api = atuin_api_client::Client::connect_authenticated(
+        hub_address,
+        &AuthToken::Bearer(hub_token),
+        timeouts,
+        None,
+    )?;
+    link(&api, cli_token).await?;
 
     info!("Successfully linked CLI account to Hub");
     Ok(())
@@ -290,12 +300,16 @@ mod tests {
     #[rstest]
     fn debug_omits_the_auth_code() {
         let hub = Url::parse("https://hub.example").unwrap();
+        let timeouts = Timeouts {
+            connect: Duration::from_secs(5),
+            total: Duration::from_secs(30),
+        };
         let mut auth_url = hub.clone();
         auth_url.query_pairs_mut().append_pair("code", CODE);
         let session = HubAuthSession {
             code: SecretString::from(CODE),
             auth_url,
-            api: atuin_api_client::Client::for_hub(&hub, None).unwrap(),
+            api: atuin_api_client::Client::connect_unauthenticated(&hub, timeouts, None).unwrap(),
             hub_address: hub,
         };
 

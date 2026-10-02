@@ -6,7 +6,7 @@ use tracing::instrument;
 use typed_builder::TypedBuilder;
 
 use super::{SyncError, SyncSession};
-use crate::api_client::{Client, caps_client};
+use crate::api_client::{Client, caps_client, timeouts};
 use crate::record::sqlite_store::SqliteStore;
 use crate::settings::Settings;
 
@@ -50,8 +50,7 @@ impl SyncSessionInit<'_> {
                 Client::new(
                     settings.sync_address.clone(),
                     &auth,
-                    settings.network_connect_timeout,
-                    settings.network_timeout,
+                    timeouts(settings),
                     &settings.extra_headers,
                     caps,
                 )

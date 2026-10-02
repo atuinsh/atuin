@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_stream::try_stream;
+pub use atuin_api_client::Timeouts;
 use atuin_api_client::{ApiError, AuthHeaderProvider, AuthToken, MapApiError, ResponseValue, types};
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::url::UrlAppendError;
@@ -47,9 +47,11 @@ pub async fn register(
     username: &str,
     email: &str,
     password: &SecretString,
+    timeouts: Timeouts,
     extra_headers: &HashMap<String, SecretString>,
 ) -> Result<types::RegisterResponse> {
-    let api = atuin_api_client::Client::for_sync_anonymous(address, extra_headers)?;
+    let api =
+        atuin_api_client::Client::connect_unauthenticated(address, timeouts, Some(extra_headers))?;
 
     if username_taken(&api, username).await? {
         bail!("username already in use");
@@ -96,9 +98,11 @@ pub async fn login(
     address: &Url,
     username: &str,
     password: &SecretString,
+    timeouts: Timeouts,
     extra_headers: &HashMap<String, SecretString>,
 ) -> Result<types::LoginResponse> {
-    let api = atuin_api_client::Client::for_sync_anonymous(address, extra_headers)?;
+    let api =
+        atuin_api_client::Client::connect_unauthenticated(address, timeouts, Some(extra_headers))?;
 
     let body = types::LoginRequest {
         username: username.to_owned(),
@@ -205,6 +209,15 @@ fn api_error(err: ApiError) -> eyre::Report {
     }
 }
 
+/// The user's `network_connect_timeout` and `network_timeout`.
+#[must_use]
+pub fn timeouts(settings: &Settings) -> Timeouts {
+    Timeouts {
+        connect: settings.network_connect_timeout,
+        total: settings.network_timeout,
+    }
+}
+
 /// Build the capability reader for a sync server.
 #[instrument(level = "trace", skip_all, err)]
 pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
@@ -217,9 +230,10 @@ pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
         })
     });
 
-    let api = atuin_api_client::Client::for_sync_anonymous(
+    let api = atuin_api_client::Client::connect_unauthenticated(
         &settings.sync_address,
-        &settings.extra_headers,
+        timeouts(settings),
+        Some(&settings.extra_headers),
     )?;
     Ok(api.with_auth(auth).cap_client())
 }
@@ -228,9 +242,15 @@ pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
 /// document. For contexts with no user auth in play (tests, tooling).
 pub fn caps_client_anonymous(
     sync_addr: &Url,
+    timeouts: Timeouts,
     extra_headers: &HashMap<String, SecretString>,
 ) -> Result<Arc<CapClient>> {
-    Ok(atuin_api_client::Client::for_sync_anonymous(sync_addr, extra_headers)?.cap_client())
+    let api = atuin_api_client::Client::connect_unauthenticated(
+        sync_addr,
+        timeouts,
+        Some(extra_headers),
+    )?;
+    Ok(api.cap_client())
 }
 
 /// A pending records download for one series, produced by [`Client::records`].
@@ -344,31 +364,29 @@ impl RecordsRequest {
 }
 
 impl Client {
-    #[instrument(level = "trace", skip_all, fields(connect_timeout, timeout), err)]
+    #[instrument(level = "trace", skip_all, fields(?timeouts), err)]
     pub fn new(
         sync_addr: impl Into<Arc<Url>>,
         auth: &AuthToken,
-        connect_timeout: Duration,
-        timeout: Duration,
+        timeouts: Timeouts,
         extra_headers: &HashMap<String, SecretString>,
         caps: Arc<CapClient>,
     ) -> Result<Self> {
         let sync_addr: Arc<Url> = sync_addr.into();
 
-        let api = atuin_api_client::Client::for_sync(
+        let api = atuin_api_client::Client::connect_authenticated(
             &sync_addr,
             auth,
-            extra_headers,
-            connect_timeout,
-            timeout,
+            timeouts,
+            Some(extra_headers),
         )?
         .with_capabilities(Arc::clone(&caps), CapMismatch::Continue);
 
         Ok(Self {
             api,
             lfs_client: reqwest::Client::builder()
-                .connect_timeout(connect_timeout)
-                .timeout(timeout)
+                .connect_timeout(timeouts.connect)
+                .timeout(timeouts.total)
                 .build()?,
             caps,
         })
@@ -521,6 +539,8 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use rstest::*;
 
     use super::*;
@@ -551,16 +571,14 @@ mod tests {
             .await;
 
         let addr: Url = server.uri().parse().unwrap();
-        let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
-        let client = Client::new(
-            addr,
-            &AuthToken::Token("t".into()),
-            Duration::from_secs(30),
-            Duration::from_secs(30),
-            &HashMap::new(),
-            caps,
-        )
-        .unwrap();
+        let timeouts = Timeouts {
+            connect: Duration::from_secs(30),
+            total: Duration::from_secs(30),
+        };
+        let caps = caps_client_anonymous(&addr, timeouts, &HashMap::new()).unwrap();
+        let client =
+            Client::new(addr, &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps)
+                .unwrap();
 
         // The client observes the server's advertised packfile cap; a second read stays warm
         // (the mock expects a single capabilities fetch).
@@ -583,6 +601,8 @@ mod tests {
 
 #[cfg(test)]
 mod records_stream_tests {
+    use std::time::Duration;
+
     use atuin_common::range::RangeExt;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag};
@@ -607,16 +627,13 @@ mod records_stream_tests {
     }
 
     fn mock_client(addr: &Url) -> Client {
-        let caps = caps_client_anonymous(addr, &HashMap::new()).unwrap();
-        Client::new(
-            addr.clone(),
-            &AuthToken::Token("t".into()),
-            Duration::from_secs(30),
-            Duration::from_secs(30),
-            &HashMap::new(),
-            caps,
-        )
-        .unwrap()
+        let timeouts = Timeouts {
+            connect: Duration::from_secs(30),
+            total: Duration::from_secs(30),
+        };
+        let caps = caps_client_anonymous(addr, timeouts, &HashMap::new()).unwrap();
+        Client::new(addr.clone(), &AuthToken::Token("t".into()), timeouts, &HashMap::new(), caps)
+            .unwrap()
     }
 
     /// Serve `records` in pages of `serve_size`, keyed on the `start` query param

@@ -416,7 +416,6 @@ dependencies = [
  "progenitor",
  "progenitor-client",
  "reqwest",
- "rstest",
  "secrecy",
  "serde",
  "serde_json",

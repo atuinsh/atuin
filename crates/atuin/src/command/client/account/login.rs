@@ -1,5 +1,6 @@
 use std::io::{self, IsTerminal};
 
+use atuin_client::api_client;
 use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
@@ -138,8 +139,9 @@ impl Cmd {
         }
 
         // Silently attempt to link CLI account to Hub if one exists
+        let timeouts = api_client::timeouts(settings);
         if let Ok(cli_token) = settings.session_token().await
-            && let Err(e) = atuin_client::hub::link_account(&endpoint, &cli_token).await
+            && let Err(e) = atuin_client::hub::link_account(&endpoint, timeouts, &cli_token).await
         {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
@@ -174,10 +176,11 @@ impl Cmd {
         Ok(())
     }
 
-    async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &url::Url) -> Result<()> {
+    async fn ensure_hub_session(&self, settings: &Settings, hub_address: &url::Url) -> Result<()> {
         tracing::info!("Authenticating with Atuin Hub...");
 
-        let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
+        let timeouts = api_client::timeouts(settings);
+        let session = atuin_client::hub::HubAuthSession::start(hub_address, timeouts).await?;
         println!("{}", fl!("account-hub-open-url"));
         println!("{}", session.auth_url);
 
