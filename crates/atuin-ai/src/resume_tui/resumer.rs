@@ -65,6 +65,10 @@ pub struct Restore {
     pub note: Option<String>,
 }
 
+/// What a template's `{path}` shows as in the plan for a session not yet restored: its
+/// transcript has no path until it is written out.
+pub const RESTORED_PATH_PLACEHOLDER: &str = "<restored transcript>";
+
 /// Plans resuming a session.
 #[async_trait]
 pub trait Resumer: Send + Sync {
@@ -217,8 +221,16 @@ impl Resumer for HarnessResumer {
             None => {
                 let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
                 target.cwd = Some(restore.cwd.clone());
+                // The transcript is only written once the user accepts the restore, so a
+                // template's `{path}` stands for where it will go: this plan is only shown, and
+                // [`Self::restore`] applies the template again with the real path.
+                let mut plan = harness.resume_plan(&target)?;
+                if let Some(template) = template {
+                    let preview = target.clone().with_native_path(RESTORED_PATH_PLACEHOLDER);
+                    plan = plan.with_template(template, &preview)?;
+                }
                 Resume {
-                    plan: harness.resume(&target, template)?.prepare()?,
+                    plan: plan.prepare()?,
                     restore: Some(restore),
                 }
             }

@@ -240,6 +240,30 @@ async fn restoring_writes_the_transcript_and_plans_resuming_it(dirs: Dirs, #[cas
     }
 }
 
+/// A template using `{path}` doesn't stop a session from being restored: the plan shows where
+/// the transcript will go, and restoring plans it with the path it was written to.
+#[rstest]
+#[tokio::test]
+async fn a_path_template_plans_a_restore_and_resumes_the_restored_transcript(dirs: Dirs) {
+    let machine = FakeMachine::default();
+    let templates = AiSessionResume {
+        pi: Some("my-pi --session {path}".to_owned()),
+        ..AiSessionResume::default()
+    };
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone());
+    let remote = row(HarnessKind::Pi, "abc-123", Path::new("/gone/proj"), true);
+
+    let resume = resumer.plan(&remote).await.unwrap();
+    assert_eq!(resume.plan.program, "my-pi");
+    assert_eq!(resume.plan.args, ["--session", RESTORED_PATH_PLACEHOLDER]);
+    let restore = resume.restore.expect("restored from sync");
+
+    let plan = resumer.restore(&Synced, &remote, &restore).await.unwrap();
+    assert_eq!(plan.program, "my-pi");
+    assert_eq!(plan.args, ["--session", "/restored/abc-123.jsonl"]);
+    assert_eq!(machine.written.lock().len(), 1);
+}
+
 #[rstest]
 #[tokio::test]
 async fn a_harness_that_cant_rehydrate_says_so(dirs: Dirs) {
