@@ -447,13 +447,20 @@ fn project_directories_are_named_as_claude_code_names_them(
 }
 
 /// A name past 200 characters is cut short and suffixed with a hash of the path, matching Claude
-/// Code's (computed with its own function, in node).
+/// Code's (computed with its own function, in node). The hash is of the path as the platform
+/// writes it: on Windows, with `\` between its components.
 #[rstest]
 fn long_project_directories_are_shortened_with_a_hash() {
     let cwd = format!("/home/u/{}proj", "deep/".repeat(45));
     let name = project_dir_name(Path::new(&cwd));
-    assert_eq!(name.len(), 200 + "-szbxz9".len());
-    assert!(name.ends_with("ep-de-szbxz9"), "{name}");
+    assert!(name.starts_with("-home-u-deep-deep-"), "{name}");
+    let (shortened, hash) = name.rsplit_once('-').unwrap();
+    assert_eq!(shortened.len(), 200, "{name}");
+    assert!(shortened.ends_with("ep-de"), "{name}");
+    #[cfg(unix)]
+    assert_eq!(hash, "szbxz9");
+    #[cfg(windows)]
+    assert_eq!(hash, base36(js_string_hash(&cwd.replace('/', "\\")).unsigned_abs()));
 }
 
 #[rstest]
