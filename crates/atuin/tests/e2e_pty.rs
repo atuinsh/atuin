@@ -294,6 +294,7 @@ fn ai_resume_widget_returns_while_a_process_it_left_runs(
     pty.wait_for_line(&format!("{marker}-resumed"));
 }
 
+const CTRL_A: &[u8] = b"\x01";
 const CTRL_O: &[u8] = b"\x0f";
 const CTRL_T: &[u8] = b"\x14";
 
@@ -350,6 +351,41 @@ fn cd_action_changes_to_entry_directory(
     wait_until("cd recorded in history", || {
         history_lines(env).lines().any(|l| l.contains("\tcd -- "))
     });
+}
+
+#[rstest]
+fn cd_default_prefix_bindings(
+    #[files("tests/shells/*.toml")] setup: PathBuf,
+    #[values(b'g', b'G')] key: u8,
+    #[values(false, true)] inspect: bool,
+) {
+    let Some(shell) = Shell::start(&setup, None) else {
+        return;
+    };
+    let (env, pty) = (&shell.env, &shell.pty);
+    let marker = marker();
+    let dir = env.home().join("prefixed");
+    std::fs::create_dir(&dir).unwrap();
+    env.record(&format!("echo {marker}"), SESSION, &dir);
+
+    open_search_for(pty, &marker, b"\x12");
+    if inspect {
+        pty.send(CTRL_O);
+        pty.wait_for("[r] Runs");
+    }
+    pty.send(CTRL_A);
+    pty.send(&[key]);
+    if key == b'G' {
+        pty.wait_for_screen("cd inserted at prompt", |s| {
+            !s.contains(": exit") && s.lines().any(|l| l.contains(PROMPT) && l.contains("cd "))
+        });
+        pty.send_str(" && pwd > cwd.txt");
+        pty.send_enter();
+    } else {
+        pty.wait_for_prompt();
+        pty.send_line("pwd > cwd.txt");
+    }
+    wait_until("shell moved to the entry's directory", || dir.join("cwd.txt").exists());
 }
 
 #[rstest]

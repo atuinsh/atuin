@@ -214,7 +214,7 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 
 The difference between `accept` and `return-selection`: `accept` runs the command immediately when the TUI closes, while `return-selection` places it on your command line for further editing before you press enter. The `enter_accept` setting controls which of these the default `enter` key uses.
 
-`accept-cd` and `return-cd` have no default binding; see [Jumping to a command's directory](#jumping-to-a-commands-directory). They act like `accept` and `return-selection`, but return a command changing to the entry's directory:
+`accept-cd` and `return-cd` are bound to `g` and `G` in prefix mode (`ctrl-a g`, `ctrl-a G`); see [Jumping to a command's directory](#jumping-to-a-commands-directory). They act like `accept` and `return-selection`, but return a command changing to the entry's directory:
 
 - The path is quoted for the current shell: `cd -- '<path>'` in bash, zsh and fish, `cd r#'<path>'#` in nushell (with more `#` when the path contains `'#`), `cd @('<path>')` in xonsh, and `Set-Location -LiteralPath '<path>'` in PowerShell.
 - In the inspector tab, they use the inspected entry.
@@ -386,15 +386,16 @@ This is equivalent to setting `enter_accept = false`, but expressed directly as 
 
 ### Jumping to a command's directory
 
+By default, press `ctrl-a g` to change to the selected entry's directory, or `ctrl-a G` to put the `cd` on the command line to edit first. Prefix bindings work in every mode.
+
+To use a single key instead:
+
 ```toml
-[keymap.prefix]
-# ctrl-a g: change to the selected entry's directory
-"g" = "accept-cd"
-# ctrl-a G: put the cd on the command line to edit first
-"G" = "return-cd"
+[keymap.emacs]
+"alt-c" = "accept-cd"
 ```
 
-Prefix bindings work in every mode. A binding under `[keymap.emacs]` doesn't apply in vim mode: add the same key to `[keymap.vim-insert]` and `[keymap.vim-normal]` too.
+A binding under `[keymap.emacs]` doesn't apply in vim mode: add the same key to `[keymap.vim-insert]` and `[keymap.vim-normal]` too.
 
 ### Custom vim-normal bindings
 
@@ -428,6 +429,8 @@ Prefix mode is a two-step shortcut: press the prefix key (++ctrl+a++ by default)
 | `D` | Delete all entries matching the selected command |
 | `a` | Move cursor to start of line |
 | `c` | Clear context (if in a switched context), otherwise switch context |
+| `g` | Change to the selected entry's directory (`accept-cd`) |
+| `G` | Put a `cd` to the selected entry's directory on the command line (`return-cd`) |
 
 You can customize these with `[keymap.prefix]`:
 
