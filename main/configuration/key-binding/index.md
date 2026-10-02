@@ -216,6 +216,8 @@ $env.config = (
 | Ctrl + a, D                          | Delete **all** history entries matching the selected command                                                   |
 | Ctrl + a, a                          | Move cursor to the start of the line                                                                           |
 | Ctrl + a, c                          | Switch to the context of the currently selected command / return to default                                    |
+| Ctrl + a, g                          | Change to the directory the selected command ran in                                                            |
+| Ctrl + a, G                          | Put a `cd` to the selected command's directory on the command line                                             |
 
 ### Prefix mode
 

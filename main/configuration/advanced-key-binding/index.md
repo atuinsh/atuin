@@ -203,6 +203,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `accept-N`           | Accept the Nth entry below the selection and execute it (for example, `accept-1` through `accept-9`)                        |
 | `return-selection`   | Return the selected entry to the command line **without executing**                                                         |
 | `return-selection-N` | Return the Nth entry below the selection without executing (for example, `return-selection-1` through `return-selection-9`) |
+| `accept-cd`          | Change to the directory the selected entry ran in, **immediately**                                                          |
+| `return-cd`          | Put a command changing to the directory the selected entry ran in on the command line **without executing**                 |
 | `return-original`    | Close the TUI and return the original command line text                                                                     |
 | `return-query`       | Close the TUI and return the current search query                                                                           |
 | `copy`               | Copy the selected entry to the clipboard                                                                                    |
@@ -217,6 +219,14 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `clear-context`      | Return to the initial [context](https://docs.atuin.sh/guide/advanced-usage/#context-switch)                                 |
 
 The difference between `accept` and `return-selection`: `accept` runs the command immediately when the TUI closes, while `return-selection` places it on your command line for further editing before you press enter. The `enter_accept` setting controls which of these the default `enter` key uses.
+
+`accept-cd` and `return-cd` are bound to `g` and `G` in prefix mode (`ctrl-a g`, `ctrl-a G`); see [Jumping to a command's directory](#jumping-to-a-commands-directory). They act like `accept` and `return-selection`, but return a command changing to the entry's directory:
+
+- The path is quoted for the current shell: `cd -- '<path>'` in bash, zsh and fish, `cd r#'<path>'#` in nushell (with more `#` when the path contains `'#`), `cd @('<path>')` in xonsh, and `Set-Location -LiteralPath '<path>'` in PowerShell.
+- In the inspector tab, they use the inspected entry.
+- With [`command_chaining`](https://docs.atuin.sh/configuration/config/#command_chaining), in the search tab, the command is appended to the chain and not executed, as with `accept`.
+- Atuin doesn't check that the directory still exists. If it's gone, for example because it came from another synced host, the shell reports the error.
+- They close the TUI like `return-original` when there is no safe command: the entry has no absolute directory (imported history records `unknown`), the path contains control or line-separator characters, the path contains `\` in PowerShell outside Windows, or the shell is unknown (`ATUIN_SHELL` unset: `atuin search -i` outside the shell integration, or nushell older than 0.106).
 
 ### Mode changes
 
@@ -379,6 +389,19 @@ Use `noop` to make a key do nothing:
 
 This is equivalent to setting `enter_accept = false`, but expressed directly as a keybinding.
 
+### Jumping to a command's directory
+
+By default, press `ctrl-a g` to change to the selected entry's directory, or `ctrl-a G` to put the `cd` on the command line to edit first. Prefix bindings work in every mode.
+
+To use a single key instead:
+
+```
+[keymap.emacs]
+"alt-c" = "accept-cd"
+```
+
+A binding under `[keymap.emacs]` doesn't apply in vim mode: add the same key to `[keymap.vim-insert]` and `[keymap.vim-normal]` too.
+
 ### Custom vim-normal bindings
 
 ```
@@ -405,12 +428,14 @@ This is equivalent to setting `enter_accept = false`, but expressed directly as 
 
 Prefix mode is a two-step shortcut: press the prefix key (`Ctrl`+`A` by default), then a second key. This is useful for actions you don't need on a single key. The default prefix bindings are:
 
-| Key | Action                                                             |
-| --- | ------------------------------------------------------------------ |
-| `d` | Delete the selected entry                                          |
-| `D` | Delete all entries matching the selected command                   |
-| `a` | Move cursor to start of line                                       |
-| `c` | Clear context (if in a switched context), otherwise switch context |
+| Key | Action                                                                         |
+| --- | ------------------------------------------------------------------------------ |
+| `d` | Delete the selected entry                                                      |
+| `D` | Delete all entries matching the selected command                               |
+| `a` | Move cursor to start of line                                                   |
+| `c` | Clear context (if in a switched context), otherwise switch context             |
+| `g` | Change to the selected entry's directory (`accept-cd`)                         |
+| `G` | Put a `cd` to the selected entry's directory on the command line (`return-cd`) |
 
 You can customize these with `[keymap.prefix]`:
 
