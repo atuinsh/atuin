@@ -66,10 +66,6 @@ impl ApiError {
     }
 
     /// `response`, or the error it answers with when its status is outside 2xx.
-    ///
-    /// # Errors
-    ///
-    /// [`ApiError::Status`], with the reason read from the body, for a status outside 2xx.
     pub async fn check(response: reqwest::Response) -> Result<reqwest::Response, Self> {
         if response.status().is_success() {
             return Ok(response);
@@ -128,9 +124,7 @@ where
     }
 }
 
-/// What an error body says, in any envelope an Atuin server, or a proxy in front of one, sends:
-/// `{reason, code}`, the AI routes' `{error, message}`, Phoenix's `{errors: [..]}`, the older
-/// `{error}`, or text.
+/// What an error body says.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Body {
     reason: Option<String>,
