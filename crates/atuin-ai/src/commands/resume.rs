@@ -334,16 +334,22 @@ fn printable_line(plan: &ResumePlan) -> Result<String> {
 
 /// Change into the session's directory and replace this process with the harness.
 fn exec(plan: &ResumePlan) -> Result<()> {
+    // On Windows, spawn the file the resumability check found (`claude.cmd`), which the bare name
+    // would not resolve to. It is looked up as the check looked it up (a relative path against the
+    // session's directory), and made absolute before changing directory, so a relative `PATH` entry
+    // such as `.` finds what the check found; elsewhere the name is looked up as it was checked.
+    #[cfg(windows)]
+    use crate::resume_tui::resumer;
+    #[cfg(windows)]
+    let program = match resumer::find_program(&resumer::program_to_check(plan)) {
+        Some(found) => std::path::absolute(found)?,
+        None => plan.program.clone().into(),
+    };
+    #[cfg(not(windows))]
+    let program = &plan.program;
     if let Some(cwd) = &plan.cwd {
         std::env::set_current_dir(cwd)?;
     }
-    // On Windows, spawn the file the resumability check found (`claude.cmd`), which the bare name
-    // would not resolve to; elsewhere the name is looked up the same way it was checked.
-    #[cfg(windows)]
-    let program = crate::resume_tui::resumer::find_program(&plan.program)
-        .unwrap_or_else(|| plan.program.clone().into());
-    #[cfg(not(windows))]
-    let program = &plan.program;
     let mut command = std::process::Command::new(program);
     command.args(&plan.args);
     if let Some(cwd) = &plan.cwd {
