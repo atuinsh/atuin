@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package atuin.api.v1;
+
+import "atuin/api/v1/common.proto";
+import "buf/validate/validate.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// A finished shell command.
+message History {
+  // Client-generated, unique per user.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // The identifier of the record if available.
+  UuidV7 record_id = 2;
+  // The command string that was ran.
+  string command = 3 [(buf.validate.field).required = true];
+  // The working directory the command ran in.
+  string cwd = 4 [(buf.validate.field).required = true];
+  // The exit code of the shell command.
+  int32 exit = 5;
+  // When the command started.
+  google.protobuf.Timestamp start_time = 6 [(buf.validate.field).required = true];
+  // How long the command ran and never negative.
+  google.protobuf.Duration duration = 7 [(buf.validate.field).duration.gte = {}];
+  // The terminal session the command ran in. Client-generated, unique per user.
+  UuidV7 session = 8 [(buf.validate.field).required = true];
+  // The machine and account the command ran on.
+  CmdOrigin cmd_origin = 9 [(buf.validate.field).required = true];
+  // Who decided to run the command.
+  Author author = 10 [(buf.validate.field).required = true];
+  // Why the command was run, if whatever ran it said so.
+  optional string intent = 11;
+  // The shell that ran the command, e.g. `zsh`, if known.
+  optional string shell = 12;
+}

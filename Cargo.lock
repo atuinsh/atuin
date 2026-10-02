@@ -404,6 +404,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "atuin-api-client"
+version = "18.23.0"
+
+[[package]]
 name = "atuin-client"
 version = "18.23.0"
 dependencies = [
