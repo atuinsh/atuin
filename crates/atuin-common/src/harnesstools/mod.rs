@@ -7,8 +7,10 @@ use enum_dispatch::enum_dispatch;
 pub mod ccode;
 pub mod codex;
 mod json_hooks;
+pub mod note;
 pub mod opencode;
 pub mod pi;
+pub mod rehydrate;
 pub mod resume;
 pub mod session;
 
@@ -16,6 +18,7 @@ use ccode::Ccode;
 use codex::Codex;
 use opencode::Opencode;
 use pi::Pi;
+use rehydrate::{RehydrateError, RehydrateSession};
 use resume::{ResumeError, ResumePlan, ResumeTarget};
 use session::Observable;
 use session::any::AnySessions;
@@ -63,6 +66,13 @@ pub trait Harness: std::fmt::Debug {
     /// holding it. Looks where the harness keeps sessions by default.
     #[allow(async_fn_in_trait)]
     async fn locate(&self, id: &str) -> Option<PathBuf>;
+
+    /// Write `session` out as this harness's own transcript, where [`Self::locate`] (and the
+    /// harness itself) will find it, and return where it went: a session recorded on another
+    /// machine, or whose transcript is gone, can then be resumed like any other. Never replaces a
+    /// transcript already there ([`RehydrateError::AlreadyExists`]).
+    #[allow(async_fn_in_trait)]
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError>;
 }
 
 #[enum_dispatch(Harness)]

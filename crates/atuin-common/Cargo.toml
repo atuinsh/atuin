@@ -75,6 +75,7 @@ sqlx = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 sysinfo = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 tiny-bip39 = { workspace = true }
@@ -103,7 +104,6 @@ pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [[bench]]

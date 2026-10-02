@@ -20,7 +20,7 @@ use time::OffsetDateTime;
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
 use super::rebuild::Rebuilding;
-use super::resumer::{NotResumable, ResumePlan};
+use super::resumer::{NotResumable, Resume};
 use super::source::{SessionFilter, SessionPreview, SessionRow};
 use super::{ResumeContext, panel};
 
@@ -33,6 +33,8 @@ pub const LIVE_SECS: u64 = 120;
 pub const PREVIEW: u8 = 0;
 pub const CHILDREN: u8 = 1;
 pub const PLAN: u8 = 2;
+/// Restoring the session's transcript from sync, once an action is waiting on it.
+pub const RESTORE: u8 = 3;
 
 /// How many rows a search asks for.
 pub const SEARCH_LIMIT: usize = 500;
@@ -209,8 +211,9 @@ pub struct State {
     /// that can't be resumed, so the picker opens on it and says why, or the several an id
     /// names, to pick one.
     pinned: Option<(Vec<SessionRow>, String)>,
-    /// Resume plans, fetched for the selected session only (planning may walk directories).
-    pub plans: HashMap<HarnessSession, Result<ResumePlan, NotResumable>>,
+    /// Resume plans, fetched for the selected session only (planning may walk directories). A
+    /// plan to restore the session from sync is replaced by the plain one once it is restored.
+    pub plans: HashMap<HarnessSession, Result<Resume, NotResumable>>,
     /// An enter/tab/ctrl-y waiting for its session's plan.
     pub pending: Option<(HarnessSession, Pending)>,
 

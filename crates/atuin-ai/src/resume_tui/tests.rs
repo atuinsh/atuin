@@ -102,8 +102,8 @@ async fn rows_show_time_badge_title_and_count() {
     assert!(!out.contains("Explore: find"), "{out}");
 }
 
-/// Other hosts' sessions look like this host's in the list: only the preview says where one
-/// ran.
+/// Other hosts' sessions look like this host's: they resume by being restored from sync,
+/// behind the scenes. Only the preview says where one ran.
 #[rstest]
 #[tokio::test]
 async fn other_hosts_rows_look_like_this_hosts() {
@@ -125,6 +125,7 @@ async fn other_hosts_rows_look_like_this_hosts() {
     state.list.selected = remote;
     let out = text(&render(&mut state, &settings(), 100, 30));
     assert!(out.contains("│       atuin · main · @00000002"), "{out}");
+    assert!(!out.contains("from sync"), "{out}");
 }
 
 /// The preview's first line says where the session ran and what forked off it, in place of a
@@ -149,16 +150,17 @@ async fn the_preview_says_where_a_session_ran() {
     assert_eq!(section(&out, "atuin", "╰")[0], "       atuin · main", "{out}");
 }
 
-/// Inspecting another host's session says it can't be resumed here, and why.
+/// Inspecting another host's session says how it resumes, hinting that it comes from sync.
 #[rstest]
 #[tokio::test]
-async fn inspect_says_a_remote_session_cant_resume_here() {
+async fn inspect_says_a_remote_session_is_restored() {
     let mut s = settings();
     s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "aarch64", 1).await;
     let out = text(&render(&mut state, &s, 120, 30));
-    let line = out.lines().find(|l| l.contains("Resume    ")).unwrap();
-    assert!(line.contains("not resumable: its transcript isn't on this machine"), "{out}");
+    let line = out.lines().find(|l| l.contains("Resume    cd -- ")).unwrap();
+    assert!(line.contains(" && claude --resume d4e6f8a0-2c3d-4e4f-8a7b-8c9d0e1f2a3b  from sync"));
+    assert!(!out.contains("Restore"), "{out}");
 }
 
 #[rstest]
@@ -474,6 +476,210 @@ async fn enter_and_tab_resume_straight_away() {
     assert_eq!(accept(&mut state, Pending::Resume, &requests), None);
     let (status, _) = state.status.clone().unwrap();
     assert!(status.starts_with("can't resume: "), "{status}");
+}
+
+/// A session recorded on another machine is restored from sync (by the worker) only once it is
+/// chosen, and then resumed from where it was written; ctrl-y copies `atuin ai resume <id>`,
+/// which restores it when run, and writes nothing.
+#[rstest]
+#[tokio::test]
+async fn a_session_from_another_machine_is_restored_first() {
+    use std::sync::Arc;
+
+    use super::state::{Pending, RESTORE};
+    use super::worker::Response;
+    use super::{Outcome, accept, apply_response, resume_line, worker};
+
+    let mut s = settings();
+    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    let resumer = Arc::new(FakeResumer::default());
+    let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+
+    let mut state = loaded(&s, "aarch64 release build", 0).await;
+    let row = state.selected().unwrap().clone();
+    assert_ne!(row.host_id, fake::THIS_HOST_ID, "another machine's session");
+    let resume = state.plans[&row.handle].clone().unwrap();
+    assert!(resume.restore.is_some());
+    let id = row.handle.session.to_string();
+    assert_eq!(resume_line(&row, &resume), format!("atuin ai resume {id}"));
+
+    let outcome = accept(&mut state, Pending::Resume, &requests);
+    assert_eq!(outcome, None, "waits for the restore");
+    assert!(state.requested.contains(&(row.handle.clone(), RESTORE)));
+    assert!(state.status.as_ref().is_some_and(|(s, _)| s.starts_with("restoring from sync")));
+
+    let restore = resume.restore.clone().unwrap();
+    let plan = resumer.restore(&FakeSource::new(), &row, &restore).await;
+    apply_response(&mut state, Response::Restored(row.handle.clone(), plan), &requests);
+    let outcome = accept(&mut state, Pending::Resume, &requests);
+    let Some(Outcome::Resume(plan)) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(plan.native_path, Some(std::path::PathBuf::from(format!("/restored/{id}.jsonl"))));
+}
+
+/// A [`FakeResumer`] whose restores wait for a permit, so the worker stays busy with one.
+struct GatedRestores {
+    inner: FakeResumer,
+    gate: tokio::sync::Semaphore,
+    started: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl Resumer for GatedRestores {
+    async fn plan(
+        &self,
+        session: &super::source::SessionRow,
+    ) -> Result<super::resumer::Resume, super::resumer::NotResumable> {
+        self.inner.plan(session).await
+    }
+
+    async fn restore(
+        &self,
+        source: &dyn SessionSource,
+        session: &super::source::SessionRow,
+        restore: &super::resumer::Restore,
+    ) -> Result<super::resumer::ResumePlan, super::resumer::NotResumable> {
+        self.started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.gate.acquire().await.unwrap().forget();
+        self.inner.restore(source, session, restore).await
+    }
+}
+
+/// Rows `0..n` of a loaded picker as if recorded on another machine, planned as restores.
+async fn from_another_machine(state: &mut State, resumer: &GatedRestores, n: usize) {
+    assert!(state.results.len() >= n);
+    for i in 0..n {
+        state.results[i].host_id = "another-host".to_owned();
+        let row = state.results[i].clone();
+        state.plans.insert(row.handle.clone(), resumer.plan(&row).await);
+    }
+}
+
+fn gated() -> std::sync::Arc<GatedRestores> {
+    std::sync::Arc::new(GatedRestores {
+        inner: FakeResumer::default(),
+        gate: tokio::sync::Semaphore::new(0),
+        started: std::sync::atomic::AtomicUsize::new(0),
+    })
+}
+
+/// An enter on a session from another machine while the worker is busy restoring one, then on a
+/// third, then on the second again: the second's restore, dropped for the third's before it
+/// started, is asked for again, runs, and the picker resumes it rather than waiting forever.
+#[rstest]
+#[tokio::test]
+async fn a_restore_dropped_for_another_sessions_is_asked_for_again() {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use super::state::Pending;
+    use super::worker::Response;
+    use super::{Outcome, accept, respond, worker};
+
+    let s = settings();
+    let resumer = gated();
+    let (requests, mut responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+
+    let mut state = loaded(&s, "", 0).await;
+    // Three sessions (busy, B and C) as if recorded on another machine.
+    from_another_machine(&mut state, &resumer, 3).await;
+    let handle = |state: &State, i: usize| state.results[i].handle.clone();
+    let enter = |state: &mut State, i: usize| {
+        state.list.selected = i;
+        assert_eq!(state.target().unwrap().handle, state.results[i].handle);
+        assert_eq!(accept(state, Pending::Resume, &requests), None, "waits for the restore");
+    };
+
+    // The worker starts restoring the first, and is busy with it.
+    enter(&mut state, 0);
+    while resumer.started.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    // Then B, then C, then B again.
+    enter(&mut state, 1);
+    enter(&mut state, 2);
+    enter(&mut state, 1);
+    resumer.gate.add_permits(10);
+
+    let mut restored = Vec::new();
+    let mut abandoned = Vec::new();
+    let outcome = loop {
+        let next = tokio::time::timeout(Duration::from_secs(10), responses.recv());
+        let response = next.await.expect("the picker is stuck").expect("the worker stopped");
+        match &response {
+            Response::Restored(session, plan) => {
+                assert!(plan.is_ok(), "{plan:?}");
+                restored.push(session.clone());
+            }
+            Response::Abandoned(session) => abandoned.push(session.clone()),
+            other => panic!("unexpected {other:?}"),
+        }
+        if let Some(outcome) = respond(&mut state, response, &requests) {
+            break outcome;
+        }
+    };
+    let Outcome::Resume(plan) = outcome else {
+        panic!("{outcome:?}");
+    };
+    let b = handle(&state, 1);
+    let id = b.session.to_string();
+    assert_eq!(plan.native_path, Some(std::path::PathBuf::from(format!("/restored/{id}.jsonl"))));
+    assert_eq!(abandoned, vec![b.clone()]);
+    // B's, asked for again once dropped, runs after C's.
+    assert_eq!(restored, vec![handle(&state, 0), handle(&state, 2), b]);
+}
+
+/// Enters on B and then C while the worker is busy restoring another session: B's restore, not
+/// started when C's was asked for, never runs (nothing is written for a session the user left),
+/// and the picker hears that it was dropped.
+#[rstest]
+#[tokio::test]
+async fn an_abandoned_restore_does_not_run() {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use super::state::{Pending, RESTORE};
+    use super::worker::Response;
+    use super::{accept, respond, worker};
+
+    let s = settings();
+    let resumer = gated();
+    let (requests, mut responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
+
+    let mut state = loaded(&s, "", 0).await;
+    from_another_machine(&mut state, &resumer, 3).await;
+    let handle = |state: &State, i: usize| state.results[i].handle.clone();
+    for i in 0..3 {
+        state.list.selected = i;
+        assert_eq!(accept(&mut state, Pending::Resume, &requests), None);
+        while resumer.started.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    }
+    resumer.gate.add_permits(10);
+
+    let c = ("restored", handle(&state, 2));
+    let mut answered = Vec::new();
+    while !answered.contains(&c) {
+        let next = tokio::time::timeout(Duration::from_secs(10), responses.recv());
+        let response = next.await.expect("C's restore never came").expect("the worker stopped");
+        answered.push(match &response {
+            Response::Restored(session, _) => ("restored", session.clone()),
+            Response::Abandoned(session) => ("abandoned", session.clone()),
+            other => panic!("unexpected {other:?}"),
+        });
+        let _ = respond(&mut state, response, &requests);
+    }
+    assert_eq!(answered, vec![
+        ("restored", handle(&state, 0)),
+        ("abandoned", handle(&state, 1)),
+        ("restored", handle(&state, 2)),
+    ]);
+    assert_eq!(resumer.started.load(Ordering::SeqCst), 2, "B's restore never ran");
+    assert!(!state.requested.contains(&(handle(&state, 1), RESTORE)));
 }
 
 /// The picker's host id is compared with the rows' in their (simple) form, however it was
@@ -970,7 +1176,7 @@ async fn an_accept_always_gets_its_plan() {
         if let Some((handle, pending)) = state.pending.clone()
             && state.plans.contains_key(&handle)
         {
-            break complete(&mut state, pending);
+            break complete(&mut state, pending, &requests);
         }
     };
     let Some(Outcome::Resume(plan)) = outcome else {

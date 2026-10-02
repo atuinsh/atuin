@@ -39,8 +39,8 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 
-use self::resumer::NotResumable;
-use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, State};
+use self::resumer::{NotResumable, Resume};
+use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, RESTORE, State};
 use self::worker::{Request, Requests, Response};
 
 /// How often the picker redraws on its own.
@@ -69,7 +69,8 @@ impl ResumeContext {
     /// The current directory, repository, branch and host.
     pub async fn current() -> Result<Self> {
         let ctx = atuin_client::database::query_context().await?;
-        // `$PWD` as it is set, which may end in a separator: rebuilt from its components.
+        // `$PWD` as it is set, which may end in a separator: rebuilt from its components, so a
+        // session restored here isn't written with `…/dir/` as its directory.
         let cwd: PathBuf = Path::new(&ctx.cwd).components().collect();
         let (git_root, branch) = checkout(&cwd);
         Ok(Self {
@@ -243,13 +244,32 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
         Response::Plan(handle, plan) => {
             state.plans.insert(handle, plan);
         }
+        Response::Restored(handle, plan) => {
+            state.requested.remove(&(handle.clone(), RESTORE));
+            state.plans.insert(handle, plan.map(Resume::ready));
+        }
+        // Dropped for a newer accept's before it started: an enter on the session (or the one
+        // still waiting on it) asks for it again.
+        Response::Abandoned(handle) => {
+            state.requested.remove(&(handle, RESTORE));
+        }
     }
 }
 
-/// Carry out `action` for the session acted on ([`State::target`]) once its plan is known. `None`
-/// keeps the picker open (the plan is still coming, the session can't be resumed, or it was a
-/// copy).
-fn complete(state: &mut State, action: Pending) -> Option<Outcome> {
+/// Apply a worker response, and finish the enter, tab or ctrl-y waiting on it, if it can now.
+fn respond(state: &mut State, response: Response, requests: &Requests) -> Option<Outcome> {
+    apply_response(state, response, requests);
+    let (handle, pending) = state.pending.clone()?;
+    if !state.plans.contains_key(&handle) {
+        return None;
+    }
+    complete(state, pending, requests)
+}
+
+/// Carry out `action` for the session acted on ([`State::target`]) once its plan is known,
+/// restoring the session from sync first when its transcript isn't here. `None` keeps the picker
+/// open (the plan or the restore is still coming, the session can't be resumed, or it was a copy).
+fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<Outcome> {
     let row = state.target()?.clone();
     let Some(plan) = state.plans.get(&row.handle).cloned() else {
         state.pending = Some((row.handle, action));
@@ -261,12 +281,28 @@ fn complete(state: &mut State, action: Pending) -> Option<Outcome> {
             state.status = Some((format!("can't resume: {why}"), Meaning::AlertError));
             None
         }
-        (Ok(plan), Pending::Copy) => {
-            copy(state, &resumer::shell_line(&plan));
+        (Ok(resume), Pending::Copy) => {
+            let line = resume_line(&row, &resume);
+            copy(state, &line);
             None
         }
-        (Ok(plan), Pending::Resume) => Some(Outcome::Resume(plan)),
-        (Ok(plan), Pending::Edit) => Some(Outcome::Edit(plan)),
+        (
+            Ok(Resume {
+                restore: Some(restore),
+                ..
+            }),
+            action,
+        ) => {
+            if state.requested.insert((row.handle.clone(), RESTORE)) {
+                requests.send(Request::Restore(Box::new(row.clone()), restore.clone()));
+            }
+            let note = restore.note.map(|n| format!(": {n}")).unwrap_or_default();
+            state.status = Some((format!("restoring from sync…{note}"), Meaning::Annotation));
+            state.pending = Some((row.handle, action));
+            return None;
+        }
+        (Ok(resume), Pending::Resume) => Some(Outcome::Resume(resume.plan)),
+        (Ok(resume), Pending::Edit) => Some(Outcome::Edit(resume.plan)),
     };
     state.pending = None;
     outcome
@@ -282,7 +318,17 @@ fn accept(state: &mut State, action: Pending, requests: &Requests) -> Option<Out
         state.requested.insert((row.handle.clone(), PLAN));
         requests.send(Request::Accept(Box::new(row)));
     }
-    complete(state, action)
+    complete(state, action, requests)
+}
+
+/// What ctrl-y copies to resume `row`, planned as `resume`, in its own harness. Copying writes
+/// nothing, so when running the harness's own command wouldn't do (the session has to be
+/// restored from sync first), it is `atuin ai resume <id>`, which does that when run.
+fn resume_line(row: &SessionRow, resume: &Resume) -> String {
+    if resume.restore.is_none() {
+        return resumer::shell_line(&resume.plan);
+    }
+    format!("atuin ai resume {}", resumer::quote(row.handle.session.as_ref()))
 }
 
 /// Put `line` on the clipboard, saying so in the status row.
@@ -415,12 +461,7 @@ impl Picker<'_> {
                         tracing::error!("the session picker's workers stopped");
                         break Outcome::Cancelled;
                     };
-                    apply_response(&mut state, response, &requests);
-                    // An enter/tab/ctrl-y waiting on this session's plan can finish now.
-                    if let Some((handle, pending)) = state.pending.clone()
-                        && state.plans.contains_key(&handle)
-                        && let Some(outcome) = complete(&mut state, pending)
-                    {
+                    if let Some(outcome) = respond(&mut state, response, &requests) {
                         break 'render outcome;
                     }
                 }
