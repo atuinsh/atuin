@@ -19,7 +19,7 @@ tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"
 
 [dependencies]
 atuin-client = { workspace = true }
-atuin-common = { workspace = true, features = ["ai", "unicode", "ansi", "sqlite"] }
+atuin-common = { workspace = true, features = ["ai", "ansi", "sqlite", "unicode"] }
 atuin-daemon = { workspace = true }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
