@@ -98,7 +98,8 @@ const COMPACTION_PREAMBLE: &str =
 /// was deleted), the index is pointed at the new one, or Codex would find none (see
 /// `codex::state_db`). Where that fails, the rollout is left where it is, as Codex may have
 /// indexed it itself meanwhile (it is visible from the moment it is written): a stale file is
-/// better than a thread whose rollout is gone.
+/// better than a thread whose rollout is gone. A later restore finds that rollout and points the
+/// index at it again.
 pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
     let root = session::default_root();
     let home = root.parent().map(Path::to_path_buf).ok_or(RehydrateError::NoDataDir)?;
@@ -111,11 +112,29 @@ pub(crate) async fn rehydrate_into(
     home: &Path,
     session: &RehydrateSession,
 ) -> Result<PathBuf, RehydrateError> {
-    let (root, session) = (root.to_path_buf(), session.clone());
+    let (sessions, session) = (root.to_path_buf(), session.clone());
     let thread = session::resume_id(&session.id).to_owned();
-    let path = tokio::task::spawn_blocking(move || write(&root, &session))
+    let written = tokio::task::spawn_blocking(move || write(&sessions, &session))
         .await
-        .map_err(|err| RehydrateError::Other(err.to_string()))??;
+        .map_err(|err| RehydrateError::Other(err.to_string()))?;
+    let path = match written {
+        Ok(path) => path,
+        // A live rollout an earlier restore left behind when pointing the index at it failed:
+        // point it again, or Codex keeps resuming from the gone rollout the index names. An index
+        // naming another rollout that exists means Codex has moved the thread on: leave it.
+        Err(RehydrateError::AlreadyExists(existing)) if existing.starts_with(root) => {
+            return match super::state_db::point_at(home, &thread, None, &existing).await {
+                Ok(_) | Err(super::state_db::StateDbError::Elsewhere(_)) => {
+                    Err(RehydrateError::AlreadyExists(existing))
+                }
+                Err(err) => Err(RehydrateError::Other(format!(
+                    "{err} (the rollout is at {})",
+                    existing.display()
+                ))),
+            };
+        }
+        Err(err) => return Err(err),
+    };
     if let Err(err) = super::state_db::point_at(home, &thread, None, &path).await {
         return Err(RehydrateError::Other(format!(
             "{err} (the rollout is left at {})",
@@ -1209,6 +1228,47 @@ pub(crate) mod tests {
         assert!(matches!(&err, RehydrateError::Other(why) if why.contains("left at")), "{err}");
         let left = session::locate(&root, ID).expect("the rollout is still there");
         assert!(left.is_file());
+    }
+
+    /// A rollout an earlier restore left behind, when pointing Codex's index at it failed, is
+    /// pointed at again on the next restore: the index stops naming the gone rollout.
+    #[rstest]
+    #[tokio::test]
+    async fn a_left_rollout_is_pointed_at_on_the_next_restore() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("sessions");
+        let thread = session::resume_id(ID);
+        let gone = home.path().join("gone.jsonl");
+        let index = home.path().join("state_5.sqlite");
+        let opts =
+            sqlx::sqlite::SqliteConnectOptions::new().filename(&index).create_if_missing(true);
+        let mut conn =
+            <sqlx::SqliteConnection as sqlx::Connection>::connect_with(&opts).await.unwrap();
+        for sql in [
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)",
+            "INSERT INTO threads (id, rollout_path) VALUES (?1, ?2)",
+        ] {
+            crate::db::query::<sqlx::Sqlite>(sql)
+                .bind(thread)
+                .bind(gone.to_string_lossy().into_owned())
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        // The rollout an earlier restore wrote, before its index update failed.
+        let left = write(&root, &session(ID, vec![])).unwrap();
+
+        let err = rehydrate_into(&root, home.path(), &session(ID, vec![])).await.unwrap_err();
+        assert!(matches!(&err, RehydrateError::AlreadyExists(path) if *path == left), "{err}");
+        let named = crate::db::query_scalar::<sqlx::Sqlite, String>(
+            "SELECT rollout_path FROM threads WHERE id = ?1",
+        )
+        .bind(thread)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(std::path::Path::new(&named), left);
+        <sqlx::SqliteConnection as sqlx::Connection>::close(conn).await.unwrap();
     }
 
     #[rstest]
