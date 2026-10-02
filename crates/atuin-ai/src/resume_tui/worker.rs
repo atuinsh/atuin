@@ -44,8 +44,9 @@ pub enum Request {
     Restore(Box<SessionRow>, Restore),
     /// Count what continuing a session in another harness would flatten (reads all of it).
     Flatten(HarnessSession, PathBuf),
-    /// Write a session out as a new session of another harness, and plan resuming that.
-    Continue(Box<SessionRow>, HarnessKind),
+    /// Write a session out as a new session of another harness, and plan resuming that. The id
+    /// comes back with the answer.
+    Continue(Box<SessionRow>, HarnessKind, u64),
 }
 
 #[derive(Debug)]
@@ -65,8 +66,8 @@ pub enum Response {
     Abandoned(HarnessSession),
     /// What continuing the session in another harness would flatten (or why that can't be read).
     Flattened(HarnessSession, Result<Flattened, String>),
-    /// The session is continued in another harness (or couldn't be).
-    Continued(HarnessSession, Result<Continued, NotResumable>),
+    /// The continuation with this id is written (or couldn't be).
+    Continued(u64, Result<Continued, NotResumable>),
 }
 
 /// Sends requests to the worker's lanes. The worker stops when this is dropped.
@@ -246,10 +247,9 @@ async fn details(
                     .map_err(|e| format!("{e:#}"));
                 Response::Flattened(session, flattened)
             }
-            Request::Continue(row, target) => Response::Continued(
-                row.handle.clone(),
-                resumer.continue_in(source.as_ref(), &row, target).await,
-            ),
+            Request::Continue(row, target, id) => {
+                Response::Continued(id, resumer.continue_in(source.as_ref(), &row, target).await)
+            }
             Request::Search { .. } => continue,
         };
         if responses.send(response).is_err() {

@@ -28,14 +28,14 @@ use unicode_width::UnicodeWidthStr;
 
 use super::render::{harness_style, is_live, style};
 use super::resumer::NotResumable;
-use super::source::{harness_badge, harness_label};
-use super::state::{InputAction, Pending, State};
+use super::source::{SessionRow, harness_badge, harness_label};
+use super::state::{InputAction, Pending, Picked, State};
 
 /// The chooser, while it's open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chooser {
-    /// The session it opened on.
-    pub session: HarnessSession,
+    /// The session it opened on: what a pick acts on, whatever the list has moved to since.
+    pub row: SessionRow,
     /// The other harnesses installed here, to continue the session in: lines 2 and on (line 1
     /// resumes it in its own).
     pub targets: Vec<HarnessKind>,
@@ -94,15 +94,12 @@ fn short_reason(why: &NotResumable) -> String {
 }
 
 impl State {
-    /// Open the chooser on the session acted on, offering its own harness and `targets` (the
-    /// other harnesses installed here); picking a line with enter does `action`. The first line
-    /// that works is selected.
-    pub fn open_chooser(&mut self, targets: Vec<HarnessKind>, action: Pending) {
-        let Some(row) = self.target() else {
-            return;
-        };
+    /// Open the chooser on `row` (the session acted on), offering its own harness and `targets`
+    /// (the other harnesses installed here); picking a line with enter does `action`. The first
+    /// line that works is selected.
+    pub fn open_chooser(&mut self, row: &SessionRow, targets: Vec<HarnessKind>, action: Pending) {
         self.chooser = Some(Chooser {
-            session: row.handle.clone(),
+            row: row.clone(),
             targets,
             selected: 0,
             action,
@@ -124,7 +121,7 @@ impl State {
         if chooser.moved
             || chooser.target(chooser.selected).is_some()
             || chooser.targets.is_empty()
-            || self.original_unavailable(&chooser.session).is_none()
+            || self.original_unavailable(&chooser.row.handle).is_none()
         {
             return;
         }
@@ -138,11 +135,10 @@ impl State {
         let Some(chooser) = &self.chooser else {
             return Vec::new();
         };
-        let session = &chooser.session;
-        let live = self
-            .target()
-            .filter(|r| r.handle == *session)
-            .is_some_and(|r| is_live((self.now)(), r));
+        let session = &chooser.row.handle;
+        // As the list last read it, while it still shows it.
+        let row = self.target().filter(|r| r.handle == *session).unwrap_or(&chooser.row);
+        let live = is_live((self.now)(), row);
         let original = match self.plans.get(session) {
             Some(Err(why)) => Choice {
                 harness: session.harness,
@@ -225,13 +221,13 @@ impl State {
             _ => return InputAction::Continue,
         };
         let target = chooser.target(chooser.selected);
-        let session = chooser.session.clone();
+        let row = chooser.row.clone();
         if target.is_none()
             && pick != Pending::Copy
-            && self.original_unavailable(&session).is_some()
+            && self.original_unavailable(&row.handle).is_some()
         {
             // Its line already says why.
-            let label = harness_label(session.harness);
+            let label = harness_label(row.handle.harness);
             self.status = Some((
                 format!("{label} can't resume it here: pick another line"),
                 Meaning::AlertError,
@@ -241,7 +237,11 @@ impl State {
         if pick != Pending::Copy {
             self.chooser = None;
         }
-        InputAction::Pick(target, pick)
+        InputAction::Pick(Box::new(Picked {
+            row,
+            target,
+            action: pick,
+        }))
     }
 
     /// The chooser, over the list against the selected row (above it, or below it when

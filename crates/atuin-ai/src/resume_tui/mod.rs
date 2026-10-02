@@ -42,7 +42,9 @@ pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 
 use self::resumer::{Continued, NotResumable, Resume};
-use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, RESTORE, State};
+use self::state::{
+    CHILDREN, Continuing, InputAction, PLAN, PREVIEW, Pending, Picked, RESTORE, State,
+};
 use self::worker::{Request, Requests, Response};
 
 /// How often the picker redraws on its own.
@@ -213,7 +215,7 @@ fn request_flatten(state: &mut State, requests: &Requests) {
     if chooser.targets.is_empty() {
         return;
     }
-    let session = chooser.session.clone();
+    let session = chooser.row.handle.clone();
     if state.flattened.contains_key(&session) || state.flattening.as_ref() == Some(&session) {
         return;
     }
@@ -294,14 +296,20 @@ fn respond(
     if !state.plans.contains_key(&handle) {
         return None;
     }
-    resume_original(state, pending, resumer, requests)
+    let row = state.target().filter(|r| r.handle == handle)?.clone();
+    resume_original(state, &row, pending, resumer, requests)
 }
 
-/// Carry out `action` for the session acted on ([`State::target`]) once its plan is known,
-/// restoring the session from sync first when its transcript isn't here. `None` keeps the picker
-/// open (the plan or the restore is still coming, the session can't be resumed, or it was a copy).
-fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<Outcome> {
-    let row = state.target()?.clone();
+/// Carry out `action` for `row` (the session acted on) once its plan is known, restoring the
+/// session from sync first when its transcript isn't here. `None` keeps the picker open (the
+/// plan or the restore is still coming, the session can't be resumed, or it was a copy).
+fn complete(
+    state: &mut State,
+    row: &SessionRow,
+    action: Pending,
+    requests: &Requests,
+) -> Option<Outcome> {
+    let row = row.clone();
     let Some(plan) = state.plans.get(&row.handle).cloned() else {
         state.pending = Some((row.handle, action));
         state.status = Some(("locating the session…".to_owned(), Meaning::Annotation));
@@ -359,33 +367,32 @@ fn accept(
     if chooser && action != Pending::Copy {
         let targets = resumer.continue_targets(&row);
         if !targets.is_empty() {
-            open_chooser(state, targets, action, requests);
+            open_chooser(state, &row, targets, action, requests);
             return None;
         }
     }
-    resume_original(state, action, resumer, requests)
+    resume_original(state, &row, action, resumer, requests)
 }
 
-/// Resume the selected session in its own harness ([`complete`]). When that harness can't
-/// resume it here, the chooser opens instead (if another harness is installed), saying why and
-/// offering the others.
+/// Resume `row` in its own harness ([`complete`]). When that harness can't resume it here, the
+/// chooser opens instead (if another harness is installed), saying why and offering the others.
 fn resume_original(
     state: &mut State,
+    row: &SessionRow,
     action: Pending,
     resumer: &dyn Resumer,
     requests: &Requests,
 ) -> Option<Outcome> {
-    let outcome = complete(state, action, requests);
+    let outcome = complete(state, row, action, requests);
     if outcome.is_none()
         && action != Pending::Copy
         && state.pending.is_none()
         && state.chooser.is_none()
-        && let Some(row) = state.target().cloned()
         && state.original_unavailable(&row.handle).is_some()
     {
-        let targets = resumer.continue_targets(&row);
+        let targets = resumer.continue_targets(row);
         if !targets.is_empty() {
-            open_chooser(state, targets, action, requests);
+            open_chooser(state, row, targets, action, requests);
             // The chooser's own line says why, dimmed.
             state.status = None;
         }
@@ -393,29 +400,51 @@ fn resume_original(
     outcome
 }
 
-/// Open the chooser on the session acted on, and read what continuing it elsewhere would
-/// flatten, for the chooser to show.
+/// Open the chooser on `row` (the session acted on), and read what continuing it elsewhere
+/// would flatten, for the chooser to show.
 fn open_chooser(
     state: &mut State,
+    row: &SessionRow,
     targets: Vec<HarnessKind>,
     action: Pending,
     requests: &Requests,
 ) {
-    state.open_chooser(targets, action);
+    state.open_chooser(row, targets, action);
     request_flatten(state, requests);
 }
 
-/// Continue the selected session in `target`, then carry out `action` (see
-/// [`finish_continuation`]). Copying writes nothing: the command copied continues it when run.
+/// A line of the chooser picked: resume the session it opened on in its own harness, or
+/// continue it in the line's. That session, not the list's selection, which an idle refresh may
+/// have moved since.
+fn pick(
+    state: &mut State,
+    picked: Picked,
+    resumer: &dyn Resumer,
+    requests: &Requests,
+) -> Option<Outcome> {
+    let Picked {
+        row,
+        target,
+        action,
+    } = picked;
+    match target {
+        None => resume_original(state, &row, action, resumer, requests),
+        Some(target) => {
+            start_continuation(state, row, target, action, requests);
+            None
+        }
+    }
+}
+
+/// Continue `row` in `target`, then carry out `action` (see [`finish_continuation`]). Copying
+/// writes nothing: the command copied continues it when run.
 fn start_continuation(
     state: &mut State,
+    row: SessionRow,
     target: HarnessKind,
     action: Pending,
     requests: &Requests,
 ) {
-    let Some(row) = state.target().cloned() else {
-        return;
-    };
     if action == Pending::Copy {
         let id = resumer::quote(row.handle.session.as_ref());
         let into = source::harness_arg(target).unwrap_or_default();
@@ -425,18 +454,23 @@ fn start_continuation(
     let flattened = state.flattened.get(&row.handle).and_then(|f| f.as_ref().ok());
     let status = resumer::continuing(target, flattened);
     state.status = Some((format!("{status}…"), Meaning::Annotation));
-    state.continuing = Some((row.handle.clone(), target, action));
-    requests.send(Request::Continue(Box::new(row), target));
+    // Each request has its own id, so the answer to one a newer pick superseded (the same
+    // session, perhaps elsewhere, or to edit instead) isn't taken for the newer one's.
+    state.continued = state.continued.wrapping_add(1);
+    let id = state.continued;
+    state.continuing = Some(Continuing { id, target, action });
+    requests.send(Request::Continue(Box::new(row), target, id));
 }
 
-/// A continuation is written (or failed): the outcome that resumes it, with the status line to
-/// leave behind, or `None` to stay open, saying why.
+/// Continuation `id` is written (or failed): the outcome that resumes it, with the status line
+/// to leave behind, or `None` to stay open, saying why. An answer to any but the continuation
+/// waited on changes nothing.
 fn finish_continuation(
     state: &mut State,
-    handle: &HarnessSession,
+    id: u64,
     result: Result<Continued, NotResumable>,
 ) -> Option<(Outcome, String)> {
-    let (_, target, action) = state.continuing.take_if(|(waiting, ..)| waiting == handle)?;
+    let Continuing { target, action, .. } = state.continuing.take_if(|c| c.id == id)?;
     match result {
         Ok(continued) => {
             let mut status = continued.status();
@@ -560,16 +594,10 @@ impl Picker<'_> {
                         InputAction::Resume => Some(Pending::Resume),
                         InputAction::ReturnCommand => Some(Pending::Edit),
                         InputAction::Copy => Some(Pending::Copy),
-                        InputAction::Pick(None, action) => {
-                            if let Some(outcome) =
-                                resume_original(&mut state, action, resumer, &requests)
-                            {
+                        InputAction::Pick(picked) => {
+                            if let Some(outcome) = pick(&mut state, *picked, resumer, &requests) {
                                 break 'render outcome;
                             }
-                            None
-                        }
-                        InputAction::Pick(Some(target), action) => {
-                            start_continuation(&mut state, target, action, &requests);
                             None
                         }
                         InputAction::ReturnOriginal | InputAction::Exit => break Outcome::Cancelled,
@@ -623,9 +651,9 @@ impl Picker<'_> {
                         tracing::error!("the session picker's workers stopped");
                         break Outcome::Cancelled;
                     };
-                    if let Response::Continued(handle, result) = response {
+                    if let Response::Continued(id, result) = response {
                         if let Some((outcome, status)) =
-                            finish_continuation(&mut state, &handle, result)
+                            finish_continuation(&mut state, id, result)
                         {
                             note = Some(status);
                             break 'render outcome;

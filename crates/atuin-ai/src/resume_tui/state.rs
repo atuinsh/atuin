@@ -110,7 +110,7 @@ impl PaneScroll {
 }
 
 /// What the event loop should do after an input event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputAction {
     Continue,
     Redraw,
@@ -120,11 +120,29 @@ pub enum InputAction {
     ReturnCommand,
     /// Copy the session's resume command, and stay open.
     Copy,
-    /// A line of the chooser: resume the session in its own harness (`None`), or continue it in
-    /// this one; then do what the key asked.
-    Pick(Option<HarnessKind>, Pending),
+    /// A line of the chooser picked.
+    Pick(Box<Picked>),
     ReturnOriginal,
     Exit,
+}
+
+/// A line of the chooser, picked: the session it opened on (not whatever the list has selected
+/// since: an idle refresh may have moved it), resumed in its own harness (`target` is `None`) or
+/// continued in `target`, then what the key asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picked {
+    pub row: SessionRow,
+    pub target: Option<HarnessKind>,
+    pub action: Pending,
+}
+
+/// A continuation asked of the worker, waiting to be written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Continuing {
+    /// Which request it is: only its own answer finishes it.
+    pub id: u64,
+    pub target: HarnessKind,
+    pub action: Pending,
 }
 
 /// An action waiting for the selected session's resume plan.
@@ -231,7 +249,9 @@ pub struct State {
     /// The last flattening asked of the worker (which keeps only the newest).
     pub flattening: Option<HarnessSession>,
     /// A continuation being written, and what to do once it is.
-    pub continuing: Option<(HarnessSession, HarnessKind, Pending)>,
+    pub continuing: Option<Continuing>,
+    /// The last continuation's id.
+    pub continued: u64,
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
@@ -282,6 +302,7 @@ impl State {
             flattened: HashMap::new(),
             flattening: None,
             continuing: None,
+            continued: 0,
             status: None,
             rebuilding: None,
             now: if settings.prefers_reduced_motion {
