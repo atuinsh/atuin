@@ -121,13 +121,17 @@ impl Resumer for HarnessResumer {
 /// (executable, on unix; on Windows, also with any of the `PATHEXT` extensions, as `cmd` finds
 /// `cmd.exe`).
 pub fn on_path(program: &str) -> bool {
+    find_program(program).is_some()
+}
+
+/// The file [`on_path`] finds for `program`, so that what runs is what was checked: on Windows that
+/// is `claude.cmd` for `claude`, which spawning the bare name would not find.
+pub fn find_program(program: &str) -> Option<PathBuf> {
     if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
         return runnable(Path::new(program));
     }
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| runnable(&dir.join(program)))
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths).find_map(|dir| runnable(&dir.join(program)))
 }
 
 /// The program a plan runs, as [`on_path`] should check it: a relative path such as
@@ -144,28 +148,31 @@ pub fn program_to_check(plan: &ResumePlan) -> String {
     }
 }
 
-/// Whether the file at `path` can be run.
-fn runnable(path: &Path) -> bool {
+/// The file at `path`, if it can be run (on Windows, `path` with a `PATHEXT` extension also counts).
+fn runnable(path: &Path) -> Option<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        path.metadata()
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .then(|| path.to_path_buf())
     }
     #[cfg(windows)]
     {
         if path.is_file() {
-            return true;
+            return Some(path.to_path_buf());
         }
         let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
-        extensions.split(';').filter(|ext| !ext.is_empty()).any(|ext| {
+        extensions.split(';').filter(|ext| !ext.is_empty()).find_map(|ext| {
             let mut with_ext = path.as_os_str().to_owned();
             with_ext.push(ext);
-            Path::new(&with_ext).is_file()
+            let with_ext = PathBuf::from(with_ext);
+            with_ext.is_file().then_some(with_ext)
         })
     }
     #[cfg(not(any(unix, windows)))]
     {
-        path.is_file()
+        path.is_file().then(|| path.to_path_buf())
     }
 }
 

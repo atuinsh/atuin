@@ -334,10 +334,19 @@ fn printable_line(plan: &ResumePlan) -> Result<String> {
 
 /// Change into the session's directory and replace this process with the harness.
 fn exec(plan: &ResumePlan) -> Result<()> {
-    let mut command = std::process::Command::new(&plan.program);
-    command.args(&plan.args);
     if let Some(cwd) = &plan.cwd {
         std::env::set_current_dir(cwd)?;
+    }
+    // On Windows, spawn the file the resumability check found (`claude.cmd`), which the bare name
+    // would not resolve to; elsewhere the name is looked up the same way it was checked.
+    #[cfg(windows)]
+    let program = crate::resume_tui::resumer::find_program(&plan.program)
+        .unwrap_or_else(|| plan.program.clone().into());
+    #[cfg(not(windows))]
+    let program = &plan.program;
+    let mut command = std::process::Command::new(program);
+    command.args(&plan.args);
+    if let Some(cwd) = &plan.cwd {
         // Keep $PWD in step, so harnesses that read it see the session's directory.
         command.env("PWD", cwd);
     }

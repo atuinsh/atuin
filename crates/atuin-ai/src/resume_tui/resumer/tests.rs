@@ -139,6 +139,7 @@ fn finds_programs_on_path() {
 #[rstest]
 fn finds_programs_on_path_and_by_path_on_unix() {
     assert!(on_path("sh"));
+    assert!(find_program("sh").is_some_and(|path| path.is_absolute() && path.ends_with("sh")));
     assert!(on_path("/bin/sh"));
     assert!(!on_path("/nonexistent/sh"));
 
@@ -155,6 +156,10 @@ fn finds_programs_on_path_and_by_path_on_windows() {
     // `cmd` is found as `cmd.exe` through PATHEXT, on PATH or by its path.
     assert!(on_path("cmd"));
     assert!(on_path("cmd.exe"));
+    // What runs is the file the check found, extension and all, which spawning `cmd` would not
+    // resolve to were it a `.cmd` or `.bat` script.
+    let found = find_program("cmd").unwrap();
+    assert!(found.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe")), "{found:?}");
     let system32 = std::path::Path::new(&std::env::var("SystemRoot").unwrap()).join("System32");
     assert!(on_path(system32.join("cmd").to_str().unwrap()));
     assert!(on_path(system32.join("cmd.exe").to_str().unwrap()));
