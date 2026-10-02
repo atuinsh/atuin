@@ -10,7 +10,7 @@ use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 
-use crate::{BaseUrlError, Client};
+use crate::Client;
 
 /// Why a [`Client`] could not be built.
 #[derive(Debug, thiserror::Error)]
@@ -31,8 +31,8 @@ pub enum ClientBuildError {
     },
     #[error("failed to build the HTTP client")]
     Http(#[from] reqwest::Error),
-    #[error("invalid base URL")]
-    BaseUrl(#[from] BaseUrlError),
+    #[error("a base URL needs a hierarchical path, like https://host/prefix")]
+    CannotBeABase,
 }
 
 /// Authentication token for sync API requests.
@@ -89,7 +89,7 @@ impl Client {
             headers.insert(AUTHORIZATION, authorization("Bearer", token)?);
         }
         let http = reqwest::Client::builder().default_headers(headers).build()?;
-        Ok(Self::from_http(endpoint, http)?)
+        Self::from_http(endpoint, http)
     }
 
     /// A client for the AI server at `endpoint` that sends `token`, if any, as a bearer.
@@ -111,7 +111,7 @@ impl Client {
             headers.insert(AUTHORIZATION, authorization("Bearer", token)?);
         }
         let http = reqwest::Client::builder().default_headers(headers).timeout(TIMEOUT).build()?;
-        Ok(Self::from_http(endpoint, http)?)
+        Self::from_http(endpoint, http)
     }
 
     /// A sync client for `base` that sends `auth` and Atuin's identity over `extra_headers`.
@@ -136,7 +136,7 @@ impl Client {
             .connect_timeout(connect_timeout)
             .timeout(timeout)
             .build()?;
-        Ok(Self::from_http(base, http)?)
+        Self::from_http(base, http)
     }
 
     /// Equivalent to [`Self::for_sync`], but with no credentials of its own and no timeouts.
@@ -153,7 +153,7 @@ impl Client {
         headers.extend(identity_headers());
 
         let http = client_builder(extra_headers).default_headers(headers).build()?;
-        Ok(Self::from_http(base, http)?)
+        Self::from_http(base, http)
     }
 }
 
