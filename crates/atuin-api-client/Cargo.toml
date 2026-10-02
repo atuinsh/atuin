@@ -11,5 +11,27 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[dependencies]
+hyper-tls = { workspace = true }
+hyper-util = { workspace = true, features = ["client-legacy", "tokio"] }
+native-tls = { workspace = true, features = ["alpn"] }
+prost = { workspace = true }
+prost-types = { workspace = true }
+secrecy = { workspace = true }
+thiserror = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+tonic-types = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+tokio = { workspace = true }
+
+[build-dependencies]
+protox = { workspace = true }
+tonic-prost-build = { workspace = true }
+
 [lints]
 workspace = true
