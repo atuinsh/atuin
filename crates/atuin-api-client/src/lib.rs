@@ -5,7 +5,6 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize, Serializer};
 use url::Url;
 
-mod caps;
 mod date_time;
 mod error;
 mod generated {
@@ -47,12 +46,11 @@ mod generated {
 mod header;
 mod hooks;
 
-pub use caps::{AuthHeaderFuture, AuthHeaderProvider, CapClient, CapMismatch, ServerSupportError};
 pub use date_time::DateTime;
 pub use error::{ApiBody, ApiError, MapApiError};
 pub use generated::{Client, ResponseValue, types};
 pub use header::{AuthToken, ClientBuildError};
-pub use hooks::HookState;
+pub use hooks::{AuthHeaderFuture, AuthHeaderProvider, HookState};
 
 /// A secret the API carries in plaintext; its `Debug` stays redacted.
 #[derive(Clone, Debug, Deserialize, Serialize, From, Into, Deref)]

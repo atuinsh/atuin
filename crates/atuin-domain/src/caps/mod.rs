@@ -29,10 +29,10 @@
 //!
 //! # Implementation
 //!
-//! The client side lives in `atuin-api-client`, whose `CapClient` fetches and caches the server's
-//! capabilities and whose generated client negotiates in its request hooks. The server side is
-//! [`CapServer`], a plain struct that can be embedded in any server, plus the axum layer in the
-//! `axum` module behind the feature of that name.
+//! The client side is [`CapClient`], which caches the server's capabilities behind a fetch its
+//! owner injects; `atuin-api-client` fetches them over HTTP and negotiates in its request hooks.
+//! The server side is [`CapServer`], a plain struct that can be embedded in any server, plus the
+//! axum layer in the `axum` module behind the feature of that name.
 //!
 //! # TODO
 //!
@@ -54,9 +54,13 @@ pub mod http;
 pub mod axum;
 
 mod all;
+mod client;
 mod server;
 
 pub use all::{CapabilitiesCap, PackfileCap, PageSizeCap};
+pub use client::{
+    CapClient, CapMismatch, CapsDocument, FetchError, ServerSupportError, token_to_refresh,
+};
 pub use server::{CapServer, Negotiation};
 
 /// A capability which two peers may negotiate.

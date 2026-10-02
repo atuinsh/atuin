@@ -4,8 +4,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_api_client::{CapClient, CapMismatch, Client, MapApiError};
-use atuin_domain::caps::CapabilitiesCap;
+use atuin_api_client::{Client, MapApiError};
+use atuin_domain::caps::{CapClient, CapMismatch, CapabilitiesCap};
 use pretty_assertions::assert_eq;
 use reqwest::StatusCode;
 use rstest::{fixture, rstest};
@@ -65,7 +65,7 @@ async fn negotiating_server() -> MockServer {
 /// A capability reader for `server` whose eager warm-up fetch has finished.
 async fn warm_cap_client(server: &MockServer) -> Arc<CapClient> {
     let base = Url::parse(&server.uri()).unwrap();
-    let caps = CapClient::new(Client::from_http(base, reqwest::Client::new()).unwrap());
+    let caps = Client::from_http(base, reqwest::Client::new()).unwrap().cap_client();
     // `get_server` waits for the warm-up fetch.
     caps.get_server::<CapabilitiesCap>().await.unwrap();
     caps

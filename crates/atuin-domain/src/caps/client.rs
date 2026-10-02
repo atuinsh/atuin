@@ -1,54 +1,30 @@
 //! The client side of capability negotiation: the server's capabilities, fetched and cached.
 //!
-//! The protocol and the capability types live in `atuin_domain::caps`. [`CapClient`] fetches the
-//! server's document with [`Client::get_capabilities`]; [`Client::with_capabilities`] stamps the
-//! token it last fetched onto every other operation and refreshes it when the server advertises
-//! another.
+//! [`CapClient`] fetches the server's capabilities document through a function its owner injects,
+//! so it knows nothing of the transport or the route; `atuin-api-client` injects its
+//! `get_capabilities` operation. A negotiating client stamps [`CapClient::known_token`] onto each
+//! request. When that token is stale, [`CapMismatch`] decides what happens: `Continue` lets the
+//! server serve the request and refreshes capabilities in the background, to the token
+//! [`token_to_refresh`] picks; `Error` asks the server to reject with `412`. The original request
+//! is never resent.
 
-use std::fmt;
+use std::error::Error;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use atuin_domain::caps::Capability;
 use parking_lot::RwLock;
-use reqwest::header::HeaderValue;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use tokio::sync::{Mutex, watch};
 
-use crate::{ApiError, Client, MapApiError, types};
+use super::Capability;
 
-/// The future an [`AuthHeaderProvider`] resolves an `Authorization` header with.
-///
-/// Mark the value [sensitive](HeaderValue::set_sensitive) so it stays out of `Debug` output.
-pub type AuthHeaderFuture = Pin<Box<dyn Future<Output = Option<HeaderValue>> + Send>>;
+type BoxError = Box<dyn Error + Send + Sync>;
 
-/// Resolves the `Authorization` header for each request of a [`Client::with_auth`] client.
-///
-/// Returning `None` sends the request anonymously. Auth is resolved per request, not at
-/// construction, so a long-lived client (e.g. the daemon's capability reader) follows login,
-/// logout, and token rotation without a rebuild.
-#[derive(Clone)]
-pub struct AuthHeaderProvider(Arc<dyn Fn() -> AuthHeaderFuture + Send + Sync>);
+type FetchFuture = Pin<Box<dyn Future<Output = Result<CapsDocument, BoxError>> + Send>>;
 
-impl AuthHeaderProvider {
-    pub fn new(f: impl Fn() -> AuthHeaderFuture + Send + Sync + 'static) -> Self {
-        Self(Arc::new(f))
-    }
-
-    pub(crate) async fn resolve(&self) -> Option<HeaderValue> {
-        (self.0)().await
-    }
-}
-
-impl fmt::Debug for AuthHeaderProvider {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("AuthHeaderProvider")
-    }
-}
-
-/// How a [`Client::with_capabilities`] client reacts when its capability token is out of date with
-/// the server's.
+/// How the client reacts when its capability token is out of date with the server's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapMismatch {
     /// Let the server serve the request despite the mismatch, then refresh capabilities in the
@@ -59,6 +35,15 @@ pub enum CapMismatch {
     Error,
 }
 
+/// The capabilities document a server advertises: `{"version": <token>, "capabilities": {..}}`.
+#[derive(Debug, Deserialize)]
+pub struct CapsDocument {
+    /// The server's capability token.
+    pub version: String,
+    /// Each advertised capability's value, by name.
+    pub capabilities: Map<String, Value>,
+}
+
 /// The server's capabilities, as the client last fetched them.
 ///
 /// They are populated by [`CapClient::refresh`], which runs once on construction and again
@@ -66,35 +51,24 @@ pub enum CapMismatch {
 /// cache.
 ///
 /// Thread it as an [`Arc`].
-#[derive(Debug)]
+#[derive(derive_more::Debug)]
 pub struct CapClient {
     /// The server's capabilities as last fetched; `None` until the first refresh. Cheap concurrent
     /// reads; writes are serialized by `fetching`.
-    server: RwLock<Option<ServerCaps>>,
-    /// Serializes capability fetches so a burst of stale callers makes a single network hop.
+    server: RwLock<Option<CapsDocument>>,
+    /// Serializes capability fetches so a burst of stale callers makes a single fetch.
     fetching: Mutex<()>,
-    /// Fetches the server's document. Never negotiates: `get_capabilities` is exempt.
-    api: Client,
+    /// Fetches the server's document.
+    #[debug(skip)]
+    fetch: Box<dyn Fn() -> FetchFuture + Send + Sync>,
     /// Flips to `true` once the warm-up fetch has finished, whether or not it succeeded.
     warmed: watch::Receiver<bool>,
 }
 
-/// The capabilities a server advertises, as last fetched from its capabilities endpoint.
-#[derive(Debug)]
-struct ServerCaps {
-    /// The server's capability token.
-    version: String,
-    caps: Map<String, Value>,
-}
-
-impl From<types::CapabilitiesResponse> for ServerCaps {
-    fn from(document: types::CapabilitiesResponse) -> Self {
-        Self {
-            version: document.version,
-            caps: document.capabilities,
-        }
-    }
-}
+/// A failed [`CapClient`] fetch, the fetch's own error kept as the source.
+#[derive(Debug, thiserror::Error)]
+#[error("failed to fetch the server's capabilities")]
+pub struct FetchError(#[source] BoxError);
 
 /// Why reading a server capability could not yield a value.
 #[derive(Debug, thiserror::Error)]
@@ -115,17 +89,24 @@ pub enum ServerSupportError {
 }
 
 impl CapClient {
-    /// Read the capabilities of the server `api` talks to, starting a warm-up fetch now.
+    /// Read the capabilities `fetch` returns, starting a warm-up fetch now.
     ///
-    /// Must run inside a tokio runtime. Give `api` [`Client::with_auth`] to fetch the document the
-    /// server scopes to the current user.
+    /// Must run inside a tokio runtime.
     #[must_use]
-    pub fn new(api: Client) -> Arc<Self> {
+    pub fn new<F, Fut, E>(fetch: F) -> Arc<Self>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<CapsDocument, E>> + Send + 'static,
+        E: Error + Send + Sync + 'static,
+    {
         let (warmed, warmed_rx) = watch::channel(false);
         let new = Arc::new(Self {
             server: RwLock::new(None),
             fetching: Mutex::new(()),
-            api,
+            fetch: Box::new(move || -> FetchFuture {
+                let fetched = fetch();
+                Box::pin(async move { fetched.await.map_err(BoxError::from) })
+            }),
             warmed: warmed_rx,
         });
 
@@ -146,11 +127,11 @@ impl CapClient {
     ///
     /// # Errors
     ///
-    /// [`ApiError`] when the fetch fails, leaving the cache as it was.
-    pub async fn refresh(&self) -> Result<(), ApiError> {
+    /// [`FetchError`] when the fetch fails, leaving the cache as it was.
+    pub async fn refresh(&self) -> Result<(), FetchError> {
         let _fetching = self.fetching.lock().await;
-        let caps = self.fetch_server_caps().await?;
-        *self.server.write() = Some(caps);
+        let document = (self.fetch)().await.map_err(FetchError)?;
+        *self.server.write() = Some(document);
         Ok(())
     }
 
@@ -161,8 +142,8 @@ impl CapClient {
     ///
     /// # Errors
     ///
-    /// [`ApiError`] when the fetch fails, leaving the cache as it was.
-    pub async fn refresh_if_stale(&self, available: &str) -> Result<(), ApiError> {
+    /// [`FetchError`] when the fetch fails, leaving the cache as it was.
+    pub async fn refresh_if_stale(&self, available: &str) -> Result<(), FetchError> {
         if !self.is_stale(available) {
             return Ok(());
         }
@@ -170,19 +151,14 @@ impl CapClient {
         if !self.is_stale(available) {
             return Ok(());
         }
-        let caps = self.fetch_server_caps().await?;
-        *self.server.write() = Some(caps);
+        let document = (self.fetch)().await.map_err(FetchError)?;
+        *self.server.write() = Some(document);
         Ok(())
     }
 
     /// Whether the cached server token differs from `available` (or nothing is cached yet).
     fn is_stale(&self, available: &str) -> bool {
-        self.server.read().as_ref().map(|caps| caps.version.as_str()) != Some(available)
-    }
-
-    async fn fetch_server_caps(&self) -> Result<ServerCaps, ApiError> {
-        let document = self.api.get_capabilities().map_api_error().await?;
-        Ok(document.into_inner().into())
+        self.server.read().as_ref().map(|document| document.version.as_str()) != Some(available)
     }
 
     /// Read whether the server supports the given capability, from the last [`CapClient::refresh`].
@@ -203,8 +179,11 @@ impl CapClient {
     ) -> Result<Option<C>, ServerSupportError> {
         let _ = self.warmed.clone().wait_for(|&done| done).await;
 
-        let cached =
-            self.server.read().as_ref().map(|server| server.caps.get(C::static_name()).cloned());
+        let cached = self
+            .server
+            .read()
+            .as_ref()
+            .map(|document| document.capabilities.get(C::static_name()).cloned());
         let Some(raw) = cached.ok_or(ServerSupportError::NotFetched)? else {
             return Ok(None);
         };
@@ -217,61 +196,51 @@ impl CapClient {
 
     /// The capability token this client currently knows, or `None` if it has never fetched.
     ///
-    /// The token is opaque: it is the `version` of the server's capabilities document, echoed back
+    /// The token is opaque: it is the [`CapsDocument::version`] the server last sent, echoed back
     /// to the server verbatim. The client never interprets it.
     #[must_use]
     pub fn known_token(&self) -> Option<String> {
-        self.server.read().as_ref().map(|caps| caps.version.clone())
+        self.server.read().as_ref().map(|document| document.version.clone())
+    }
+}
+
+/// The capability token to refresh to after an answer advertised `available`, if any.
+///
+/// Only [`CapMismatch::Continue`] refreshes, and only to a token that differs from both `sent`,
+/// the one the request carried, and `cached`, the one cached now.
+#[must_use]
+pub fn token_to_refresh<'a>(
+    on_mismatch: CapMismatch,
+    available: Option<&'a str>,
+    sent: Option<&str>,
+    cached: Option<&str>,
+) -> Option<&'a str> {
+    match on_mismatch {
+        CapMismatch::Error => None,
+        CapMismatch::Continue => {
+            available.filter(|available| Some(*available) != sent && Some(*available) != cached)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::future;
 
-    use atuin_domain::caps::{CapServer, CapabilitiesCap};
     use pretty_assertions::assert_eq;
     use rstest::rstest;
-    use url::Url;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use super::CapClient;
-    use crate::Client;
-
-    const CAPABILITIES: &str = "/api/v0/capabilities";
-
-    async fn server_answering(response: ResponseTemplate) -> MockServer {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(CAPABILITIES))
-            .respond_with(response)
-            .mount(&server)
-            .await;
-        server
-    }
-
-    fn api(server: &MockServer, http: reqwest::Client) -> Client {
-        Client::from_http(Url::parse(&server.uri()).unwrap(), http).unwrap()
-    }
-
-    /// A reader for `server` whose warm-up fetch has finished.
-    async fn warm(server: &MockServer) -> Arc<CapClient> {
-        let caps = CapClient::new(api(server, reqwest::Client::new()));
-        let _ = caps.get_server::<CapabilitiesCap>().await;
-        caps
-    }
+    use super::{CapClient, CapsDocument};
+    use crate::caps::{CapServer, CapabilitiesCap};
 
     #[rstest]
     #[tokio::test]
     async fn observes_the_capability_the_server_advertises() {
         let advertised = CapServer::new().add(CapabilitiesCap { version: 1 }).unwrap();
-        let server = server_answering(
-            ResponseTemplate::new(200).set_body_string(advertised.body().to_owned()),
-        )
-        .await;
+        let body = advertised.body().to_owned();
+        let fetch = move || future::ready(serde_json::from_str::<CapsDocument>(&body));
 
-        let caps = warm(&server).await;
+        let caps = CapClient::new(fetch);
 
         assert_eq!(
             caps.get_server::<CapabilitiesCap>().await.unwrap(),

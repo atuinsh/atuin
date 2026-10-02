@@ -5,13 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::try_stream;
-use atuin_api_client::{
-    ApiError, AuthHeaderProvider, AuthToken, CapClient, CapMismatch, MapApiError, ResponseValue,
-    types,
-};
+use atuin_api_client::{ApiError, AuthHeaderProvider, AuthToken, MapApiError, ResponseValue, types};
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::url::UrlAppendError;
 use atuin_domain::api::{ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION};
+use atuin_domain::caps::{CapClient, CapMismatch};
 use atuin_domain::record::{
     EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus,
 };
@@ -232,7 +230,7 @@ pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
         &settings.sync_address,
         &settings.extra_headers,
     )?;
-    Ok(CapClient::new(api.with_auth(auth)))
+    Ok(api.with_auth(auth).cap_client())
 }
 
 /// Build an anonymous capability reader: every fetch sees the server-global
@@ -241,7 +239,7 @@ pub fn caps_client_anonymous(
     sync_addr: &Url,
     extra_headers: &HashMap<String, SecretString>,
 ) -> Result<Arc<CapClient>> {
-    Ok(CapClient::new(atuin_api_client::Client::for_sync_anonymous(sync_addr, extra_headers)?))
+    Ok(atuin_api_client::Client::for_sync_anonymous(sync_addr, extra_headers)?.cap_client())
 }
 
 /// A pending records download for one series, produced by [`Client::records`].

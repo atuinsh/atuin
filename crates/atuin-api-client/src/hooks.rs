@@ -14,17 +14,49 @@
 //! never negotiated: neither server negotiates that route, and a refresh must not trigger a
 //! refresh.
 
+use std::fmt;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use atuin_domain::caps::http::{AVAILABLE_HEADER, ENFORCE_HEADER, KNOWN_HEADER};
+use atuin_domain::caps::{CapClient, CapMismatch, CapsDocument, token_to_refresh};
 use progenitor_client::{ClientHooks, Error, OperationInfo};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 
-use crate::{AuthHeaderProvider, CapClient, CapMismatch, Client};
+use crate::{ApiBody, Client};
 
 const API_VERSION_HEADER: &str = "api-version";
 /// `OperationInfo::operation_id` of [`Client::get_capabilities`], which progenitor snake-cases.
 const GET_CAPABILITIES: &str = "get_capabilities";
+
+/// The future an [`AuthHeaderProvider`] resolves an `Authorization` header with.
+///
+/// Mark the value [sensitive](HeaderValue::set_sensitive) so it stays out of `Debug` output.
+pub type AuthHeaderFuture = Pin<Box<dyn Future<Output = Option<HeaderValue>> + Send>>;
+
+/// Resolves the `Authorization` header for each request of a [`Client::with_auth`] client.
+///
+/// Returning `None` sends the request anonymously. Auth is resolved per request, not at
+/// construction, so a long-lived client (e.g. the daemon's capability reader) follows login,
+/// logout, and token rotation without a rebuild.
+#[derive(Clone)]
+pub struct AuthHeaderProvider(Arc<dyn Fn() -> AuthHeaderFuture + Send + Sync>);
+
+impl AuthHeaderProvider {
+    pub fn new(f: impl Fn() -> AuthHeaderFuture + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    async fn resolve(&self) -> Option<HeaderValue> {
+        (self.0)().await
+    }
+}
+
+impl fmt::Debug for AuthHeaderProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AuthHeaderProvider")
+    }
+}
 
 /// State the generated operations hand to the hooks: the base URL's query from
 /// [`Client::from_http`], and what [`Client::with_capabilities`] and [`Client::with_auth`] set.
@@ -52,6 +84,20 @@ struct Negotiation {
 }
 
 impl Client {
+    /// Build a [`CapClient`] that fetches the server's capabilities through this client.
+    #[must_use]
+    pub fn cap_client(self) -> Arc<CapClient> {
+        CapClient::new(move || {
+            let api = self.clone();
+            async move {
+                api.get_capabilities().body().await.map(|document| CapsDocument {
+                    version: document.version,
+                    capabilities: document.capabilities,
+                })
+            }
+        })
+    }
+
     /// Negotiate capabilities through `caps` on every operation but [`Client::get_capabilities`].
     #[must_use]
     pub fn with_capabilities(mut self, caps: Arc<CapClient>, on_mismatch: CapMismatch) -> Self {
@@ -129,9 +175,6 @@ impl Negotiation {
     }
 
     /// Refresh in the background if `headers` advertise the token [`token_to_refresh`] picks.
-    ///
-    /// Not inlined into `exec`: the refresh runs `get_capabilities` through `exec` again, and
-    /// rustc proves that future `Send` only from outside `exec`'s own body.
     fn refresh_if_advertised(&self, headers: &HeaderMap, sent: Option<&str>) {
         let available = headers.get(AVAILABLE_HEADER).and_then(|value| value.to_str().ok());
         let cached = self.caps.known_token();
@@ -148,23 +191,5 @@ impl Negotiation {
         tokio::spawn(async move {
             let _ = caps.refresh_if_stale(&available).await;
         });
-    }
-}
-
-/// The capability token to refresh to after an answer advertised `available`, if any.
-///
-/// Only [`CapMismatch::Continue`] refreshes, and only to a token that differs from both `sent`,
-/// the one the request carried, and `cached`, the one cached now.
-fn token_to_refresh<'a>(
-    on_mismatch: CapMismatch,
-    available: Option<&'a str>,
-    sent: Option<&str>,
-    cached: Option<&str>,
-) -> Option<&'a str> {
-    match on_mismatch {
-        CapMismatch::Error => None,
-        CapMismatch::Continue => {
-            available.filter(|available| Some(*available) != sent && Some(*available) != cached)
-        }
     }
 }

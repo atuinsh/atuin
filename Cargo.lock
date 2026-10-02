@@ -413,7 +413,6 @@ version = "18.23.0"
 dependencies = [
  "atuin-domain",
  "derive_more",
- "parking_lot",
  "pretty_assertions",
  "progenitor",
  "progenitor-client",

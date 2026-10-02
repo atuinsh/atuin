@@ -26,6 +26,7 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync"] }
 typed-builder = { workspace = true }
 uuid = { workspace = true }
 whoami = { workspace = true }
@@ -39,7 +40,6 @@ axum = ["dep:axum"]
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
-tokio = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 
 [lints]
