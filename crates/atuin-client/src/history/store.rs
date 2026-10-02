@@ -11,11 +11,12 @@ use atuin_domain::record::{
     RecordVersion,
 };
 use easy_cast::Conv;
-use eyre::{Result, bail, eyre};
+use eyre::{Result, bail, ensure, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use tracing::instrument;
 use tracing_futures::Instrument;
+use xxhash_rust::xxh3::Xxh3;
 
 use super::{History, HistoryId, Version};
 use crate::database::{Sqlite, current_context};
@@ -216,28 +217,49 @@ impl HistoryStore {
     /// Records go in as chunks of [`APPEND_BATCH_SIZE`], each atomic. Indices are claimed
     /// optimistically like [`Self::push_record`]: a chunk is stamped from the current tail, and if
     /// another writer took a slot in the meantime only that chunk is re-stamped from the new tail
-    /// and retried. Fresh record ids are built on every attempt, which
-    /// [`SqliteStore::push_batch_unique`] relies on.
+    /// and retried.
+    ///
+    /// Records get fresh random ids, unless `record_ids` gives one per record. A record whose given
+    /// id is already in the store is skipped as already pushed, and isn't in the returned ids.
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, count = records.len()), err)]
-    async fn push_records(&self, records: &[HistoryRecord]) -> Result<Vec<RecordId>> {
+    async fn push_records(
+        &self,
+        records: &[HistoryRecord],
+        record_ids: Option<&[RecordId]>,
+    ) -> Result<Vec<RecordId>> {
+        if let Some(record_ids) = record_ids {
+            ensure!(record_ids.len() == records.len(), "one history record id per record");
+            ensure!(
+                record_ids.iter().collect::<HashSet<_>>().len() == record_ids.len(),
+                "history record ids repeat"
+            );
+        }
+
         let series = RecordSeriesKey::new(self.host_id, RecordTag::History);
         let payloads = records.iter().map(HistoryRecord::serialize).collect::<Result<Vec<_>>>()?;
         let mut ids = Vec::with_capacity(payloads.len());
 
-        for chunk in payloads.chunks(APPEND_BATCH_SIZE) {
-            loop {
+        for (c, chunk) in payloads.chunks(APPEND_BATCH_SIZE).enumerate() {
+            let mut chunk: Vec<_> = chunk
+                .iter()
+                .enumerate()
+                .map(|(n, bytes)| (bytes, record_ids.map(|ids| ids[c * APPEND_BATCH_SIZE + n])))
+                .collect();
+
+            while !chunk.is_empty() {
                 let idx = self.store.last(&series).await?.map_or(0, |p| p.idx + 1);
 
                 let unencrypted: Vec<_> = chunk
                     .iter()
                     .enumerate()
-                    .map(|(n, bytes)| {
+                    .map(|(n, (bytes, id))| {
                         Record::builder()
+                            .id(id.unwrap_or_else(|| RecordId(uuid::Uuid::now_v7())))
                             .host(Host::new(self.host_id))
                             .version(RecordVersion::from(Version::LATEST.name()))
                             .tag(RecordTag::History)
                             .idx(idx + u64::conv(n))
-                            .data(bytes.clone())
+                            .data((*bytes).clone())
                             .build()
                     })
                     .collect();
@@ -247,6 +269,15 @@ impl HistoryStore {
                     ids.extend(encrypted.into_iter().map(|r| r.id));
                     break;
                 }
+
+                // Restamping resolves index conflicts, not ids. A given id already in the store
+                // was pushed by an earlier attempt or a concurrent push of the same record: it's
+                // done, so drop it rather than retry it forever.
+                if record_ids.is_some() {
+                    let chunk_ids: Vec<_> = encrypted.iter().map(|r| r.id).collect();
+                    let stored = self.store.existing(&chunk_ids).await?;
+                    chunk.retain(|(_, id)| !id.is_some_and(|id| stored.contains(&id)));
+                }
             }
         }
 
@@ -255,7 +286,7 @@ impl HistoryStore {
 
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_batch(&self, records: impl Iterator<Item = HistoryRecord>) -> Result<()> {
-        self.push_records(&records.collect::<Vec<_>>()).await?;
+        self.push_records(&records.collect::<Vec<_>>(), None).await?;
 
         Ok(())
     }
@@ -279,7 +310,7 @@ impl HistoryStore {
             return Ok(Vec::new());
         }
 
-        self.push_records(&records).await
+        self.push_records(&records, None).await
     }
 
     /// [`Self::delete_batch`] for whole entries.
@@ -292,32 +323,56 @@ impl HistoryStore {
     }
 
     /// Add history from outside Atuin (e.g. a shell's history file) to `database` and the store,
-    /// returning the entries that were new.
+    /// returning the entries that were new to the database.
     ///
-    /// Importers mint fresh ids every run, so entries are matched by the database's
-    /// `(timestamp, cwd, command)` uniqueness. The rows are committed only after the store push:
-    /// committed first, a failed push would leave rows every retry skips, never to be synced.
+    /// Entries are matched by the database's `(timestamp, cwd, command)` uniqueness, which their ids
+    /// are also derived from (see [`HistoryId::for_import`]), so importing the same history again,
+    /// here or on another machine, adds nothing.
     ///
-    /// Entries go in chunks no larger than one store transaction, so each chunk lands in both or
-    /// neither. On error, earlier chunks stay imported.
+    /// Entries go in chunks no larger than one store transaction, each saved as records first, then
+    /// rows. Rows first, a failed push would leave rows every retry skips, never to be synced. The
+    /// two databases can't commit together, so a failure in between leaves records without rows;
+    /// their ids are derived from the entry and host, so a retry recognises them and pushes only
+    /// the rest. On error, earlier chunks stay imported.
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, count = histories.len()), err)]
     pub async fn import(&self, database: &Sqlite, histories: Vec<History>) -> Result<Vec<History>> {
-        let mut new = Vec::new();
+        let mut imported = Vec::new();
 
         for chunk in histories.chunks(APPEND_BATCH_SIZE) {
-            let pending = database.save_bulk_uncommitted(chunk).await?;
-            let inserted: HashSet<_> = pending.inserted.iter().collect();
-            let chunk_new: Vec<_> =
-                chunk.iter().filter(|h| inserted.contains(&h.id)).cloned().collect();
+            // Ask which entries are new up front, so the history db isn't locked while the store
+            // is written. An entry can appear more than once in a chunk, under the same id: keep
+            // the first.
+            let mut new_ids: HashSet<_> = database.new_ids(chunk).await?.into_iter().collect();
+            let new: Vec<_> = chunk.iter().filter(|h| new_ids.remove(&h.id)).cloned().collect();
 
-            // Keep this order: if the push fails, returning early drops `pending`, which rolls the
-            // rows back so a retry imports them again.
-            self.push_batch(chunk_new.iter().cloned().map(HistoryRecord::Create)).await?;
-            pending.commit().await?;
-            new.extend(chunk_new);
+            // Records first, then rows, so no row is ever saved without its record. A failure in
+            // between leaves records without rows: the retry derives the same record ids, and
+            // `push_records` skips those already stored.
+            let record_ids: Vec<_> = new.iter().map(|h| self.import_record_id(h)).collect();
+            let records: Vec<_> = new.iter().cloned().map(HistoryRecord::Create).collect();
+            self.push_records(&records, Some(&record_ids)).await?;
+
+            let inserted: HashSet<_> =
+                database.save_bulk_returning_ids(&new).await?.into_iter().collect();
+            imported.extend(new.into_iter().filter(|h| inserted.contains(&h.id)));
         }
 
-        Ok(new)
+        Ok(imported)
+    }
+
+    /// The id of the record that imports `history` from this host: derived from both, so a retried
+    /// import can tell which entries an earlier, failed attempt already pushed. Shaped like a v7
+    /// UUID carrying the entry's time, like every other record id.
+    fn import_record_id(&self, history: &History) -> RecordId {
+        let mut hasher = Xxh3::new();
+        hasher.update(self.host_id.0.as_bytes());
+        hasher.update(&history.id.into_bytes());
+        let hash = hasher.digest128().to_le_bytes();
+
+        let millis =
+            u64::try_from(history.timestamp.unix_timestamp_nanos() / 1_000_000).unwrap_or(0);
+        let random: [u8; 10] = hash[..10].try_into().expect("a 128-bit hash has 10 bytes");
+        RecordId(uuid::Builder::from_unix_timestamp_millis(millis, &random).into_uuid())
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
@@ -961,7 +1016,8 @@ mod tests {
         assert!(history_store.delete_batch([]).await.unwrap().is_empty());
     }
 
-    /// A re-import mints fresh ids, but only entries new by `(timestamp, cwd, command)` land.
+    /// Entries the db already has by `(timestamp, cwd, command)` -- under any id, e.g. from an
+    /// older version's import -- aren't imported again.
     #[rstest]
     #[tokio::test]
     async fn import_skips_entries_the_db_already_has(
@@ -986,6 +1042,73 @@ mod tests {
 
         assert_eq!(db.history_count(true).await.unwrap(), 4);
         assert_eq!(store.len_tag(&RecordTag::History).await.unwrap(), 4);
+    }
+
+    /// An attempt that pushed its records but failed before committing its rows leaves records in
+    /// the store with no rows. The retry must build the rows without pushing those records again.
+    #[rstest]
+    #[tokio::test]
+    async fn import_retry_does_not_repush_records_a_failed_attempt_left(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (store, _host_id, history_store) = parts;
+        let db = memory_db().await;
+        let histories: Vec<_> = (0..3).map(history_n).collect();
+
+        // The failed attempt: two records pushed, no rows committed.
+        let left: Vec<_> =
+            histories[..2].iter().map(|h| HistoryRecord::Create(h.clone())).collect();
+        let ids: Vec<_> =
+            histories[..2].iter().map(|h| history_store.import_record_id(h)).collect();
+        history_store.push_records(&left, Some(&ids)).await.unwrap();
+
+        let imported = history_store.import(&db, histories.clone()).await.unwrap();
+
+        assert_eq!(imported, histories);
+        assert_eq!(db.history_count(true).await.unwrap(), 3);
+        assert_eq!(store.len_tag(&RecordTag::History).await.unwrap(), 3);
+    }
+
+    /// Two imports of the same history at once both succeed, and land each entry once.
+    #[rstest]
+    #[tokio::test]
+    async fn concurrent_imports_land_each_entry_once(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (store, _host_id, history_store) = parts;
+        let db = memory_db().await;
+        let histories: Vec<_> = (0..50).map(history_n).collect();
+
+        let (a, b) = tokio::join!(
+            history_store.import(&db, histories.clone()),
+            history_store.import(&db, histories.clone()),
+        );
+
+        assert_eq!(a.unwrap().len() + b.unwrap().len(), 50);
+        assert_eq!(db.history_count(true).await.unwrap(), 50);
+        assert_eq!(store.len_tag(&RecordTag::History).await.unwrap(), 50);
+    }
+
+    /// A history file can hold the same entry twice, and the copies share an id.
+    #[rstest]
+    #[tokio::test]
+    async fn import_takes_a_repeated_entry_once(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (store, _host_id, history_store) = parts;
+        let db = memory_db().await;
+
+        let imported = history_store.import(&db, vec![history_n(0), history_n(0)]).await.unwrap();
+
+        assert_eq!(imported, vec![history_n(0)]);
+        assert_eq!(db.history_count(true).await.unwrap(), 1);
+        assert_eq!(store.len_tag(&RecordTag::History).await.unwrap(), 1);
     }
 
     /// An import larger than one store transaction lands whole, chunk by chunk.

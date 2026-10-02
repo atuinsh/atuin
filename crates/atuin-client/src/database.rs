@@ -362,22 +362,12 @@ impl From<sqlx::migrate::MigrateError> for DbSetupError {
     }
 }
 
-/// Rows inserted by [`Sqlite::save_bulk_uncommitted`], held in an open transaction.
-///
-/// Dropping it without calling [`Self::commit`] rolls the inserts back, so a caller that fails
-/// part-way through writing what it derives from the rows leaves the database as it found it.
-#[must_use = "the inserted rows are rolled back unless committed"]
-pub struct PendingSave {
-    tx: sqlx::Transaction<'static, sqlx::Sqlite>,
-    /// Ids of the entries actually inserted.
-    pub inserted: Vec<HistoryId>,
-}
-
-impl PendingSave {
-    /// Make the inserts permanent.
-    pub async fn commit(self) -> Result<()> {
-        self.tx.commit().await
-    }
+/// What [`Sqlite::insert_bulk`] does with the rows, and whether it reports which went in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Insert {
+    Commit,
+    CommitReturningIds,
+    RollBackReturningIds,
 }
 
 impl Sqlite {
@@ -458,18 +448,37 @@ impl Sqlite {
         Ok(())
     }
 
+    /// Insert `h`, skipping entries whose id or `(timestamp, cwd, command)` is already present.
     pub async fn save_bulk<'a>(&self, h: impl IntoIterator<Item = &'a History>) -> Result<()> {
-        self.save_bulk_uncommitted(h).await?.commit().await
+        self.insert_bulk(h, Insert::Commit).await.map(drop)
     }
 
-    /// Insert `h`, skipping entries whose id or `(timestamp, cwd, command)` is already present,
-    /// leaving the caller to commit once anything derived from the new rows is written too.
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn save_bulk_uncommitted<'a>(
+    /// [`Self::save_bulk`], returning the ids of the entries actually inserted.
+    pub async fn save_bulk_returning_ids<'a>(
         &self,
         h: impl IntoIterator<Item = &'a History>,
-    ) -> Result<PendingSave> {
+    ) -> Result<Vec<HistoryId>> {
+        self.insert_bulk(h, Insert::CommitReturningIds).await
+    }
+
+    /// The ids of the entries [`Self::save_bulk`] would insert now, without inserting anything.
+    pub async fn new_ids<'a>(
+        &self,
+        h: impl IntoIterator<Item = &'a History>,
+    ) -> Result<Vec<HistoryId>> {
+        self.insert_bulk(h, Insert::RollBackReturningIds).await
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    async fn insert_bulk<'a>(
+        &self,
+        h: impl IntoIterator<Item = &'a History>,
+        mode: Insert,
+    ) -> Result<Vec<HistoryId>> {
         let mut h = h.into_iter().peekable();
+        if h.peek().is_none() {
+            return Ok(Vec::new());
+        }
 
         debug!("saving history to sqlite");
 
@@ -504,13 +513,24 @@ impl Sqlite {
                     .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
             });
 
-            // With `or ignore`, sqlite returns ids only for the rows it actually inserted: an entry
-            // whose id or `(timestamp, cwd, command)` is already present is skipped silently.
-            builder.push(" returning id");
-            inserted.extend(builder.build_query_scalar::<HistoryId>().fetch_all(&mut *tx).await?);
+            if mode == Insert::Commit {
+                builder.build().execute(&mut *tx).await?;
+            } else {
+                // With `or ignore`, sqlite returns ids only for the rows it actually inserted: an
+                // entry whose id or `(timestamp, cwd, command)` is already present is skipped.
+                builder.push(" returning id");
+                inserted
+                    .extend(builder.build_query_scalar::<HistoryId>().fetch_all(&mut *tx).await?);
+            }
         }
 
-        Ok(PendingSave { tx, inserted })
+        if mode == Insert::RollBackReturningIds {
+            tx.rollback().await?;
+        } else {
+            tx.commit().await?;
+        }
+
+        Ok(inserted)
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
