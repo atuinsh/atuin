@@ -1263,11 +1263,20 @@ pub(crate) mod tests {
         assert!(minted < mint("msg", 1_790_217_606_980, "other"));
     }
 
+    /// A directory programs can be run from, next to the test binary: CI's temporary directory is
+    /// mounted without exec, so a fake program written there could not be run.
+    #[cfg(unix)]
+    fn exec_dir() -> tempfile::TempDir {
+        let exe = std::env::current_exe().unwrap();
+        tempfile::tempdir_in(exe.parent().unwrap()).unwrap()
+    }
+
     /// A fake `opencode`: records how it was run, then does what `$FAKE_EXIT` says.
     #[cfg(unix)]
-    fn fake_opencode(dir: &Path) -> PathBuf {
+    fn fake_opencode(dir: &Path) -> (tempfile::TempDir, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("opencode");
+        let bin = exec_dir();
+        let path = bin.path().join("opencode");
         std::fs::write(
             &path,
             format!(
@@ -1279,7 +1288,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
+        (bin, path)
     }
 
     /// `opencode import` runs from the session's directory, against the database it was given,
@@ -1289,7 +1298,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn import_runs_opencode_from_the_session_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let program = fake_opencode(dir.path());
+        let (_bin, program) = fake_opencode(dir.path());
         let db = dir.path().join("opencode.db");
         let mut s = session(SES, Some("t"), every_kind());
         s.cwd = dir.path().canonicalize().unwrap();
@@ -1384,9 +1393,10 @@ pub(crate) mod tests {
 
     /// A fake `opencode` that succeeds, saying it ran in `ran`.
     #[cfg(unix)]
-    fn succeeding_opencode(dir: &Path) -> PathBuf {
+    fn succeeding_opencode(dir: &Path) -> (tempfile::TempDir, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("opencode");
+        let bin = exec_dir();
+        let path = bin.path().join("opencode");
         std::fs::write(
             &path,
             format!(
@@ -1398,7 +1408,7 @@ touch {}/ran
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
+        (bin, path)
     }
 
     /// A session an earlier import left partly written is imported again, rather than taken for
@@ -1408,7 +1418,7 @@ touch {}/ran
     #[tokio::test]
     async fn a_partly_imported_session_is_imported_again() {
         let dir = tempfile::tempdir().unwrap();
-        let program = succeeding_opencode(dir.path());
+        let (_bin, program) = succeeding_opencode(dir.path());
         let db = dir.path().join("opencode.db");
         let mut s = session(SES, None, every_kind());
         s.cwd = dir.path().canonicalize().unwrap();
