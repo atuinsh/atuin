@@ -604,8 +604,9 @@ pub fn select_session(
     }
 
     // `list` prints ids truncated to 12 chars, so accept a unique id prefix as well as a full id.
-    let mut matches =
-        sessions.into_iter().filter(|s| s.handle.session.as_ref().starts_with(selector));
+    let mut matches = sessions.into_iter().filter(|s| {
+        s.handle.session.as_ref().starts_with(selector) || s.atuin_id.has_prefix(selector)
+    });
     let first = matches.next().ok_or_else(|| SelectError::NotFound(selector.to_owned()))?;
     if matches.next().is_some() {
         return Err(SelectError::Ambiguous(selector.to_owned()));
@@ -617,6 +618,7 @@ pub fn select_session(
 
 fn write_session_header(out: &mut dyn Write, s: &Session) -> io::Result<()> {
     writeln!(out, "session   {}", sanitize(s.handle.session.as_ref()))?;
+    writeln!(out, "atuin id  {}", s.atuin_id)?;
     writeln!(out, "harness   {}", harness_name(s.handle.harness))?;
     if let Some(title) = &s.title {
         writeln!(out, "title     {}", sanitize(title))?;
@@ -1004,6 +1006,7 @@ struct HandleJson {
 struct SessionJson {
     harness: String,
     session_id: String,
+    atuin_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent: Option<HandleJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1168,6 +1171,7 @@ fn session_json(s: &Session) -> SessionJson {
     SessionJson {
         harness: harness_name(s.handle.harness).to_owned(),
         session_id: s.handle.session.to_string(),
+        atuin_id: s.atuin_id.to_string(),
         parent: s.parent.as_ref().map(handle_json),
         parent_kind: s.parent_kind.map(|kind| match kind {
             ParentKind::Subagent => "subagent",
@@ -1256,6 +1260,7 @@ mod tests {
     fn session(harness: HarnessKind, id: &str) -> Session {
         Session::builder()
             .handle(handle(harness, id))
+            .atuin_id(handle(harness, id).atuin_id(OffsetDateTime::UNIX_EPOCH))
             .started_at(OffsetDateTime::UNIX_EPOCH)
             .updated_at(OffsetDateTime::UNIX_EPOCH)
             .usage(Usage::default())
@@ -1318,6 +1323,17 @@ mod tests {
     }
 
     #[rstest]
+    #[case::whole(32)]
+    #[case::past_the_timestamp(16)]
+    fn the_atuin_id_resolves_a_session(#[case] len: usize) {
+        let sessions =
+            vec![session(HarnessKind::Codex, "aaa"), session(HarnessKind::ClaudeCode, "bbb")];
+        let id = sessions[1].atuin_id.to_string();
+        let selected = select_session(sessions, &id[..len]).unwrap();
+        assert_eq!(selected, handle(HarnessKind::ClaudeCode, "bbb"));
+    }
+
+    #[rstest]
     fn ambiguous_prefix_is_an_error() {
         let sessions =
             vec![session(HarnessKind::Codex, "abc111"), session(HarnessKind::ClaudeCode, "abc222")];
@@ -1353,6 +1369,7 @@ mod tests {
         let v = serde_json::to_value(session_json(&s)).unwrap();
         assert_eq!(v["harness"], "claude-code");
         assert_eq!(v["session_id"], "abcdef0123456789");
+        assert_eq!(v["atuin_id"], s.atuin_id.to_string());
         assert_eq!(v["message_count"], 3);
         assert_eq!(v["tokens"]["input"], 10);
         assert_eq!(v["tokens"]["output"], 20);

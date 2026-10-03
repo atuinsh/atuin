@@ -21,6 +21,7 @@
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 
+use atuin_client::ai_session::AtuinSessionId;
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
@@ -123,8 +124,13 @@ async fn direct_match(source: &dyn SessionSource, query: &str) -> Result<Option<
         return Ok(None);
     }
     let mut found = source.find_by_id(query).await?;
-    let exact: Vec<usize> =
-        (0..found.len()).filter(|&i| found[i].handle.session.as_ref() == query).collect();
+    let atuin_id = query.parse::<AtuinSessionId>().ok();
+    let exact: Vec<usize> = (0..found.len())
+        .filter(|&i| {
+            let row = &found[i];
+            row.handle.session.as_ref() == query || atuin_id == Some(row.atuin_id)
+        })
+        .collect();
     if let [exact] = exact.as_slice() {
         return Ok(Some(found.swap_remove(*exact)));
     }
@@ -433,6 +439,19 @@ mod tests {
         assert!(direct_match(&source, "ses_4b8e2f1a9c3d7e6f").await.unwrap().is_some());
         assert!(direct_match(&source, "ses_4b8e2f1a9c3d7e").await.unwrap().is_none());
         assert!(direct_match(&source, "flaky").await.unwrap().is_none());
+    }
+
+    #[rstest]
+    #[case::whole(32)]
+    #[case::past_the_timestamp(16)]
+    #[tokio::test]
+    async fn an_atuin_id_resumes_directly(#[case] len: usize) {
+        let source = FakeSource::new();
+        let wanted = source.find_by_id("7f3c9a12").await.unwrap().remove(0);
+        let id = wanted.atuin_id.to_string();
+
+        let row = direct_match(&source, &id[..len]).await.unwrap().unwrap();
+        assert_eq!(row.handle, wanted.handle);
     }
 
     /// An id several agents have names no session to resume directly, and without a

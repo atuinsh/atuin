@@ -19,10 +19,11 @@ use sqlx::SqliteConnection;
 use sqlx::migrate::MigrateError;
 use time::OffsetDateTime;
 use tracing::warn;
+use uuid::Uuid;
 
 use super::{
-    HarnessKind, HarnessSession, MatchedSession, Message, NativeSessionId, PreviewParts,
-    SearchTerms, Session, SessionFilter, SessionMatch, SourceId,
+    AtuinSessionId, HarnessKind, HarnessSession, MatchedSession, Message, NativeSessionId,
+    PreviewParts, SearchTerms, Session, SessionFilter, SessionMatch, SourceId,
 };
 
 mod watermark;
@@ -35,7 +36,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -59,7 +60,7 @@ macro_rules! session_columns {
          s.model, s.started_at, s.updated_at, s.message_count, s.usage_input, s.usage_output, \
          s.usage_cache_read, s.usage_cache_write, s.usage_reasoning, s.title, s.title_source, \
          s.preview, s.last_reply, s.parent_kind, s.host_id, s.root_harness, s.root_session_id, \
-         s.copy_of_session_id"
+         s.copy_of_session_id, s.atuin_id"
     };
 }
 
@@ -177,6 +178,8 @@ pub enum DbError {
     InvalidContentEncoding,
     #[error("stored ai-session record id is not a valid uuid")]
     InvalidRecordId,
+    #[error("stored ai-session atuin id is missing or not a valid uuid")]
+    InvalidAtuinId,
     /// No daemon has created the sidecar yet.
     #[error(
         "the AI session database has not been created yet: start the atuin daemon (`atuin daemon \
@@ -249,6 +252,7 @@ struct SessionRow {
     root_harness: Option<i64>,
     root_session_id: Option<String>,
     copy_of_session_id: Option<String>,
+    atuin_id: Option<Vec<u8>>,
     child_count: i64,
     group_updated_at: Option<i64>,
 }
@@ -475,7 +479,33 @@ impl AiSessionDatabase {
         let pool = self.db.pool();
         db::migrate!(pool, "./src/ai_session/migrations").await?;
         self.group_migrated().await?;
-        self.recount_migrated().await
+        self.recount_migrated().await?;
+        self.atuin_id_migrated().await
+    }
+
+    /// Derive ids for sessions stored before the `atuin_id` migration.
+    async fn atuin_id_migrated(&self) -> Result<(), DbError> {
+        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let unset: Vec<(i64, i64, String, i64)> = db::query_as(
+            "SELECT id, harness, session_id, started_at FROM sessions WHERE atuin_id IS NULL",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+
+        for (id, harness, session_id, started_at) in unset {
+            let handle = HarnessSession {
+                harness: Self::harness_from_repr(harness)?,
+                session: NativeSessionId::from(session_id),
+            };
+            let atuin_id = handle.atuin_id(Self::time_from_millis(started_at)?);
+            db::query("UPDATE sessions SET atuin_id = ? WHERE id = ?")
+                .bind(atuin_id.as_bytes().as_slice())
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Attribute the usage stored before the `session_scoped_calls` migration afresh from the
@@ -586,6 +616,10 @@ impl AiSessionDatabase {
         let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
         let host = msg.host.map(Self::host_repr);
 
+        // v0 rows carry no id. The earliest row's derived id is the smallest, so MIN settles on
+        // the one from the session's start.
+        let atuin_id = msg.atuin_id.unwrap_or_else(|| msg.session.atuin_id(msg.timestamp));
+        let atuin_id = atuin_id.as_bytes().as_slice();
         let before = Self::session_key(&mut tx, harness, session_id).await?;
 
         // Messages reference their session by id, so it has to exist first. The upsert below
@@ -593,13 +627,14 @@ impl AiSessionDatabase {
         // A new session starts as its own root; regroup() below places it.
         db::query(
             "INSERT INTO sessions (harness, session_id, started_at, updated_at, root_harness,
-                root_session_id)
-            VALUES (?1, ?2, ?3, ?3, ?1, ?2)
+                root_session_id, atuin_id)
+            VALUES (?1, ?2, ?3, ?3, ?1, ?2, ?4)
             ON CONFLICT(harness, session_id) DO NOTHING",
         )
         .bind(harness)
         .bind(session_id)
         .bind(timestamp)
+        .bind(atuin_id)
         .execute(&mut *tx)
         .await?;
         let session: i64 =
@@ -651,6 +686,12 @@ impl AiSessionDatabase {
             if let Some(host) = &host {
                 Self::backfill_host(&mut tx, session, source_id, host).await?;
             }
+            // Another host may have captured this row under another id.
+            db::query("UPDATE sessions SET atuin_id = MIN(atuin_id, ?) WHERE id = ?")
+                .bind(atuin_id)
+                .bind(session)
+                .execute(&mut *tx)
+                .await?;
             tx.commit().await?;
             return Ok(Appended::Duplicate);
         }
@@ -678,10 +719,11 @@ impl AiSessionDatabase {
             "INSERT INTO sessions (
                 harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
                 started_at, updated_at, message_count, title, title_source, preview, last_reply,
-                last_reply_at, parent_kind, host_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                last_reply_at, parent_kind, host_id, atuin_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(harness, session_id) DO UPDATE SET
                 host_id = COALESCE(sessions.host_id, excluded.host_id),
+                atuin_id = MIN(sessions.atuin_id, excluded.atuin_id),
                 parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
                 parent_session_id = COALESCE(excluded.parent_session_id, \
              sessions.parent_session_id),
@@ -719,6 +761,7 @@ impl AiSessionDatabase {
         .bind(last_reply.as_ref().map(|_| timestamp))
         .bind(msg.parent.as_ref().and(msg.parent_kind).map(Self::parent_kind_repr))
         .bind(host.as_deref())
+        .bind(atuin_id)
         .execute(&mut *tx)
         .await?;
 
@@ -988,9 +1031,9 @@ impl AiSessionDatabase {
         self.recent_sessions(filter, 0).await
     }
 
-    /// Every session whose id starts with `prefix`, across harnesses, newest first (to find a
-    /// session by an abbreviated id). Wildcards mean nothing here: the prefix is a byte range,
-    /// not a pattern.
+    /// Every session whose id or [atuin id](AtuinSessionId) starts with `prefix`, across
+    /// harnesses, newest first (to find a session by an abbreviated id). Wildcards mean nothing
+    /// here: the prefix is a byte range, not a pattern.
     pub async fn sessions_with_id_prefix(&self, prefix: &str) -> Result<Vec<Session>, DbError> {
         // Text compares by its UTF-8 bytes, which order as the code points do: the ids starting
         // with `prefix` are those at or past it and before its successor.
@@ -1000,15 +1043,25 @@ impl AiSessionDatabase {
         } else {
             ""
         };
+        let atuin_ids = AtuinSessionId::prefix_range(prefix);
+        let atuin_clause = if atuin_ids.is_some() {
+            " OR s.atuin_id BETWEEN ? AND ?"
+        } else {
+            ""
+        };
+
         let sql = format!(
-            "SELECT {}, {} FROM sessions s WHERE s.session_id >= ?{upper_clause} ORDER BY \
-             s.updated_at DESC, s.session_id",
+            "SELECT {}, {} FROM sessions s WHERE (s.session_id >= ?{upper_clause}){atuin_clause} \
+             ORDER BY s.updated_at DESC, s.session_id",
             session_columns!(),
             no_group_columns!(),
         );
         let mut query = db::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(sql)).bind(prefix);
         if let Some(upper) = upper {
             query = query.bind(upper);
+        }
+        if let Some((low, high)) = &atuin_ids {
+            query = query.bind(low.as_bytes().as_slice()).bind(high.as_bytes().as_slice());
         }
         let rows: Vec<SessionRow> = query.fetch_all(self.db.pool()).await?;
         rows.into_iter().map(Self::session_from_row).collect()
@@ -2591,17 +2644,24 @@ impl AiSessionDatabase {
             harness,
             session: NativeSessionId::from(session),
         });
+        let handle = HarnessSession {
+            harness,
+            session: NativeSessionId::from(row.session_id),
+        };
+        let started_at = Self::time_from_millis(row.started_at)?;
+        let atuin_id = match row.atuin_id.as_deref() {
+            Some(bytes) => Uuid::from_slice(bytes).map_err(|_| DbError::InvalidAtuinId)?.into(),
+            // A reader can open the sidecar between the migration and its backfill.
+            None => handle.atuin_id(started_at),
+        };
 
         Ok(Session::builder()
-            .handle(HarnessSession {
-                harness,
-                session: NativeSessionId::from(row.session_id),
-            })
+            .handle(handle)
             .parent(parent)
             .cwd(row.cwd.map(PathBuf::from))
             .git_branch(row.git_branch)
             .model(row.model)
-            .started_at(Self::time_from_millis(row.started_at)?)
+            .started_at(started_at)
             .updated_at(Self::time_from_millis(row.updated_at)?)
             .message_count(u64::try_from(row.message_count).unwrap_or(0))
             .usage(Usage {
@@ -2621,6 +2681,7 @@ impl AiSessionDatabase {
             .copy_of(copy_of)
             .child_count(u64::try_from(row.child_count).unwrap_or(0))
             .group_updated_at(group_updated_at)
+            .atuin_id(atuin_id)
             .build())
     }
 }
@@ -2830,8 +2891,8 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{
-        AiSessionDatabase, Appended, COMPRESS_THRESHOLD, DbError, QueryTerms, SCHEMA_VERSION,
-        TitleSource, prefix_successor,
+        AiSessionDatabase, Appended, AtuinSessionId, COMPRESS_THRESHOLD, DbError, QueryTerms,
+        SCHEMA_VERSION, TitleSource, Uuid, prefix_successor,
     };
     use crate::ai_session::{
         HarnessKind, HarnessSession, Message, NativeSessionId, SearchTerms, Session, SessionFilter,
@@ -2902,11 +2963,14 @@ mod tests {
             include_str!("migrations/0004_parent_kind.sql"),
             include_str!("migrations/0005_sessions_updated_at.sql"),
             include_str!("migrations/0006_incremental_sidecar.sql"),
+            include_str!("migrations/0007_session_scoped_calls.sql"),
+            include_str!("migrations/0008_atuin_id.sql"),
         ] {
             sqlx::raw_sql(migration).execute(pool).await.unwrap();
         }
 
         let db = AiSessionDatabase::from_sqlite(sqlite);
+        db.atuin_id_migrated().await.unwrap();
         let hits: Vec<SessionMatch> = db
             .search("hello", SearchTerms::Typed, &SessionFilter::default(), 0)
             .try_collect()
@@ -5318,6 +5382,141 @@ mod tests {
             .collect();
         found.sort();
         assert_eq!(found, expected);
+    }
+
+    #[rstest]
+    #[case::whole(32, 1)]
+    #[case::past_the_timestamp(16, 1)]
+    #[case::only_the_timestamp(12, 2)]
+    #[case::odd_length(9, 2)]
+    #[tokio::test]
+    async fn an_atuin_id_or_its_prefix_finds_a_session(#[case] len: usize, #[case] found: usize) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let wanted = handle(HarnessKind::ClaudeCode, "wanted");
+        // Same start, so the ids share their timestamp digits.
+        let started = OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap();
+        for session in [&wanted, &handle(HarnessKind::Pi, "other")] {
+            let mut msg = message_in(session, 1_790_000_000, "words");
+            msg.atuin_id = Some(session.atuin_id(started));
+            db.append(&msg).await.unwrap();
+        }
+
+        let id = wanted.atuin_id(started);
+        let sessions = db.sessions_with_id_prefix(&id.to_string()[..len]).await.unwrap();
+        assert_eq!(sessions.len(), found);
+        assert!(sessions.iter().any(|s| s.handle == wanted));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rows_disagreeing_on_the_id_settle_on_the_smaller(
+        #[values(false, true)] reversed: bool,
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let mut rows = [message_in(&session, 0, "one"), message_in(&session, 1, "two")];
+        rows[0].atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(2)));
+        rows[1].atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(1)));
+        if reversed {
+            rows.reverse();
+        }
+        for row in &rows {
+            db.append(row).await.unwrap();
+        }
+
+        assert_eq!(
+            db.get_session(&session).await.unwrap().unwrap().atuin_id,
+            AtuinSessionId::from(Uuid::from_u128(1))
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rows_without_the_id_stand_for_a_derived_one(#[values(false, true)] fixed_first: bool) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let old = message_in(&session, 5, "one");
+        db.append(&old).await.unwrap();
+        assert_eq!(
+            db.get_session(&session).await.unwrap().unwrap().atuin_id,
+            session.atuin_id(old.timestamp)
+        );
+
+        let mut fixed = message_in(&session, 6, "two");
+        fixed.atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(1)));
+        let older = message_in(&session, 0, "three");
+        let rows = if fixed_first {
+            [fixed, older]
+        } else {
+            [older, fixed]
+        };
+        for row in &rows {
+            db.append(row).await.unwrap();
+        }
+
+        assert_eq!(
+            db.get_session(&session).await.unwrap().unwrap().atuin_id,
+            AtuinSessionId::from(Uuid::from_u128(1))
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_duplicate_row_settles_on_the_smaller_id() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let mut row = message_in(&session, 0, "one");
+        row.atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(2)));
+        db.append(&row).await.unwrap();
+        row.id = RecordId(atuin_common::utils::uuid_v7());
+        row.atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(1)));
+
+        assert!(matches!(db.append(&row).await.unwrap(), Appended::Duplicate));
+        assert_eq!(
+            db.get_session(&session).await.unwrap().unwrap().atuin_id,
+            AtuinSessionId::from(Uuid::from_u128(1))
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn migrating_to_atuin_ids_derives_them_and_replays_every_record() {
+        let db = sidecar_at(7, &[("s", None)]).await;
+        db::query("INSERT INTO reproject_watermark VALUES ('h', 't', 3, 'r')")
+            .execute(db.db.pool())
+            .await
+            .unwrap();
+        let before = db.projection_generation().await.unwrap();
+
+        db.migrate().await.unwrap();
+
+        let session = handle(HarnessKind::ClaudeCode, "s");
+        let stored: Option<Vec<u8>> = db::query_scalar("SELECT atuin_id FROM sessions")
+            .fetch_one(db.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            stored.as_deref(),
+            Some(session.atuin_id(OffsetDateTime::UNIX_EPOCH).as_bytes().as_slice())
+        );
+        let marks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
+            .fetch_one(db.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(marks, 0);
+        assert_ne!(db.projection_generation().await.unwrap(), before);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_reader_before_the_backfill_derives_the_id() {
+        let db = sidecar_at(8, &[("s", None)]).await;
+        let session = handle(HarnessKind::ClaudeCode, "s");
+
+        assert_eq!(
+            db.get_session(&session).await.unwrap().unwrap().atuin_id,
+            session.atuin_id(OffsetDateTime::UNIX_EPOCH)
+        );
     }
 
     #[rstest]

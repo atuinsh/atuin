@@ -1263,6 +1263,7 @@ impl State {
                     harness_style(theme, row.handle.harness),
                 ),
             ]),
+            field("Atuin id", text(row.atuin_id.to_string())),
             field("Title", highlighted_line(&row.title.text, &[], width, base, base)),
             field("Host", vec![
                 Span::styled(row.host_id.clone(), base),

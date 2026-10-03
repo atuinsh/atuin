@@ -43,7 +43,9 @@ pub fn context() -> ResumeContext {
 
 /// A bare row with sensible defaults, for tests.
 pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
+    let started_at = now() - Duration::hours(1);
     SessionRow {
+        atuin_id: handle(harness, id).atuin_id(started_at),
         handle: handle(harness, id),
         parent: None,
         relation: Relation::Root,
@@ -53,7 +55,7 @@ pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
         branch: Some("main".to_owned()),
         model: None,
         host_id: THIS_HOST_ID.to_owned(),
-        started_at: now() - Duration::hours(1),
+        started_at,
         updated_at: now() - Duration::minutes(30),
         messages: 10,
         usage: Usage::default(),
@@ -127,6 +129,7 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
     };
     FakeSession {
         row: SessionRow {
+            atuin_id: handle(spec.harness, spec.id).atuin_id(updated_at - spec.duration),
             handle: handle(spec.harness, spec.id),
             parent: parent.map(|p| p.handle.clone()),
             relation,
@@ -803,7 +806,9 @@ impl SessionSource for FakeSource {
         Ok(self
             .sessions
             .iter()
-            .filter(|s| s.row.handle.session.as_ref().starts_with(id))
+            .filter(|s| {
+                s.row.handle.session.as_ref().starts_with(id) || s.row.atuin_id.has_prefix(id)
+            })
             .map(|s| s.row.clone())
             .collect())
     }

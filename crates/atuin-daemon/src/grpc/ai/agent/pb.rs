@@ -2,7 +2,8 @@
 //!
 //! The wire is lossless: a domain value survives `domain -> wire -> domain` unchanged, so how to
 //! render it is the client's call. The exceptions are `Message::session_title`,
-//! `Message::session_title_source`, `Message::title_change`, `Message::turn_id` and
+//! `Message::session_title_source`, `Message::title_change`, `Message::turn_id`,
+//! `Message::atuin_id` (the session's, which `Session::atuin_id` carries) and
 //! `Session::title_source`, storage bookkeeping the wire never carries, and a non-UTF-8 `cwd`,
 //! which is sent lossily.
 mod codegen {
@@ -295,6 +296,7 @@ impl TryFrom<Message> for DomainMessage {
             session_title_source: None,
             title_change: None,
             turn_id: None,
+            atuin_id: None,
             host: host_from_repr(value.host_id)?,
         })
     }
@@ -326,6 +328,9 @@ impl From<DomainSession> for Session {
             root: value.root.map(Into::into),
             copy_of: value.copy_of.map(Into::into),
             child_count: value.child_count,
+            atuin_id: Some(Uuid {
+                value: value.atuin_id.as_bytes().to_vec(),
+            }),
         }
     }
 }
@@ -341,13 +346,22 @@ impl TryFrom<Session> for DomainSession {
                 timestamp.nanos.into(),
             )?)
         };
+        let handle: DomainHarnessSession =
+            value.handle.ok_or(ParseError::Missing("handle"))?.try_into()?;
+        let started_at = at(value.started_at, "started_at")?;
+        // Older daemons don't send it.
+        let atuin_id = match value.atuin_id {
+            Some(id) => uuid::Uuid::from_slice(&id.value)?.into(),
+            None => handle.atuin_id(started_at),
+        };
+
         Ok(Self {
-            handle: value.handle.ok_or(ParseError::Missing("handle"))?.try_into()?,
+            handle,
             parent: value.parent.map(TryInto::try_into).transpose()?,
             cwd: value.cwd.map(PathBuf::from),
             git_branch: value.git_branch,
             model: value.model,
-            started_at: at(value.started_at, "started_at")?,
+            started_at,
             updated_at: at(value.updated_at, "updated_at")?,
             message_count: value.message_count,
             usage: value.tokens.ok_or(ParseError::Missing("tokens"))?,
@@ -362,6 +376,7 @@ impl TryFrom<Session> for DomainSession {
             child_count: value.child_count,
             // Not carried on the wire.
             group_updated_at: None,
+            atuin_id,
         })
     }
 }
@@ -538,6 +553,7 @@ mod tests {
                 session_title_source: None,
                 title_change: None,
                 turn_id: None,
+                atuin_id: None,
                 host,
             },
         )
@@ -566,12 +582,13 @@ mod tests {
             any::<u64>(),
             prop::option::of(arb_harness_session()),
             arb_parent_kind(),
+            any::<u128>().prop_map(|id| uuid::Uuid::from_u128(id).into()),
         );
         (handles, summary, grouping).prop_map(
             |(
                 (handle, parent, cwd, git_branch, model),
                 (started_at, updated_at, message_count, usage, title, preview, last_reply),
-                (host, root, child_count, copy_of, parent_kind),
+                (host, root, child_count, copy_of, parent_kind, atuin_id),
             )| DomainSession {
                 handle,
                 parent,
@@ -592,6 +609,7 @@ mod tests {
                 copy_of,
                 child_count,
                 group_updated_at: None,
+                atuin_id,
             },
         )
     }

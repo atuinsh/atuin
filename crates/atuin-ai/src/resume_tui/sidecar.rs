@@ -64,6 +64,7 @@ impl SidecarSource {
         let title = titled(&s)
             .map_or_else(|| title::derive(s.preview.as_deref().unwrap_or_default()), str::to_owned);
         SessionRow {
+            atuin_id: s.atuin_id,
             handle: s.handle,
             // A copy (a Claude Code `--resume` fork) is forked from the session it copies.
             parent: s.parent.or(s.copy_of),

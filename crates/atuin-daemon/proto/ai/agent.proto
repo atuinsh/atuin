@@ -203,4 +203,6 @@ message Session {
   // For a session with no parent, the session it was found to be a copy of (from the model
   // calls they share); always of the same harness.
   optional HarnessSession copy_of = 19;
+  // Atuin's id for the session.
+  optional common.Uuid atuin_id = 20;
 }

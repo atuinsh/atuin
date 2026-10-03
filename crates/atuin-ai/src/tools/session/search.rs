@@ -296,7 +296,7 @@ mod tests {
         SessionHit(&hit).render_into(&mut out, 1, time::UtcOffset::UTC);
 
         assert!(out.contains("claude-code"));
-        assert!(out.contains("abc-123"));
+        assert!(out.contains(&hit.session.atuin_id.to_string()));
         assert!(out.contains("Add FTS"));
         assert!(out.contains("the flaky test"));
         assert!(out.contains("in /work/atuin"));

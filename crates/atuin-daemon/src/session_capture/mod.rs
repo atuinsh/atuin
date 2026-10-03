@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::ai_session::{
-    AiSessionDatabase, AiSessionStore, Appended, BuildError, DbError, HarnessKind, HarnessSession,
-    Message, PushError, ReprojectProgress, SearchTerms, Session, SessionFilter, SessionMatch,
+    AiSessionDatabase, AiSessionStore, Appended, AtuinSessionId, BuildError, DbError, HarnessKind,
+    HarnessSession, Message, PushError, ReprojectProgress, SearchTerms, Session, SessionFilter,
+    SessionMatch,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
@@ -172,7 +173,7 @@ impl Sink {
     async fn append_locked(
         self,
         (mut pending, local): CaptureLocks,
-        msg: Message,
+        mut msg: Message,
     ) -> Result<Appended, AppendError> {
         self.repair(&mut pending).await?;
         // Dedup gate: if this logical message is already projected it is already in the record
@@ -181,6 +182,11 @@ impl Sink {
         if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
             return Ok(Appended::Duplicate);
         }
+        // Under the locks the sidecar holds every local row, so this sees the session's id.
+        msg.atuin_id = Some(match self.sidecar.get_session(&msg.session).await? {
+            Some(session) => session.atuin_id,
+            None => AtuinSessionId::mint(msg.timestamp),
+        });
 
         // Pending from before the push: should the push fail, or this task panic, once the
         // record may be stored, the next capture's repair finds out whether it was, and projects
@@ -711,6 +717,33 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn every_row_of_a_session_carries_its_first_rows_id() {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sub = sink.subscribe();
+        let first = sample_message();
+        let mut earlier = sample_message();
+        earlier.id = RecordId(atuin_common::utils::uuid_v7());
+        earlier.source_id = SourceId::from("earlier".to_owned());
+        earlier.timestamp = first.timestamp - time::Duration::hours(1);
+
+        sink.append(first.clone()).await.unwrap();
+        sink.append(earlier).await.unwrap();
+
+        let fixed = sink.sidecar.get_session(&first.session).await.unwrap().unwrap().atuin_id;
+        let mut carried = Vec::new();
+        while carried.len() < 2 {
+            if let SessionTailEvent::Message(m) = sub.next().await.unwrap().unwrap() {
+                carried.push(m.atuin_id);
+            }
+        }
+        assert_eq!(carried, [Some(fixed), Some(fixed)]);
+        // Minted, not derived from the session.
+        assert_ne!(fixed, first.session.atuin_id(first.timestamp));
+        assert_eq!(uuid::Uuid::from(fixed).get_version(), Some(uuid::Version::SortRand));
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn append_emits_started_then_message_to_subscriber() {
         let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
         let mut sub = sink.subscribe();
@@ -759,8 +792,10 @@ mod tests {
         ];
         sink.append(msg.clone()).await.unwrap();
         sanitize_message(&mut msg);
-        // Capture stamps the local host.
+        // Capture stamps the local host, and the session's id.
         msg.host = Some(sink.records.host_id());
+        msg.atuin_id =
+            Some(sink.sidecar.get_session(&msg.session).await.unwrap().unwrap().atuin_id);
         assert_eq!(msg.content.len(), 4);
         assert_eq!(msg.content[3], Content::ReasoningSummary { tokens: None });
         assert_eq!(msg.content[0], Content::Text("AWS_SECRET_ACCESS_KEY=****".to_owned()));
@@ -784,8 +819,9 @@ mod tests {
             sink.sidecar.get_session(&msg.session).await.unwrap().unwrap().title,
             msg.session_title,
         );
-        // The projection keeps titles on sessions rather than individual messages.
+        // The projection keeps titles and ids on sessions rather than individual messages.
         let title = msg.session_title.take();
+        msg.atuin_id = None;
         let mut messages = Box::pin(sink.sidecar.messages(&msg.session));
         assert_eq!(messages.next().await.unwrap().unwrap(), msg);
 

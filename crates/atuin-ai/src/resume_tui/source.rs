@@ -8,7 +8,9 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use atuin_client::ai_session::{HarnessKind, HarnessSession, SessionFilter as DbFilter};
+use atuin_client::ai_session::{
+    AtuinSessionId, HarnessKind, HarnessSession, SessionFilter as DbFilter,
+};
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::Usage;
 use time::OffsetDateTime;
@@ -78,6 +80,7 @@ impl Snippet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionRow {
     pub handle: HarnessSession,
+    pub atuin_id: AtuinSessionId,
     /// The session this one was forked or spawned from.
     pub parent: Option<HarnessSession>,
     pub relation: Relation,

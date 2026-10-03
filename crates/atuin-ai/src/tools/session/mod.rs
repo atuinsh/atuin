@@ -192,14 +192,15 @@ fn timestamp(ts: time::OffsetDateTime, offset: time::UtcOffset) -> String {
 }
 
 /// The compact per-session line shared by list and search results:
-/// `[harness] <updated>  <id>  (<n> msgs)` then the directory/branch and title on their own lines.
+/// `[harness] <updated>  <atuin id>  (<n> msgs)` then the directory/branch and title on their own
+/// lines.
 fn render_session_summary(out: &mut String, index: usize, s: &Session, offset: time::UtcOffset) {
     let _ = writeln!(
         out,
         "{index}. [{}] {}  {}  ({} msgs)",
         harness_name(s.handle.harness),
         timestamp(s.updated_at, offset),
-        s.handle.session,
+        s.atuin_id,
         s.message_count,
     );
     let label = label(s);

@@ -42,7 +42,7 @@ const HARNESS_CHARS: usize = 200;
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct AtuinAiSessionReadToolCall {
-    /// The session to read: a full session id or a unique prefix of one, as returned by
+    /// The session to read: a full session id or atuin id, or a unique prefix of one, as returned by
     /// atuin_ai_session_list or atuin_ai_session_search. 'latest' reads the most recent session
     /// before this one.
     pub session_id: NonBlankString,
@@ -141,6 +141,7 @@ impl AtuinAiSessionReadToolCall {
 
         let mut out = String::new();
         let _ = writeln!(out, "session  {} [{}]", s.handle.session, harness_name(s.handle.harness));
+        let _ = writeln!(out, "atuin id {}", s.atuin_id);
         let label = label(s);
         if !label.is_empty() {
             let _ = writeln!(out, "title    {label}");

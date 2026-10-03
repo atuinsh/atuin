@@ -39,6 +39,8 @@ pub enum DecodeError {
     Empty,
     #[error("unknown ai-session record kind {0}")]
     UnknownKind(u8),
+    #[error("unknown ai-session record version {}", .0.as_str())]
+    UnknownVersion(RecordVersion),
     #[error("failed to decode ai-session record body: {0}")]
     Body(#[from] rmp_serde::decode::Error),
 }
@@ -70,25 +72,34 @@ pub enum BuildError {
 impl AiSessionRecord {
     const MESSAGE_KIND: u8 = 0;
 
-    /// A kind byte, then the body as named-field msgpack: a reader ignores fields it does not
-    /// know, so adding one never breaks hosts on an older build.
+    /// v0: named msgpack, without [`Message::atuin_id`]. v1: positional, so any change to
+    /// [`Message`]'s fields needs a new version.
+    pub const VERSION: RecordVersion = RecordVersion::V1;
+
+    /// A kind byte, then the positional msgpack body.
     #[must_use]
     pub fn serialize(&self) -> Vec<u8> {
         match self {
             Self::Message(msg) => {
                 let mut out = vec![Self::MESSAGE_KIND];
-                out.extend(rmp_serde::to_vec_named(msg).expect("Message is always serializable"));
+                out.extend(rmp_serde::to_vec(msg).expect("Message is always serializable"));
                 out
             }
         }
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, DecodeError> {
+    pub fn deserialize(bytes: &[u8], version: &RecordVersion) -> Result<Self, DecodeError> {
         let (&kind, body) = bytes.split_first().ok_or(DecodeError::Empty)?;
+        if kind != Self::MESSAGE_KIND {
+            return Err(DecodeError::UnknownKind(kind));
+        }
 
-        match kind {
-            Self::MESSAGE_KIND => Ok(Self::Message(rmp_serde::from_slice(body)?)),
-            n => Err(DecodeError::UnknownKind(n)),
+        // from_slice reads a map by name (v0) or an array by position (v1).
+        match version {
+            RecordVersion::V0 | RecordVersion::V1 => {
+                Ok(Self::Message(rmp_serde::from_slice(body)?))
+            }
+            other => Err(DecodeError::UnknownVersion(other.clone())),
         }
     }
 }
@@ -117,7 +128,7 @@ impl AiSessionStore {
             let record = Record::builder()
                 .id(id)
                 .host(Host::new(self.host_id))
-                .version(RecordVersion::V0)
+                .version(AiSessionRecord::VERSION)
                 .tag(RecordTag::AiSession)
                 .idx(idx)
                 .data(DecryptedData(bytes.clone()))
@@ -148,7 +159,8 @@ impl AiSessionStore {
         //   one projects it later. Passing it would lose it for good. A record no key will ever
         //   decrypt (lost key, corrupted ciphertext) is held too, which costs replaying its
         //   series' later records on each reprojection, but never stops them projecting.
-        // - One that decrypts but whose kind this build does not know is held until an upgrade.
+        // - One that decrypts but whose kind or version this build does not know is held until
+        //   an upgrade.
         // - One that decrypts to a known kind but fails to decode is skipped: decryption
         //   authenticates it, so it is exactly what its writer wrote, and no retry reads it.
         let decrypted = match record.decrypt(&self.key) {
@@ -159,11 +171,12 @@ impl AiSessionStore {
             }
         };
 
-        let AiSessionRecord::Message(msg) = match AiSessionRecord::deserialize(&decrypted.data.0) {
+        let decoded = AiSessionRecord::deserialize(&decrypted.data.0, &decrypted.version);
+        let AiSessionRecord::Message(msg) = match decoded {
             Ok(record) => record,
             // Written by a newer build, which an upgrade will be able to project.
-            Err(err @ DecodeError::UnknownKind(_)) => {
-                warn!(?err, id = %id.0, "unknown ai-session record kind, holding it back");
+            Err(err @ (DecodeError::UnknownKind(_) | DecodeError::UnknownVersion(_))) => {
+                warn!(?err, id = %id.0, "unknown ai-session record kind or version, holding it back");
                 return Ok(Projected::Held);
             }
             Err(err) => {
@@ -644,7 +657,7 @@ mod tests {
         assert_eq!(recs[0].id, msg.id, "record envelope id must match the message id");
         let decrypted = recs[0].decrypt(&key()).unwrap();
         let AiSessionRecord::Message(got) =
-            AiSessionRecord::deserialize(&decrypted.data.0).unwrap();
+            AiSessionRecord::deserialize(&decrypted.data.0, &decrypted.version).unwrap();
         assert_eq!(got.id, msg.id, "stored record body id must match the message id");
         assert_eq!(got.session, msg.session);
     }
@@ -653,7 +666,8 @@ mod tests {
     fn record_body_roundtrips() {
         proptest!(|(m in arb_message())| {
             let bytes = AiSessionRecord::Message(m.clone()).serialize();
-            let AiSessionRecord::Message(back) = AiSessionRecord::deserialize(&bytes).unwrap();
+            let AiSessionRecord::Message(back) =
+                AiSessionRecord::deserialize(&bytes, &AiSessionRecord::VERSION).unwrap();
             prop_assert_eq!(m, back);
         });
     }
@@ -1280,7 +1294,7 @@ mod tests {
         let record = Record::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .host(Host::new(s.host_id))
-            .version(RecordVersion::V0)
+            .version(AiSessionRecord::VERSION)
             .tag(RecordTag::AiSession)
             .idx(idx)
             .data(DecryptedData(AiSessionRecord::Message(msg.clone()).serialize()))
