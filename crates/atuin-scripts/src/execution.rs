@@ -71,11 +71,16 @@ pub fn template_variables(script: &Script) -> Result<HashSet<String>> {
     Ok(template.undeclared_variables(true))
 }
 
-/// Execute a script interactively, allowing for ongoing stdin/stdout interaction
-pub async fn execute_script_interactive(
-    script: String,
-    shebang: String,
-) -> Result<ScriptSession, Box<dyn std::error::Error + Send + Sync>> {
+/// Write the script to a temporary file and spawn it, falling back to running
+/// it through the shebang's interpreter if direct execution fails.
+///
+/// `stdio` builds the stdio configuration for each of stdin, stdout and stderr.
+/// The returned temp file must be kept alive until the process has exited.
+async fn spawn_script(
+    script: &str,
+    shebang: &str,
+    stdio: fn() -> Stdio,
+) -> Result<(tokio::process::Child, NamedTempFile), Box<dyn std::error::Error + Send + Sync>> {
     // Create a temporary file for the script
     let temp_file = NamedTempFile::new()?;
     let temp_path = temp_file.path().to_path_buf();
@@ -90,7 +95,7 @@ pub async fn execute_script_interactive(
     };
 
     // Write script content to the temp file, including the shebang
-    let full_script_content = build_executable_script(&script, &shebang);
+    let full_script_content = build_executable_script(script, shebang);
 
     debug!("writing script content to temp file");
     tokio::fs::write(&temp_path, &full_script_content).await?;
@@ -105,15 +110,11 @@ pub async fn execute_script_interactive(
         std::fs::set_permissions(&temp_path, perms)?;
     }
 
-    // Store the temp_file to prevent it from being dropped
-    // This ensures it won't be deleted while the script is running
-    let keep_temp_file = temp_file;
-
     debug!("attempting direct script execution");
     let mut child_result = tokio::process::Command::new(temp_path.to_str().unwrap())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(stdio())
+        .stdout(stdio())
+        .stderr(stdio())
         .spawn();
 
     // If direct execution fails, try using the interpreter
@@ -123,7 +124,7 @@ pub async fn execute_script_interactive(
         // When falling back to interpreter, remove the shebang from the file
         // Some interpreters don't handle scripts with shebangs well
         debug!("writing script content without shebang for interpreter execution");
-        tokio::fs::write(&temp_path, &script).await?;
+        tokio::fs::write(&temp_path, script).await?;
 
         // Parse the interpreter command
         let parts: Vec<&str> = interpreter.split_whitespace().collect();
@@ -139,18 +140,39 @@ pub async fn execute_script_interactive(
             cmd.arg(temp_path.to_str().unwrap());
 
             // Try with the interpreter
-            child_result =
-                cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+            child_result = cmd.stdin(stdio()).stdout(stdio()).stderr(stdio()).spawn();
         }
     }
 
     // If it still fails, return the error
-    let mut child = match child_result {
-        Ok(child) => child,
-        Err(e) => {
-            return Err(format!("Failed to execute script: {e}").into());
-        }
-    };
+    match child_result {
+        Ok(child) => Ok((child, temp_file)),
+        Err(e) => Err(format!("Failed to execute script: {e}").into()),
+    }
+}
+
+/// Execute a script attached to the current terminal and wait for it to exit.
+///
+/// The script inherits stdin, stdout and stderr, so interactive programs
+/// (fzf, editors, prompts) work as they would in a normal shell.
+pub async fn execute_script(
+    script: String,
+    shebang: String,
+) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    let (mut child, _temp_file) = spawn_script(&script, &shebang, Stdio::inherit).await?;
+
+    let status = child.wait().await?;
+    debug!("Process exited with status: {:?}", status);
+
+    Ok(status.code().unwrap_or(-1))
+}
+
+/// Execute a script interactively, allowing for ongoing stdin/stdout interaction
+pub async fn execute_script_interactive(
+    script: String,
+    shebang: String,
+) -> Result<ScriptSession, Box<dyn std::error::Error + Send + Sync>> {
+    let (mut child, keep_temp_file) = spawn_script(&script, &shebang, Stdio::piped).await?;
 
     // Get handles to stdin, stdout, stderr
     let mut stdin =
@@ -276,4 +298,22 @@ pub async fn execute_script_interactive(
         stdin_tx,
         exit_code_rx,
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use rstest::rstest;
+
+    use super::execute_script;
+
+    #[rstest]
+    #[case::success("exit 0", 0)]
+    #[case::failure("exit 3", 3)]
+    #[tokio::test]
+    async fn execute_script_returns_exit_code(#[case] script: &str, #[case] expected: i32) {
+        let code =
+            execute_script(script.to_string(), String::new()).await.expect("script should run");
+
+        assert_eq!(code, expected);
+    }
 }
