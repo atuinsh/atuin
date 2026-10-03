@@ -1151,6 +1151,7 @@ impl State {
                     history_highlighter,
                     settings.show_numeric_shortcuts,
                     settings.ui.syntax_highlight,
+                    settings.ui.selected_row_background_color().map(Color::from_crossterm),
                     &settings.ui.columns,
                 );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
@@ -1368,12 +1369,14 @@ impl State {
         history_highlighter: HistoryHighlighter<'a>,
         show_numeric_shortcuts: bool,
         syntax_highlight: bool,
+        selected_row_background: Option<Color>,
         columns: &'a [UiColumn],
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
             results,
             style.invert,
             keymap_mode == KeymapMode::VimNormal,
+            selected_row_background,
             now,
             tz,
             indicator,

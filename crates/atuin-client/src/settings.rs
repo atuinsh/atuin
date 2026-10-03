@@ -15,6 +15,7 @@ use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::builder::DefaultState;
 use config::{Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat};
+use crossterm::style::Color;
 use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
 use regex::RegexSet;
@@ -985,6 +986,10 @@ pub struct Ui {
     /// Syntax highlight commands in the interactive search results.
     #[serde(default = "Ui::default_syntax_highlight")]
     pub syntax_highlight: bool,
+
+    /// Background color for the selected history row, independent of the keymap.
+    #[serde(default)]
+    pub selected_row_background: Option<String>,
 }
 
 impl Ui {
@@ -1007,7 +1012,19 @@ impl Ui {
         if expand_count > 1 {
             return Err(UiValidationError::MultipleExpandingColumns(expand_count));
         }
+        if let Some(color) = &self.selected_row_background {
+            crate::theme::from_string(color)
+                .map_err(UiValidationError::InvalidSelectedRowBackground)?;
+        }
         Ok(())
+    }
+
+    /// Parse the optional selected-row color after settings validation.
+    #[must_use]
+    pub fn selected_row_background_color(&self) -> Option<Color> {
+        self.selected_row_background
+            .as_deref()
+            .and_then(|color| crate::theme::from_string(color).ok())
     }
 }
 
@@ -1016,6 +1033,9 @@ impl Ui {
 pub enum UiValidationError {
     #[error("Only one column can have expand = true, but {0} columns are set to expand")]
     MultipleExpandingColumns(usize),
+
+    #[error("Invalid selected row background color: {0}")]
+    InvalidSelectedRowBackground(String),
 }
 
 impl Default for Ui {
@@ -1023,6 +1043,7 @@ impl Default for Ui {
         Self {
             columns: Self::default_columns(),
             syntax_highlight: Self::default_syntax_highlight(),
+            selected_row_background: None,
         }
     }
 }
@@ -1942,6 +1963,19 @@ mod tests {
         AiEndpointProtocol, ConfigFile, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
         Settings, UtcOffsetSpec,
     };
+
+    #[rstest]
+    fn selected_row_background_accepts_hex_color() {
+        let config = "[ui]\nselected_row_background = \"#3c3836\"\n";
+        assert!(super::Settings::validate_str(config).is_ok());
+    }
+
+    #[rstest]
+    fn selected_row_background_rejects_invalid_color() {
+        let config = "[ui]\nselected_row_background = \"not-a-color\"\n";
+        let error = super::Settings::validate_str(config).expect_err("invalid color should fail");
+        assert!(error.to_string().contains("Invalid selected row background color"));
+    }
 
     #[rstest]
     #[case::plus_two_digit_hours("+02", (2, 0, 0))]
