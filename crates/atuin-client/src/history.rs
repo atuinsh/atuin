@@ -741,7 +741,8 @@ impl History {
             || self.command.is_empty()
             || settings.history_filter.is_match(&self.command)
             || settings.cwd_filter.is_match(&self.cwd)
-            || (settings.secrets_filter && contains_secret(&self.command)))
+            || (settings.secrets_filter && contains_secret(&self.command))
+            || (settings.max_record_length > 0 && self.command.len() > settings.max_record_length))
     }
 }
 
@@ -815,6 +816,30 @@ mod tests {
         assert_eq!(history.should_save(&settings), expected);
     }
 
+    fn tight_max_length_settings(max_byte_size: usize) -> Settings {
+        Settings {
+            max_record_length: max_byte_size,
+            ..Settings::utc()
+        }
+    }
+    #[rstest]
+    #[case::short("echo foo", 10, true)]
+    #[case::long("echo this is a long command", 10, false)]
+    #[case::zero_max("echo foo", 0, true)]
+    fn should_save_respects_max_length(
+        #[case] command: &str,
+        #[case] max_byte_size: usize,
+        #[case] expected: bool,
+    ) {
+        let settings = tight_max_length_settings(max_byte_size);
+        let history: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command(command)
+            .cwd("/")
+            .build()
+            .into();
+        assert_eq!(history.should_save(&settings), expected);
+    }
     /// The SQL author filter derives its recognised-kind list from [`AuthorKind::VARIANTS`] while
     /// Rust decoding goes through [`AuthorKind::from_repr`]; a value present in one but not the
     /// other would split the two classifiers, so pin them to agree over the whole u8 range.

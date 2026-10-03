@@ -142,6 +142,10 @@
 ## by more than the first few lines.
 # max_preview_height = 4
 
+## Configure the maximum record size that atuin will store
+## Useful when you have long records in your history that you wouldn't want to save
+# max_record_length = 1048576
+
 ## Configure whether or not to show the help row, which includes the current Atuin
 ## version (and whether an update is available), a keymap hint, and the total
 ## amount of commands in your history.

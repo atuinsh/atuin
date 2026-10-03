@@ -19,7 +19,7 @@ use std::num::NonZeroU64;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::sync::MutEagerFutureCell;
-use atuin_domain::caps::{PackfileCap, PageSizeCap};
+use atuin_domain::caps::{MaxSizeRecordCap, PackfileCap, PageSizeCap};
 use atuin_domain::record::{
     Diff, EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
 };
@@ -48,7 +48,8 @@ const MAX_CONCURRENT_PACKS: usize = 16;
 
 /// Records requested per sync page unless overridden with [`SyncSession::with_page_size`].
 pub const DEFAULT_PAGE_SIZE: NonZeroU64 = NonZeroU64::new(100).unwrap();
-
+/// Default max record size unless overridden by server config
+pub const DEFAULT_MAX_RECORD_SIZE: u64 = 1024 * 1024 * 1024; // 1GiB
 #[derive(Error, Debug, Clone)]
 pub enum SyncError {
     #[error("the local store is ahead of the remote, but for another host. has remote lost data?")]
@@ -167,6 +168,16 @@ impl SyncSession {
                 .and_then(|cap| NonZeroU64::new(cap.page_size))
                 .unwrap_or(DEFAULT_PAGE_SIZE),
         }
+    }
+    async fn get_record_max_size(&self) -> u64 {
+        self.client
+            .caps()
+            .get_server::<MaxSizeRecordCap>()
+            .await
+            .ok()
+            .flatten()
+            .map(|c| c.0)
+            .unwrap_or(DEFAULT_MAX_RECORD_SIZE)
     }
 
     /// Pair this session with an encryption `key` to run the crypto-touching sync operations.
@@ -335,6 +346,7 @@ impl Keyed<'_> {
         remote: Option<RecordIdx>,
     ) -> Result<u64, SyncError> {
         let page_size = self.session.get_page_size().await.get();
+        let max_record_size = self.session.get_record_max_size().await;
         let store = &self.session.store;
         let client = &self.session.client;
         // The first record the remote *doesn't* have.
@@ -375,6 +387,41 @@ impl Keyed<'_> {
             if page.is_empty() {
                 break;
             }
+            let page = page
+                .into_iter()
+                .map(|record| {
+                    if series.tag != RecordTag::Packfile
+                        && max_record_size > 0
+                        && record.data.raw.len() > usize::conv(max_record_size)
+                    {
+                        warn!(
+                            "Oversized record {} (tag: {:?}) exceeds server limit of {} bytes. \
+                             Uploading empty payload tombstone to prevent sync stall. Record will \
+                             remain available locally.",
+                            record.id, series.tag, max_record_size
+                        );
+                        // Replace the payload with an empty vector and re-encrypt
+                        let empty_data = atuin_domain::record::DecryptedData(vec![]);
+                        let empty_record = record.with_data(empty_data).encrypt(self.key);
+
+                        if empty_record.data.raw.len() > usize::conv(max_record_size) {
+                            return Err(SyncError::OperationalError {
+                                msg: format!(
+                                    "Server max_record_size of {} bytes is too small to upload an \
+                                     empty record tombstone (requires {} bytes). Please contact \
+                                     your server administrator.",
+                                    max_record_size,
+                                    empty_record.data.raw.len()
+                                ),
+                            });
+                        }
+
+                        Ok(empty_record)
+                    } else {
+                        Ok(record)
+                    }
+                })
+                .collect::<Result<Vec<_>, SyncError>>()?;
 
             if series.tag == RecordTag::Packfile {
                 let key = self.key.clone();

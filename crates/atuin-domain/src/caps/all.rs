@@ -69,3 +69,19 @@ impl Capability for PageSizeCap {
         serde_json::to_value(self)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaxSizeRecordCap(pub u64);
+impl Capability for MaxSizeRecordCap {
+    fn static_name() -> &'static str {
+        "sh.atuin.server/records.max_record_size"
+    }
+
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
+    fn json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        serde_json::to_value(self)
+    }
+}
