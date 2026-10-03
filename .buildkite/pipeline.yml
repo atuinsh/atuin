@@ -69,7 +69,6 @@ steps:
     # (cargo check --release), and nearly all of this job is LLVM codegen
     # for the atuin binary (~2 min on any machine).
     if: *main-only
-    notify: [github_check: {name: buildkite/build}]
     agents: *linux-large
     timeout_in_minutes: 45
     env:
@@ -88,7 +87,6 @@ steps:
   # Unit, integration and e2e tests, compiled once and run below.
   - label: ":package: Build tests (Linux)"
     key: build-tests
-    notify: [github_check: {name: buildkite/build-tests}]
     agents: *linux-large
     timeout_in_minutes: 45
     env:
@@ -104,7 +102,6 @@ steps:
   - label: ":test_tube: Tests (Linux) %n"
     key: tests
     depends_on: build-tests
-    notify: [github_check: {name: buildkite/tests}]
     agents: *linux-large
     # ~60s of test time plus ~15s of setup per job (Postgres, packages, the
     # archive): two jobs finish in under a minute.
@@ -132,7 +129,6 @@ steps:
   # Linux agents run.
   - label: ":package: Build tests (macOS)"
     key: build-tests-macos
-    notify: [github_check: {name: buildkite/build-tests-macos}]
     agents: *macos-large
     timeout_in_minutes: 45
     env:
@@ -147,7 +143,6 @@ steps:
   - label: ":test_tube: Tests (macOS) %n"
     key: tests-macos
     depends_on: build-tests-macos
-    notify: [github_check: {name: buildkite/tests-macos}]
     agents: *macos-large
     # ~30s of test time plus ~8s of setup: one job finishes in under a
     # minute. Kept as a parallel step so raising this is all it takes.
@@ -170,7 +165,6 @@ steps:
   # All features are type-checked by clippy below.
   - label: ":mag: Check (Linux)"
     key: check
-    notify: [github_check: {name: buildkite/check}]
     agents: *linux-large
     timeout_in_minutes: 45
     command:
@@ -190,7 +184,6 @@ steps:
 
   - label: ":mag: Check (macOS)"
     key: check-macos
-    notify: [github_check: {name: buildkite/check-macos}]
     agents: *macos-large
     timeout_in_minutes: 45
     command:
@@ -212,7 +205,6 @@ steps:
 
   - label: ":crab: MSRV (1.95.0)"
     key: msrv
-    notify: [github_check: {name: buildkite/msrv}]
     timeout_in_minutes: 45
     env:
       # rust-toolchain.toml pins the dev toolchain; override it explicitly.
@@ -227,7 +219,6 @@ steps:
 
   - label: ":paperclip: Clippy"
     key: clippy
-    notify: [github_check: {name: buildkite/clippy}]
     timeout_in_minutes: 45
     env:
       RUST_COMPONENTS: clippy
@@ -247,7 +238,6 @@ steps:
 
   - label: ":books: Docs"
     key: docs
-    notify: [github_check: {name: buildkite/docs}]
     timeout_in_minutes: 45
     env:
       RUSTDOCFLAGS: "-D warnings"
@@ -261,7 +251,6 @@ steps:
 
   - label: ":art: Format"
     key: format
-    notify: [github_check: {name: buildkite/format}]
     timeout_in_minutes: 15
     env:
       RUST_TOOLCHAIN: nightly
@@ -272,7 +261,6 @@ steps:
 
   - label: ":no_entry: cargo-deny"
     key: deny
-    notify: [github_check: {name: buildkite/deny}]
     timeout_in_minutes: 15
     env:
       CARGO_TOOLS: deny
@@ -295,7 +283,6 @@ steps:
     # from its packaged tarball), which isn't part of the PR flow. On main
     # it still flags publishing breakage well before a release.
     if: *main-only
-    notify: [github_check: {name: buildkite/package}]
     agents: *linux-large
     timeout_in_minutes: 45
     command:
@@ -317,7 +304,6 @@ steps:
   - label: ":sunrise: Build on illumos (OmniOS VM)"
     key: illumos
     if: *main-only
-    notify: [github_check: {name: buildkite/illumos}]
     agents: *linux-large
     timeout_in_minutes: 45
     command:
@@ -328,7 +314,6 @@ steps:
   - label: ":moon: Nightly tests"
     key: nightly
     if: build.source == "schedule"
-    notify: [github_check: {name: buildkite/nightly}]
     timeout_in_minutes: 60
     env:
       <<: *test-engine
@@ -353,7 +338,6 @@ steps:
   # nix.yml: flake check, build (and run the result), formatting.
   - label: ":nix: Nix flake check"
     key: nix-check
-    notify: [github_check: {name: buildkite/nix-check}]
     timeout_in_minutes: 30
     command:
       - source .buildkite/scripts/lib.sh
@@ -366,7 +350,6 @@ steps:
     # derivation, so every change rebuilds from scratch (~4 min). The flake
     # check and nixfmt steps still run on PRs.
     if: *main-only
-    notify: [github_check: {name: buildkite/nix-build}]
     agents: *linux-large
     timeout_in_minutes: 45
     command:
@@ -377,7 +360,6 @@ steps:
 
   - label: ":nix: nixfmt"
     key: nixfmt
-    notify: [github_check: {name: buildkite/nixfmt}]
     timeout_in_minutes: 15
     command:
       - source .buildkite/scripts/lib.sh
@@ -386,7 +368,6 @@ steps:
 
   - label: ":pencil2: Codespell"
     key: codespell
-    notify: [github_check: {name: buildkite/codespell}]
     timeout_in_minutes: 10
     command:
       - source .buildkite/scripts/lib.sh
@@ -395,7 +376,6 @@ steps:
 
   - label: ":shell: Shellcheck"
     key: shellcheck
-    notify: [github_check: {name: buildkite/shellcheck}]
     timeout_in_minutes: 10
     env:
       SHELLCHECK_OPTS: "-e SC2148"
@@ -414,7 +394,6 @@ steps:
       - ".vale.ini"
       - ".vale/styles/config/**"
       - ".buildkite/scripts/vale.sh"
-    notify: [github_check: {name: buildkite/vale}]
     timeout_in_minutes: 10
     command:
       - source .buildkite/scripts/lib.sh
@@ -426,7 +405,6 @@ steps:
   - label: ":inbox_tray: Installer (Linux)"
     key: install
     if: *main-only
-    notify: [github_check: {name: buildkite/install}]
     timeout_in_minutes: 10
     command:
       - source .buildkite/scripts/lib.sh
@@ -437,7 +415,6 @@ steps:
   - label: ":inbox_tray: Installer (macOS)"
     key: install-macos
     if: *main-only
-    notify: [github_check: {name: buildkite/install-macos}]
     agents:
       queue: macos-medium
     timeout_in_minutes: 10
