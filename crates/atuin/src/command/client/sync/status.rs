@@ -3,6 +3,7 @@ use atuin_client::settings::Settings;
 use atuin_common::time::DurationExt;
 use colored::Colorize;
 use eyre::{Result, bail};
+use time::OffsetDateTime;
 
 use crate::i18n::fl;
 use crate::{SHA, VERSION};
@@ -41,7 +42,9 @@ pub async fn run(settings: &Settings) -> Result<()> {
             "{}",
             fl!(
                 "sync-status-last-sync",
-                time = last_sync.to_offset(settings.timezone.0).to_string()
+                time = last_sync
+                    .to_offset(settings.timezone.offset_at(OffsetDateTime::now_utc()))
+                    .to_string()
             )
         );
     }

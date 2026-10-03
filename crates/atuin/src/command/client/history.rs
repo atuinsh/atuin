@@ -322,7 +322,12 @@ impl FormatKey for FmtHistory<'_> {
                 write!(f, "{}", dur.display().largest_unit())?;
             }
             "time" => {
-                self.history.timestamp.to_offset(self.tz.0).display().ymd_hms().fmt(f)?;
+                self.history
+                    .timestamp
+                    .to_offset(self.tz.offset_at(OffsetDateTime::now_utc()))
+                    .display()
+                    .ymd_hms()
+                    .fmt(f)?;
             }
             "relativetime" => {
                 let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
@@ -714,11 +719,12 @@ impl TailEvent {
     }
 
     fn render_json(&self, tz: UtcOffsetSpec) -> Result<String> {
+        let offset = tz.offset_at(OffsetDateTime::now_utc());
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
                 id: self.history.id,
-                timestamp: self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
+                timestamp: self.history.timestamp.to_offset(offset).display().ymd_hms().to_string(),
                 timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
                     .context("history timestamp predates unix epoch")?,
                 command: &self.history.command,
@@ -737,7 +743,7 @@ impl TailEvent {
                 success: self.success_value(),
                 finished_at: self
                     .finished_at()
-                    .map(|time| time.to_offset(tz.0).display().ymd_hms().to_string()),
+                    .map(|time| time.to_offset(offset).display().ymd_hms().to_string()),
             },
         };
 
@@ -745,6 +751,7 @@ impl TailEvent {
     }
 
     fn render_pretty(&self, tz: UtcOffsetSpec) -> String {
+        let offset = tz.offset_at(OffsetDateTime::now_utc());
         let mut out = String::new();
         let border = match self.kind {
             TailKind::Started => "-".repeat(72).bright_blue().to_string(),
@@ -776,7 +783,7 @@ impl TailEvent {
         push_pretty_field(
             &mut out,
             "start",
-            &self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
+            &self.history.timestamp.to_offset(offset).display().ymd_hms().to_string(),
         );
         push_pretty_field(&mut out, "history", &self.history.id.to_string());
         push_pretty_field(&mut out, "session", &self.history.session);
@@ -796,7 +803,7 @@ impl TailEvent {
         }
 
         if let Some(finished) = self.finished_at() {
-            let finished = finished.to_offset(tz.0).display().ymd_hms().to_string();
+            let finished = finished.to_offset(offset).display().ymd_hms().to_string();
             push_pretty_field(&mut out, "finished", &finished);
         }
 
@@ -891,6 +898,28 @@ fn push_pretty_field(out: &mut String, label: &str, value: &str) {
         out.push_str(line);
         out.push('\n');
     }
+}
+
+/// Resolve `history dedup --before <cutoff>` to a unix-nanos cutoff.
+///
+/// Mirrors [`atuin_client::database::parse_date_with_spec`]'s two-pass resolution -- used for
+/// search's own `--before`/`--after` -- so a bare (offset-less) cutoff is interpreted in the
+/// offset that applied *on the cutoff's own date*, not today's. Resolving against a single
+/// offset queried for "now" (as this used to) is wrong whenever the cutoff falls in a different
+/// DST period than today: e.g. under `timezone = "local"` in `America/Chicago`, a `--before
+/// "2026-01-15 00:00"` cutoff issued in August (CDT, -05:00) must still be interpreted at
+/// January's CST (-06:00), or it lands an hour off and dedup can miss or delete the wrong
+/// entries near that cutoff.
+fn resolve_dedup_before(before: &str, settings: &Settings) -> Result<i64> {
+    let now = OffsetDateTime::now_utc();
+    let now = now.to_offset(settings.timezone.offset_at(now));
+    let before = atuin_client::database::parse_date_with_spec(
+        before,
+        now,
+        settings.timezone,
+        settings.dialect.into(),
+    )?;
+    Ok(i64::try_from(before.unix_timestamp_nanos())?)
 }
 
 impl Cmd {
@@ -1182,14 +1211,7 @@ impl Cmd {
                         before,
                         dupkeep,
                     } => {
-                        let before = i64::try_from(
-                            interim::parse_date_string(
-                                before.as_str(),
-                                OffsetDateTime::now_utc().to_offset(settings.timezone.0),
-                                settings.dialect.into(),
-                            )?
-                            .unix_timestamp_nanos(),
-                        )?;
+                        let before = resolve_dedup_before(before.as_str(), settings)?;
                         Self::handle_dedup(&db, settings, store, before, dupkeep, dry_run).await
                     }
 
@@ -1214,8 +1236,10 @@ impl Cmd {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 mod tests {
     use rstest::{fixture, rstest};
+    use time::format_description::well_known::Rfc3339;
     #[cfg(feature = "daemon")]
     use time::macros::datetime;
 
@@ -1234,6 +1258,44 @@ mod tests {
     #[rstest]
     fn utc_settings_strip_trailing_whitespace_by_default() {
         assert!(Settings::utc().strip_trailing_whitespace);
+    }
+
+    /// Regression test for the gap greptile flagged in this PR's own DST fix: with
+    /// `timezone = "local"`, `history dedup --before` used to parse the cutoff using *today's*
+    /// UTC offset regardless of what date the cutoff named, so a cutoff in a different DST
+    /// period than today landed an hour off and dedup could miss or delete the wrong entries.
+    /// `resolve_dedup_before` now shares the same two-pass, date-specific resolution that
+    /// `Sqlite::search` uses for `--before`/`--after` (see
+    /// `atuin_client::database::parse_date_with_spec`'s doc comment for why one extra pass
+    /// suffices).
+    ///
+    /// `America/Chicago` is `-06:00` (CST) in January and `-05:00` (CDT) in August: whichever
+    /// DST period is actually in effect on the machine running this test (i.e. "today"),
+    /// resolving the *other* case's cutoff at today's offset instead of its own would land an
+    /// hour away from the expected instant below, so at least one of these two cases would have
+    /// caught the old single-resolution bug.
+    #[cfg(not(windows))]
+    #[rstest]
+    // midnight CST: 2026-01-15T00:00 -06:00 == 2026-01-15T06:00Z
+    #[case::winter_cutoff_is_cst("2026-01-15T00:00:00", "2026-01-15T06:00:00Z")]
+    // midnight CDT: 2026-08-15T00:00 -05:00 == 2026-08-15T05:00Z
+    #[case::summer_cutoff_is_cdt("2026-08-15T00:00:00", "2026-08-15T05:00:00Z")]
+    fn resolve_dedup_before_uses_the_cutoffs_own_dst_offset(
+        #[case] before: &str,
+        #[case] expected_utc: &str,
+    ) {
+        // SAFETY: nextest runs each test in its own process, so no other test observes this.
+        unsafe { std::env::set_var("TZ", "America/Chicago") };
+
+        let settings = Settings {
+            timezone: UtcOffsetSpec::Local,
+            ..Settings::utc()
+        };
+
+        let resolved = resolve_dedup_before(before, &settings).unwrap();
+        let expected = OffsetDateTime::parse(expected_utc, &Rfc3339).unwrap();
+
+        assert_eq!(resolved, i64::try_from(expected.unix_timestamp_nanos()).unwrap());
     }
 
     #[rstest]
@@ -1313,7 +1375,7 @@ mod tests {
     #[cfg(feature = "daemon")]
     #[rstest]
     fn test_tail_json_output_contains_history_fields(tail_event: TailEvent) {
-        let json = tail_event.render(false, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
+        let json = tail_event.render(false, UtcOffsetSpec::Fixed(time::UtcOffset::UTC)).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["event"], "ended");
@@ -1328,7 +1390,7 @@ mod tests {
     fn test_tail_pretty_output_shows_pending_fields_for_started_events(
         #[with(TailKind::Started)] tail_event: TailEvent,
     ) {
-        let rendered = tail_event.render(true, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
+        let rendered = tail_event.render(true, UtcOffsetSpec::Fixed(time::UtcOffset::UTC)).unwrap();
         let plain = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap().replace_all(&rendered, "");
 
         assert!(plain.contains("STARTED git status"));
