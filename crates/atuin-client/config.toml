@@ -186,6 +186,12 @@ enter_accept = true
 ## "{blink,steady}-{block,underline,bar}".
 # keymap_cursor = { emacs = "blink-block", vim_insert = "blink-block", vim_normal = "steady-block" }
 
+## How long, in milliseconds, emacs and vim-insert mode wait for the second key
+## of a multi-key sequence (such as "j k" bound to vim-enter-normal) before the
+## first key is handled on its own, which in these modes usually types it.
+## 0 waits indefinitely. Vim-normal mode always waits, so "g g" is not timed.
+# keymap_sequence_timeout_ms = 100
+
 # network_connect_timeout = 5
 # network_timeout = 30
 
