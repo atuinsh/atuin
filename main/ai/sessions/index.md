@@ -77,6 +77,8 @@ If the session's own agent can't resume it here (a Copilot session, an agent tha
 
 From the command line, `atuin ai resume <id>` resumes a session directly (an id prefix works too), writing it out from sync first when it isn't on this machine. `--print` prints the command instead of running it.
 
+The id can be the agent's own, or the session's Atuin id, which Inspect and the MCP session tools show. An Atuin id is a UUIDv7, written as 32 hex digits like a history id. It's fixed when Atuin first records the session, and is the same for every agent and on every machine. Its first 12 digits are when the session started, so a prefix needs more digits than that to name a single session.
+
 ## Settings
 
 The picker follows the history search's `style`, `invert`, `show_preview`, `max_preview_height`, `enter_accept`, `keymap_mode` and theme settings. Its own go under `[ai.sessions]`:
