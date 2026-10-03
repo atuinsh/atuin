@@ -15,13 +15,16 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Not for the update a /merge makes: its jobs skip, so it mustn't cancel ones still running.
+  cancel-in-progress: ${{ github.event.action != 'synchronize' || github.actor != 'atuin-bot' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   unit-test:
+    # A /merge points the pull request at the commit it landed as, which CI already ran.
+    if: github.event.action != 'synchronize' || github.actor != 'atuin-bot'
     strategy:
       matrix:
         os: [depot-windows-2025-16]
@@ -84,6 +87,8 @@ jobs:
           retention-days: 14
 
   check:
+    # A /merge points the pull request at the commit it landed as, which CI already ran.
+    if: github.event.action != 'synchronize' || github.actor != 'atuin-bot'
     strategy:
       matrix:
         os: [depot-windows-2025-16]
