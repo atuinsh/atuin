@@ -38,17 +38,7 @@ impl Shell {
     pub fn start(path: &Path, settings: Option<&str>) -> Option<Self> {
         let config: ShellConfig = toml_edit::de::from_str(&fs::read_to_string(path).unwrap())
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let override_var = format!("ATUIN_E2E_{}", config.shell.to_uppercase());
-        let executable = if let Some(path) = std::env::var_os(&override_var) {
-            let path = PathBuf::from(path);
-            assert!(path.is_file(), "{override_var} is not a file: {}", path.display());
-            Some(path)
-        } else {
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|dir| dir.join(&config.shell))
-                .find(|path| path.is_file())
-        };
-        let Some(executable) = executable else {
+        let Some(executable) = find_shell(&config.shell) else {
             missing(path, &config.shell);
             return None;
         };
@@ -76,6 +66,19 @@ impl Shell {
         pty.wait_for_prompt();
         Some(Self { pty, env, config })
     }
+}
+
+/// `ATUIN_E2E_<NAME>` if set, otherwise `name` on PATH.
+pub fn find_shell(name: &str) -> Option<PathBuf> {
+    let override_var = format!("ATUIN_E2E_{}", name.to_uppercase());
+    if let Some(path) = std::env::var_os(&override_var) {
+        let path = PathBuf::from(path);
+        assert!(path.is_file(), "{override_var} is not a file: {}", path.display());
+        return Some(path);
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
 }
 
 fn missing(config: &Path, dependency: &str) {
