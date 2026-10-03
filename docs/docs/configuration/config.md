@@ -27,23 +27,6 @@ The path to the Atuin encryption key.
 key_path = "~/.atuin-key"
 ```
 
-### `dialect`
-
-Default: `us`
-
-This configures how the [stats](../reference/stats.md) command parses dates. It has two
-possible values
-
-```toml
-dialect = "uk"
-```
-
-or
-
-```toml
-dialect = "us"
-```
-
 ### `auto_sync`
 
 Default: `true`

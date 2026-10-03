@@ -29,8 +29,8 @@ $ atuin stats year
 Any period that isn't one of the keywords above is parsed as a date. You provide
 the starting point, and Atuin computes the stats for 24h from that point.
 Date parsing is provided by `interim`, which supports different formats
-for full or relative dates. Certain formats rely on the dialect option in your
-[configuration](../configuration/config.md#dialect) to differentiate day from month.
+for full or relative dates. Formats like `01/02` read the month first if your locale
+(`LC_ALL`, `LC_TIME` or `LANG`) does, as `en_US` does, and the day first otherwise.
 Refer to [the module's documentation](https://docs.rs/interim/latest/interim/#supported-formats) for more details on the supported date formats.
 
 ```console

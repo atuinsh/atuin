@@ -2,6 +2,7 @@
 
 use std::fmt::Write as _;
 
+use atuin_client::locale::DialectExt;
 use atuin_client::settings::Settings;
 use atuin_common::range::Clamped;
 use atuin_common::time::UtcOffsetExt;
@@ -59,7 +60,7 @@ impl AtuinAiSessionListToolCall {
                 let now = time::OffsetDateTime::now_utc().to_offset(offset);
                 let offset_at = |t| time::UtcOffset::local_offset_at(t).unwrap_or(offset);
 
-                match parse_since(since, now, settings.dialect.into(), offset_at) {
+                match parse_since(since, now, interim::Dialect::from_env(), offset_at) {
                     Ok(parsed) => Some(parsed),
                     Err(e) => {
                         return ToolOutcome::Error(format!(

@@ -172,27 +172,6 @@ pub enum ExitMode {
     ReturnQuery,
 }
 
-// FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
-// FIXME: Above PR was merged, but dependency was changed to interim (fork of chrono-english) in the ... interim
-#[derive(Clone, Debug, Default, Deserialize, Copy, Serialize)]
-pub enum Dialect {
-    #[default]
-    #[serde(rename = "us")]
-    Us,
-
-    #[serde(rename = "uk")]
-    Uk,
-}
-
-impl From<Dialect> for interim::Dialect {
-    fn from(d: Dialect) -> Self {
-        match d {
-            Dialect::Uk => Self::Uk,
-            Dialect::Us => Self::Us,
-        }
-    }
-}
-
 use atuin_common::time::UtcOffsetSpec;
 
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
@@ -1032,7 +1011,6 @@ impl Default for Ui {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
     pub data_dir: Option<String>,
-    pub dialect: Dialect,
     pub timezone: UtcOffsetSpec,
     pub style: Style,
     pub auto_sync: bool,
@@ -1522,7 +1500,6 @@ impl Settings {
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?
-            .set_default("dialect", "us")?
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
             .set_default("update_check", cfg!(feature = "check-update"))?

@@ -14,9 +14,6 @@
 ## windows: %USERPROFILE%/.local/share/atuin/key
 # key_path = "~/.key"
 
-## date format used, either "us" or "uk"
-# dialect = "us"
-
 ## default timezone to use when displaying time, and when reading date filters
 ## (e.g. `--before`/`--after`) that don't carry an explicit offset
 ## either "l", "local" to use the system's current local timezone, or an offset

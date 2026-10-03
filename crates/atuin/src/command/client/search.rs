@@ -255,7 +255,6 @@ impl Cmd {
                 authors: authors.as_slice_filter(),
                 shells: shells.as_slice_filter(),
                 timezone: tz,
-                dialect: settings.dialect,
             };
 
             let mut entries = run_non_interactive(settings, opt_filter, &query, &db).await?;

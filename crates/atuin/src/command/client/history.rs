@@ -5,6 +5,7 @@ use std::time::Duration;
 use atuin_client::database::{Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{AuthorKind, History, HistoryId, probe_author};
+use atuin_client::locale::DialectExt;
 #[cfg(feature = "sync")]
 use atuin_client::record;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -1186,7 +1187,7 @@ impl Cmd {
                             interim::parse_date_string(
                                 before.as_str(),
                                 OffsetDateTime::now_utc().to_offset(settings.timezone.0),
-                                settings.dialect.into(),
+                                interim::Dialect::from_env(),
                             )?
                             .unix_timestamp_nanos(),
                         )?;

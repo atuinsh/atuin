@@ -15,6 +15,7 @@ pub mod database;
 pub mod distro;
 pub mod history;
 pub mod import;
+pub mod locale;
 pub mod logout;
 pub mod logs;
 pub mod meta;

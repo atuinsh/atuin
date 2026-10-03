@@ -1,10 +1,11 @@
 use atuin_client::database::{Sqlite, current_context};
+use atuin_client::locale::DialectExt;
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_client::theme::Theme;
 use atuin_history::stats::{compute, pretty_print};
 use clap::Parser;
 use eyre::Result;
-use interim::parse_date_string;
+use interim::{Dialect, parse_date_string};
 use time::{Duration, OffsetDateTime, Time};
 use tracing::instrument;
 
@@ -81,7 +82,7 @@ impl Cmd {
             let start = end - Duration::days(365);
             Some((start, end))
         } else {
-            let start = parse_date_string(&words, now, settings.dialect.into())?;
+            let start = parse_date_string(&words, now, Dialect::from_env())?;
             let end = start + Duration::days(1);
             Some((start, end))
         };

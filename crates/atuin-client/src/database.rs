@@ -9,6 +9,7 @@ use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use easy_cast::{CastFloat, Conv};
+use interim::Dialect;
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
@@ -20,8 +21,9 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use super::history::History;
+use super::locale::DialectExt;
 use super::ordering;
-use super::settings::{Dialect, FilterMode, SearchMode, Settings};
+use super::settings::{FilterMode, SearchMode, Settings};
 use crate::history::{AuthorKind, AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
 
 #[derive(Clone)]
@@ -59,8 +61,6 @@ pub struct OptFilters<'a> {
     /// that relative phrases like "today" are anchored to. Pass `settings.timezone`; the
     /// `Default` is UTC.
     pub timezone: UtcOffsetSpec,
-    /// Date dialect (day/month order) for parsing `before`/`after`. Pass `settings.dialect`.
-    pub dialect: Dialect,
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
@@ -817,7 +817,7 @@ impl Sqlite {
         filter_options.exclude_cwd.map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
         let now = OffsetDateTime::now_utc().to_offset(filter_options.timezone.0);
-        let dialect = filter_options.dialect.into();
+        let dialect = Dialect::from_env();
 
         if let Some(before) = filter_options.before {
             let parsed = interim::parse_date_string(before, now, dialect).map_err(|e| {
