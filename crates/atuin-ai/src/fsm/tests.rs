@@ -631,6 +631,45 @@ fn unknown_tool_alongside_real_tool_waits_for_both(#[from(new_fsm)] mut fsm: Age
     assert!(effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
 }
 
+#[rstest]
+fn server_tool_call_does_not_continue_turn(#[from(new_fsm)] mut fsm: AgentFsm) {
+    let _ = fsm.handle(Event::UserSubmit("hello".into()));
+    let _ = fsm.handle(Event::StreamStarted);
+    let _ = fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "web_search".into(),
+        input: json!({"query": "atuin"}),
+    });
+    let _ = fsm.handle(Event::StreamServerToolResult {
+        tool_use_id: "t1".into(),
+        content: "results".into(),
+        is_error: false,
+        remote: false,
+        content_length: None,
+    });
+    let _ = fsm.handle(Event::StreamChunk("answer".into()));
+    let effects = fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+
+    // The server already ran the tool and answered: the only result is the
+    // server's, and the turn ends instead of asking the model again.
+    let results: Vec<_> = fsm
+        .ctx
+        .events
+        .iter()
+        .filter(|e| matches!(e, ConversationEvent::ToolResult { .. }))
+        .collect();
+    assert_eq!(results.len(), 1);
+    assert!(matches!(results[0], ConversationEvent::ToolResult {
+        is_error: false,
+        ..
+    }));
+    assert!(matches!(fsm.state, AgentState::Idle { .. }));
+    assert!(effects.iter().any(|e| matches!(e, Effect::TurnEnded)));
+    assert!(!effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
+}
+
 // ============================================================================
 // Shell execution timeouts
 // ============================================================================
