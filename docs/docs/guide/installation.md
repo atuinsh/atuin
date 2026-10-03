@@ -305,6 +305,12 @@ After installing, remember to restart your shell.
 
 Run `atuin update`, and if that command isn't available, run the install script again.
 
+If GitHub's API rate limit prevents the update, set `ATUIN_GITHUB_TOKEN` to a GitHub token. For example, if you use the GitHub CLI:
+
+```shell
+ATUIN_GITHUB_TOKEN="$(gh auth token)" atuin update
+```
+
 If you used a package manager to install Atuin, then you should also use your package manager to update Atuin.
 
 ## Uninstall
