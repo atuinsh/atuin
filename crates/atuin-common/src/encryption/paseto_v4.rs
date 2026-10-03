@@ -247,80 +247,49 @@ impl Key {
     ///
     /// Refuses to overwrite a file that already exists.
     pub fn try_write_path(&self, path: &Path) -> Result<(), KeyFileStoringError> {
-        use std::io::{Error, ErrorKind};
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::io::{Error, ErrorKind, Write as _};
 
-        // To avoid race conditions, this function:
+        // The key is published the same way `crate::fs::write_new` publishes any new file: the
+        // encoded key goes to a temporary file beside `path` first, which is then moved into
+        // place only if nothing is there. `persist_noclobber` does that with
+        // `renameat2(RENAME_NOREPLACE)`, falling back to a hard link on unix and `MoveFileExW`
+        // without `MOVEFILE_REPLACE_EXISTING` on Windows, so a concurrent reader never observes
+        // a half-written key and a key that appears meanwhile is left alone.
         //
-        // 1. Creates a temporary file in the same directory as `path`, named after the key file
-        //    with a per-writer-unique tag (this process's id plus a monotonic counter) so that
-        //    concurrent writers never pick the same temp name. That collision is not benign on
-        //    Windows: `create_new` on a name another writer has just removed hits the file's
-        //    "delete pending" window and fails with `ERROR_ACCESS_DENIED` rather than
-        //    `AlreadyExists`. The trailing `.{i}` (starting at 0) only disambiguates the
-        //    near-impossible case where a stale temp file already holds the name.
-        //
-        //    For example, `/path/to/key` -> `/path/to/.key.atuin-tmp.4321.7.0`.
-        //
-        // 2. Writes the key to the temporary path.
-        //
-        // 3. Hardlinks the temporary path to the real key path (`path`). Hardlinking will fail if
-        //    the destination already exists, which is what we want.
-        //
-        // 4. Removes the temporary file.
+        // This cannot reuse `crate::fs::write_new` itself, because the key file must be created
+        // owner-only (`KEY_FILE_MODE`) rather than with the default permissions.
+        let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(Error::from(ErrorKind::InvalidInput).into());
+        };
 
-        let dir = path.parent().ok_or(Error::from(ErrorKind::IsADirectory))?;
-        let name = path.file_name().ok_or(Error::from(ErrorKind::IsADirectory))?;
+        let mut prefix = std::ffi::OsString::from(".");
+        prefix.push(name);
+        prefix.push(".");
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(&prefix).suffix(".tmp");
+        #[cfg(unix)]
+        builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(KEY_FILE_MODE));
+        let mut tmp = builder.tempfile_in(dir)?;
 
-        static TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let tag = format!(
-            ".atuin-tmp.{}.{}",
-            std::process::id(),
-            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        let mut base_tmp_name = std::ffi::OsString::from(".");
-        base_tmp_name.push(name);
-        base_tmp_name.push(tag);
+        tmp.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
+        tmp.as_file().sync_all()?;
 
-        let mut i: usize = 0;
-        match loop {
-            let mut tmp_path = dir.join(&base_tmp_name);
-            tmp_path.add_extension(i.to_string());
-
-            // `tmp_path` is first so it gets dropped after `tmp_file`. `tmp_path` is a
-            // `RemoveOnDropPath` so it will remove the file when dropped, but this will fail on
-            // Windows if the file is still open.
-            let (tmp_path, mut tmp_file) = match key_file_options().create_new(true).open(&tmp_path)
-            {
-                Ok(file) => (crate::fs::RemoveOnDropPath(tmp_path), file),
-                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                    // This error will essentially never happen in practice. It requires
-                    // `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to
-                    // `usize::MAX`.
-                    i = i.checked_add(1).ok_or(KeyFileStoringError::TempFilesExhausted)?;
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
-            };
-
-            tmp_file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
-            tmp_file.sync_all()?;
-            drop(tmp_file);
-            break std::fs::hard_link(&tmp_path, path);
-        } {
-            Ok(()) => return Ok(()),
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+        match tmp.persist_noclobber(path) {
+            Ok(_) => return Ok(()),
+            Err(e) if e.error.kind() == ErrorKind::AlreadyExists || path.exists() => {
                 return Err(KeyFileStoringError::AlreadyExists);
             }
-            Err(e) if e.kind() == ErrorKind::Unsupported => {}
-            Err(e) => return Err(e.into()),
+            // The filesystem can do neither a no-replace rename nor a hard link. FAT32 and
+            // exFAT have no hard links, and Android refuses `link(2)` outright in app-private
+            // storage, where all of Termux lives (`EACCES`). The temporary file is removed as
+            // `e` drops.
+            Err(_) => {}
         }
 
-        // Hardlinks are unsupported. This is unlikely but can happen on FAT32/exFAT filesystems.
-        // Fall back to creating the file and then writing to it. This has the possibility of a race
+        // Last resort: create the file and then write to it. This has the possibility of a race
         // condition where another process could observe a partially written key file, but it is
         // better than unconditionally failing to create the key file. In any case we are careful
-        // not to overwrite an existing key file.
+        // not to overwrite an existing key file, and a half-written file is removed again.
         let mut file = match key_file_options().create_new(true).open(path) {
             Ok(file) => file,
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {
@@ -328,8 +297,14 @@ impl Key {
             }
             Err(e) => return Err(e.into()),
         };
-        file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
-        Ok(())
+        let written = file
+            .write_all(self.encode().dangerously_leak_secret().as_bytes())
+            .and_then(|()| file.sync_all());
+        if written.is_err() {
+            drop(file);
+            let _ = fs::remove_file(path);
+        }
+        Ok(written?)
     }
 
     /// Write this [`Self::encode`]d key to `path`, replacing any existing file.
