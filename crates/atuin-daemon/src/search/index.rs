@@ -293,28 +293,45 @@ impl HaystackEntry {
     }
 }
 
+/// How many frecency points one point of fuzzy match quality is worth when the
+/// two are combined into a single ranking score.
+///
+/// Frecency spans 0..=200 under default multipliers while a meaningful
+/// difference in match quality is worth only a handful of matcher points, so
+/// frecency has to be scaled up before the two can be added -- otherwise every
+/// result would be ordered by usage alone and match quality would stop
+/// mattering. At this weight a match that scores a few points better stays
+/// ahead of a much more frequent command under default settings, while a raised
+/// `recency_score_multiplier` scales the frecency side enough to reorder
+/// near-ties.
+const FUZZY_SCORE_WEIGHT: u32 = 64;
+
 /// Represents how closely a command matches a search query.
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Score {
-    // Fields must be in this order so we rank by fuzzy score first and only use frecency
-    // for ties. See #3702.
-    pub fuzzy_score: u16,
-    pub frecency: u32,
+    /// Match quality and frecency combined, so that either can decide the
+    /// order. See #3702 and #4256.
+    pub combined: u64,
     pub index: u32,
+}
+
+impl Score {
+    /// Combine fuzzy match quality with frecency into a single ranking score.
+    fn new(fuzzy_score: u16, frecency: u32, index: u32) -> Self {
+        Self {
+            combined: u64::from(fuzzy_score) * u64::from(FUZZY_SCORE_WEIGHT) + u64::from(frecency),
+            index,
+        }
+    }
 }
 
 /// Scores are ordered as follows:
 ///
-/// * Fuzzy score (highest first)
-/// * If equal, frecency (highest first)
+/// * Combined match-quality/frecency score (highest first)
 /// * If equal, index (lowest first)
 impl Ord for Score {
     fn cmp(&self, other: &Self) -> Ordering {
-        (other.fuzzy_score, other.frecency, self.index).cmp(&(
-            self.fuzzy_score,
-            self.frecency,
-            other.index,
-        ))
+        (other.combined, self.index).cmp(&(self.combined, other.index))
     }
 }
 
@@ -327,8 +344,8 @@ impl PartialOrd for Score {
 /// A deduplicated search index with frecency-based ranking.
 ///
 /// Commands are stored by their text, with metadata about all invocations.
-/// Frizbee handles fuzzy matching; results are ranked by match quality,
-/// with frecency breaking ties between equally good matches.
+/// Frizbee handles fuzzy matching; results are ranked by a combination of
+/// match quality and frecency, so both can decide the order.
 ///
 /// Global frecency is precomputed by a background task and used for scoring.
 /// If frecency data is not available, search still works but without frecency ranking;
@@ -533,11 +550,7 @@ impl SearchIndex {
         // the matcher and rank purely by frecency
         let mut scored: Vec<Score> = if matcher.patterns().is_empty() {
             (0..candidates.len())
-                .map(|i| Score {
-                    fuzzy_score: 0,
-                    frecency: candidate_frecency(i),
-                    index: u32::conv(i),
-                })
+                .map(|i| Score::new(0, candidate_frecency(i), u32::conv(i)))
                 .collect()
         } else {
             // This is a vec of `&Arc<str>` instead of `&str` because `&Arc<str>` is the size of one
@@ -555,11 +568,7 @@ impl SearchIndex {
             });
             matches
                 .iter()
-                .map(|m| Score {
-                    fuzzy_score: m.score,
-                    frecency: candidate_frecency(usize::conv(m.index)),
-                    index: m.index,
-                })
+                .map(|m| Score::new(m.score, candidate_frecency(usize::conv(m.index)), m.index))
                 .collect()
         };
 
@@ -827,6 +836,107 @@ mod tests {
             )
             .count();
         assert_eq!(count, 2);
+    }
+
+    /// Regression test for #4256: `dran` matches `dig rancher.redacted.com`
+    /// only through a scattered `d` + `ran`, so it outscores `git dranpacken &&
+    /// git pfusch` on match quality alone. Ranking those two purely by match
+    /// quality left a three-year-old command on top no matter how the user
+    /// tuned the score multipliers, because frecency was only ever consulted
+    /// for exact ties.
+    #[test]
+    fn recency_multiplier_promotes_recent_near_tie() {
+        let index = SearchIndex::default();
+        let now = OffsetDateTime::now_utc();
+
+        let old =
+            make_history("dig rancher.redacted.com", "/tmp", now - time::Duration::days(365 * 3));
+        index.add_history(&old);
+
+        let fresh =
+            make_history("git dranpacken && git pfusch", "/tmp", now - time::Duration::minutes(16));
+        for _ in 0..200 {
+            index.add_history(&fresh);
+        }
+
+        let mut settings = Search::default();
+        settings.recency_score_multiplier = 10.0;
+        settings.frequency_score_multiplier = 0.0;
+        index.rebuild_frecency(&settings);
+
+        let results: Vec<_> = index.search("dran", &IndexFilterMode::Global, 10).collect();
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0], fresh.id,
+            "a 16-minute-old command must outrank a three-year-old one when the \
+             recency multiplier is raised, even if the old one matches marginally better"
+        );
+    }
+
+    /// The multipliers only shift the order between near-ties: at default
+    /// settings a clearly better match still beats a far more recent command
+    /// that matches worse, no matter how extreme the frequency difference.
+    /// Guards the weight that keeps the combination from degenerating into
+    /// pure frecency ordering.
+    #[test]
+    fn clearly_better_match_survives_extreme_frequency_at_default_settings() {
+        let index = SearchIndex::default();
+        let now = OffsetDateTime::now_utc();
+
+        // contiguous match for "foo bar", ancient and never repeated
+        index.add_history(&make_history(
+            "foo bar --baz",
+            "/tmp",
+            now - time::Duration::days(365 * 5),
+        ));
+
+        // scattered match for the same query, just used, run 10000 times
+        let scattered =
+            make_history("foo build-analyzer-report", "/tmp", now - time::Duration::minutes(1));
+        for _ in 0..10_000 {
+            index.add_history(&scattered);
+        }
+
+        index.rebuild_frecency(&Search::default());
+
+        let results: Vec<_> = index.search("foo bar", &IndexFilterMode::Global, 10).collect();
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0],
+            index.commands.get("foo bar --baz").unwrap().most_recent_id(),
+            "at default settings match quality must dominate an extreme frequency difference"
+        );
+    }
+
+    /// `frecency_score_multiplier = 0` disables frecency entirely, so ranking
+    /// must fall back to pure match quality.
+    #[test]
+    fn zero_frecency_multiplier_ranks_by_match_quality_only() {
+        let index = SearchIndex::default();
+        let now = OffsetDateTime::now_utc();
+
+        index.add_history(&make_history(
+            "dig rancher.redacted.com",
+            "/tmp",
+            now - time::Duration::days(365 * 3),
+        ));
+        let fresh =
+            make_history("git dranpacken && git pfusch", "/tmp", now - time::Duration::minutes(16));
+        for _ in 0..200 {
+            index.add_history(&fresh);
+        }
+
+        let mut settings = Search::default();
+        settings.frecency_score_multiplier = 0.0;
+        index.rebuild_frecency(&settings);
+
+        let results: Vec<_> = index.search("dran", &IndexFilterMode::Global, 10).collect();
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0],
+            index.commands.get("dig rancher.redacted.com").unwrap().most_recent_id(),
+            "with frecency disabled the better match must win regardless of age"
+        );
     }
 
     /// Regression test for #3702: a frequently-run command whose match is
