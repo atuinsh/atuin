@@ -465,24 +465,24 @@ pub async fn run(settings: &Settings) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::sync_auth_state;
+    use rstest::rstest;
 
-    #[test]
-    fn hub_sync_reports_hub_states() {
-        assert_eq!(sync_auth_state(true, true, false), "Hub (authenticated)");
-        assert_eq!(
-            sync_auth_state(true, false, true),
-            "Hub (legacy token \u{2014} run 'atuin login' to upgrade)"
-        );
-        assert_eq!(sync_auth_state(true, false, false), "Not authenticated");
-    }
-
-    #[test]
-    fn self_hosted_ignores_a_stale_hub_token() {
-        // A leftover `atapi_` token from a past config typo must not label a client whose syncs
-        // run against its own server.
-        assert_eq!(sync_auth_state(false, true, true), "Self-hosted (authenticated)");
-        assert_eq!(sync_auth_state(false, false, true), "Self-hosted (authenticated)");
-        assert_eq!(sync_auth_state(false, true, false), "Not authenticated");
-        assert_eq!(sync_auth_state(false, false, false), "Not authenticated");
+    #[rstest]
+    #[case(true, true, false, "Hub (authenticated)")]
+    #[case(true, false, true, "Hub (legacy token \u{2014} run 'atuin login' to upgrade)")]
+    #[case(true, false, false, "Not authenticated")]
+    // A leftover `atapi_` token from a past config typo must not label a client whose syncs
+    // run against its own server.
+    #[case(false, true, true, "Self-hosted (authenticated)")]
+    #[case(false, false, true, "Self-hosted (authenticated)")]
+    #[case(false, true, false, "Not authenticated")]
+    #[case(false, false, false, "Not authenticated")]
+    fn reports_the_sync_target_the_client_is_configured_for(
+        #[case] is_hub_sync: bool,
+        #[case] has_hub_token: bool,
+        #[case] has_cli_token: bool,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(sync_auth_state(is_hub_sync, has_hub_token, has_cli_token), expected);
     }
 }
