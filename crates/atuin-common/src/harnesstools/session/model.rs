@@ -51,6 +51,21 @@ pub fn reasoning_label(tokens: Option<u64>) -> String {
     tokens.map_or_else(|| "Reasoned".to_owned(), |n| format!("Reasoning · {n} tokens"))
 }
 
+/// Whether a row with `role` and `content` is a message that makes a line of conversation worth
+/// telling apart from another: a user prompt, or assistant text. Tool calls, their results,
+/// reasoning, usage and system context are not, so a fork in a session's rows only counts as a
+/// branch where it holds one of these.
+#[must_use]
+pub fn is_substantive(role: &Role, content: &[Content]) -> bool {
+    match role {
+        Role::User => true,
+        Role::Assistant => {
+            content.iter().any(|c| matches!(c, Content::Text(t) if !t.trim().is_empty()))
+        }
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolUse {
     pub id: ToolCallId,

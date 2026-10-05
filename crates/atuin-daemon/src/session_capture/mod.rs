@@ -2868,4 +2868,183 @@ mod pipeline_tests {
         let new = outcomes.iter().filter(|o| **o == Appended::New).count();
         assert_eq!(new, 0, "re-capturing the rehydrated rollout pushed {new} records");
     }
+
+    fn codex_item(id: &str, role: &str, text: &str, at: &str) -> serde_json::Value {
+        let kind = if role == "user" {
+            "input_text"
+        } else {
+            "output_text"
+        };
+        serde_json::json!({
+            "timestamp": at, "type": "response_item",
+            "payload": {"type": "message", "id": id, "role": role,
+                "content": [{"type": kind, "text": text}]},
+        })
+    }
+
+    /// A Codex session restored on a second host (written back out from its synced rows) and
+    /// continued there links its new rows onto the restored ones, even when capture restarts
+    /// in between and resumes the rollout past its checkpoint; the first host carrying on from
+    /// the same row as well leaves the session diverged, a head on each host.
+    #[rstest]
+    #[tokio::test]
+    async fn two_hosts_continuing_a_restored_codex_session_diverge(#[future] sink: Sink) {
+        use atuin_common::harnesstools::codex::session::CodexSession;
+        use atuin_common::harnesstools::session::{Checkpoint, Session as _};
+        use futures::TryStreamExt;
+
+        let a = sink.await;
+        let id = "01a0d147-e745-7ae2-a941-ce48e7888470";
+        let mut on_a = MessageEnricher::new(HarnessKind::Codex);
+        let started = [
+            codex(serde_json::json!({
+                "timestamp": "2026-09-24T03:00:00.000Z", "type": "session_meta",
+                "payload": {"id": id, "cwd": "/work"},
+            })),
+            codex(codex_item("msg_p1", "user", "hello", "2026-09-24T03:00:01.000Z")),
+            codex(codex_item("msg_r1", "assistant", "hi", "2026-09-24T03:00:02.000Z")),
+        ];
+        capture_all(&a, &mut on_a, &sid(id), &started).await;
+
+        // Host B restores the session from the synced rows.
+        let records = AiSessionStore::builder()
+            .store(SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let b = Sink::new(records, a.sidecar.clone());
+        let handle = handle(HarnessKind::Codex, id);
+        let session = a.sidecar.rehydrate_session(&handle, "/elsewhere".into()).await;
+        let home = tempfile::tempdir().unwrap();
+        let path = rehydrate_codex(&session.unwrap().unwrap(), home.path()).await;
+
+        // B captures the restored rollout, checkpointing as the engine does: past the last line
+        // that made a row.
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        let lines: Vec<(Checkpoint, _)> = CodexSession::open(sid(id), path.clone(), pool.clone())
+            .messages_from(None)
+            .try_collect()
+            .await
+            .unwrap();
+        let mut on_b = MessageEnricher::new(HarnessKind::Codex);
+        let mut checkpoint = None;
+        let mut last = None;
+        for (at, line) in lines {
+            for row in on_b.capture(&sid(id), &AnyMessage::from(line)) {
+                last = Some(row.source_id.clone());
+                checkpoint = Some(at);
+                assert_eq!(b.append(row).await.unwrap(), Appended::Duplicate);
+            }
+        }
+        assert_eq!(last.as_ref().map(AsRef::as_ref), Some("msg_r1"));
+
+        // Codex carries on in the restored rollout while capture is down; capture resumes it.
+        let more = [
+            codex_item("msg_b2", "user", "on b", "2026-09-25T00:00:00.000Z"),
+            codex_item("msg_b3", "assistant", "ok", "2026-09-25T00:00:01.000Z"),
+        ];
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        for line in &more {
+            std::io::Write::write_all(&mut file, format!("{line}\n").as_bytes()).unwrap();
+        }
+        let continued: Vec<_> = CodexSession::open(sid(id), path, pool)
+            .messages_from(checkpoint)
+            .map_ok(|(_, line)| AnyMessage::from(line))
+            .try_collect()
+            .await
+            .unwrap();
+        let mut on_b = resumed(&b, HarnessKind::Codex, &sid(id)).await;
+        let rows = capture_all(&b, &mut on_b, &sid(id), &continued).await;
+        assert_eq!(rows, [Appended::New, Appended::New]);
+
+        // A carries on from the same row.
+        let more_on_a = [codex(codex_item("msg_a2", "user", "on a", "2026-09-25T00:00:05.000Z"))];
+        capture_all(&a, &mut on_a, &sid(id), &more_on_a).await;
+
+        let parent = |row: &str| {
+            let sidecar = a.sidecar.clone();
+            let handle = handle.clone();
+            let row = row.to_owned();
+            async move {
+                let rows: Vec<Message> = sidecar.messages(&handle).try_collect().await.unwrap();
+                let row = rows.into_iter().find(|m| m.source_id.as_ref() == row).unwrap();
+                row.parent_source_id.map(String::from)
+            }
+        };
+        assert_eq!(parent("msg_r1").await.as_deref(), Some("msg_p1"));
+        assert_eq!(parent("msg_b2").await.as_deref(), Some("msg_r1"));
+        assert_eq!(parent("msg_b3").await.as_deref(), Some("msg_b2"));
+        assert_eq!(parent("msg_a2").await.as_deref(), Some("msg_r1"));
+
+        let analysis = a.sidecar.analyse(&handle).await.unwrap();
+        assert!(analysis.diverged());
+        let heads: Vec<&str> = analysis.heads().iter().map(|h| h.source_id.as_ref()).collect();
+        assert_eq!(heads, ["msg_a2", "msg_b3"]);
+        let path: Vec<String> = analysis
+            .path_to(&analysis.heads()[1].source_id)
+            .iter()
+            .map(|m| m.source_id.to_string())
+            .collect();
+        assert_eq!(path[path.len() - 3..], ["msg_r1", "msg_b2", "msg_b3"]);
+    }
+
+    /// Capture restarting past a Codex line with no id of its own (a `turn_context`, keyed on its
+    /// content) links the next row to that line's row, which the reader names the way capture
+    /// keyed it: the newest of identical lines.
+    #[rstest]
+    #[tokio::test]
+    async fn a_resumed_codex_read_links_past_a_content_keyed_row(#[future] sink: Sink) {
+        use atuin_common::harnesstools::codex::session::CodexSession;
+        use atuin_common::harnesstools::session::{Checkpoint, Session as _};
+        use futures::TryStreamExt;
+
+        let sink = sink.await;
+        let id = "01a0d147-e745-7ae2-a941-ce48e7888470";
+        let context = serde_json::json!({"timestamp": "2026-09-24T03:00:02.000Z",
+            "type": "turn_context", "payload": {"cwd": "/work", "model": "gpt-5"}});
+        let lines = [
+            serde_json::json!({"timestamp": "2026-09-24T03:00:00.000Z", "type": "session_meta",
+                "payload": {"id": id, "cwd": "/work"}}),
+            codex_item("msg_p1", "user", "hello", "2026-09-24T03:00:01.000Z"),
+            context.clone(),
+            context,
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("rollout-2026-09-24T03-00-00-{id}.jsonl"));
+        let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&path, body).unwrap();
+
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        let read: Vec<(Checkpoint, _)> = CodexSession::open(sid(id), path.clone(), pool.clone())
+            .messages_from(None)
+            .try_collect()
+            .await
+            .unwrap();
+        let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+        let (mut checkpoint, mut last) = (None, None);
+        for (at, line) in read {
+            for row in enricher.capture(&sid(id), &AnyMessage::from(line)) {
+                last = Some(row.source_id.clone());
+                checkpoint = Some(at);
+                sink.append(row).await.unwrap();
+            }
+        }
+        let last = last.unwrap();
+        assert!(last.as_ref().starts_with("syn-") && last.as_ref().ends_with("-1"), "{last}");
+
+        let more = codex_item("msg_p2", "user", "again", "2026-09-24T03:00:03.000Z");
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, format!("{more}\n").as_bytes()).unwrap();
+        let continued: Vec<AnyMessage> = CodexSession::open(sid(id), path, pool)
+            .messages_from(checkpoint)
+            .map_ok(|(_, line)| AnyMessage::from(line))
+            .try_collect()
+            .await
+            .unwrap();
+        let mut enricher = resumed(&sink, HarnessKind::Codex, &sid(id)).await;
+        let rows: Vec<Message> =
+            continued.iter().flat_map(|m| enricher.capture(&sid(id), m)).collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].parent_source_id, Some(last));
+    }
 }

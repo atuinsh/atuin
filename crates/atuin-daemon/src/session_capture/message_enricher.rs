@@ -4,14 +4,13 @@ use atuin_client::ai_session::{
     HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
 use atuin_common::harnesstools::continuation;
+pub(super) use atuin_common::harnesstools::session::synthetic::SYNTHETIC;
+use atuin_common::harnesstools::session::synthetic::{self, content_hash};
 use atuin_common::harnesstools::session::{
     AnyMessage, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
 };
 use atuin_domain::record::RecordId;
 use time::OffsetDateTime;
-
-/// Prefix of a content-addressed [`SourceId`], for lines the harness gave no id.
-pub(super) const SYNTHETIC: &str = "syn-";
 
 /// Builds the canonical [`Message`] rows for one harness's lines, carrying the per-session
 /// bookkeeping (title, timestamps, parent, synthetic id ordinals) that a single line cannot
@@ -86,6 +85,7 @@ impl MessageEnricher {
             native_parent: row.is_some_and(|r| r.parent.is_some()),
             occurrences,
             untimed: Vec::new(),
+            previous: None,
         });
     }
 
@@ -100,6 +100,16 @@ impl MessageEnricher {
         }
         if let Some(change) = m.title() {
             apply(&mut state.titles, change);
+        }
+        if let Some(follows) = m.follows() {
+            let follows = SourceId::from(String::from(follows));
+            state.previous = match parse_synthetic(&follows) {
+                // A line keyed on its content: the reader cannot know which of identical lines it
+                // is, and names the first; the newest row of that content captured is the one
+                // (none: the line made no row, and there is nothing to follow).
+                Some((hash, _)) => state.occurrences.get(&hash).map(|&n| synthetic_id(hash, n - 1)),
+                None => Some(follows),
+            };
         }
         if let Some(parent) = m.parent_session().filter(|p| p != session) {
             state.parent = Some(HarnessSession {
@@ -219,6 +229,13 @@ fn build(
             id
         }
     };
+    // Codex lines name no parent: each row follows the row captured before it, so the rows of
+    // two hosts continuing one rollout part where they did (see `AiSessionDatabase::analyse`).
+    let parent_source_id = if handle.harness == HarnessKind::Codex {
+        state.previous.replace(source_id.clone())
+    } else {
+        m.parent_id().map(|id| SourceId::from(String::from(id)))
+    };
     Some(
         Message::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
@@ -226,7 +243,7 @@ fn build(
             .source_id(source_id)
             .parent(state.parent.clone())
             .parent_kind(state.parent_kind)
-            .parent_source_id(m.parent_id().map(|id| SourceId::from(String::from(id))))
+            .parent_source_id(parent_source_id)
             .turn_id(m.turn_id())
             .timestamp(state.last_ts.unwrap_or(OffsetDateTime::UNIX_EPOCH))
             .role(m.role())
@@ -251,42 +268,13 @@ fn apply(titles: &mut BTreeMap<TitleSource, String>, change: TitleChange) {
     };
 }
 
-/// A hash of everything a row takes from an id-less line, so lines that differ in any of it
-/// (two usage records written in one millisecond) never share an id.
-fn content_hash(session: &SessionId, m: &AnyMessage) -> u64 {
-    let canonical = serde_json::json!([
-        session.as_ref(),
-        m.timestamp().map(OffsetDateTime::unix_timestamp_nanos).map(|ns| ns.to_string()),
-        m.role(),
-        m.content(),
-        m.title(),
-        m.model(),
-        m.usage(),
-        m.stop_reason(),
-        m.cwd(),
-        m.git_branch(),
-        m.parent_id(),
-        m.parent_session(),
-        m.turn_id(),
-    ]);
-    xxhash_rust::xxh3::xxh3_64(canonical.to_string().as_bytes())
-}
-
-/// The first occurrence keeps the bare hash; the nth identical line after it is `-n`.
+/// A content-addressed source id (see [`synthetic::synthetic_id`]).
 fn synthetic_id(hash: u64, ordinal: u32) -> SourceId {
-    SourceId::from(match ordinal {
-        0 => format!("{SYNTHETIC}{hash:016x}"),
-        n => format!("{SYNTHETIC}{hash:016x}-{n}"),
-    })
+    SourceId::from(synthetic::synthetic_id(hash, ordinal))
 }
 
 fn parse_synthetic(id: &SourceId) -> Option<(u64, u32)> {
-    let rest = id.as_ref().strip_prefix(SYNTHETIC)?;
-    let (hash, ordinal) = match rest.split_once('-') {
-        Some((hash, n)) => (hash, n.parse().ok()?),
-        None => (rest, 0),
-    };
-    Some((u64::from_str_radix(hash, 16).ok()?, ordinal))
+    synthetic::parse_synthetic(id.as_ref())
 }
 
 /// What the capture pipeline carries from one line to the next, per native session id.
@@ -317,6 +305,10 @@ struct SessionState {
     /// Rows from before the first timestamped line, waiting to take its timestamp: the session
     /// started no earlier, and capture time would make an old session look new.
     untimed: Vec<Message>,
+    /// The source id of the row captured last, which a Codex row names as its parent; what the
+    /// reader says a line [follows](HarnessMessage::follows) where capture has seen no row yet
+    /// (a read resumed past its checkpoint, a reverted thread's rollout).
+    previous: Option<SourceId>,
 }
 
 impl SessionState {
@@ -731,6 +723,31 @@ mod tests {
         let again = rows(&mut n, &session(), &[untimed]);
         assert_eq!(again[0].source_id, synthetic_id(hash, 0));
         assert_eq!(again[0].parent, None);
+    }
+
+    /// Codex lines name no parent: each row names the row captured before it, a content-keyed
+    /// one included, passing over lines capture keeps no row of.
+    #[rstest]
+    fn codex_rows_follow_the_row_captured_before() {
+        let at = "2026-09-24T03:00:00.000Z";
+        let lines = [
+            codex(&serde_json::json!({"timestamp": at, "type": "session_meta",
+                "payload": {"id": "s1", "cwd": "/work"}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "turn_context",
+                "payload": {"cwd": "/work", "model": "gpt-5"}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "event_msg",
+                "payload": {"type": "task_started"}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "response_item",
+                "payload": {"type": "message", "id": "msg_1", "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}]}})),
+        ];
+        let rows = rows(&mut MessageEnricher::new(HarnessKind::Codex), &session(), &lines);
+        let ids: Vec<&str> = rows.iter().map(|r| r.source_id.as_ref()).collect();
+        assert_eq!(ids.len(), 3, "{ids:?}");
+        assert!(ids[1].starts_with(SYNTHETIC));
+        let parents: Vec<Option<&str>> =
+            rows.iter().map(|r| r.parent_source_id.as_ref().map(AsRef::as_ref)).collect();
+        assert_eq!(parents, [None, Some(ids[0]), Some(ids[1])]);
     }
 
     /// Codex has no turn id: a bookkeeping line must not make the accounting line that follows

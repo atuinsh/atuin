@@ -26,7 +26,9 @@ use super::{
     PreviewParts, SearchTerms, Session, SessionFilter, SessionMatch, SourceId,
 };
 
+mod heads;
 mod watermark;
+pub use heads::{Analysis, Head};
 pub use watermark::{Generation, Watermark};
 
 const COMPRESS_THRESHOLD: usize = 256;
