@@ -5636,16 +5636,38 @@ While the picker has the mouse, your terminal can't select text the usual way. M
 mouse = false
 ```
 
-- Forks of a session (including Claude Code `--resume` copies) are grouped under it. Inspect (`Ctrl`+`O`) lists them, and `C` there expands the list.
+- Forks of a session (including Claude Code `--resume` copies, and continuations in another agent) are grouped under it. Inspect (`Ctrl`+`O`) lists them, and `C` there expands the list.
 - Subagents aren't listed at all, as they can't be resumed. A search that matches something a subagent said still finds the session it worked for, and `atuin ai resume <subagent-id>` resumes that session. Atuin records whether a child session is a subagent, a fork or a continuation as it captures it. Sessions captured by older versions don't say, and for Codex and opencode nearly all such children are subagents, so the picker treats them as such (they still resume by id).
 
-`Enter` resumes the selected session in its own agent (or, without `enter_accept`, puts the command on your command line), and `Tab` puts the command on your command line to edit first. `Ctrl`+`Y` copies it.
+Once you choose a session, with `Enter` (or `Tab` to edit the command first), Atuin asks where to resume it:
 
-If the session was recorded on another machine, or its transcript was deleted, Atuin first writes the transcript back out from the synced messages (Inspect says "from sync"). It resumes in the directory the session ran in when that exists here. Otherwise, when you're in a checkout of a repository with the same name, it resumes in the same place in that checkout (or at its root), and otherwise in the current directory. The picker says which.
+```
+╭ Resume in ──────────────────────────────────────────────────────────────────╮
+│ > 1 CC Claude Code  original                                                │
+│   2 CX Codex        continue, 42 tool calls become notes, reasoning dropped │
+│   3 OC opencode     continue, 42 tool calls become notes, reasoning dropped │
+│ <enter>: resume  <tab>: edit  <esc>: back                                   │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
 
-If the session's own agent can't resume it here (a Copilot session, an agent that isn't installed, or a session whose transcript is here but whose directory is gone, for an agent that needs it), the picker says why and stays open; Inspect says so too.
+- The session's own agent comes first and is already selected, so `Enter` `Enter` resumes it. If the session was recorded on another machine, or its transcript was deleted, Atuin writes the transcript back out from the synced messages before resuming it ("from sync").
+- Every other agent installed on this machine follows. Picking one continues the session there as a new session: the conversation carries over, but that agent can't replay the original's tool calls, so they become notes in the text, and reasoning is dropped. The line says how much. The new session opens with a note to the agent naming the session it continues, by its own agent's id and its Atuin id (in Pi, the note opens the first prompt, so you see it too). Agents that aren't installed aren't listed, and with no other agent installed there is nothing to choose, so `Enter` resumes straight away.
+- If the session's own agent can't resume it here (a Copilot session, an agent that isn't installed, or a session whose transcript is here but whose directory is gone, for an agent that needs it), its line is dimmed with the reason, and the next one is selected instead.
 
-From the command line, `atuin ai resume <id>` resumes a session directly (an id prefix works too), writing it out from sync first when it isn't on this machine. `--print` prints the command instead of running it.
+A session written back out from sync, or continued in another agent, resumes in the directory the session ran in when that exists here. Otherwise, when you're in a checkout of a repository with the same name, it resumes in the same place in that checkout (or at its root), and otherwise in the current directory. The picker says which.
+
+In the chooser, `Up` / `Down` (or `K` / `J`) move, a digit picks that line, and `Esc` goes back to the list. `Enter` does what the key that opened the chooser did: it resumes (or, without `enter_accept`, puts the command on your command line), and after `Tab` it edits. `Tab` in the chooser always edits. `Ctrl`+`Y` copies the command.
+
+To resume in the session's own agent straight away, without the chooser:
+
+```
+[ai.sessions]
+resume_chooser = false
+```
+
+The chooser still opens for a session its own agent can't resume.
+
+From the command line, `atuin ai resume <id>` resumes a session in its own agent directly (an id prefix works too), writing it out from sync first when it isn't on this machine, and `atuin ai resume <id> --in codex` continues it in another (`claude`, `codex`, `opencode` or `pi`). `--print` prints the command instead of running it.
 
 The id can be the agent's own, or the session's Atuin id, which Inspect and the MCP session tools show. An Atuin id is a UUIDv7, written as 32 hex digits like a history id. It's fixed when Atuin first records the session, and is the same for every agent and on every machine. Its first 12 digits are when the session started, so a prefix needs more digits than that to name a single session.
 
