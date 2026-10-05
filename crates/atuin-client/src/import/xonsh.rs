@@ -3,6 +3,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::CmdOrigin;
 use easy_cast::CastFloat;
 use eyre::{Result, eyre};
@@ -112,10 +113,7 @@ impl Importer for Xonsh {
         for session in self.sessions {
             for cmd in session.cmds {
                 let (start, end) = cmd.ts;
-                let timestamp = (start * 1_000_000_000_f64)
-                    .try_cast_trunc()
-                    .ok()
-                    .and_then(|nanos: i128| OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
+                let timestamp = OffsetDateTime::from_unix_seconds_f64(start)
                     .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
                 let duration = ((end - start) * 1_000_000_000_f64)
@@ -202,7 +200,7 @@ mod tests {
     fn expected_hist_entries() -> [History; 4] {
         [
             History::import()
-                .timestamp(datetime!(2024-02-6 04:17:59.478272256 +00:00:00))
+                .timestamp(datetime!(2024-02-6 04:17:59.4782722 +00:00:00))
                 .command("echo hello world!".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
@@ -211,7 +209,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 04:18:01.70632832 +00:00:00))
+                .timestamp(datetime!(2024-02-06 04:18:01.706328392 +00:00:00))
                 .command("ls -l".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
@@ -220,7 +218,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:41:31.142515968 +00:00:00))
+                .timestamp(datetime!(2024-02-06 17:41:31.142515898 +00:00:00))
                 .command("false".to_string())
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(1)
@@ -229,7 +227,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:41:32.271584 +00:00:00))
+                .timestamp(datetime!(2024-02-06 17:41:32.271584034 +00:00:00))
                 .command("exit".to_string())
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(0)

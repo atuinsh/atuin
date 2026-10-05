@@ -2,6 +2,7 @@
 
 use core::fmt;
 
+use easy_cast::CastFloat;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
@@ -29,6 +30,10 @@ pub trait OffsetDateTimeExt {
 
     /// Build an [`OffsetDateTime`] from a seconds/nanoseconds pair counted from the unix epoch.
     fn from_timespec(secs: i128, nsecs: i128) -> Result<OffsetDateTime, TimespecOutOfRange>;
+
+    /// Build an [`OffsetDateTime`] from a fractional count of seconds since the unix epoch, as
+    /// tools that keep time in a float store it; `None` when it is not finite or out of range.
+    fn from_unix_seconds_f64(seconds: f64) -> Option<OffsetDateTime>;
 
     /// How much time has passed since `earlier`, clamped to zero if it is in the future.
     fn saturating_duration_since(self, earlier: OffsetDateTime) -> std::time::Duration;
@@ -134,6 +139,13 @@ impl OffsetDateTimeExt for OffsetDateTime {
             .ok_or_else(out_of_range)?;
 
         Self::from_unix_timestamp_nanos(nanos).map_err(|_| out_of_range())
+    }
+
+    fn from_unix_seconds_f64(seconds: f64) -> Option<OffsetDateTime> {
+        let whole = seconds.floor();
+        let secs: i64 = whole.try_cast_trunc().ok()?;
+        let nsecs: i64 = ((seconds - whole) * 1_000_000_000_f64).try_cast_nearest().ok()?;
+        Self::from_timespec(i128::from(secs), i128::from(nsecs)).ok()
     }
 
     fn saturating_duration_since(self, earlier: OffsetDateTime) -> std::time::Duration {

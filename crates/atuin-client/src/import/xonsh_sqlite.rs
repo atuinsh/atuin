@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::db;
+use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::CmdOrigin;
 use easy_cast::{CastFloat, Conv};
 use eyre::{Result, eyre};
@@ -32,8 +33,11 @@ impl HistDbEntry {
         cmd_origin: CmdOrigin,
         sessions: &mut ImportedSessions,
     ) -> History {
-        let timestamp = from_unix_seconds(self.tsb);
-        let session_id = sessions.id(&self.sessionid, from_unix_seconds(self.session_start));
+        let timestamp =
+            OffsetDateTime::from_unix_seconds_f64(self.tsb).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let session_start = OffsetDateTime::from_unix_seconds_f64(self.session_start)
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let session_id = sessions.id(&self.sessionid, session_start);
         let duration = ((self.tse - self.tsb) * 1_000_000_000_f64)
             .try_cast_trunc()
             .unwrap_or(HistoryImported::DEFAULT_DURATION);
@@ -50,15 +54,6 @@ impl HistDbEntry {
             .build()
             .into()
     }
-}
-
-/// The time `seconds` after the Unix epoch, or the epoch itself when that is out of range.
-fn from_unix_seconds(seconds: f64) -> OffsetDateTime {
-    (seconds * 1_000_000_000_f64)
-        .try_cast_trunc()
-        .ok()
-        .and_then(|nanos: i128| OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH)
 }
 
 fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
@@ -191,7 +186,7 @@ mod tests {
     fn expected_hist_entries() -> [History; 4] {
         [
             History::import()
-                .timestamp(datetime!(2024-02-6 17:56:21.130956288 +00:00:00))
+                .timestamp(datetime!(2024-02-6 17:56:21.130956173 +00:00:00))
                 .command("echo hello world!".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
@@ -200,7 +195,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:56:28.190406144 +00:00:00))
+                .timestamp(datetime!(2024-02-06 17:56:28.190406084 +00:00:00))
                 .command("ls -l".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
@@ -209,7 +204,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:56:46.989020928 +00:00:00))
+                .timestamp(datetime!(2024-02-06 17:56:46.989020824 +00:00:00))
                 .command("false".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(1)
@@ -218,7 +213,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:56:48.218384128 +00:00:00))
+                .timestamp(datetime!(2024-02-06 17:56:48.218384027 +00:00:00))
                 .command("exit".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)

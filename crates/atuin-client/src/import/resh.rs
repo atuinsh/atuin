@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
-use easy_cast::CastFloat;
 use eyre::{Result, eyre};
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -105,14 +104,8 @@ impl Importer for Resh {
                 continue;
             };
 
-            let try_to_time = |realtime: f64| {
-                let secs: i64 = realtime.try_cast_floor().ok()?;
-                let nanosecs: i64 =
-                    (realtime.fract() * 1_000_000_000_f64).try_cast_nearest().ok()?;
-                OffsetDateTime::from_timespec(i128::from(secs), i128::from(nanosecs)).ok()
-            };
-            let start = try_to_time(entry.realtime_before);
-            let end = try_to_time(entry.realtime_after);
+            let start = OffsetDateTime::from_unix_seconds_f64(entry.realtime_before);
+            let end = OffsetDateTime::from_unix_seconds_f64(entry.realtime_after);
 
             // a corrupt entry must not abort the whole import. only report a duration when
             // both ends are representable - measuring against the epoch sentinel would
