@@ -52,7 +52,7 @@
 //!   older layout `opencode import` writes; their parts get minted ids and would be captured again
 //!   as new rows.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -131,13 +131,27 @@ pub(crate) async fn import(
             session.cwd.display()
         )));
     }
-    let file = export_file(&exported)?;
+    let stdout = run_import(program, db, &session.cwd, &exported).await?;
+    session::locate(db, &session.id).await.ok_or_else(|| {
+        RehydrateError::Other(format!("opencode import did not write the session: {stdout}"))
+    })
+}
+
+/// Run `opencode import` (the executable `program`) of `export` into `db`, from `cwd` (which
+/// becomes the session's directory and project), handing back what it printed.
+pub(crate) async fn run_import(
+    program: &Path,
+    db: &Path,
+    cwd: &Path,
+    export: &Value,
+) -> Result<String, RehydrateError> {
+    let file = export_file(export)?;
     let mut command = tokio::process::Command::new(program);
     command
         .arg("import")
         .arg("--pure")
         .arg(&*file)
-        .current_dir(&session.cwd)
+        .current_dir(cwd)
         .env("OPENCODE_DB", db)
         .env_remove("OPENCODE_AUTO_SHARE")
         .envs(QUIET_ENV.iter().copied())
@@ -155,12 +169,7 @@ pub(crate) async fn import(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    session::locate(db, &session.id).await.ok_or_else(|| {
-        RehydrateError::Other(format!(
-            "opencode import did not write the session: {}",
-            String::from_utf8_lossy(&output.stdout).trim()
-        ))
-    })
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 /// How much of an export opencode's database holds of a session it has a row for.
@@ -422,6 +431,12 @@ fn is_session_row(session: &RehydrateSession, row: &RehydrateMessage) -> bool {
 
 /// The JSON `opencode export` writes for `session`, which `opencode import` reads back.
 pub(crate) fn export(session: &RehydrateSession) -> Value {
+    export_minting(session).0
+}
+
+/// [`export`], and the ids of its messages that were minted, not recovered from a row naming
+/// them: every one of a fork's, whose ids are all fresh.
+pub(crate) fn export_minting(session: &RehydrateSession) -> (Value, HashSet<String>) {
     let mut drafts: Vec<Draft> = Vec::new();
     // A note joins a text part of its own message: the one answering the same prompt in the
     // same model call.
@@ -492,8 +507,7 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
         }
     }
     // A user message's id is the one the assistant message answering it names.
-    let mut used: std::collections::HashSet<String> =
-        drafts.iter().filter_map(|draft| draft.id.clone()).collect();
+    let mut used: HashSet<String> = drafts.iter().filter_map(|draft| draft.id.clone()).collect();
     for at in 0..drafts.len() {
         if drafts[at].id.is_some() || drafts[at].assistant {
             continue;
@@ -508,10 +522,13 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
             drafts[at].id = Some(id);
         }
     }
+    let mut minted = HashSet::new();
     for (n, draft) in drafts.iter_mut().enumerate() {
         if draft.id.is_none() {
             let created = draft_created(draft);
-            draft.id = Some(mint("msg", created, &format!("{}/message/{n}", session.id)));
+            let id = mint("msg", created, &format!("{}/message/{n}", session.id));
+            minted.insert(id.clone());
+            draft.id = Some(id);
         }
     }
 
@@ -551,8 +568,10 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
     let started = millis(session.started_at);
     if let Some(of) = &session.fork_of {
         fork(&mut messages, session, of);
+        minted =
+            messages.iter().filter_map(|m| m["info"]["id"].as_str().map(str::to_owned)).collect();
     }
-    json!({
+    let export = json!({
         "info": {
             "id": session.id,
             "slug": session.id,
@@ -564,7 +583,8 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
             "time": {"created": started, "updated": updated.unwrap_or(started).max(started)},
         },
         "messages": messages,
-    })
+    });
+    (export, minted)
 }
 
 /// Make the messages of `session`'s export a fork's of `of`: its first user message (one of its

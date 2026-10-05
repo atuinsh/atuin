@@ -567,7 +567,7 @@ impl CcodeMessage {
     /// 2.1.281): as `JSON.parse` would (see [`crate::json::js`]; its 2.1.132 changelog notes
     /// sessions holding a lone surrogate from a tool error cut mid-emoji), and without a leading
     /// byte order mark. The error is the original line's.
-    fn decode(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, serde_json::Error> {
         crate::json::js::from_slice(bytes).or_else(|err| {
             match bytes.strip_prefix(b"\xef\xbb\xbf") {
                 Some(rest) => crate::json::js::from_slice(rest).map_err(|_| err),

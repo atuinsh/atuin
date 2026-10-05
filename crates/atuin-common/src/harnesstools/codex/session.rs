@@ -156,7 +156,7 @@ impl Observable for Codex {
 /// thread's history since the revert and names the rollout before it as its `history_base`.
 /// Such a file keeps both ids as its session, so it never shares one with the thread's earlier
 /// rollout (see [`thread_of`]).
-pub(super) fn session_id_of(stem: &str) -> SessionId {
+pub(crate) fn session_id_of(stem: &str) -> SessionId {
     const UUID_LEN: usize = 36;
     if let Some((head, rollout)) = stem.rsplit_once('_')
         && let Some(thread) = head.len().checked_sub(UUID_LEN).and_then(|at| head.get(at..))

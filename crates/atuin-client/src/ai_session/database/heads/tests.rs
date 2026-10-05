@@ -1,10 +1,11 @@
 use atuin_common::harnesstools::session::{Content, Role};
+use atuin_common::harnesstools::sync::{LocalTip, Stamp};
 use atuin_domain::record::{HostId, RecordId};
 use proptest::prelude::*;
 use rstest::rstest;
 use time::OffsetDateTime;
 
-use super::Analysis;
+use super::{Analysis, FastForward};
 use crate::ai_session::{
     AiSessionDatabase, HarnessKind, HarnessSession, Message, NativeSessionId, SourceId,
 };
@@ -425,4 +426,57 @@ proptest! {
             prop_assert!(analysis.heads().len() > 1, "{:?}", analysis.heads());
         }
     }
+}
+
+/// A copy on this machine holding `held` (the last its tip, unless `tip` says otherwise), with
+/// `merged` rows folded into its tip's line.
+fn local(held: &[&str], tip: Option<&str>, merged: &[&str]) -> LocalTip {
+    let tip = tip.or(held.last().copied()).map(str::to_owned);
+    let merged: std::collections::HashMap<String, String> =
+        merged.iter().map(|m| ((*m).to_owned(), tip.clone().unwrap_or_default())).collect();
+    LocalTip {
+        native_path: std::path::PathBuf::new(),
+        known_source_ids: held
+            .iter()
+            .map(|h| (*h).to_owned())
+            .chain(merged.keys().cloned())
+            .collect(),
+        merged,
+        tip_source_id: tip,
+        stamp: Stamp::of(b""),
+        modified: None,
+        cwd: None,
+    }
+}
+
+/// The base, then a2 and u3 on host 1, and a fork off a1 from host 2.
+const GROWN: &[Row<'static>] = &[
+    ("u1", None, 1, 0, Prompt),
+    ("a1", Some("u1"), 1, 1, Reply),
+    ("t1", Some("a1"), 1, 2, Tool),
+    ("a2", Some("t1"), 1, 3, Reply),
+    ("u3", Some("a2"), 1, 4, Prompt),
+    ("u9", Some("a1"), 2, 5, Prompt),
+];
+
+#[rstest]
+#[case::behind(local(&["u1", "a1"], None, &[]), "u3", Some(&["t1", "a2", "u3"][..]))]
+#[case::behind_past_rows_merged_into_the_tip(local(&["u1", "a1"], None, &["t1"]), "u3", Some(&["a2", "u3"][..]))]
+#[case::up_to_date(local(&["u1", "a1", "t1", "a2", "u3"], None, &[]), "u3", Some(&[][..]))]
+#[case::on_another_line(local(&["u1", "a1", "t1", "a2"], None, &[]), "u9", None)]
+#[case::went_on_here(local(&["u1", "a1", "u5"], None, &[]), "u3", None)]
+#[case::rewound_here(local(&["u1", "a1", "t1", "a2"], Some("a1"), &[]), "u3", None)]
+#[case::empty(local(&[], None, &[]), "u3", None)]
+fn a_copy_fast_forwards_only_along_the_heads_line(
+    #[case] local: LocalTip,
+    #[case] head: &str,
+    #[case] behind: Option<&[&str]>,
+) {
+    let analysis = analyse(CC, GROWN);
+    let found = match analysis.fast_forward(&SourceId::from(head.to_owned()), &local) {
+        FastForward::Elsewhere => None,
+        FastForward::NotBehind => Some(Vec::new()),
+        FastForward::Behind(rows) => Some(rows.into_iter().map(|r| r.source_id).collect()),
+    };
+    assert_eq!(found, behind.map(|rows| rows.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>()));
 }

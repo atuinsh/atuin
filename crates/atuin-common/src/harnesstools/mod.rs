@@ -15,6 +15,7 @@ pub mod pi;
 pub mod rehydrate;
 pub mod resume;
 pub mod session;
+pub mod sync;
 
 use ccode::Ccode;
 use codex::Codex;

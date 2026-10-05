@@ -46,7 +46,9 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
+use atuin_common::harnesstools::rehydrate::RehydrateMessage;
 use atuin_common::harnesstools::session::{Role, is_substantive};
+use atuin_common::harnesstools::sync::LocalTip;
 use atuin_domain::record::HostId;
 use futures::TryStreamExt;
 use time::OffsetDateTime;
@@ -278,6 +280,41 @@ impl Analysis {
         }
         path.reverse();
         path
+    }
+}
+
+/// Where a machine's own copy of a session stands against one of its heads: whether it can be
+/// fast-forwarded to it (see [`Analysis::fast_forward`]).
+#[derive(Clone, Debug)]
+pub enum FastForward {
+    /// The copy already ends where the head does: nothing to append.
+    NotBehind,
+    /// The copy is behind on the head's line: these rows, root to head, continue it from its tip
+    /// (for [`SessionSync::append`](atuin_common::harnesstools::sync::SessionSync::append)).
+    Behind(Vec<RehydrateMessage>),
+    /// The copy's tip is not on the head's line, or the copy went on past it here: no
+    /// fast-forward, but a fork from the head.
+    Elsewhere,
+}
+
+impl Analysis {
+    /// Whether the copy of the session `local` read can be fast-forwarded to `head`: its tip is
+    /// on [the head's path](Self::path_to), and the copy holds nothing of the path after it.
+    #[must_use]
+    pub fn fast_forward(&self, head: &SourceId, local: &LocalTip) -> FastForward {
+        let path = self.path_to(head);
+        // The tip, or the last row merged into its line.
+        let Some(at) = path.iter().rposition(|m| local.is_tip(m.source_id.as_ref())) else {
+            return FastForward::Elsewhere;
+        };
+        let rest = &path[at + 1..];
+        if rest.iter().any(|m| local.known_source_ids.contains(m.source_id.as_ref())) {
+            FastForward::Elsewhere
+        } else if rest.is_empty() {
+            FastForward::NotBehind
+        } else {
+            FastForward::Behind(rest.iter().map(|&m| m.clone().into()).collect())
+        }
     }
 }
 

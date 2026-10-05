@@ -314,10 +314,10 @@ pub(crate) fn header(session: &RehydrateSession) -> Value {
 /// The lines one captured row is written as (none for a row the rollout cannot carry): `lines`,
 /// the first of them the one capture reads the row back from, and `before` it, events that go
 /// ahead of it.
-struct Row {
-    source_id: String,
-    before: Vec<Value>,
-    lines: Vec<Value>,
+pub(crate) struct Row {
+    pub source_id: String,
+    pub before: Vec<Value>,
+    pub lines: Vec<Value>,
 }
 
 /// The lines `messages` are written as, row by row, unnumbered. Calls captured without their
@@ -334,7 +334,7 @@ struct Row {
 /// and each answer's ahead of it, as Codex writes them), and ends (`task_complete`, or the
 /// turn's own failure, which gets its turn id) after its last row. Capture keeps no turn ids,
 /// so each turn is named after its prompt's row, the same every time.
-fn rows(session: &RehydrateSession, messages: &[RehydrateMessage]) -> Vec<Row> {
+pub(crate) fn rows(session: &RehydrateSession, messages: &[RehydrateMessage]) -> Vec<Row> {
     let mut calls = HashMap::new();
     // A line keyed on its content would be captured again as a new row once its content changes.
     let keyed = |m: &RehydrateMessage| !m.source_id.starts_with("syn-");

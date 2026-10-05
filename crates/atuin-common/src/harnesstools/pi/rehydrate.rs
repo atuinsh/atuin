@@ -120,25 +120,48 @@ fn transcript(session: &RehydrateSession) -> String {
     if let Some(path) = session.fork_of.as_ref().and_then(|of| of.path.as_ref()) {
         header["parentSession"] = json!(path);
     }
-    let session = &RehydrateSession {
-        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
-        ..session.clone()
-    };
-    let mut writer = Writer::new(session);
-    for message in &session.messages {
-        writer.push(message);
-    }
-    writer.title();
-    let mut lines = writer.lines;
-    // The rows written as no entry of their own, on the entries they went into.
-    record_merged(&mut lines, &writer.merged, |l| l["id"].as_str().map(str::to_owned));
     let mut out = header.to_string();
     out.push('\n');
-    for line in lines {
+    for line in lines(session, &Continuing::default(), true) {
         out.push_str(&line.to_string());
         out.push('\n');
     }
     out
+}
+
+/// A session file rows are appended to: what [`lines`] needs to know of it.
+#[derive(Default)]
+pub(crate) struct Continuing<'a> {
+    /// The entry the file ends on, which the first row then hangs from.
+    pub after: Option<&'a str>,
+    /// The first entry since the last compaction on the path to `after`: a compaction among the
+    /// rows keeps from it.
+    pub kept_from: Option<&'a str>,
+}
+
+/// The entries for `session`'s rows, calls captured without their input flattened into notes
+/// ([`Flatten::Runs`]), and its title when `title`: for a whole session, or for rows appended to
+/// the file `continuing` describes. The rows written as no entry of their own are recorded on the
+/// entries they went into ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)).
+pub(crate) fn lines(
+    session: &RehydrateSession,
+    continuing: &Continuing<'_>,
+    title: bool,
+) -> Vec<Value> {
+    let session = &RehydrateSession {
+        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
+        ..session.clone()
+    };
+    let mut writer = Writer::new(session, continuing);
+    for message in &session.messages {
+        writer.push(message);
+    }
+    if title {
+        writer.title();
+    }
+    let mut lines = writer.lines;
+    record_merged(&mut lines, &writer.merged, |l| l["id"].as_str().map(str::to_owned));
+    lines
 }
 
 struct Writer<'a> {
@@ -159,7 +182,7 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(session: &'a RehydrateSession) -> Self {
+    fn new(session: &'a RehydrateSession, continuing: &Continuing<'a>) -> Self {
         let tools = session
             .messages
             .iter()
@@ -174,8 +197,8 @@ impl<'a> Writer<'a> {
             lines: Vec::new(),
             by_id: session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect(),
             writable: HashSet::new(),
-            last: None,
-            kept_from: None,
+            last: continuing.after,
+            kept_from: continuing.kept_from,
             tools,
             merged: Vec::new(),
         };

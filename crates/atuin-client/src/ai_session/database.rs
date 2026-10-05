@@ -28,7 +28,7 @@ use super::{
 mod heads;
 mod watermark;
 
-pub use heads::{Analysis, Head};
+pub use heads::{Analysis, FastForward, Head};
 pub use watermark::{Generation, Watermark};
 pub use write::PreparedMessage;
 use write::Writer;
