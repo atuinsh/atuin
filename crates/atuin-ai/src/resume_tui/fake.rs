@@ -18,7 +18,8 @@ use time::{Duration, OffsetDateTime};
 
 use super::ResumeContext;
 use super::resumer::{
-    Continued, NotResumable, Restore, Resume, ResumeError, ResumePlan, ResumeTarget, Resumer,
+    Continued, ForkFrom, Forked, NotResumable, Restore, Resume, ResumeError, ResumePlan,
+    ResumeTarget, Resumer,
 };
 use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
 
@@ -58,6 +59,7 @@ pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
         host_id: THIS_HOST_ID.to_owned(),
         started_at,
         updated_at: now() - Duration::minutes(30),
+        active_at: now() - Duration::minutes(30),
         messages: 10,
         usage: Usage::default(),
         children: 0,
@@ -142,6 +144,7 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
             host_id: spec.host.to_owned(),
             started_at: updated_at - spec.duration,
             updated_at,
+            active_at: updated_at,
             messages: spec.msgs,
             usage: Usage {
                 input: Some(spec.msgs * 2_300),
@@ -864,6 +867,7 @@ impl SessionSource for FakeSource {
             model: row.model.clone(),
             started_at: row.started_at,
             messages: Vec::new(),
+            fork_of: None,
         })
     }
 }
@@ -969,6 +973,29 @@ impl Resumer for FakeResumer {
                 tool_results: 42,
                 reasoning: 7,
             },
+            note: None,
+        })
+    }
+
+    /// Every harness atuin writes is installed.
+    fn can_fork(&self, session: &SessionRow) -> bool {
+        session.handle.harness.harness().is_some()
+    }
+
+    /// Plans resuming a made-up fork, written nowhere.
+    async fn fork(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        _from: ForkFrom,
+    ) -> Result<Forked, NotResumable> {
+        let mut row = session.clone();
+        row.handle.session = NativeSessionId::from(format!("forked-{}", session.handle.session));
+        let native = PathBuf::from(format!("/forked/{}", row.handle.session));
+        Ok(Forked {
+            harness: row.handle.harness,
+            id: row.handle.session.to_string(),
+            plan: self.plan_for(&row, Some(native))?,
             note: None,
         })
     }

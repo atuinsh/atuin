@@ -9,11 +9,11 @@
 //!   Restoring a session from sync, or continuing it in another harness, which only an enter or
 //!   tab asks for, goes first: only the newest accepted session's restore is kept, and one dropped
 //!   before it started is reported ([`Response::Abandoned`]) so that the picker asks again if the
-//!   user comes back to it. Likewise only the newest continuation is kept, and one is dropped
-//!   when the picker stops waiting on it ([`Request::CancelContinue`]); once the picker is gone,
-//!   nothing queued runs. One already running finishes and reports as usual: its files are left
-//!   as written, not deleted, since capture may already have read and synced them. Then the plan an
-//!   enter or tab is waiting on, which is never dropped for another session's (see
+//!   user comes back to it. Likewise only the newest continuation or fork is kept, and one is
+//!   dropped when the picker stops waiting on it ([`Request::CancelContinue`]); once the picker is
+//!   gone, nothing queued runs. One already running finishes and reports as usual: its files are
+//!   left as written, not deleted, since capture may already have read and synced them. Then the
+//!   plan an enter or tab is waiting on, which is never dropped for another session's (see
 //!   [`Request::Accept`]).
 
 use std::path::PathBuf;
@@ -24,7 +24,9 @@ use atuin_client::settings::AiSessionFilterMode as FilterMode;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
-use super::resumer::{Continued, NotResumable, Restore, Resume, ResumePlan, Resumer};
+use super::resumer::{
+    Continued, ForkFrom, Forked, NotResumable, Restore, Resume, ResumePlan, Resumer,
+};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -51,8 +53,11 @@ pub enum Request {
     /// comes back with the answer. Only the newest is kept: one a newer one replaces before it
     /// started never runs (its answer would be ignored, as the picker waits on the newer id).
     Continue(Box<SessionRow>, HarnessKind, u64),
-    /// The picker no longer waits on a continuation (the user chose something else): drop the
-    /// one not yet started, so nothing is written for it.
+    /// Write a session out as a fork of it, and plan resuming that. Answered as a continuation
+    /// is, and in its place: a newer pick supersedes either.
+    Fork(Box<SessionRow>, u64),
+    /// The picker no longer waits on a continuation or fork (the user chose something else):
+    /// drop the one not yet started, so nothing is written for it.
     CancelContinue,
 }
 
@@ -75,6 +80,8 @@ pub enum Response {
     Flattened(HarnessSession, Result<Flattened, String>),
     /// The continuation with this id is written (or couldn't be).
     Continued(u64, Result<Continued, NotResumable>),
+    /// The fork with this id is written (or couldn't be).
+    Forked(u64, Result<Forked, NotResumable>),
 }
 
 /// Sends requests to the worker's lanes. The worker stops when this is dropped.
@@ -169,7 +176,7 @@ impl Latest {
             Request::Accept(_) => &mut self.accept,
             Request::Restore(..) => &mut self.restore,
             Request::Flatten(..) => &mut self.flatten,
-            Request::Continue(..) => &mut self.continuation,
+            Request::Continue(..) | Request::Fork(..) => &mut self.continuation,
             Request::CancelContinue => {
                 self.continuation = None;
                 return None;
@@ -265,6 +272,9 @@ async fn details(
             }
             Request::Continue(row, target, id) => {
                 Response::Continued(id, resumer.continue_in(source.as_ref(), &row, target).await)
+            }
+            Request::Fork(row, id) => {
+                Response::Forked(id, resumer.fork(source.as_ref(), &row, ForkFrom::default()).await)
             }
             Request::Search { .. } | Request::CancelContinue => continue,
         };
@@ -405,7 +415,8 @@ mod tests {
         assert_eq!(*source.previewed.lock(), answered);
     }
 
-    /// A [`FakeResumer`] whose continuations wait for a permit, recording the ids started.
+    /// A [`FakeResumer`] whose continuations and forks wait for a permit, recording the ids
+    /// started (a fork's as `fork:<id>`).
     struct GatedContinues {
         inner: FakeResumer,
         gate: Semaphore,
@@ -444,6 +455,17 @@ mod tests {
             self.started.lock().push(session.handle.session.to_string());
             self.gate.acquire().await.unwrap().forget();
             self.inner.continue_in(source, session, target).await
+        }
+
+        async fn fork(
+            &self,
+            source: &dyn SessionSource,
+            session: &SessionRow,
+            from: ForkFrom,
+        ) -> Result<Forked, NotResumable> {
+            self.started.lock().push(format!("fork:{}", session.handle.session));
+            self.gate.acquire().await.unwrap().forget();
+            self.inner.fork(source, session, from).await
         }
     }
 
@@ -484,6 +506,52 @@ mod tests {
             let next = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv());
             match next.await.expect("the worker is stuck").expect("the worker stopped") {
                 Response::Continued(_, result) => assert!(result.is_ok(), "{result:?}"),
+                Response::Preview(..) => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(*resumer.started.lock(), expected);
+    }
+
+    /// A fork waits in a continuation's place: one asked for while continuation `a` is written
+    /// never starts when the picker cancels it, or a newer continuation replaces it; and a newer
+    /// fork replaces a waiting continuation.
+    #[rstest]
+    #[case::fork_cancelled(&[true], true, &["a"])]
+    #[case::fork_replaced(&[true, false], false, &["a", "c"])]
+    #[case::fork_replaces(&[false, true], false, &["a", "fork:c"])]
+    #[tokio::test]
+    async fn a_superseded_fork_never_starts(
+        #[case] forks: &[bool],
+        #[case] cancel: bool,
+        #[case] expected: &[&str],
+    ) {
+        let resumer = gated_continues();
+        let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), resumer.clone());
+        let row = |id: &str| Box::new(fake::row(HarnessKind::ClaudeCode, id, "t"));
+        tx.send(Request::Continue(row("a"), HarnessKind::Codex, 0));
+        while resumer.started.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        // `b`, then `c`: each forked, or continued.
+        for ((n, id), &fork) in (1..).zip(["b", "c"]).zip(forks) {
+            tx.send(if fork {
+                Request::Fork(row(id), n)
+            } else {
+                Request::Continue(row(id), HarnessKind::Codex, n)
+            });
+        }
+        if cancel {
+            tx.send(Request::CancelContinue);
+        }
+        tx.send(Request::Preview(session("after")));
+        resumer.gate.add_permits(10);
+
+        loop {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv());
+            match next.await.expect("the worker is stuck").expect("the worker stopped") {
+                Response::Continued(_, result) => assert!(result.is_ok(), "{result:?}"),
+                Response::Forked(_, result) => assert!(result.is_ok(), "{result:?}"),
                 Response::Preview(..) => break,
                 other => panic!("unexpected {other:?}"),
             }

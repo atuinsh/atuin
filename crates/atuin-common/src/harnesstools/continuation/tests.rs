@@ -17,10 +17,10 @@ use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, T
 use crate::harnesstools::{ccode, codex, opencode, pi};
 use crate::sync::BlockingPool;
 
-const CLAUDE: AnyHarness = AnyHarness::ClaudeCode(Ccode);
-const CODEX: AnyHarness = AnyHarness::Codex(Codex);
-const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
-const PI: AnyHarness = AnyHarness::Pi(Pi);
+pub const CLAUDE: AnyHarness = AnyHarness::ClaudeCode(Ccode);
+pub const CODEX: AnyHarness = AnyHarness::Codex(Codex);
+pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
+pub const PI: AnyHarness = AnyHarness::Pi(Pi);
 /// The original's atuin id, as the picker passes it.
 const ATUIN_ID: &str = "01a0d147e7457ae280000123456789ab";
 
@@ -28,7 +28,7 @@ fn fixture(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(path)
 }
 
-fn pool() -> BlockingPool {
+pub fn pool() -> BlockingPool {
     BlockingPool::new(NonZeroUsize::MIN)
 }
 
@@ -49,7 +49,7 @@ fn row_of<M: Message>(n: usize, m: &M) -> RehydrateMessage {
     }
 }
 
-fn rows_of<M: Message>(messages: &[M]) -> Vec<RehydrateMessage> {
+pub fn rows_of<M: Message>(messages: &[M]) -> Vec<RehydrateMessage> {
     messages.iter().enumerate().map(|(n, m)| row_of(n, m)).collect()
 }
 
@@ -67,11 +67,12 @@ fn session_of(id: &str, messages: Vec<RehydrateMessage>) -> RehydrateSession {
             .min()
             .unwrap_or(OffsetDateTime::UNIX_EPOCH),
         messages,
+        fork_of: None,
     }
 }
 
 /// A real session recorded by `source`, as capture holds it.
-async fn recorded(source: AnyHarness) -> RehydrateSession {
+pub async fn recorded(source: AnyHarness) -> RehydrateSession {
     match source {
         AnyHarness::ClaudeCode(_) => {
             let text = std::fs::read_to_string(fixture("ccode/session1.jsonl")).unwrap();

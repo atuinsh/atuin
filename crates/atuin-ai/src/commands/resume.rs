@@ -16,6 +16,9 @@
 //!   picker, accepting a session asks where to resume it: its own harness first, then the others
 //!   installed here (see [`crate::resume_tui::chooser`]; `[ai.sessions] resume_chooser = false`
 //!   skips that).
+//! - `--fork` forks it instead: it is written out as a new session of its own harness, with the
+//!   same history, linked to it as a fork (see [`atuin_common::harnesstools::fork`]), and that is
+//!   resumed. The original is left as it is.
 //! - From the shell widget (`--shell-widget`), the result goes to stderr using the history
 //!   search's protocol: `__atuin_accept__:<cmd>` to run it, plain `<cmd>` to edit it, nothing to
 //!   leave the command line alone.
@@ -35,7 +38,7 @@ use clap::Args;
 use eyre::{Result, bail};
 
 use super::session::one_line;
-use crate::resume_tui::resumer::{HarnessResumer, Resume, shell_line};
+use crate::resume_tui::resumer::{ForkFrom, HarnessResumer, Resume, shell_line};
 use crate::resume_tui::sidecar::SidecarSource;
 use crate::resume_tui::source::{Relation, harness_label};
 use crate::resume_tui::{
@@ -71,6 +74,12 @@ pub struct Cmd {
     /// written out as a new session there, tool calls flattened into notes, and resumed.
     #[arg(long = "in", value_enum, value_name = "HARNESS")]
     continue_in: Option<ContinueIn>,
+
+    /// Fork the session QUERY names (by id, or a unique id prefix): it is written out as a new
+    /// session of the same agent, with the same history, and resumed. The original is left as
+    /// it is.
+    #[arg(long, conflicts_with = "continue_in")]
+    fork: bool,
 
     /// The filter the picker opens in (default: workspace, widening to global).
     #[arg(long, value_enum)]
@@ -279,9 +288,12 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let resumer: Arc<dyn Resumer> =
         Arc::new(HarnessResumer::new(context.clone(), settings.ai.sessions.resume.clone()));
 
-    if let Some(into) = cmd.continue_in {
-        let (plan, status) =
-            continue_plan(source.as_ref(), resumer.as_ref(), query.trim(), into).await?;
+    if cmd.fork || cmd.continue_in.is_some() {
+        let (source, resumer, query) = (source.as_ref(), resumer.as_ref(), query.trim());
+        let (plan, status) = match cmd.continue_in {
+            Some(into) => continue_plan(source, resumer, query, into).await?,
+            None => fork_plan(source, resumer, query).await?,
+        };
         // The widget reads stderr for the command: nothing else may go there.
         if output != Output::Widget {
             eprintln!("atuin: {}", status.escape_non_printable());
@@ -381,6 +393,30 @@ async fn continue_plan(
         status.push_str(&format!("; {note}"));
     }
     Ok((continued.plan, status))
+}
+
+/// `atuin ai resume <id> --fork`: write the session `query` names out as a fork of it, and the
+/// plan that resumes that, with the status line saying so.
+async fn fork_plan(
+    source: &dyn SessionSource,
+    resumer: &dyn Resumer,
+    query: &str,
+) -> Result<(ResumePlan, String)> {
+    let Some((row, redirected)) = direct_target(source, query).await? else {
+        bail!("`--fork` forks the session an id names: no single session has the id {query:?}");
+    };
+    let forked = resumer.fork(source, &row, ForkFrom::default()).await.map_err(|why| {
+        let message = format!("can't fork {}: {why}", row.handle.session);
+        eyre::eyre!("{}", message.escape_non_printable())
+    })?;
+    let mut status = forked.status();
+    if let Some(redirected) = redirected {
+        status = format!("{redirected}; {status}");
+    }
+    if let Some(note) = &forked.note {
+        status.push_str(&format!("; {note}"));
+    }
+    Ok((forked.plan, status))
 }
 
 /// What a session named by id does without the picker. Standalone, `atuin ai resume <id>` resumes
@@ -697,6 +733,27 @@ mod tests {
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "opencode"]).unwrap();
         assert_eq!(cli.cmd.continue_in, Some(ContinueIn::Opencode));
         assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "cursor"]).is_err());
+    }
+
+    /// `atuin ai resume <id> --fork` forks the session the id names and plans resuming the fork,
+    /// with `--print` too; it can't go with `--in`.
+    #[rstest]
+    #[tokio::test]
+    async fn forking_by_id_plans_the_fork() {
+        let source = FakeSource::new();
+        let resumer = FakeResumer::default();
+        let (plan, status) = fork_plan(&source, &resumer, "7f3c9a12").await.unwrap();
+        let fork = "forked-7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10";
+        assert!(plan.args.iter().any(|a| a == fork), "{plan:?}");
+        assert_eq!(status, "forked into a new Claude Code session");
+
+        let err = fork_plan(&source, &resumer, "fix flaky").await.unwrap_err();
+        assert!(err.to_string().contains("no single session has the id"), "{err}");
+
+        let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--fork", "--print"]).unwrap();
+        assert!(cli.cmd.fork);
+        assert_eq!(cli.cmd.output(), Output::Print);
+        assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--fork", "--in", "pi"]).is_err());
     }
 
     #[rstest]

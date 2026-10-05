@@ -7,6 +7,7 @@ use enum_dispatch::enum_dispatch;
 pub mod ccode;
 pub mod codex;
 pub mod continuation;
+pub mod fork;
 mod json_hooks;
 pub mod note;
 pub mod opencode;

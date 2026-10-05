@@ -58,6 +58,12 @@ pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
     })
 }
 
+/// The `session_meta` field in which a fork atuin wrote (`atuin ai resume`) names the session it
+/// was forked from when that is a segment of a thread (`<thread>_<rollout>`, see
+/// [`session_id_of`]): `forked_from_id`, which Codex reads as a thread id, can only name the
+/// thread. Codex's reader leaves fields it doesn't know be (`SessionMeta` denies none).
+pub(crate) const ATUIN_FORKED_FROM: &str = "atuin_forked_from";
+
 /// The id `codex resume` takes for session `id`: its thread's (see [`thread_of`]).
 pub(crate) fn resume_id(id: &str) -> &str {
     id.split_once('_').map_or(id, |(thread, _)| thread)
@@ -448,12 +454,15 @@ impl CodexMessage {
         .into_iter()
         .find_map(serde_json::Value::as_str)?;
         let spawned = !meta["source"]["subagent"].is_null() || meta["parent_thread_id"].is_string();
-        let kind = if spawned {
-            ParentKind::Subagent
-        } else {
-            ParentKind::Fork
-        };
-        Some((SessionId::from(parent.to_owned()), kind))
+        if spawned {
+            return Some((SessionId::from(parent.to_owned()), ParentKind::Subagent));
+        }
+        // A fork atuin wrote of a segment of the thread `forked_from_id` names: that segment.
+        let parent = meta[ATUIN_FORKED_FROM]
+            .as_str()
+            .filter(|segment| meta["forked_from_id"].as_str() == Some(resume_id(segment)))
+            .unwrap_or(parent);
+        Some((SessionId::from(parent.to_owned()), ParentKind::Fork))
     }
 }
 
@@ -483,6 +492,11 @@ fn records_usage(meta: &serde_json::Value) -> bool {
             (Some(Ok(major)), Some(Ok(minor))) if (major, minor) >= (0, 153)
         )
     })
+}
+
+/// The own `session_meta` payload of the rollout of session `id` at `path`.
+pub(crate) fn own_meta_at(path: &Path, id: &str) -> Option<serde_json::Value> {
+    first_own_meta(path, &SessionId::from(id.to_owned()))
 }
 
 /// The own `session_meta` payload of the rollout at `path`, which is its first line.
@@ -1843,6 +1857,22 @@ mod tests {
         }));
         assert_eq!(m.parent_session(), Some(SessionId::from("parent".to_owned())));
         assert_eq!(m.parent_kind(), Some(kind));
+    }
+
+    /// A fork atuin wrote of a segment of a thread names the segment in `atuin_forked_from`, and
+    /// is linked to it; a value that isn't a segment of the thread `forked_from_id` names is not
+    /// believed.
+    #[rstest]
+    #[case::a_segment_of_the_thread("parent_01a0d160", "parent_01a0d160")]
+    #[case::another_threads("other_01a0d160", "parent")]
+    fn an_atuin_fork_names_the_segment_it_forked(#[case] named: &str, #[case] parent: &str) {
+        let m = line(&serde_json::json!({
+            "timestamp": "2026-09-18T10:00:00.000Z", "type": "session_meta",
+            "payload": {"id": "child", "cwd": "/work", "forked_from_id": "parent",
+                "atuin_forked_from": named},
+        }));
+        assert_eq!(m.parent_session(), Some(SessionId::from(parent.to_owned())));
+        assert_eq!(m.parent_kind(), Some(ParentKind::Fork));
     }
 
     /// A fork copies its parent's rollout, `session_meta` included, after its own

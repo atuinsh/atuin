@@ -382,6 +382,7 @@ impl Session {
             model: self.model.clone(),
             started_at: self.started_at,
             messages: messages.into_iter().map(RehydrateMessage::from).collect(),
+            fork_of: None,
         }
     }
 

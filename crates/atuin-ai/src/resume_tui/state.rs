@@ -18,7 +18,7 @@ use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind
 use ratatui::layout::{Position, Rect};
 use time::OffsetDateTime;
 
-use super::chooser::{Chooser, ListAnchor};
+use super::chooser::{Chooser, Destination, ListAnchor};
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
 use super::rebuild::Rebuilding;
@@ -122,26 +122,30 @@ pub enum InputAction {
     Copy,
     /// A line of the chooser picked.
     Pick(Box<Picked>),
+    /// Ask where to resume the session acted on, the fork selected.
+    Fork,
     ReturnOriginal,
     Exit,
 }
 
 /// A line of the chooser, picked: the session it opened on (not whatever the list has selected
-/// since: an idle refresh may have moved it), resumed in its own harness (`target` is `None`) or
-/// continued in `target`, then what the key asked.
+/// since: an idle refresh may have moved it), what the line does with it, then what the key
+/// asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Picked {
     pub row: SessionRow,
-    pub target: Option<HarnessKind>,
+    pub line: Destination,
     pub action: Pending,
 }
 
-/// A continuation asked of the worker, waiting to be written.
+/// A continuation (or a fork) asked of the worker, waiting to be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Continuing {
     /// Which request it is: only its own answer finishes it.
     pub id: u64,
     pub target: HarnessKind,
+    /// A fork, in the session's own harness.
+    pub fork: bool,
     pub action: Pending,
 }
 
@@ -895,6 +899,7 @@ impl State {
             Action::Resume => return InputAction::Resume,
             Action::ReturnCommand => return InputAction::ReturnCommand,
             Action::Copy => return InputAction::Copy,
+            Action::Fork => return InputAction::Fork,
             Action::ReturnOriginal => return InputAction::ReturnOriginal,
             // Nothing to clear: every frame is drawn whole, and clearing the terminal first only
             // flashed it blank.

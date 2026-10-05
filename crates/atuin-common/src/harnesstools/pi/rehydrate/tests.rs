@@ -52,6 +52,7 @@ fn session(id: &str, cwd: &Path, messages: Vec<RehydrateMessage>) -> RehydrateSe
         model: None,
         started_at: OffsetDateTime::UNIX_EPOCH,
         messages,
+        fork_of: None,
     }
 }
 

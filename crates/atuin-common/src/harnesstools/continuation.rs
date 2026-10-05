@@ -52,7 +52,7 @@ use super::note::{Part, clip, render, tool_note};
 use super::rehydrate::{RehydrateMessage, RehydrateSession};
 use super::resume::is_plain_name;
 use super::{AnyHarness, Harness as _, opencode};
-use crate::harnesstools::session::{Content, Message, Role, StopReason};
+use crate::harnesstools::session::{Content, Message, ParentKind, Role, StopReason};
 
 /// How much of an error a note shows.
 const NOTE_ERROR: usize = 200;
@@ -60,6 +60,8 @@ const NOTE_ERROR: usize = 200;
 /// The first line of every marker ends with this.
 const MARKER_TAIL: &str = " via atuin.";
 const MARKER_HEAD: &str = "Continued from ";
+/// A [fork marker](fork_marker_text) starts with this instead.
+const FORK_HEAD: &str = "Forked from ";
 /// Before the tail, when the marker names the session's atuin id.
 const MARKER_ATUIN_ID: &str = " (atuin id ";
 
@@ -139,24 +141,47 @@ pub fn marker_text(source: AnyHarness, id: &str, atuin_id: Option<&str>) -> Stri
     )
 }
 
-/// The harness and session `text` says it continues, when it is a [marker](marker_text), with
-/// or without the atuin id (which capture doesn't need: the harness's id is the link).
+/// The one line an opencode [fork](crate::harnesstools::fork) starts with, naming the session
+/// it was forked from: `Forked from <harness> session <id> (atuin id <atuin id>) via atuin.`,
+/// as [`marker_text`]'s first line does. opencode keeps it from the model (an `ignored` part).
 #[must_use]
-pub fn continued_from(text: &str) -> Option<(AnyHarness, &str)> {
-    marker_parts(text).map(|(harness, id, _)| (harness, id))
+pub fn fork_marker_text(source: AnyHarness, id: &str, atuin_id: Option<&str>) -> String {
+    let atuin_id = atuin_id.map(|a| format!("{MARKER_ATUIN_ID}{a})")).unwrap_or_default();
+    format!("{FORK_HEAD}{} session {id}{atuin_id}{MARKER_TAIL}", source.name())
 }
 
-/// The harness, session and atuin id (if named) on a [marker](marker_text)'s first line.
-fn marker_parts(text: &str) -> Option<(AnyHarness, &str, Option<&str>)> {
+/// How `text` links its session to another, when it is a [marker](marker_text) or a
+/// [fork marker](fork_marker_text), read from its first line: the kind of link, and the harness,
+/// session and atuin id (if named) it names.
+fn marker_parts(text: &str) -> Option<(ParentKind, AnyHarness, &str, Option<&str>)> {
     let first = text.lines().next()?;
-    let (name, rest) =
-        first.strip_prefix(MARKER_HEAD)?.strip_suffix(MARKER_TAIL)?.split_once(" session ")?;
+    let (kind, rest) = match first.strip_prefix(MARKER_HEAD) {
+        Some(rest) => (ParentKind::Continuation, rest),
+        None => (ParentKind::Fork, first.strip_prefix(FORK_HEAD)?),
+    };
+    let (name, rest) = rest.strip_suffix(MARKER_TAIL)?.split_once(" session ")?;
     let (id, atuin_id) = match rest.split_once(MARKER_ATUIN_ID) {
         Some((id, atuin_id)) => (id, Some(atuin_id.strip_suffix(')')?)),
         None => (rest, None),
     };
     let harness = AnyHarness::from_name(name).ok()?;
-    (is_plain_name(id) && !id.contains(char::is_whitespace)).then_some((harness, id, atuin_id))
+    (is_plain_name(id) && !id.contains(char::is_whitespace))
+        .then_some((kind, harness, id, atuin_id))
+}
+
+/// The harness and session `text` says it continues, when it is a [marker](marker_text), with
+/// or without the atuin id (which capture doesn't need: the harness's id is the link).
+#[must_use]
+pub fn continued_from(text: &str) -> Option<(AnyHarness, &str)> {
+    marker_parts(text)
+        .filter(|(kind, ..)| *kind == ParentKind::Continuation)
+        .map(|(_, harness, id, _)| (harness, id))
+}
+
+/// Whether `text` is a [fork marker](fork_marker_text).
+#[must_use]
+pub fn is_fork_marker(text: &str) -> bool {
+    marker_parts(text).is_some_and(|(kind, ..)| kind == ParentKind::Fork)
 }
 
 /// The harness and session a transcript line says its session continues: a [marker](marker_text)
@@ -166,21 +191,44 @@ fn marker_parts(text: &str) -> Option<(AnyHarness, &str, Option<&str>)> {
 /// first block too. How capture links a continuation to the session it continues.
 #[must_use]
 pub fn continued_from_message<M: Message + ?Sized>(m: &M) -> Option<(AnyHarness, String)> {
+    linked_from_message(m)
+        .filter(|(_, _, kind)| *kind == ParentKind::Continuation)
+        .map(|(harness, id, _)| (harness, id))
+}
+
+/// The harness and session a transcript line links its session to, and how: a continuation's
+/// [marker](marker_text) as [`continued_from_message`] reads it, and an opencode fork's
+/// [marker](fork_marker_text) as a [fork](ParentKind::Fork). How capture links a continuation, or
+/// an opencode fork, to the session it came from.
+#[must_use]
+pub fn linked_from_message<M: Message + ?Sized>(m: &M) -> Option<(AnyHarness, String, ParentKind)> {
     let content = m.content();
     let marker = match (m.role(), content.as_slice()) {
         (Role::Assistant | Role::Tool, _) => return None,
         (Role::User, [Content::Text(first), _, ..]) => {
-            let (harness, id, atuin_id) = marker_parts(first)?;
-            return (*first == marker_text(harness, id, atuin_id))
-                .then(|| (harness, id.to_owned()));
+            let (kind, harness, id, atuin_id) = marker_parts(first)?;
+            let exact = match kind {
+                ParentKind::Fork => fork_marker_text(harness, id, atuin_id),
+                _ => marker_text(harness, id, atuin_id),
+            };
+            return (*first == exact).then(|| (harness, id.to_owned(), kind));
         }
         (Role::User, _) => return None,
         (_, content) => content.iter().find_map(|c| match c {
-            Content::Text(text) if continued_from(text).is_some() => Some(text),
+            Content::Text(text) if marker_parts(text).is_some() => Some(text),
             _ => None,
         })?,
     };
-    continued_from(marker).map(|(harness, id)| (harness, id.to_owned()))
+    marker_parts(marker).map(|(kind, harness, id, _)| (harness, id.to_owned(), kind))
+}
+
+/// That `messages` hold something of the conversation, so a continuation or fork of them isn't
+/// empty.
+pub fn conversational(messages: &[RehydrateMessage]) -> Result<(), NothingToContinue> {
+    if turns(messages).0.is_empty() {
+        return Err(NothingToContinue);
+    }
+    Ok(())
 }
 
 /// What continuing `original` in another harness would flatten or drop, whichever harness, or
@@ -264,6 +312,7 @@ fn continue_at(
             model: None,
             started_at: start,
             messages: rows,
+            fork_of: None,
         },
         flattened,
     })
@@ -386,6 +435,11 @@ fn is_media(kind: &str) -> bool {
     matches!(kind, "image" | "input_image" | "document" | "file")
 }
 
+/// A new session's id for `harness`, in its own format, minted at `now`.
+pub(crate) fn new_session_id(harness: AnyHarness, now: OffsetDateTime) -> String {
+    Ids::new(harness, now).session()
+}
+
 /// Fresh ids in the target's own formats.
 struct Ids {
     target: AnyHarness,
@@ -437,4 +491,4 @@ impl Ids {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

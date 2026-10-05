@@ -35,6 +35,9 @@
 //!   title is written once, as an `ai-title` line.
 //! - **Directories**: each line's `cwd` is moved from the original directory to the one the
 //!   session resumes in, where that exists.
+//!
+//! A [fork](crate::harnesstools::fork) is written the same way under its own id, every line
+//! naming the line it copies in `forkedFrom`, as `/branch` writes it.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -267,6 +270,11 @@ impl<'a> Writer<'a> {
         }
         fields.insert("uuid".to_owned(), json!(m.source_id));
         fields.insert("timestamp".to_owned(), json!(timestamp(m.timestamp)));
+        // A fork's lines are the original's under its own session, as `/branch` copies them.
+        if let Some(of) = &session.fork_of {
+            let from = json!({"sessionId": of.id, "messageUuid": m.source_id});
+            fields.insert("forkedFrom".to_owned(), from);
+        }
         self.lines.push(line);
         self.last = Some(&m.source_id);
     }

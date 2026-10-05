@@ -41,7 +41,8 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 
-use self::resumer::{Continued, NotResumable, Resume};
+use self::chooser::Destination;
+use self::resumer::{Continued, Forked, NotResumable, Resume};
 use self::state::{
     CHILDREN, Continuing, InputAction, PLAN, PREVIEW, Pending, Picked, RESTORE, State,
 };
@@ -278,9 +279,11 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
         }
         Response::Flattened(handle, flattened) => {
             state.flattened.insert(handle, flattened);
+            // A fork with nothing to fork isn't left selected.
+            state.settle_chooser();
         }
-        // Handled by `finish_continuation`, which may end the picker.
-        Response::Continued(..) => {}
+        // Handled by `finish_continuation` and `finish_fork`, which may end the picker.
+        Response::Continued(..) | Response::Forked(..) => {}
     }
 }
 
@@ -392,10 +395,10 @@ fn complete(
     outcome
 }
 
-/// A new choice (an enter, tab or ctrl-y on a session, or a line of the chooser picked)
-/// supersedes any older one still waiting: the original's plan or restore, whose answer then
-/// finishes nothing, and a continuation, whose answer is then ignored and which the worker drops
-/// if it hasn't started writing it. One already being written is left to finish (see
+/// A new choice (an enter, tab, ctrl-y or alt-enter on a session, or a line of the chooser
+/// picked) supersedes any older one still waiting: the original's plan or restore, whose answer
+/// then finishes nothing, and a continuation or fork, whose answer is then ignored and which the
+/// worker drops if it hasn't started writing it. One already being written is left to finish (see
 /// [`worker`]).
 fn supersede(state: &mut State, requests: &Requests) {
     state.pending = None;
@@ -424,8 +427,9 @@ fn accept(
     }
     if chooser && action != Pending::Copy {
         let targets = resumer.continue_targets(&row);
-        if !targets.is_empty() {
-            open_chooser(state, &row, targets, action, requests);
+        let fork = resumer.can_fork(&row);
+        if !targets.is_empty() || fork {
+            open_chooser(state, &row, targets, fork, action, requests);
             return None;
         }
     }
@@ -449,8 +453,9 @@ fn resume_original(
         && state.original_unavailable(&row.handle).is_some()
     {
         let targets = resumer.continue_targets(row);
-        if !targets.is_empty() {
-            open_chooser(state, row, targets, action, requests);
+        let fork = resumer.can_fork(row);
+        if !targets.is_empty() || fork {
+            open_chooser(state, row, targets, fork, action, requests);
             // The chooser's own line says why, dimmed.
             state.status = None;
         }
@@ -464,11 +469,31 @@ fn open_chooser(
     state: &mut State,
     row: &SessionRow,
     targets: Vec<HarnessKind>,
+    fork: bool,
     action: Pending,
     requests: &Requests,
 ) {
-    state.open_chooser(row, targets, action);
+    state.open_chooser(row, targets, fork, action);
     request_flatten(state, requests);
+}
+
+/// alt-enter (vim normal `F`, Inspect's `f`): the chooser on the session acted on, forking it
+/// selected, whether or not `resume_chooser` is on; enter in it then does what `action` (enter's)
+/// does.
+fn ask_fork(state: &mut State, action: Pending, resumer: &dyn Resumer, requests: &Requests) {
+    let Some(row) = state.target().cloned() else {
+        return;
+    };
+    if !resumer.can_fork(&row) {
+        let label = source::harness_label(row.handle.harness);
+        let why = format!("{label} sessions can't be forked here");
+        state.status = Some((why, Meaning::AlertError));
+        return;
+    }
+    supersede(state, requests);
+    request_plan(state, requests, &row);
+    open_chooser(state, &row, resumer.continue_targets(&row), true, action, requests);
+    state.select_fork();
 }
 
 /// A line of the chooser picked: resume the session it opened on in its own harness, or
@@ -480,19 +505,73 @@ fn pick(
     resumer: &dyn Resumer,
     requests: &Requests,
 ) -> Option<Outcome> {
-    let Picked {
-        row,
-        target,
-        action,
-    } = picked;
+    let Picked { row, line, action } = picked;
     supersede(state, requests);
-    match target {
-        None => resume_original(state, &row, action, resumer, requests),
-        Some(target) => {
-            start_continuation(state, row, target, action, requests);
+    match line {
+        Destination::Original => return resume_original(state, &row, action, resumer, requests),
+        Destination::Fork => start_fork(state, row, action, requests),
+        Destination::Continue(target) => start_continuation(state, row, target, action, requests),
+    }
+    None
+}
+
+/// Fork `row`, then carry out `action` (see [`finish_fork`]). Copying writes nothing: the
+/// command copied forks it when run.
+fn start_fork(state: &mut State, row: SessionRow, action: Pending, requests: &Requests) {
+    if action == Pending::Copy {
+        let id = resumer::quote(row.handle.session.as_ref());
+        copy(state, &format!("atuin ai resume {id} --fork"));
+        return;
+    }
+    state.status = Some(("forking…".to_owned(), Meaning::Annotation));
+    state.continued = state.continued.wrapping_add(1);
+    let id = state.continued;
+    let target = row.handle.harness;
+    state.continuing = Some(Continuing {
+        id,
+        target,
+        fork: true,
+        action,
+    });
+    requests.send(Request::Fork(Box::new(row), id));
+}
+
+/// Fork `id` is written (or failed): as [`finish_continuation`].
+fn finish_fork(
+    state: &mut State,
+    id: u64,
+    result: Result<Forked, NotResumable>,
+) -> Option<(Outcome, String)> {
+    let Continuing { action, .. } = state.continuing.take_if(|c| c.id == id && c.fork)?;
+    match result {
+        Ok(forked) => {
+            let mut status = forked.status();
+            if let Some(note) = &forked.note {
+                status.push_str(&format!(" ({note})"));
+            }
+            Some(written(state, action, forked.plan, status))
+        }
+        Err(why) => {
+            state.status = Some((format!("can't fork: {why}"), Meaning::AlertError));
             None
         }
     }
+}
+
+/// A new session is written, ready to resume with `plan`: what `action` does with it, and the
+/// status line to leave behind.
+fn written(
+    state: &mut State,
+    action: Pending,
+    plan: ResumePlan,
+    status: String,
+) -> (Outcome, String) {
+    state.status = Some((status.clone(), Meaning::AlertInfo));
+    let outcome = match action {
+        Pending::Resume => Outcome::Resume(plan),
+        Pending::Edit | Pending::Copy => Outcome::Edit(plan),
+    };
+    (outcome, status)
 }
 
 /// Continue `row` in `target`, then carry out `action` (see [`finish_continuation`]). Copying
@@ -517,7 +596,12 @@ fn start_continuation(
     // session, perhaps elsewhere, or to edit instead) isn't taken for the newer one's.
     state.continued = state.continued.wrapping_add(1);
     let id = state.continued;
-    state.continuing = Some(Continuing { id, target, action });
+    state.continuing = Some(Continuing {
+        id,
+        target,
+        fork: false,
+        action,
+    });
     requests.send(Request::Continue(Box::new(row), target, id));
 }
 
@@ -529,19 +613,14 @@ fn finish_continuation(
     id: u64,
     result: Result<Continued, NotResumable>,
 ) -> Option<(Outcome, String)> {
-    let Continuing { target, action, .. } = state.continuing.take_if(|c| c.id == id)?;
+    let Continuing { target, action, .. } = state.continuing.take_if(|c| c.id == id && !c.fork)?;
     match result {
         Ok(continued) => {
             let mut status = continued.status();
             if let Some(note) = &continued.note {
                 status.push_str(&format!(" ({note})"));
             }
-            state.status = Some((status.clone(), Meaning::AlertInfo));
-            let outcome = match action {
-                Pending::Resume => Outcome::Resume(continued.plan),
-                Pending::Edit | Pending::Copy => Outcome::Edit(continued.plan),
-            };
-            Some((outcome, status))
+            Some(written(state, action, continued.plan, status))
         }
         Err(why) => {
             let message = match why {
@@ -653,6 +732,15 @@ impl Picker<'_> {
                         InputAction::Resume => Some(Pending::Resume),
                         InputAction::ReturnCommand => Some(Pending::Edit),
                         InputAction::Copy => Some(Pending::Copy),
+                        InputAction::Fork => {
+                            let enter = if settings.enter_accept {
+                                Pending::Resume
+                            } else {
+                                Pending::Edit
+                            };
+                            ask_fork(&mut state, enter, resumer, &requests);
+                            None
+                        }
                         InputAction::Pick(picked) => {
                             if let Some(outcome) = pick(&mut state, *picked, resumer, &requests) {
                                 break 'render outcome;
@@ -710,16 +798,22 @@ impl Picker<'_> {
                         tracing::error!("the session picker's workers stopped");
                         break Outcome::Cancelled;
                     };
-                    if let Response::Continued(id, result) = response {
-                        if let Some((outcome, status)) =
+                    let finished = match response {
+                        Response::Continued(id, result) => {
                             finish_continuation(&mut state, id, result)
-                        {
-                            note = Some(status);
-                            break 'render outcome;
                         }
-                    } else if let Some(outcome) =
-                        respond(&mut state, response, resumer, &requests)
-                    {
+                        Response::Forked(id, result) => finish_fork(&mut state, id, result),
+                        response => {
+                            if let Some(outcome) =
+                                respond(&mut state, response, resumer, &requests)
+                            {
+                                break 'render outcome;
+                            }
+                            None
+                        }
+                    };
+                    if let Some((outcome, status)) = finished {
+                        note = Some(status);
                         break 'render outcome;
                     }
                 }

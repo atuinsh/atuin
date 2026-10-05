@@ -77,6 +77,11 @@ pub(crate) fn rehydrate_into(
     if let Some(existing) = locate(root, &session.id) {
         return Err(RehydrateError::AlreadyExists(existing));
     }
+    if session.fork_of.as_ref().is_some_and(|of| of.path.is_none()) {
+        return Err(RehydrateError::Other(
+            "a pi fork names the file of the session it was forked from, which isn't here".into(),
+        ));
+    }
     std::fs::create_dir_all(dir)?;
     // pi's own name: the start time with `:` and `.` made file-safe, then the id.
     let started = timestamp(session.started_at).replace([':', '.'], "-");
@@ -104,13 +109,17 @@ fn millis(at: OffsetDateTime) -> i64 {
 }
 
 fn transcript(session: &RehydrateSession) -> String {
-    let header = json!({
+    let mut header = json!({
         "type": "session",
         "version": VERSION,
         "id": session.id,
         "timestamp": timestamp(session.started_at),
         "cwd": session.cwd,
     });
+    // A fork names the file of the session it was forked from, as pi's own `/fork` does.
+    if let Some(path) = session.fork_of.as_ref().and_then(|of| of.path.as_ref()) {
+        header["parentSession"] = json!(path);
+    }
     let session = &RehydrateSession {
         messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
         ..session.clone()

@@ -17,9 +17,11 @@ use async_trait::async_trait;
 use atuin_client::ai_session::HarnessKind;
 use atuin_client::settings::AiSessionResume;
 use atuin_common::harnesstools::continuation::{self, Flattened};
-use atuin_common::harnesstools::rehydrate::{RehydrateError, RehydrateSession};
+use atuin_common::harnesstools::rehydrate::{
+    ForkOf, RehydrateError, RehydrateMessage, RehydrateSession,
+};
 pub use atuin_common::harnesstools::resume::{ResumeError, ResumePlan, ResumeTarget, quote};
-use atuin_common::harnesstools::{AnyHarness, Harness as _};
+use atuin_common::harnesstools::{AnyHarness, Harness as _, fork};
 
 use super::ResumeContext;
 use super::source::{SessionRow, SessionSource, harness_label};
@@ -39,7 +41,10 @@ pub enum NotResumable {
     #[error("continuing it in {0} failed: {1}")]
     Continue(&'static str, String),
 
-    /// A continuation of a session with nothing of the conversation in it.
+    #[error("forking it failed: {0}")]
+    Fork(String),
+
+    /// A continuation or fork of a session with nothing of the conversation in it.
     #[error(transparent)]
     Empty(#[from] continuation::NothingToContinue),
 
@@ -106,6 +111,38 @@ pub fn continuing(target: HarnessKind, flattened: Option<&Flattened>) -> String 
     }
 }
 
+/// What a fork starts from ([`Resumer::fork`]): by default, every row synced of the session.
+#[derive(Debug, Clone, Default)]
+pub struct ForkFrom {
+    /// The rows to fork, in transcript order, instead of those synced of the session.
+    pub rows: Option<Vec<RehydrateMessage>>,
+    /// The row to fork at, by source id: the rows up to it, it included.
+    pub tip: Option<String>,
+}
+
+/// A session forked: written out as a new session of its own harness, ready to resume with
+/// `plan`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Forked {
+    pub harness: HarnessKind,
+    /// The fork's native id.
+    pub id: String,
+    pub plan: ResumePlan,
+    /// Why it resumes somewhere other than the directory the session ran in, when it does.
+    pub note: Option<String>,
+}
+
+impl Forked {
+    /// The status line: `forked into a new Claude Code session`. It names no id: the fork's
+    /// atuin id is minted by capture when it first sees the fork, which can't be known here.
+    pub fn status(&self) -> String {
+        format!("forked into a new {} session", harness_label(self.harness))
+    }
+}
+
+/// Why a fork from a [tip](ForkFrom::tip) fails when no row is it.
+const NO_TIP: &str = "no row is the one to fork at";
+
 /// Plans resuming a session.
 #[async_trait]
 pub trait Resumer: Send + Sync {
@@ -134,6 +171,23 @@ pub trait Resumer: Send + Sync {
         session: &SessionRow,
         _target: HarnessKind,
     ) -> Result<Continued, NotResumable> {
+        Err(NotResumable::Unsupported(harness_label(session.handle.harness)))
+    }
+
+    /// Whether `session` can be forked here: its harness forks, and is installed.
+    fn can_fork(&self, _session: &SessionRow) -> bool {
+        false
+    }
+
+    /// Write `session` out as a new session of its own harness, linked to it as its fork
+    /// ([`fork`]), from `from` (by default what `source` holds of it), and plan resuming that.
+    /// Only once the user has chosen to.
+    async fn fork(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        _from: ForkFrom,
+    ) -> Result<Forked, NotResumable> {
         Err(NotResumable::Unsupported(harness_label(session.handle.harness)))
     }
 }
@@ -211,6 +265,16 @@ impl HarnessResumer {
             context,
             machine: Box::new(machine),
         }
+    }
+
+    /// Whether `kind` could resume a session here, in the directory `session` would: it is
+    /// installed (or the user's template's program is).
+    fn runs_here(&self, kind: HarnessKind, session: &SessionRow) -> bool {
+        let target = ResumeTarget::new("atuin")
+            .with_cwd(resolve_cwd(session.cwd.as_deref(), &self.context).cwd);
+        kind.harness()
+            .and_then(|harness| self.unwritten_plan(harness, kind, &target).ok())
+            .is_some_and(|plan| self.check_installed(&plan).is_ok())
     }
 
     fn check_installed(&self, plan: &ResumePlan) -> Result<(), NotResumable> {
@@ -315,18 +379,75 @@ impl Resumer for HarnessResumer {
         if own.harness().is_none() {
             return Vec::new();
         }
-        let target = ResumeTarget::new("atuin")
-            .with_cwd(resolve_cwd(session.cwd.as_deref(), &self.context).cwd);
         AnyHarness::all()
             .iter()
             .map(HarnessKind::from)
-            .filter(|kind| *kind != own)
-            .filter(|kind| {
-                kind.harness()
-                    .and_then(|harness| self.unwritten_plan(harness, *kind, &target).ok())
-                    .is_some_and(|plan| self.check_installed(&plan).is_ok())
-            })
+            .filter(|kind| *kind != own && self.runs_here(*kind, session))
             .collect()
+    }
+
+    /// Every harness atuin writes forks (Copilot isn't one), when installed.
+    fn can_fork(&self, session: &SessionRow) -> bool {
+        self.runs_here(session.handle.harness, session)
+    }
+
+    async fn fork(
+        &self,
+        source: &dyn SessionSource,
+        session: &SessionRow,
+        from: ForkFrom,
+    ) -> Result<Forked, NotResumable> {
+        let kind = session.handle.harness;
+        let harness = kind.harness().ok_or(NotResumable::Unsupported(harness_label(kind)))?;
+        let fail = |e: String| NotResumable::Fork(e);
+        let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
+        let mut original = source
+            .rehydrate(&session.handle, &restore.cwd)
+            .await
+            .map_err(|e| fail(format!("{e:#}")))?;
+        // Checked before anything is written. A fork of no conversation is refused, as a
+        // continuation of it is: opencode's would have no prompt to carry its link.
+        let rows = from.rows.as_deref().unwrap_or(&original.messages);
+        let rows = match from.tip.as_deref() {
+            Some(tip) => fork::up_to(rows, tip).ok_or_else(|| fail(NO_TIP.to_owned()))?,
+            None => rows,
+        };
+        continuation::conversational(rows)?;
+        let planned = ResumeTarget::new("atuin").with_cwd(&restore.cwd);
+        self.check_installed(&self.unwritten_plan(harness, kind, &planned)?)?;
+        // pi names a fork's parent by its file: the original is restored first when it isn't here.
+        // A Codex fork continues the history its original's rollout does, when that is here (a
+        // reverted thread's holds only what came after the revert); restored, it continues none,
+        // as the original restored would.
+        let id = session.handle.session.as_ref();
+        let path = match harness {
+            AnyHarness::Pi(_) => Some(match self.machine.locate(harness, id).await {
+                Some(path) => path,
+                None => match self.machine.rehydrate(harness, &original).await {
+                    Ok(path) | Err(RehydrateError::AlreadyExists(path)) => path,
+                    Err(e) => return Err(fail(format!("restoring the original: {e}"))),
+                },
+            }),
+            AnyHarness::Codex(_) => self.machine.locate(harness, id).await,
+            _ => None,
+        };
+        if let Some(rows) = from.rows {
+            original.messages = rows;
+        }
+        let of = ForkOf {
+            id: id.to_owned(),
+            atuin_id: Some(session.atuin_id.to_string()),
+            path,
+        };
+        let forked = fork::fork(harness, &original, of, from.tip.as_deref())
+            .ok_or_else(|| fail(NO_TIP.to_owned()))?;
+        let plan = self.write_out(kind, &forked, fail).await?;
+        Ok(Forked {
+            harness: kind,
+            id: forked.id,
+            plan,
+            note: restore.note,
+        })
     }
 
     async fn continue_in(

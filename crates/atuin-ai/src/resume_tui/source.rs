@@ -97,6 +97,9 @@ pub struct SessionRow {
     pub started_at: OffsetDateTime,
     /// The newest message in the session or any of its grouped children.
     pub updated_at: OffsetDateTime,
+    /// The newest message in the session itself, its grouped children not counted: whether it is
+    /// the one still running.
+    pub active_at: OffsetDateTime,
     /// How many messages the session holds: every row stored of it
     /// ([`atuin_client::ai_session::Session::message_count`]).
     pub messages: u64,

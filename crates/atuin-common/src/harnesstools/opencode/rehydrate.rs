@@ -46,11 +46,13 @@
 //!   parallel tool calls that finished out of order come back in id order.
 //! - A tool call captured without a result (one opencode stopped mid-way) is written `pending`,
 //!   which opencode shows as interrupted and capture skips as unfinished.
-//! - The session's parent, for a subagent's, is not kept.
+//! - The session's parent, for a subagent's, is not kept. A [fork](crate::harnesstools::fork)
+//!   names its original in a marker instead, and gets fresh message and part ids.
 //! - Rows opencode 2.0 wrote (`session_v2`, the experimental event system) name no part id of the
 //!   older layout `opencode import` writes; their parts get minted ids and would be captured again
 //!   as new rows.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -63,10 +65,11 @@ use time::OffsetDateTime;
 use super::session;
 use crate::db::query_scalar;
 use crate::harnesstools::rehydrate::{
-    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
+    Flatten, ForkOf, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
     flatten_uncaptured_calls,
 };
 use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, ToolUse, Usage};
+use crate::harnesstools::{AnyHarness, continuation};
 
 /// How long `opencode import` may take before it is given up on.
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -291,8 +294,10 @@ pub(crate) fn mint_session(at: OffsetDateTime, seed: &str) -> String {
     mint_at("ses", !u64::try_from(millis(at)).unwrap_or_default().wrapping_mul(0x1000), seed)
 }
 
+/// The digits of opencode's ids, in the order they sort in.
+const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
 fn mint_at(prefix: &str, time: u64, seed: &str) -> String {
-    const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     let mut hash = xxhash_rust::xxh3::xxh3_128(seed.as_bytes());
     let tail: String = (0..14)
         .map(|_| {
@@ -407,11 +412,12 @@ fn is_failure(row: &RehydrateMessage) -> bool {
 }
 
 /// The row for the session itself (`<session>:title:<title>`, `<session>:session`), which the
-/// session's own info stands for.
+/// session's own info stands for; for a fork, the original's too.
 fn is_session_row(session: &RehydrateSession, row: &RehydrateMessage) -> bool {
+    let of = |id: &str| row.source_id.strip_prefix(id).is_some_and(|rest| rest.starts_with(':'));
     row.content.is_empty()
         && row.usage.is_none()
-        && row.source_id.strip_prefix(session.id.as_str()).is_some_and(|rest| rest.starts_with(':'))
+        && (of(&session.id) || session.fork_of.as_ref().is_some_and(|f| of(&f.id)))
 }
 
 /// The JSON `opencode export` writes for `session`, which `opencode import` reads back.
@@ -543,6 +549,9 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
 
     let updated = session.messages.iter().map(|m| millis(m.timestamp)).max();
     let started = millis(session.started_at);
+    if let Some(of) = &session.fork_of {
+        fork(&mut messages, session, of);
+    }
     json!({
         "info": {
             "id": session.id,
@@ -556,6 +565,141 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
         },
         "messages": messages,
     })
+}
+
+/// Make the messages of `session`'s export a fork's of `of`: its first user message (one of its
+/// own, ahead of the rest, when it has none) starts with a
+/// [fork marker](continuation::fork_marker_text), an `ignored` text part, which opencode keeps
+/// from the model and capture reads as the fork's link; and every message and part gets a fresh
+/// id. opencode's ids are keys of its whole database, which `opencode import` skips when it
+/// holds them already: under the original's, the fork would import empty.
+///
+/// A fresh id keeps the old one's prefix and time (opencode orders by id), then a tail of the
+/// fork's own (from its session id, so a retried import mints the same) and the old id's rank:
+/// the fork's ids sort as the original's did.
+fn fork(messages: &mut Vec<Value>, session: &RehydrateSession, of: &ForkOf) {
+    let source = AnyHarness::from_name("opencode").expect("opencode is a harness");
+    let marker = continuation::fork_marker_text(source, &of.id, of.atuin_id.as_deref());
+    // With no user message (only the model's replies were captured), the marker gets one of its
+    // own ahead of the rest. Not in an assistant message: opencode sends an assistant's text to
+    // the model, `ignored` or not, and a user message of only ignored parts not at all.
+    if !messages.iter().any(|m| m["info"]["role"] == "user")
+        && let Some(first) = messages.first()
+    {
+        let created = first["info"]["time"]["created"].as_i64().unwrap_or_default();
+        let time = first["info"]["id"]
+            .as_str()
+            .and_then(id_time)
+            .unwrap_or_else(|| u64::try_from(created).unwrap_or_default().wrapping_mul(0x1000));
+        let model = |field: &str, or: &str| first["info"][field].as_str().unwrap_or(or).to_owned();
+        // The user message the first reply answers, which isn't there: this is it now.
+        let id = first["info"]["parentID"].as_str().map_or_else(
+            || mint_at("msg", time.saturating_sub(1), &format!("{}/fork", session.id)),
+            str::to_owned,
+        );
+        let info = json!({
+            "id": id,
+            "sessionID": session.id,
+            "role": "user",
+            "time": {"created": created},
+            "agent": "build",
+            "model": {
+                "providerID": model("providerID", "opencode"),
+                "modelID": model("modelID", "unknown"),
+            },
+        });
+        messages.insert(0, json!({"info": info, "parts": []}));
+    }
+    if let Some(first) = messages.iter_mut().find(|m| m["info"]["role"] == "user") {
+        let created = first["info"]["time"]["created"].as_i64().unwrap_or_default();
+        let message = first["info"]["id"].clone();
+        let parts = first["parts"].as_array_mut().expect("an export's parts are an array");
+        // Ahead of every part of the message, the time (and so the order) of each in its id.
+        let earliest = parts
+            .iter()
+            .filter_map(|p| id_time(p["id"].as_str()?))
+            .chain([u64::try_from(created).unwrap_or_default().wrapping_mul(0x1000)])
+            .min()
+            .unwrap_or_default();
+        parts.insert(
+            0,
+            json!({
+                "id": mint_at("prt", earliest.saturating_sub(1), &format!("{}/fork", session.id)),
+                "sessionID": session.id,
+                "messageID": message,
+                "type": "text",
+                "text": marker,
+                "ignored": true,
+                "time": {"start": created, "end": created},
+            }),
+        );
+    }
+
+    let mut old: Vec<String> = messages
+        .iter()
+        .flat_map(|m| {
+            let parts = m["parts"].as_array().into_iter().flatten().map(|p| &p["id"]);
+            std::iter::once(&m["info"]["id"]).chain(parts)
+        })
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect();
+    old.sort();
+    old.dedup();
+    let tail = mint_at("", 0, &session.id);
+    let tail = &tail[tail.len() - 8..];
+    let fresh: HashMap<String, String> = old
+        .into_iter()
+        .enumerate()
+        .map(|(rank, id)| {
+            // An id not in opencode's own format keeps all of itself, so it sorts as it did.
+            let kept = match id_time(&id) {
+                Some(_) => &id[..16],
+                None => id.as_str(),
+            };
+            let new = format!("{kept}{tail}{}", base62(rank));
+            (id, new)
+        })
+        .collect();
+    for message in messages {
+        replace_ids(message, &fresh);
+    }
+}
+
+/// The time an opencode id holds (its 12 hex digits after the prefix), as [`mint_at`] takes it.
+fn id_time(id: &str) -> Option<u64> {
+    let (_, rest) = id.split_once('_')?;
+    u64::from_str_radix(rest.get(..12)?, 16).ok()
+}
+
+/// `n` in six base-62 digits, which sort as the numbers do.
+fn base62(mut n: usize) -> String {
+    let mut digits = [b'0'; 6];
+    for digit in digits.iter_mut().rev() {
+        *digit = BASE62[n % 62];
+        n /= 62;
+    }
+    String::from_utf8_lossy(&digits).into_owned()
+}
+
+/// The ids of an exported `message` that are keys of `fresh` (its own, the message it answers,
+/// and each part's own and its message's), replaced by their values. Only the fields the export
+/// writes ids into: what was said, or a tool's input, may hold an id too, and stays as it was.
+fn replace_ids(message: &mut Value, fresh: &HashMap<String, String>) {
+    let swap = |value: &mut Value, field: &str| {
+        if let Some(id) = value.get_mut(field)
+            && let Some(new) = id.as_str().and_then(|old| fresh.get(old))
+        {
+            *id = Value::String(new.clone());
+        }
+    };
+    if let Some(info) = message.get_mut("info") {
+        swap(info, "id");
+        swap(info, "parentID");
+    }
+    for part in message.get_mut("parts").and_then(Value::as_array_mut).into_iter().flatten() {
+        swap(part, "id");
+        swap(part, "messageID");
+    }
 }
 
 /// When a message was created: an assistant's, as its turn says (to the millisecond, which the
@@ -734,7 +878,10 @@ fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
     match row.content.as_slice() {
         [Content::Text(text)] => {
             let mut part = json!({"type": "text", "text": text, "time": {"start": at, "end": at}});
-            if row.role == Role::System {
+            // A fork's marker stays kept from the model (see `fork`).
+            if row.role == Role::System && continuation::is_fork_marker(text) {
+                part["ignored"] = json!(true);
+            } else if row.role == Role::System {
                 part["synthetic"] = json!(true);
             }
             Some(part)
@@ -935,6 +1082,7 @@ pub(crate) mod tests {
             model: None,
             started_at: messages.first().map_or(OffsetDateTime::UNIX_EPOCH, |m| m.timestamp),
             messages,
+            fork_of: None,
         }
     }
 
@@ -1276,6 +1424,48 @@ pub(crate) mod tests {
         assert!(minted.starts_with("msg_"));
         assert_eq!(minted.len(), "msg_".len() + 26);
         assert!(minted < mint("msg", 1_790_217_606_980, "other"));
+    }
+
+    /// A fork's messages and parts get fresh ids, and only its ids: a prompt, or a tool's input,
+    /// that names an id of the original keeps it as written.
+    #[rstest]
+    fn a_fork_renames_ids_not_what_was_said() {
+        let said = format!("why did {U1} and prt_a fail?");
+        let rows = vec![
+            row("prt_a", 10, Role::User, vec![Content::Text(said.clone())]),
+            answer("prt_b", 11, U1, "msg_y", vec![Content::ToolUse(ToolUse {
+                id: "call_1".to_owned().into(),
+                name: "bash".into(),
+                input: json!(U1),
+            })]),
+        ];
+        let mut s = session(SES, None, rows);
+        s.fork_of = Some(ForkOf {
+            id: "ses_original".to_owned(),
+            atuin_id: None,
+            path: None,
+        });
+        let exported = export(&s);
+        let messages = exported["messages"].as_array().unwrap();
+        let (user, assistant) = (&messages[0], &messages[1]);
+
+        let ids: Vec<&str> = messages
+            .iter()
+            .flat_map(|m| {
+                let parts = m["parts"].as_array().unwrap().iter();
+                std::iter::once(&m["info"]["id"]).chain(parts.map(|p| &p["id"]))
+            })
+            .map(|id| id.as_str().unwrap())
+            .collect();
+        for old in [U1, "msg_y", "prt_a", "prt_b"] {
+            assert!(!ids.contains(&old), "{old} renamed: {ids:?}");
+        }
+        assert_eq!(assistant["info"]["parentID"], user["info"]["id"]);
+        let prompt = user["parts"].as_array().unwrap().iter().find(|p| p["ignored"].is_null());
+        assert_eq!(prompt.unwrap()["text"], said.as_str());
+        let call = &assistant["parts"][0];
+        assert_eq!(call["messageID"], assistant["info"]["id"]);
+        assert_eq!(call["state"]["input"], json!({"input": U1}));
     }
 
     /// A directory programs can be run from, next to the test binary: CI's temporary directory is

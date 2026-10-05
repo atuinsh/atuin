@@ -87,6 +87,7 @@ impl SessionSource for Synced {
             model: None,
             started_at: OffsetDateTime::UNIX_EPOCH,
             messages: Vec::new(),
+            fork_of: None,
         })
     }
 }
@@ -501,6 +502,25 @@ async fn an_empty_session_is_not_continued(
     assert!(machine.written.lock().is_empty());
 }
 
+/// A session with no messages isn't forked either, in any harness, and nothing is written (not
+/// even a pi original restored for its fork to name): there'd be nothing to resume, and an
+/// opencode fork would have no prompt for its marker. It's refused as its continuation is.
+#[rstest]
+#[tokio::test]
+async fn an_empty_session_is_not_forked(
+    dirs: Dirs,
+    #[values(HarnessKind::ClaudeCode, HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi)]
+    harness: HarnessKind,
+) {
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let session = row(harness, "abc-123", &dirs.elsewhere, false);
+    let err = resumer.fork(&Synced, &session, ForkFrom::default()).await.unwrap_err();
+    assert_eq!(err, NotResumable::Empty(continuation::NothingToContinue));
+    assert_eq!(err.to_string(), "nothing to continue: the session has no messages");
+    assert!(machine.written.lock().is_empty());
+}
+
 /// A target's template using `{path}` still offers it, and the continuation resumes with the
 /// path its transcript was written to.
 #[rstest]
@@ -648,4 +668,100 @@ fn the_program_to_check_is_relative_to_the_plans_directory() {
     assert_eq!(program_to_check(&plan("./bin/wrapper", None)), "./bin/wrapper");
     assert_eq!(program_to_check(&plan("claude", Some("/w/proj"))), "claude");
     assert_eq!(program_to_check(&plan("/usr/bin/claude", Some("/w/proj"))), "/usr/bin/claude");
+}
+
+/// A fork is a new session of the session's own harness, with its rows (those up to a tip, when
+/// given one), linked to the original by both its ids; its status names the harness. Only a
+/// harness atuin writes, and that is installed, forks.
+#[rstest]
+#[tokio::test]
+async fn a_fork_is_a_new_session_of_its_own_harness(dirs: Dirs) {
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
+    assert!(resumer.can_fork(&session));
+    let forked = resumer.fork(&Worked, &session, ForkFrom::default()).await.unwrap();
+
+    let written = machine.written.lock().clone();
+    let [new] = written.as_slice() else {
+        panic!("one session written: {written:?}");
+    };
+    assert_eq!(new.id, forked.id);
+    assert_ne!(new.id, "abc-123");
+    let ids: Vec<_> = new.messages.iter().map(|m| m.source_id.as_str()).collect();
+    assert_eq!(ids, ["r1", "r2", "r3"], "the rows as they were");
+    let of = new.fork_of.clone().unwrap();
+    assert_eq!((of.id, of.atuin_id), ("abc-123".to_owned(), Some(session.atuin_id.to_string())));
+    assert_eq!(forked.plan.program, "claude");
+    assert_eq!(forked.status(), "forked into a new Claude Code session");
+
+    let from = ForkFrom {
+        rows: None,
+        tip: Some("r2".to_owned()),
+    };
+    resumer.fork(&Worked, &session, from).await.unwrap();
+    assert_eq!(machine.written.lock()[1].messages.len(), 2, "up to the tip");
+
+    let copilot = row(HarnessKind::Copilot, "cp", &dirs.elsewhere, false);
+    assert!(!resumer.can_fork(&copilot));
+    let missing = FakeMachine {
+        missing_programs: vec!["claude"],
+        ..FakeMachine::default()
+    };
+    let without = HarnessResumer::on(context(&dirs), AiSessionResume::default(), missing);
+    assert!(!without.can_fork(&session));
+}
+
+/// pi names a fork's parent by its file: an original that isn't here is restored first, and the
+/// fork names where it was written; one that is here is named where it is.
+#[rstest]
+#[case::missing(None)]
+#[case::here(Some("/pi/sessions/abc-123.jsonl"))]
+#[tokio::test]
+async fn a_pi_fork_names_the_original_by_its_file(dirs: Dirs, #[case] found: Option<&str>) {
+    let mut machine = FakeMachine::default();
+    if let Some(found) = found {
+        machine.found.insert("abc-123".to_owned(), PathBuf::from(found));
+    }
+    let resumer = resumer(&dirs, &machine);
+    let session = row(HarnessKind::Pi, "abc-123", &dirs.elsewhere, true);
+    let forked = resumer.fork(&Worked, &session, ForkFrom::default()).await.unwrap();
+
+    let written: Vec<String> = machine.written.lock().iter().map(|s| s.id.clone()).collect();
+    let written: Vec<&str> = written.iter().map(String::as_str).collect();
+    let parent = match found {
+        None => {
+            assert_eq!(written, ["abc-123", forked.id.as_str()], "the original first");
+            PathBuf::from("/restored/abc-123.jsonl")
+        }
+        Some(found) => {
+            assert_eq!(written, [forked.id.as_str()]);
+            PathBuf::from(found)
+        }
+    };
+    let fork = machine.written.lock().last().cloned().unwrap();
+    assert_eq!(fork.fork_of.unwrap().path, Some(parent));
+}
+
+/// A Codex fork reads the original's rollout where it is (a reverted thread's names the history
+/// it continues, which the fork continues too), and restores nothing when it isn't here.
+#[rstest]
+#[case::missing(None)]
+#[case::here(Some("/codex/sessions/rollout-abc-123.jsonl"))]
+#[tokio::test]
+async fn a_codex_fork_reads_the_original_where_it_is(dirs: Dirs, #[case] found: Option<&str>) {
+    let mut machine = FakeMachine::default();
+    if let Some(found) = found {
+        machine.found.insert("abc-123".to_owned(), PathBuf::from(found));
+    }
+    let resumer = resumer(&dirs, &machine);
+    let session = row(HarnessKind::Codex, "abc-123", &dirs.elsewhere, true);
+    let forked = resumer.fork(&Worked, &session, ForkFrom::default()).await.unwrap();
+
+    let written = machine.written.lock().clone();
+    let [fork] = written.as_slice() else {
+        panic!("only the fork written: {written:?}");
+    };
+    assert_eq!(fork.id, forked.id);
+    assert_eq!(fork.fork_of.clone().unwrap().path, found.map(PathBuf::from));
 }

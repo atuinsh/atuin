@@ -77,6 +77,7 @@ impl SidecarSource {
             host_id,
             started_at: s.started_at,
             updated_at: s.group_updated_at.unwrap_or(s.updated_at),
+            active_at: s.updated_at,
             messages: s.message_count,
             usage: s.usage,
             children: u32::try_from(s.child_count).unwrap_or(u32::MAX),

@@ -742,11 +742,15 @@ mod tests {
         assert_eq!(uuid::Uuid::from(fixed).get_version(), Some(uuid::Version::SortRand));
     }
 
-    /// A continuation (`atuin ai resume --in`) is a new session: it gets an atuin id of its own,
-    /// not the one of the session it continues, whose rows keep theirs.
+    /// A continuation (`atuin ai resume --in`) or a fork (`--fork`) is a new session: it gets an
+    /// atuin id of its own, not the one of the session it came from, whose rows keep theirs.
     #[rstest]
+    #[case::continuation(atuin_common::harnesstools::session::ParentKind::Continuation)]
+    #[case::fork(atuin_common::harnesstools::session::ParentKind::Fork)]
     #[tokio::test]
-    async fn a_continuation_gets_its_own_atuin_id() {
+    async fn a_continuation_gets_its_own_atuin_id(
+        #[case] kind: atuin_common::harnesstools::session::ParentKind,
+    ) {
         let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
         let original = sample_message();
         let mut continued = sample_message();
@@ -756,7 +760,7 @@ mod tests {
             session: NativeSessionId::from("continued".to_owned()),
         };
         continued.parent = Some(original.session.clone());
-        continued.parent_kind = Some(atuin_common::harnesstools::session::ParentKind::Continuation);
+        continued.parent_kind = Some(kind);
 
         sink.append(original.clone()).await.unwrap();
         sink.append(continued.clone()).await.unwrap();

@@ -4,8 +4,9 @@
 //! The bindings mirror the history search's defaults wherever an action exists in both, so muscle
 //! memory carries over: ctrl-r cycles the filter, ctrl-o toggles Inspect, tab edits, enter follows
 //! `enter_accept`, and vim users get normal/insert modes. Where a chosen session resumes (its own
-//! harness, or continued in another) is asked by the chooser, which has keys of its own (see
-//! [`super::chooser`]).
+//! harness, forked, or continued in another) is asked by the chooser, which has keys of its own
+//! (see [`super::chooser`]). alt-enter (vim normal `F`, Inspect `f`) opens it on the fork; some
+//! terminals keep alt-enter for themselves, where enter then `f` gets there too.
 
 use std::collections::HashMap;
 
@@ -102,6 +103,8 @@ pub enum Action {
     ReturnCommand,
     /// Copy the resume command to the clipboard.
     Copy,
+    /// Ask where to resume the selected session, forking it selected.
+    Fork,
     ReturnOriginal,
     Exit,
     Redraw,
@@ -176,6 +179,7 @@ fn add_common(km: &mut Keymap, settings: &Settings) {
     km.bind(key("ctrl-l"), Action::Redraw);
     km.bind(key("enter"), enter_action(settings));
     km.bind(key("ctrl-m"), enter_action(settings));
+    km.bind(key("alt-enter"), Action::Fork);
     km.bind(key("up"), Action::SelectPrevious);
     km.bind(key("down"), Action::SelectNext);
     km.bind(key("pageup"), Action::ScrollPageUp);
@@ -261,6 +265,7 @@ pub fn vim_normal(settings: &Settings) -> Keymap {
     km.bind(key("A"), Action::VimEnterInsertAtEnd);
     km.bind(key("i"), Action::VimEnterInsert);
     km.bind(key("I"), Action::VimEnterInsertAtStart);
+    km.bind(key("F"), Action::Fork);
 
     km.bind(key("ctrl-u"), Action::ScrollHalfPageUp);
     km.bind(key("ctrl-d"), Action::ScrollHalfPageDown);
@@ -279,8 +284,8 @@ pub fn vim_insert(settings: &Settings) -> Keymap {
     km
 }
 
-/// The Inspect tab has no text input: esc goes back to the list, and vim users get j/k. `c`
-/// expands the grouped sessions; while it is, up/down (and page up/down, home/end) move in that
+/// The Inspect tab has no text input: esc goes back to the list, `f` forks, and vim users get
+/// j/k. `c` expands the grouped sessions; while it is, up/down (and page up/down, home/end) move in that
 /// list instead of between sessions, and esc or `c` collapses it.
 pub fn inspector(settings: &Settings) -> Keymap {
     let mut km = Keymap::default();
@@ -289,6 +294,7 @@ pub fn inspector(settings: &Settings) -> Keymap {
     km.bind(key("ctrl-["), Action::Exit);
     km.bind(key("q"), Action::Exit);
     km.bind(key("c"), Action::ToggleChildren);
+    km.bind(key("f"), Action::Fork);
     km.bind(key("home"), Action::ScrollToTop);
     km.bind(key("end"), Action::ScrollToBottom);
     if matches!(settings.keymap_mode, KeymapMode::VimNormal | KeymapMode::VimInsert) {
@@ -364,6 +370,20 @@ mod tests {
             assert_eq!(resolve(&km, "up"), Some(Action::SelectPrevious));
             assert_eq!(resolve(&km, "pagedown"), Some(Action::ScrollPageDown));
         }
+    }
+
+    /// alt-enter forks everywhere; vim normal mode has `F` too, and Inspect (no text input) `f`.
+    /// None of them did anything before.
+    #[rstest]
+    fn fork_keys_are_free_and_shared() {
+        let settings = Settings::utc();
+        let modes = [emacs(&settings), vim_normal(&settings), vim_insert(&settings)];
+        for km in modes.iter().chain([&inspector(&settings)]) {
+            assert_eq!(resolve(km, "alt-enter"), Some(Action::Fork));
+        }
+        assert_eq!(resolve(&vim_normal(&settings), "F"), Some(Action::Fork));
+        assert_eq!(resolve(&inspector(&settings), "f"), Some(Action::Fork));
+        assert_eq!(resolve(&emacs(&settings), "f"), None, "typed into the query");
     }
 
     #[rstest]

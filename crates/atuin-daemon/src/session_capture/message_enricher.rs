@@ -113,9 +113,11 @@ impl MessageEnricher {
         // its first line, which the harness wrote itself, names it. Unless the harness names a
         // parent itself: a fork of a continuation (Claude Code `--fork-session`, Codex and
         // opencode forks, Pi `/fork`) copies the marker with the rest, but forks the
-        // continuation, not the session the marker names.
+        // continuation, not the session the marker names. An opencode fork's marker
+        // (`atuin ai resume --fork`) stands for the link opencode can't write: it names the parent
+        // as a harness would, and a marker copied in after it doesn't replace it.
         if !state.native_parent
-            && let Some((harness, parent)) = continuation::continued_from_message(m)
+            && let Some((harness, parent, kind)) = continuation::linked_from_message(m)
         {
             let parent = HarnessSession {
                 harness: HarnessKind::from(&harness),
@@ -123,7 +125,8 @@ impl MessageEnricher {
             };
             if parent != handle {
                 state.parent = Some(parent);
-                state.parent_kind = Some(ParentKind::Continuation);
+                state.parent_kind = Some(kind);
+                state.native_parent = kind == ParentKind::Fork;
             }
         }
 
@@ -1038,6 +1041,35 @@ mod parser_contract {
             session: NativeSessionId::from(CONTINUATION.to_owned()),
         };
         assert!(!rows.is_empty());
+        for row in &rows {
+            assert_eq!(row.parent.as_ref(), Some(&parent), "{row:?}");
+            assert_eq!(row.parent_kind, Some(ParentKind::Fork), "{row:?}");
+        }
+    }
+
+    /// An opencode fork (`atuin ai resume --fork`) names its original in a fork marker, in text
+    /// opencode wrote itself (here a Claude Code `isMeta` line, read the same way): its rows are a
+    /// fork of the original, and a continuation's marker copied in after it doesn't move them.
+    #[rstest]
+    fn a_fork_marker_names_the_original_as_a_harness_would() {
+        use atuin_common::harnesstools::AnyHarness;
+        let opencode = AnyHarness::from_name("opencode").unwrap();
+        let forked = continuation::fork_marker_text(opencode, "ses_original", Some("01a0"));
+        let line = |uuid: &str, meta: bool, text: &str| {
+            ccode(&serde_json::json!({"type": "user", "uuid": uuid, "parentUuid": null,
+                "sessionId": "fork", "isMeta": meta, "timestamp": "2026-09-27T10:00:00Z",
+                "message": {"role": "user", "content": text}}))
+        };
+        let lines =
+            [line("u0", true, &forked), line("u1", true, &marker()), line("u2", false, "go")];
+        let fork = SessionId::from("fork".to_owned());
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        let rows: Vec<Message> = lines.iter().flat_map(|m| n.capture(&fork, m)).collect();
+        let parent = HarnessSession {
+            harness: HarnessKind::Opencode,
+            session: NativeSessionId::from("ses_original".to_owned()),
+        };
+        assert_eq!(rows.len(), 3);
         for row in &rows {
             assert_eq!(row.parent.as_ref(), Some(&parent), "{row:?}");
             assert_eq!(row.parent_kind, Some(ParentKind::Fork), "{row:?}");

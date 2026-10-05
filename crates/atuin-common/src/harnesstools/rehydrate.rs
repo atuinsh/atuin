@@ -39,6 +39,21 @@ pub struct RehydrateSession {
     pub model: Option<String>,
     pub started_at: OffsetDateTime,
     pub messages: Vec<RehydrateMessage>,
+    /// Set on a fork ([`crate::harnesstools::fork`]): the session it was forked from, which the
+    /// writer links it to the way its harness links a fork of its own.
+    pub fork_of: Option<ForkOf>,
+}
+
+/// The session a fork was forked from, as its writer names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForkOf {
+    /// Its native id.
+    pub id: String,
+    /// Its atuin id, where the link is text that can say it (opencode's marker).
+    pub atuin_id: Option<String>,
+    /// Its transcript on this machine: pi names a fork's parent by its file, and a Codex fork
+    /// continues the history the original's rollout continues (its `history_base`).
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]

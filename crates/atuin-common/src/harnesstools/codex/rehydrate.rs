@@ -177,8 +177,9 @@ pub(crate) fn write(root: &Path, session: &RehydrateSession) -> Result<PathBuf, 
         .join(format!("{:02}", u8::from(started.month())))
         .join(format!("{:02}", started.day()));
     std::fs::create_dir_all(&dir)?;
+    let base = inherited_history(root, session);
     let mut text = String::new();
-    for line in rollout(session) {
+    for line in rollout(session, base) {
         text.push_str(&line.to_string());
         text.push('\n');
     }
@@ -222,19 +223,52 @@ enum CallKind {
     ToolSearch,
 }
 
-/// The rollout's lines: its `session_meta` (ordinal 0), then each message's, numbered on from
-/// it.
-fn rollout(session: &RehydrateSession) -> Vec<Value> {
+/// The rollout's lines: its `session_meta`, then each message's, numbered on from it: from 0, or
+/// for a rollout continuing the history `base` names, from where that ends (its
+/// `end_ordinal_exclusive`, as Codex numbers such a rollout: codex-rs `ordinal.rs`).
+fn rollout(session: &RehydrateSession, base: Option<Value>) -> Vec<Value> {
     let mut header = header(session);
-    header["ordinal"] = json!(0);
+    let first = base.as_ref().and_then(|b| b["end_ordinal_exclusive"].as_u64()).unwrap_or(0);
+    if let Some(base) = base {
+        header["payload"]["history_base"] = base;
+    }
     let mut lines = vec![header];
     for row in rows(session, &session.messages) {
         lines.extend(row.before.into_iter().chain(row.lines));
     }
-    for (ordinal, line) in lines.iter_mut().enumerate().skip(1) {
+    for (ordinal, line) in (first..).zip(lines.iter_mut()) {
         line["ordinal"] = json!(ordinal);
     }
     lines
+}
+
+/// The history a fork's rollout continues, as its original's does: the `history_base` of the
+/// original's own rollout here ([`ForkOf::path`](crate::harnesstools::rehydrate::ForkOf::path)),
+/// when it has one and the rollout it names is here too, live or archived.
+///
+/// A rollout a thread was reverted into (a `<thread>_<rollout>` session), and one Codex forked in
+/// its paginated mode, holds only the history since then, and names the rest in its
+/// `history_base`: the immutable rollout it continues, and where in it that history ends
+/// (codex-rs `rollout_lineage.rs`). Capture keeps none of that, so a fork names the same base,
+/// and resumes with the whole history its original resumes with. Without the original's rollout
+/// here (another host's), where its base ends can't be known: the fork holds what restoring the
+/// original would, the rows since.
+fn inherited_history(root: &Path, session: &RehydrateSession) -> Option<Value> {
+    let of = session.fork_of.as_ref()?;
+    let base = session::own_meta_at(of.path.as_deref()?, &of.id)?["history_base"].clone();
+    let rollout = base["thread_id"].as_str()?;
+    base["end_ordinal_exclusive"].as_u64()?;
+    base["end_byte_offset"].as_u64()?;
+    // The base's session, as capture names it (see `session::session_id_of`).
+    let thread = session::resume_id(&of.id);
+    let id = if rollout == thread {
+        thread.to_owned()
+    } else {
+        format!("{thread}_{rollout}")
+    };
+    let here = session::locate(root, &id)
+        .or_else(|| archive_of(root).and_then(|archive| session::locate(&archive, &id)));
+    here.map(|_| base)
 }
 
 /// A new rollout's `session_meta` line (without its ordinal), in Codex's paginated history mode:
@@ -262,6 +296,17 @@ pub(crate) fn header(session: &RehydrateSession) -> Value {
     });
     if let Some(branch) = &session.git_branch {
         meta["git"] = json!({"branch": branch});
+    }
+    // A fork names the thread it was forked from, as Codex's own do. Codex reads the field as a
+    // thread id: never the `<thread>_<rollout>` capture names a segment of a thread by. A fork
+    // of a segment names that in a field of atuin's own too, which Codex's reader leaves be, and
+    // capture links the fork to the segment by it.
+    if let Some(of) = &session.fork_of {
+        let thread = session::resume_id(&of.id);
+        meta["forked_from_id"] = json!(thread);
+        if thread != of.id {
+            meta[session::ATUIN_FORKED_FROM] = json!(of.id);
+        }
     }
     line(&stamp(session.started_at), "session_meta", meta)
 }
@@ -840,6 +885,7 @@ pub(crate) mod tests {
             model: None,
             started_at: messages.first().map_or(OffsetDateTime::UNIX_EPOCH, |m| m.timestamp),
             messages,
+            fork_of: None,
         }
     }
 
