@@ -40,8 +40,9 @@ pub trait Loader: Sync + Send {
 /// The sessions of history imported from another tool, each a UUIDv7 that importing the same
 /// history again reproduces.
 ///
-/// An id hashes the importer and the tool's own key for the session, and is stamped with the
-/// session's first entry, so an importer asks for ids in the order it reads its entries.
+/// An id is the name-based UUIDv7 of the tool's own key for the session within the importer's
+/// namespace, stamped with the session's first entry, so an importer asks for ids in the order it
+/// reads its entries.
 pub(crate) struct ImportedSessions {
     importer: &'static str,
     ids: HashMap<String, Uuid>,
@@ -60,9 +61,7 @@ impl ImportedSessions {
         let importer = self.importer;
         self.ids
             .entry(key.to_owned())
-            .or_insert_with(|| {
-                Uuid::new_v7_keyed(first_seen, format!("{importer}\0{key}").as_bytes())
-            })
+            .or_insert_with(|| Uuid::new_v7_named(first_seen, importer, key.as_bytes()))
             .as_simple()
             .to_string()
     }
