@@ -344,7 +344,7 @@ impl TestEnv {
 
     pub async fn active_ids(&self) -> HashSet<HistoryId> {
         let mut ids = HashSet::new();
-        let mut pager = self.history_db.all_paged(corpus::SEED_BATCH, false, false);
+        let mut pager = self.history_db.all_paged(corpus::SEED_BATCH, false);
         while let Some(page) = pager.next().await.unwrap() {
             ids.extend(page.into_iter().map(|h| h.id));
         }

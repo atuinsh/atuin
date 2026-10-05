@@ -209,7 +209,7 @@ async fn tombstones_are_contiguous_and_replay_identically(
     let survivors: HashSet<HistoryId> = [ids[1], ids[3]].into();
     assert_eq!(env.active_ids().await, survivors);
     let other_machine = env.fresh_db_from_store().await;
-    let mut pager = other_machine.all_paged(100, false, false);
+    let mut pager = other_machine.all_paged(100, false);
     let mut replayed = HashSet::new();
     while let Some(page) = pager.next().await.unwrap() {
         replayed.extend(page.into_iter().map(|h| h.id));

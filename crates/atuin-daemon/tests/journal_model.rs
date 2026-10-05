@@ -16,6 +16,7 @@ use atuin_daemon::{CaptureError, CmdEvent, RegisterOutputError};
 use common::{TestEnv, capture, history};
 use futures::{FutureExt, StreamExt};
 use proptest::prelude::*;
+use rstest::rstest;
 
 const SLOTS: u8 = 10;
 
@@ -224,7 +225,7 @@ async fn check_invariants(env: &TestEnv, model: &Model, step: usize, op: &Op) {
     }
     let replayed = env.fresh_db_from_store().await;
     let mut replayed_ids = HashSet::new();
-    let mut pager = replayed.all_paged(100, false, false);
+    let mut pager = replayed.all_paged(100, false);
     while let Some(page) = pager.next().await.unwrap() {
         replayed_ids.extend(page.into_iter().map(|h| h.id));
     }
@@ -234,7 +235,7 @@ async fn check_invariants(env: &TestEnv, model: &Model, step: usize, op: &Op) {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(40))]
 
-    #[test]
+    #[rstest]
     fn journal_agrees_with_its_model(ops in proptest::collection::vec(op(), 1..24)) {
         common::current_thread_runtime().block_on(async {
             let env = TestEnv::builder().build().await;

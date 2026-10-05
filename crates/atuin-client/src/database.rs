@@ -989,8 +989,8 @@ impl Sqlite {
     }
 
     #[must_use]
-    pub fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
-        Paged::new(self.clone(), page_size, include_deleted, unique)
+    pub fn all_paged(&self, page_size: usize, include_deleted: bool) -> Paged {
+        Paged::new(self.clone(), page_size, include_deleted)
     }
 
     // This used to scramble the command and set deleted_at, so that sync v1 could
@@ -1145,18 +1145,16 @@ pub struct Paged {
     page_size: usize,
     last_id: Option<String>,
     include_deleted: bool,
-    unique: bool,
 }
 
 impl Paged {
     #[must_use]
-    pub fn new(database: Sqlite, page_size: usize, include_deleted: bool, unique: bool) -> Self {
+    pub fn new(database: Sqlite, page_size: usize, include_deleted: bool) -> Self {
         Self {
             database,
             page_size,
             last_id: None,
             include_deleted,
-            unique,
         }
     }
 
@@ -1168,13 +1166,6 @@ impl Paged {
 
         if !self.include_deleted {
             query.and_where_is_null("deleted_at");
-        }
-
-        if self.unique {
-            // We want to deduplicate on command, but the user can search via cwd, hostname, and session.
-            // Without those fields, filter modes won't work right. With those fields, we get duplicates.
-            // This must be handled upstream.
-            query.group_by("command, cwd, hostname, session").having("max(timestamp)");
         }
 
         query.limit(self.page_size);
@@ -2160,6 +2151,7 @@ mod test {
 
     // SQL operators are stripped when performing fuzzy reordering, but this must not affect the
     // initial SQL matching.
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy_operator() {
         let db = db_with(&["use screen", "screenshot tool"]).await;
@@ -2183,7 +2175,7 @@ mod test {
         }
 
         // Create a paged iterator with page_size of 2
-        let mut paged = db.all_paged(2, false, false);
+        let mut paged = db.all_paged(2, false);
 
         // First page should have 2 items
         let page1 = paged.next().await.unwrap();
@@ -2213,35 +2205,11 @@ mod test {
         db: Sqlite,
     ) {
         // Create a paged iterator on empty database
-        let mut paged = db.all_paged(10, false, false);
+        let mut paged = db.all_paged(10, false);
 
         // Should return None immediately
         let page = paged.next().await.unwrap();
         assert!(page.is_none());
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_unique(
-        #[future(awt)]
-        #[from(empty_db)]
-        db: Sqlite,
-    ) {
-        // Add duplicate commands
-        new_history_item(&db, "duplicate").await.unwrap();
-        new_history_item(&db, "duplicate").await.unwrap();
-        new_history_item(&db, "unique1").await.unwrap();
-        new_history_item(&db, "unique2").await.unwrap();
-
-        // Without unique flag - should get all 4
-        let mut paged = db.all_paged(10, false, false);
-        let page = paged.next().await.unwrap().unwrap();
-        assert_eq!(page.len(), 4);
-
-        // With unique flag - should get 3 (duplicates collapsed)
-        let mut paged_unique = db.all_paged(10, false, true);
-        let page_unique = paged_unique.next().await.unwrap().unwrap();
-        assert_eq!(page_unique.len(), 3);
     }
 
     #[rstest]
@@ -2280,11 +2248,11 @@ mod test {
         db.delete(to_delete).await.unwrap();
 
         // Deletes remove the row outright, so both views should get 2
-        let mut paged = db.all_paged(10, false, false);
+        let mut paged = db.all_paged(10, false);
         let page = paged.next().await.unwrap().unwrap();
         assert_eq!(page.len(), 2);
 
-        let mut paged_deleted = db.all_paged(10, true, false);
+        let mut paged_deleted = db.all_paged(10, true);
         let page_deleted = paged_deleted.next().await.unwrap().unwrap();
         assert_eq!(page_deleted.len(), 2);
 
@@ -2293,11 +2261,11 @@ mod test {
         legacy.deleted_at = Some(OffsetDateTime::now_utc());
         db.update(&legacy).await.unwrap();
 
-        let mut paged = db.all_paged(10, false, false);
+        let mut paged = db.all_paged(10, false);
         let page = paged.next().await.unwrap().unwrap();
         assert_eq!(page.len(), 1);
 
-        let mut paged_deleted = db.all_paged(10, true, false);
+        let mut paged_deleted = db.all_paged(10, true);
         let page_deleted = paged_deleted.next().await.unwrap().unwrap();
         assert_eq!(page_deleted.len(), 2);
     }

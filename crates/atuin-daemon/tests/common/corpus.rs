@@ -263,16 +263,9 @@ pub async fn seed_record_store(history_store: &HistoryStore, histories: &[Histor
 
 /// Distinct index-eligible commands among the active rows of `db`: what `SearchIndex::command_count`
 /// must equal once the index is in sync with the database.
-///
-/// The index itself loads with `all_paged(.., unique = true)`, which groups rows by
-/// (command, cwd, hostname, session) and keeps one representative per group, while this oracle
-/// instead counts distinct command *text* over all active rows. The two agree because every row in
-/// a `unique = true` group shares the same command text by construction (that's what makes it a
-/// group) — so the set of distinct commands across the deduplicated rows the index loads is
-/// identical to the set of distinct commands across every active row.
 pub async fn distinct_indexable_commands(db: &Sqlite) -> usize {
     let mut commands: HashSet<String> = HashSet::new();
-    let mut pager = db.all_paged(SEED_BATCH, false, false);
+    let mut pager = db.all_paged(SEED_BATCH, false);
     while let Some(page) = pager.next().await.unwrap() {
         commands.extend(page.into_iter().filter(index_eligible).map(|h| h.command));
     }
