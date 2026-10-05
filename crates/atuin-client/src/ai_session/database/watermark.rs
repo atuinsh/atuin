@@ -23,6 +23,11 @@ use uuid::Uuid;
 
 use super::{AiSessionDatabase, DbError};
 
+/// Record an invalidation: the statement [`AiSessionDatabase::bump_generation`] runs, for the
+/// writer to run too.
+pub(super) const BUMP_GENERATION: &str =
+    "UPDATE projection_state SET generation = generation + 1 WHERE id = 0";
+
 /// The last record of a series the sidecar has projected, and every one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Watermark {
@@ -34,7 +39,7 @@ pub struct Watermark {
 /// to [`AiSessionDatabase::advance_reproject_watermark`]: the watermark moves only if no
 /// invalidation happened in between.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Generation(i64);
+pub struct Generation(pub(super) i64);
 
 impl AiSessionDatabase {
     /// Every series' watermark. A series without one must be replayed from its first record.
@@ -202,9 +207,7 @@ impl AiSessionDatabase {
 
     /// Record an invalidation, inside the transaction making it.
     pub(super) async fn bump_generation(conn: &mut SqliteConnection) -> Result<(), DbError> {
-        db::query("UPDATE projection_state SET generation = generation + 1 WHERE id = 0")
-            .execute(conn)
-            .await?;
+        db::query(BUMP_GENERATION).execute(conn).await?;
         Ok(())
     }
 

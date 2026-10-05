@@ -137,6 +137,9 @@ rmp-serde = "1"
 rpassword = "7"
 rstest = "0.27"
 runtime-format = "0.1"
+# The AI session sidecar's synchronous writer. Kept on the libsqlite3-sys that sqlx uses (one
+# bundled SQLite), with unlock_notify as sqlx has it, for shared-cache in-memory databases.
+rusqlite = { version = "0.32", features = ["unlock_notify"] }
 rust-embed = "8"
 rustix = { version = "1", features = ["process", "fs", "pty", "termios", "stdio", "event"] }
 schemars = "1"

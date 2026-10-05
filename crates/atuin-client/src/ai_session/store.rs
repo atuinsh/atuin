@@ -10,11 +10,14 @@ use tracing::warn;
 use typed_builder::TypedBuilder;
 
 use crate::ai_session::Message;
-use crate::ai_session::database::{AiSessionDatabase, DbError, Watermark};
+use crate::ai_session::database::{AiSessionDatabase, DbError, PreparedMessage, Watermark};
+use crate::record::decode::decode_parallel;
 use crate::record::sqlite_store::SqliteStore;
 
-/// Records read from the record store at a time while reprojecting.
-const REPROJECT_PAGE: u64 = 512;
+/// Records read from the record store at a time while reprojecting, each page appended in one
+/// transaction: fewer, larger commits flush and merge the search index far less often. A page
+/// holds capture off for as long as it takes to append (a fraction of a second).
+const REPROJECT_PAGE: u64 = 4096;
 
 /// How many times one reprojection starts over after an invalidation lands in the middle of it.
 /// Past that it gives up for now with [`BuildError::Incomplete`]: the invalidation cleared the
@@ -140,11 +143,9 @@ impl AiSessionStore {
         }
     }
 
-    async fn decode_and_append(
-        &self,
-        record: Record<EncryptedData>,
-        db: &AiSessionDatabase,
-    ) -> Result<Projected, BuildError> {
+    /// Decrypt and decode `record` with `key`, and prepare it for the sidecar, which the caller
+    /// appends it to.
+    fn decode(key: &Key, record: &Record<EncryptedData>) -> Result<Projected, DbError> {
         if record.tag != RecordTag::AiSession {
             return Ok(Projected::Skipped);
         }
@@ -163,7 +164,7 @@ impl AiSessionStore {
         //   an upgrade.
         // - One that decrypts to a known kind but fails to decode is skipped: decryption
         //   authenticates it, so it is exactly what its writer wrote, and no retry reads it.
-        let decrypted = match record.decrypt(&self.key) {
+        let decrypted = match record.decrypt(key) {
             Ok(decrypted) => decrypted,
             Err(err) => {
                 warn!(?err, id = %id.0, "failed to decrypt ai-session record, holding it back");
@@ -186,12 +187,11 @@ impl AiSessionStore {
         };
 
         // The record body never carries the host: its envelope does.
-        let msg = Message {
+        let msg = PreparedMessage::new(Message {
             host: Some(host),
             ..msg
-        };
-        db.append(&msg).await?;
-        Ok(Projected::Appended)
+        })?;
+        Ok(Projected::Append(Box::new(msg)))
     }
 
     /// Replay every record into the sidecar, whatever it already holds.
@@ -442,38 +442,53 @@ impl AiSessionStore {
         // Read before replaying anything: an invalidation after this stops the watermark moving.
         let generation = db.projection_generation().await?;
         let mut next = start;
-        // A held record keeps the watermark below it (see `decode_and_append`), and so does a
+        // A held record keeps the watermark below it (see `decode`), and so does a
         // hole in the series: a record missing there (not downloaded yet, as sync can fetch a
         // series' records out of order) would never be replayed if the watermark passed it.
         // Records past either are still replayed, which a later replay repeats idempotently.
         let mut held = false;
-        loop {
-            // Per page rather than per series, so capture never waits long.
-            let local = self.lock_if_local(db, series.host_id).await;
-            let page = self.store.next(series, next, REPROJECT_PAGE).await?;
-            let Some(tail) = page.last() else {
-                break;
-            };
+        // Records are only read under the lock (see `lock_if_local`), so never one capture has
+        // pushed but not yet appended. One read but not yet appended is to capture as one not yet
+        // read: as every page after the one replaying is, between pages.
+        let mut page = {
+            let _local = self.lock_if_local(db, series.host_id).await;
+            self.read_page(series, next).await?
+        };
+        while let Some(&(tail, _, _)) = page.last() {
+            let page_len = page.len() as u64;
             let mut expected = next;
-            next = tail.idx + 1;
+            next = tail + 1;
 
             let mut to = None;
-            for record in page {
-                let (idx, record_id) = (record.idx, record.id);
+            let mut msgs = Vec::with_capacity(page.len());
+            for (idx, record_id, projected) in page {
                 if idx != expected {
                     held = true;
                 }
                 expected = idx + 1;
-                if self.decode_and_append(record, db).await? == Projected::Held {
-                    held = true;
+                match projected? {
+                    Projected::Append(msg) => msgs.push(*msg),
+                    Projected::Held => held = true,
+                    Projected::Skipped => {}
                 }
-                stats.replayed += 1;
-                progress.replayed.fetch_add(1, Ordering::Relaxed);
                 if !held {
                     to = Some(Watermark { idx, record_id });
                 }
             }
+
+            // Per page rather than per series, so capture never waits long. The page is appended
+            // in one transaction (committing each row alone is most of a replay's cost), while
+            // the next one is read and decoded.
+            let local = self.lock_if_local(db, series.host_id).await;
+            let (appended, following) =
+                tokio::join!(db.append_all(msgs, generation), self.read_page(series, next));
             drop(local);
+            if !appended? {
+                warn!(host = %series.host_id, "ai-session sidecar invalidated under reproject");
+                return Ok(Pass::Invalidated);
+            }
+            stats.replayed += page_len;
+            progress.replayed.fetch_add(page_len, Ordering::Relaxed);
 
             // Every append up to `to` has committed, in the same database: a watermark that
             // survives a crash implies the appends it covers do too.
@@ -484,9 +499,25 @@ impl AiSessionStore {
                 }
                 from = Some(to);
             }
+            page = following?;
         }
 
         Ok(pass)
+    }
+
+    /// The page of `series` from `from`: each record's place in it, and what replaying it does,
+    /// decoded and prepared across cores.
+    async fn read_page(
+        &self,
+        series: &RecordSeriesKey,
+        from: RecordIdx,
+    ) -> Result<Vec<(RecordIdx, RecordId, Result<Projected, DbError>)>, BuildError> {
+        let records = self.store.next(series, from, REPROJECT_PAGE).await?;
+        let key = self.key.clone();
+        Ok(decode_parallel(records, move |record| {
+            (record.idx, record.id, Self::decode(&key, &record))
+        })
+        .await)
     }
 }
 
@@ -527,10 +558,10 @@ impl ReprojectProgress {
     }
 }
 
-/// What replaying one record did to the sidecar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What replaying one record does to the sidecar.
+#[derive(Debug)]
 enum Projected {
-    Appended,
+    Append(Box<PreparedMessage>),
     /// Can never be projected (not ai-session, or authentic but undecodable): pass over it.
     Skipped,
     /// Cannot be projected with this key or by this build: replay it again (with another key,
@@ -991,8 +1022,8 @@ mod tests {
         s.reproject(&db).await.unwrap();
         let before = mark(&db, &s).await;
 
-        // The sidecar dies partway through the next batch: the appends before it commit, the
-        // one it hits and every later one do not.
+        // The sidecar dies partway through the next page, which is appended in one transaction:
+        // none of it commits, source-3 before the failure included.
         push_range(&s, &handle, 3..6).await;
         let fault =
             atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
@@ -1004,10 +1035,10 @@ mod tests {
         .await
         .unwrap();
         assert!(s.reproject(&db).await.is_err());
-        assert_eq!(count(&db, &handle).await, Some(4), "source-3 made it in");
+        assert_eq!(count(&db, &handle).await, Some(3), "the page rolled back whole");
         assert_eq!(mark(&db, &s).await, before, "the watermark must not pass what failed");
 
-        // A restart replays from the old watermark, source-3 included, and counts it once.
+        // A restart replays the page from the old watermark.
         drop(db);
         atuin_common::db::query("DROP TRIGGER fail_write").execute(fault.pool()).await.unwrap();
         let db = AiSessionDatabase::open(&path).await.unwrap();
