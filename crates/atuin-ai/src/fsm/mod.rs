@@ -13,7 +13,7 @@ pub mod tools;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
 use events::{Event, PermissionChoice, PermissionResponse};
@@ -620,7 +620,7 @@ impl AgentFsm {
                 }
 
                 // Cancel all pending tools
-                let pending = self.ctx.tools.pending_ids();
+                let mut pending = self.ctx.tools.pending_ids();
                 for id in &pending {
                     if let Some(tracked) = self.ctx.tools.get_mut(id) {
                         if tracked.state == ToolState::Executing {
@@ -630,6 +630,14 @@ impl AgentFsm {
                         }
                         tracked.state = ToolState::Completed;
                     }
+                }
+
+                // Server-side calls aren't tracked, so one cancelled before its
+                // result streamed in would otherwise go to the next request
+                // without a matching result.
+                pending.extend(self.unanswered_server_tool_calls());
+
+                for id in &pending {
                     self.ctx.events.push(ConversationEvent::ToolResult {
                         tool_use_id: id.clone(),
                         content: RESULT_USER_CANCELLED.to_string(),
@@ -1236,6 +1244,30 @@ impl AgentFsm {
     fn current_invocation_events(&self) -> impl DoubleEndedIterator<Item = &ConversationEvent> {
         let start = self.ctx.view_start_index.min(self.ctx.events.len());
         self.ctx.events[start..].iter()
+    }
+
+    /// IDs of server-side tool calls in the current invocation that have no
+    /// result yet.
+    fn unanswered_server_tool_calls(&self) -> Vec<String> {
+        let answered: HashSet<&str> = self
+            .current_invocation_events()
+            .filter_map(|e| match e {
+                ConversationEvent::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        self.current_invocation_events()
+            .filter_map(|e| match e {
+                ConversationEvent::ToolCall { id, name, .. }
+                    if !answered.contains(id.as_str())
+                        && crate::tools::descriptor::by_name(name)
+                            .is_some_and(|d| !d.is_client) =>
+                {
+                    Some(id.clone())
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Handle a slash command by pushing an OOB event.
