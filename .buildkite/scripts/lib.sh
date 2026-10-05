@@ -130,5 +130,7 @@ install_nix() {
     --extra-conf "extra-substituters = https://atuin.cachix.org" \
     --extra-conf "extra-trusted-public-keys = atuin.cachix.org-1:aNJ8IU+udXIYNtrF+LHH8yIzXqgmva4hVnuHq2REgK0="
   export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+  # cachix refuses to run without $USER, which the CI container leaves unset.
+  export USER="${USER:-$(id -un)}"
   nix --version
 }
