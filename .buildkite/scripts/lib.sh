@@ -126,7 +126,9 @@ install_nix() {
   fetch_verified "https://dl.tty0.dev/DeterminateSystems/nix-installer/releases/download/v${NIX_INSTALLER_VERSION}/nix-installer-x86_64-linux" \
     "$NIX_INSTALLER_SHA256" /tmp/nix-installer
   chmod +x /tmp/nix-installer
-  $sudo /tmp/nix-installer install linux --no-confirm --init none --prefer-upstream-nix
+  $sudo /tmp/nix-installer install linux --no-confirm --init none --prefer-upstream-nix \
+    --extra-conf "extra-substituters = https://atuin.cachix.org" \
+    --extra-conf "extra-trusted-public-keys = atuin.cachix.org-1:aNJ8IU+udXIYNtrF+LHH8yIzXqgmva4hVnuHq2REgK0="
   export PATH="/nix/var/nix/profiles/default/bin:$PATH"
   nix --version
 }

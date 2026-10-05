@@ -346,17 +346,19 @@ steps:
 
   - label: ":nix: Nix build"
     key: nix-build
-    # main only: buildRustPackage builds atuin and every dependency in one
-    # derivation, so every change rebuilds from scratch (~4 min). The flake
-    # check and nixfmt steps still run on PRs.
+    # main only, so the cache only ever holds main's builds. Pushes everything
+    # it builds to atuin.cachix.org, including crane's dependency-only
+    # derivation, which isn't in the result's runtime closure.
     if: *main-only
     agents: *linux-large
     timeout_in_minutes: 45
+    secrets:
+      CACHIX_AUTH_TOKEN: CACHIX_AUTH_TOKEN
     command:
       - source .buildkite/scripts/lib.sh
       - 'section ":nix: Install Nix" install_nix'
-      - 'section ":nix: nix build" nix build --print-build-logs'
-      - 'section ":nix: Run the built binary" ./result/bin/atuin --version'
+      - 'section ":nix: nix build" nix run --inputs-from . nixpkgs#cachix -- watch-exec atuin -- nix build --print-build-logs'
+      - 'section ":nix: Run the built binary" env -u CACHIX_AUTH_TOKEN ./result/bin/atuin --version'
 
   - label: ":nix: nixfmt"
     key: nixfmt

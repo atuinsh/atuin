@@ -49,20 +49,7 @@ crossterm = "0.29"
 crypto_secretbox = "0.1"
 daemonix = "0.1"
 dashmap = "6"
-derive_more = {
-    version = "2",
-    features = [
-        "add",
-        "add_assign",
-        "as_ref",
-        "deref",
-        "display",
-        "error",
-        "from",
-        "into",
-        "debug",
-    ],
-}
+derive_more = { version = "2", features = ["add", "add_assign", "as_ref", "deref", "display", "error", "from", "into", "debug"] }
 dirs = "6"
 divan = "0.1"
 # easy-cast 0.5.5+ raises its MSRV to 1.96.
@@ -125,11 +112,7 @@ rand = { version = "0.8", features = ["std"] }
 ratatui = "0.30"
 ratatui-core = "0.1"
 regex = "1"
-reqwest = {
-    version = "0.13",
-    default-features = false,
-    features = ["json", "native-tls", "stream", "gzip", "zstd"],
-}
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "stream", "gzip", "zstd"] }
 reqwest-middleware = "0.5"
 rmcp = { version = "3", default-features = false, features = ["server", "transport-io", "schemars"] }
 rmp = "0.8"
@@ -180,10 +163,7 @@ tower-http = { version = "0.6", features = ["trace"] }
 tracing-appender = "0.2"
 tracing-futures = { version = "0.2", features = ["futures-03"] }
 tracing-opentelemetry = "0.33"
-tracing-subscriber = {
-    version = "0.3",
-    features = ["ansi", "fmt", "registry", "env-filter", "json"],
-}
+tracing-subscriber = { version = "0.3", features = ["ansi", "fmt", "registry", "env-filter", "json"] }
 tracing-tree = "0.4"
 tree-sitter = "0.27"
 tree-sitter-bash = "0.25"
@@ -198,15 +178,7 @@ url = { version = "2", features = ["serde"] }
 # Explicitly 1.6 is necessary because the v7 UUID was only added then.
 uuid = { version = "1.6", features = ["v4", "v7", "serde"] }
 whoami = "2"
-windows-sys = {
-    version = "0.61",
-    features = [
-        "Win32_System_Console",
-        "Win32_System_Threading",
-        "Win32_Foundation",
-        "Win32_Storage_FileSystem",
-    ],
-}
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Foundation", "Win32_Storage_FileSystem"] }
 wiremock = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 # held at 0.11: 0.12 pulls hashlink 0.12 (a 2nd copy vs sqlx's 0.11) + an encoding_rs/multiversion subtree
