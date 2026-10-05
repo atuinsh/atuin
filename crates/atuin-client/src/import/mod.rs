@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use atuin_common::utils::uuid_v7_for;
+use atuin_common::uuid::UuidV7Ext;
 use eyre::{Result, bail};
 use memchr::Memchr;
 use time::OffsetDateTime;
@@ -60,7 +60,9 @@ impl ImportedSessions {
         let importer = self.importer;
         self.ids
             .entry(key.to_owned())
-            .or_insert_with(|| uuid_v7_for(first_seen, format!("{importer}\0{key}").as_bytes()))
+            .or_insert_with(|| {
+                Uuid::new_v7_keyed(first_seen, format!("{importer}\0{key}").as_bytes())
+            })
             .as_simple()
             .to_string()
     }

@@ -88,7 +88,7 @@ unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true }
-# Digests session checkpoints and seeds `utils::uuid_v7_for`; xxh3 is stable across versions.
+# Digests session checkpoints and seeds `uuid::UuidV7Ext::new_v7_keyed`; xxh3 is stable across versions.
 xxhash-rust = { workspace = true }
 zeroize = { workspace = true }
 
