@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{
-    AtuinSessionId, HarnessKind, HarnessSession, SessionFilter as DbFilter,
+    Analysis, AtuinSessionId, HarnessKind, HarnessSession, SessionFilter as DbFilter,
 };
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::Usage;
@@ -147,6 +147,12 @@ pub trait SessionSource: Send + Sync {
         _cwd: &Path,
     ) -> eyre::Result<RehydrateSession> {
         eyre::bail!("this source can't restore sessions")
+    }
+
+    /// The branches of `session` as its synced rows hold them now: its heads, and the rows on
+    /// each (see [`super::catchup`]). `None` when the source doesn't know them.
+    async fn analyse(&self, _session: &HarnessSession) -> eyre::Result<Option<Analysis>> {
+        Ok(None)
     }
 }
 

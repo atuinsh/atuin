@@ -16,9 +16,19 @@
 //!   picker, accepting a session asks where to resume it: its own harness first, then the others
 //!   installed here (see [`crate::resume_tui::chooser`]; `[ai.sessions] resume_chooser = false`
 //!   skips that).
+//! - A session whose transcript is here is caught up with sync first (see
+//!   [`crate::resume_tui::catchup`]): when it went on on another machine, the messages this copy
+//!   lacks are appended. When that can't be done (an agent here has it open, it went another way
+//!   here, or this copy has messages sync hasn't got), nothing is written, and it fails saying
+//!   so: `--as-is` resumes this copy as it is, `--fork` forks it instead.
 //! - `--fork` forks it instead: it is written out as a new session of its own harness, with the
 //!   same history, linked to it as a fork (see [`atuin_common::harnesstools::fork`]), and that is
-//!   resumed. The original is left as it is.
+//!   resumed. The original is left as it is. A session that went on separately on several
+//!   machines forks from its newest branch.
+//! - `--branch` picks the branch to catch up to, or to fork from: `this`, `@<host id>`, or the
+//!   start of its head's id.
+//! - `--as-is` and `--branch` need an id naming a single session that can resume here: anything
+//!   else is an error (listing the sessions an id names), never the picker, which would drop them.
 //! - From the shell widget (`--shell-widget`), the result goes to stderr using the history
 //!   search's protocol: `__atuin_accept__:<cmd>` to run it, plain `<cmd>` to edit it, nothing to
 //!   leave the command line alone.
@@ -30,7 +40,7 @@
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 
-use atuin_client::ai_session::{AtuinSessionId, HarnessKind};
+use atuin_client::ai_session::{Analysis, AtuinSessionId, HarnessKind, SourceId};
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
@@ -38,7 +48,8 @@ use clap::Args;
 use eyre::{Result, bail};
 
 use super::session::one_line;
-use crate::resume_tui::resumer::{ForkFrom, HarnessResumer, Resume, shell_line};
+use crate::resume_tui::catchup::{self, CatchUp, Held};
+use crate::resume_tui::resumer::{HarnessResumer, NotResumable, Resume, quote, shell_line};
 use crate::resume_tui::sidecar::SidecarSource;
 use crate::resume_tui::source::{Relation, harness_label};
 use crate::resume_tui::{
@@ -80,6 +91,16 @@ pub struct Cmd {
     /// it is.
     #[arg(long, conflicts_with = "continue_in")]
     fork: bool,
+
+    /// Resume this machine's copy of the session QUERY names as it is, without catching it up
+    /// with sync.
+    #[arg(long, conflicts_with_all = ["fork", "continue_in"])]
+    as_is: bool,
+
+    /// The branch of the session QUERY names to catch up to, or to fork from with `--fork`:
+    /// `this`, `@<host id>`, or the start of its head's id. The newest by default.
+    #[arg(long, value_name = "BRANCH", conflicts_with_all = ["continue_in", "as_is"])]
+    branch: Option<String>,
 
     /// The filter the picker opens in (default: workspace, widening to global).
     #[arg(long, value_enum)]
@@ -190,12 +211,19 @@ fn picker_has_a_terminal() -> bool {
 /// What to say when `query` names several sessions and there's no terminal to pick one on: each
 /// on a line of its own, with its harness, when it last changed (in `offset`) and its title.
 fn ambiguous_note(query: &str, found: &[SessionRow], offset: time::UtcOffset) -> String {
-    let format = time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]");
-    let width = found.iter().map(|r| harness_label(r.handle.harness).len()).max().unwrap_or(0);
-    let mut note = format!(
+    let note = format!(
         "{query} names {} sessions; run `atuin ai resume {query}` on a terminal to pick one:",
         found.len()
     );
+    note + &listing(found, offset)
+}
+
+/// `found`, each on a line of its own, with its harness, when it last changed (in `offset`) and
+/// its title.
+fn listing(found: &[SessionRow], offset: time::UtcOffset) -> String {
+    let format = time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]");
+    let width = found.iter().map(|r| harness_label(r.handle.harness).len()).max().unwrap_or(0);
+    let mut note = String::new();
     for row in found {
         let when = row.updated_at.to_offset(offset).format(&format).unwrap_or_default();
         note.push_str(&format!(
@@ -206,6 +234,59 @@ fn ambiguous_note(query: &str, found: &[SessionRow], offset: time::UtcOffset) ->
         ));
     }
     note
+}
+
+/// What to say when `flag` (`--branch`, `--as-is`) is given with a `query` that names no single
+/// session: the picker would drop the flag, so it is an error, listing what `query` names.
+fn be_more_specific(
+    flag: &str,
+    query: &str,
+    found: &[SessionRow],
+    offset: time::UtcOffset,
+) -> String {
+    let query = query.escape_non_printable();
+    match found.len() {
+        0 => format!("`{flag}` resumes the session an id names: no session has the id \"{query}\""),
+        n => format!(
+            "`{flag}` resumes the session an id names: {query} names {n} sessions; be more \
+             specific:{}",
+            listing(found, offset)
+        ),
+    }
+}
+
+/// The session named, `row`, can't be resumed here, for `why`: the picker opens on it instead, so
+/// the reason shows (and another can be picked). With `flag` (`--branch`, `--as-is`) given, which
+/// the picker would drop, an error saying why.
+fn picker_on(
+    row: SessionRow,
+    why: NotResumable,
+    flag: Option<&str>,
+) -> Result<(SessionRow, NotResumable)> {
+    if let Some(flag) = flag {
+        let message = format!("can't resume {} with `{flag}`: {why}", row.handle.session);
+        bail!("{}", message.escape_non_printable());
+    }
+    Ok((row, why))
+}
+
+/// With `flag` (`--branch`, `--as-is`) given and `query` naming no single session, the error
+/// saying to be more specific ([`be_more_specific`]).
+async fn no_single_session_for(
+    source: &dyn SessionSource,
+    query: &str,
+    flag: Option<&str>,
+) -> Result<()> {
+    let Some(flag) = flag else {
+        return Ok(());
+    };
+    let found = if looks_like_id(query) {
+        source.find_by_id(query).await?
+    } else {
+        Vec::new()
+    };
+    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+    bail!("{}", be_more_specific(flag, query, &found, offset))
 }
 
 /// The sessions `query` names when it is an id naming several (see [`direct_match`]), for the
@@ -292,7 +373,10 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         let (source, resumer, query) = (source.as_ref(), resumer.as_ref(), query.trim());
         let (plan, status) = match cmd.continue_in {
             Some(into) => continue_plan(source, resumer, query, into).await?,
-            None => fork_plan(source, resumer, query).await?,
+            None => {
+                let branch = cmd.branch.as_deref();
+                fork_plan(source, resumer, query, branch, &context.host_id).await?
+            }
         };
         // The widget reads stderr for the command: nothing else may go there.
         if output != Output::Widget {
@@ -303,6 +387,11 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
 
     let mut preselect = None;
     let target = direct_target(source.as_ref(), query.trim()).await?;
+    // These only resume the session an id names: the picker would drop them.
+    let flag = cmd.branch.as_ref().map(|_| "--branch").or(cmd.as_is.then_some("--as-is"));
+    if target.is_none() {
+        no_single_session_for(source.as_ref(), query.trim(), flag).await?;
+    }
     // An id naming several sessions opens the picker on them, to pick one.
     let matches = if target.is_none() {
         ambiguous_matches(source.as_ref(), query.trim(), picker_has_a_terminal()).await?
@@ -316,34 +405,20 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         {
             eprintln!("atuin: {note}");
         }
-        let plan = match resumer.plan(&row).await {
-            Ok(Resume {
-                plan,
-                restore: None,
-            }) => Ok(plan),
-            Ok(Resume {
-                restore: Some(restore),
-                ..
-            }) => {
-                let plan = resumer.restore(source.as_ref(), &row, &restore).await;
-                // The widget reads stderr for the command: nothing else may go there.
-                if plan.is_ok()
-                    && output != Output::Widget
-                    && let Some(note) = &restore.note
-                {
-                    eprintln!(
-                        "atuin: restored the session from sync; {}",
-                        note.escape_non_printable()
-                    );
-                }
-                plan
-            }
-            Err(why) => Err(why),
-        };
+        let branch = cmd.branch.as_deref();
+        let (source, resumer) = (source.as_ref(), resumer.as_ref());
+        let plan = direct_plan(source, resumer, &row, cmd.as_is, branch, &context.host_id).await?;
         match plan {
-            Ok(plan) => return finish(direct_outcome(plan, output, settings.enter_accept), output),
-            // Open the picker on it instead, so the reason shows (and another can be picked).
-            Err(why) => preselect = Some((row, why)),
+            Ok((plan, status)) => {
+                // The widget reads stderr for the command: nothing else may go there.
+                if let Some(status) = status
+                    && output != Output::Widget
+                {
+                    eprintln!("atuin: {}", status.escape_non_printable());
+                }
+                return finish(direct_outcome(plan, output, settings.enter_accept), output);
+            }
+            Err(why) => preselect = Some(picker_on(row, why, flag)?),
         }
     }
 
@@ -368,6 +443,91 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         eprintln!("atuin: {}", note.escape_non_printable());
     }
     finish(outcome, output)
+}
+
+/// `atuin ai resume <id>`: the plan resuming `row` in its own agent, caught up with sync first
+/// (with `as_is`, as it is) to the head `branch` names, and what to say of it; inside, why it
+/// can't resume here. A choice to make (see [`Held`]) is an error saying how to make it.
+async fn direct_plan(
+    source: &dyn SessionSource,
+    resumer: &dyn Resumer,
+    row: &SessionRow,
+    as_is: bool,
+    branch: Option<&str>,
+    here: &str,
+) -> Result<Result<(ResumePlan, Option<String>), NotResumable>> {
+    if as_is {
+        match resumer.plan(row).await {
+            Ok(Resume {
+                plan,
+                restore: None,
+                ..
+            }) => return Ok(Ok((plan, None))),
+            Err(why) => return Ok(Err(why)),
+            // No copy here to resume as it is: it is restored.
+            Ok(_) => {}
+        }
+    }
+    let head = match branch {
+        Some(selector) => Some(pick_head(source, row, selector, here).await?),
+        None => None,
+    };
+    Ok(match resumer.catch_up(source, row, head.as_ref()).await {
+        Ok(CatchUp::Ready { plan, status }) => Ok((plan, status)),
+        Ok(CatchUp::Choice(held)) => bail!("{}", choice_note(row, &held, here)),
+        Err(why) => Err(why),
+    })
+}
+
+/// The head of `row` that `selector` names (`--branch`).
+async fn pick_head(
+    source: &dyn SessionSource,
+    row: &SessionRow,
+    selector: &str,
+    here: &str,
+) -> Result<SourceId> {
+    let analysis = source.analyse(&row.handle).await?;
+    let heads = analysis.as_ref().map(Analysis::heads).unwrap_or_default();
+    let now = time::OffsetDateTime::now_utc();
+    match catchup::pick_branch(heads, selector, now, here) {
+        Ok(head) => Ok(head.source_id.clone()),
+        Err(why) => {
+            // Line by line: the listing of branches keeps its lines.
+            let lines: Vec<String> =
+                why.lines().map(|l| l.escape_non_printable().to_string()).collect();
+            bail!("--branch: {}", lines.join("\n"))
+        }
+    }
+}
+
+/// What to say when catching `row` up needs a choice: why, and the flags that make it. Ids are
+/// agent-supplied: shown without their control characters.
+fn choice_note(row: &SessionRow, held: &Held, here: &str) -> String {
+    let id = quote(row.handle.session.as_ref());
+    let id = id.escape_non_printable();
+    let status = held.status();
+    let mut note =
+        format!("{}: `--as-is` resumes this copy as it is", status.escape_non_printable());
+    if let Some(branch) = held.branches.get(held.chosen) {
+        let pick = if held.chosen == 0 {
+            String::new()
+        } else {
+            format!(" --branch {}", quote(&branch.selector).escape_non_printable())
+        };
+        note.push_str(&format!(
+            ", `atuin ai resume {id} --fork{pick}` forks it from {}'s branch",
+            branch.host
+        ));
+    }
+    if held.branches.len() > 1 {
+        note.push_str("; `--branch` picks another:");
+        let now = time::OffsetDateTime::now_utc();
+        for branch in &held.branches {
+            let line = catchup::describe(&branch.head, now, here);
+            note.push_str(&format!("\n  {}  {line}", branch.selector.escape_non_printable()));
+        }
+    }
+    note
 }
 
 /// `atuin ai resume <id> --in <harness>`: write the session `query` names out as a new session
@@ -401,11 +561,19 @@ async fn fork_plan(
     source: &dyn SessionSource,
     resumer: &dyn Resumer,
     query: &str,
+    branch: Option<&str>,
+    here: &str,
 ) -> Result<(ResumePlan, String)> {
     let Some((row, redirected)) = direct_target(source, query).await? else {
         bail!("`--fork` forks the session an id names: no single session has the id {query:?}");
     };
-    let forked = resumer.fork(source, &row, ForkFrom::default()).await.map_err(|why| {
+    let head = match branch {
+        Some(selector) => Some(pick_head(source, &row, selector, here).await?),
+        None => None,
+    };
+    let from = catchup::fork_from(source, &row.handle, head.as_ref()).await;
+    let forked = async { resumer.fork(source, &row, from?).await };
+    let forked = forked.await.map_err(|why| {
         let message = format!("can't fork {}: {why}", row.handle.session);
         eyre::eyre!("{}", message.escape_non_printable())
     })?;
@@ -586,6 +754,68 @@ mod tests {
         );
     }
 
+    /// `--branch` and `--as-is` only resume the session an id names: with an id naming several,
+    /// or none, it is an error listing them, never the picker, which would drop the flag.
+    #[rstest]
+    #[tokio::test]
+    async fn a_flag_on_no_single_session_says_to_be_more_specific() {
+        use atuin_client::ai_session::HarnessKind;
+
+        let mut claude = fake::row(HarnessKind::ClaudeCode, "7aaabc31-1631", "fix the flaky test");
+        claude.updated_at = time::macros::datetime!(2026-09-27 14:03 UTC);
+        let mut pi = fake::row(HarnessKind::Pi, "7aaabc31-1631", "plan the dotfiles sync");
+        pi.updated_at = time::macros::datetime!(2026-09-26 09:12 UTC);
+        assert_eq!(
+            be_more_specific("--branch", "7aaabc31", &[claude, pi], time::UtcOffset::UTC),
+            [
+                "`--branch` resumes the session an id names: 7aaabc31 names 2 sessions; be more \
+                 specific:",
+                "  Claude Code  2026-09-27 14:03  fix the flaky test  (7aaabc31-1631)",
+                "  Pi           2026-09-26 09:12  plan the dotfiles sync  (7aaabc31-1631)",
+            ]
+            .join("\n")
+        );
+        assert_eq!(
+            be_more_specific("--as-is", "flaky", &[], time::UtcOffset::UTC),
+            "`--as-is` resumes the session an id names: no session has the id \"flaky\""
+        );
+
+        let source = FakeSource::new();
+        let ambiguous = "ses_4b8e2f1a9c3d7e";
+        assert!(direct_target(&source, ambiguous).await.unwrap().is_none());
+        for flag in ["--branch", "--as-is"] {
+            let err = no_single_session_for(&source, ambiguous, Some(flag)).await.unwrap_err();
+            let err = err.to_string();
+            assert!(err.contains("be more specific"), "{err}");
+            assert!(err.contains("ses_4b8e2f1a9c3d7e6f"), "{err}");
+            let err = no_single_session_for(&source, "flaky", Some(flag)).await.unwrap_err();
+            assert!(err.to_string().contains("no session has the id"), "{err}");
+        }
+        // Without them, the picker opens on the matches.
+        assert!(no_single_session_for(&source, ambiguous, None).await.is_ok());
+    }
+
+    /// A session named that can't be resumed opens the picker on it, but not with `--branch` or
+    /// `--as-is`, which the picker would drop: an error saying why.
+    #[rstest]
+    #[case::plain(None, None)]
+    #[case::branch(Some("--branch"), Some("can't resume s with `--branch`: catching it up"))]
+    #[case::as_is(Some("--as-is"), Some("can't resume s with `--as-is`: catching it up"))]
+    fn a_session_that_cant_resume_keeps_its_flags(
+        #[case] flag: Option<&str>,
+        #[case] err: Option<&str>,
+    ) {
+        use atuin_client::ai_session::HarnessKind;
+
+        let row = fake::row(HarnessKind::ClaudeCode, "s", "t");
+        let why = NotResumable::CatchUp("no longer a head".to_owned());
+        match (picker_on(row, why, flag), err) {
+            (Ok((row, _)), None) => assert_eq!(row.handle.session.as_ref(), "s"),
+            (Err(e), Some(want)) => assert!(e.to_string().starts_with(want), "{e}"),
+            (got, _) => panic!("{got:?}"),
+        }
+    }
+
     /// An id naming several sessions opens the picker on all of them, given a terminal to pick
     /// one on; without one, it fails, listing them. A unique id, or a query that isn't an id,
     /// pins nothing.
@@ -742,18 +972,117 @@ mod tests {
     async fn forking_by_id_plans_the_fork() {
         let source = FakeSource::new();
         let resumer = FakeResumer::default();
-        let (plan, status) = fork_plan(&source, &resumer, "7f3c9a12").await.unwrap();
+        let (plan, status) =
+            fork_plan(&source, &resumer, "7f3c9a12", None, fake::THIS_HOST_ID).await.unwrap();
         let fork = "forked-7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10";
         assert!(plan.args.iter().any(|a| a == fork), "{plan:?}");
         assert_eq!(status, "forked into a new Claude Code session");
 
-        let err = fork_plan(&source, &resumer, "fix flaky").await.unwrap_err();
+        let err =
+            fork_plan(&source, &resumer, "fix flaky", None, fake::THIS_HOST_ID).await.unwrap_err();
         assert!(err.to_string().contains("no single session has the id"), "{err}");
 
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--fork", "--print"]).unwrap();
         assert!(cli.cmd.fork);
         assert_eq!(cli.cmd.output(), Output::Print);
         assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--fork", "--in", "pi"]).is_err());
+    }
+
+    /// The fake session `7f3c9a12…`, with sync holding two branches of it: this host's `a`-`b`-
+    /// `x`-`y`, the newest, and another's `a`-`b`-`c`-`d`.
+    async fn branched() -> (FakeSource, SessionRow) {
+        let row = direct_match(&FakeSource::new(), "7f3c9a12").await.unwrap().unwrap();
+        let rows = fake::synced_rows_of(&row.handle, true);
+        (FakeSource::new().with_synced(&row.handle, rows), row)
+    }
+
+    /// `atuin ai resume <id>` catches the session's copy here up with sync first, saying what it
+    /// wrote. A choice to make fails, saying why and naming the flags that make it; `--as-is`
+    /// resumes the copy as it is, and `--branch` names no branch the session hasn't got.
+    #[rstest]
+    #[tokio::test]
+    async fn resuming_by_id_catches_up_or_says_what_to_choose() {
+        use crate::resume_tui::catchup::{Why, branches};
+
+        let (source, row) = branched().await;
+        let plan = FakeResumer::default().plan(&row).await.unwrap().plan;
+        let status = "caught up: 2 messages from @00000002".to_owned();
+        let ready = FakeResumer {
+            catch_up: Some(CatchUp::Ready {
+                plan: plan.clone(),
+                status: Some(status.clone()),
+            }),
+            ..FakeResumer::default()
+        };
+        let here = fake::THIS_HOST_ID;
+        let got = direct_plan(&source, &ready, &row, false, None, here).await.unwrap();
+        assert_eq!(got, Ok((plan.clone(), Some(status))));
+
+        let analysis = source.analyse(&row.handle).await.unwrap().unwrap();
+        let copy = fake::local_tip(&["a", "b", "c", "d"], Some("d"));
+        let held = FakeResumer {
+            catch_up: Some(CatchUp::Choice(Box::new(Held {
+                why: Why::Live,
+                harness: HarnessKind::ClaudeCode,
+                plan: plan.clone(),
+                branches: branches(&analysis, Some(&copy), here),
+                chosen: 0,
+            }))),
+            ..FakeResumer::default()
+        };
+        let err = direct_plan(&source, &held, &row, false, None, here).await.unwrap_err();
+        let err = err.to_string();
+        let id = row.handle.session.as_ref();
+        let want = format!(
+            "Claude Code is running this session here: `--as-is` resumes this copy as it is, \
+             `atuin ai resume {id} --fork` forks it from this machine's branch; `--branch` picks \
+             another:\n  y  this machine · "
+        );
+        assert!(err.starts_with(&want), "{err}");
+        assert!(err.contains("\n  d  @00000002 · "), "{err}");
+
+        let got = direct_plan(&source, &held, &row, true, None, here).await.unwrap();
+        assert_eq!(got, Ok((plan, None)), "as it is");
+        let err = direct_plan(&source, &held, &row, false, Some("nope"), here).await.unwrap_err();
+        assert!(err.to_string().starts_with("--branch: no branch is \"nope\""), "{err}");
+    }
+
+    /// `--fork` forks a session that went on separately on several machines from its newest
+    /// branch, or the one `--branch` names, from the rows on it.
+    #[rstest]
+    #[case::the_newest(None, &["a", "b", "x", "y"])]
+    #[case::by_host(Some("@00000002"), &["a", "b", "c", "d"])]
+    #[case::by_head(Some("d"), &["a", "b", "c", "d"])]
+    #[tokio::test]
+    async fn forking_by_id_forks_from_a_branch(
+        #[case] branch: Option<&str>,
+        #[case] want: &[&str],
+    ) {
+        let (source, _) = branched().await;
+        let resumer = FakeResumer::default();
+        let here = fake::THIS_HOST_ID;
+        fork_plan(&source, &resumer, "7f3c9a12", branch, here).await.unwrap();
+        let rows = resumer.forks.lock()[0].rows.clone().unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.source_id.as_str()).collect();
+        assert_eq!(ids, want);
+    }
+
+    /// `--as-is` and `--branch` go with resuming (and `--branch` with `--fork`), not with each
+    /// other or `--in`; `--print` still prints.
+    #[rstest]
+    #[case::as_is(&["--as-is", "--print"], true)]
+    #[case::branch(&["--branch", "@00000002"], true)]
+    #[case::fork_from_a_branch(&["--fork", "--branch", "d", "--print"], true)]
+    #[case::as_is_and_fork(&["--as-is", "--fork"], false)]
+    #[case::as_is_and_branch(&["--as-is", "--branch", "d"], false)]
+    #[case::branch_and_in(&["--branch", "d", "--in", "pi"], false)]
+    fn catch_up_flags(#[case] flags: &[&str], #[case] ok: bool) {
+        let args = ["resume", "7f3c9a12"].iter().chain(flags);
+        let cli = Cli::try_parse_from(args);
+        assert_eq!(cli.is_ok(), ok, "{flags:?}");
+        if let Ok(cli) = cli {
+            assert_eq!(cli.cmd.print, flags.contains(&"--print"));
+        }
     }
 
     #[rstest]

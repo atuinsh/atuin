@@ -6,8 +6,9 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
-//!   Restoring a session from sync, or continuing it in another harness, which only an enter or
-//!   tab asks for, goes first: only the newest accepted session's restore is kept, and one dropped
+//!   Restoring a session from sync (or catching its copy here up with sync), or continuing it in
+//!   another harness, which only an enter or tab asks for, goes first: only the newest accepted
+//!   session's restore or catch-up is kept, and one dropped
 //!   before it started is reported ([`Response::Abandoned`]) so that the picker asks again if the
 //!   user comes back to it. Likewise only the newest continuation or fork is kept, and one is
 //!   dropped when the picker stops waiting on it ([`Request::CancelContinue`]); once the picker is
@@ -19,14 +20,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, SourceId};
 use atuin_client::settings::AiSessionFilterMode as FilterMode;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
-use super::resumer::{
-    Continued, ForkFrom, Forked, NotResumable, Restore, Resume, ResumePlan, Resumer,
-};
+use super::catchup::{self, CatchUp};
+use super::resumer::{Continued, Forked, NotResumable, Restore, Resume, ResumePlan, Resumer};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -47,15 +47,18 @@ pub enum Request {
     Accept(Box<SessionRow>),
     /// Write out the transcript of a session planned with a restore, and plan resuming it.
     Restore(Box<SessionRow>, Restore),
+    /// Catch the copy here of a session up with sync, and plan resuming it. Kept as a restore
+    /// is, in its place.
+    CatchUp(Box<SessionRow>),
     /// Count what continuing a session in another harness would flatten (reads all of it).
     Flatten(HarnessSession, PathBuf),
     /// Write a session out as a new session of another harness, and plan resuming that. The id
     /// comes back with the answer. Only the newest is kept: one a newer one replaces before it
     /// started never runs (its answer would be ignored, as the picker waits on the newer id).
     Continue(Box<SessionRow>, HarnessKind, u64),
-    /// Write a session out as a fork of it, and plan resuming that. Answered as a continuation
-    /// is, and in its place: a newer pick supersedes either.
-    Fork(Box<SessionRow>, u64),
+    /// Write a session out as a fork of it (from a head, when one is given), and plan resuming
+    /// that. Answered as a continuation is, and in its place: a newer pick supersedes either.
+    Fork(Box<SessionRow>, u64, Option<SourceId>),
     /// The picker no longer waits on a continuation or fork (the user chose something else):
     /// drop the one not yet started, so nothing is written for it.
     CancelContinue,
@@ -73,8 +76,10 @@ pub enum Response {
     Plan(HarnessSession, Result<Resume, NotResumable>),
     /// The session is restored (or couldn't be): the plan that resumes it.
     Restored(HarnessSession, Result<ResumePlan, NotResumable>),
-    /// The session's restore was dropped before it started, for a newer accepted session's: it
-    /// has to be asked for again.
+    /// The copy here is caught up (or catching up needs a choice, or failed).
+    CaughtUp(HarnessSession, Result<CatchUp, NotResumable>),
+    /// The session's restore or catch-up was dropped before it started, for a newer accepted
+    /// session's: it has to be asked for again.
     Abandoned(HarnessSession),
     /// What continuing the session in another harness would flatten (or why that can't be read).
     Flattened(HarnessSession, Result<Flattened, String>),
@@ -174,7 +179,7 @@ impl Latest {
             Request::Children(_) => &mut self.children,
             Request::Plan(_) => &mut self.plan,
             Request::Accept(_) => &mut self.accept,
-            Request::Restore(..) => &mut self.restore,
+            Request::Restore(..) | Request::CatchUp(_) => &mut self.restore,
             Request::Flatten(..) => &mut self.flatten,
             Request::Continue(..) | Request::Fork(..) => &mut self.continuation,
             Request::CancelContinue => {
@@ -185,11 +190,10 @@ impl Latest {
         };
         let dropped = slot.replace(request)?;
         match (dropped, &*slot) {
-            (Request::Restore(old, _), Some(Request::Restore(new, _)))
-                if old.handle != new.handle =>
-            {
-                Some(old.handle)
-            }
+            (
+                Request::Restore(old, _) | Request::CatchUp(old),
+                Some(Request::Restore(new, _) | Request::CatchUp(new)),
+            ) if old.handle != new.handle => Some(old.handle),
             _ => None,
         }
     }
@@ -263,6 +267,10 @@ async fn details(
                 row.handle.clone(),
                 resumer.restore(source.as_ref(), &row, &restore).await,
             ),
+            Request::CatchUp(row) => Response::CaughtUp(
+                row.handle.clone(),
+                resumer.catch_up(source.as_ref(), &row, None).await,
+            ),
             Request::Flatten(session, cwd) => {
                 let flattened =
                     source.rehydrate(&session, &cwd).await.map_err(|e| format!("{e:#}")).and_then(
@@ -273,8 +281,14 @@ async fn details(
             Request::Continue(row, target, id) => {
                 Response::Continued(id, resumer.continue_in(source.as_ref(), &row, target).await)
             }
-            Request::Fork(row, id) => {
-                Response::Forked(id, resumer.fork(source.as_ref(), &row, ForkFrom::default()).await)
+            Request::Fork(row, id, head) => {
+                let source = source.as_ref();
+                let from = catchup::fork_from(source, &row.handle, head.as_ref()).await;
+                let forked = match from {
+                    Ok(from) => resumer.fork(source, &row, from).await,
+                    Err(why) => Err(why),
+                };
+                Response::Forked(id, forked)
             }
             Request::Search { .. } | Request::CancelContinue => continue,
         };
@@ -296,6 +310,7 @@ mod tests {
 
     use super::*;
     use crate::resume_tui::fake::{self, FakeResumer, FakeSource};
+    use crate::resume_tui::resumer::ForkFrom;
 
     fn roots() -> SessionFilter {
         let mut filter = SessionFilter::default();
@@ -536,7 +551,7 @@ mod tests {
         // `b`, then `c`: each forked, or continued.
         for ((n, id), &fork) in (1..).zip(["b", "c"]).zip(forks) {
             tx.send(if fork {
-                Request::Fork(row(id), n)
+                Request::Fork(row(id), n, None)
             } else {
                 Request::Continue(row(id), HarnessKind::Codex, n)
             });

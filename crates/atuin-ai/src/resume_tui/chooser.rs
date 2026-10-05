@@ -6,7 +6,7 @@
 //! hints at. Right under it, when its harness is installed and atuin can write its sessions,
 //! forking it: a new session of the same harness, with the same history (see
 //! [`atuin_common::harnesstools::fork`]); `f` selects it, and it is preselected when the original
-//! can't resume here or looks to be running here still. It is dimmed, and can't be picked, once
+//! can't resume here or an agent here has it open. It is dimmed, and can't be picked, once
 //! the session turns out to hold no conversation to fork. Then every other harness installed
 //! here, to continue the session in: it is written out as a new session there, its tool calls
 //! flattened into notes, and that is resumed. Harnesses
@@ -14,6 +14,11 @@
 //! harness is always listed, dimmed with the reason when it can't resume it here (a Copilot
 //! session, a directory that's gone, a harness that isn't installed), and the first line that
 //! works is preselected instead.
+//!
+//! When catching the session's copy here up with sync needs a choice ([`Held`]), the chooser opens
+//! again on it, saying why: its first line resumes the copy here as it is, and a fork line for each
+//! of the session's heads, newest first, forks from that head; the newest is preselected when an
+//! agent here has the session open.
 //!
 //! The chooser keeps the key's meaning: opened with enter it resumes (or edits, without
 //! `enter_accept`), opened with tab it edits, and tab in it always edits.
@@ -34,8 +39,9 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
+use super::catchup::{Branch, Held, Why};
 use super::render::{harness_style, style};
-use super::resumer::NotResumable;
+use super::resumer::{NotResumable, ResumePlan};
 use super::source::{SessionRow, harness_badge, harness_label};
 use super::state::{InputAction, LIVE_SECS, Pending, Picked, State};
 
@@ -56,31 +62,49 @@ pub struct Chooser {
     /// Whether the selection was moved by hand: if not, it moves off the first line once that
     /// turns out not to work.
     pub moved: bool,
+    /// Set when it opened on catching up needing a choice: the first line resumes the copy here
+    /// as it is, and the fork lines fork from the session's heads.
+    pub held: Option<Box<Held>>,
 }
 
 /// What a line of the chooser does with the session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Destination {
     /// Resume it in its own harness.
     Original,
-    /// Fork it: a new session of its own harness, with the same history.
-    Fork,
+    /// Resume the copy here as it is, with this plan, rather than catch it up.
+    AsIs(Box<ResumePlan>),
+    /// Fork it: a new session of its own harness, with the same history (that of a head, when
+    /// given).
+    Fork(Option<Box<Branch>>),
     /// Continue it in another harness.
     Continue(HarnessKind),
 }
 
 impl Chooser {
+    /// How many fork lines it has.
+    fn forks(&self) -> usize {
+        match &self.held {
+            Some(held) if self.fork => held.branches.len(),
+            _ => usize::from(self.fork),
+        }
+    }
+
     pub fn len(&self) -> usize {
-        1 + usize::from(self.fork) + self.targets.len()
+        1 + self.forks() + self.targets.len()
     }
 
     /// What line `n` does.
     pub fn line(&self, n: usize) -> Destination {
-        let first = 1 + usize::from(self.fork);
-        match n {
-            0 => Destination::Original,
-            1 if self.fork => Destination::Fork,
-            n => self
+        let first = 1 + self.forks();
+        match (n, &self.held) {
+            (0, None) => Destination::Original,
+            (0, Some(held)) => Destination::AsIs(Box::new(held.plan.clone())),
+            (n, None) if n < first => Destination::Fork(None),
+            (n, Some(held)) if n < first => {
+                Destination::Fork(held.branches.get(n - 1).cloned().map(Box::new))
+            }
+            (n, _) => self
                 .targets
                 .get(n - first)
                 .map_or(Destination::Original, |t| Destination::Continue(*t)),
@@ -147,6 +171,31 @@ impl State {
             selected: 0,
             action,
             moved: false,
+            held: None,
+        });
+        self.settle_chooser();
+    }
+
+    /// Open the chooser on `row` for the choice catching it up needs (`held`): resume the copy
+    /// here as it is, fork from a head (with `fork`), or continue it in one of `targets`. The
+    /// status line says why.
+    pub fn open_choice(
+        &mut self,
+        row: &SessionRow,
+        held: Box<Held>,
+        targets: Vec<HarnessKind>,
+        fork: bool,
+        action: Pending,
+    ) {
+        self.status = Some((held.status(), Meaning::AlertWarn));
+        self.chooser = Some(Chooser {
+            row: row.clone(),
+            targets,
+            fork: fork && !held.branches.is_empty(),
+            selected: 0,
+            action,
+            moved: false,
+            held: Some(held),
         });
         self.settle_chooser();
     }
@@ -163,9 +212,12 @@ impl State {
     }
 
     /// Move an untouched selection off the first line once its plan says it can't be picked,
-    /// or onto the fork when the session looks to be running here still (it was written to
-    /// lately, itself rather than a child: see [`running`]), which resuming it again would race.
-    /// Never onto a fork with nothing to fork: off it again, if it was moved there already.
+    /// or onto the fork when an agent here has the session open ([`Resume::live`]), which
+    /// resuming it again would race. Never onto a fork with nothing to fork: off it again, if it
+    /// was moved there already. For a choice catching up needs, the copy here as it is, or the
+    /// fork from the newest head while an agent here has the session open.
+    ///
+    /// [`Resume::live`]: super::resumer::Resume::live
     pub fn settle_chooser(&mut self) {
         let Some(chooser) = &self.chooser else {
             return;
@@ -175,10 +227,15 @@ impl State {
         }
         let row = &chooser.row;
         let fork = chooser.fork && !self.nothing_to_fork(&row.handle);
-        let running = fork && row.host_id == self.context.host_id && {
-            let row = self.target().filter(|r| r.handle == row.handle).unwrap_or(row);
-            running((self.now)(), row)
-        };
+        if let Some(held) = &chooser.held {
+            let selected = usize::from(fork && held.why == Why::Live);
+            if let Some(chooser) = self.chooser.as_mut() {
+                chooser.selected = selected;
+            }
+            return;
+        }
+        let plan = self.plans.get(&row.handle).and_then(|p| p.as_ref().ok());
+        let running = fork && plan.is_some_and(|p| p.live);
         let selected = if !running && self.original_unavailable(&row.handle).is_none() {
             0
         } else if fork || !chooser.fork {
@@ -210,6 +267,9 @@ impl State {
         // As the list last read it, while it still shows it.
         let row = self.target().filter(|r| r.handle == *session).unwrap_or(&chooser.row);
         let live = running((self.now)(), row);
+        if let Some(held) = &chooser.held {
+            return self.held_choices(chooser, held);
+        }
         let original = match self.plans.get(session) {
             Some(Err(why)) => Choice {
                 harness: session.harness,
@@ -264,6 +324,28 @@ impl State {
             unavailable: None,
         });
         std::iter::once(original).chain(fork).chain(continued).collect()
+    }
+
+    /// The chooser's lines for a choice catching up needs.
+    fn held_choices(&self, chooser: &Chooser, held: &Held) -> Vec<Choice> {
+        let harness = chooser.row.handle.harness;
+        let line = |detail: String| Choice {
+            harness,
+            detail,
+            unavailable: None,
+        };
+        let detail = match held.why {
+            Why::Live => "this copy as is · running here",
+            _ => "this copy as is",
+        };
+        let now = (self.now)();
+        let forks = held.branches.iter().take(chooser.forks()).map(|b| line(b.line(now)));
+        let continued = chooser.targets.iter().map(|target| Choice {
+            harness: *target,
+            detail: "continue".to_owned(),
+            unavailable: None,
+        });
+        std::iter::once(line(detail.to_owned())).chain(forks).chain(continued).collect()
     }
 
     /// A key while the chooser is open: move (up/down, ctrl-p/ctrl-n, k/j, f to the fork), pick
@@ -324,7 +406,7 @@ impl State {
             ));
             return InputAction::Continue;
         }
-        if line == Destination::Fork && self.nothing_to_fork(&row.handle) {
+        if matches!(line, Destination::Fork(_)) && self.nothing_to_fork(&row.handle) {
             // Its line already says why; the `--fork` command copied would fail as well.
             self.status =
                 Some(("nothing to fork: pick another line".to_owned(), Meaning::AlertError));

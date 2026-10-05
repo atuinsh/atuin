@@ -481,6 +481,7 @@ async fn with_chooser(settings: &Settings, query: &str, action: super::state::Pe
     state.results[at].active_at = fake::now() - time::Duration::days(1);
     let row = state.selected().unwrap().clone();
     let resumer = FakeResumer::default();
+    state.plans.insert(row.handle.clone(), resumer.plan(&row).await);
     state.open_chooser(&row, resumer.continue_targets(&row), resumer.can_fork(&row), action);
     let flattened = Flattened {
         tool_calls: 42,
@@ -653,7 +654,7 @@ async fn f_selects_the_fork_under_the_original() {
         let row = state.selected().unwrap().clone();
         InputAction::Pick(Box::new(Picked {
             row,
-            line: Destination::Fork,
+            line: Destination::Fork(None),
             action,
         }))
     };
@@ -700,11 +701,11 @@ async fn the_fork_is_preselected_over_an_original_that_shouldnt_resume(
         } else {
             fake::now()
         };
-        state.plans.insert(row.handle.clone(), FakeResumer::default().plan(&row).await);
     } else {
         row.updated_at = fake::now() - time::Duration::days(1);
         row.active_at = row.updated_at;
     }
+    state.plans.insert(row.handle.clone(), FakeResumer::default().plan(&row).await);
     state.results[state.list.selected] = row.clone();
     let resumer = FakeResumer::default();
     state.open_chooser(&row, resumer.continue_targets(&row), true, Pending::Resume);
@@ -754,6 +755,7 @@ async fn a_session_with_nothing_to_fork_never_picks_the_fork(#[values(false, tru
     row.active_at = fake::now();
     let at = state.list.selected;
     state.results[at] = row.clone();
+    state.plans.insert(row.handle.clone(), FakeResumer::default().plan(&row).await);
     let targets = FakeResumer::default().continue_targets(&row);
     state.open_chooser(&row, targets.clone(), true, Pending::Resume);
     assert_eq!(state.chooser.as_ref().unwrap().selected, usize::from(!empty));
@@ -811,7 +813,7 @@ async fn a_picked_fork_is_written_then_resumed() {
     let row = state.selected().unwrap().clone();
     let picked = Picked {
         row: row.clone(),
-        line: Destination::Fork,
+        line: Destination::Fork(None),
         action: Pending::Resume,
     };
     assert_eq!(pick(&mut state, picked, resumer.as_ref(), &requests), None, "waits");
@@ -1400,7 +1402,7 @@ async fn a_continuation_picked_supersedes_a_waiting_original(#[values(false, tru
     let picked = Picked {
         row: row.clone(),
         line: if fork {
-            Destination::Fork
+            Destination::Fork(None)
         } else {
             Destination::Continue(HarnessKind::Codex)
         },
@@ -1465,7 +1467,7 @@ async fn an_original_chosen_supersedes_a_continuation(
         action: Pending::Resume,
     };
     let first = if fork {
-        Destination::Fork
+        Destination::Fork(None)
     } else {
         Destination::Continue(HarnessKind::Codex)
     };
@@ -2184,4 +2186,244 @@ async fn a_clipped_chooser_keeps_the_selected_line_in_sight() {
         let out = text(&render(&mut state, &s, 100, 4));
         assert!(out.contains(&format!("> {}", lines[n])), "line {}: {out}", n + 1);
     }
+}
+
+// --- catching up with sync ----------------------------------------------------------------------
+
+/// A resumer whose catching up of this host's sessions does `caught`, and the selected session's
+/// plan from it; and a worker over a source holding the selected session's synced rows.
+async fn catching_up(
+    state: &mut State,
+    caught: super::catchup::CatchUp,
+) -> (
+    std::sync::Arc<FakeResumer>,
+    super::worker::Requests,
+    tokio::sync::mpsc::UnboundedReceiver<super::worker::Response>,
+) {
+    use std::sync::Arc;
+
+    let row = state.selected().unwrap().clone();
+    let resumer = Arc::new(FakeResumer {
+        catch_up: Some(caught),
+        ..FakeResumer::default()
+    });
+    state.plans.insert(row.handle.clone(), resumer.plan(&row).await);
+    let source =
+        FakeSource::new().with_synced(&row.handle, fake::synced_rows_of(&row.handle, true));
+    let (requests, responses) = super::worker::spawn(Arc::new(source), resumer.clone());
+    (resumer, requests, responses)
+}
+
+/// The choice catching up needs for `why`: this copy is at `d`, the other host's head; this
+/// host's `y` is the newest.
+async fn held(why: super::catchup::Why) -> super::catchup::CatchUp {
+    use super::catchup::{CatchUp, Held, branches};
+
+    let source = FakeSource::from_rows(Vec::new())
+        .with_synced(&fake::synced_handle(), fake::synced_rows(true));
+    let analysis = source.analyse(&fake::synced_handle()).await.unwrap().unwrap();
+    let copy = fake::local_tip(&["a", "b", "c", "d"], Some("d"));
+    CatchUp::Choice(Box::new(Held {
+        why,
+        harness: atuin_client::ai_session::HarnessKind::ClaudeCode,
+        plan: as_is_plan(),
+        branches: branches(&analysis, Some(&copy), fake::THIS_HOST_ID),
+        chosen: 0,
+    }))
+}
+
+fn as_is_plan() -> super::ResumePlan {
+    super::ResumePlan {
+        program: "claude".to_owned(),
+        args: vec!["--resume".to_owned(), "as-is".to_owned()],
+        cwd: None,
+        cwd_requirement: atuin_common::harnesstools::resume::CwdRequirement::Preferred,
+        native_path: None,
+    }
+}
+
+/// Enter on a session whose copy is here catches it up with sync first, through the worker as a
+/// restore goes, then resumes it; what was written is said once the picker is gone.
+#[rstest]
+#[tokio::test]
+async fn a_copy_here_is_caught_up_then_resumed() {
+    use super::catchup::CatchUp;
+    use super::state::{Pending, RESTORE};
+    use super::worker::Response;
+    use super::{Outcome, accept, respond};
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let status = "caught up: 2 messages from @00000002".to_owned();
+    let caught = CatchUp::Ready {
+        plan: as_is_plan(),
+        status: Some(status.clone()),
+    };
+    let (resumer, requests, _responses) = catching_up(&mut state, caught).await;
+    let row = state.selected().unwrap().clone();
+
+    assert_eq!(accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false), None);
+    assert!(state.requested.contains(&(row.handle.clone(), RESTORE)));
+    assert_eq!(state.status.clone().unwrap().0, "catching up with sync…");
+
+    let caught = resumer.catch_up(&FakeSource::new(), &row, None).await;
+    let response = Response::CaughtUp(row.handle.clone(), caught);
+    let outcome = respond(&mut state, response, resumer.as_ref(), &requests);
+    assert_eq!(outcome, Some(Outcome::Resume(as_is_plan())));
+    assert_eq!(state.note, Some(status));
+}
+
+/// A catch-up answered after the user moved off the session is dropped: the session's plan still
+/// catches it up, so the next enter on it asks again rather than resuming the copy unchecked.
+#[rstest]
+#[case::ready(false)]
+#[case::failed(true)]
+#[tokio::test]
+async fn a_catch_up_nobody_waits_on_is_dropped(#[case] failed: bool) {
+    use super::catchup::CatchUp;
+    use super::resumer::NotResumable;
+    use super::state::{Pending, RESTORE};
+    use super::worker::Response;
+    use super::{accept, respond};
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let caught = CatchUp::Ready {
+        plan: as_is_plan(),
+        status: Some("caught up: 2 messages from @00000002".to_owned()),
+    };
+    let (resumer, requests, _responses) = catching_up(&mut state, caught).await;
+    let row = state.selected().unwrap().clone();
+    assert_eq!(accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false), None);
+    // The user moves on.
+    state.pending = None;
+
+    let caught = if failed {
+        Err(NotResumable::CatchUp("it changed".to_owned()))
+    } else {
+        resumer.catch_up(&FakeSource::new(), &row, None).await
+    };
+    let response = Response::CaughtUp(row.handle.clone(), caught);
+    assert_eq!(respond(&mut state, response, resumer.as_ref(), &requests), None);
+    assert_eq!(state.note, None);
+    assert!(!state.requested.contains(&(row.handle.clone(), RESTORE)));
+    let plan = state.plans.get(&row.handle).cloned().unwrap().unwrap();
+    assert!(plan.catch_up, "still to be caught up: {plan:?}");
+
+    // Enter on it again catches it up again.
+    assert_eq!(accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false), None);
+    assert!(state.requested.contains(&(row.handle.clone(), RESTORE)));
+}
+
+/// Catching up that needs a choice opens the chooser on it, saying why: this copy as it is
+/// first, then a fork line per head, newest first, the newest preselected when an agent here has
+/// the session open. Picking the copy resumes it as it is; picking the older head forks from
+/// the rows on its branch.
+#[rstest]
+#[case::live(crate::resume_tui::catchup::Why::Live, "Claude Code is running this session here", 1)]
+#[case::diverged(
+    crate::resume_tui::catchup::Why::Diverged,
+    "this copy went another way than this machine's",
+    0
+)]
+#[tokio::test]
+async fn a_choice_offers_the_copy_as_it_is_and_a_fork_per_head(
+    #[case] why: super::catchup::Why,
+    #[case] status: &str,
+    #[case] selected: usize,
+) {
+    use super::chooser::Destination;
+    use super::state::{InputAction, Pending, Picked};
+    use super::worker::Response;
+    use super::{Outcome, accept, finish_fork, pick, respond};
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let (resumer, requests, mut responses) = catching_up(&mut state, held(why).await).await;
+    let row = state.selected().unwrap().clone();
+    assert_eq!(accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false), None);
+    let caught = resumer.catch_up(&FakeSource::new(), &row, None).await;
+    let response = Response::CaughtUp(row.handle.clone(), caught);
+    assert_eq!(respond(&mut state, response, resumer.as_ref(), &requests), None);
+    assert!(state.pending.is_none());
+    assert_eq!(state.status.clone().unwrap().0, status);
+    assert_eq!(state.chooser.as_ref().expect("the chooser opens").selected, selected);
+
+    let out = text(&render(&mut state, &s, 100, 30));
+    assert!(out.contains("1 CC Claude Code  this copy as is"), "{out}");
+    let newest = "2 CC Claude Code  fork this machine's · +2 since they split · 55m ago";
+    assert!(out.contains(newest), "{out}");
+    let older = "3 CC Claude Code  fork @00000002's · 57m ago";
+    assert!(out.contains(older), "{out}");
+
+    // The copy as it is.
+    let line = state.chooser.as_ref().unwrap().line(0);
+    assert_eq!(line, Destination::AsIs(Box::new(as_is_plan())));
+    let as_is = Picked {
+        row: row.clone(),
+        line,
+        action: Pending::Resume,
+    };
+    let outcome = pick(&mut state, as_is, resumer.as_ref(), &requests);
+    assert_eq!(outcome, Some(Outcome::Resume(as_is_plan())));
+
+    // The older head, forked from its own rows.
+    let InputAction::Pick(picked) = press(&mut state, &s, "3") else {
+        panic!("picks");
+    };
+    let Picked {
+        line: Destination::Fork(Some(branch)),
+        ..
+    } = picked.as_ref()
+    else {
+        panic!("{picked:?}");
+    };
+    assert_eq!(branch.head.source_id.as_ref(), "d");
+    assert_eq!(pick(&mut state, *picked, resumer.as_ref(), &requests), None, "waits");
+    let id = state.continued;
+    let forked = loop {
+        let next = tokio::time::timeout(std::time::Duration::from_secs(10), responses.recv());
+        match next.await.expect("the worker is stuck").expect("the worker stopped") {
+            Response::Forked(n, forked) if n == id => break forked,
+            _ => {}
+        }
+    };
+    let rows = resumer.forks.lock()[0].rows.clone().expect("the head's rows");
+    let ids: Vec<&str> = rows.iter().map(|r| r.source_id.as_str()).collect();
+    assert_eq!(ids, ["a", "b", "c", "d"]);
+    let (_, status) = finish_fork(&mut state, id, forked).unwrap();
+    assert_eq!(status, "forked into a new Claude Code session");
+}
+
+/// The fork is preselected when an agent here has the session open, as its plan says, however
+/// lately it was written to.
+#[rstest]
+#[case::open_but_quiet(true, false, 1)]
+#[case::written_to_lately_but_closed(false, true, 0)]
+#[tokio::test]
+async fn a_session_open_here_preselects_the_fork(
+    #[case] live: bool,
+    #[case] recent: bool,
+    #[case] selected: usize,
+) {
+    use super::resumer::Resume;
+    use super::state::Pending;
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let at = state.list.selected;
+    if !recent {
+        state.results[at].active_at = fake::now() - time::Duration::days(1);
+    }
+    let row = state.results[at].clone();
+    let plan = FakeResumer::default().plan(&row).await.unwrap().plan;
+    let resume = Resume {
+        catch_up: true,
+        live,
+        ..Resume::ready(plan)
+    };
+    state.plans.insert(row.handle.clone(), Ok(resume));
+    let targets = FakeResumer::default().continue_targets(&row);
+    state.open_chooser(&row, targets, true, Pending::Resume);
+    assert_eq!(state.chooser.as_ref().unwrap().selected, selected);
 }

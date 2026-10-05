@@ -262,20 +262,91 @@ impl Analysis {
     }
 
     /// The rows from the root of the session down to `row` (a [head](Self::heads), or any row on
-    /// a branch), in order, following the branch tree: what a transcript on that branch holds,
-    /// for forking from it, or for fast-forwarding a copy holding the start of it.
+    /// a branch), in order, following the branch tree: the rows of the tree a transcript on that
+    /// branch holds, for fast-forwarding a copy holding the start of it.
     ///
     /// Only rows that are nodes of the tree are on it (see the module docs): for Claude Code and
-    /// Pi, the rows with an id of their own, so not titles or other content-addressed rows. Empty
-    /// when `row` is not stored, or is no node.
+    /// Pi, the rows with an id of their own, so not titles or other content-addressed rows (see
+    /// [`Self::rows_for`] for those too). Empty when `row` is not stored, or is no node.
     #[must_use]
     pub fn path_to(&self, row: &SourceId) -> Vec<&Message> {
+        self.path_indices(row).into_iter().map(|i| &self.rows[i]).collect()
+    }
+
+    /// Every row a transcript on the branch ending at `row` holds, in order, for writing one out
+    /// (a fork from a head, or a restore along it): [its path](Self::path_to), with the rows that
+    /// are no node of the tree (Claude Code's and Pi's content-addressed rows) that go with it.
+    ///
+    /// Such a row goes with a branch when it is session metadata (a title, a header: a row of
+    /// [`Role::Other`] with no content, so nothing the model is given, which plain restore keeps
+    /// too), or when it goes with a row on the path. Context the model is given under a role of
+    /// its own (pi's extensions' `custom` messages) is no metadata:
+    ///
+    /// - a row with no row of the tree before it at all (a Pi session's prompts and replies from
+    ///   before ids) starts every branch;
+    /// - else, as a row whose parent is not stored does (see the module docs), it follows its
+    ///   host's row of the tree before it;
+    /// - else, when its host has none before it (a host's own rows from before ids, written after
+    ///   another host's), it goes with its host's first row of the tree after it, which its host
+    ///   wrote them ahead of, not with another host's branch;
+    /// - and when its host has no row of the tree at all, it follows the row of the tree before it.
+    ///
+    /// So a row written before a branch point goes with every branch below it, and one written
+    /// after it goes with the branch its host was on.
+    ///
+    /// The path keeps its order; each row off it comes in time order, before the first row of the
+    /// path after it. Empty when `row` is not stored, or is no node.
+    #[must_use]
+    pub fn rows_for(&self, row: &SourceId) -> Vec<&Message> {
+        let path = self.path_indices(row);
+        if path.is_empty() {
+            return Vec::new();
+        }
+        let on: HashSet<usize> = path.iter().copied().collect();
+        // Each host's first row of the tree.
+        let mut first: HashMap<Option<HostId>, usize> = HashMap::new();
+        for (i, m) in self.rows.iter().enumerate().filter(|(i, _)| self.in_tree[*i]) {
+            first.entry(m.host).or_insert(i);
+        }
+        let mut previous = None;
+        let mut by_host: HashMap<Option<HostId>, usize> = HashMap::new();
+        let mut off = Vec::new();
+        for (i, m) in self.rows.iter().enumerate() {
+            if self.in_tree[i] {
+                previous = Some(i);
+                by_host.insert(m.host, i);
+                continue;
+            }
+            let follows = previous.map(|previous| {
+                by_host.get(&m.host).or_else(|| first.get(&m.host)).copied().unwrap_or(previous)
+            });
+            // Nothing the model is given: context of another role (pi's extensions' messages)
+            // goes with its branch like any row.
+            let metadata = matches!(m.role, Role::Other(_)) && m.content.is_empty();
+            if metadata || follows.is_none_or(|f| on.contains(&f)) {
+                off.push(i);
+            }
+        }
+        let mut off = off.into_iter().peekable();
+        let mut rows = Vec::with_capacity(path.len() + off.len());
+        for p in path {
+            while let Some(i) = off.next_if(|&i| i < p) {
+                rows.push(&self.rows[i]);
+            }
+            rows.push(&self.rows[p]);
+        }
+        rows.extend(off.map(|i| &self.rows[i]));
+        rows
+    }
+
+    /// [`Self::path_to`], as indices into the rows.
+    fn path_indices(&self, row: &SourceId) -> Vec<usize> {
         let found =
             self.rows.iter().zip(&self.in_tree).position(|(m, t)| *t && m.source_id == *row);
         let mut path = Vec::new();
         let mut at = found;
         while let Some(i) = at {
-            path.push(&self.rows[i]);
+            path.push(i);
             at = self.parent[i];
         }
         path.reverse();

@@ -15,12 +15,26 @@ use crate::resume_tui::source::{SessionFilter, SessionPreview};
 /// A machine that touches nothing: transcripts are found where `found` says, restoring records
 /// what it would write, and every program is installed unless `installed` says otherwise.
 /// Rehydrating fails for the harness `cant_rehydrate` names.
+///
+/// Its copies read as `tip`, an agent has them open as `live` says (none, by default; with
+/// `agent_in`, one works there, open for a session in that directory or above it, or in no
+/// directory known), and appending records what it would write (from where) and the directory it was told the session
+/// works in, unless `refuse` names the error to refuse with.
 #[derive(Clone, Default)]
 struct FakeMachine {
     found: HashMap<String, PathBuf>,
     written: Arc<Mutex<Vec<RehydrateSession>>>,
     missing_programs: Vec<&'static str>,
     cant_rehydrate: Option<HarnessKind>,
+    tip: Option<LocalTip>,
+    /// Reading the copy fails, saying this.
+    tip_error: Option<&'static str>,
+    live: Option<Liveness>,
+    live_cwds: Arc<Mutex<Vec<Option<PathBuf>>>>,
+    agent_in: Option<PathBuf>,
+    refuse: Option<&'static str>,
+    appended: Arc<Mutex<Vec<String>>>,
+    append_cwds: Arc<Mutex<Vec<Option<PathBuf>>>>,
 }
 
 #[async_trait]
@@ -49,6 +63,53 @@ impl Machine for FakeMachine {
 
     fn installed(&self, program: &str) -> bool {
         !self.missing_programs.contains(&program)
+    }
+
+    async fn local_tip(&self, _: AnyHarness, _: &str) -> Result<Option<LocalTip>, SyncError> {
+        match self.tip_error {
+            Some(why) => Err(SyncError::Unsupported(why)),
+            None => Ok(self.tip.clone()),
+        }
+    }
+
+    async fn is_live(&self, _: AnyHarness, _: &str, cwd: Option<&Path>) -> Liveness {
+        self.live_cwds.lock().push(cwd.map(Path::to_path_buf));
+        let agent =
+            self.agent_in.as_deref().is_some_and(|dir| cwd.is_none_or(|c| dir.starts_with(c)));
+        match self.live {
+            Some(live) => live,
+            None if agent => Liveness::Live { pid: Some(7) },
+            None => Liveness::NotLive,
+        }
+    }
+
+    async fn append(
+        &self,
+        harness: AnyHarness,
+        id: &str,
+        base: &LocalTip,
+        lines: &[RehydrateMessage],
+        options: &AppendOptions<'_>,
+    ) -> Result<AppendOutcome, SyncError> {
+        self.append_cwds.lock().push(options.cwd.map(Path::to_path_buf));
+        if self.is_live(harness, id, options.cwd).await != Liveness::NotLive {
+            return Err(SyncError::MaybeLive);
+        }
+        match self.refuse {
+            Some("unsupported") => return Err(SyncError::Unsupported("not a fast-forward")),
+            Some("changed") => return Err(SyncError::Changed),
+            Some("id taken") => return Err(SyncError::IdTaken("c".to_owned())),
+            Some(_) => return Err(SyncError::MaybeLive),
+            None => {}
+        }
+        let ids: Vec<String> = lines.iter().map(|m| m.source_id.clone()).collect();
+        let from = base.tip_source_id.clone().unwrap_or_default();
+        self.appended.lock().push(format!("{}@{from}", ids.join(",")));
+        Ok(AppendOutcome {
+            native_path: base.native_path.clone(),
+            tip_source_id: ids.last().cloned(),
+            appended: ids,
+        })
     }
 }
 
@@ -764,4 +825,372 @@ async fn a_codex_fork_reads_the_original_where_it_is(dirs: Dirs, #[case] found: 
     };
     assert_eq!(fork.id, forked.id);
     assert_eq!(fork.fork_of.clone().unwrap().path, found.map(PathBuf::from));
+}
+
+// --- catching up with sync ----------------------------------------------------------------------
+
+/// What catching the synced Claude Code session up with this machine's copy (read as the
+/// machine's `tip`; none: not here) says, and what it appended.
+async fn catch_up(dirs: &Dirs, machine: FakeMachine, diverged: bool) -> (String, Vec<String>) {
+    catch_up_in(dirs, machine, diverged, &dirs.elsewhere).await
+}
+
+/// [`catch_up`], with the session recorded working in `cwd`.
+async fn catch_up_in(
+    dirs: &Dirs,
+    mut machine: FakeMachine,
+    diverged: bool,
+    cwd: &Path,
+) -> (String, Vec<String>) {
+    if machine.tip.is_some() {
+        machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
+    }
+    let mut session = row(HarnessKind::ClaudeCode, "s", cwd, false);
+    session.handle = fake::synced_handle();
+    let source = fake::FakeSource::from_rows(vec![session.clone()])
+        .with_synced(&session.handle, fake::synced_rows(diverged));
+    let caught = resumer(dirs, &machine).catch_up(&source, &session, None).await.unwrap();
+    let said = match caught {
+        CatchUp::Ready { plan, status } => {
+            format!("{} {}", plan.native_path.unwrap().display(), status.unwrap_or_default())
+        }
+        CatchUp::Choice(held) => {
+            let forks: Vec<&str> = held.branches.iter().map(|b| b.selector.as_str()).collect();
+            format!("{} [{}]", held.status(), forks.join(" "))
+        }
+    };
+    (said.trim_end().to_owned(), machine.appended.lock().clone())
+}
+
+/// Resuming a session in its own agent catches its copy here up with sync first: restored when
+/// it isn't here, resumed as it is when it is at the head, the rows it lacks appended when it is
+/// behind; anything else is a choice, with nothing written.
+#[rstest]
+#[case::not_here(None, None, false, "/restored/s.jsonl", &[])]
+#[case::at_the_head(Some((&["a", "b", "c", "d"][..], "d")), None, false, "/t/s.jsonl", &[])]
+#[case::behind(
+    Some((&["a", "b"][..], "b")),
+    None,
+    false,
+    "/t/s.jsonl caught up: 2 messages from @00000002",
+    &["c,d@b"]
+)]
+#[case::behind_and_live(
+    Some((&["a", "b"][..], "b")),
+    Some(Liveness::Live { pid: Some(7) }),
+    false,
+    "Claude Code is running this session here [d]",
+    &[]
+)]
+#[case::behind_and_maybe_live(
+    Some((&["a", "b"][..], "b")),
+    Some(Liveness::Unknown),
+    false,
+    "Claude Code is running this session here [d]",
+    &[]
+)]
+#[case::live_at_the_head(
+    Some((&["a", "b", "c", "d"][..], "d")),
+    Some(Liveness::Unknown),
+    false,
+    "/t/s.jsonl",
+    &[]
+)]
+#[case::diverged(
+    Some((&["a", "b", "c", "d"][..], "d")),
+    None,
+    true,
+    "this copy went another way than this machine's [y d]",
+    &[]
+)]
+#[case::diverged_at_the_newest(
+    Some((&["a", "b", "x", "y"][..], "y")),
+    None,
+    true,
+    "/t/s.jsonl",
+    &[]
+)]
+#[case::unsynced(
+    Some((&["a", "b", "z"][..], "z")),
+    None,
+    false,
+    "this copy has messages sync hasn't got [d]",
+    &[]
+)]
+#[tokio::test]
+async fn a_copy_here_is_caught_up_or_offered_a_choice(
+    dirs: Dirs,
+    #[case] copy: Option<(&[&str], &str)>,
+    #[case] live: Option<Liveness>,
+    #[case] diverged: bool,
+    #[case] said: &str,
+    #[case] appended: &[&str],
+) {
+    let machine = FakeMachine {
+        tip: copy.map(|(known, at)| fake::local_tip(known, Some(at))),
+        live,
+        ..FakeMachine::default()
+    };
+    let written = machine.written.clone();
+    let caught = catch_up(&dirs, machine, diverged).await;
+    let appended = appended.iter().map(|s| (*s).to_owned()).collect();
+    assert_eq!(caught, (said.to_owned(), appended));
+    assert_eq!(written.lock().len(), usize::from(copy.is_none()), "only a restore writes");
+}
+
+/// The agent's copy refusing the rows (it changed, they aren't a clean fast-forward, an id is
+/// taken, an agent may have it open after all) leaves the choice, with nothing written.
+#[rstest]
+#[case::unsupported("unsupported", "couldn't catch up: not a fast-forward [d]")]
+#[case::changed(
+    "changed",
+    "couldn't catch up: the session's transcript changed since it was read [d]"
+)]
+#[case::id_taken("id taken", "couldn't catch up: c is already taken [d]")]
+#[case::maybe_live("maybe live", "Claude Code is running this session here [d]")]
+#[tokio::test]
+async fn a_refused_append_leaves_the_choice(
+    dirs: Dirs,
+    #[case] refuse: &'static str,
+    #[case] said: &str,
+) {
+    let machine = FakeMachine {
+        tip: Some(fake::local_tip(&["a", "b"], Some("b"))),
+        refuse: Some(refuse),
+        ..FakeMachine::default()
+    };
+    assert_eq!(catch_up(&dirs, machine, false).await, (said.to_owned(), Vec::new()));
+}
+
+/// The append checks for an agent where the session works, as the plan's check does.
+#[rstest]
+#[tokio::test]
+async fn the_append_looks_for_an_agent_where_the_session_works(dirs: Dirs) {
+    let machine = FakeMachine {
+        tip: Some(fake::local_tip(&["a", "b"], Some("b"))),
+        ..FakeMachine::default()
+    };
+    let cwds = machine.append_cwds.clone();
+    catch_up(&dirs, machine, false).await;
+    assert_eq!(*cwds.lock(), vec![Some(dirs.elsewhere.clone())]);
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Agent {
+    InTheMappedDir,
+    Unrelated,
+}
+
+/// A session recorded on another machine under a path that isn't here works in the same place
+/// in this checkout: an agent there may have it open, so nothing is appended; one in an unrelated
+/// directory doesn't. One whose directory here isn't known counts any agent as having it open.
+#[rstest]
+#[case::mapped_agent_there("/home/u/atuin/crates", Agent::InTheMappedDir, false)]
+#[case::mapped_agent_elsewhere("/home/u/atuin/crates", Agent::Unrelated, true)]
+#[case::unknown_agent_anywhere("/home/u/zsh", Agent::Unrelated, false)]
+#[tokio::test]
+async fn an_agent_is_looked_for_where_the_session_works_here(
+    dirs: Dirs,
+    #[case] recorded: &str,
+    #[case] agent: Agent,
+    #[case] appends: bool,
+) {
+    let agent_in = match agent {
+        Agent::InTheMappedDir => dirs.repo.join("crates").join("atuin"),
+        Agent::Unrelated => dirs.elsewhere.clone(),
+    };
+    let machine = FakeMachine {
+        tip: Some(fake::local_tip(&["a", "b"], Some("b"))),
+        agent_in: Some(agent_in),
+        ..FakeMachine::default()
+    };
+    let cwds = machine.append_cwds.clone();
+    let caught = catch_up_in(&dirs, machine, false, Path::new(recorded)).await;
+    let want = if appends {
+        ("/t/s.jsonl caught up: 2 messages from @00000002", vec!["c,d@b".to_owned()])
+    } else {
+        ("Claude Code is running this session here [d]", Vec::new())
+    };
+    assert_eq!(caught, (want.0.to_owned(), want.1));
+    // The append, when it gets that far, looks where the plan did.
+    if appends {
+        assert_eq!(*cwds.lock(), vec![Some(dirs.repo.join("crates"))]);
+    }
+}
+
+/// Planning a session whose copy is here says it is to be caught up, and whether an agent here
+/// has it open, as the agent's own check says (unknown counting as open).
+#[rstest]
+#[case::not_live(None, false)]
+#[case::live(Some(Liveness::Live { pid: None }), true)]
+#[case::unknown(Some(Liveness::Unknown), true)]
+#[tokio::test]
+async fn a_plan_says_whether_an_agent_here_has_the_session_open(
+    dirs: Dirs,
+    #[case] live: Option<Liveness>,
+    #[case] want: bool,
+) {
+    let machine = FakeMachine {
+        found: HashMap::from([("abc".to_owned(), PathBuf::from("/t/abc.jsonl"))]),
+        live,
+        ..FakeMachine::default()
+    };
+    let session = row(HarnessKind::ClaudeCode, "abc", &dirs.elsewhere, false);
+    let resume = resumer(&dirs, &machine).plan(&session).await.unwrap();
+    assert!(resume.catch_up);
+    assert_eq!(resume.live, want);
+}
+
+/// The synced Claude Code session (diverged or not), with a title host 2 named last: session
+/// metadata, which is no node of the tree.
+fn synced_with_a_title(diverged: bool) -> Vec<atuin_client::ai_session::Message> {
+    let handle = fake::synced_handle();
+    let mut rows = fake::synced_rows(diverged);
+    let mut title = fake::synced_row(&handle, ("syn-title", None, 2, 6, false));
+    title.role = atuin_common::harnesstools::session::Role::Other("ai-title".to_owned());
+    title.content = Vec::new();
+    rows.push(title);
+    rows
+}
+
+/// A session with no copy here is restored along the head named, else, when it diverged, along
+/// its newest head (whether `atuin ai resume` catches it up or the picker restores it), with the
+/// rows off the tree that go with it; one that went one way is restored from every row synced of
+/// it, as before.
+#[rstest]
+#[case::one_way(false, None, false, &["a", "b", "c", "d", "syn-title"])]
+#[case::one_way_by_the_picker(false, None, true, &["a", "b", "c", "d", "syn-title"])]
+#[case::one_way_named(false, Some("d"), false, &["a", "b", "c", "d", "syn-title"])]
+#[case::diverged(true, None, false, &["a", "b", "x", "y", "syn-title"])]
+#[case::diverged_by_the_picker(true, None, true, &["a", "b", "x", "y", "syn-title"])]
+#[case::diverged_named(true, Some("d"), false, &["a", "b", "c", "d", "syn-title"])]
+#[tokio::test]
+async fn a_session_not_here_is_restored_along_one_branch(
+    dirs: Dirs,
+    #[case] diverged: bool,
+    #[case] head: Option<&str>,
+    #[case] by_the_picker: bool,
+    #[case] want: &[&str],
+) {
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let mut session = row(HarnessKind::ClaudeCode, "s", &dirs.elsewhere, true);
+    session.handle = fake::synced_handle();
+    let source = fake::FakeSource::from_rows(vec![session.clone()])
+        .with_synced(&session.handle, synced_with_a_title(diverged));
+    if by_the_picker {
+        let restore = resumer.plan(&session).await.unwrap().restore.unwrap();
+        resumer.restore(&source, &session, &restore).await.unwrap();
+    } else {
+        let head = head.map(|h| SourceId::from(h.to_owned()));
+        let caught = resumer.catch_up(&source, &session, head.as_ref()).await.unwrap();
+        assert!(matches!(caught, CatchUp::Ready { .. }), "{caught:?}");
+    }
+
+    let written = machine.written.lock().clone();
+    let [restored] = written.as_slice() else {
+        panic!("one session written: {written:?}");
+    };
+    let ids: Vec<&str> = restored.messages.iter().map(|m| m.source_id.as_str()).collect();
+    assert_eq!(ids, want);
+}
+
+/// The plan, the catch-up and the append all look for an agent where this machine's copy
+/// records working, when it records a directory that is there: not where the session row says
+/// (another host's newer directory, maybe). Else where the session works here; else anywhere.
+#[rstest]
+#[case::where_the_copy_works(true, true)]
+#[case::where_the_copy_worked_but_gone(true, false)]
+#[case::no_directory_recorded(false, false)]
+#[tokio::test]
+async fn an_agent_is_looked_for_where_the_copy_works(
+    dirs: Dirs,
+    #[case] recorded: bool,
+    #[case] exists: bool,
+) {
+    let copy_dir = dirs.repo.join("crates").join("atuin");
+    let copy_dir = if exists {
+        copy_dir
+    } else {
+        dirs.repo.join("gone")
+    };
+    let mut tip = fake::local_tip(&["a", "b"], Some("b"));
+    tip.cwd = recorded.then(|| copy_dir.clone());
+    let machine = FakeMachine {
+        tip: Some(tip),
+        ..FakeMachine::default()
+    };
+    let (live, appended) = (machine.live_cwds.clone(), machine.append_cwds.clone());
+    let caught = catch_up(&dirs, machine, false).await;
+    assert_eq!(caught.1, ["c,d@b"]);
+    let want = if recorded && exists {
+        copy_dir
+    } else {
+        dirs.elsewhere.clone()
+    };
+    // The plan asks, then the append (the fake asks again as it appends).
+    assert_eq!(*live.lock(), vec![Some(want.clone()); 2], "the plan's check");
+    assert_eq!(*appended.lock(), vec![Some(want)], "the append's check");
+
+    // An agent where the copy works holds the append, wherever the session row says.
+    if recorded && exists {
+        let mut tip = fake::local_tip(&["a", "b"], Some("b"));
+        tip.cwd = Some(dirs.repo.join("crates").join("atuin"));
+        let machine = FakeMachine {
+            tip: Some(tip),
+            agent_in: Some(dirs.repo.join("crates").join("atuin")),
+            ..FakeMachine::default()
+        };
+        let caught = catch_up(&dirs, machine, false).await;
+        assert_eq!(caught, ("Claude Code is running this session here [d]".to_owned(), vec![]));
+    }
+}
+
+/// A copy that can't be read, or caught up (opencode 2.0's), is never resumed as if it were
+/// caught up: the choice says why.
+#[rstest]
+#[tokio::test]
+async fn a_copy_that_cant_be_caught_up_leaves_the_choice(dirs: Dirs) {
+    let mut machine = FakeMachine {
+        tip_error: Some("opencode 2.0 sessions can't be caught up yet"),
+        ..FakeMachine::default()
+    };
+    machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
+    let caught = catch_up(&dirs, machine, false).await;
+    assert_eq!(
+        caught,
+        ("couldn't catch up: opencode 2.0 sessions can't be caught up yet [d]".to_owned(), vec![])
+    );
+}
+
+/// A copy gone since it was located is restored from sync, as one that isn't here is.
+#[rstest]
+#[tokio::test]
+async fn a_copy_gone_since_it_was_located_is_restored(dirs: Dirs) {
+    let mut machine = FakeMachine::default();
+    machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
+    let written = machine.written.clone();
+    let caught = catch_up(&dirs, machine, false).await;
+    assert_eq!(caught, ("/restored/s.jsonl".to_owned(), vec![]));
+    assert_eq!(written.lock().len(), 1);
+}
+
+/// A branch named that is no longer a head is an error, not the newest head instead.
+#[rstest]
+#[tokio::test]
+async fn a_branch_no_longer_a_head_is_not_swapped_for_another(dirs: Dirs) {
+    let machine = FakeMachine {
+        tip: Some(fake::local_tip(&["a", "b"], Some("b"))),
+        found: HashMap::from([("s".to_owned(), PathBuf::from("/t/s.jsonl"))]),
+        ..FakeMachine::default()
+    };
+    let appended = machine.appended.clone();
+    let mut session = row(HarnessKind::ClaudeCode, "s", &dirs.elsewhere, false);
+    session.handle = fake::synced_handle();
+    let source = fake::FakeSource::from_rows(vec![session.clone()])
+        .with_synced(&session.handle, fake::synced_rows(false));
+    let gone = SourceId::from("b".to_owned());
+    let caught = resumer(&dirs, &machine).catch_up(&source, &session, Some(&gone)).await;
+    assert!(matches!(caught, Err(NotResumable::CatchUp(_))), "{caught:?}");
+    assert!(appended.lock().is_empty());
 }

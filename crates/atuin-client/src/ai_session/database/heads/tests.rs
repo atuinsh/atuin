@@ -21,8 +21,12 @@ enum Kind {
     Tool,
     /// A Pi session header.
     Header,
+    /// Session metadata: a title.
+    Title,
+    /// Context an extension gave the model (pi's `custom_message`): no metadata.
+    Custom,
 }
-use Kind::{Header, Prompt, Reply, Tool};
+use Kind::{Custom, Header, Prompt, Reply, Title, Tool};
 
 /// A row: its source id, parent, host, timestamp (ms) and kind.
 type Row<'a> = (&'a str, Option<&'a str>, u8, i64, Kind);
@@ -44,6 +48,8 @@ fn message(harness: HarnessKind, (id, parent, on, at, kind): Row<'_>) -> Message
         Reply => (Role::Assistant, vec![Content::Text(format!("ok {id}"))]),
         Tool => (Role::Tool, vec![Content::Other(serde_json::json!(id))]),
         Header => (Role::Other("session".to_owned()), Vec::new()),
+        Title => (Role::Other("session_info".to_owned()), Vec::new()),
+        Custom => (Role::Other("custom".to_owned()), vec![Content::Text(format!("ctx {id}"))]),
     };
     Message::builder()
         .id(RecordId(atuin_common::utils::uuid_v7()))
@@ -479,4 +485,88 @@ fn a_copy_fast_forwards_only_along_the_heads_line(
         FastForward::Behind(rows) => Some(rows.into_iter().map(|r| r.source_id).collect()),
     };
     assert_eq!(found, behind.map(|rows| rows.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>()));
+}
+
+/// A Pi session from before ids (its first prompts and replies content-addressed, so no node),
+/// then ids, diverged off a1: host 2's side, a reply of it with no id, and a title host 2 named.
+const PRE_IDS: &[Row<'static>] = &[
+    ("syn-p0", None, 1, 0, Prompt),
+    ("syn-r0", None, 1, 1, Reply),
+    ("u1", None, 1, 2, Prompt),
+    ("a1", Some("u1"), 1, 3, Reply),
+    ("syn-r1", None, 1, 4, Reply),
+    ("u2", Some("a1"), 1, 5, Prompt),
+    ("syn-r2", None, 1, 6, Reply),
+    ("v2", Some("a1"), 2, 10, Prompt),
+    ("b2", Some("v2"), 2, 11, Reply),
+    ("syn-r3", None, 2, 12, Reply),
+    ("syn-title", None, 2, 13, Title),
+    ("syn-c3", None, 2, 14, Custom),
+];
+
+/// The rows for a branch are its path with the rows off the tree that go with it: those before
+/// any row of the tree, those following on from a row on the path (by their host's row before
+/// them), and session metadata wherever it is; never another branch's own, even context an
+/// extension gave the model, which is no metadata.
+#[rstest]
+#[case::host_2s(
+    "b2",
+    &["syn-p0", "syn-r0", "u1", "a1", "syn-r1", "v2", "b2", "syn-r3", "syn-title", "syn-c3"]
+)]
+#[case::host_1s("u2", &["syn-p0", "syn-r0", "u1", "a1", "syn-r1", "u2", "syn-r2", "syn-title"])]
+#[case::before_the_split("a1", &["syn-p0", "syn-r0", "u1", "a1", "syn-r1", "syn-title"])]
+#[case::no_node("syn-r1", &[])]
+#[case::not_stored("nope", &[])]
+fn a_branchs_rows_hold_what_goes_with_it(#[case] head: &str, #[case] want: &[&str]) {
+    let analysis = analyse(HarnessKind::Pi, PRE_IDS);
+    assert!(analysis.diverged());
+    let rows: Vec<&str> = analysis
+        .rows_for(&SourceId::from(head.to_owned()))
+        .iter()
+        .map(|m| m.source_id.as_ref())
+        .collect();
+    assert_eq!(rows, want);
+}
+
+/// Host 2 joins a session host 1 started with rows from before ids (its own pi), then branches
+/// off a1 with ids: its rows from before ids go with its own branch, not host 1's, though host 1
+/// wrote the row of the tree before them.
+const HOST_2_PRE_IDS: &[Row<'static>] = &[
+    ("u1", None, 1, 0, Prompt),
+    ("a1", Some("u1"), 1, 1, Reply),
+    ("u2", Some("a1"), 1, 2, Prompt),
+    ("syn-p2", None, 2, 3, Prompt),
+    ("syn-r2", None, 2, 4, Reply),
+    ("a2", Some("u2"), 1, 5, Reply),
+    ("v2", Some("a1"), 2, 6, Prompt),
+    ("b2", Some("v2"), 2, 7, Reply),
+];
+
+#[rstest]
+#[case::host_2s("b2", &["u1", "a1", "syn-p2", "syn-r2", "v2", "b2"])]
+#[case::host_1s("a2", &["u1", "a1", "u2", "a2"])]
+fn a_hosts_rows_before_its_first_node_go_with_its_branch(
+    #[case] head: &str,
+    #[case] want: &[&str],
+) {
+    let analysis = analyse(HarnessKind::Pi, HOST_2_PRE_IDS);
+    assert!(analysis.diverged());
+    let rows: Vec<&str> = analysis
+        .rows_for(&SourceId::from(head.to_owned()))
+        .iter()
+        .map(|m| m.source_id.as_ref())
+        .collect();
+    assert_eq!(rows, want);
+}
+
+/// With every row a node of the tree, a branch's rows are its path.
+#[rstest]
+#[case::codex(CODEX)]
+#[case::opencode(OPENCODE)]
+#[case::claude_code(CC)]
+fn rows_for_a_branch_of_nodes_are_its_path(#[case] harness: HarnessKind) {
+    let analysis = analyse(harness, GROWN);
+    for head in analysis.heads() {
+        assert_eq!(analysis.rows_for(&head.source_id), analysis.path_to(&head.source_id));
+    }
 }

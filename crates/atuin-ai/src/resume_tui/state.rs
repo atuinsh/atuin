@@ -35,7 +35,8 @@ pub const LIVE_SECS: u64 = 120;
 pub const PREVIEW: u8 = 0;
 pub const CHILDREN: u8 = 1;
 pub const PLAN: u8 = 2;
-/// Restoring the session's transcript from sync, once an action is waiting on it.
+/// Restoring the session's transcript from sync, or catching its copy here up with sync, once an
+/// action is waiting on it.
 pub const RESTORE: u8 = 3;
 
 /// How many rows a search asks for.
@@ -258,6 +259,8 @@ pub struct State {
     pub continuing: Option<Continuing>,
     /// The last continuation's id.
     pub continued: u64,
+    /// What catching the session being resumed up with sync wrote, to say once the picker is gone.
+    pub note: Option<String>,
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
@@ -309,6 +312,7 @@ impl State {
             flattening: None,
             continuing: None,
             continued: 0,
+            note: None,
             status: None,
             rebuilding: None,
             now: if settings.prefers_reduced_motion {

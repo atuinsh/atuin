@@ -9,6 +9,7 @@
 //! - [`SessionSource`] lists, searches and previews sessions;
 //! - [`Resumer`] turns a session into a resume command, or says why it can't be resumed.
 
+pub mod catchup;
 pub mod chooser;
 pub mod clock;
 #[cfg(test)]
@@ -41,6 +42,7 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 
+use self::catchup::{Branch, CatchUp};
 use self::chooser::Destination;
 use self::resumer::{Continued, Forked, NotResumable, Resume};
 use self::state::{
@@ -282,8 +284,9 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
             // A fork with nothing to fork isn't left selected.
             state.settle_chooser();
         }
-        // Handled by `finish_continuation` and `finish_fork`, which may end the picker.
-        Response::Continued(..) | Response::Forked(..) => {}
+        // Handled by `finish_continuation` and `finish_fork`, which may end the picker, and by
+        // `caught_up`, which needs the resumer.
+        Response::Continued(..) | Response::Forked(..) | Response::CaughtUp(..) => {}
     }
 }
 
@@ -296,12 +299,55 @@ fn respond(
     resumer: &dyn Resumer,
     requests: &Requests,
 ) -> Option<Outcome> {
-    apply_response(state, response, requests);
+    match response {
+        Response::CaughtUp(handle, result) => {
+            if caught_up(state, handle, result, resumer, requests) {
+                return None;
+            }
+        }
+        response => apply_response(state, response, requests),
+    }
     let (row, pending) = state.pending.clone()?;
     if !state.plans.contains_key(&row.handle) {
         return None;
     }
     resume_original(state, &row, pending, resumer, requests)
+}
+
+/// The copy here of session `handle` is caught up with sync (or catching up needs a choice, or
+/// failed): what's waiting on it resumes it as planned now, with what was written said once the
+/// picker is gone; or the chooser opens on the choice, saying why. Returns whether it opened.
+///
+/// When nothing waits on it any more (the user moved on), it is dropped: the plan stays one that
+/// catches the copy up first, so a later enter catches it up again, against sync as it is then.
+fn caught_up(
+    state: &mut State,
+    handle: HarnessSession,
+    result: Result<CatchUp, NotResumable>,
+    resumer: &dyn Resumer,
+    requests: &Requests,
+) -> bool {
+    state.requested.remove(&(handle.clone(), RESTORE));
+    let Some((row, action)) = state.pending.clone().filter(|(row, _)| row.handle == handle) else {
+        return false;
+    };
+    match result {
+        Ok(CatchUp::Ready { plan, status }) => {
+            state.note = status;
+            state.plans.insert(handle, Ok(Resume::ready(plan)));
+        }
+        Ok(CatchUp::Choice(held)) => {
+            state.pending = None;
+            let (targets, fork) = (resumer.continue_targets(&row), resumer.can_fork(&row));
+            state.open_choice(&row, held, targets, fork, action);
+            request_flatten(state, requests);
+            return true;
+        }
+        Err(why) => {
+            state.plans.insert(handle, Err(why));
+        }
+    }
+    false
 }
 
 /// Handle a user input, then drop an enter, tab or ctrl-y the user has moved on from: one whose
@@ -349,8 +395,9 @@ fn moved_off_pending(state: &mut State, before: Option<&HarnessSession>) {
 }
 
 /// Carry out `action` for `row` (the session acted on) once its plan is known, restoring the
-/// session from sync first when its transcript isn't here. `None` keeps the picker open (the
-/// plan or the restore is still coming, the session can't be resumed, or it was a copy).
+/// session from sync first when its transcript isn't here, and catching it up with sync when it
+/// is. `None` keeps the picker open (the plan, the restore or the catch-up is still coming, the
+/// session can't be resumed, or it was a copy).
 fn complete(
     state: &mut State,
     row: &SessionRow,
@@ -385,6 +432,14 @@ fn complete(
             }
             let note = restore.note.map(|n| format!(": {n}")).unwrap_or_default();
             state.status = Some((format!("restoring from sync…{note}"), Meaning::Annotation));
+            state.pending = Some((row, action));
+            return None;
+        }
+        (Ok(Resume { catch_up: true, .. }), action) => {
+            if state.requested.insert((row.handle.clone(), RESTORE)) {
+                requests.send(Request::CatchUp(Box::new(row.clone())));
+            }
+            state.status = Some(("catching up with sync…".to_owned(), Meaning::Annotation));
             state.pending = Some((row, action));
             return None;
         }
@@ -509,21 +564,46 @@ fn pick(
     supersede(state, requests);
     match line {
         Destination::Original => return resume_original(state, &row, action, resumer, requests),
-        Destination::Fork => start_fork(state, row, action, requests),
+        Destination::AsIs(plan) => return as_is(state, *plan, action),
+        Destination::Fork(branch) => start_fork(state, row, branch.map(|b| *b), action, requests),
         Destination::Continue(target) => start_continuation(state, row, target, action, requests),
     }
     None
 }
 
-/// Fork `row`, then carry out `action` (see [`finish_fork`]). Copying writes nothing: the
-/// command copied forks it when run.
-fn start_fork(state: &mut State, row: SessionRow, action: Pending, requests: &Requests) {
+/// Resume the copy here as it is, with `plan`, rather than catch it up: what `action` does with
+/// it. Copying copies the agent's own command.
+fn as_is(state: &mut State, plan: ResumePlan, action: Pending) -> Option<Outcome> {
+    match action {
+        Pending::Resume => Some(Outcome::Resume(plan)),
+        Pending::Edit => Some(Outcome::Edit(plan)),
+        Pending::Copy => {
+            copy(state, &resumer::shell_line(&plan));
+            None
+        }
+    }
+}
+
+/// Fork `row` (from `branch`'s head, when given), then carry out `action` (see [`finish_fork`]).
+/// Copying writes nothing: the command copied forks it when run.
+fn start_fork(
+    state: &mut State,
+    row: SessionRow,
+    branch: Option<Branch>,
+    action: Pending,
+    requests: &Requests,
+) {
     if action == Pending::Copy {
         let id = resumer::quote(row.handle.session.as_ref());
-        copy(state, &format!("atuin ai resume {id} --fork"));
+        let pick = branch.map(|b| format!(" --branch {}", resumer::quote(&b.selector)));
+        copy(state, &format!("atuin ai resume {id} --fork{}", pick.unwrap_or_default()));
         return;
     }
-    state.status = Some(("forking…".to_owned(), Meaning::Annotation));
+    let status = match &branch {
+        Some(branch) => format!("forking from {}'s…", branch.host),
+        None => "forking…".to_owned(),
+    };
+    state.status = Some((status, Meaning::Annotation));
     state.continued = state.continued.wrapping_add(1);
     let id = state.continued;
     let target = row.handle.harness;
@@ -533,7 +613,8 @@ fn start_fork(state: &mut State, row: SessionRow, action: Pending, requests: &Re
         fork: true,
         action,
     });
-    requests.send(Request::Fork(Box::new(row), id));
+    let head = branch.map(|b| b.head.source_id);
+    requests.send(Request::Fork(Box::new(row), id, head));
 }
 
 /// Fork `id` is written (or failed): as [`finish_continuation`].
@@ -635,9 +716,10 @@ fn finish_continuation(
 
 /// What ctrl-y copies to resume `row`, planned as `resume`, in its own harness. Copying writes
 /// nothing, so when running the harness's own command wouldn't do (the session has to be
-/// restored from sync first), it is `atuin ai resume <id>`, which does that when run.
+/// restored from sync, or caught up with it, first), it is `atuin ai resume <id>`, which does
+/// that when run.
 fn resume_line(row: &SessionRow, resume: &Resume) -> String {
-    if resume.restore.is_none() {
+    if resume.restore.is_none() && !resume.catch_up {
         return resumer::shell_line(&resume.plan);
     }
     format!("atuin ai resume {}", resumer::quote(row.handle.session.as_ref()))
@@ -807,6 +889,7 @@ impl Picker<'_> {
                             if let Some(outcome) =
                                 respond(&mut state, response, resumer, &requests)
                             {
+                                note = state.note.take();
                                 break 'render outcome;
                             }
                             None

@@ -145,8 +145,8 @@ first), Atuin asks where to resume it:
   grouped under the original, with an Atuin id of its own. It keeps the
   original's title. Pi names the original by its file, so a Pi session that
   isn't on this machine is written out first. Forking is selected instead of
-  the original when the original can't resume here, or looks to be running
-  here still. Copilot sessions, and sessions with no messages, can't be
+  the original when the original can't resume here, or its agent has it open
+  on this machine. Copilot sessions, and sessions with no messages, can't be
   forked.
 - Every other agent installed on this machine follows. Picking one continues
   the session there as a new session: the conversation carries over, but that
@@ -161,6 +161,35 @@ first), Atuin asks where to resume it:
   agent that isn't installed, or a session whose transcript is here but whose
   directory is gone, for an agent that needs it), its line is dimmed with the
   reason, and the next one is selected instead.
+
+A session keeps one id on every machine. When you resume one in its own agent
+and its transcript is on this machine, Atuin first catches it up with the
+synced messages:
+
+- If the session continued on another machine since, the messages this copy
+  lacks are appended to it, and it resumes in place. The status line says
+  `caught up: 12 messages from @3f9a12bc`.
+- If this copy is up to date, or went on past the newest messages along the
+  same branch, it resumes unchanged.
+- Otherwise Atuin writes nothing and asks, with the chooser saying why: when
+  the agent is running this session here (`Claude Code is running this session
+  here`), when this copy went another way than the newest messages, when it
+  has messages sync hasn't got, or when this copy can't be caught up
+  (`couldn't catch up: ...`). Its first line resumes this copy unchanged, and
+  a fork line for each branch of the session, newest first, forks from that
+  branch (`fork @3f9a12bc's · +11 since they split · 20m ago`). With the agent
+  running here, the newest fork is selected.
+
+Atuin never merges branches, and never writes to a session its agent has open.
+Claude Code, and Codex where it keeps session locks, say which session they
+have open. opencode, Pi and other Codex installs don't, so Atuin treats a
+session as possibly open, and doesn't catch it up, while one of that agent's
+processes works in the session's directory or below it: the directory this
+copy records, or else where the session works on this machine. A process elsewhere
+counts when its command line names the session (`opencode -s <id>`,
+`codex resume <id>`, `pi --session <file>`). While the session's transcript has
+changed in the last two minutes, any running process of that agent counts,
+wherever it works.
 
 A session written back out from sync, or continued in another agent, resumes in
 the directory the session ran in when that exists here. Otherwise, when you're
@@ -191,7 +220,13 @@ From the command line, `atuin ai resume <id>` resumes a session in its own
 agent directly (an id prefix works too), writing it out from sync first when it
 isn't on this machine, and `atuin ai resume <id> --in codex` continues it in
 another (`claude`, `codex`, `opencode` or `pi`). `atuin ai resume <id> --fork`
-forks it. `--print` prints the command instead of running it.
+forks it. It catches the session up with sync as the picker does, and fails
+when that needs a choice, saying which: `--as-is` resumes this copy unchanged,
+and `--fork` forks it from its newest branch. `--branch` picks the branch to
+catch up to, or to fork from: `this`, `@<host id>`, or the start of the id the
+error lists. `--as-is` and `--branch` need an id that names a single session:
+when it names several, Atuin lists them and asks you to be more specific.
+`--print` prints the command instead of running it.
 
 The id can be the agent's own, or the session's Atuin id, which Inspect and
 the MCP session tools show. An Atuin id is a UUIDv7, written as 32 hex digits

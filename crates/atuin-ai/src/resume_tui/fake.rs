@@ -4,19 +4,26 @@
 //! It covers all four harnesses, forks and subagents grouped under their roots, sessions from other
 //! hosts, a deleted worktree (missing cwd), and live sessions (updated in the last two minutes).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
+use atuin_client::ai_session::{
+    AiSessionDatabase, Analysis, HarnessKind, HarnessSession, Message, NativeSessionId, SourceId,
+};
 use atuin_common::harnesstools::Harness as _;
 use atuin_common::harnesstools::continuation::Flattened;
-use atuin_common::harnesstools::rehydrate::RehydrateSession;
+use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use atuin_common::harnesstools::resume::CwdRequirement;
-use atuin_common::harnesstools::session::Usage;
+use atuin_common::harnesstools::session::{Content, Role as Said, Usage};
+use atuin_common::harnesstools::sync::{LocalTip, Stamp};
+use atuin_domain::record::{HostId, RecordId};
+use parking_lot::Mutex;
 use time::{Duration, OffsetDateTime};
 
 use super::ResumeContext;
+use super::catchup::CatchUp;
 use super::resumer::{
     Continued, ForkFrom, Forked, NotResumable, Restore, Resume, ResumeError, ResumePlan,
     ResumeTarget, Resumer,
@@ -90,6 +97,76 @@ struct FakeSession {
 
 pub struct FakeSource {
     sessions: Vec<FakeSession>,
+    /// The rows sync holds of a session, for its branches ([`SessionSource::analyse`]).
+    synced: HashMap<HarnessSession, Vec<Message>>,
+}
+
+/// The session [`synced_rows`] are of.
+pub fn synced_handle() -> HarnessSession {
+    HarnessSession {
+        harness: HarnessKind::ClaudeCode,
+        session: NativeSessionId::from("s".to_owned()),
+    }
+}
+
+/// The rows sync holds of a Claude Code session: `a`-`b` on this host, then `c`-`d` on another;
+/// `diverged`, this host went on from `b` with `x`-`y` too.
+pub fn synced_rows(diverged: bool) -> Vec<Message> {
+    synced_rows_of(&synced_handle(), diverged)
+}
+
+/// [`synced_rows`], of session `handle`.
+pub fn synced_rows_of(handle: &HarnessSession, diverged: bool) -> Vec<Message> {
+    let mut specs = vec![
+        ("a", None, 1, 0, false),
+        ("b", Some("a"), 1, 1, true),
+        ("c", Some("b"), 2, 2, false),
+        ("d", Some("c"), 2, 3, true),
+    ];
+    if diverged {
+        specs.extend([("x", Some("b"), 1, 4, false), ("y", Some("x"), 1, 5, true)]);
+    }
+    specs.into_iter().map(|spec| synced_row(handle, spec)).collect()
+}
+
+/// A copy holding `known`, going on from `at`.
+pub fn local_tip(known: &[&str], at: Option<&str>) -> LocalTip {
+    LocalTip {
+        native_path: PathBuf::from("/t/s.jsonl"),
+        known_source_ids: known.iter().map(|s| (*s).to_owned()).collect::<HashSet<_>>(),
+        merged: HashMap::new(),
+        tip_source_id: at.map(str::to_owned),
+        stamp: Stamp::of(b""),
+        modified: None,
+        cwd: None,
+    }
+}
+
+/// The hosts' ids, but for their last digit.
+const HOST_BASE: u128 = 0x0190_0000_0000_7000_8000_0000_0000_0000;
+
+/// A row synced of session `handle`: `id`, hanging from `parent`, captured on host `host` (its
+/// id's last digit: 1 is this host) `minutes` after the hour, a prompt or (`reply`) a reply.
+pub fn synced_row(
+    handle: &HarnessSession,
+    (id, parent, host, minutes, reply): (&str, Option<&str>, u128, i64, bool),
+) -> Message {
+    let role = if reply {
+        Said::Assistant
+    } else {
+        Said::User
+    };
+    let mut message = Message::builder()
+        .id(RecordId(atuin_common::utils::uuid_v7()))
+        .session(handle.clone())
+        .source_id(SourceId::from(id.to_owned()))
+        .parent_source_id(parent.map(|p| SourceId::from(p.to_owned())))
+        .timestamp(now() - Duration::hours(1) + Duration::minutes(minutes))
+        .role(role)
+        .content(vec![Content::Text(format!("message {id}"))])
+        .build();
+    message.host = Some(HostId(uuid::Uuid::from_u128(HOST_BASE | host)));
+    message
 }
 
 struct Spec {
@@ -668,7 +745,16 @@ impl FakeSource {
             s.root = root;
         }
 
-        Self { sessions }
+        Self {
+            sessions,
+            synced: HashMap::new(),
+        }
+    }
+
+    /// This source, with `rows` synced of session `handle`.
+    pub fn with_synced(mut self, handle: &HarnessSession, rows: Vec<Message>) -> Self {
+        self.synced.insert(handle.clone(), rows);
+        self
     }
 
     /// A source holding only `rows`.
@@ -684,7 +770,15 @@ impl FakeSource {
                     messages: Vec::new(),
                 })
                 .collect(),
+            synced: HashMap::new(),
         }
+    }
+
+    /// Every row synced of `session`, in time order, as the sidecar restores them.
+    fn synced_messages(&self, session: &HarnessSession) -> Vec<RehydrateMessage> {
+        let mut rows = self.synced.get(session).cloned().unwrap_or_default();
+        rows.sort_by_key(|m| m.timestamp);
+        rows.into_iter().map(RehydrateMessage::from).collect()
     }
 
     fn children_of<'a>(
@@ -846,7 +940,8 @@ impl SessionSource for FakeSource {
         Ok(rows)
     }
 
-    /// The session without its messages: the fake sessions have none.
+    /// The session, with every row synced of it as its messages (the fake sessions' own messages
+    /// are preview text only).
     async fn rehydrate(
         &self,
         session: &HarnessSession,
@@ -866,9 +961,20 @@ impl SessionSource for FakeSource {
             git_branch: row.branch.clone(),
             model: row.model.clone(),
             started_at: row.started_at,
-            messages: Vec::new(),
+            messages: self.synced_messages(session),
             fork_of: None,
         })
+    }
+
+    async fn analyse(&self, session: &HarnessSession) -> eyre::Result<Option<Analysis>> {
+        let Some(rows) = self.synced.get(session) else {
+            return Ok(None);
+        };
+        let db = AiSessionDatabase::in_memory().await?;
+        for row in rows {
+            db.append(row).await?;
+        }
+        Ok(Some(db.analyse(session).await?))
     }
 }
 
@@ -877,13 +983,19 @@ impl SessionSource for FakeSource {
 /// Other hosts' sessions are restored from sync, into the directory they ran in; restoring
 /// writes nothing.
 pub struct FakeResumer {
-    missing: HashSet<PathBuf>,
+    pub missing: HashSet<PathBuf>,
+    /// What catching this host's sessions up does, when they are caught up at all.
+    pub catch_up: Option<CatchUp>,
+    /// What each fork started from.
+    pub forks: Arc<Mutex<Vec<ForkFrom>>>,
 }
 
 impl Default for FakeResumer {
     fn default() -> Self {
         Self {
             missing: HashSet::from([PathBuf::from(DELETED_WORKTREE)]),
+            catch_up: None,
+            forks: Arc::default(),
         }
     }
 }
@@ -917,16 +1029,38 @@ impl FakeResumer {
 
 #[async_trait]
 impl Resumer for FakeResumer {
+    /// This host's sessions are here, live while they were written to in the last two minutes;
+    /// other hosts' are restored.
     async fn plan(&self, session: &SessionRow) -> Result<Resume, NotResumable> {
         let plan = self.plan_for(session, None)?;
         if session.host_id == THIS_HOST_ID {
-            return Ok(Resume::ready(plan));
+            let ago = now() - session.active_at;
+            return Ok(Resume {
+                catch_up: self.catch_up.is_some(),
+                live: ago < Duration::seconds(i64::try_from(super::state::LIVE_SECS).unwrap_or(0)),
+                ..Resume::ready(plan)
+            });
         }
         let cwd = session.cwd.clone().unwrap_or_else(|| PathBuf::from(REPO));
         Ok(Resume {
-            plan,
             restore: Some(Restore { cwd, note: None }),
+            ..Resume::ready(plan)
         })
+    }
+
+    async fn catch_up(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        _head: Option<&SourceId>,
+    ) -> Result<CatchUp, NotResumable> {
+        match &self.catch_up {
+            Some(caught) if session.host_id == THIS_HOST_ID => Ok(caught.clone()),
+            _ => Ok(CatchUp::Ready {
+                plan: self.plan(session).await?.plan,
+                status: None,
+            }),
+        }
     }
 
     async fn restore(
@@ -987,8 +1121,9 @@ impl Resumer for FakeResumer {
         &self,
         _source: &dyn SessionSource,
         session: &SessionRow,
-        _from: ForkFrom,
+        from: ForkFrom,
     ) -> Result<Forked, NotResumable> {
+        self.forks.lock().push(from);
         let mut row = session.clone();
         row.handle.session = NativeSessionId::from(format!("forked-{}", session.handle.session));
         let native = PathBuf::from(format!("/forked/{}", row.handle.session));

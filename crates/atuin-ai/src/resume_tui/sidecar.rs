@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use atuin_client::ai_session::{AiSessionDatabase, HarnessSession, SearchTerms, Session};
+use atuin_client::ai_session::{AiSessionDatabase, Analysis, HarnessSession, SearchTerms, Session};
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{Content, ParentKind};
 use atuin_common::string::highlighted::HighlightedString;
@@ -178,6 +178,10 @@ impl SessionSource for SidecarSource {
             .rehydrate_session(session, cwd.to_owned())
             .await?
             .ok_or_else(|| eyre::eyre!("the session isn't in the AI session database"))
+    }
+
+    async fn analyse(&self, session: &HarnessSession) -> Result<Option<Analysis>> {
+        Ok(Some(self.db.analyse(session).await?))
     }
 }
 
