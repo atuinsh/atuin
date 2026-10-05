@@ -138,18 +138,20 @@ impl Importer for Xonsh {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
+    #[rstest]
     fn test_hist_dir_xonsh() {
         let hist_dir = xonsh_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
         assert_eq!(hist_dir, PathBuf::from("/home/user/xonsh_data/history_json"));
     }
 
+    #[rstest]
     #[tokio::test]
     async fn out_of_range_timestamp_falls_back_to_epoch() {
         let xonsh = Xonsh {
@@ -173,8 +175,7 @@ mod tests {
         assert_eq!(loader.buf[0].command, "echo hello");
     }
 
-    #[tokio::test]
-    async fn test_import() {
+    async fn import_fixture() -> Vec<History> {
         let dir = PathBuf::from("tests/data/xonsh");
         let sessions = load_sessions(&dir).unwrap();
         let cmd_origin = CmdOrigin::try_from("box:user").unwrap();
@@ -187,7 +188,14 @@ mod tests {
         xonsh.load(&mut loader).await.unwrap();
         // order in buf will depend on filenames, so sort by timestamp for consistency
         loader.buf.sort_by_key(|h| h.timestamp);
-        for (actual, expected) in loader.buf.iter().zip(expected_hist_entries().iter()) {
+        loader.buf
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_import() {
+        for (actual, expected) in import_fixture().await.iter().zip(expected_hist_entries().iter())
+        {
             assert_eq!(actual.timestamp, expected.timestamp);
             assert_eq!(actual.command, expected.command);
             assert_eq!(actual.cwd, expected.cwd);
@@ -195,6 +203,22 @@ mod tests {
             assert_eq!(actual.duration, expected.duration);
             assert_eq!(actual.cmd_origin, expected.cmd_origin);
         }
+    }
+
+    /// The fixture holds two xonsh sessions of two commands each, the earlier two and the later.
+    #[rstest]
+    #[tokio::test]
+    async fn each_session_gets_one_id_that_importing_again_reproduces() {
+        let sessions = || async {
+            let ids: Vec<String> = import_fixture().await.into_iter().map(|h| h.session).collect();
+            <[String; 4]>::try_from(ids).unwrap()
+        };
+        let [a1, a2, b1, b2] = sessions().await;
+
+        assert_eq!(a1, a2);
+        assert_eq!(b1, b2);
+        assert_ne!(a1, b1);
+        assert_eq!(sessions().await, [a1, a2, b1, b2]);
     }
 
     fn expected_hist_entries() -> [History; 4] {

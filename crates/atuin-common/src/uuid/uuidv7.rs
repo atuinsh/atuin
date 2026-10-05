@@ -20,3 +20,44 @@ impl UuidV7Ext for Uuid {
         uuid::Builder::from_unix_timestamp_millis(millis, &random).into_uuid()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use time::OffsetDateTime;
+    use time::macros::datetime;
+    use uuid::Uuid;
+
+    use super::UuidV7Ext;
+
+    #[rstest]
+    #[case::same_namespace_and_name("ns", b"name", "ns", b"name", true)]
+    #[case::another_name("ns", b"name", "ns", b"other", false)]
+    #[case::another_namespace("ns", b"name", "other", b"name", false)]
+    #[case::the_split_moved("a", b"bc", "ab", b"c", false)]
+    fn is_the_same_exactly_when_namespace_and_name_are(
+        #[case] namespace: &str,
+        #[case] name: &[u8],
+        #[case] other_namespace: &str,
+        #[case] other_name: &[u8],
+        #[case] same: bool,
+    ) {
+        let at = datetime!(2024-01-02 03:04:05 UTC);
+        assert_eq!(
+            Uuid::new_v7_named(at, namespace, name)
+                == Uuid::new_v7_named(at, other_namespace, other_name),
+            same
+        );
+    }
+
+    #[rstest]
+    #[case::after_the_epoch(datetime!(2024-01-02 03:04:05.678 UTC), 1_704_164_645_678)]
+    #[case::before_the_epoch(datetime!(1960-01-01 0:00 UTC), 0)]
+    fn is_a_v7_stamped_with_the_timestamp(#[case] timestamp: OffsetDateTime, #[case] millis: u64) {
+        let id = Uuid::new_v7_named(timestamp, "ns", b"name");
+
+        assert_eq!(id.get_version(), Some(uuid::Version::SortRand));
+        let (seconds, nanos) = id.get_timestamp().unwrap().to_unix();
+        assert_eq!(seconds * 1000 + u64::from(nanos / 1_000_000), millis);
+    }
+}

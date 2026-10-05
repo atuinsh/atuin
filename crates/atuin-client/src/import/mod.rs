@@ -151,6 +151,9 @@ fn is_dir(p: PathBuf) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+    use time::macros::datetime;
+
     use super::*;
 
     #[derive(Default)]
@@ -164,5 +167,22 @@ mod tests {
             self.buf.push(hist);
             Ok(())
         }
+    }
+
+    #[rstest]
+    fn imported_sessions_name_each_source_session_once_and_again_on_reimport() {
+        let start = datetime!(2024-01-02 03:04:05 UTC);
+        let mut sessions = ImportedSessions::new("nu_histdb");
+        let first = sessions.id("1", start);
+
+        assert_eq!(sessions.id("1", datetime!(2024-01-02 04:00 UTC)), first);
+        assert_ne!(sessions.id("2", start), first);
+        assert_eq!(ImportedSessions::new("nu_histdb").id("1", start), first);
+        assert_ne!(ImportedSessions::new("zsh_histdb").id("1", start), first);
+
+        let id = Uuid::parse_str(&first).unwrap();
+        assert_eq!(id.as_simple().to_string(), first);
+        assert_eq!(id.get_version(), Some(uuid::Version::SortRand));
+        assert_eq!(id.get_timestamp().unwrap().to_unix(), (1_704_164_645, 0));
     }
 }

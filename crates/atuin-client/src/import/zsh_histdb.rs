@@ -177,9 +177,11 @@ mod test {
 
     use std::env;
 
+    use rstest::rstest;
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     #[allow(unsafe_code)]
     async fn test_env_vars() {
@@ -196,6 +198,7 @@ mod test {
         assert_eq!(histdb_path.to_str().unwrap(), test_env_db);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn duration_saturates_instead_of_overflowing() {
         use time::macros::datetime;
@@ -225,6 +228,7 @@ mod test {
         assert_eq!(loader.buf[0].duration, i64::MAX);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_import() {
         let pool: SqlitePool =
