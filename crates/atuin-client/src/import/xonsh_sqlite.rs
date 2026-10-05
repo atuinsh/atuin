@@ -23,7 +23,8 @@ struct HistDbEntry {
     tsb: f64,
     tse: f64,
     cwd: String,
-    sessionid: String,
+    // Nullable in xonsh's schema; rows without one share a session, as they share a partition.
+    sessionid: Option<String>,
     session_start: f64,
 }
 
@@ -37,7 +38,7 @@ impl HistDbEntry {
             OffsetDateTime::from_unix_seconds_f64(self.tsb).unwrap_or(OffsetDateTime::UNIX_EPOCH);
         let session_start = OffsetDateTime::from_unix_seconds_f64(self.session_start)
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        let session_id = sessions.id(&self.sessionid, session_start);
+        let session_id = sessions.id(self.sessionid.as_deref().unwrap_or_default(), session_start);
         let duration = ((self.tse - self.tsb) * 1_000_000_000_f64)
             .try_cast_trunc()
             .unwrap_or(HistoryImported::DEFAULT_DURATION);
@@ -130,19 +131,20 @@ impl Importer for XonshSqlite {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
+    #[rstest]
     fn test_db_path_xonsh() {
         let db_path = xonsh_db_path(Some("/home/user/xonsh_data".to_string())).unwrap();
         assert_eq!(db_path, PathBuf::from("/home/user/xonsh_data/xonsh-history.sqlite"));
     }
 
-    #[test]
+    #[rstest]
     fn out_of_range_timestamp_falls_back_to_epoch() {
         let entry = HistDbEntry {
             inp: "echo hello".to_string(),
@@ -150,7 +152,7 @@ mod tests {
             tsb: 1e30,
             tse: 1e30,
             cwd: "/tmp".to_string(),
-            sessionid: "s".to_string(),
+            sessionid: Some("s".to_string()),
             session_start: 0.0,
         };
 
@@ -162,18 +164,26 @@ mod tests {
         assert_eq!(hist.command, "echo hello");
     }
 
-    #[tokio::test]
-    async fn test_import() {
-        let connection_str = "tests/data/xonsh-history.sqlite";
+    async fn import(pool: SqlitePool) -> Vec<History> {
         let xonsh_sqlite = XonshSqlite {
-            pool: SqlitePool::connect(connection_str).await.unwrap(),
+            pool,
             cmd_origin: CmdOrigin::try_from("box:user").unwrap(),
         };
 
         let mut loader = TestLoader::default();
         xonsh_sqlite.load(&mut loader).await.unwrap();
+        loader.buf
+    }
 
-        for (actual, expected) in loader.buf.iter().zip(expected_hist_entries().iter()) {
+    async fn import_fixture() -> Vec<History> {
+        import(SqlitePool::connect("tests/data/xonsh-history.sqlite").await.unwrap()).await
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_import() {
+        for (actual, expected) in import_fixture().await.iter().zip(expected_hist_entries().iter())
+        {
             assert_eq!(actual.timestamp, expected.timestamp);
             assert_eq!(actual.command, expected.command);
             assert_eq!(actual.cwd, expected.cwd);
@@ -181,6 +191,47 @@ mod tests {
             assert_eq!(actual.duration, expected.duration);
             assert_eq!(actual.cmd_origin, expected.cmd_origin);
         }
+    }
+
+    /// The fixture holds two xonsh sessions of two commands each, rows 1-2 and 3-4.
+    #[rstest]
+    #[tokio::test]
+    async fn each_session_gets_one_id_that_importing_again_reproduces() {
+        let sessions = || async {
+            let ids: Vec<String> = import_fixture().await.into_iter().map(|h| h.session).collect();
+            <[String; 4]>::try_from(ids).unwrap()
+        };
+        let [a1, a2, b1, b2] = sessions().await;
+
+        assert_eq!(a1, a2);
+        assert_eq!(b1, b2);
+        assert_ne!(a1, b1);
+        assert_eq!(sessions().await, [a1, a2, b1, b2]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_row_without_a_session_id_still_imports() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        db::query(
+            "CREATE TABLE xonsh_history (inp TEXT, rtn INTEGER, tsb REAL, tse REAL, sessionid \
+             TEXT, cwd TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        db::query(
+            "INSERT INTO xonsh_history VALUES ('echo hi', 0, 1707242181.0, 1707242182.0, NULL, \
+             '/tmp')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let imported = import(pool).await;
+
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].command, "echo hi");
     }
 
     fn expected_hist_entries() -> [History; 4] {
