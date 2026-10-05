@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 # Enables `atuin_common::harnesstools`.
-ai = ["fs-watcher", "jsonl", "dep:shlex", "dep:xxhash-rust", "sqlite"]
+ai = ["fs-watcher", "jsonl", "dep:shlex", "sqlite"]
 # Enables `atuin_common::ansi`.
 ansi = ["dep:atuin-vt100"]
 # Enables `atuin_common::db` (but not `db::sqlite`).
@@ -88,8 +88,8 @@ unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true }
-# Digests the item a session checkpoint was taken after; xxh3 is stable across versions.
-xxhash-rust = { workspace = true, optional = true }
+# Digests session checkpoints and seeds `utils::uuid_v7_for`; xxh3 is stable across versions.
+xxhash-rust = { workspace = true }
 zeroize = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
