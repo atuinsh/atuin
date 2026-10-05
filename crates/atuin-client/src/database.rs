@@ -502,6 +502,13 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, err)]
+    pub async fn active_ids(&self) -> Result<Vec<HistoryId>> {
+        db::query_scalar::<_, HistoryId>("select id from history where deleted_at is null")
+            .fetch_all(self.sqlite.pool())
+            .await
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn load_active(
         &self,
         ids: impl IntoIterator<Item = HistoryId>,

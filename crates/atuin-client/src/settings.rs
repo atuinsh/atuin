@@ -540,6 +540,12 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Octavo {
+    pub enabled: bool,
+    pub endpoint: Option<Url>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Search {
     /// The list of enabled filter modes, in order of priority.
@@ -1135,6 +1141,9 @@ pub struct Settings {
     pub output: OutputCapture,
 
     #[serde(default)]
+    pub octavo: Octavo,
+
+    #[serde(default)]
     pub search: Search,
 
     #[serde(default)]
@@ -1221,6 +1230,11 @@ impl Settings {
     #[must_use]
     pub fn ai_session_sidecar_path() -> PathBuf {
         Self::effective_data_dir().join("ai_harness_sessions.db")
+    }
+
+    #[must_use]
+    pub fn octavo_queue_path() -> PathBuf {
+        Self::effective_data_dir().join("octavo.db")
     }
 
     // -- Meta store: lazily initialized on first access --
@@ -1628,6 +1642,8 @@ impl Settings {
             )?
             .set_default("no_mouse", false)?
             .set_default("pty_proxy.enabled", false)?
+            .set_default("octavo.enabled", false)?
+            .set_default("octavo.endpoint", None::<String>)?
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 

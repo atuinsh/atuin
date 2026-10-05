@@ -20,6 +20,7 @@ pub mod daemon;
 pub mod events;
 pub mod grpc;
 pub(crate) mod history_journal;
+mod octavo;
 mod output_capture;
 pub mod pidfile;
 pub mod search;
@@ -38,6 +39,7 @@ pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
+pub use octavo::Octavo;
 pub use output_capture::{
     CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputLine, OutputMatch,
 };
@@ -343,6 +345,7 @@ pub async fn boot(
         handle.history_db().clone(),
         search_index,
         output_capture,
+        Octavo::open(&settings, handle.clone()).await,
     ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
     let ai_session_service = AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture));

@@ -48,12 +48,14 @@ default = [
     "daemon",
     "ai",
     "pty-proxy",
+    "octavo",
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
+octavo = ["sync", "daemon", "atuin-daemon/octavo", "dep:atuin-octavo"]
 hex = ["pty-proxy"]
 clipboard = ["dep:arboard", "atuin-ai?/clipboard"]
 check-update = ["atuin-client/check-update"]
@@ -85,6 +87,7 @@ atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
 atuin-vt100 = { workspace = true }
 atuin-kv = { workspace = true }
+atuin-octavo = { workspace = true, optional = true }
 atuin-pty-proxy = { workspace = true, optional = true }
 atuin-scripts = { workspace = true }
 

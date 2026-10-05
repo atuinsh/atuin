@@ -1,6 +1,6 @@
 [codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file
-skip = .git*,*.lock,.codespellrc,CODE_OF_CONDUCT.md,CONTRIBUTORS,./vendor/axoasset,./crates/atuin-api-client/proto/buf
+skip = .git*,*.lock,.codespellrc,CODE_OF_CONDUCT.md,CONTRIBUTORS,./vendor/axoasset,./crates/atuin-octavo/proto/buf
 check-hidden = true
 # ignore-regex = 
 ignore-words-list = crate,ratatui,inbetween,iterm,fo,brunch,ser,writet

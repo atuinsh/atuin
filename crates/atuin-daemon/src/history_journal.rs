@@ -98,6 +98,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
+use crate::octavo::Octavo;
 use crate::output_capture::{CaptureError, GetOutputError, OutputCaptureEngine};
 use crate::search::SearchIndex;
 
@@ -212,6 +213,8 @@ pub struct HistoryJournal {
     /// Durable store for captured command output.
     output_capture: OutputCaptureEngine,
 
+    octavo: Octavo,
+
     /// Ids a [`Self::delete`] is currently tearing down, reference-counted across concurrent
     /// deletes. [`Self::register_command_output`] refuses these, so no capture can land between a
     /// delete's output removal and its record removal.
@@ -284,6 +287,7 @@ impl HistoryJournal {
         history_db: HistoryDatabase,
         search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
         output_capture: OutputCaptureEngine,
+        octavo: Octavo,
     ) -> Self {
         const DEFAULT_LIFECYCLE_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
@@ -296,6 +300,7 @@ impl HistoryJournal {
             search_index,
             broadcast,
             output_capture,
+            octavo,
             deleting: DashMap::new(),
             lifecycle_mutex: AsyncShardedMutex::new(DEFAULT_LIFECYCLE_SHARDS),
         }
@@ -406,6 +411,7 @@ impl HistoryJournal {
         //              .read() and the subsequent .write() are completely discarded from the new
         //              index.
         self.search_index.read().await.add_history(&history);
+        self.octavo.push_history(&history, history_record_id).await;
 
         if self.broadcast.receiver_count() > 0 {
             let _ = self.broadcast.send(CmdEvent::Finished(history));
@@ -533,6 +539,9 @@ impl HistoryJournal {
         if to_delete.is_empty() {
             return Ok(deleted);
         }
+
+        // The tombstones commit the deletion, so Octavo hears of it even if a chunk below fails.
+        self.octavo.delete_history(&to_delete).await;
 
         // The tombstones were just written above, so replaying them through
         // `HistoryStore::build_all` would only read and decrypt them back into these same ids.
@@ -699,8 +708,14 @@ mod tests {
         let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
         let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
         let caps = CapClient::new("http://127.0.0.1:1".parse().unwrap(), reqwest::Client::new());
-        let journal =
-            HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);
+        let journal = HistoryJournal::new(
+            caps,
+            history_store,
+            history_db,
+            search_index,
+            output_capture,
+            Octavo::nop(),
+        );
         (journal, tmp)
     }
 

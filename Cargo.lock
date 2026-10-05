@@ -277,6 +277,7 @@ dependencies = [
  "atuin-dotfiles",
  "atuin-history",
  "atuin-kv",
+ "atuin-octavo",
  "atuin-pty-proxy",
  "atuin-scripts",
  "atuin-vt100",
@@ -405,10 +406,6 @@ dependencies = [
  "xxhash-rust",
  "yaml-rust2",
 ]
-
-[[package]]
-name = "atuin-api-client"
-version = "18.23.0"
 
 [[package]]
 name = "atuin-client"
@@ -553,6 +550,7 @@ dependencies = [
  "atuin-common",
  "atuin-domain",
  "atuin-history",
+ "atuin-octavo",
  "dashmap",
  "derive_more",
  "divan",
@@ -680,6 +678,32 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "typed-builder",
+]
+
+[[package]]
+name = "atuin-octavo"
+version = "18.23.0"
+dependencies = [
+ "atuin-client",
+ "atuin-common",
+ "atuin-domain",
+ "eyre",
+ "futures",
+ "hyper-tls",
+ "hyper-util",
+ "native-tls",
+ "prost",
+ "prost-types",
+ "protox",
+ "secrecy",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "url",
+ "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]

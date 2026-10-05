@@ -23,8 +23,9 @@ message History {
   google.protobuf.Timestamp start_time = 6 [(buf.validate.field).required = true];
   // How long the command ran and never negative.
   google.protobuf.Duration duration = 7 [(buf.validate.field).duration.gte = {}];
-  // The terminal session the command ran in. Client-generated, unique per user.
-  UuidV7 session = 8 [(buf.validate.field).required = true];
+  // The terminal session the command ran in, as the client names it. Unique per user, and empty
+  // when the client doesn't know it.
+  string session = 8 [(buf.validate.field).string.max_bytes = 128];
   // The machine and account the command ran on.
   CmdOrigin cmd_origin = 9 [(buf.validate.field).required = true];
   // Who decided to run the command.

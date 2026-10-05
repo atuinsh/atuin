@@ -11,12 +11,16 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+octavo = ["dep:atuin-octavo"]
+
 [dependencies]
 async-stream = { workspace = true }
 atuin-client = { workspace = true, features = ["proto"] }
 atuin-common = { workspace = true, features = ["ai", "os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-history = { workspace = true }
+atuin-octavo = { workspace = true, optional = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }

@@ -21,6 +21,7 @@ atuin-domain = { path = "crates/atuin-domain", version = "18.23.0" }
 atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.23.0" }
 atuin-history = { path = "crates/atuin-history", version = "18.23.0" }
 atuin-kv = { path = "crates/atuin-kv", version = "18.23.0" }
+atuin-octavo = { path = "crates/atuin-octavo", version = "18.23.0" }
 atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.23.0", default-features = false }
 atuin-scripts = { path = "crates/atuin-scripts", version = "18.23.0" }
 atuin-server = { path = "crates/atuin-server", version = "18.23.0" }
@@ -73,6 +74,7 @@ getrandom = "0.4"
 glob-match = "0.2"
 http = "1"
 humantime = "2"
+hyper-tls = "0.6"
 hyper-util = "0.1"
 i18n-embed = { version = "0.16", features = ["fluent-system"] }
 i18n-embed-fl = "0.10"
@@ -92,6 +94,7 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 minijinja = "2"
 minspan = "0.1"
+native-tls = "0.2"
 norm = { version = "0.1", features = ["fzf-v2"] }
 notify = "8"
 notify-debouncer-full = "0.7"

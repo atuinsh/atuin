@@ -1,0 +1,39 @@
+[package]
+name = "atuin-octavo"
+edition = "2024"
+description = "Client for the Atuin hub's gRPC API"
+
+authors.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+atuin-client = { workspace = true }
+atuin-common = { workspace = true, features = ["sqlite"] }
+atuin-domain = { workspace = true }
+eyre = { workspace = true }
+futures = { workspace = true }
+hyper-tls = { workspace = true }
+hyper-util = { workspace = true, features = ["client-legacy", "tokio"] }
+native-tls = { workspace = true, features = ["alpn"] }
+prost = { workspace = true }
+prost-types = { workspace = true }
+secrecy = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+xxhash-rust = { workspace = true }
+
+[build-dependencies]
+protox = { workspace = true }
+tonic-prost-build = { workspace = true }
+
+[lints]
+workspace = true

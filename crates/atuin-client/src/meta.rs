@@ -25,6 +25,7 @@ const KEY_LAST_VERSION_CHECK: &str = "last_version_check_time";
 const KEY_LATEST_VERSION: &str = "latest_version";
 const KEY_SESSION: &str = "session";
 const KEY_HUB_SESSION: &str = "hub_session";
+const KEY_HUB_USER_ID: &str = "hub_user_id";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
 
 const HUB_TOKEN_PREFIX: &str = "atapi_";
@@ -188,11 +189,68 @@ impl MetaStore {
     }
 
     pub async fn save_hub_session(&self, token: &SecretString) -> Result<()> {
-        self.set(KEY_HUB_SESSION, token.expose_secret()).await
+        let mut tx = self.sqlite.pool().begin().await?;
+        db::query(
+            "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, strftime('%s', 'now'))
+             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
+        )
+        .bind(KEY_HUB_SESSION)
+        .bind(token.expose_secret())
+        .execute(&mut *tx)
+        .await?;
+        db::query("DELETE FROM meta WHERE key = ?1")
+            .bind(KEY_HUB_USER_ID)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     pub async fn delete_hub_session(&self) -> Result<()> {
-        self.delete(KEY_HUB_SESSION).await
+        db::query("DELETE FROM meta WHERE key IN (?1, ?2)")
+            .bind(KEY_HUB_SESSION)
+            .bind(KEY_HUB_USER_ID)
+            .execute(self.sqlite.pool())
+            .await?;
+
+        Ok(())
+    }
+
+    /// The id of the hub user `token` logs in, if `token` is still the hub session and
+    /// [`Self::save_hub_user_id`] recorded it.
+    pub async fn hub_user_id(&self, token: &SecretString) -> Result<Option<String>> {
+        let row: Option<(String,)> = db::query_as(
+            "SELECT user_id.value FROM meta AS user_id
+             JOIN meta AS session ON session.key = ?2 AND session.value = ?3
+             WHERE user_id.key = ?1",
+        )
+        .bind(KEY_HUB_USER_ID)
+        .bind(KEY_HUB_SESSION)
+        .bind(token.expose_secret())
+        .fetch_optional(self.sqlite.pool())
+        .await?;
+
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Records that `token` logs in the hub user `user_id`, unless a login or logout replaced
+    /// `token` as the hub session since it was read.
+    pub async fn save_hub_user_id(&self, token: &SecretString, user_id: &str) -> Result<()> {
+        db::query(
+            "INSERT INTO meta (key, value, updated_at)
+             SELECT ?1, ?2, strftime('%s', 'now') WHERE EXISTS
+               (SELECT 1 FROM meta WHERE key = ?3 AND value = ?4)
+             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
+        )
+        .bind(KEY_HUB_USER_ID)
+        .bind(user_id)
+        .bind(KEY_HUB_SESSION)
+        .bind(token.expose_secret())
+        .execute(self.sqlite.pool())
+        .await?;
+
+        Ok(())
     }
 
     pub async fn hub_logged_in(&self) -> Result<bool> {

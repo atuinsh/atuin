@@ -20,7 +20,7 @@ message CmdOrigin {
 // Who decided to run a command: a person or an agent. Not a hub user.
 message Author {
   // e.g. `alice` or `claude-code`.
-  string name = 1;
+  string name = 1 [(buf.validate.field).string.max_bytes = 255];
   // Logically required; the hub rejects `AUTHOR_KIND_UNSPECIFIED`.
   AuthorKind kind = 2 [
     (buf.validate.field).required = true,
