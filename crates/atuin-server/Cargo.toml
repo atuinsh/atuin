@@ -11,6 +11,11 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+# The server keeps the workspace's installers without the Windows MSI, which
+# is for the shell-integrated client.
+[package.metadata.dist]
+installers = ["shell", "powershell"]
+
 [lib]
 name = "atuin_server"
 path = "src/lib.rs"
