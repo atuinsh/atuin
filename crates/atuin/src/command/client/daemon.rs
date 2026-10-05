@@ -11,7 +11,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
-use atuin_common::fs::lock::{LockMode, LockOptions};
+use atuin_common::fs::lock::{LockError, LockMode, LockOptions};
 use atuin_common::futures::Backoff;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::pidfile::{self, PidfileGuard};
@@ -102,6 +102,22 @@ impl Cmd {
 
 const STARTUP_POLL: Duration = Duration::from_millis(40);
 const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart daemon manually";
+
+/// How long a single connect to the daemon's socket may take.
+///
+/// The check only has to notice a listener, so it must not inherit the stall it exists to
+/// diagnose: a socket that hasn't answered within this isn't serving.
+const SERVING_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// How long a daemon that is alive but not yet reachable is given to start serving, before it is
+/// treated as wedged.
+///
+/// A daemon takes the pidfile lock before it binds its socket, so without this grace a client
+/// racing a daemon that is still booting would replace it.
+const SERVING_GRACE: Duration = Duration::from_secs(1);
+
+/// How long to wait for a wedged daemon to exit once it has been asked to.
+const WEDGE_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 enum Probe {
     Ready(HistoryClient),
@@ -304,6 +320,143 @@ fn startup_lock_path(pidfile_path: &Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// What to do with the daemon recorded in the pidfile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Autostart {
+    /// A daemon is serving its socket; leave it alone.
+    Keep,
+    /// Nothing is holding the pidfile; spawn a daemon.
+    Spawn,
+    /// A daemon is alive but not serving; replace it.
+    Replace,
+}
+
+/// Decide what to do with the daemon recorded in the pidfile.
+///
+/// Liveness is not health: a daemon can outlive its socket, and it holds the pidfile lock for its
+/// whole lifetime, so that wedge blocks every later attempt to take the lock. A daemon that is
+/// alive without serving therefore has to be replaced, not assumed healthy.
+#[must_use]
+fn autostart_action(daemon_alive: bool, socket_serving: bool) -> Autostart {
+    match (daemon_alive, socket_serving) {
+        (true, true) => Autostart::Keep,
+        (true, false) => Autostart::Replace,
+        (false, _) => Autostart::Spawn,
+    }
+}
+
+/// Whether a daemon is still holding the pidfile's exclusive lock, which it does from the moment it
+/// starts until it exits.
+///
+/// A held lock is the liveness signal here, because it belongs to the daemon itself: a PID read
+/// from the pidfile can name a process that has long since exited and had its PID reused.
+#[must_use]
+fn daemon_holds_pidfile(pidfile_path: &Path) -> bool {
+    let options = LockOptions {
+        create: false,
+        mode: LockMode::Exclusive,
+    };
+
+    match options.try_open(pidfile_path) {
+        Err(LockError::WouldBlock) => true,
+        Ok(_) => false,
+        Err(e) => {
+            tracing::debug!(path = %pidfile_path.display(), "could not lock daemon pidfile: {e}");
+            false
+        }
+    }
+}
+
+/// Whether a connect to the daemon's socket succeeds within [`SERVING_PROBE_TIMEOUT`].
+///
+/// A missing, a refused and a non-answering socket all mean the same thing here: not serving.
+#[cfg(unix)]
+#[must_use]
+async fn socket_is_serving(socket_path: &Path) -> bool {
+    let connect = tokio::net::UnixStream::connect(socket_path);
+    let socket = socket_path.display();
+
+    match tokio::time::timeout(SERVING_PROBE_TIMEOUT, connect).await {
+        Ok(Ok(_stream)) => true,
+        outcome => {
+            tracing::debug!("daemon socket {socket} is not serving: {outcome:?}");
+            false
+        }
+    }
+}
+
+/// Whether a connect to the daemon's TCP port succeeds within [`SERVING_PROBE_TIMEOUT`].
+#[cfg(not(unix))]
+#[must_use]
+async fn socket_is_serving(port: u64) -> bool {
+    let address = format!("127.0.0.1:{port}");
+    let connect = tokio::net::TcpStream::connect(address.clone());
+
+    match tokio::time::timeout(SERVING_PROBE_TIMEOUT, connect).await {
+        Ok(Ok(_stream)) => true,
+        outcome => {
+            tracing::debug!("daemon port {address} is not serving: {outcome:?}");
+            false
+        }
+    }
+}
+
+/// Whether the socket the client connects to is serving, polling for up to `timeout`.
+///
+/// The grace period matters because a daemon locks the pidfile before it binds its socket, so a
+/// daemon that is still booting looks exactly like a wedged one for as long as it takes to start.
+/// The socket path is resolved on every attempt rather than once, because a daemon may come up on a
+/// fallback path that only exists once it is listening.
+async fn daemon_is_serving(settings: &Settings, timeout: Duration) -> bool {
+    Backoff::Constant(STARTUP_POLL)
+        .retry(
+            || async move {
+                #[cfg(unix)]
+                let serving = socket_is_serving(&atuin_daemon::client::socket_path(settings)).await;
+                #[cfg(not(unix))]
+                let serving = socket_is_serving(settings.daemon.tcp_port).await;
+
+                if serving {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            },
+            timeout,
+        )
+        .await
+        .is_ok()
+}
+
+/// Terminate a daemon that is alive but has stopped serving, freeing the pidfile for its
+/// replacement, and report whether one was terminated.
+///
+/// Without this a wedged daemon is never replaced: it holds the pidfile lock for as long as it
+/// runs, so the spawn path waits out the whole timeout on that lock and fails, on every command,
+/// until somebody kills it by hand.
+async fn replace_wedged_daemon(settings: &Settings) -> bool {
+    let pidfile_path = Path::new(&settings.daemon.pidfile_path);
+    let daemon_alive = daemon_holds_pidfile(pidfile_path);
+    // Only a daemon that is alive can still start serving, so the grace period is only ever paid
+    // in the one case where it can change the answer.
+    let socket_serving = daemon_alive && daemon_is_serving(settings, SERVING_GRACE).await;
+
+    let Autostart::Replace = autostart_action(daemon_alive, socket_serving) else {
+        return false;
+    };
+
+    let Some(pid) = pidfile::try_read_pid(pidfile_path).filter(|pid| *pid != 0) else {
+        return false;
+    };
+
+    tracing::warn!("daemon (pid {pid}) is not serving its socket; replacing it");
+    if let Err(e) = atuin_common::os::process::force_terminate(pid, WEDGE_EXIT_TIMEOUT).await {
+        tracing::warn!("could not terminate wedged daemon (pid {pid}): {e}");
+    }
+
+    true
+}
+
 /// Ensure the daemon is running, starting it if necessary.
 ///
 /// If the daemon is already running and up-to-date, this is a no-op.
@@ -339,6 +492,8 @@ pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
             if is_legacy_daemon_error(&err) {
                 return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
             }
+
+            replace_wedged_daemon(settings).await;
         }
     }
 
@@ -549,7 +704,11 @@ pub(super) async fn restart_cmd(settings: &Settings) -> Result<()> {
                 .wrap_err("Timed out waiting for old daemon to stop")?;
         }
         Probe::Unreachable(_) => {
-            println!("No daemon running");
+            if replace_wedged_daemon(settings).await {
+                println!("Replaced a daemon that was no longer serving");
+            } else {
+                println!("No daemon running");
+            }
         }
     }
 
@@ -630,9 +789,68 @@ async fn force_cleanup(settings: &Settings) {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
 
     use super::*;
+
+    #[fixture]
+    fn tmp_dir() -> TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    /// Liveness on its own is not health: a daemon that is alive but has stopped serving holds the
+    /// pidfile lock for as long as it runs, so it has to be replaced instead of assumed healthy.
+    #[rstest]
+    #[case::no_daemon(false, false, Autostart::Spawn)]
+    #[case::serving_daemon(true, true, Autostart::Keep)]
+    #[case::wedged_daemon(true, false, Autostart::Replace)]
+    fn autostart_replaces_only_a_daemon_that_is_alive_without_serving(
+        #[case] daemon_alive: bool,
+        #[case] socket_serving: bool,
+        #[case] expected: Autostart,
+    ) {
+        assert_eq!(autostart_action(daemon_alive, socket_serving), expected);
+    }
+
+    /// The lock is what says the daemon is alive, since a PID left in the pidfile can name a
+    /// process that has long since exited.
+    #[rstest]
+    fn a_daemon_is_alive_for_as_long_as_it_holds_the_pidfile_lock(tmp_dir: TempDir) {
+        let pidfile = tmp_dir.path().join("atuin-daemon.pid");
+
+        assert!(!daemon_holds_pidfile(&pidfile), "no pidfile, no daemon");
+
+        let held = LockOptions {
+            create: true,
+            mode: LockMode::Exclusive,
+        }
+        .open(&pidfile)
+        .unwrap();
+
+        assert!(daemon_holds_pidfile(&pidfile), "a running daemon holds the lock");
+        drop(held);
+        assert!(!daemon_holds_pidfile(&pidfile), "the lock dies with the daemon");
+    }
+
+    /// What tells a serving daemon from a wedged one is a connect, so the check has to follow
+    /// whatever is, or isn't, listening on the socket.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn a_socket_is_serving_only_while_something_listens_on_it(tmp_dir: TempDir) {
+        let socket_path = tmp_dir.path().join("atuin.sock");
+
+        assert!(!socket_is_serving(&socket_path).await, "no socket at all");
+
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        drop(listener);
+        fs::remove_file(&socket_path).unwrap();
+        assert!(!socket_is_serving(&socket_path).await, "socket left behind");
+
+        let _listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        assert!(socket_is_serving(&socket_path).await, "daemon listening");
+    }
 
     #[cfg(unix)]
     #[rstest]
