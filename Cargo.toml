@@ -43,7 +43,7 @@ chrono-humanize = "0.2"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 clap_complete_nushell = "4"
-colored = "2"
+colored = "3"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 crossterm = "0.29"
 crypto_secretbox = "0.1"
