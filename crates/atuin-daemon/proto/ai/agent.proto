@@ -205,4 +205,10 @@ message Session {
   optional HarnessSession copy_of = 19;
   // Atuin's id for the session.
   optional common.Uuid atuin_id = 20;
+  // The atuin ids of `parent` and `root`, when those sessions are stored: links are resolved
+  // when read, never recorded.
+  optional common.Uuid parent_atuin_id = 21;
+  optional common.Uuid root_atuin_id = 22;
+  // The atuin ids of the stored sessions naming this one their parent, oldest first.
+  repeated common.Uuid child_atuin_ids = 23;
 }

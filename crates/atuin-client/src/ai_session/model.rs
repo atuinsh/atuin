@@ -348,6 +348,20 @@ pub struct Session {
     pub group_updated_at: Option<OffsetDateTime>,
     #[builder(default)]
     pub atuin_id: AtuinSessionId,
+    /// The atuin id of [`Self::parent`], resolved when read: `None` while the parent is not
+    /// stored. Links are stored as the harness gave them, so this is never recorded.
+    #[builder(default)]
+    #[serde(default)]
+    pub parent_atuin_id: Option<AtuinSessionId>,
+    /// The atuin id of [`Self::root`], resolved when read like [`Self::parent_atuin_id`].
+    #[builder(default)]
+    #[serde(default)]
+    pub root_atuin_id: Option<AtuinSessionId>,
+    /// The atuin ids of the stored sessions naming this one their [`Self::parent`], resolved
+    /// when read, oldest first.
+    #[builder(default)]
+    #[serde(default)]
+    pub child_atuin_ids: Vec<AtuinSessionId>,
 }
 
 impl Session {

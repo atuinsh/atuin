@@ -15,8 +15,8 @@ mod codegen {
 use std::path::PathBuf;
 
 use atuin_client::ai_session::{
-    HarnessKind, HarnessSession as DomainHarnessSession, Message as DomainMessage, NativeSessionId,
-    Session as DomainSession, SourceId,
+    AtuinSessionId, HarnessKind, HarnessSession as DomainHarnessSession, Message as DomainMessage,
+    NativeSessionId, Session as DomainSession, SourceId,
 };
 use atuin_common::harnesstools::session::{
     Content, ParentKind as DomainParentKind, Role as DomainRole, StopReason as DomainStopReason,
@@ -53,6 +53,16 @@ pub enum ParseError {
 }
 
 invalid_argument_errors!(ParseError);
+
+fn atuin_id_pb(id: AtuinSessionId) -> Uuid {
+    Uuid {
+        value: id.as_bytes().to_vec(),
+    }
+}
+
+fn atuin_id_domain(id: &Uuid) -> Result<AtuinSessionId, ParseError> {
+    Ok(uuid::Uuid::from_slice(&id.value)?.into())
+}
 
 impl From<DomainHarnessSession> for HarnessSession {
     fn from(value: DomainHarnessSession) -> Self {
@@ -328,9 +338,10 @@ impl From<DomainSession> for Session {
             root: value.root.map(Into::into),
             copy_of: value.copy_of.map(Into::into),
             child_count: value.child_count,
-            atuin_id: Some(Uuid {
-                value: value.atuin_id.as_bytes().to_vec(),
-            }),
+            atuin_id: Some(atuin_id_pb(value.atuin_id)),
+            parent_atuin_id: value.parent_atuin_id.map(atuin_id_pb),
+            root_atuin_id: value.root_atuin_id.map(atuin_id_pb),
+            child_atuin_ids: value.child_atuin_ids.into_iter().map(atuin_id_pb).collect(),
         }
     }
 }
@@ -351,7 +362,7 @@ impl TryFrom<Session> for DomainSession {
         let started_at = at(value.started_at, "started_at")?;
         // Older daemons don't send it.
         let atuin_id = match value.atuin_id {
-            Some(id) => uuid::Uuid::from_slice(&id.value)?.into(),
+            Some(id) => atuin_id_domain(&id)?,
             None => handle.atuin_id(started_at),
         };
 
@@ -377,6 +388,13 @@ impl TryFrom<Session> for DomainSession {
             // Not carried on the wire.
             group_updated_at: None,
             atuin_id,
+            parent_atuin_id: value.parent_atuin_id.as_ref().map(atuin_id_domain).transpose()?,
+            root_atuin_id: value.root_atuin_id.as_ref().map(atuin_id_domain).transpose()?,
+            child_atuin_ids: value
+                .child_atuin_ids
+                .iter()
+                .map(atuin_id_domain)
+                .collect::<Result<_, _>>()?,
         })
     }
 }
@@ -584,11 +602,18 @@ mod tests {
             arb_parent_kind(),
             any::<u128>().prop_map(|id| uuid::Uuid::from_u128(id).into()),
         );
-        (handles, summary, grouping).prop_map(
+        let arb_uuid = || any::<u128>().prop_map(|id| uuid::Uuid::from_u128(id).into());
+        let links = (
+            prop::option::of(arb_uuid()),
+            prop::option::of(arb_uuid()),
+            prop::collection::vec(arb_uuid(), 0..3),
+        );
+        (handles, summary, grouping, links).prop_map(
             |(
                 (handle, parent, cwd, git_branch, model),
                 (started_at, updated_at, message_count, usage, title, preview, last_reply),
                 (host, root, child_count, copy_of, parent_kind, atuin_id),
+                (parent_atuin_id, root_atuin_id, child_atuin_ids),
             )| DomainSession {
                 handle,
                 parent,
@@ -610,6 +635,9 @@ mod tests {
                 child_count,
                 group_updated_at: None,
                 atuin_id,
+                parent_atuin_id,
+                root_atuin_id,
+                child_atuin_ids,
             },
         )
     }

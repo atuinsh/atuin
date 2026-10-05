@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::caller::{Caller, is_own};
-use super::{connect, is_subagent, label, relation, timestamp};
+use super::{connect, is_subagent, label, link_lines, parent_line, timestamp};
 use crate::commands::session::{SelectError, harness_name, message_role, one_line, select_session};
 use crate::tools::ToolOutcome;
 
@@ -156,7 +156,10 @@ impl AtuinAiSessionReadToolCall {
             let _ = writeln!(out, "model    {model}");
         }
         if let Some(parent) = &s.parent {
-            let _ = writeln!(out, "parent   {} {}", relation(s.parent_kind), parent.session);
+            let _ = writeln!(out, "parent   {}", parent_line(s, parent));
+        }
+        for (label, ids) in link_lines(s) {
+            let _ = writeln!(out, "{label:<8} {ids}");
         }
         let _ = writeln!(
             out,
@@ -568,7 +571,7 @@ impl ToolRun {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::ai_session::{HarnessKind, NativeSessionId, SourceId};
+    use atuin_client::ai_session::{AtuinSessionId, HarnessKind, NativeSessionId, SourceId};
     use atuin_common::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
     use atuin_domain::record::RecordId;
     use rstest::rstest;
@@ -681,6 +684,25 @@ mod tests {
         let out = render(json!({"session_id": "abc"}), &msgs);
         assert!(out.contains("→ Bash: cargo test"), "{out}");
         assert!(out.contains("← test result: ok"), "{out}");
+    }
+
+    /// The header names a few children and counts the rest, so a session with many subagents
+    /// cannot push the header past the page budget.
+    #[rstest]
+    fn the_header_bounds_the_children_it_names() {
+        let id = |n: u128| AtuinSessionId::from(uuid::Uuid::from_u128(n));
+        let mut s = session();
+        s.child_atuin_ids = (0..1_000).map(id).collect();
+        let out = call(json!({"session_id": "abc"})).render(
+            &s,
+            &[text(Role::User, "hi")],
+            true,
+            time::UtcOffset::UTC,
+        );
+        let children = out.lines().find(|l| l.starts_with("children ")).expect(&out);
+        assert_eq!(children, format!("children {}, {}, {}, and 997 more", id(0), id(1), id(2)));
+        assert!(!out.contains(&id(3).to_string()), "{out}");
+        assert!(out.chars().count() < 1_000, "{out}");
     }
 
     #[rstest]

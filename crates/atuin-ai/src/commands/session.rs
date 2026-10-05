@@ -267,10 +267,10 @@ async fn show(client: &mut AiClient, selector: &str, style: Style) -> Result<()>
             writeln!(out)?;
         }
         Style::Ndjson => {
-            serde_json::to_writer(&mut out, &ShowEventJson::Session(session_json(&session)))?;
+            serde_json::to_writer(&mut out, &ShowEventJson::Session(&session_json(&session)))?;
             writeln!(out)?;
             for m in &messages {
-                serde_json::to_writer(&mut out, &ShowEventJson::Message(message_json(m)))?;
+                serde_json::to_writer(&mut out, &ShowEventJson::Message(&message_json(m)))?;
                 writeln!(out)?;
             }
         }
@@ -631,6 +631,17 @@ fn write_session_header(out: &mut dyn Write, s: &Session) -> io::Result<()> {
     }
     if let Some(model) = &s.model {
         writeln!(out, "model     {}", sanitize(model))?;
+    }
+    // Links by atuin id, for the stored sessions they name.
+    if let Some(parent) = s.parent_atuin_id {
+        writeln!(out, "parent    {parent}")?;
+    }
+    if let Some(root) = s.root_atuin_id {
+        writeln!(out, "root      {root}")?;
+    }
+    if !s.child_atuin_ids.is_empty() {
+        let children: Vec<String> = s.child_atuin_ids.iter().map(ToString::to_string).collect();
+        writeln!(out, "children  {}", children.join(", "))?;
     }
     writeln!(out, "started   {}", age(s.started_at))?;
     writeln!(out, "updated   {}", age(s.updated_at))?;
@@ -1011,6 +1022,13 @@ struct SessionJson {
     parent: Option<HandleJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent_kind: Option<&'static str>,
+    /// The atuin ids of the parent, root and children, for those stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_atuin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root_atuin_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    children_atuin_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1084,9 +1102,9 @@ struct SessionDetailJson {
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum ShowEventJson {
-    Session(SessionJson),
-    Message(MessageJson),
+enum ShowEventJson<'a> {
+    Session(&'a SessionJson),
+    Message(&'a MessageJson),
 }
 
 #[derive(Serialize)]
@@ -1178,6 +1196,9 @@ fn session_json(s: &Session) -> SessionJson {
             ParentKind::Fork => "fork",
             ParentKind::Continuation => "continuation",
         }),
+        parent_atuin_id: s.parent_atuin_id.map(|id| id.to_string()),
+        root_atuin_id: s.root_atuin_id.map(|id| id.to_string()),
+        children_atuin_ids: s.child_atuin_ids.iter().map(ToString::to_string).collect(),
         cwd: s.cwd.as_ref().map(|cwd| cwd.to_string_lossy().into_owned()),
         git_branch: s.git_branch.clone(),
         model: s.model.clone(),
@@ -1241,7 +1262,7 @@ fn message_json(m: &Message) -> MessageJson {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::ai_session::{NativeSessionId, SourceId};
+    use atuin_client::ai_session::{AtuinSessionId, NativeSessionId, SourceId};
     use atuin_common::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
     use atuin_common::string::highlighted::TextHighlighter;
     use atuin_domain::record::RecordId;
@@ -1396,6 +1417,42 @@ mod tests {
         assert_eq!(v["parent"]["session_id"], "parent");
         assert_eq!(v["parent_kind"], want);
         assert_eq!(v["last_reply"], "done");
+    }
+
+    /// `show` names a session's links by atuin id, in text and JSON, leaving out those unknown.
+    #[rstest]
+    fn show_names_links_by_atuin_id() {
+        let id = |n: u128| AtuinSessionId::from(uuid::Uuid::from_u128(n));
+        let mut s = session(HarnessKind::Codex, "child");
+        s.parent = Some(handle(HarnessKind::Codex, "parent"));
+        s.parent_atuin_id = Some(id(1));
+        s.root_atuin_id = Some(id(2));
+        s.child_atuin_ids = vec![id(3), id(4)];
+
+        let v = serde_json::to_value(session_json(&s)).unwrap();
+        assert_eq!(v["parent_atuin_id"], id(1).to_string());
+        assert_eq!(v["root_atuin_id"], id(2).to_string());
+        assert_eq!(
+            v["children_atuin_ids"],
+            serde_json::json!([id(3).to_string(), id(4).to_string()])
+        );
+
+        let mut out = Vec::new();
+        write_session_header(&mut out, &s).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains(&format!("parent    {}\n", id(1))), "{text}");
+        assert!(text.contains(&format!("root      {}\n", id(2))), "{text}");
+        assert!(text.contains(&format!("children  {}, {}\n", id(3), id(4))), "{text}");
+
+        let alone = session(HarnessKind::Codex, "alone");
+        let v = serde_json::to_value(session_json(&alone)).unwrap();
+        for key in ["parent_atuin_id", "root_atuin_id", "children_atuin_ids"] {
+            assert!(v.get(key).is_none(), "{key}");
+        }
+        let mut out = Vec::new();
+        write_session_header(&mut out, &alone).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("parent ") && !text.contains("root ") && !text.contains("children"));
     }
 
     #[rstest]

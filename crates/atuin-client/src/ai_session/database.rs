@@ -54,13 +54,22 @@ const MIN_PREFIX_CHARS: usize = 2;
 
 /// The `sessions` columns [`SessionRow`] reads, from a table aliased `s`. Every query also selects
 /// `child_count` and `group_updated_at`.
+///
+/// Links are stored as the harness gave them, (harness, native id): the atuin ids of the parent,
+/// root and children are looked up here, at read time, from whichever of them are stored.
+/// `child_uuids` is comma-separated.
 macro_rules! session_columns {
     () => {
         "s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, s.git_branch, \
          s.model, s.started_at, s.updated_at, s.message_count, s.usage_input, s.usage_output, \
          s.usage_cache_read, s.usage_cache_write, s.usage_reasoning, s.title, s.title_source, \
          s.preview, s.last_reply, s.parent_kind, s.host_id, s.root_harness, s.root_session_id, \
-         s.copy_of_session_id, s.atuin_id"
+         s.copy_of_session_id, s.atuin_id, (SELECT lp.atuin_id FROM sessions lp WHERE lp.harness = \
+         s.parent_harness AND lp.session_id = s.parent_session_id) AS parent_atuin_id, (SELECT \
+         lr.atuin_id FROM sessions lr WHERE lr.harness = s.root_harness AND lr.session_id = \
+         s.root_session_id) AS root_atuin_id, (SELECT group_concat(hex(lc.atuin_id)) FROM sessions \
+         lc WHERE lc.parent_harness = s.harness AND lc.parent_session_id = s.session_id) AS \
+         child_atuin_ids"
     };
 }
 
@@ -253,6 +262,9 @@ struct SessionRow {
     root_session_id: Option<String>,
     copy_of_session_id: Option<String>,
     atuin_id: Option<Vec<u8>>,
+    parent_atuin_id: Option<Vec<u8>>,
+    root_atuin_id: Option<Vec<u8>>,
+    child_atuin_ids: Option<String>,
     child_count: i64,
     group_updated_at: Option<i64>,
 }
@@ -2654,6 +2666,18 @@ impl AiSessionDatabase {
             // A reader can open the sidecar between the migration and its backfill.
             None => handle.atuin_id(started_at),
         };
+        // A link whose session is not stored yet (or has no stored id) resolves to nothing.
+        let linked = |bytes: Option<&[u8]>| {
+            bytes.and_then(|bytes| Uuid::from_slice(bytes).ok()).map(AtuinSessionId::from)
+        };
+        let parent_atuin_id = parent.as_ref().and(linked(row.parent_atuin_id.as_deref()));
+        let root_atuin_id = root.as_ref().and(linked(row.root_atuin_id.as_deref()));
+        let mut child_atuin_ids: Vec<AtuinSessionId> = row
+            .child_atuin_ids
+            .as_deref()
+            .map_or_else(Vec::new, |ids| ids.split(',').filter_map(|id| id.parse().ok()).collect());
+        // UUIDv7s order by time: oldest first.
+        child_atuin_ids.sort_unstable();
 
         Ok(Session::builder()
             .handle(handle)
@@ -2682,6 +2706,9 @@ impl AiSessionDatabase {
             .child_count(u64::try_from(row.child_count).unwrap_or(0))
             .group_updated_at(group_updated_at)
             .atuin_id(atuin_id)
+            .parent_atuin_id(parent_atuin_id)
+            .root_atuin_id(root_atuin_id)
+            .child_atuin_ids(child_atuin_ids)
             .build())
     }
 }
@@ -5517,6 +5544,75 @@ mod tests {
             db.get_session(&session).await.unwrap().unwrap().atuin_id,
             session.atuin_id(OffsetDateTime::UNIX_EPOCH)
         );
+    }
+
+    /// Links stay (harness, native id): their atuin ids are looked up when read, so a child
+    /// stored before its parent names the parent's id once the parent arrives.
+    #[rstest]
+    #[tokio::test]
+    async fn links_resolve_to_atuin_ids_when_read() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let (root, child, grandchild) = (
+            handle(HarnessKind::Codex, "root"),
+            handle(HarnessKind::Codex, "child"),
+            handle(HarnessKind::Codex, "grandchild"),
+        );
+        let id = |s: &HarnessSession| s.atuin_id(OffsetDateTime::UNIX_EPOCH);
+        let store = |session: &HarnessSession, parent: Option<&HarnessSession>, index| {
+            let mut m = message_in(session, index, "words");
+            m.parent = parent.cloned();
+            m.atuin_id = Some(id(session));
+            m
+        };
+
+        db.append(&store(&grandchild, Some(&child), 2)).await.unwrap();
+        let alone = db.get_session(&grandchild).await.unwrap().unwrap();
+        assert_eq!(
+            (alone.parent_atuin_id, alone.root_atuin_id),
+            (None, None),
+            "parent not stored yet"
+        );
+
+        db.append(&store(&child, Some(&root), 1)).await.unwrap();
+        db.append(&store(&root, None, 0)).await.unwrap();
+        let (r, c, g) = (
+            db.get_session(&root).await.unwrap().unwrap(),
+            db.get_session(&child).await.unwrap().unwrap(),
+            db.get_session(&grandchild).await.unwrap().unwrap(),
+        );
+        assert_eq!(
+            (r.parent_atuin_id, r.root_atuin_id, &r.child_atuin_ids),
+            (None, None, &vec![id(&child)])
+        );
+        assert_eq!(
+            (c.parent_atuin_id, c.root_atuin_id, &c.child_atuin_ids),
+            (Some(id(&root)), Some(id(&root)), &vec![id(&grandchild)])
+        );
+        assert_eq!(
+            (g.parent_atuin_id, g.root_atuin_id, g.child_atuin_ids.is_empty()),
+            (Some(id(&child)), Some(id(&root)), true)
+        );
+
+        // Lists resolve them the same way.
+        let listed = db.list_sessions(&SessionFilter::default()).await.unwrap();
+        let listed_child = listed.iter().find(|s| s.handle == child).unwrap();
+        assert_eq!(listed_child, &c);
+    }
+
+    /// Sessions stored before the `atuin_id` migration resolve their links once it backfills.
+    #[rstest]
+    #[tokio::test]
+    async fn links_of_sessions_from_before_atuin_ids_resolve() {
+        let db = sidecar_at(7, &[("p", None), ("c", Some("p"))]).await;
+        db.migrate().await.unwrap();
+
+        let (p, c) = (handle(HarnessKind::ClaudeCode, "p"), handle(HarnessKind::ClaudeCode, "c"));
+        let (p, c) = (
+            db.get_session(&p).await.unwrap().unwrap(),
+            db.get_session(&c).await.unwrap().unwrap(),
+        );
+        assert_eq!(c.parent_atuin_id, Some(p.atuin_id));
+        assert_eq!(p.child_atuin_ids, vec![c.atuin_id]);
     }
 
     #[rstest]
