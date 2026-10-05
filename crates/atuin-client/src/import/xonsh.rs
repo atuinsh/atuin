@@ -8,11 +8,8 @@ use easy_cast::CastFloat;
 use eyre::{Result, eyre};
 use serde::Deserialize;
 use time::OffsetDateTime;
-use uuid::Uuid;
-use uuid::timestamp::Timestamp;
-use uuid::timestamp::context::NoContext;
 
-use super::{Importer, Loader, get_histdir_path};
+use super::{ImportedSessions, Importer, Loader, get_histdir_path};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
 
@@ -85,21 +82,7 @@ fn load_session(path: &Path) -> Result<Option<HistoryData>> {
         return Ok(None);
     }
 
-    let mut hist_file: HistoryFile = serde_json::from_reader(file)?;
-
-    // if there are commands in this session, replace the existing UUIDv4
-    // with a UUIDv7 generated from the timestamp of the first command
-    if let Some(cmd) = hist_file.data.cmds.first() {
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "only used for creating a UUID -- saturating is ok"
-        )]
-        let (seconds, nanos) =
-            (cmd.ts.0.trunc() as u64, (cmd.ts.0.fract() * 1_000_000_000_f64) as u32);
-        let ts = Timestamp::from_unix(NoContext, seconds, nanos);
-        hist_file.data.sessionid = Uuid::new_v7(ts).to_string();
-    }
+    let hist_file: HistoryFile = serde_json::from_reader(file)?;
     Ok(Some(hist_file.data))
 }
 
@@ -125,6 +108,7 @@ impl Importer for Xonsh {
     }
 
     async fn load(self, loader: &mut impl Loader) -> Result<()> {
+        let mut sessions = ImportedSessions::new(Self::NAME);
         for session in self.sessions {
             for cmd in session.cmds {
                 let (start, end) = cmd.ts;
@@ -145,7 +129,7 @@ impl Importer for Xonsh {
                     .exit(cmd.rtn.unwrap_or(HistoryImported::DEFAULT_EXIT))
                     .command(cmd.inp.trim())
                     .cwd(cmd.cwd)
-                    .session(session.sessionid.clone())
+                    .session(sessions.id(&session.sessionid, timestamp))
                     .cmd_origin(self.cmd_origin.clone());
                 loader.push(entry.build().into()).await?;
             }

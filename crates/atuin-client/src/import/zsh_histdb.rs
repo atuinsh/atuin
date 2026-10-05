@@ -32,19 +32,17 @@
 //                       duration int);
 //
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::db;
-use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use eyre::{Result, eyre};
 use sqlx::Pool;
 use sqlx::sqlite::SqlitePool;
 use time::PrimitiveDateTime;
 
-use super::Importer;
+use super::{ImportedSessions, Importer};
 use crate::history::History;
 use crate::import::Loader;
 
@@ -141,7 +139,7 @@ impl Importer for ZshHistDb {
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        let mut session_map = HashMap::new();
+        let mut sessions = ImportedSessions::new(Self::NAME);
         for entry in self.histdb {
             let command = match std::str::from_utf8(&entry.argv) {
                 Ok(s) => s.trim_end(),
@@ -155,16 +153,17 @@ impl Importer for ZshHistDb {
                 .map(CmdHost::from)
                 .unwrap_or_else(|_e| CmdHost::probe_current());
             let cmd_origin = CmdOrigin::new(&hostname, &self.username);
-            let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
+            let timestamp = entry.start_time.assume_utc();
+            let session = sessions.id(&entry.session.to_string(), timestamp);
 
             let imported = History::import()
                 .shell("zsh")
-                .timestamp(entry.start_time.assume_utc())
+                .timestamp(timestamp)
                 .command(command)
                 .cwd(cwd)
                 .duration(entry.duration.saturating_mul(1_000_000_000))
                 .exit(entry.exit_status)
-                .session(session.as_simple().to_string())
+                .session(session)
                 .cmd_origin(cmd_origin)
                 .build();
             h.push(imported.into()).await?;

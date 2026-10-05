@@ -12,7 +12,7 @@ use sqlx::Pool;
 use sqlx::sqlite::SqlitePool;
 use time::OffsetDateTime;
 
-use super::Importer;
+use super::{ImportedSessions, Importer};
 use crate::history::History;
 use crate::import::Loader;
 
@@ -29,26 +29,27 @@ pub struct HistDbEntry {
     pub more_info: Vec<u8>,
 }
 
-impl From<HistDbEntry> for History {
-    fn from(histdb_item: HistDbEntry) -> Self {
-        let ts_secs = histdb_item.start_timestamp / 1000;
-        let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
+impl HistDbEntry {
+    /// The entry as history, its nushell session id mapped to one of `sessions`.
+    fn into_history(self, sessions: &mut ImportedSessions) -> History {
+        let ts_secs = self.start_timestamp / 1000;
+        let ts_ns = (self.start_timestamp % 1000) * 1_000_000;
         // a corrupt row must not take down the whole import. the epoch sorts to the
         // bottom of history and is obviously not a real time
         let timestamp = OffsetDateTime::from_timespec(i128::from(ts_secs), i128::from(ts_ns))
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
 
-        let imported = Self::import()
+        let imported = History::import()
             .shell("nu")
             .timestamp(timestamp)
             // nushell stores raw bytes: keep the entry even if it is not valid utf8
-            .command(String::from_utf8_lossy(&histdb_item.command_line).into_owned())
-            .cwd(String::from_utf8_lossy(&histdb_item.cwd).into_owned())
-            .exit(histdb_item.exit_status)
-            .duration(histdb_item.duration_ms)
-            .session(format!("{:x}", histdb_item.session_id))
+            .command(String::from_utf8_lossy(&self.command_line).into_owned())
+            .cwd(String::from_utf8_lossy(&self.cwd).into_owned())
+            .exit(self.exit_status)
+            .duration(self.duration_ms)
+            .session(sessions.id(&self.session_id.to_string(), timestamp))
             .cmd_origin(CmdOrigin::new(
-                &CmdHost::from(String::from_utf8_lossy(&histdb_item.hostname).into_owned()),
+                &CmdHost::from(String::from_utf8_lossy(&self.hostname).into_owned()),
                 &CmdUser::default(),
             ));
 
@@ -118,8 +119,9 @@ impl Importer for NuHistDb {
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
+        let mut sessions = ImportedSessions::new(Self::NAME);
         for i in self.histdb {
-            h.push(i.into()).await?;
+            h.push(i.into_history(&mut sessions)).await?;
         }
         Ok(())
     }
@@ -158,7 +160,8 @@ mod test {
         #[case] nanoseconds: u32,
         #[case] command: &str,
     ) {
-        let h: History = entry(start_timestamp, command_line.to_vec()).into();
+        let h = entry(start_timestamp, command_line.to_vec())
+            .into_history(&mut ImportedSessions::new(NuHistDb::NAME));
 
         assert_eq!(h.timestamp.unix_timestamp(), seconds);
         assert_eq!(h.timestamp.nanosecond(), nanoseconds);

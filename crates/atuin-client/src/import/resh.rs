@@ -2,14 +2,13 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::time::OffsetDateTimeExt;
-use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use easy_cast::CastFloat;
 use eyre::{Result, eyre};
 use serde::Deserialize;
 use time::OffsetDateTime;
 
-use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
+use super::{ImportedSessions, Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
 use crate::import::read_to_end;
@@ -95,6 +94,7 @@ impl Importer for Resh {
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
+        let mut sessions = ImportedSessions::new(Self::NAME);
         for b in unix_byte_lines(&self.bytes) {
             // we can skip past things like invalid utf8
             let Ok(s) = std::str::from_utf8(b) else {
@@ -140,8 +140,7 @@ impl Importer for Resh {
                 .exit(entry.exit_code)
                 .cwd(entry.pwd)
                 .cmd_origin(CmdOrigin::new(&CmdHost::from(entry.host), &CmdUser::default()))
-                // CHECK: should we add uuid here? It's not set in the other importers
-                .session(uuid_v7().as_simple().to_string());
+                .session(sessions.id(&entry.session_id, timestamp));
 
             h.push(imported.build().into()).await?;
         }

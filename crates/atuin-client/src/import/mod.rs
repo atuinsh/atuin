@@ -1,10 +1,14 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::utils::uuid_v7_for;
 use eyre::{Result, bail};
 use memchr::Memchr;
+use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::history::History;
 
@@ -31,6 +35,35 @@ pub trait Importer: Sized {
 #[async_trait]
 pub trait Loader: Sync + Send {
     async fn push(&mut self, hist: History) -> Result<()>;
+}
+
+/// The sessions of history imported from another tool, each a UUIDv7 that importing the same
+/// history again reproduces.
+///
+/// An id hashes the importer and the tool's own key for the session, and is stamped with the
+/// session's first entry, so an importer asks for ids in the order it reads its entries.
+pub(crate) struct ImportedSessions {
+    importer: &'static str,
+    ids: HashMap<String, Uuid>,
+}
+
+impl ImportedSessions {
+    pub(crate) fn new(importer: &'static str) -> Self {
+        Self {
+            importer,
+            ids: HashMap::new(),
+        }
+    }
+
+    /// The id of the tool's session `key`, stamped `first_seen` when this is its first entry.
+    pub(crate) fn id(&mut self, key: &str, first_seen: OffsetDateTime) -> String {
+        let importer = self.importer;
+        self.ids
+            .entry(key.to_owned())
+            .or_insert_with(|| uuid_v7_for(first_seen, format!("{importer}\0{key}").as_bytes()))
+            .as_simple()
+            .to_string()
+    }
 }
 
 fn unix_byte_lines(input: &[u8]) -> impl Iterator<Item = &[u8]> {

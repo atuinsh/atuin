@@ -10,11 +10,8 @@ use futures::TryStreamExt;
 use sqlx::sqlite::SqlitePool;
 use sqlx::{FromRow, Row};
 use time::OffsetDateTime;
-use uuid::Uuid;
-use uuid::timestamp::Timestamp;
-use uuid::timestamp::context::NoContext;
 
-use super::{Importer, Loader, get_histfile_path};
+use super::{ImportedSessions, Importer, Loader, get_histfile_path};
 use crate::history::History;
 use crate::history::builder::HistoryImported;
 
@@ -25,28 +22,18 @@ struct HistDbEntry {
     tsb: f64,
     tse: f64,
     cwd: String,
+    sessionid: String,
     session_start: f64,
 }
 
 impl HistDbEntry {
-    fn into_hist_with_cmd_origin(self, cmd_origin: CmdOrigin) -> History {
-        let timestamp = (self.tsb * 1_000_000_000_f64)
-            .try_cast_trunc()
-            .ok()
-            .and_then(|nanos: i128| OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
-            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "only used for creating a UUID -- saturating is ok"
-        )]
-        let (session_ts_seconds, session_ts_nanos) = (
-            self.session_start.trunc() as u64,
-            (self.session_start.fract() * 1_000_000_000_f64) as u32,
-        );
-        let session_ts = Timestamp::from_unix(NoContext, session_ts_seconds, session_ts_nanos);
-        let session_id = Uuid::new_v7(session_ts).to_string();
+    fn into_hist_with_cmd_origin(
+        self,
+        cmd_origin: CmdOrigin,
+        sessions: &mut ImportedSessions,
+    ) -> History {
+        let timestamp = from_unix_seconds(self.tsb);
+        let session_id = sessions.id(&self.sessionid, from_unix_seconds(self.session_start));
         let duration = ((self.tse - self.tsb) * 1_000_000_000_f64)
             .try_cast_trunc()
             .unwrap_or(HistoryImported::DEFAULT_DURATION);
@@ -63,6 +50,15 @@ impl HistDbEntry {
             .build()
             .into()
     }
+}
+
+/// The time `seconds` after the Unix epoch, or the epoch itself when that is out of range.
+fn from_unix_seconds(seconds: f64) -> OffsetDateTime {
+    (seconds * 1_000_000_000_f64)
+        .try_cast_trunc()
+        .ok()
+        .and_then(|nanos: i128| OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH)
 }
 
 fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
@@ -116,7 +112,7 @@ impl Importer for XonshSqlite {
 
     async fn load(self, loader: &mut impl Loader) -> Result<()> {
         let query = r"
-            SELECT inp, rtn, tsb, tse, cwd,
+            SELECT inp, rtn, tsb, tse, cwd, sessionid,
             MIN(tsb) OVER (PARTITION BY sessionid) AS session_start
             FROM xonsh_history
             ORDER BY rowid
@@ -124,9 +120,10 @@ impl Importer for XonshSqlite {
 
         let mut entries = db::query_as::<_, HistDbEntry>(query).fetch(&self.pool);
 
+        let mut sessions = ImportedSessions::new(Self::NAME);
         let mut count = 0;
         while let Some(entry) = entries.try_next().await? {
-            let hist = entry.into_hist_with_cmd_origin(self.cmd_origin.clone());
+            let hist = entry.into_hist_with_cmd_origin(self.cmd_origin.clone(), &mut sessions);
             loader.push(hist).await?;
             count += 1;
         }
@@ -158,10 +155,14 @@ mod tests {
             tsb: 1e30,
             tse: 1e30,
             cwd: "/tmp".to_string(),
+            sessionid: "s".to_string(),
             session_start: 0.0,
         };
 
-        let hist = entry.into_hist_with_cmd_origin(CmdOrigin::try_from("box:user").unwrap());
+        let hist = entry.into_hist_with_cmd_origin(
+            CmdOrigin::try_from("box:user").unwrap(),
+            &mut ImportedSessions::new(XonshSqlite::NAME),
+        );
         assert_eq!(hist.timestamp, OffsetDateTime::UNIX_EPOCH);
         assert_eq!(hist.command, "echo hello");
     }
