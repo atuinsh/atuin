@@ -41,7 +41,7 @@ pub enum Relation {
     Subagent,
     /// Branches off its parent's conversation, or copies it.
     Fork,
-    /// Carries its parent's conversation on under a new session.
+    /// Carries its parent's conversation on under a new session (maybe in another harness).
     Continuation,
     /// Has a parent, but no kind was recorded and the harness doesn't say which kind of child it
     /// is.
@@ -173,6 +173,17 @@ pub fn harness_badge(harness: HarnessKind) -> &'static str {
         HarnessKind::Pi => "PI",
         HarnessKind::Copilot => "CP",
         HarnessKind::Unknown => "??",
+    }
+}
+
+/// The harness as `atuin ai resume --in` names it; `None` for one that can't be continued in.
+pub fn harness_arg(harness: HarnessKind) -> Option<&'static str> {
+    match harness {
+        HarnessKind::ClaudeCode => Some("claude"),
+        HarnessKind::Codex => Some("codex"),
+        HarnessKind::Opencode => Some("opencode"),
+        HarnessKind::Pi => Some("pi"),
+        HarnessKind::Copilot | HarnessKind::Unknown => None,
     }
 }
 

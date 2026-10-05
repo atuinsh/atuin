@@ -415,8 +415,9 @@ impl Session {
 
     /// The kind of a parent recorded without one (by a build from before kinds were captured), as
     /// well as the harness and id tell: another harness's session is only ever named by a
-    /// continuation, and a Claude Code `agent-*` session is a subagent while its other children
-    /// are forks, as are all of pi's. Codex and opencode link subagents and forks alike: `None`.
+    /// continuation (`atuin ai resume --in`), and a Claude Code `agent-*` session is a subagent
+    /// while its other children are forks, as are all of pi's. Codex and opencode link subagents
+    /// and forks alike: `None`.
     fn guess_parent_kind(&self, parent: &HarnessSession) -> Option<ParentKind> {
         if parent.harness != self.handle.harness {
             return Some(ParentKind::Continuation);
@@ -734,9 +735,9 @@ mod tests {
         assert_eq!(session.inferred_parent_kind(), expected);
     }
 
-    /// A session carried on in another harness is a continuation of the one it continues,
-    /// whatever its own harness calls its children, even in records from before capture recorded
-    /// the kind.
+    /// A session continued in another harness (`atuin ai resume --in`) is a continuation of the
+    /// one it continues, whatever its own harness calls its children, even in records from
+    /// before capture recorded the kind.
     #[rstest]
     fn a_continuation_in_another_harness_is_a_continuation(
         #[values(HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::ClaudeCode)]

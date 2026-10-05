@@ -742,6 +742,32 @@ mod tests {
         assert_eq!(uuid::Uuid::from(fixed).get_version(), Some(uuid::Version::SortRand));
     }
 
+    /// A continuation (`atuin ai resume --in`) is a new session: it gets an atuin id of its own,
+    /// not the one of the session it continues, whose rows keep theirs.
+    #[rstest]
+    #[tokio::test]
+    async fn a_continuation_gets_its_own_atuin_id() {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let original = sample_message();
+        let mut continued = sample_message();
+        continued.id = RecordId(atuin_common::utils::uuid_v7());
+        continued.session = HarnessSession {
+            harness: HarnessKind::Pi,
+            session: NativeSessionId::from("continued".to_owned()),
+        };
+        continued.parent = Some(original.session.clone());
+        continued.parent_kind = Some(atuin_common::harnesstools::session::ParentKind::Continuation);
+
+        sink.append(original.clone()).await.unwrap();
+        sink.append(continued.clone()).await.unwrap();
+
+        let id_of =
+            async |handle| sink.sidecar.get_session(handle).await.unwrap().unwrap().atuin_id;
+        let (from, to) = (id_of(&original.session).await, id_of(&continued.session).await);
+        assert_ne!(from, to);
+        assert_eq!(uuid::Uuid::from(to).get_version(), Some(uuid::Version::SortRand));
+    }
+
     #[rstest]
     #[tokio::test]
     async fn append_emits_started_then_message_to_subscriber() {
@@ -2694,6 +2720,31 @@ mod pipeline_tests {
             MessageEnricher::new(HarnessKind::ClaudeCode).capture(&sid("s1"), &m).pop().unwrap();
         sanitize_message(&mut msg);
         assert!(!msg.content.is_empty(), "summary text retained");
+    }
+
+    /// A continuation's marker (`atuin ai resume --in`) is harness-injected text, which is not
+    /// synced; the link it makes is, as every row's parent, so it survives sync and reprojection.
+    #[rstest]
+    fn a_continuation_marker_is_dropped_but_its_parent_is_kept() {
+        use atuin_common::harnesstools::{AnyHarness, continuation};
+        let marker =
+            continuation::marker_text(AnyHarness::from_name("pi").unwrap(), "0199-orig", None);
+        let m = ccode(serde_json::json!({
+            "type": "user", "uuid": "c1", "isMeta": true, "timestamp": "2026-09-18T10:00:00.000Z",
+            "message": {"role": "user", "content": marker},
+        }));
+        let mut msg =
+            MessageEnricher::new(HarnessKind::ClaudeCode).capture(&sid("s1"), &m).pop().unwrap();
+        sanitize_message(&mut msg);
+        assert!(msg.content.is_empty(), "{:?}", msg.content);
+        let parent = msg.parent.clone().expect("the marker names the parent");
+        assert_eq!(parent.harness, HarnessKind::Pi);
+        assert_eq!(parent.session.as_ref(), "0199-orig");
+        let record = atuin_client::ai_session::AiSessionRecord::Message(msg).serialize();
+        let version = atuin_client::ai_session::AiSessionRecord::VERSION;
+        let back =
+            atuin_client::ai_session::AiSessionRecord::deserialize(&record, &version).unwrap();
+        assert!(format!("{back:?}").contains("0199-orig"), "the record carries the parent");
     }
 
     /// Execution payloads that Claude Code records as user text (`<local-command-stdout>`) must

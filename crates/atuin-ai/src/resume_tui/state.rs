@@ -6,17 +6,19 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use atuin_client::ai_session::HarnessSession;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::{AiSessionFilterMode as FilterMode, KeymapMode, Settings};
 use atuin_client::theme::Meaning;
 use atuin_client::tui::cursor::Cursor;
 use atuin_client::tui::key::{KeyCodeValue, KeyInput, SingleKey};
+use atuin_common::harnesstools::continuation::Flattened;
 use atuin_common::time::OffsetDateTimeExt as _;
 use atuin_domain::record::HostId;
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use time::OffsetDateTime;
 
+use super::chooser::{Chooser, ListAnchor};
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
 use super::rebuild::Rebuilding;
@@ -108,7 +110,7 @@ impl PaneScroll {
 }
 
 /// What the event loop should do after an input event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputAction {
     Continue,
     Redraw,
@@ -118,8 +120,29 @@ pub enum InputAction {
     ReturnCommand,
     /// Copy the session's resume command, and stay open.
     Copy,
+    /// A line of the chooser picked.
+    Pick(Box<Picked>),
     ReturnOriginal,
     Exit,
+}
+
+/// A line of the chooser, picked: the session it opened on (not whatever the list has selected
+/// since: an idle refresh may have moved it), resumed in its own harness (`target` is `None`) or
+/// continued in `target`, then what the key asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picked {
+    pub row: SessionRow,
+    pub target: Option<HarnessKind>,
+    pub action: Pending,
+}
+
+/// A continuation asked of the worker, waiting to be written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Continuing {
+    /// Which request it is: only its own answer finishes it.
+    pub id: u64,
+    pub target: HarnessKind,
+    pub action: Pending,
 }
 
 /// An action waiting for the selected session's resume plan.
@@ -214,8 +237,23 @@ pub struct State {
     /// Resume plans, fetched for the selected session only (planning may walk directories). A
     /// plan to restore the session from sync is replaced by the plain one once it is restored.
     pub plans: HashMap<HarnessSession, Result<Resume, NotResumable>>,
-    /// An enter/tab/ctrl-y waiting for its session's plan.
-    pub pending: Option<(HarnessSession, Pending)>,
+    /// An enter/tab/ctrl-y waiting for its session's plan (or restore), and the session it acts
+    /// on: that row, not whatever the list shows by the time the answer comes, which an idle
+    /// refresh may have moved or dropped meanwhile.
+    pub pending: Option<(SessionRow, Pending)>,
+    /// The "Resume in" chooser, while it's open.
+    pub chooser: Option<Chooser>,
+    /// Where the selected row was last drawn, for the chooser to open against.
+    pub list_anchor: Option<ListAnchor>,
+    /// What continuing each session elsewhere would flatten, once read (see
+    /// [`Request::Flatten`](super::worker::Request::Flatten)); `Err` when it can't be read.
+    pub flattened: HashMap<HarnessSession, Result<Flattened, String>>,
+    /// The last flattening asked of the worker (which keeps only the newest).
+    pub flattening: Option<HarnessSession>,
+    /// A continuation being written, and what to do once it is.
+    pub continuing: Option<Continuing>,
+    /// The last continuation's id.
+    pub continued: u64,
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
@@ -261,6 +299,12 @@ impl State {
             pinned: None,
             plans: HashMap::new(),
             pending: None,
+            chooser: None,
+            list_anchor: None,
+            flattened: HashMap::new(),
+            flattening: None,
+            continuing: None,
+            continued: 0,
             status: None,
             rebuilding: None,
             now: if settings.prefers_reduced_motion {
@@ -561,7 +605,7 @@ impl State {
     /// action supersedes what it asked for, so asking again would only do it twice.
     pub fn forget_unanswered(&mut self) {
         let selected = self.selected().map(|r| r.handle.clone());
-        let waiting = self.pending.as_ref().map(|(handle, _)| handle.clone());
+        let waiting = self.pending.as_ref().map(|(row, _)| row.handle.clone());
         self.requested.retain(|(handle, _)| {
             selected.as_ref() == Some(handle) || waiting.as_ref() == Some(handle)
         });
@@ -604,6 +648,10 @@ impl State {
     /// selection, as in the history search. The mouse reports screen positions, which is what
     /// the panes' areas are, inline or not.
     fn handle_mouse_input(&mut self, settings: &Settings, event: MouseEvent) -> InputAction {
+        // The chooser is for the session it opened on.
+        if self.chooser.is_some() {
+            return InputAction::Continue;
+        }
         let down = match event.kind {
             MouseEventKind::ScrollDown => true,
             MouseEventKind::ScrollUp => false,
@@ -653,6 +701,9 @@ impl State {
         let Some(single) = SingleKey::from_event(input) else {
             return InputAction::Continue;
         };
+        if self.chooser.is_some() {
+            return self.chooser_key(&single);
+        }
         let ctx = self.input.as_str().is_empty();
         let pending = self.pending_vim_key.take();
         let keymap = self.mode_keymap();
@@ -1197,7 +1248,7 @@ mod tests {
         // And the session an action waits on.
         let fork = rows(3)[2].handle.clone();
         state.requested.insert((fork.clone(), PLAN));
-        state.pending = Some((fork.clone(), Pending::Resume));
+        state.pending = Some((rows(3)[2].clone(), Pending::Resume));
         state.forget_unanswered();
         assert!(state.requested.contains(&(fork, PLAN)));
         assert_eq!(state.requested.len(), 2);

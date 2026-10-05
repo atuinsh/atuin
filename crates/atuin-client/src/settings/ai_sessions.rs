@@ -84,7 +84,7 @@ impl AiSessionResume {
 }
 
 /// `[ai.sessions]`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AiSessions {
     /// The filter the picker opens in. Unset: `workspace`, widening to `global` when not in a git
@@ -94,6 +94,11 @@ pub struct AiSessions {
     /// Height of the inline picker. Unset: the top-level `inline_height`.
     pub inline_height: Option<u16>,
 
+    /// Ask where to resume a session once it's chosen (enter or tab): in its own harness, or
+    /// continued in another one installed here. When false, a session resumes in its own harness
+    /// straight away; the chooser still opens for one that can't.
+    pub resume_chooser: bool,
+
     /// Take the mouse: the wheel scrolls the preview under it, or moves the selection over the
     /// list. While the picker has the mouse, most terminals still select text with shift held
     /// while dragging (option in iTerm2, fn in macOS Terminal). Unset: as the top-level
@@ -102,6 +107,18 @@ pub struct AiSessions {
 
     /// Per-harness resume command templates.
     pub resume: AiSessionResume,
+}
+
+impl Default for AiSessions {
+    fn default() -> Self {
+        Self {
+            filter_mode: None,
+            inline_height: None,
+            resume_chooser: true,
+            mouse: None,
+            resume: AiSessionResume::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +139,7 @@ mod tests {
             r#"
             filter_mode = "global"
             inline_height = 20
+            resume_chooser = false
             mouse = false
 
             [resume]
@@ -132,6 +150,7 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.filter_mode, Some(AiSessionFilterMode::Global));
         assert_eq!(parsed.inline_height, Some(20));
+        assert!(!parsed.resume_chooser);
         assert_eq!(parsed.mouse, Some(false));
         assert_eq!(
             parsed.resume.template(HarnessKind::ClaudeCode),

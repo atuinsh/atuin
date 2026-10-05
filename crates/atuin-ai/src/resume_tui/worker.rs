@@ -6,19 +6,25 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
-//!   Restoring a session from sync, which only an enter or tab asks for, goes first: only the
-//!   newest accepted session's is kept, and one dropped before it started is reported
-//!   ([`Response::Abandoned`]) so that the picker asks again if the user comes back to it. One
-//!   already running finishes and reports as usual. Then the plan an enter or tab is waiting on,
-//!   which is never dropped for another session's (see [`Request::Accept`]).
+//!   Restoring a session from sync, or continuing it in another harness, which only an enter or
+//!   tab asks for, goes first: only the newest accepted session's restore is kept, and one dropped
+//!   before it started is reported ([`Response::Abandoned`]) so that the picker asks again if the
+//!   user comes back to it. Likewise only the newest continuation is kept, and one is dropped
+//!   when the picker stops waiting on it ([`Request::CancelContinue`]); once the picker is gone,
+//!   nothing queued runs. One already running finishes and reports as usual: its files are left
+//!   as written, not deleted, since capture may already have read and synced them. Then the plan an
+//!   enter or tab is waiting on, which is never dropped for another session's (see
+//!   [`Request::Accept`]).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use atuin_client::ai_session::HarnessSession;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::AiSessionFilterMode as FilterMode;
+use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
-use super::resumer::{NotResumable, Restore, Resume, ResumePlan, Resumer};
+use super::resumer::{Continued, NotResumable, Restore, Resume, ResumePlan, Resumer};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -39,6 +45,15 @@ pub enum Request {
     Accept(Box<SessionRow>),
     /// Write out the transcript of a session planned with a restore, and plan resuming it.
     Restore(Box<SessionRow>, Restore),
+    /// Count what continuing a session in another harness would flatten (reads all of it).
+    Flatten(HarnessSession, PathBuf),
+    /// Write a session out as a new session of another harness, and plan resuming that. The id
+    /// comes back with the answer. Only the newest is kept: one a newer one replaces before it
+    /// started never runs (its answer would be ignored, as the picker waits on the newer id).
+    Continue(Box<SessionRow>, HarnessKind, u64),
+    /// The picker no longer waits on a continuation (the user chose something else): drop the
+    /// one not yet started, so nothing is written for it.
+    CancelContinue,
 }
 
 #[derive(Debug)]
@@ -56,6 +71,10 @@ pub enum Response {
     /// The session's restore was dropped before it started, for a newer accepted session's: it
     /// has to be asked for again.
     Abandoned(HarnessSession),
+    /// What continuing the session in another harness would flatten (or why that can't be read).
+    Flattened(HarnessSession, Result<Flattened, String>),
+    /// The continuation with this id is written (or couldn't be).
+    Continued(u64, Result<Continued, NotResumable>),
 }
 
 /// Sends requests to the worker's lanes. The worker stops when this is dropped.
@@ -133,6 +152,8 @@ struct Latest {
     plan: Option<Request>,
     accept: Option<Request>,
     restore: Option<Request>,
+    flatten: Option<Request>,
+    continuation: Option<Request>,
 }
 
 impl Latest {
@@ -147,6 +168,12 @@ impl Latest {
             Request::Plan(_) => &mut self.plan,
             Request::Accept(_) => &mut self.accept,
             Request::Restore(..) => &mut self.restore,
+            Request::Flatten(..) => &mut self.flatten,
+            Request::Continue(..) => &mut self.continuation,
+            Request::CancelContinue => {
+                self.continuation = None;
+                return None;
+            }
             Request::Search { .. } => return None,
         };
         let dropped = slot.replace(request)?;
@@ -160,13 +187,16 @@ impl Latest {
         }
     }
 
-    /// The next to answer: the restore, then the plan an enter is waiting on (an enter waits on
-    /// either), then the selection's plan (one may soon be), then children, then the preview.
+    /// The next to answer: a continuation, the restore, then the plan an enter is waiting on (an
+    /// enter waits on any of them), then the selection's plan (one may soon be), then what the
+    /// chooser shows, then children, then the preview.
     fn take(&mut self) -> Option<Request> {
-        self.restore
+        self.continuation
             .take()
+            .or_else(|| self.restore.take())
             .or_else(|| self.accept.take())
             .or_else(|| self.plan.take())
+            .or_else(|| self.flatten.take())
             .or_else(|| self.children.take())
             .or_else(|| self.preview.take())
     }
@@ -181,8 +211,14 @@ async fn details(
     let mut latest = Latest::default();
     loop {
         let mut abandoned = Vec::new();
-        while let Ok(next) = requests.try_recv() {
-            abandoned.extend(latest.put(next));
+        loop {
+            match requests.try_recv() {
+                Ok(next) => abandoned.extend(latest.put(next)),
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                // The picker is gone: nothing queued is wanted any more, and a continuation or
+                // restore not yet started must not write a session the user left.
+                Err(mpsc::error::TryRecvError::Disconnected) => return,
+            }
         }
         for session in abandoned {
             if responses.send(Response::Abandoned(session)).is_err() {
@@ -220,7 +256,17 @@ async fn details(
                 row.handle.clone(),
                 resumer.restore(source.as_ref(), &row, &restore).await,
             ),
-            Request::Search { .. } => continue,
+            Request::Flatten(session, cwd) => {
+                let flattened =
+                    source.rehydrate(&session, &cwd).await.map_err(|e| format!("{e:#}")).and_then(
+                        |original| continuation::flattened(&original).map_err(|e| e.to_string()),
+                    );
+                Response::Flattened(session, flattened)
+            }
+            Request::Continue(row, target, id) => {
+                Response::Continued(id, resumer.continue_in(source.as_ref(), &row, target).await)
+            }
+            Request::Search { .. } | Request::CancelContinue => continue,
         };
         if responses.send(response).is_err() {
             return;
@@ -357,6 +403,116 @@ mod tests {
         }
         assert_eq!(answered, vec![session("s0"), session("s3")]);
         assert_eq!(*source.previewed.lock(), answered);
+    }
+
+    /// A [`FakeResumer`] whose continuations wait for a permit, recording the ids started.
+    struct GatedContinues {
+        inner: FakeResumer,
+        gate: Semaphore,
+        started: Mutex<Vec<String>>,
+    }
+
+    fn gated_continues() -> Arc<GatedContinues> {
+        Arc::new(GatedContinues {
+            inner: FakeResumer::default(),
+            gate: Semaphore::new(0),
+            started: Mutex::new(Vec::new()),
+        })
+    }
+
+    #[async_trait]
+    impl Resumer for GatedContinues {
+        async fn plan(&self, session: &SessionRow) -> Result<Resume, NotResumable> {
+            self.inner.plan(session).await
+        }
+
+        async fn restore(
+            &self,
+            source: &dyn SessionSource,
+            session: &SessionRow,
+            restore: &Restore,
+        ) -> Result<ResumePlan, NotResumable> {
+            self.inner.restore(source, session, restore).await
+        }
+
+        async fn continue_in(
+            &self,
+            source: &dyn SessionSource,
+            session: &SessionRow,
+            target: HarnessKind,
+        ) -> Result<Continued, NotResumable> {
+            self.started.lock().push(session.handle.session.to_string());
+            self.gate.acquire().await.unwrap().forget();
+            self.inner.continue_in(source, session, target).await
+        }
+    }
+
+    /// While the worker writes continuation `a`, others are asked for. One a newer one replaced,
+    /// or the picker cancelled (it moved on to another choice), before it started never runs:
+    /// nothing is written for a choice the user left. `a`, already running, finishes.
+    #[rstest]
+    #[case::replaced(&["b", "c"], false, &["a", "c"])]
+    #[case::cancelled(&["b"], true, &["a"])]
+    #[case::replaced_then_cancelled(&["b", "c"], true, &["a"])]
+    #[tokio::test]
+    async fn a_superseded_continuation_never_starts(
+        #[case] queued: &[&str],
+        #[case] cancel: bool,
+        #[case] expected: &[&str],
+    ) {
+        let resumer = gated_continues();
+        let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), resumer.clone());
+        let continue_ = |id: &str, n: u64| {
+            let row = fake::row(HarnessKind::ClaudeCode, id, "t");
+            Request::Continue(Box::new(row), HarnessKind::Codex, n)
+        };
+        tx.send(continue_("a", 0));
+        while resumer.started.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        for (n, id) in (1..).zip(queued) {
+            tx.send(continue_(id, n));
+        }
+        if cancel {
+            tx.send(Request::CancelContinue);
+        }
+        // Answered after any continuation still kept, which goes first.
+        tx.send(Request::Preview(session("after")));
+        resumer.gate.add_permits(10);
+
+        loop {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv());
+            match next.await.expect("the worker is stuck").expect("the worker stopped") {
+                Response::Continued(_, result) => assert!(result.is_ok(), "{result:?}"),
+                Response::Preview(..) => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(*resumer.started.lock(), expected);
+    }
+
+    /// The picker gone (its requests dropped) while a continuation waits behind a running one:
+    /// the waiting one never runs.
+    #[rstest]
+    #[tokio::test]
+    async fn nothing_queued_runs_once_the_picker_is_gone() {
+        let resumer = gated_continues();
+        let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), resumer.clone());
+        let row = |id: &str| Box::new(fake::row(HarnessKind::ClaudeCode, id, "t"));
+        tx.send(Request::Continue(row("a"), HarnessKind::Codex, 0));
+        while resumer.started.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        tx.send(Request::Continue(row("b"), HarnessKind::Codex, 1));
+        drop(tx);
+        resumer.gate.add_permits(10);
+
+        // `a` finishes; then the worker stops, its response channel closing.
+        let next = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while rx.recv().await.is_some() {}
+        });
+        next.await.expect("the worker kept running");
+        assert_eq!(*resumer.started.lock(), ["a"]);
     }
 
     /// An enter on a fork while the detail lane is busy, and then the selection settling on the

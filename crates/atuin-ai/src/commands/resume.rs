@@ -10,6 +10,12 @@
 //!   resumed with the usual command. That happens only once a session is chosen (enter or tab in
 //!   the picker, or named by id), in this process, before the command is run or handed to the
 //!   shell widget, so the command the widget puts on the command line works as it stands.
+//! - `--in <harness>` continues the session the id names in another harness instead: it is
+//!   written out there as a new session (its tool calls flattened into notes; see
+//!   [`atuin_common::harnesstools::continuation`]) and that is resumed, the same way. In the
+//!   picker, accepting a session asks where to resume it: its own harness first, then the others
+//!   installed here (see [`crate::resume_tui::chooser`]; `[ai.sessions] resume_chooser = false`
+//!   skips that).
 //! - From the shell widget (`--shell-widget`), the result goes to stderr using the history
 //!   search's protocol: `__atuin_accept__:<cmd>` to run it, plain `<cmd>` to edit it, nothing to
 //!   leave the command line alone.
@@ -21,7 +27,7 @@
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 
-use atuin_client::ai_session::AtuinSessionId;
+use atuin_client::ai_session::{AtuinSessionId, HarnessKind};
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
@@ -61,6 +67,11 @@ pub struct Cmd {
     #[arg(long)]
     print: bool,
 
+    /// Continue the session QUERY names (by id, or a unique id prefix) in another agent: it is
+    /// written out as a new session there, tool calls flattened into notes, and resumed.
+    #[arg(long = "in", value_enum, value_name = "HARNESS")]
+    continue_in: Option<ContinueIn>,
+
     /// The filter the picker opens in (default: workspace, widening to global).
     #[arg(long, value_enum)]
     filter_mode: Option<AiSessionFilterMode>,
@@ -76,6 +87,26 @@ pub struct Cmd {
     /// Report the result on stderr for the shell widget.
     #[arg(long, hide = true)]
     shell_widget: bool,
+}
+
+/// A harness to continue a session in (`--in`).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum ContinueIn {
+    Claude,
+    Codex,
+    Opencode,
+    Pi,
+}
+
+impl ContinueIn {
+    fn kind(self) -> HarnessKind {
+        match self {
+            Self::Claude => HarnessKind::ClaudeCode,
+            Self::Codex => HarnessKind::Codex,
+            Self::Opencode => HarnessKind::Opencode,
+            Self::Pi => HarnessKind::Pi,
+        }
+    }
 }
 
 /// Where the result goes.
@@ -248,6 +279,16 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let resumer: Arc<dyn Resumer> =
         Arc::new(HarnessResumer::new(context.clone(), settings.ai.sessions.resume.clone()));
 
+    if let Some(into) = cmd.continue_in {
+        let (plan, status) =
+            continue_plan(source.as_ref(), resumer.as_ref(), query.trim(), into).await?;
+        // The widget reads stderr for the command: nothing else may go there.
+        if output != Output::Widget {
+            eprintln!("atuin: {}", status.escape_non_printable());
+        }
+        return finish(direct_outcome(plan, output, settings.enter_accept), output);
+    }
+
     let mut preselect = None;
     let target = direct_target(source.as_ref(), query.trim()).await?;
     // An id naming several sessions opens the picker on them, to pick one.
@@ -296,7 +337,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
 
     let mut themes = ThemeManager::new(settings.theme.debug, None);
     let theme = themes.load_theme(settings.theme.name.as_str(), settings.theme.max_depth);
-    let outcome = Picker {
+    let (outcome, note) = Picker {
         settings: &settings,
         theme,
         source,
@@ -309,7 +350,37 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     }
     .run()
     .await?;
+    if let Some(note) = note
+        && output != Output::Widget
+    {
+        eprintln!("atuin: {}", note.escape_non_printable());
+    }
     finish(outcome, output)
+}
+
+/// `atuin ai resume <id> --in <harness>`: write the session `query` names out as a new session
+/// of `into`, and the plan that resumes it, with the status line saying what was flattened.
+async fn continue_plan(
+    source: &dyn SessionSource,
+    resumer: &dyn Resumer,
+    query: &str,
+    into: ContinueIn,
+) -> Result<(ResumePlan, String)> {
+    let Some((row, redirected)) = direct_target(source, query).await? else {
+        bail!("`--in` continues the session an id names: no single session has the id {query:?}");
+    };
+    let continued = resumer.continue_in(source, &row, into.kind()).await.map_err(|why| {
+        let message = format!("can't continue {}: {why}", row.handle.session);
+        eyre::eyre!("{}", message.escape_non_printable())
+    })?;
+    let mut status = continued.status();
+    if let Some(redirected) = redirected {
+        status = format!("{redirected}; {status}");
+    }
+    if let Some(note) = &continued.note {
+        status.push_str(&format!("; {note}"));
+    }
+    Ok((continued.plan, status))
 }
 
 /// What a session named by id does without the picker. Standalone, `atuin ai resume <id>` resumes
@@ -409,7 +480,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::resume_tui::fake::{self, FakeSource};
+    use crate::resume_tui::fake::{self, FakeResumer, FakeSource};
 
     #[derive(Parser)]
     struct Cli {
@@ -524,6 +595,12 @@ mod tests {
             assert!(note.starts_with(&format!("{query} is a subagent")), "{note}");
             assert!(note.contains(target), "{note}");
         }
+
+        let resumer = FakeResumer::default();
+        let (plan, status) =
+            continue_plan(&source, &resumer, query, ContinueIn::Codex).await.unwrap();
+        assert_eq!(plan.args[1], format!("continued-{target}"));
+        assert_eq!(status.contains("is a subagent"), redirected, "{status}");
     }
 
     /// Titles and ids are agent-supplied: the note for an ambiguous id shows each on one line,
@@ -599,6 +676,27 @@ mod tests {
         };
         let outcome = direct_outcome(plan, output, enter_accept);
         assert_eq!(matches!(outcome, Outcome::Resume(_)), runs, "{outcome:?}");
+    }
+
+    /// `atuin ai resume <id> --in <harness>` continues the session the id names, and plans
+    /// resuming the new session; a query that names no single session is an error.
+    #[rstest]
+    #[tokio::test]
+    async fn continuing_by_id_plans_the_new_session() {
+        let source = FakeSource::new();
+        let resumer = FakeResumer::default();
+        let (plan, status) =
+            continue_plan(&source, &resumer, "7f3c9a12", ContinueIn::Codex).await.unwrap();
+        assert_eq!(plan.program, "codex");
+        assert_eq!(plan.args, ["resume", "continued-7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10"]);
+        assert_eq!(status, "continuing in Codex: 42 tool calls become notes, reasoning dropped");
+
+        let err = continue_plan(&source, &resumer, "fix flaky", ContinueIn::Pi).await.unwrap_err();
+        assert!(err.to_string().contains("no single session has the id"), "{err}");
+
+        let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "opencode"]).unwrap();
+        assert_eq!(cli.cmd.continue_in, Some(ContinueIn::Opencode));
+        assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "cursor"]).is_err());
     }
 
     #[rstest]

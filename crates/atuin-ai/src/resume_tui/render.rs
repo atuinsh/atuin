@@ -24,6 +24,7 @@ use ratatui::widgets::{
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
+use super::chooser::ListAnchor;
 use super::panel::{self, SPLIT_MIN_WIDTH};
 use super::query::{TokenKind, TokenState};
 use super::resumer::shell_line;
@@ -781,9 +782,41 @@ impl State {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Where the selected row of the list in `area` is, for the chooser to open against.
+    fn anchor(&self, area: Rect, cells: &[(Column, u16)], invert: bool) -> Option<ListAnchor> {
+        if self.results.is_empty() || area.height == 0 {
+            return None;
+        }
+        let from_top = u16::try_from(self.list.selected.checked_sub(self.list.offset)?).ok()?;
+        let row = if invert {
+            area.top() + from_top
+        } else {
+            area.bottom().checked_sub(from_top + 1)?
+        };
+        // Past the indicator, and the columns before the badge.
+        let before: u16 = cells
+            .iter()
+            .take_while(|(c, _)| !matches!(c, Column::Harness | Column::Title))
+            .map(|(_, w)| w + 1)
+            .sum();
+        Some(ListAnchor {
+            list: area,
+            row,
+            badge_x: area.x + 3 + before,
+        })
+    }
+
     pub fn draw(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
+        self.draw_main(f, settings, theme);
+        if self.chooser.is_some() {
+            self.draw_chooser(f, settings, theme);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn draw_main(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
         let area = f.area();
+        self.list_anchor = None;
         for scroll in &mut self.scrolls {
             scroll.area = None;
         }
@@ -988,6 +1021,7 @@ impl State {
             cells: &cells,
         };
         f.render_stateful_widget(list, list_area, &mut self.list);
+        self.list_anchor = self.anchor(list_area, &cells, invert);
 
         // A scrollbar on the right border (or the divider) once the list overflows.
         let visible = usize::from(list_area.height);
