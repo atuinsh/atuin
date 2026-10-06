@@ -48,7 +48,7 @@ fn get_input<T: for<'a> From<&'a str>>() -> Result<Option<T>> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        match settings.resolve_sync_auth().await {
+        let had_cli_session = match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
                 println!("{}", fl!("account-hub-authenticated"));
                 println!("{}", fl!("account-run-logout"));
@@ -61,9 +61,10 @@ impl Cmd {
             }
             SyncAuth::HubViaCli { .. } => {
                 println!("{}", fl!("login-upgrading-legacy"));
+                true
             }
-            SyncAuth::NotLoggedIn { .. } => {}
-        }
+            SyncAuth::NotLoggedIn { .. } => false,
+        };
 
         // A key given for a browser login is checked against the account's data before it's stored,
         // so a wrong one can't re-encrypt this machine's history on its way to being rejected.
@@ -74,18 +75,28 @@ impl Cmd {
             _ => None,
         };
 
-        let generated_key = if settings.is_hub_sync() {
+        let given_key = candidate.is_some();
+
+        let machine_key = if settings.is_hub_sync() {
             self.run_hub_login(settings, store).await?
         } else {
             self.run_legacy_login(settings, store).await?;
             None
         };
 
-        verify_key_against_remote(settings, store, self.interactive(), candidate).await?;
+        if let Err(err) =
+            verify_key_against_remote(settings, store, self.interactive(), candidate).await
+        {
+            // Undo only what this login added, so a CLI session from before an upgrade keeps
+            // syncing.
+            forget_login(had_cli_session).await;
+            return Err(err);
+        }
 
-        // A key made for this login that the account kept, rather than swapping in the key its
-        // data needed, exists nowhere else yet.
-        if let Some(key) = generated_key
+        // The account settled on this machine's own key, maybe made moments ago, rather than one
+        // the person supplied; nothing says they hold a copy of it anywhere else.
+        if let Some(key) = machine_key
+            && !given_key
             && paseto_v4::Key::try_load_from_path(&settings.key_path).is_ok_and(|kept| kept == key)
         {
             println!("\n{}", fl!("login-new-key-backup"));
@@ -107,7 +118,7 @@ impl Cmd {
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
     ///
-    /// Returns the key the browser flow generated, if this machine had none.
+    /// Returns the key the browser flow starts from: this machine's own, made now if it had none.
     async fn run_hub_login(
         &self,
         settings: &Settings,
@@ -115,7 +126,7 @@ impl Cmd {
     ) -> Result<Option<paseto_v4::Key>> {
         let endpoint = settings.hub_endpoint();
 
-        let generated_key = if let Some(username) = &self.username {
+        let machine_key = if let Some(username) = &self.username {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
@@ -158,13 +169,11 @@ impl Cmd {
             // only shows once we can see its data, so start from this machine's key (or a fresh
             // one) and let `verify_key_against_remote` swap in a given key, or ask for one, if
             // its data needs it.
-            let had_key = settings.key_path.exists();
             let key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
                 .context(fl!("login-key-generate-failed"))?;
-            let generated_key = (!had_key).then_some(key);
 
             self.ensure_hub_session(settings, &endpoint).await?;
-            generated_key
+            Some(key)
         };
 
         // Silently attempt to link CLI account to Hub if one exists
@@ -175,7 +184,7 @@ impl Cmd {
         }
 
         println!("{}", fl!("login-success"));
-        Ok(generated_key)
+        Ok(machine_key)
     }
 
     /// Legacy login: always prompt for username/password interactively
@@ -317,7 +326,6 @@ async fn verify_key_against_remote(
     interactive: bool,
     candidate: Option<paseto_v4::Key>,
 ) -> Result<()> {
-    let given = candidate.is_some();
     let mut key = match candidate {
         Some(key) => key,
         None => paseto_v4::Key::try_load_from_path(&settings.key_path)
@@ -369,11 +377,11 @@ async fn verify_key_against_remote(
             Some(e) => {
                 tracing::warn!("could not verify encryption key against remote: {e}");
 
-                // A key given for this login only replaces this machine's key once the
-                // account's data accepts it, so one that can't be checked fails the login
-                // rather than risk re-encrypting local history with a wrong key.
-                if given {
-                    delete_sessions().await;
+                // Only a key the account's data has accepted may replace this machine's own, so
+                // a given or typed-in key that can't be checked fails the login rather than risk
+                // re-encrypting local history with a wrong key.
+                let machine_key = paseto_v4::Key::try_load_from_path(&settings.key_path).ok();
+                if machine_key.as_ref() != Some(&key) {
                     bail!(fl!("login-key-unverified", error = e.to_string()));
                 }
 
@@ -389,14 +397,17 @@ async fn verify_key_against_remote(
 /// Roll back the saved session so the user is not left in a half-authenticated
 /// state with a key that can't read the data, then exit.
 async fn logout_wrong_key() -> ! {
-    delete_sessions().await;
+    forget_login(false).await;
     crate::print_error::print_error(&fl!("login-wrong-key-title"), &fl!("login-wrong-key-body"));
     std::process::exit(1);
 }
 
-async fn delete_sessions() {
+/// Delete the sessions a login saves; `keep_cli_session` spares one that was there before it.
+async fn forget_login(keep_cli_session: bool) {
     if let Ok(meta) = Settings::meta_store().await {
-        let _ = meta.delete_session().await;
+        if !keep_cli_session {
+            let _ = meta.delete_session().await;
+        }
         let _ = meta.delete_hub_session().await;
     }
 }
