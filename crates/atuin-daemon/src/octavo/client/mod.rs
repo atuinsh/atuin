@@ -13,6 +13,7 @@ pub use nop::NopOctavoClient;
 #[allow(async_fn_in_trait)]
 pub trait OctavoClient {
     async fn push_history(&self, history: &History, record_id: RecordId);
+    async fn push_output(&self, id: HistoryId);
     async fn delete_history(&self, ids: &[HistoryId]);
 }
 

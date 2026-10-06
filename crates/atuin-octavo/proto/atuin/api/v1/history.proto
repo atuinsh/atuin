@@ -35,3 +35,23 @@ message History {
   // The shell that ran the command, e.g. `zsh`, if known.
   optional string shell = 12;
 }
+
+// What a finished command printed, as its terminal showed it once it finished.
+message HistoryOutput {
+  // All of the rendered output, or its start when `end` is set. Carries SGR escapes and no other
+  // control characters but `\n`. `start` and `end` together hold at most 1 MiB.
+  string start = 1;
+  // The end of output too long to keep whole; what came between `start` and `end` was dropped.
+  optional string end = 2;
+  // The bytes the terminal received from the command, before rendering.
+  uint64 observed_bytes = 3;
+  // The terminal's size when the command finished.
+  uint32 terminal_width = 4 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 65535
+  }];
+  uint32 terminal_height = 5 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 65535
+  }];
+}

@@ -665,6 +665,8 @@ impl HistoryJournal {
         }
 
         self.output_capture.capture(id, capture).await?;
+        // Only once stored, since the upload reads the output back from the store.
+        self.octavo.push_output(id).await;
         Ok(())
     }
 

@@ -340,13 +340,14 @@ pub async fn boot(
 
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
+    let outputs = output_capture.store();
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,
         handle.history_db().clone(),
         search_index,
         output_capture,
-        Octavo::open(&settings, handle.clone()).await,
+        Octavo::open(&settings, handle.clone(), outputs).await,
     ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
     let ai_session_service =

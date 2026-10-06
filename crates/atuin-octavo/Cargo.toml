@@ -31,6 +31,11 @@ url = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 
+[dev-dependencies]
+rstest = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
 [build-dependencies]
 protox = { workspace = true }
 tonic-prost-build = { workspace = true }

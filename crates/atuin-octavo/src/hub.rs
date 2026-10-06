@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_domain::record::RecordId;
 use hyper_tls::HttpsConnector;
@@ -15,7 +15,7 @@ use url::Url;
 
 use crate::pb;
 use crate::pb::hub_service_client::HubServiceClient;
-use crate::pb::{HistoryConversionError, NotUuidV7};
+use crate::pb::{HistoryConversionError, NotUuidV7, OutputTooLarge};
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
@@ -35,6 +35,10 @@ pub enum HubCallError {
     Convert(#[from] HistoryConversionError),
     #[error(transparent)]
     Id(#[from] NotUuidV7),
+    #[error(transparent)]
+    OutputTooLarge(#[from] OutputTooLarge),
+    #[error("the hub has not stored the history entry yet")]
+    HistoryNotStored(#[source] tonic::Status),
     #[error("Octavo needs a hub login; run `atuin login`")]
     NotLoggedIn,
     #[error("failed to read the hub login: {0:#}")]
@@ -56,13 +60,14 @@ impl HubCallError {
     #[must_use]
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Convert(_) | Self::Id(_) => true,
+            Self::Convert(_) | Self::Id(_) | Self::OutputTooLarge(_) => true,
             Self::Hub(status) => status.code() == Code::InvalidArgument,
             Self::NotLoggedIn
             | Self::Meta(_)
             | Self::Connect(_)
             | Self::EndpointChanged(_)
             | Self::InvalidToken(_)
+            | Self::HistoryNotStored(_)
             | Self::NoUserId => false,
         }
     }
@@ -76,6 +81,13 @@ impl UserId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+#[cfg(test)]
+impl UserId {
+    pub(crate) fn new(id: &str) -> Self {
+        Self(id.to_owned())
     }
 }
 
@@ -195,6 +207,29 @@ impl HubLogin {
         match self.caller.service.clone().insert_history(request).await {
             Ok(_) => Ok(()),
             Err(status) if status.code() == Code::AlreadyExists => Ok(()),
+            Err(status) => Err(HubCallError::Hub(status)),
+        }
+    }
+
+    /// Stores `capture` as the output of the entry with `id`.
+    ///
+    /// Fails with [`HubCallError::HistoryNotStored`] until the entry itself is stored.
+    pub async fn upload_output(
+        &self,
+        id: HistoryId,
+        capture: CommandCapture,
+    ) -> Result<(), HubCallError> {
+        let request = self.caller.request(pb::InsertHistoryOutputRequest {
+            id: Some(id.try_into()?),
+            output: Some(capture.try_into()?),
+        });
+
+        match self.caller.service.clone().insert_history_output(request).await {
+            Ok(_) => Ok(()),
+            Err(status) if status.code() == Code::AlreadyExists => Ok(()),
+            Err(status) if status.code() == Code::NotFound => {
+                Err(HubCallError::HistoryNotStored(status))
+            }
             Err(status) => Err(HubCallError::Hub(status)),
         }
     }

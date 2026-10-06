@@ -1,5 +1,6 @@
 mod engine;
 
+use std::fmt;
 use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
@@ -14,6 +15,7 @@ use tokio::sync::Notify;
 
 use super::OctavoClient;
 use crate::daemon::DaemonHandle;
+use crate::output_capture::OutputStore;
 
 #[derive(Debug, Error)]
 pub enum OpenActiveOctavoClientError {
@@ -33,11 +35,13 @@ impl ActiveOctavoClient {
     pub async fn open(
         settings: &Settings,
         handle: DaemonHandle,
+        outputs: Arc<OutputStore>,
     ) -> Result<Self, OpenActiveOctavoClientError> {
         let queue = UploadQueue::open(Settings::octavo_queue_path()).await?;
         let hub = HubClient::new(settings)?;
         let wake = Arc::new(Notify::new());
-        let engine = UploadEngine::spawn(queue.clone(), hub.clone(), handle.clone(), wake.clone());
+        let engine =
+            UploadEngine::spawn(queue.clone(), hub.clone(), handle.clone(), outputs, wake.clone());
 
         Ok(Self {
             uploader: Arc::new(DirectUploader {
@@ -72,6 +76,19 @@ impl OctavoClient for ActiveOctavoClient {
         ));
     }
 
+    async fn push_output(&self, id: HistoryId) {
+        let settings = self.uploader.handle.settings().await.clone();
+        if !(settings.octavo.enabled && settings.octavo.upload_output) {
+            return;
+        }
+        // Read now, so the output goes to whoever was logged in as it was captured.
+        let Some(token) = self.uploader.token(&settings).await else {
+            return;
+        };
+
+        self.uploader.queue_for(settings, token, Queued::Output(id)).await;
+    }
+
     async fn delete_history(&self, ids: &[HistoryId]) {
         let settings = self.uploader.handle.settings().await.clone();
         // Read now, so the deletions go to whoever was logged in when the entries were deleted.
@@ -79,25 +96,22 @@ impl OctavoClient for ActiveOctavoClient {
             return;
         };
 
-        // Queued before the local delete returns, so the deletion outlives the daemon. That needs
-        // the token's user, known once the daemon has reached the hub since the login; until
-        // then a detached task asks the hub first. The engine sends them once they're queued.
-        match self.uploader.hub.user_of(&token).await {
-            Ok(Some(user)) => self.uploader.queue_deletions(&user, ids).await,
-            Ok(None) => {
-                tokio::spawn(Arc::clone(&self.uploader).learn_user_and_queue_deletions(
-                    settings,
-                    token,
-                    ids.to_vec(),
-                ));
-            }
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    count = ids.len(),
-                    "failed to read the hub login; these deletions will not reach octavo"
-                );
-            }
+        self.uploader.queue_for(settings, token, Queued::Deletions(ids.to_vec())).await;
+    }
+}
+
+/// Work for the engine to send, queued under the user a hub token belongs to.
+#[derive(Debug)]
+enum Queued {
+    Deletions(Vec<HistoryId>),
+    Output(HistoryId),
+}
+
+impl fmt::Display for Queued {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Deletions(ids) => write!(f, "{} deletions", ids.len()),
+            Self::Output(id) => write!(f, "the output of {id}"),
         }
     }
 }
@@ -136,6 +150,8 @@ impl DirectUploader {
         };
 
         match login.upload(history, Some(record_id)).await {
+            // The entry's output may be queued already, waiting on it.
+            Ok(()) if settings.octavo.upload_output => self.wake.notify_one(),
             Ok(()) => {}
             Err(err) if err.is_permanent() => {
                 tracing::warn!(
@@ -143,6 +159,13 @@ impl DirectUploader {
                     %id,
                     "octavo will never accept this history entry; dropping it"
                 );
+                if let Err(err) = self.queue.remove_output(login.user_id(), id).await {
+                    tracing::warn!(
+                        ?err,
+                        %id,
+                        "failed to remove the output of a refused history entry from the queue"
+                    );
+                }
             }
             Err(err) => {
                 tracing::debug!(
@@ -163,36 +186,61 @@ impl DirectUploader {
         }
     }
 
-    /// Learns whose `token` is from the hub, then queues the deletion of `ids` for them.
-    async fn learn_user_and_queue_deletions(
-        self: Arc<Self>,
-        settings: Settings,
-        token: HubToken,
-        ids: Vec<HistoryId>,
-    ) {
-        match self.hub.login_as(token, &settings).await {
-            Ok(login) => self.queue_deletions(login.user_id(), &ids).await,
+    /// Queues `work` for `token`'s user before returning, so it outlives the daemon.
+    ///
+    /// That needs the token's user, known once the daemon has reached the hub since the login;
+    /// until then a detached task asks the hub first.
+    async fn queue_for(self: &Arc<Self>, settings: Settings, token: HubToken, work: Queued) {
+        match self.hub.user_of(&token).await {
+            Ok(Some(user)) => self.enqueue(&user, work).await,
+            Ok(None) => {
+                tokio::spawn(Arc::clone(self).learn_user_and_queue(settings, token, work));
+            }
             Err(err) => {
                 tracing::warn!(
                     ?err,
-                    count = ids.len(),
-                    "failed to learn whose hub token this is; these deletions will not reach \
-                     octavo"
+                    %work,
+                    "failed to read the hub login; not queueing for octavo"
                 );
             }
         }
     }
 
-    /// Queues the deletion of `user`'s entries `ids` for the engine to send.
-    async fn queue_deletions(&self, user: &UserId, ids: &[HistoryId]) {
-        // Octavo never stored an entry whose id isn't a UUIDv7.
-        let stored = ids.iter().copied().filter(|&id| pb::UuidV7::try_from(id).is_ok());
-        if let Err(err) = self.queue.push_deletions(user, stored).await {
-            tracing::warn!(
-                ?err,
-                count = ids.len(),
-                "failed to queue history deletions for octavo; they will not reach it"
-            );
+    /// Learns whose `token` is from the hub, then queues `work` for them.
+    async fn learn_user_and_queue(
+        self: Arc<Self>,
+        settings: Settings,
+        token: HubToken,
+        work: Queued,
+    ) {
+        match self.hub.login_as(token, &settings).await {
+            Ok(login) => self.enqueue(login.user_id(), work).await,
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    %work,
+                    "failed to learn whose hub token this is; not queueing for octavo"
+                );
+            }
+        }
+    }
+
+    /// Queues `user`'s `work` for the engine to send, and wakes it.
+    async fn enqueue(&self, user: &UserId, work: Queued) {
+        let queued = match &work {
+            // Octavo never stored an entry whose id isn't a UUIDv7.
+            Queued::Deletions(ids) => self
+                .queue
+                .push_deletions(
+                    user,
+                    ids.iter().copied().filter(|&id| pb::UuidV7::try_from(id).is_ok()),
+                )
+                .await
+                .map(drop),
+            Queued::Output(id) => self.queue.push_output(user, *id).await,
+        };
+        if let Err(err) = queued {
+            tracing::warn!(?err, %work, "failed to queue for octavo; it will not reach it");
             return;
         }
 

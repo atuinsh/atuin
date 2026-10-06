@@ -5,7 +5,7 @@ mod codegen {
 
 use std::time::{Duration, SystemTime};
 
-use atuin_client::history::{History as DomainHistory, HistoryId};
+use atuin_client::history::{CommandCapture, History as DomainHistory, HistoryId};
 use atuin_common::string::NonNulStr;
 use atuin_domain::record::{CmdOrigin as DomainCmdOrigin, RecordId};
 pub use codegen::*;
@@ -121,6 +121,32 @@ impl TryFrom<DomainHistory> for History {
     }
 }
 
+/// What `HistoryOutput.start` and `HistoryOutput.end` hold together at most.
+const MAX_OUTPUT_BYTES: usize = 1 << 20;
+
+#[derive(Debug, Error)]
+#[error("the output is {0} bytes, over the {MAX_OUTPUT_BYTES} Octavo takes")]
+pub struct OutputTooLarge(pub usize);
+
+impl TryFrom<CommandCapture> for HistoryOutput {
+    type Error = OutputTooLarge;
+
+    fn try_from(capture: CommandCapture) -> Result<Self, Self::Error> {
+        let len = capture.output_start.len() + capture.output_end.as_ref().map_or(0, String::len);
+        if len > MAX_OUTPUT_BYTES {
+            return Err(OutputTooLarge(len));
+        }
+
+        Ok(Self {
+            start: capture.output_start,
+            end: capture.output_end,
+            observed_bytes: capture.output_observed_bytes,
+            terminal_width: capture.terminal_width.into(),
+            terminal_height: capture.terminal_height.into(),
+        })
+    }
+}
+
 /// `session` as `History.session` can carry it: as is when it fits the bytes the field allows, or
 /// else as the hex of its 128-bit xxh3 hash, which keeps two long sessions apart.
 fn session_key(session: String) -> String {
@@ -129,4 +155,60 @@ fn session_key(session: String) -> String {
     }
 
     format!("{:032x}", xxh3_128(session.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    fn capture(start: String, end: Option<String>) -> CommandCapture {
+        CommandCapture {
+            output_start: start,
+            output_end: end,
+            output_observed_bytes: 4_096,
+            terminal_width: 80,
+            terminal_height: 24,
+        }
+    }
+
+    #[rstest]
+    #[case::kept_whole("\x1b[31mfile\x1b[0m\nline two", None)]
+    #[case::truncated("first lines", Some("last lines"))]
+    #[case::no_output("", None)]
+    fn keeps_every_field(#[case] start: &str, #[case] end: Option<&str>) {
+        let output = HistoryOutput::try_from(capture(start.to_owned(), end.map(str::to_owned)))
+            .expect("well under the cap");
+
+        assert_eq!(output, HistoryOutput {
+            start: start.to_owned(),
+            end: end.map(str::to_owned),
+            observed_bytes: 4_096,
+            terminal_width: 80,
+            terminal_height: 24,
+        });
+    }
+
+    #[rstest]
+    #[case::start_at_the_cap(MAX_OUTPUT_BYTES, None, true)]
+    #[case::start_past_the_cap(MAX_OUTPUT_BYTES + 1, None, false)]
+    #[case::halves_at_the_cap(MAX_OUTPUT_BYTES / 2, Some(MAX_OUTPUT_BYTES / 2), true)]
+    #[case::halves_past_the_cap(MAX_OUTPUT_BYTES / 2, Some(MAX_OUTPUT_BYTES / 2 + 1), false)]
+    fn caps_start_and_end_together(
+        #[case] start: usize,
+        #[case] end: Option<usize>,
+        #[case] fits: bool,
+    ) {
+        let converted =
+            HistoryOutput::try_from(capture("a".repeat(start), end.map(|end| "z".repeat(end))));
+
+        match converted {
+            Ok(_) => assert!(fits, "output past the cap was accepted"),
+            Err(OutputTooLarge(len)) => {
+                assert!(!fits, "output within the cap was refused");
+                assert_eq!(len, start + end.unwrap_or(0));
+            }
+        }
+    }
 }

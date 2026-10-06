@@ -9,5 +9,7 @@ pub struct NopOctavoClient;
 impl OctavoClient for NopOctavoClient {
     async fn push_history(&self, _history: &History, _record_id: RecordId) {}
 
+    async fn push_output(&self, _id: HistoryId) {}
+
     async fn delete_history(&self, _ids: &[HistoryId]) {}
 }

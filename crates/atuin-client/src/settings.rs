@@ -544,6 +544,9 @@ pub struct PtyProxy {
 pub struct Octavo {
     pub enabled: bool,
     pub endpoint: Option<Url>,
+    /// Whether captured command output goes to Octavo too, while `enabled` and output capture are
+    /// both on.
+    pub upload_output: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1659,6 +1662,7 @@ impl Settings {
             .set_default("pty_proxy.enabled", false)?
             .set_default("octavo.enabled", false)?
             .set_default("octavo.endpoint", None::<String>)?
+            .set_default("octavo.upload_output", false)?
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 

@@ -24,6 +24,18 @@ service HubService {
   // deletion, or send it before the upload it races.
   rpc DeleteHistory(DeleteHistoryRequest) returns (DeleteHistoryResponse);
 
+  // Store the output of the calling user's history entry with this id, if it has none yet.
+  //
+  // Fails with `NOT_FOUND` (`HISTORY_NOT_FOUND`) until the entry is stored, and with
+  // `ALREADY_EXISTS` (`HISTORY_OUTPUT_ALREADY_EXISTS`) once it has output, keeping what was
+  // stored. Output for an entry the user deleted is accepted and dropped.
+  rpc InsertHistoryOutput(InsertHistoryOutputRequest) returns (InsertHistoryOutputResponse);
+
+  // The output of the calling user's history entry with this id.
+  //
+  // Fails with `NOT_FOUND` (`HISTORY_OUTPUT_NOT_FOUND`) when none is stored.
+  rpc GetHistoryOutput(GetHistoryOutputRequest) returns (GetHistoryOutputResponse);
+
   // Identify the user the call's token logs in.
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
 }
@@ -48,6 +60,25 @@ message DeleteHistoryRequest {
 }
 
 message DeleteHistoryResponse {}
+
+message InsertHistoryOutputRequest {
+  // The entry the output is of, as `History.id` gave it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // Logically required.
+  HistoryOutput output = 2 [(buf.validate.field).required = true];
+}
+
+message InsertHistoryOutputResponse {}
+
+message GetHistoryOutputRequest {
+  // The entry whose output to get, as `History.id` gave it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+}
+
+message GetHistoryOutputResponse {
+  // Logically required.
+  HistoryOutput output = 1 [(buf.validate.field).required = true];
+}
 
 message WhoAmIRequest {}
 
