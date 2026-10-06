@@ -145,7 +145,7 @@ fn timestamp(at: OffsetDateTime) -> String {
 }
 
 /// The whole transcript, one JSON line per written row.
-fn transcript(session: &RehydrateSession) -> String {
+pub(crate) fn transcript(session: &RehydrateSession) -> String {
     let mut out = String::new();
     for line in lines(session, None) {
         out.push_str(&line.to_string());

@@ -304,9 +304,16 @@ mod tests {
             _from: Option<Checkpoint>,
         ) -> impl Stream<Item = Result<(Checkpoint, StubMsg), MessageError>> + Send + 'static
         {
-            let items = futures::stream::iter(
-                self.offsets.into_iter().map(|at| Ok((Checkpoint { at, digest: 0 }, StubMsg))),
-            );
+            let items = futures::stream::iter(self.offsets.into_iter().map(|at| {
+                Ok((
+                    Checkpoint {
+                        at,
+                        digest: 0,
+                        generation: 0,
+                    },
+                    StubMsg,
+                ))
+            }));
             if self.hang {
                 items.chain(futures::stream::pending()).left_stream()
             } else {

@@ -139,15 +139,25 @@ pub struct Picked {
     pub action: Pending,
 }
 
-/// A continuation (or a fork) asked of the worker, waiting to be written.
+/// A continuation (or a fork, or a switch) asked of the worker, waiting to be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Continuing {
     /// Which request it is: only its own answer finishes it.
     pub id: u64,
     pub target: HarnessKind,
-    /// A fork, in the session's own harness.
-    pub fork: bool,
+    pub kind: Writing,
     pub action: Pending,
+}
+
+/// What a [`Continuing`] writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Writing {
+    /// A new session of another harness.
+    Continuation,
+    /// A fork, in the session's own harness.
+    Fork,
+    /// The copy here, switched to another branch in place.
+    Switch,
 }
 
 /// An action waiting for the selected session's resume plan.

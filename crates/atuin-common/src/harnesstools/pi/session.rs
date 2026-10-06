@@ -393,23 +393,45 @@ impl PiSession {
     }
 }
 
+/// The file a header's `parentSession` names, for a line of a session file in `dir`; `None` for
+/// any other line.
+fn parent_file(message: &PiMessage, dir: Option<&Path>) -> Option<PathBuf> {
+    let parent = message.parent_session_path()?;
+    Some(match dir {
+        Some(dir) if Path::new(parent).is_relative() => dir.join(parent),
+        _ => PathBuf::from(parent),
+    })
+}
+
+/// The session id the header of the session file at `path` carries, if it can be read.
+fn header_id(path: &Path) -> Option<SessionId> {
+    match read_header(path) {
+        Ok(Header::Session { id }) => Some(SessionId::from(id)),
+        _ => None,
+    }
+}
+
+/// [`resolve_parent`], blocking: line `message` of a session file in `dir`, as capture reads it.
+pub(crate) fn resolve_parent_blocking(mut message: PiMessage, dir: Option<&Path>) -> PiMessage {
+    if let Some(id) = parent_file(&message, dir).and_then(|parent| header_id(&parent)) {
+        message.resolved_parent = Some(id);
+    }
+    message
+}
+
 /// Resolve a header's `parentSession` file path to the parent's session id by reading the
 /// parent's own header, so a custom-named parent (`pi --session <path>`) resolves too. Other
-/// lines pass through untouched.
+/// lines pass through untouched; a parent whose header can't be read is named by its file name.
 async fn resolve_parent(
     mut message: PiMessage,
     dir: Option<&Path>,
     pool: &BlockingPool,
 ) -> PiMessage {
-    let Some(parent) = message.parent_session_path() else {
+    let Some(parent) = parent_file(&message, dir) else {
         return message;
     };
-    let parent = match dir {
-        Some(dir) if Path::new(parent).is_relative() => dir.join(parent),
-        _ => PathBuf::from(parent),
-    };
-    if let Ok(Ok(Header::Session { id })) = pool.run(move || read_header(&parent)).await {
-        message.resolved_parent = Some(SessionId::from(id));
+    if let Ok(Some(id)) = pool.run(move || header_id(&parent)).await {
+        message.resolved_parent = Some(id);
     }
     message
 }
@@ -430,6 +452,8 @@ impl Session for PiSession {
                 Some(from) => self.start(from).await,
                 None => 0,
             };
+            // A checkpoint names a line's end, never 0: read from there, it no longer held.
+            let over = from.is_some() && start == 0;
             let dir = self.path.parent().map(Path::to_path_buf);
             let lines = FollowLines::new(PooledReadLines::new(
                 PathLineReader::at(&self.path, start),
@@ -444,7 +468,7 @@ impl Session for PiSession {
                 match item {
                     Ok((line, message)) => {
                         let message = resolve_parent(message, dir.as_deref(), &self.pool).await;
-                        yield Ok((Checkpoint::new(line.end, &line.bytes), message));
+                        yield Ok((Checkpoint::after(&line).started_over(over), message));
                     }
                     Err(err) => yield Err(MessageError::from(err)),
                 }

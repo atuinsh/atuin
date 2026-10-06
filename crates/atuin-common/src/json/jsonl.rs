@@ -103,6 +103,7 @@ mod tests {
         Line {
             end,
             bytes: Bytes::from_static(text.as_bytes()),
+            generation: 0,
         }
     }
 

@@ -818,7 +818,7 @@ async fn a_picked_fork_is_written_then_resumed() {
     };
     assert_eq!(pick(&mut state, picked, resumer.as_ref(), &requests), None, "waits");
     let id = state.continued;
-    assert!(state.continuing.as_ref().is_some_and(|c| c.fork));
+    assert!(state.continuing.as_ref().is_some_and(|c| c.kind == super::state::Writing::Fork));
     let continued = resumer.continue_in(&source, &row, HarnessKind::Codex).await;
     assert!(finish_continuation(&mut state, id, continued).is_none(), "not a continuation");
 
@@ -2393,6 +2393,90 @@ async fn a_choice_offers_the_copy_as_it_is_and_a_fork_per_head(
     assert_eq!(ids, ["a", "b", "c", "d"]);
     let (_, status) = finish_fork(&mut state, id, forked).unwrap();
     assert_eq!(status, "forked into a new Claude Code session");
+}
+
+/// A choice for a copy that can be switched to another machine's branch offers that first,
+/// after the copy as it is, which stays preselected: one switch line per head it can be switched
+/// to, then the fork lines. Picking it switches the copy (in the worker, as a fork is written)
+/// and resumes it, saying so.
+#[rstest]
+#[tokio::test]
+async fn a_choice_offers_to_switch_the_copy_to_another_branch() {
+    use super::catchup::{CatchUp, Held, Why, branches};
+    use super::chooser::Destination;
+    use super::state::{InputAction, Pending, Picked};
+    use super::worker::Response;
+    use super::{Outcome, accept, finish_switch, pick, respond};
+
+    let source = FakeSource::from_rows(Vec::new())
+        .with_synced(&fake::synced_handle(), fake::synced_rows(true));
+    let analysis = source.analyse(&fake::synced_handle()).await.unwrap().unwrap();
+    // This copy went on to `y` here; host 2's `d` is the branch named.
+    let copy = fake::local_tip(&["a", "b", "x", "y"], Some("y"));
+    let mut branches = branches(&analysis, Some(&copy), fake::THIS_HOST_ID);
+    branches[1].switch = true;
+    let held = CatchUp::Choice(Box::new(Held {
+        why: Why::Diverged,
+        harness: atuin_client::ai_session::HarnessKind::ClaudeCode,
+        plan: as_is_plan(),
+        branches,
+        chosen: 1,
+    }));
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let (resumer, requests, mut responses) = catching_up(&mut state, held).await;
+    let row = state.selected().unwrap().clone();
+    assert_eq!(accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false), None);
+    let caught = resumer.catch_up(&FakeSource::new(), &row, None).await;
+    let response = Response::CaughtUp(row.handle.clone(), caught);
+    assert_eq!(respond(&mut state, response, resumer.as_ref(), &requests), None);
+    assert_eq!(state.status.clone().unwrap().0, "this copy went another way than @00000002's");
+    assert_eq!(state.chooser.as_ref().expect("the chooser opens").selected, 0, "as is");
+
+    let out = text(&render(&mut state, &s, 100, 30));
+    assert!(out.contains("> 1 CC Claude Code  this copy as is"), "{out}");
+    let switch =
+        "2 CC Claude Code  switch to @00000002's · replaces this copy, yours stays in atuin";
+    assert!(out.contains(switch), "{out}");
+    assert!(out.contains("3 CC Claude Code  fork this machine's"), "{out}");
+    assert!(out.contains("4 CC Claude Code  fork @00000002's"), "{out}");
+    assert!(!out.contains("5 CC"), "one switch line per head it can be switched to: {out}");
+
+    let InputAction::Pick(picked) = press(&mut state, &s, "2") else {
+        panic!("picks");
+    };
+    let Picked {
+        line: Destination::Switch(branch),
+        ..
+    } = picked.as_ref()
+    else {
+        panic!("{picked:?}");
+    };
+    assert_eq!(branch.head.source_id.as_ref(), "d");
+    assert_eq!(pick(&mut state, *picked, resumer.as_ref(), &requests), None, "waits");
+    assert_eq!(state.status.clone().unwrap().0, "switching to @00000002's…");
+    let id = state.continued;
+    let switched = loop {
+        let next = tokio::time::timeout(std::time::Duration::from_secs(10), responses.recv());
+        match next.await.expect("the worker is stuck").expect("the worker stopped") {
+            Response::Switched(n, switched) if n == id => break switched,
+            _ => {}
+        }
+    };
+    assert_eq!(*resumer.switches.lock(), [atuin_client::ai_session::SourceId::from(
+        "d".to_owned()
+    )]);
+    let plan = switched.as_ref().unwrap().plan.clone();
+    let (outcome, status) = finish_switch(&mut state, id, switched).unwrap();
+    assert_eq!(outcome, Outcome::Resume(plan));
+    assert_eq!(
+        status,
+        format!(
+            "switched to @00000002's branch: 4 messages (your copy is at {})",
+            fake::SWITCHED_BACKUP
+        )
+    );
 }
 
 /// The fork is preselected when an agent here has the session open, as its plan says, however

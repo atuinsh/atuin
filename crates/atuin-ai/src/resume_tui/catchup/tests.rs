@@ -95,6 +95,51 @@ async fn branches_say_what_they_add_and_when() {
     assert_eq!((branches[0].selector.as_str(), branches[1].selector.as_str()), ("y", "d"));
 }
 
+/// The copy switches to the head named, else the newest on another line than its own; never to
+/// the head of its own line, nor with rows sync hasn't got.
+#[rstest]
+#[case::the_newest_on_another_line(&["a", "b", "x", "y"], "y", None, Ok("d"))]
+#[case::named(&["a", "b", "c", "d"], "d", Some("y"), Ok("y"))]
+#[case::its_own_line(&["a", "b", "c", "d"], "d", Some("d"), Err("on that branch already"))]
+#[case::behind_on_its_line(&["a", "b", "x"], "x", Some("y"), Err("on that branch already"))]
+#[case::unsynced(&["a", "b", "x", "y", "z"], "z", Some("d"), Err("sync hasn't got"))]
+#[case::gone(&["a", "b", "x", "y"], "y", Some("b"), Err("no longer one of its branches' heads"))]
+#[tokio::test]
+async fn a_copy_switches_to_a_head_on_another_line(
+    #[case] known: &[&str],
+    #[case] at: &str,
+    #[case] named: Option<&str>,
+    #[case] want: Result<&str, &str>,
+) {
+    let analysis = analysis(rows(true)).await;
+    let named = named.map(|n| SourceId::from(n.to_owned()));
+    let copy = tip(known, Some(at));
+    let to = switch_to(&analysis, HarnessKind::ClaudeCode, named.as_ref(), &copy);
+    match want {
+        Ok(head) => assert_eq!(to.unwrap().source_id.as_ref(), head),
+        Err(why) => assert!(to.unwrap_err().contains(why)),
+    }
+    let line = Branch {
+        switch: true,
+        ..branches(&analysis, Some(&copy), fake::THIS_HOST_ID).remove(1)
+    };
+    assert_eq!(
+        line.switch_line(),
+        "switch to @00000002's · replaces this copy, yours stays in atuin"
+    );
+    let backup = std::path::Path::new("/data/ai/switched/claude-code/s-1.jsonl");
+    assert_eq!(
+        switched(1, "@00000002", backup),
+        "switched to @00000002's branch: 1 message (your copy is at \
+         /data/ai/switched/claude-code/s-1.jsonl)"
+    );
+    assert_eq!(
+        switched(12, "@00000002", backup),
+        "switched to @00000002's branch: 12 messages (your copy is at \
+         /data/ai/switched/claude-code/s-1.jsonl)"
+    );
+}
+
 #[rstest]
 #[case::live(Why::Live, "Claude Code is running this session here")]
 #[case::unsynced(Why::Unsynced, "this copy has messages sync hasn't got")]

@@ -652,6 +652,7 @@ impl AiSessionDatabase {
             Some(Checkpoint {
                 at: u64::try_from(at).unwrap_or(0),
                 digest: digest?.cast_unsigned(),
+                generation: 0,
             })
         }))
     }
@@ -2024,11 +2025,18 @@ mod tests {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
         assert_eq!(db.checkpoint(&session).await.unwrap(), None);
-        db.set_checkpoint(&session, Checkpoint { at: 42, digest: 1 }).await.unwrap();
+        db.set_checkpoint(&session, Checkpoint {
+            at: 42,
+            digest: 1,
+            generation: 0,
+        })
+        .await
+        .unwrap();
         // A digest with its top bit set survives the signed column.
         let latest = Checkpoint {
             at: 4096,
             digest: u64::MAX - 1,
+            generation: 0,
         };
         db.set_checkpoint(&session, latest).await.unwrap();
         assert_eq!(db.checkpoint(&session).await.unwrap(), Some(latest));

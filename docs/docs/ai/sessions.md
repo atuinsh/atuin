@@ -179,6 +179,27 @@ synced messages:
   a fork line for each branch of the session, newest first, forks from that
   branch (`fork @3f9a12bc's · +11 since they split · 20m ago`). With the agent
   running here, the newest fork is selected.
+- When this copy went another way, sync holds every message of it, and the
+  agent isn't running it here, a switch line for each other branch comes after
+  the first line (`switch to @3f9a12bc's · replaces this copy, yours stays in
+  atuin`).
+  It moves this copy onto that branch, in place, under the same session id,
+  and resumes it. The history this copy shares with that branch stays exactly
+  as it was, and the messages this copy went on with are taken out. The
+  branch's messages since the two split are added from sync, so, like a
+  restore, they carry what Atuin keeps of them: the conversation and which
+  tools were called, but not the other machine's tool input and output, or
+  its images. Before anything changes, your copy is saved whole to
+  `ai/switched/<agent>/` in Atuin's data directory, where no agent lists it,
+  and the status line says where:
+  `switched to @3f9a12bc's branch: 24 messages (your copy is at ...)`. Atuin
+  never deletes these copies. The branch this copy was on stays in Atuin too,
+  so forking it brings it back.
+  Claude Code, Codex and Pi sessions can switch. These can only fork, and get
+  no switch line: a Codex session that was reverted, so its history spans
+  several files, or that Codex wrote in its older format; a Pi session file
+  Pi hasn't opened since version 2 of its format; and opencode sessions, which
+  live in a database.
 
 Atuin never merges branches, and never writes to a session its agent has open.
 Claude Code, and Codex where it keeps session locks, say which session they
@@ -222,9 +243,10 @@ isn't on this machine, and `atuin ai resume <id> --in codex` continues it in
 another (`claude`, `codex`, `opencode` or `pi`). `atuin ai resume <id> --fork`
 forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,
-and `--fork` forks it from its newest branch. `--branch` picks the branch to
-catch up to, or to fork from: `this`, `@<host id>`, or the start of the id the
-error lists. `--as-is` and `--branch` need an id that names a single session:
+`--switch` switches it to another branch, and `--fork` forks it from its newest
+branch. `--branch` picks the branch to catch up to, to switch to, or to fork
+from: `this`, `@<host id>`, or the start of the id the error lists. `--as-is`,
+`--switch` and `--branch` need an id that names a single session:
 when it names several, Atuin lists them and asks you to be more specific.
 `--print` prints the command instead of running it.
 

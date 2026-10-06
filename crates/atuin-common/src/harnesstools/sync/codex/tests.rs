@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::rehydrate::testing;
+use crate::harnesstools::session::Message as _;
 use crate::harnesstools::sync::TableEntry;
 use crate::harnesstools::sync::liveness::tests::{Fake, cwd, dir, entry, procs, table};
 
@@ -181,6 +182,132 @@ async fn what_is_no_clean_fast_forward_is_refused(dir: TempDir, #[case] expected
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
+/// Another machine's branch of the paginated fixture's thread: its rows up to where the rollout
+/// cut after `cut` lines ends, then a reply of its own; and that reply, the head.
+async fn their_branch(cut: usize) -> (Vec<RehydrateMessage>, String) {
+    let elsewhere = tempfile::tempdir().unwrap();
+    let (_, _, base, _) = behind(elsewhere.path(), cut).await;
+    let text = fixture(PAGINATED);
+    let all = synced(&rollout(elsewhere.path(), &thread(&text), &text, usize::MAX)).await;
+    let tip = base.tip_source_id.unwrap();
+    let at = all.iter().position(|r| r.source_id == tip).unwrap();
+    let mut rows = all[..=at].to_vec();
+    let mut reply = all
+        .iter()
+        .find(|r| {
+            r.role == crate::harnesstools::session::Role::Assistant
+                && !r.source_id.starts_with("syn-")
+        })
+        .unwrap()
+        .clone();
+    reply.source_id = "msg_theirs".to_owned();
+    reply.parent_source_id = Some(tip);
+    reply.content = vec![crate::harnesstools::session::Content::Text("their reply".to_owned())];
+    rows.push(reply);
+    (rows, "msg_theirs".to_owned())
+}
+
+/// Switching the copy (which went on here past where the other branch leaves it) to another
+/// machine's branch keeps its rollout up to the line where the branch leaves it as it was, byte
+/// for byte (its `session_meta`, and what capture never kept: a reasoning item's encrypted
+/// content), drops what it went on with here, and appends the branch's lines past it, numbered on
+/// from the line kept last; Codex resumes from the branch's head, and capture reads back nothing
+/// the branch doesn't hold. In place, under the thread's writer lock where Codex keeps them, with
+/// the rollout as it was kept whole outside Codex's sessions.
+#[rstest]
+#[case::without_locks(false)]
+#[case::under_the_writer_lock(true)]
+#[tokio::test]
+async fn a_switch_writes_the_rollout_out_along_the_branch_in_place(
+    dir: TempDir,
+    #[case] locks: bool,
+) {
+    if locks {
+        std::fs::create_dir_all(dir.path().join(LOCKS)).unwrap();
+    }
+    let backups = tempfile::tempdir().unwrap();
+    let (thread, path, base, _) = behind(dir.path(), 45).await;
+    let before = std::fs::read_to_string(&path).unwrap();
+    let (rows, head) = their_branch(30).await;
+
+    let outcome =
+        replace_in(dir.path(), &thread, &base, &rows, None, backups.path()).await.unwrap();
+
+    assert_eq!(outcome.native_path, path);
+    assert_eq!(outcome.appended, [head.as_str()]);
+    assert_eq!(outcome.tip_source_id.as_deref(), Some(head.as_str()));
+    let text = std::fs::read_to_string(&path).unwrap();
+    // The branch leaves the copy at its 30th line, the last it shares.
+    let shared: String = before.lines().take(30).map(|l| format!("{l}\n")).collect();
+    assert!(text.starts_with(&shared), "the shared lines, byte for byte");
+    assert!(shared.contains(r#""encrypted_content":"ZW5jcnlwdGVk""#));
+    assert_eq!(text.lines().count(), 31, "then the branch's reply");
+    assert_eq!(outcome.backup.parent(), Some(backups.path()));
+    assert_eq!(std::fs::read_to_string(&outcome.backup).unwrap(), before);
+    assert!(!outcome.backup.starts_with(dir.path()), "not among Codex's sessions");
+    let numbers: Vec<u64> = ordinals(&path).into_iter().map(Option::unwrap).collect();
+    assert_eq!(numbers, (0..numbers.len() as u64).collect::<Vec<_>>());
+    let switched = local_tip_in(dir.path(), &thread).await.unwrap().unwrap();
+    assert_eq!(switched.tip_source_id.as_deref(), Some(head.as_str()));
+    assert_eq!(switched.native_path, path);
+    let again = synced(&path).await;
+    testing::assert_nothing_new(&rows, again.iter().map(|r| r.source_id.as_str()));
+    if locks {
+        assert!(!dir.path().join(LOCKS).join(format!("{thread}.lock")).exists(), "let go");
+    }
+}
+
+/// Nothing is written to a thread kept in several rollouts (reverted, or named by a segment of
+/// it), to a rollout changed since it was read, or one Codex holds the writer lock of.
+#[rstest]
+#[case::two_rollouts("two rollouts", "Unsupported")]
+#[case::a_segment("a segment", "Unsupported")]
+#[case::changed("changed", "Changed")]
+#[case::locked("locked", "Live")]
+#[tokio::test]
+async fn a_switch_that_cant_be_made_writes_nothing(
+    dir: TempDir,
+    #[case] how: &str,
+    #[case] expected: &str,
+) {
+    let text = fixture(PAGINATED);
+    let thread = thread(&text);
+    if how == "two rollouts" {
+        // The thread's first rollout, which a newer one continues.
+        let older = dir.path().join("sessions/2026/09/23");
+        std::fs::create_dir_all(&older).unwrap();
+        std::fs::write(older.join(format!("rollout-2026-09-23T00-00-00-{thread}.jsonl")), &text)
+            .unwrap();
+    }
+    let (_, path, base, _) = behind(dir.path(), 45).await;
+    let mut id = thread.clone();
+    let mut held = None;
+    match how {
+        "a segment" => id = format!("{thread}_01a0d14f-0000-7000-8000-000000000000"),
+        "changed" => {
+            let mut bytes = std::fs::read(&path).unwrap();
+            bytes.extend_from_slice(b"{}\n");
+            std::fs::write(&path, bytes).unwrap();
+        }
+        "locked" => {
+            let locks = dir.path().join(LOCKS);
+            std::fs::create_dir_all(&locks).unwrap();
+            let lock = File::create(locks.join(format!("{thread}.lock"))).unwrap();
+            lock.lock().unwrap();
+            held = Some(lock);
+        }
+        _ => {}
+    }
+    let before = std::fs::read(&path).unwrap();
+    let (rows, _) = their_branch(30).await;
+    let backups = tempfile::tempdir().unwrap();
+    let err = replace_in(dir.path(), &id, &base, &rows, None, backups.path()).await.unwrap_err();
+    assert!(format!("{err:?}").starts_with(expected), "{err:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(std::fs::read_dir(backups.path()).unwrap().count(), 0, "no backup left");
+    drop(held);
+}
+
 /// A rollout in the legacy history mode numbers no lines: Codex couldn't continue it with
 /// numbered ones.
 #[rstest]
@@ -275,4 +402,49 @@ async fn without_locks_a_codex_elsewhere_counts_when_named_or_writing(
     }]);
     let seen = appending(&base, &thread, Some(&dir.path().join("proj")));
     assert_eq!(liveness(dir.path(), &thread, &procs, &seen), expected);
+}
+
+/// What a switch would refuse whatever the branch is known from the copy alone, so none is
+/// offered: a thread kept in several rollouts (or named by a segment of it), a segment continuing
+/// another (`history_base`), a rollout in the legacy history mode.
+#[rstest]
+#[case::one_rollout("one rollout", None)]
+#[case::two_rollouts("two rollouts", Some(SEGMENTED))]
+#[case::a_segment("a segment", Some(SEGMENTED))]
+#[case::continuing_another("history base", Some(SEGMENTED))]
+#[case::legacy("legacy", Some(LEGACY_SWITCH))]
+#[tokio::test]
+async fn the_copy_says_up_front_when_it_cant_be_switched(
+    dir: TempDir,
+    #[case] how: &str,
+    #[case] why: Option<&str>,
+) {
+    let text = fixture(if how == "legacy" {
+        LEGACY
+    } else {
+        PAGINATED
+    });
+    let thread = thread(&text);
+    let mut id = thread.clone();
+    let mut text = text;
+    match how {
+        "two rollouts" => {
+            let older = dir.path().join("sessions/2026/09/23");
+            std::fs::create_dir_all(&older).unwrap();
+            let name = format!("rollout-2026-09-23T00-00-00-{thread}.jsonl");
+            std::fs::write(older.join(name), &text).unwrap();
+        }
+        "a segment" => id = format!("{thread}_01a0d14f-0000-7000-8000-000000000000"),
+        "history base" => {
+            let mut lines: Vec<Value> =
+                text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+            lines[0]["payload"]["history_base"] =
+                json!({"thread_id": "01a0d14f-0000-7000-8000-000000000001", "end_byte_offset": 9});
+            text = lines.iter().map(|l| format!("{l}\n")).collect();
+        }
+        _ => {}
+    }
+    rollout(dir.path(), &thread, &text, 20);
+    let tip = local_tip_in(dir.path(), &id).await.unwrap().unwrap();
+    assert_eq!(tip.unswitchable, why);
 }

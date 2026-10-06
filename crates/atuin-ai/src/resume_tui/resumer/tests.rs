@@ -35,6 +35,12 @@ struct FakeMachine {
     refuse: Option<&'static str>,
     appended: Arc<Mutex<Vec<String>>>,
     append_cwds: Arc<Mutex<Vec<Option<PathBuf>>>>,
+    /// What each replace wrote (`c,d@d`: the rows appended, then the head), and where it looked
+    /// for an agent.
+    replaced: Arc<Mutex<Vec<String>>>,
+    replace_cwds: Arc<Mutex<Vec<Option<PathBuf>>>>,
+    /// The copy as the last replace left it, read instead of `tip` once there is one.
+    switched: Arc<Mutex<Option<LocalTip>>>,
 }
 
 #[async_trait]
@@ -68,8 +74,55 @@ impl Machine for FakeMachine {
     async fn local_tip(&self, _: AnyHarness, _: &str) -> Result<Option<LocalTip>, SyncError> {
         match self.tip_error {
             Some(why) => Err(SyncError::Unsupported(why)),
-            None => Ok(self.tip.clone()),
+            None => Ok(self.switched.lock().clone().or_else(|| self.tip.clone())),
         }
+    }
+
+    async fn replace(
+        &self,
+        harness: AnyHarness,
+        id: &str,
+        base: &LocalTip,
+        branch: &[RehydrateMessage],
+        options: &AppendOptions<'_>,
+        backups: &Path,
+    ) -> Result<ReplaceOutcome, SyncError> {
+        self.replace_cwds.lock().push(options.cwd.map(Path::to_path_buf));
+        let head = branch.last().map(|m| m.source_id.clone()).unwrap_or_default();
+        let head = head.as_str();
+        if self.is_live(harness, id, options.cwd).await != Liveness::NotLive {
+            return Err(SyncError::MaybeLive);
+        }
+        let mut warning = None;
+        match self.refuse {
+            Some("unsupported") => {
+                return Err(SyncError::Unsupported("a thread kept in several rollouts"));
+            }
+            Some("changed") => return Err(SyncError::Changed),
+            // Replaced, but its directory couldn't be synced after.
+            Some("unsynced") => warning = Some("syncing its directory failed".to_owned()),
+            Some(_) => return Err(SyncError::MaybeLive),
+            None => {}
+        }
+        // The rows the copy shares with the branch are kept; the rest are appended.
+        let ids: Vec<String> = branch.iter().map(|m| m.source_id.clone()).collect();
+        let appended: Vec<String> =
+            ids.iter().filter(|id| !base.known_source_ids.contains(*id)).cloned().collect();
+        self.replaced.lock().push(format!("{}@{head}", appended.join(",")));
+        // Every row synced on any branch but the branch's is taken.
+        assert!(options.taken_ids.is_some_and(|taken| ids.iter().all(|id| !taken.contains(id))));
+        let known: Vec<&str> = ids.iter().map(String::as_str).collect();
+        *self.switched.lock() = Some(LocalTip {
+            native_path: base.native_path.clone(),
+            ..fake::local_tip(&known, Some(head))
+        });
+        Ok(ReplaceOutcome {
+            native_path: base.native_path.clone(),
+            tip_source_id: Some(head.to_owned()),
+            appended,
+            backup: backups.join(format!("{id}-switched.jsonl")),
+            warning,
+        })
     }
 
     async fn is_live(&self, _: AnyHarness, _: &str, cwd: Option<&Path>) -> Liveness {
@@ -160,6 +213,8 @@ struct Dirs {
     here: PathBuf,
     repo: PathBuf,
     elsewhere: PathBuf,
+    /// Where switched copies are kept.
+    switched: PathBuf,
 }
 
 #[fixture]
@@ -171,11 +226,13 @@ fn dirs() -> Dirs {
     for dir in [&here, &repo.join("crates").join("atuin"), &elsewhere] {
         std::fs::create_dir_all(dir).unwrap();
     }
+    let switched = tmp.path().join("data").join("ai").join("switched");
     Dirs {
         _tmp: tmp,
         here,
         repo,
         elsewhere,
+        switched,
     }
 }
 
@@ -191,6 +248,7 @@ fn context(dirs: &Dirs) -> ResumeContext {
 
 fn resumer(dirs: &Dirs, machine: &FakeMachine) -> HarnessResumer {
     HarnessResumer::on(context(dirs), AiSessionResume::default(), machine.clone())
+        .keeping_switched_in(&dirs.switched)
 }
 
 fn row(harness: HarnessKind, id: &str, cwd: &Path, remote: bool) -> SessionRow {
@@ -1193,4 +1251,267 @@ async fn a_branch_no_longer_a_head_is_not_swapped_for_another(dirs: Dirs) {
     let caught = resumer(&dirs, &machine).catch_up(&source, &session, Some(&gone)).await;
     assert!(matches!(caught, Err(NotResumable::CatchUp(_))), "{caught:?}");
     assert!(appended.lock().is_empty());
+}
+
+// --- switching to another branch ----------------------------------------------------------------
+
+/// The synced session `s` of `harness` (diverged: this host's `a`-`b`-`x`-`y`, the newest, and
+/// host 2's `a`-`b`-`c`-`d`), with `more` rows synced too, and the source holding it.
+fn diverged_session(
+    dirs: &Dirs,
+    harness: HarnessKind,
+    more: Vec<atuin_client::ai_session::Message>,
+) -> (SessionRow, fake::FakeSource) {
+    let session = row(harness, "s", &dirs.elsewhere, false);
+    let mut rows = fake::synced_rows_of(&session.handle, true);
+    rows.extend(more);
+    let source =
+        fake::FakeSource::from_rows(vec![session.clone()]).with_synced(&session.handle, rows);
+    (session, source)
+}
+
+/// Switch this machine's copy of [`diverged_session`] (read as `machine`'s tip) to `head`: what
+/// it says, and what it wrote.
+async fn switch(
+    dirs: &Dirs,
+    mut machine: FakeMachine,
+    harness: HarnessKind,
+    head: Option<&str>,
+) -> (Result<String, NotResumable>, Vec<String>) {
+    machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
+    let (session, source) = diverged_session(dirs, harness, Vec::new());
+    let head = head.map(|h| SourceId::from(h.to_owned()));
+    let switched = resumer(dirs, &machine).switch(&source, &session, head.as_ref()).await;
+    // Kept in a directory of the harness's own among the switched copies.
+    let backups = dirs.switched.join(harness.harness().map_or("none", |h| h.name()));
+    let said = switched.map(|s| {
+        let said = format!("{} {}", s.plan.native_path.clone().unwrap().display(), s.status());
+        said.replace(&backups.display().to_string(), "<backups>")
+    });
+    (said, machine.replaced.lock().clone())
+}
+
+/// What a switch of [`diverged_session`] to `d` says, the backup's path as this platform writes
+/// it (`<backups>` standing for the directory it is in).
+fn switched_said() -> String {
+    let backup = Path::new("<backups>").join("s-switched.jsonl");
+    format!(
+        "/t/s.jsonl switched to @00000002's branch: 4 messages (your copy is at {})",
+        backup.display()
+    )
+}
+
+/// The cases of a switch saying [`switched_said`].
+const SWITCHED: &str = "switched";
+
+/// Switching the copy here moves it onto the other machine's branch, in place: the branch's rows
+/// it hasn't got appended to those it shares with it, up to its head (the one named, else the newest the copy can be switched to).
+/// Nothing is written when anything of the copy would be lost, an agent here has it open (as the
+/// plan reads it, or as the replace reads it again), it changed since it was read, its agent's
+/// store can't be written out whole (opencode's database, a Codex thread in several rollouts),
+/// or it is on that branch already.
+#[rstest]
+#[case::the_newest_it_can((&["a", "b", "x", "y"][..], "y"), None, None, HarnessKind::ClaudeCode, None,
+    Ok(SWITCHED))]
+#[case::named((&["a", "b", "x", "y"][..], "y"), None, None, HarnessKind::Pi, Some("d"),
+    Ok(SWITCHED))]
+#[case::codex((&["a", "b", "x", "y"][..], "y"), None, None, HarnessKind::Codex, Some("d"),
+    Ok(SWITCHED))]
+#[case::unsynced((&["a", "b", "x", "y", "z"][..], "z"), None, None, HarnessKind::ClaudeCode, Some("d"),
+    Err("this copy has messages sync hasn't got: switching would lose them"))]
+#[case::unsynced_off_the_tip((&["a", "b", "q", "x", "y"][..], "y"), None, None, HarnessKind::ClaudeCode,
+    Some("d"), Err("this copy has messages sync hasn't got: switching would lose them"))]
+#[case::live((&["a", "b", "x", "y"][..], "y"), Some(Liveness::Live { pid: Some(7) }), None,
+    HarnessKind::ClaudeCode, Some("d"), Err("Claude Code is running this session here"))]
+#[case::maybe_live((&["a", "b", "x", "y"][..], "y"), Some(Liveness::Unknown), None,
+    HarnessKind::ClaudeCode, Some("d"), Err("Claude Code is running this session here"))]
+#[case::live_by_the_time_it_writes((&["a", "b", "x", "y"][..], "y"), None, Some("maybe live"),
+    HarnessKind::ClaudeCode, Some("d"), Err("Claude Code is running this session here"))]
+#[case::changed((&["a", "b", "x", "y"][..], "y"), None, Some("changed"), HarnessKind::ClaudeCode,
+    Some("d"), Err("the session's transcript changed since it was read"))]
+#[case::codex_in_several_rollouts((&["a", "b", "x", "y"][..], "y"), None, Some("unsupported"),
+    HarnessKind::Codex, Some("d"), Err("a thread kept in several rollouts"))]
+#[case::opencode((&["a", "b", "x", "y"][..], "y"), None, None, HarnessKind::Opencode, Some("d"),
+    Err("opencode keeps its sessions in a database, which can't be switched to another branch: \
+         fork it instead"))]
+#[case::on_that_branch((&["a", "b", "c", "d"][..], "d"), None, None, HarnessKind::ClaudeCode, Some("d"),
+    Err("this copy is on that branch already: resuming it catches it up"))]
+#[case::behind_on_that_branch((&["a", "b", "c"][..], "c"), None, None, HarnessKind::ClaudeCode,
+    Some("d"), Err("this copy is on that branch already: resuming it catches it up"))]
+#[tokio::test]
+async fn switching_writes_the_copy_out_along_the_branch_or_nothing(
+    dirs: Dirs,
+    #[case] copy: (&[&str], &str),
+    #[case] live: Option<Liveness>,
+    #[case] refuse: Option<&'static str>,
+    #[case] harness: HarnessKind,
+    #[case] head: Option<&str>,
+    #[case] want: Result<&str, &str>,
+) {
+    let (known, at) = copy;
+    let machine = FakeMachine {
+        tip: Some(fake::local_tip(known, Some(at))),
+        live,
+        refuse,
+        ..FakeMachine::default()
+    };
+    let cwds = machine.replace_cwds.clone();
+    let (said, replaced) = switch(&dirs, machine, harness, head).await;
+    match want {
+        Ok(want) => {
+            assert_eq!(want, SWITCHED);
+            assert_eq!(said, Ok(switched_said()));
+            // The copy keeps a and b, and the branch's c and d are appended.
+            assert_eq!(replaced, ["c,d@d"]);
+            // The replace looks for an agent where the plan did.
+            assert_eq!(*cwds.lock(), [Some(dirs.elsewhere.clone())]);
+        }
+        Err(why) => {
+            assert_eq!(said, Err(NotResumable::Switch(why.to_owned())));
+            assert!(replaced.is_empty(), "nothing written: {replaced:?}");
+        }
+    }
+}
+
+/// A copy that isn't here has nothing to switch: resuming it restores it.
+#[rstest]
+#[tokio::test]
+async fn a_copy_not_here_is_not_switched(dirs: Dirs) {
+    let (said, replaced) =
+        switch(&dirs, FakeMachine::default(), HarnessKind::ClaudeCode, None).await;
+    let why = "there's no copy of it here: resuming it restores it".to_owned();
+    assert_eq!(said, Err(NotResumable::Switch(why)));
+    assert!(replaced.is_empty());
+}
+
+/// A copy its agent's store says up front can't be switched (a Codex thread kept in several
+/// rollouts, an old pi file) is neither offered the switch nor switched, saying why.
+#[rstest]
+#[tokio::test]
+async fn a_copy_that_cant_be_switched_is_not_offered_the_switch(dirs: Dirs) {
+    let why = "this Codex thread is kept in several rollouts";
+    let copy = LocalTip {
+        unswitchable: Some(why),
+        // On host 2's line: the newest head, y, is on another.
+        ..fake::local_tip(&["a", "b", "c", "d"], Some("d"))
+    };
+    let mut machine = FakeMachine {
+        tip: Some(copy.clone()),
+        ..FakeMachine::default()
+    };
+    machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
+    let (session, source) = diverged_session(&dirs, HarnessKind::Codex, Vec::new());
+    let caught = resumer(&dirs, &machine).catch_up(&source, &session, None).await.unwrap();
+    let CatchUp::Choice(held) = caught else {
+        panic!("a choice: {caught:?}");
+    };
+    assert!(held.branches.iter().all(|b| !b.switch), "{:?}", held.branches);
+
+    let machine = FakeMachine {
+        tip: Some(copy),
+        ..FakeMachine::default()
+    };
+    let (said, replaced) = switch(&dirs, machine, HarnessKind::Codex, Some("y")).await;
+    assert_eq!(said, Err(NotResumable::Switch(why.to_owned())));
+    assert!(replaced.is_empty());
+}
+
+/// A switch writes the branch as a restore would: with the rows beside the tree that go with it
+/// (here a Pi extension's message, keyed on its content), not only those on the head's path.
+#[rstest]
+#[tokio::test]
+async fn a_switch_writes_the_rows_that_go_with_the_branch(dirs: Dirs) {
+    let mut machine = FakeMachine {
+        tip: Some(fake::local_tip(&["a", "b", "x", "y"], Some("y"))),
+        ..FakeMachine::default()
+    };
+    machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
+    let session = row(HarnessKind::Pi, "s", &dirs.elsewhere, false);
+    // Host 2's, after c, with no id of its own.
+    let beside = fake::synced_row(&session.handle, ("syn-0000000000000001", None, 2, 2, false));
+    let (session, source) = diverged_session(&dirs, HarnessKind::Pi, vec![beside]);
+    let switched = resumer(&dirs, &machine).switch(&source, &session, None).await;
+    assert!(switched.is_ok(), "{switched:?}");
+    assert_eq!(*machine.replaced.lock(), ["c,syn-0000000000000001,d@d"]);
+}
+
+/// A switch that replaced the copy but couldn't make sure it reached the disk is a switch: the
+/// copy holds the branch, and the status says what went wrong, and where the backup is.
+#[rstest]
+#[tokio::test]
+async fn a_switch_whose_directory_fails_to_sync_says_so(dirs: Dirs) {
+    let machine = FakeMachine {
+        tip: Some(fake::local_tip(&["a", "b", "x", "y"], Some("y"))),
+        refuse: Some("unsynced"),
+        ..FakeMachine::default()
+    };
+    let (said, replaced) = switch(&dirs, machine, HarnessKind::ClaudeCode, Some("d")).await;
+    assert_eq!(said, Ok(format!("{}; but syncing its directory failed", switched_said())));
+    assert_eq!(replaced, ["c,d@d"]);
+}
+
+/// A choice for a copy on another line than the head's offers to switch it to each head it is
+/// not on; never while an agent here has it open, nor when sync hasn't got all of it, which the
+/// switch would lose, nor for opencode.
+#[rstest]
+#[case::diverged(&["a", "b", "c", "d"], "d", None, HarnessKind::ClaudeCode, &[true, false])]
+#[case::pi(&["a", "b", "c", "d"], "d", None, HarnessKind::Pi, &[true, false])]
+#[case::live(&["a", "b", "c", "d"], "d", Some(Liveness::Live { pid: None }),
+    HarnessKind::ClaudeCode, &[false, false])]
+#[case::unsynced_off_the_tip(&["a", "b", "c", "q", "d"], "d", None, HarnessKind::ClaudeCode,
+    &[false, false])]
+#[case::opencode(&["a", "b", "c", "d"], "d", None, HarnessKind::Opencode, &[false, false])]
+#[tokio::test]
+async fn a_choice_offers_to_switch_only_a_copy_that_loses_nothing(
+    dirs: Dirs,
+    #[case] known: &[&str],
+    #[case] at: &str,
+    #[case] live: Option<Liveness>,
+    #[case] harness: HarnessKind,
+    #[case] switches: &[bool],
+) {
+    let mut machine = FakeMachine {
+        tip: Some(fake::local_tip(known, Some(at))),
+        live,
+        ..FakeMachine::default()
+    };
+    machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
+    let (session, source) = diverged_session(&dirs, harness, Vec::new());
+    let caught = resumer(&dirs, &machine).catch_up(&source, &session, None).await.unwrap();
+    let CatchUp::Choice(held) = caught else {
+        panic!("a choice: {caught:?}");
+    };
+    let offered: Vec<bool> = held.branches.iter().map(|b| b.switch).collect();
+    assert_eq!(offered, switches);
+}
+
+/// Once switched to another machine's branch, the copy here is on that branch's line: resumed
+/// along it as it is, and caught up (fast-forwarded) as that branch grows, rather than offered
+/// the choice again for the session having diverged.
+#[rstest]
+#[tokio::test]
+async fn a_switched_copy_fast_forwards_as_its_branch_grows(dirs: Dirs) {
+    let mut machine = FakeMachine {
+        tip: Some(fake::local_tip(&["a", "b", "x", "y"], Some("y"))),
+        ..FakeMachine::default()
+    };
+    machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
+    let resumer = resumer(&dirs, &machine);
+    let (session, source) = diverged_session(&dirs, HarnessKind::ClaudeCode, Vec::new());
+    let d = SourceId::from("d".to_owned());
+    resumer.switch(&source, &session, Some(&d)).await.unwrap();
+
+    // Resumed along its branch: as it is.
+    let caught = resumer.catch_up(&source, &session, Some(&d)).await.unwrap();
+    assert!(matches!(caught, CatchUp::Ready { status: None, .. }), "{caught:?}");
+
+    // Host 2 goes on from d: its head is the newest, and the copy is behind on its line.
+    let grown = fake::synced_row(&session.handle, ("e", Some("d"), 2, 30, true));
+    let (_, source) = diverged_session(&dirs, HarnessKind::ClaudeCode, vec![grown]);
+    let caught = resumer.catch_up(&source, &session, None).await.unwrap();
+    let CatchUp::Ready { status, .. } = caught else {
+        panic!("caught up, not a choice: {caught:?}");
+    };
+    assert_eq!(status.as_deref(), Some("caught up: 1 message from @00000002"));
+    assert_eq!(*machine.appended.lock(), ["e@d"]);
 }

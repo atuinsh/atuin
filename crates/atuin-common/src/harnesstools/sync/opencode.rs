@@ -35,8 +35,8 @@ use serde_json::Value;
 
 use super::liveness::{agent_running, changed_lately};
 use super::{
-    AppendOptions, AppendOutcome, Dirs, Links, Liveness, LocalTip, Processes, Seen, SessionSync,
-    Stamp, SyncError, blocking_liveness, check_segment, require_idle,
+    AppendOptions, AppendOutcome, Dirs, Links, Liveness, LocalTip, Processes, ReplaceOutcome, Seen,
+    SessionSync, Stamp, SyncError, blocking_liveness, check_segment, require_idle,
 };
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::opencode::rehydrate::{export_minting, run_import};
@@ -74,7 +74,24 @@ impl SessionSync for Opencode {
         })
         .await
     }
+
+    /// Never: opencode keeps a session as events in its database, which an import only adds to
+    /// (see the module docs); there is no transcript to write out again in place.
+    async fn replace(
+        &self,
+        _id: &str,
+        _base: &LocalTip,
+        _branch: &[RehydrateMessage],
+        _options: &AppendOptions<'_>,
+        _backups: &Path,
+    ) -> Result<ReplaceOutcome, SyncError> {
+        Err(SyncError::Unsupported(OPENCODE_SWITCH))
+    }
 }
+
+/// Why an opencode session is never switched to another branch.
+pub(super) const OPENCODE_SWITCH: &str = "opencode keeps its sessions in a database, which can't \
+                                          be switched to another branch; fork instead";
 
 /// Whether an opencode process may be writing the session `seen`: [`Liveness::Unknown`] while
 /// any that may be runs ([`agent_running`]).
@@ -164,6 +181,7 @@ pub(super) async fn local_tip_in(db: &Path, id: &str) -> Result<Option<LocalTip>
             stamp: stamp(&found),
             modified: updated(&found),
             cwd: Some(found.directory.clone()),
+            unswitchable: Some(OPENCODE_SWITCH),
         })),
         Ok(None) if session::locate(db, id).await.is_some() => {
             Err(SyncError::Unsupported("opencode 2.0 sessions can't be caught up yet"))

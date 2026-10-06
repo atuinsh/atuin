@@ -452,6 +452,7 @@ fn local(held: &[&str], tip: Option<&str>, merged: &[&str]) -> LocalTip {
         stamp: Stamp::of(b""),
         modified: None,
         cwd: None,
+        unswitchable: None,
     }
 }
 
@@ -485,6 +486,18 @@ fn a_copy_fast_forwards_only_along_the_heads_line(
         FastForward::Behind(rows) => Some(rows.into_iter().map(|r| r.source_id).collect()),
     };
     assert_eq!(found, behind.map(|rows| rows.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>()));
+}
+
+/// A copy is held whole by sync only when every row of it is synced, its own line's and those
+/// merged into its lines alike, wherever they are in the tree.
+#[rstest]
+#[case::on_the_heads_line(local(&["u1", "a1", "t1", "a2", "u3"], None, &[]), true)]
+#[case::on_another_line(local(&["u1", "a1", "u9"], None, &[]), true)]
+#[case::a_row_not_synced(local(&["u1", "a1", "u5"], None, &[]), false)]
+#[case::a_merged_row_not_synced(local(&["u1", "a1"], None, &["t5"]), false)]
+#[case::empty(local(&[], None, &[]), true)]
+fn a_copy_is_held_by_sync_only_whole(#[case] local: LocalTip, #[case] held: bool) {
+    assert_eq!(analyse(CC, GROWN).holds_all(&local), held);
 }
 
 /// A Pi session from before ids (its first prompts and replies content-addressed, so no node),

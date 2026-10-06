@@ -168,10 +168,12 @@ pub(super) fn checkpoint(legacy: Option<(i64, &str)>, next: Option<Mark>) -> Che
                     Digest::Full(digest) => digest,
                     Digest::Low(low) => u64::from(low),
                 },
+                generation: 0,
             },
             None => Checkpoint {
                 at: BOTH,
                 digest: 0,
+                generation: 0,
             },
         };
     };
@@ -188,6 +190,7 @@ pub(super) fn checkpoint(legacy: Option<(i64, &str)>, next: Option<Mark>) -> Che
     Checkpoint {
         at: BOTH | legacy_at << NEXT_BITS | next_at,
         digest: u64::from(legacy_low) << 32 | u64::from(next_low),
+        generation: 0,
     }
 }
 

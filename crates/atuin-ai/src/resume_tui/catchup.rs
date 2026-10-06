@@ -11,7 +11,20 @@
 //! - the copy is behind on the head's line ([`Step::FastForward`]), and no agent here has it open:
 //!   the rows it lacks are appended, and it resumes in place;
 //! - anything else ([`Step::Choice`]): nothing is written, and the user chooses between resuming
-//!   the copy as it is and forking from a head ([`Held`]).
+//!   the copy as it is and forking from a head ([`Held`]); and, for a copy on another line than a
+//!   head's, switching it to that head's branch ([`Branch::switch`]).
+//!
+//! Switching ([`Resumer::switch`]) moves this machine's copy onto the head's branch, in place: the
+//! same native id and file, which the agent then resumes from the head. The history the copy
+//! shares with the branch is kept as it is, native detail and all; what it went on with here is
+//! dropped, and the branch's messages since are appended from sync, as a fast-forward appends
+//! them (so with what capture keeps of them: no tool output or images, as a restore). The copy as
+//! it was is kept whole as a backup, in atuin's data directory, where no agent looks. Only when
+//! nothing of the copy would be lost from atuin: every row of it is synced (its own line stays
+//! there as a branch, so a fork from it brings it back), no agent here has it open, and its
+//! agent's store is a transcript that can be switched so (not opencode's database).
+//!
+//! [`Resumer::switch`]: super::resumer::Resumer::switch
 //!
 //! [`Resumer::restore`]: super::resumer::Resumer::restore
 
@@ -37,7 +50,7 @@ pub enum Step {
     /// The copy is behind on the head's line: append `rows` to it, read as `base`.
     FastForward {
         rows: Vec<RehydrateMessage>,
-        base: LocalTip,
+        base: Box<LocalTip>,
     },
     /// Nothing can be written: resuming the copy as it is, or forking, is the user's choice.
     Choice(Why),
@@ -82,7 +95,7 @@ pub fn classify(
         FastForward::Behind(rows) => {
             return Step::FastForward {
                 rows,
-                base: tip.clone(),
+                base: Box::new(tip.clone()),
             };
         }
         FastForward::Elsewhere => {}
@@ -106,7 +119,7 @@ pub fn classify(
     let rest = &path[shared..];
     let holds_none = !rest.iter().any(|m| tip.known_source_ids.contains(m.source_id.as_ref()));
     if twig && holds_none && shared > 0 {
-        let mut base = tip.clone();
+        let mut base = Box::new(tip.clone());
         base.tip_source_id = Some(path[shared - 1].source_id.to_string());
         let rows = rest.iter().map(|&m| m.clone().into()).collect();
         return Step::FastForward { rows, base };
@@ -138,9 +151,18 @@ pub struct Branch {
     pub selector: String,
     /// Its messages this machine's copy hasn't got: since they split.
     pub ahead: usize,
+    /// Whether this machine's copy can be switched to it: the copy is on another line, and
+    /// nothing of it would be lost (see the module docs).
+    pub switch: bool,
 }
 
 impl Branch {
+    /// The chooser's switch line: `switch to @3f9a12bc's · replaces this copy, yours stays in
+    /// atuin`.
+    pub fn switch_line(&self) -> String {
+        format!("switch to {}'s · replaces this copy, yours stays in atuin", self.host)
+    }
+
     /// The chooser's line: `fork @3f9a12bc's · +11 since they split · 20m ago`.
     pub fn line(&self, now: OffsetDateTime) -> String {
         let when = When::of(now, self.head.last_at, time::UtcOffset::UTC).phrase();
@@ -169,9 +191,86 @@ pub fn branches(analysis: &Analysis, tip: Option<&LocalTip>, here: &str) -> Vec<
                 host: host_label(head, here),
                 selector: branch_selector(heads, head),
                 ahead,
+                switch: false,
             }
         })
         .collect()
+}
+
+/// Whether this machine's copy of a session of `harness`, read as `tip`, can be switched to
+/// `head`'s branch: the copy is on another line than the head's (catching up to it is a choice
+/// for that alone, [`Why::Diverged`]), sync holds every row of it, and the harness keeps it in a
+/// transcript that can be written out whole (not opencode's database, nor one the copy says can't
+/// be: [`LocalTip::unswitchable`]). That no agent here has it open is the caller's to check.
+pub fn can_switch(
+    analysis: &Analysis,
+    harness: HarnessKind,
+    head: &SourceId,
+    tip: &LocalTip,
+) -> bool {
+    harness != HarnessKind::Opencode
+        && tip.unswitchable.is_none()
+        && analysis.holds_all(tip)
+        && matches!(classify(analysis, harness, head, tip), Step::Choice(Why::Diverged))
+}
+
+/// Why an opencode session is never switched.
+const OPENCODE_SWITCH: &str = "opencode keeps its sessions in a database, which can't be switched \
+                               to another branch: fork it instead";
+
+/// Why a copy with rows sync hasn't got is never switched.
+const UNSYNCED_SWITCH: &str = "this copy has messages sync hasn't got: switching would lose them";
+
+/// The head of `analysis` to switch the copy of a session of `harness` read as `tip` to: `named`,
+/// else the newest it can be switched to ([`can_switch`]); or why it can't be.
+pub fn switch_to<'a>(
+    analysis: &'a Analysis,
+    harness: HarnessKind,
+    named: Option<&SourceId>,
+    tip: &LocalTip,
+) -> Result<&'a Head, String> {
+    if harness == HarnessKind::Opencode {
+        return Err(OPENCODE_SWITCH.to_owned());
+    }
+    if let Some(why) = tip.unswitchable {
+        return Err(why.to_owned());
+    }
+    if !analysis.holds_all(tip) {
+        return Err(UNSYNCED_SWITCH.to_owned());
+    }
+    let heads = analysis.heads();
+    let head = match named {
+        Some(named) => heads
+            .iter()
+            .find(|h| h.source_id == *named)
+            .ok_or_else(|| format!("{named} is no longer one of its branches' heads"))?,
+        None => heads
+            .iter()
+            .find(|h| can_switch(analysis, harness, &h.source_id, tip))
+            .ok_or("this copy is on the session's only line: resuming it catches it up")?,
+    };
+    match classify(analysis, harness, &head.source_id, tip) {
+        Step::Choice(Why::Diverged) => Ok(head),
+        Step::Choice(_) => Err(UNSYNCED_SWITCH.to_owned()),
+        Step::AsIs | Step::Ahead | Step::FastForward { .. } => {
+            Err("this copy is on that branch already: resuming it catches it up".to_owned())
+        }
+    }
+}
+
+/// `switched to @3f9a12bc's branch: 12 messages (your copy is at <backup>)`: the copy here was
+/// switched to that host's branch, holds that many messages now, and was kept as it was at
+/// `backup`.
+pub fn switched(messages: usize, host: &str, backup: &std::path::Path) -> String {
+    let s = if messages == 1 {
+        ""
+    } else {
+        "s"
+    };
+    format!(
+        "switched to {host}'s branch: {messages} message{s} (your copy is at {})",
+        backup.display()
+    )
 }
 
 /// Catching up needs a choice: nothing was written.
@@ -199,6 +298,11 @@ impl Held {
             },
             Why::Refused(why) => format!("couldn't catch up: {why}"),
         }
+    }
+
+    /// The branches this machine's copy can be switched to, newest first.
+    pub fn switches(&self) -> impl Iterator<Item = &Branch> {
+        self.branches.iter().filter(|b| b.switch)
     }
 }
 

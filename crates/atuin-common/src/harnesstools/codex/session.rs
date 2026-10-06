@@ -327,6 +327,8 @@ impl Session for CodexSession {
                 Some(from) => self.start(from).await,
                 None => (0, None),
             };
+            // A checkpoint names a line's end, never 0: read from there, it no longer held.
+            let over = from.is_some() && start == 0;
             let mut stamper = self.stamper(start);
             // Resumed past a checkpoint: the line it was taken after is the last capture took a
             // row of, which the first line read now follows. One with no id capture keyed on its
@@ -345,7 +347,7 @@ impl Session for CodexSession {
                 yield match item {
                     Ok((line, mut message)) => {
                         stamper.stamp(&line, &mut message).await;
-                        Ok((Checkpoint::new(line.end, &line.bytes), message))
+                        Ok((Checkpoint::after(&line).started_over(over), message))
                     }
                     Err(err) => Err(MessageError::from(err)),
                 };

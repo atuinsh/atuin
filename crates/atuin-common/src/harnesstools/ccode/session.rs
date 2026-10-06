@@ -228,31 +228,10 @@ impl CcodeSession {
     /// before it (within the same second, in real sessions, and occasionally long after), so a
     /// followed transcript asks again with each line until it can.
     async fn spawned_by(&self) -> Option<Option<SessionId>> {
-        let Some(name) = self
-            .path
-            .file_name()
-            .and_then(|n| n.to_str()?.strip_suffix(".jsonl"))
-            .map(str::to_owned)
-        else {
+        let Some(meta) = meta_file(&self.path) else {
             return Some(None);
         };
-        if !name.starts_with("agent-") {
-            return Some(None);
-        }
-        let meta = self.path.with_file_name(format!("{name}.meta.json"));
-        self.pool
-            .run(move || {
-                let meta: serde_json::Value =
-                    serde_json::from_slice(&std::fs::read(meta).ok()?).ok()?;
-                Some(
-                    meta["parentAgentId"]
-                        .as_str()
-                        .map(|parent| SessionId::from(format!("agent-{parent}"))),
-                )
-            })
-            .await
-            .ok()
-            .flatten()
+        self.pool.run(move || spawner_in(&meta)).await.ok().flatten()
     }
 
     /// The byte offset to read from: `from`'s, if the line ending there is still the one `from`
@@ -286,6 +265,26 @@ impl CcodeSession {
     }
 }
 
+/// The metadata file beside a subagent's transcript at `path` (`agent-<id>.meta.json`); `None`
+/// for any other transcript.
+fn meta_file(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?.strip_suffix(".jsonl")?;
+    name.starts_with("agent-").then(|| path.with_file_name(format!("{name}.meta.json")))
+}
+
+/// The subagent that spawned the one whose metadata file is `meta` (its `parentAgentId`), if
+/// any; `None` while the file can't be read.
+fn spawner_in(meta: &Path) -> Option<Option<SessionId>> {
+    let meta: serde_json::Value = serde_json::from_slice(&std::fs::read(meta).ok()?).ok()?;
+    Some(meta["parentAgentId"].as_str().map(|parent| SessionId::from(format!("agent-{parent}"))))
+}
+
+/// `CcodeSession::spawned_by`, blocking, for the transcript at `path`: the subagent that
+/// spawned it, as capture names it on its lines (none while its metadata can't be read).
+pub(crate) fn spawner_of(path: &Path) -> Option<SessionId> {
+    meta_file(path).and_then(|meta| spawner_in(&meta)).flatten()
+}
+
 impl Session for CcodeSession {
     type Message = CcodeMessage;
 
@@ -304,6 +303,8 @@ impl Session for CcodeSession {
                 Some(from) => self.start(from).await,
                 None => 0,
             };
+            // A checkpoint names a line's end, never 0: read from there, it no longer held.
+            let over = from.is_some() && start == 0;
             let lines = FollowLines::new(PooledReadLines::new(
                 PathLineReader::at(&self.path, start),
                 self.pool,
@@ -320,7 +321,7 @@ impl Session for CcodeSession {
                 let known = spawner.clone().flatten();
                 yield item
                     .map(|(line, message)| {
-                        (Checkpoint::new(line.end, &line.bytes), message.with_spawner(known))
+                        (Checkpoint::after(&line).started_over(over), message.with_spawner(known))
                     })
                     .map_err(MessageError::from);
             }
@@ -589,7 +590,7 @@ impl CcodeMessage {
             .map(|parent| (parent, ParentKind::Subagent))
     }
 
-    fn with_spawner(self, spawner: Option<SessionId>) -> Self {
+    pub(crate) fn with_spawner(self, spawner: Option<SessionId>) -> Self {
         Self { spawner, ..self }
     }
 

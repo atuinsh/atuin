@@ -43,16 +43,16 @@ use serde_json::{Value, json};
 
 use super::liveness::{agent_running, changed_lately, flock_holder};
 use super::{
-    AppendOptions, AppendOutcome, Dirs, Links, Liveness, LocalTip, Processes, Seen, SessionSync,
-    Stamp, SyncError, append_jsonl, blocking, blocking_liveness, check_segment, jsonl_lines,
-    merged_in, modified, require_idle,
+    AppendOptions, AppendOutcome, Dirs, Links, Liveness, LocalTip, Processes, ReplaceOutcome, Seen,
+    SessionSync, Stamp, SyncError, append_jsonl, blocking, blocking_liveness, branch_point,
+    capture_key, check_segment, continuing_from, jsonl_lines, merged_in, modified, past,
+    replace_jsonl, require_idle, resumes_from, switched_to,
 };
 use crate::harnesstools::codex::session::{CodexSession, default_root, resume_id, session_id_of};
-use crate::harnesstools::codex::{Codex, rehydrate};
+use crate::harnesstools::codex::{Codex, rehydrate, state_db};
 use crate::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use crate::harnesstools::resume::is_plain_name;
-use crate::harnesstools::session::synthetic::{content_hash, synthetic_id};
-use crate::harnesstools::session::{Message, Session, SessionId};
+use crate::harnesstools::session::Session;
 use crate::sync::BlockingPool;
 
 impl SessionSync for Codex {
@@ -92,6 +92,23 @@ impl SessionSync for Codex {
         )?;
         let (base, lines, taken) = (base.clone(), lines.to_vec(), options.taken_ids.cloned());
         blocking(move || append_in(&home, &thread, &base, &lines, taken.as_ref())).await
+    }
+
+    async fn replace(
+        &self,
+        id: &str,
+        base: &LocalTip,
+        branch: &[RehydrateMessage],
+        options: &AppendOptions<'_>,
+        backups: &Path,
+    ) -> Result<ReplaceOutcome, SyncError> {
+        let (home, thread) = (codex_home(), resume_id(id).to_owned());
+        let seen = appending(base, &thread, options.cwd);
+        let (at, of) = (home.clone(), id.to_owned());
+        require_idle(
+            blocking_liveness(move || liveness(&at, &of, &Processes::here(), &seen)).await,
+        )?;
+        replace_in(&home, id, base, branch, options.taken_ids, backups).await
     }
 }
 
@@ -261,33 +278,6 @@ impl Rollout {
     }
 }
 
-/// The source id capture gives the row of line `m` of `session`, counting the id-less lines
-/// alike in `occurrences`; `None` for a line capture keeps no row of. As the daemon's
-/// `MessageEnricher` keys them.
-fn capture_key<M: Message>(
-    session: &SessionId,
-    m: &M,
-    occurrences: &mut HashMap<u64, u32>,
-) -> Option<String> {
-    if let Some(id) = m.id() {
-        return Some(String::from(id));
-    }
-    let nothing = m.content().is_empty()
-        && m.usage().is_none()
-        && m.stop_reason().is_none()
-        && m.model().is_none()
-        && m.cwd().is_none()
-        && m.git_branch().is_none()
-        && m.title().is_none();
-    if nothing {
-        return None;
-    }
-    let hash = content_hash(session, m);
-    let n = occurrences.entry(hash).or_insert(0);
-    *n += 1;
-    Some(synthetic_id(hash, *n - 1))
-}
-
 /// A thread's history as Codex reads it from its newest segment: the segments it continues,
 /// oldest first, each with how many of its rows the history keeps (all of the newest).
 struct Lineage {
@@ -363,6 +353,15 @@ pub(super) async fn local_tip_in(home: &Path, id: &str) -> Result<Option<LocalTi
     let head = Rollout::read(&path, &pool).await?;
     let stamp = Stamp::of(&head.bytes);
     let cwd = head.meta["cwd"].as_str().map(PathBuf::from);
+    // A segment of a thread, or a thread kept in several rollouts: see `replace_in`.
+    let segmented = thread != id
+        || rollouts_of(&home.join("sessions"), thread).len() > 1
+        || !rollouts_of(&home.join("archived_sessions"), thread).is_empty();
+    let unswitchable = if segmented {
+        Some(SEGMENTED)
+    } else {
+        unswitchable(&head.bytes)
+    };
     let lineage = Lineage::of(home, thread, head, &pool).await;
     let (known, merged) = lineage.held();
     Ok(Some(LocalTip {
@@ -373,6 +372,7 @@ pub(super) async fn local_tip_in(home: &Path, id: &str) -> Result<Option<LocalTi
         stamp,
         modified,
         cwd,
+        unswitchable,
     }))
 }
 
@@ -395,8 +395,31 @@ pub(super) fn append_in(
     if Stamp::of(&bytes) != base.stamp {
         return Err(SyncError::Changed);
     }
+    let (out, appended) = extend(thread, &bytes, base, lines, taken)?;
+    if !out.is_empty() {
+        append_jsonl(path, base.stamp, &out)?;
+    }
+    drop(lock);
+    Ok(AppendOutcome {
+        native_path: path.clone(),
+        tip_source_id: appended.last().cloned().or_else(|| base.tip_source_id.clone()),
+        appended,
+    })
+}
+
+/// The lines that append `lines` to the rollout of thread `thread` holding `bytes` (read as
+/// `base`), numbered on from its last, and the source ids of the rows written as lines of their
+/// own (see [`append_in`]); refused, as it is, unless they fast-forward it in Codex's paginated
+/// history mode.
+fn extend(
+    thread: &str,
+    bytes: &[u8],
+    base: &LocalTip,
+    lines: &[RehydrateMessage],
+    taken: Option<&HashSet<String>>,
+) -> Result<(Vec<Value>, Vec<String>), SyncError> {
     check_segment(lines, base, taken, Links::Chained)?;
-    let parsed = || jsonl_lines(&bytes).filter_map(|l| serde_json::from_slice::<Value>(l).ok());
+    let parsed = || jsonl_lines(bytes).filter_map(|l| serde_json::from_slice::<Value>(l).ok());
     let meta = parsed().next().map(|l| l["payload"].clone()).unwrap_or_default();
     let last = parsed().next_back().and_then(|l| l["ordinal"].as_u64());
     let (true, Some(last)) = (meta["history_mode"] == "paginated", last) else {
@@ -428,15 +451,188 @@ pub(super) fn append_in(
     for (n, line) in (last + 1..).zip(&mut out) {
         line["ordinal"] = json!(n);
     }
-    if !out.is_empty() {
-        append_jsonl(path, base.stamp, &out)?;
+    Ok((out, appended))
+}
+
+/// [`SessionSync::replace`] of session `id` under Codex home `home`, once no Codex is known to
+/// have it loaded: under the thread's writer lock, its rollout cut back to the line the branch
+/// leaves it at and the branch's rows appended ([`replace_rollout`]).
+///
+/// Only a thread kept in a single rollout: one reverted (`thread/revert`) or forked in Codex's
+/// paginated mode is kept in several segments, each continuing the history of the one before
+/// up to a byte offset into it (`history_base`), and capture names each segment a session of its
+/// own. Rewriting the newest would leave Codex reading the older segments' history ahead of it
+/// (and rewriting an older one would move the offsets the newer ones name), so that is refused:
+/// fork instead. Codex's thread index (`state_<n>.sqlite`) names the rollout by its path, which
+/// the replace keeps; one naming another rollout of the thread that exists means Codex has moved
+/// the thread on, and is refused too.
+pub(super) async fn replace_in(
+    home: &Path,
+    id: &str,
+    base: &LocalTip,
+    branch: &[RehydrateMessage],
+    taken: Option<&HashSet<String>>,
+    backups: &Path,
+) -> Result<ReplaceOutcome, SyncError> {
+    let thread = resume_id(id).to_owned();
+    if thread != id || !is_plain_name(&thread) {
+        return Err(SyncError::Unsupported(SEGMENTED));
     }
+    match state_db::point_at(home, &thread, Some(&base.native_path), &base.native_path).await {
+        Ok(_) => {}
+        Err(state_db::StateDbError::Elsewhere(_)) => {
+            return Err(SyncError::Changed);
+        }
+        Err(e) => return Err(SyncError::Other(e.to_string())),
+    }
+    // The rows capture keeps of each line, as `local_tip` read them: the rollout is checked to be
+    // what it read again, under the lock, before they are used.
+    let pool = BlockingPool::new(std::num::NonZeroUsize::MIN);
+    let rollout = Rollout::read(&base.native_path, &pool).await?;
+    if Stamp::of(&rollout.bytes) != base.stamp {
+        return Err(SyncError::Changed);
+    }
+    let switch = Switch {
+        thread,
+        base: base.clone(),
+        branch: branch.to_vec(),
+        taken: taken.cloned(),
+        backups: backups.to_path_buf(),
+    };
+    let home = home.to_path_buf();
+    blocking(move || replace_rollout(&home, &switch, &rollout.rows)).await
+}
+
+/// Why the rollout holding `bytes` can't be written out again along another branch, whatever the
+/// branch: one in Codex's legacy history mode (its lines unnumbered), or a segment continuing
+/// another (`history_base`; see [`replace_in`]).
+fn unswitchable(bytes: &[u8]) -> Option<&'static str> {
+    let header = jsonl_lines(bytes).next().unwrap_or_default();
+    let first = serde_json::from_slice::<Value>(header).unwrap_or_default();
+    let meta = &first["payload"];
+    let legacy = first["type"] != "session_meta"
+        || first["ordinal"].as_u64().is_none()
+        || meta["history_mode"] != "paginated";
+    if legacy {
+        Some(LEGACY_SWITCH)
+    } else if !meta["history_base"].is_null() {
+        Some(SEGMENTED)
+    } else {
+        None
+    }
+}
+
+/// Why a rollout in Codex's legacy history mode is not switched.
+const LEGACY_SWITCH: &str = "this Codex rollout is in the legacy history mode, which can't be \
+                             written out again with numbered lines";
+
+/// Why a thread kept in several rollouts is not switched (see [`replace_in`]).
+const SEGMENTED: &str = "this Codex thread is kept in several rollouts (it was reverted or \
+                         forked): only a thread in a single rollout can be switched; fork instead";
+
+/// A [`SessionSync::replace`] of a Codex thread, as [`replace_rollout`] takes it.
+pub(super) struct Switch {
+    pub(super) thread: String,
+    pub(super) base: LocalTip,
+    pub(super) branch: Vec<RehydrateMessage>,
+    pub(super) taken: Option<HashSet<String>>,
+    pub(super) backups: PathBuf,
+}
+
+/// The rollout of thread `switch.thread` `switch.base` read (whose lines capture keeps rows of
+/// are `rows`: where each ends, its id), switched under the thread's writer lock: kept up to the
+/// end of the line the branch leaves it at (Codex's history is the rollout's lines in order, so
+/// what follows that line is what went on from it here), its `session_meta` and every line
+/// before as they are; then the branch's rows past it, numbered on from the line kept last, as
+/// [`append_in`] writes them. Codex continues from the last line, so the branch's head must be
+/// the last row written, or merged into it.
+pub(super) fn replace_rollout(
+    home: &Path,
+    switch: &Switch,
+    rows: &[(u64, String)],
+) -> Result<ReplaceOutcome, SyncError> {
+    let Switch {
+        thread,
+        base,
+        branch,
+        taken,
+        backups,
+    } = switch;
+    if branch.is_empty() {
+        return Err(SyncError::Unsupported("the branch has no rows"));
+    }
+    let lock = WriterLock::acquire(home, thread)?;
+    let path = &base.native_path;
+    let live = rollouts_of(&home.join("sessions"), thread);
+    let archived = rollouts_of(&home.join("archived_sessions"), thread);
+    if live.as_slice() != std::slice::from_ref(path) || !archived.is_empty() {
+        return Err(if live.last() == Some(path) {
+            SyncError::Unsupported(SEGMENTED)
+        } else {
+            SyncError::Changed
+        });
+    }
+    let bytes = std::fs::read(path)?;
+    if Stamp::of(&bytes) != base.stamp {
+        return Err(SyncError::Changed);
+    }
+    let header = jsonl_lines(&bytes).next().unwrap_or_default();
+    if let Some(why) = unswitchable(&bytes) {
+        return Err(SyncError::Unsupported(why));
+    }
+    let (shared, from) = branch_point(base, branch, Links::Chained)?;
+    let Some(at) = rows.iter().position(|(_, id)| *id == from) else {
+        return Err(SyncError::Other(format!("no line of the rollout is the row {from}")));
+    };
+    let kept = kept_through(&bytes, rows[at].0, header.len());
+    let held: HashSet<String> = rows[..=at].iter().map(|(_, id)| id.clone()).collect();
+    let merged = merged_in(&kept, &held);
+    let mut known = held;
+    known.extend(merged.keys().cloned());
+    let kept_tip = LocalTip {
+        known_source_ids: known,
+        merged,
+        stamp: Stamp::of(&kept),
+        ..base.clone()
+    };
+    let continuing = continuing_from(kept_tip, &from)?;
+    let rest = past(branch, shared, &continuing, Links::Chained);
+    let (lines, appended) = extend(thread, &kept, &continuing, &rest, taken.as_ref())?;
+    let mut out = kept;
+    for line in &lines {
+        out.extend(line.to_string().bytes());
+        out.push(b'\n');
+    }
+    let end = switched_to(&rest, &from).to_owned();
+    let tip = appended.last().cloned().or(Some(from));
+    let merged = merged_in(&out, &tip.iter().cloned().collect());
+    resumes_from(tip.as_deref(), &merged, &end)?;
+    let (backup, warning) = replace_jsonl(path, base.stamp, &bytes, &out, backups)?;
     drop(lock);
-    Ok(AppendOutcome {
+    Ok(ReplaceOutcome {
         native_path: path.clone(),
-        tip_source_id: appended.last().cloned().or_else(|| base.tip_source_id.clone()),
         appended,
+        tip_source_id: tip,
+        backup,
+        warning,
     })
+}
+
+/// The rollout `bytes`, up to the end of the line ending at `end` (and never short of its first
+/// line, `header` bytes long), newline-terminated.
+fn kept_through(bytes: &[u8], end: u64, header: usize) -> Vec<u8> {
+    let end = usize::try_from(end).unwrap_or(usize::MAX).max(header).min(bytes.len());
+    let mut kept = bytes[..end].to_vec();
+    if !kept.ends_with(b"\n") {
+        // Through the rest of the line it ends in.
+        let rest = &bytes[end..];
+        let line = memchr::memchr(b'\n', rest).map_or(rest.len(), |n| n + 1);
+        kept.extend_from_slice(&rest[..line]);
+        if !kept.ends_with(b"\n") {
+            kept.push(b'\n');
+        }
+    }
+    kept
 }
 
 #[cfg(test)]

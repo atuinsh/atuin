@@ -389,6 +389,18 @@ impl Analysis {
     }
 }
 
+impl Analysis {
+    /// Whether sync holds every row of the copy `local` read (on any branch, or none): the
+    /// rows of its lines, and those merged into them. Only then can the copy be written over
+    /// (switched to another branch) without losing anything: its own line stays in sync.
+    #[must_use]
+    pub fn holds_all(&self, local: &LocalTip) -> bool {
+        let synced: HashSet<&str> = self.rows.iter().map(|m| m.source_id.as_ref()).collect();
+        local.known_source_ids.iter().all(|id| synced.contains(id.as_str()))
+            && local.tip_source_id.as_deref().is_none_or(|tip| synced.contains(tip))
+    }
+}
+
 /// Parent pointers resolved to rows (see [`Model::Tree`]).
 fn tree_parents(rows: &[Message], in_tree: &[bool], chained: bool) -> Vec<Option<usize>> {
     let by_id: HashMap<&SourceId, usize> = rows

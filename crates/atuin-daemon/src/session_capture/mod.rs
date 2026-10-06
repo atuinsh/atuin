@@ -1478,12 +1478,26 @@ mod tests {
         let enricher = MessageEnricher::new(HarnessKind::ClaudeCode);
         let handle = enricher.handle(&session);
         assert_eq!(handle, msg.session);
-        let checkpoint = Checkpoint { at: 40, digest: 7 };
+        let checkpoint = Checkpoint {
+            at: 40,
+            digest: 7,
+            generation: 0,
+        };
         let listener = tokio::spawn({
             let (sink, msg) = (capture.sink.clone(), msg.clone());
             async move {
                 let mut stuck = std::collections::HashSet::new();
-                capture_rows(&sink, &enricher, &mut stuck, &session, vec![msg], checkpoint).await;
+                let mut held = std::collections::HashMap::new();
+                capture_rows(
+                    &sink,
+                    &enricher,
+                    &mut stuck,
+                    &mut held,
+                    &session,
+                    vec![msg],
+                    checkpoint,
+                )
+                .await;
                 stuck
             }
         });

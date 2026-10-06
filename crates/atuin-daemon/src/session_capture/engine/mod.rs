@@ -109,9 +109,18 @@ async fn capture(
     // Sessions with a failed append: their checkpoint must not move past the line that was
     // lost, or a restart would never re-read it.
     let mut stuck: HashSet<SessionId> = HashSet::new();
+    // Rows of a transcript's content before it was replaced whose append failed: no read can
+    // bring them back, so they are kept, and retried, and the checkpoint held, until stored.
+    let mut held: Held = HashMap::new();
     // Sessions holding rows that wait for a timestamp: when they may be flushed, and the
     // checkpoint past the last line seen.
     let mut untimed: HashMap<SessionId, (Instant, Checkpoint)> = HashMap::new();
+    // Which read of its transcript each session's stream is in ([`Checkpoint::generation`]):
+    // one that changes under the same stream started over from the beginning of a transcript
+    // replaced or cut short under it, which the line reader says, as positions can't (the new
+    // content's first line may end past where the old content was read to).
+    // ponytail: kept for every session seen, as `events()` keeps its handles.
+    let mut reads: HashMap<SessionId, u32> = HashMap::new();
 
     loop {
         let due = untimed.values().map(|(at, _)| *at).min();
@@ -126,12 +135,16 @@ async fn capture(
                     }
                 };
                 let opened = opened.lock().remove(&session);
+                let read = reads.insert(session.clone(), checkpoint.generation);
                 if let Some(from) = opened {
                     let start = Start::of(from, checkpoint);
                     // A new read retries whatever a failed append lost.
                     stuck.remove(&session);
                     untimed.remove(&session);
                     warm(sink, &mut enricher, &session, start).await;
+                } else if read.is_some_and(|read| read != checkpoint.generation) {
+                    restarted(sink, &mut enricher, &mut stuck, &mut held, &mut untimed, &session)
+                        .await;
                 }
                 let rows = enricher.capture(&session, &message);
                 if rows.is_empty() {
@@ -141,7 +154,7 @@ async fn capture(
                     continue;
                 }
                 untimed.remove(&session);
-                store(sink, &enricher, &mut stuck, &session, rows, checkpoint).await;
+                store(sink, &enricher, &mut stuck, &mut held, &session, rows, checkpoint).await;
             }
             () = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                 let now = Instant::now();
@@ -150,15 +163,71 @@ async fn capture(
                 for session in quiet {
                     let Some((_, checkpoint)) = untimed.remove(&session) else { continue };
                     let rows = enricher.finish(&session);
-                    store(sink, &enricher, &mut stuck, &session, rows, checkpoint).await;
+                    store(sink, &enricher, &mut stuck, &mut held, &session, rows, checkpoint).await;
                 }
             }
         }
     }
 }
 
+/// The read of `session` started over from the beginning of its transcript, which was replaced
+/// in place (`atuin ai resume` switching it to another branch writes a new file over it) or cut
+/// short: the line reader reads a file whose identity changed, or that shrank below what it had
+/// read, again from its first byte, under the same stream, and says so on every line it reads
+/// after ([`Checkpoint::generation`]).
+///
+/// Its bookkeeping is set up as for a read from the beginning: every line replays, so ordinals
+/// of the lines keyed on their content count from 0 again, and those already stored resolve to
+/// the rows they made (deduplicated by source id) instead of new rows under the next ordinals;
+/// and no line of the new content follows a row of the old one. Rows the old content left
+/// waiting for a timestamp are stored first with capture time, as a session gone quiet's are
+/// ([`MessageEnricher::finish`]); their checkpoint is not, as it named the old content.
+///
+/// The old content is gone, so no read brings back a row of it whose append fails: such a row is
+/// kept, as a failed append holds its line, and the session's checkpoint stays where it is until
+/// a later append of the session stores it ([`Held`]). An append of the old content that failed
+/// before the restart (its row, not kept, no read can bring back either) no longer holds the
+/// checkpoint back: the new read is what a restart would read again.
+async fn restarted(
+    sink: &Sink,
+    enricher: &mut MessageEnricher,
+    stuck: &mut HashSet<SessionId>,
+    held: &mut Held,
+    untimed: &mut HashMap<SessionId, (Instant, Checkpoint)>,
+    session: &SessionId,
+) {
+    tracing::debug!(%session, "ai-session transcript replaced or cut short; reading it again");
+    untimed.remove(session);
+    let rows = enricher.finish(session);
+    hold(sink, held, session, rows).await;
+    stuck.remove(session);
+    warm(sink, enricher, session, Start::Beginning).await;
+}
+
+/// Each session's rows that no read of its transcript can bring back (see [`restarted`]) whose
+/// append failed: kept, in order, until an append of them succeeds. While a session has any, its
+/// checkpoint doesn't move.
+pub(super) type Held = HashMap<SessionId, Vec<Message>>;
+
+/// Append `rows` of `session` after those it holds already ([`Held`]), retrying those first;
+/// whichever fails is held (again).
+async fn hold(sink: &Sink, held: &mut Held, session: &SessionId, rows: Vec<Message>) {
+    let pending = held.remove(session).unwrap_or_default();
+    let mut failed = Vec::new();
+    for msg in pending.into_iter().chain(rows) {
+        if let Err(e) = append(sink, msg.clone()).await {
+            tracing::warn!(?e, %session, "failed to capture ai-session message; holding it");
+            failed.push(msg);
+        }
+    }
+    if !failed.is_empty() {
+        held.insert(session.clone(), failed);
+    }
+}
+
 /// Append a session's rows, then checkpoint just past the line that completed them unless an
-/// append failed.
+/// append failed, or the session holds rows no read can bring back ([`Held`]), which are retried
+/// first.
 ///
 /// A row refused because the store is unavailable (see [`Sink::append`]) pauses the listener
 /// until the store is ready again (a rebuild succeeding), then is retried, so the line is neither
@@ -168,17 +237,21 @@ pub(super) async fn store(
     sink: &Sink,
     enricher: &MessageEnricher,
     stuck: &mut HashSet<SessionId>,
+    held: &mut Held,
     session: &SessionId,
     rows: Vec<Message>,
     checkpoint: Checkpoint,
 ) {
+    if held.contains_key(session) {
+        hold(sink, held, session, Vec::new()).await;
+    }
     for msg in rows {
         if let Err(e) = append(sink, msg).await {
             tracing::warn!(?e, "failed to capture ai-session message");
             stuck.insert(session.clone());
         }
     }
-    if stuck.contains(session) {
+    if stuck.contains(session) || held.contains_key(session) {
         return;
     }
     // ponytail: one checkpoint write per row; batch per session on idle if it shows up in
@@ -222,17 +295,20 @@ impl Start {
     /// resumed read always lies strictly past `from`. A first event at or before `from` is
     /// therefore the beginning, as is any read handed no checkpoint at all.
     ///
-    /// The converse is not exact: a source rewritten so that its first item now ends past `from`
-    /// (a first line longer than the old checkpoint's offset; an opencode aggregate recreated
-    /// whose first row with a message has a greater `seq`) is read from its beginning but taken
-    /// for a resume. That errs on the safe side: the bookkeeping is then warmed from rows of the
-    /// old content, so a re-read id-less line that matches one of them is stored again under the
-    /// next ordinal rather than deduplicated. The other mistake, a resume taken for the
-    /// beginning, would reset the ordinals and silently drop genuinely new repeats of earlier
-    /// lines, and cannot happen.
+    /// The converse is not exact from positions alone: a source rewritten so that its first item
+    /// now ends past `from` (a first line longer than the old checkpoint's offset; an opencode
+    /// aggregate recreated whose first row with a message has a greater `seq`) is read from its
+    /// beginning but would be taken for a resume. A transcript's reader says when it started
+    /// over ([`Checkpoint::generation`]: it found `from` no longer naming its line, or the file
+    /// replaced or cut short under it), so only opencode's is left to the positions. That errs
+    /// on the safe side: the bookkeeping is then warmed from rows of the old content, so a
+    /// re-read id-less line that matches one of them is stored again under the next ordinal
+    /// rather than deduplicated. The other mistake, a resume taken for the beginning, would
+    /// reset the ordinals and silently drop genuinely new repeats of earlier lines, and cannot
+    /// happen: a reader only says it started over when it did.
     pub(super) fn of(from: Option<Checkpoint>, first: Checkpoint) -> Self {
         match from {
-            Some(from) if first.at > from.at => Self::Resumed,
+            Some(from) if first.generation == 0 && first.at > from.at => Self::Resumed,
             _ => Self::Beginning,
         }
     }
@@ -403,7 +479,11 @@ mod tests {
     use super::*;
 
     const fn at(at: u64) -> Checkpoint {
-        Checkpoint { at, digest: 7 }
+        Checkpoint {
+            at,
+            digest: 7,
+            generation: 0,
+        }
     }
 
     async fn sink() -> Sink {
@@ -493,7 +573,7 @@ mod tests {
     }
 
     /// Byte offsets and row seqs alike: only a first event strictly past the checkpoint handed
-    /// to the read is a resume.
+    /// to the read, in the reader's first read of the source, is a resume.
     #[rstest]
     #[case::no_checkpoint(None, at(40), Start::Beginning)]
     #[case::first_item_before_it(Some(at(100)), at(40), Start::Beginning)]
@@ -501,6 +581,8 @@ mod tests {
     #[case::next_item(Some(at(100)), at(160), Start::Resumed)]
     #[case::first_row_seq_zero(Some(at(0)), at(0), Start::Beginning)]
     #[case::next_row_seq(Some(at(4)), at(5), Start::Resumed)]
+    #[case::started_over_by_the_reader(Some(at(100)), Checkpoint { generation: 1, ..at(160) },
+        Start::Beginning)]
     fn a_read_resumed_only_when_its_first_event_is_past_its_checkpoint(
         #[case] from: Option<Checkpoint>,
         #[case] first: Checkpoint,
@@ -535,9 +617,217 @@ mod tests {
         Start::of(from, first)
     }
 
+    /// Fails the next this many captures, before their push (as a panic does).
+    #[derive(Debug)]
+    struct FailCaptures(std::sync::atomic::AtomicUsize);
+
+    impl super::super::hooks::Hooks for FailCaptures {
+        fn at(
+            &self,
+            point: super::super::hooks::Point,
+        ) -> futures::future::BoxFuture<'_, super::super::hooks::Fault> {
+            use std::sync::atomic::Ordering;
+
+            use super::super::hooks::{Fault, Point};
+
+            let fail = point == Point::CapturePushing
+                && self
+                    .0
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok();
+            Box::pin(async move {
+                if fail {
+                    Fault::Panic
+                } else {
+                    Fault::None
+                }
+            })
+        }
+    }
+
+    /// A transcript replaced under its read leaves rows waiting for a timestamp, stored then;
+    /// one whose append fails can't be read again (its line is gone), so it is held, and retried
+    /// with the session's next rows, and the checkpoint doesn't move past it until it is stored.
+    #[rstest]
+    #[tokio::test]
+    async fn a_row_of_a_replaced_transcript_that_fails_to_store_is_held_until_stored() {
+        let mut sink = sink().await;
+        sink.hooks = Some(Arc::new(FailCaptures(2.into())));
+        let session = SessionId::from("s1".to_owned());
+        let handle = handle_of(HarnessKind::ClaudeCode, &session);
+        let line = |raw: &str| AnyMessage::Ccode(serde_json::from_str(raw).unwrap());
+        let mut enricher = MessageEnricher::new(HarnessKind::ClaudeCode);
+        // A title before any timestamp: it waits for one.
+        assert!(enricher.capture(&session, &line(&title("mine"))).is_empty());
+        assert!(enricher.has_untimed(&session));
+        let (mut stuck, mut held, mut untimed) = (HashSet::new(), Held::new(), HashMap::new());
+
+        restarted(&sink, &mut enricher, &mut stuck, &mut held, &mut untimed, &session).await;
+        assert_eq!(held.get(&session).map(Vec::len), Some(1), "held, not dropped");
+        assert!(stored(&sink).await.is_empty());
+
+        // Retried first, failing again: the next row is stored, but not checkpointed past.
+        let rows = enricher.capture(&session, &line(&turn("u1", None, 1)));
+        store(&sink, &enricher, &mut stuck, &mut held, &session, rows, at(100)).await;
+        assert_eq!(held.get(&session).map(Vec::len), Some(1));
+        assert_eq!(stored(&sink).await, ["u1"]);
+        assert_eq!(sink.sidecar.checkpoint(&handle).await.unwrap(), None);
+
+        // Stored at last: the checkpoint moves on.
+        let rows = enricher.capture(&session, &line(&turn("u2", Some("u1"), 2)));
+        store(&sink, &enricher, &mut stuck, &mut held, &session, rows, at(200)).await;
+        assert!(held.is_empty());
+        let ids = stored(&sink).await;
+        assert_eq!(ids.len(), 3, "{ids:?}");
+        assert!(ids.iter().any(|id| id.starts_with(SYNTHETIC)), "the title: {ids:?}");
+        assert_eq!(sink.sidecar.checkpoint(&handle).await.unwrap(), Some(at(200)));
+    }
+
+    /// The source ids stored for session `s1`, sorted.
+    async fn stored(sink: &Sink) -> Vec<String> {
+        use futures::TryStreamExt;
+
+        let handle = handle_of(HarnessKind::ClaudeCode, &SessionId::from("s1".to_owned()));
+        let rows: Vec<Message> = sink.sidecar.messages(&handle).try_collect().await.unwrap();
+        let mut ids: Vec<String> = rows.into_iter().map(|m| m.source_id.to_string()).collect();
+        ids.sort();
+        ids
+    }
+
+    /// A transcript line of session `s1`: `uuid` hanging from `parent`, at second `at`.
+    fn turn(uuid: &str, parent: Option<&str>, at: u32) -> String {
+        said(uuid, parent, at, &format!("said {uuid}"))
+    }
+
+    /// [`turn`], saying `text`.
+    fn said(uuid: &str, parent: Option<&str>, at: u32, text: &str) -> String {
+        serde_json::json!({
+            "type": "user", "uuid": uuid, "parentUuid": parent, "sessionId": "s1",
+            "timestamp": format!("2026-09-18T10:00:{at:02}Z"),
+            "message": {"role": "user", "content": text},
+        })
+        .to_string()
+            + "\n"
+    }
+
+    fn title(text: &str) -> String {
+        serde_json::json!({"type": "custom-title", "customTitle": text, "sessionId": "s1"})
+            .to_string()
+            + "\n"
+    }
+
+    /// A captured transcript replaced in place (written out again along another branch, as
+    /// `atuin ai resume` switching it does: a new file renamed over it, its title line kept) is
+    /// read again from its start while it is followed: the rows already stored are not stored
+    /// again (not even its title line, which capture keys on its content and counts), none is
+    /// lost, the new branch's rows are stored, and the checkpoint is the new file's end, not a
+    /// stale offset past it. Shrunk in place, it is read again from its start too. The line
+    /// reader says it started over, so it is told even when the new file's first line ends past
+    /// where the old one was read to, which no comparison of positions could tell from lines
+    /// appended.
+    #[rstest]
+    #[case::renamed_over(false, false)]
+    #[case::truncated_in_place(true, false)]
+    #[case::renamed_over_with_a_first_line_past_what_was_read(false, true)]
+    #[tokio::test]
+    async fn a_followed_transcript_replaced_in_place_is_captured_once(
+        #[case] in_place: bool,
+        #[case] long_first_line: bool,
+    ) {
+        use atuin_common::harnesstools::ccode::session::CcodeSessions;
+        use atuin_common::harnesstools::session::{Listener as _, Sessions as _};
+
+        const WAIT: Duration = Duration::from_secs(20);
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("-work-proj");
+        std::fs::create_dir(&project).unwrap();
+        let path = project.join("s1.jsonl");
+        let old = turn("u1", None, 1)
+            + &title("mine")
+            + &turn("u2", Some("u1"), 2)
+            + &turn("u4", Some("u2"), 3);
+        std::fs::write(&path, &old).unwrap();
+
+        let sink = Arc::new(sink().await);
+        let listener = CcodeSessions::builder()
+            .root(root.path().to_path_buf())
+            .pool(BlockingPool::new(std::num::NonZeroUsize::MIN))
+            .build()
+            .listener()
+            .unwrap();
+        let opened: Opened = Arc::default();
+        let checkpoint = {
+            let (sink, opened) = (sink.clone(), opened.clone());
+            move |id: &SessionId| {
+                let (sink, opened, id) = (sink.clone(), opened.clone(), id.clone());
+                async move {
+                    let from = checkpoint_of(&sink, HarnessKind::ClaudeCode, &id).await;
+                    opened.lock().insert(id, from);
+                    from
+                }
+            }
+        };
+        let events = listener.events(checkpoint).map(|ev| {
+            ev.map(|ev| SessionEvent {
+                session: ev.session,
+                checkpoint: ev.checkpoint,
+                message: AnyMessage::Ccode(ev.message),
+            })
+        });
+        let run = capture(HarnessKind::ClaudeCode, &sink, events, &opened, UNTIMED_GRACE);
+        let check = async {
+            let settle = |want: usize| {
+                let sink = &sink;
+                async move {
+                    tokio::time::timeout(WAIT, async {
+                        while stored(sink).await.len() < want {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                    })
+                    .await
+                    .expect("capture never stored the rows");
+                }
+            };
+            settle(4).await;
+            let before = stored(&sink).await;
+
+            // Switched to the branch off u1 that another machine went on with: shorter than
+            // what was read, and holding the title line again.
+            let first = if long_first_line {
+                // The same row (u1), its line now longer than all that was read of the old file.
+                said("u1", None, 1, &"said u1 at length ".repeat(old.len()))
+            } else {
+                turn("u1", None, 1)
+            };
+            assert_eq!(first.len() > old.len(), long_first_line);
+            let new = first + &title("mine") + &turn("u3", Some("u1"), 4);
+            if in_place {
+                std::fs::write(&path, &new).unwrap();
+            } else {
+                atuin_common::fs::replace(&path, new.as_bytes(), |_| true).unwrap();
+            }
+            settle(5).await;
+            // Whatever else it would store, it has had the time to.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            let after = stored(&sink).await;
+            let mut want = before.clone();
+            want.push("u3".to_owned());
+            want.sort();
+            assert_eq!(after, want, "u2 and u4 stay; the title line is not stored twice");
+            assert_eq!(after.iter().filter(|id| id.starts_with(SYNTHETIC)).count(), 1);
+            let handle = handle_of(HarnessKind::ClaudeCode, &SessionId::from("s1".to_owned()));
+            let at = sink.sidecar.checkpoint(&handle).await.unwrap().unwrap().at;
+            assert_eq!(at, new.len() as u64, "checkpointed at the new file's end");
+        };
+        tokio::select! {
+            () = run => panic!("capture ended"),
+            () = check => {}
+        }
+    }
+
     /// Against a real transcript: a checkpoint that still names its line resumes; one the file
-    /// was rewritten under, with a first line of the same length or shorter, reads from the
-    /// beginning.
+    /// was rewritten under, whatever the length of its first line, reads from the beginning.
     #[rstest]
     #[tokio::test]
     async fn a_transcript_read_is_told_resumed_only_past_a_checkpoint_that_holds() {
@@ -556,5 +846,10 @@ mod tests {
 
         std::fs::write(&path, line("x") + &line("u2")).unwrap();
         assert_eq!(start_of(&path, Some(from)).await, Start::Beginning, "shorter first line");
+
+        // Its first line ends past the checkpoint, which no position could tell from a resume:
+        // the reader says it started over.
+        std::fs::write(&path, line(&"w".repeat(first.len())) + &line("u2")).unwrap();
+        assert_eq!(start_of(&path, Some(from)).await, Start::Beginning, "longer first line");
     }
 }

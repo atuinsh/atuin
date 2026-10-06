@@ -10,12 +10,12 @@
 //!   another harness, which only an enter or tab asks for, goes first: only the newest accepted
 //!   session's restore or catch-up is kept, and one dropped
 //!   before it started is reported ([`Response::Abandoned`]) so that the picker asks again if the
-//!   user comes back to it. Likewise only the newest continuation or fork is kept, and one is
-//!   dropped when the picker stops waiting on it ([`Request::CancelContinue`]); once the picker is
-//!   gone, nothing queued runs. One already running finishes and reports as usual: its files are
-//!   left as written, not deleted, since capture may already have read and synced them. Then the
-//!   plan an enter or tab is waiting on, which is never dropped for another session's (see
-//!   [`Request::Accept`]).
+//!   user comes back to it. Likewise only the newest continuation, fork or switch is kept, and
+//!   one is dropped when the picker stops waiting on it ([`Request::CancelContinue`]); once the
+//!   picker is gone, nothing queued runs. One already running finishes and reports as usual: its
+//!   files are left as written, not deleted, since capture may already have read and synced them.
+//!   Then the plan an enter or tab is waiting on, which is never dropped for another session's
+//!   (see [`Request::Accept`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,7 +26,9 @@ use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
 use super::catchup::{self, CatchUp};
-use super::resumer::{Continued, Forked, NotResumable, Restore, Resume, ResumePlan, Resumer};
+use super::resumer::{
+    Continued, Forked, NotResumable, Restore, Resume, ResumePlan, Resumer, Switched,
+};
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 
 #[derive(Debug)]
@@ -59,6 +61,9 @@ pub enum Request {
     /// Write a session out as a fork of it (from a head, when one is given), and plan resuming
     /// that. Answered as a continuation is, and in its place: a newer pick supersedes either.
     Fork(Box<SessionRow>, u64, Option<SourceId>),
+    /// Switch the copy here of a session to a head's branch, and plan resuming it. Answered as a
+    /// fork is, and in its place.
+    Switch(Box<SessionRow>, u64, SourceId),
     /// The picker no longer waits on a continuation or fork (the user chose something else):
     /// drop the one not yet started, so nothing is written for it.
     CancelContinue,
@@ -87,6 +92,8 @@ pub enum Response {
     Continued(u64, Result<Continued, NotResumable>),
     /// The fork with this id is written (or couldn't be).
     Forked(u64, Result<Forked, NotResumable>),
+    /// The switch with this id is written (or was refused).
+    Switched(u64, Result<Switched, NotResumable>),
 }
 
 /// Sends requests to the worker's lanes. The worker stops when this is dropped.
@@ -181,7 +188,9 @@ impl Latest {
             Request::Accept(_) => &mut self.accept,
             Request::Restore(..) | Request::CatchUp(_) => &mut self.restore,
             Request::Flatten(..) => &mut self.flatten,
-            Request::Continue(..) | Request::Fork(..) => &mut self.continuation,
+            Request::Continue(..) | Request::Fork(..) | Request::Switch(..) => {
+                &mut self.continuation
+            }
             Request::CancelContinue => {
                 self.continuation = None;
                 return None;
@@ -289,6 +298,9 @@ async fn details(
                     Err(why) => Err(why),
                 };
                 Response::Forked(id, forked)
+            }
+            Request::Switch(row, id, head) => {
+                Response::Switched(id, resumer.switch(source.as_ref(), &row, Some(&head)).await)
             }
             Request::Search { .. } | Request::CancelContinue => continue,
         };

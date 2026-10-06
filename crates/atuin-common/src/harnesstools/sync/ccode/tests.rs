@@ -169,6 +169,45 @@ fn write(dir: &TempDir, bytes: &[u8]) -> PathBuf {
     path
 }
 
+/// A nested subagent's lines name the subagent that spawned it, which only its metadata file
+/// says: a line keyed on its content (a title) is keyed with it here as capture keys it, and
+/// without it while that file can't be read, as capture does then.
+#[rstest]
+#[case::spawned(Some(r#"{"parentAgentId": "a1"}"#))]
+#[case::no_metadata(None)]
+#[tokio::test]
+async fn a_subagents_lines_are_keyed_as_capture_keys_them(
+    dir: TempDir,
+    #[case] meta: Option<&str>,
+) {
+    use futures::TryStreamExt;
+
+    use crate::harnesstools::ccode::session::CcodeSession;
+    use crate::harnesstools::session::Session;
+
+    let path = dir.path().join("agent-a2.jsonl");
+    let title = json!({"type": "custom-title", "customTitle": "named", "sessionId": SESSION});
+    std::fs::write(&path, jsonl(&[user("u1", None, 1), title])).unwrap();
+    if let Some(meta) = meta {
+        std::fs::write(dir.path().join("agent-a2.meta.json"), meta).unwrap();
+    }
+
+    let session = SessionId::from("agent-a2".to_owned());
+    let reader = CcodeSession::open(
+        session.clone(),
+        path.clone(),
+        crate::sync::BlockingPool::new(std::num::NonZeroUsize::MIN),
+    );
+    let messages: Vec<CcodeMessage> = reader.read().try_collect().await.unwrap();
+    let mut occurrences = HashMap::new();
+    let captured: HashSet<String> =
+        messages.iter().filter_map(|m| capture_key(&session, m, &mut occurrences)).collect();
+
+    let tip = read_tip(&path).unwrap();
+    assert!(tip.known_source_ids.iter().any(|id| id.starts_with("syn-")), "{tip:?}");
+    assert_eq!(tip.known_source_ids, captured);
+}
+
 /// The rows another machine went on with from a2: appended, they hang from it, and Claude Code
 /// resumes from the last of them; capture reads back nothing it did not sync. A torn last line
 /// stays torn.
@@ -364,4 +403,188 @@ fn a_domain_off_linux_is_this_machines_unless_a_linux_namespaces(
     std::fs::write(sessions.join("41.json"), record.to_string()).unwrap();
     let procs = table(&[entry(41, "claude", &["claude"], STARTED)]);
     assert_eq!(liveness(&sessions, SESSION, &procs, "macos"), expected);
+}
+
+/// A transcript that went its own way here after sharing a turn with a tool call in it: u1 →
+/// a1 (calling a tool, with the input capture doesn't keep) → r1 (its result, with output and an
+/// image capture doesn't keep), then the session's title; then, here only, u2 → a2, with the
+/// file history snapshot taken for u2 and the `last-prompt` naming a2.
+fn went_its_own_way() -> Vec<Value> {
+    let mut a1 = assistant("a1", "u1", 2);
+    a1["message"]["content"] = json!([
+        {"type": "text", "text": "reply a1"},
+        {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls -la ~"}},
+    ]);
+    let mut r1 = user("r1", Some("a1"), 3);
+    r1["message"]["content"] = json!([{
+        "type": "tool_result",
+        "tool_use_id": "toolu_1",
+        "content": [
+            {"type": "text", "text": "only this machine saw this output"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA"}},
+        ],
+    }]);
+    r1["toolUseResult"] = json!({"stdout": "only this machine saw this output", "stderr": ""});
+    vec![
+        user("u1", None, 1),
+        a1,
+        r1,
+        json!({"type": "custom-title", "customTitle": "mine", "sessionId": SESSION}),
+        json!({"type": "file-history-snapshot", "messageId": "u2", "snapshot": {"files": {}}}),
+        user("u2", Some("r1"), 4),
+        assistant("a2", "u2", 5),
+        last_prompt(Some("a2"), false),
+    ]
+}
+
+/// Another machine's branch off `r1`: u1 → a1 → r1 → u3 → a3, as synced.
+fn their_branch() -> Vec<RehydrateMessage> {
+    vec![
+        RehydrateMessage {
+            parent_source_id: None,
+            ..row("u1", "", Role::User, 1)
+        },
+        row("a1", "u1", Role::Assistant, 2),
+        row("r1", "a1", Role::Tool, 3),
+        row("u3", "r1", Role::User, 6),
+        row("a3", "u3", Role::Assistant, 7),
+    ]
+}
+
+/// Switching the copy to another machine's branch keeps the lines it shares with it byte for
+/// byte (the tool call's input, its output and image, which capture never kept, so no write from
+/// sync could bring back), and its title; drops the lines it went on with here (and the lines
+/// that name them); and appends the branch's rows past where they part, hanging from there, so
+/// Claude Code resumes from the head. In place: the same file and session id, a new file moved
+/// into place whole. The transcript as it was is kept whole outside the project directory, where
+/// Claude Code lists no session.
+#[rstest]
+fn a_switch_keeps_the_shared_history_as_it_is_and_backs_the_copy_up(dir: TempDir) {
+    let backups = tempfile::tempdir().unwrap();
+    let local = jsonl(&went_its_own_way());
+    let path = write(&dir, &local);
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&path).unwrap());
+    let base = read_tip(&path).unwrap();
+    assert_eq!(base.tip_source_id.as_deref(), Some("a2"));
+
+    let outcome = replace_to(SESSION, &base, &their_branch(), None, backups.path()).unwrap();
+
+    assert_eq!(outcome.native_path, path);
+    assert_eq!(outcome.appended, ["u3", "a3"]);
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("a3"));
+    assert_eq!(read_back(&path), ["u1", "a1", "r1", "u3", "a3"]);
+    assert_eq!(read_tip(&path).unwrap().tip_source_id.as_deref(), Some("a3"));
+    let bytes = std::fs::read(&path).unwrap();
+    let lines: Vec<&[u8]> = jsonl_lines(&bytes).collect();
+    let kept: Vec<&[u8]> = jsonl_lines(&local).take(4).collect();
+    assert_eq!(lines[..4], kept[..], "the shared lines and the title, byte for byte");
+    let written: Vec<Value> = lines[4..].iter().filter_map(|l| parse(l)).collect();
+    assert_eq!(written[0]["parentUuid"], "r1", "the branch hangs from where it left the copy");
+    assert!(written.iter().all(|l| l["sessionId"] == SESSION));
+    for gone in ["u2", "a2", "last-prompt", "file-history-snapshot"] {
+        let found = lines.iter().any(|l| memchr::memmem::find(l, gone.as_bytes()).is_some());
+        assert!(!found, "{gone} went on from where the branch left the copy");
+    }
+    #[cfg(unix)]
+    assert_ne!(std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&path).unwrap()), inode);
+    // Only the transcript is where Claude Code lists sessions: no temporary file, no backup.
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    assert_eq!(outcome.backup.parent(), Some(backups.path()));
+    let name = outcome.backup.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with(&format!("{SESSION}-")), "{name}");
+    assert_eq!(outcome.backup.extension(), Some(std::ffi::OsStr::new("jsonl")));
+    assert_eq!(std::fs::read(&outcome.backup).unwrap(), local, "the copy as it was, whole");
+}
+
+/// Nothing is written, and nothing backed up, when the transcript changed since it was read,
+/// when it shares nothing with the branch, or when the file is another session's.
+#[rstest]
+#[case::changed(true, their_branch(), SESSION, "Changed")]
+#[case::shares_nothing(false, vec![row("x1", "", Role::User, 1)], SESSION, "Unsupported")]
+#[case::another_session(false, their_branch(), "5e55e55e-0000-4000-8000-000000000009", "Other")]
+fn a_switch_that_cant_be_made_writes_nothing(
+    dir: TempDir,
+    #[case] changed: bool,
+    #[case] branch: Vec<RehydrateMessage>,
+    #[case] id: &str,
+    #[case] expected: &str,
+) {
+    let backups = tempfile::tempdir().unwrap();
+    let path = write(&dir, &jsonl(&went_its_own_way()));
+    let base = read_tip(&path).unwrap();
+    let local = if changed {
+        jsonl(&with(went_its_own_way(), [user("u9", Some("a2"), 9)]))
+    } else {
+        jsonl(&went_its_own_way())
+    };
+    std::fs::write(&path, &local).unwrap();
+    let err = replace_to(id, &base, &branch, None, backups.path()).unwrap_err();
+    assert!(format!("{err:?}").starts_with(expected), "{err:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), local);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "no temporary file left");
+    assert_eq!(std::fs::read_dir(backups.path()).unwrap().count(), 0, "no backup left");
+}
+
+/// The source id capture gives the `n`th line like `line` (one with no id of its own: a title, a
+/// summary) of session [`SESSION`].
+fn content_keyed(line: &Value, n: u32) -> String {
+    use crate::harnesstools::session::synthetic::{content_hash, synthetic_id};
+
+    let session = SessionId::from(SESSION.to_owned());
+    let message = CcodeMessage::decode(line.to_string().as_bytes()).unwrap();
+    assert_eq!(message.id(), None, "a line capture keys on its content");
+    synthetic_id(content_hash(&session, &message), n)
+}
+
+/// A summary Claude Code wrote of the branch that went on here: a title, with no id.
+fn summary() -> Value {
+    json!({"type": "summary", "summary": "what went on here", "leafUuid": "a2"})
+}
+
+/// The lines with no id of their own that capture keeps a row of (titles, summaries) are
+/// reported under the id capture gives them, keyed on their content, so one sync hasn't got is
+/// never taken for synced: a switch drops a summary of the branch it leaves. Lines capture keeps
+/// no row of (a `last-prompt`, a file history snapshot) are not reported at all.
+#[rstest]
+fn lines_with_no_id_are_keyed_as_capture_keys_them(dir: TempDir) {
+    let lines = with(went_its_own_way(), [summary()]);
+    let path = write(&dir, &jsonl(&lines));
+    let tip = read_tip(&path).unwrap();
+    let title = json!({"type": "custom-title", "customTitle": "mine", "sessionId": SESSION});
+    let mut want: HashSet<String> =
+        ["u1", "a1", "r1", "u2", "a2"].into_iter().map(str::to_owned).collect();
+    want.extend([content_keyed(&title, 0), content_keyed(&summary(), 0)]);
+    assert_eq!(tip.known_source_ids, want);
+    assert_eq!(tip.unswitchable, None);
+}
+
+/// A branch holds the rows beside the tree that go with it (titles, keyed on their content, with
+/// no parent): another machine's title before where the branch leaves the copy is passed over,
+/// the copy's own title, which it keeps, isn't written again, and one after it is merged into
+/// the line before it, as a restore writes it; Claude Code resumes from the head.
+#[rstest]
+fn a_switch_passes_the_rows_beside_the_tree_by(dir: TempDir) {
+    let backups = tempfile::tempdir().unwrap();
+    let path = write(&dir, &jsonl(&went_its_own_way()));
+    let base = read_tip(&path).unwrap();
+    let title = |id: &str| RehydrateMessage {
+        parent_source_id: None,
+        content: Vec::new(),
+        ..row(id, "", Role::Other("custom-title".into()), 8)
+    };
+    let mine = json!({"type": "custom-title", "customTitle": "mine", "sessionId": SESSION});
+    let mut branch = their_branch();
+    branch.insert(1, title("syn-0000000000000001"));
+    branch.push(title(&content_keyed(&mine, 0)));
+    branch.push(title("syn-0000000000000002"));
+
+    let outcome = replace_to(SESSION, &base, &branch, None, backups.path()).unwrap();
+
+    assert_eq!(outcome.appended, ["u3", "a3"]);
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("a3"));
+    assert_eq!(read_back(&path), ["u1", "a1", "r1", "u3", "a3"]);
+    let tip = read_tip(&path).unwrap();
+    assert!(tip.is_tip("syn-0000000000000002"), "merged into the last line");
 }

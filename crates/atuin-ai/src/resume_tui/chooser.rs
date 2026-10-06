@@ -16,9 +16,11 @@
 //! works is preselected instead.
 //!
 //! When catching the session's copy here up with sync needs a choice ([`Held`]), the chooser opens
-//! again on it, saying why: its first line resumes the copy here as it is, and a fork line for each
-//! of the session's heads, newest first, forks from that head; the newest is preselected when an
-//! agent here has the session open.
+//! again on it, saying why: its first line resumes the copy here as it is (and stays preselected),
+//! then a switch line for each head the copy can be switched to (written out again along that
+//! head's branch, in place; see [`super::catchup`]), and a fork line for each of the session's
+//! heads, newest first, forks from that head; the newest fork is preselected when an agent here
+//! has the session open (and no switch line is offered then).
 //!
 //! The chooser keeps the key's meaning: opened with enter it resumes (or edits, without
 //! `enter_accept`), opened with tab it edits, and tab in it always edits.
@@ -77,6 +79,9 @@ pub enum Destination {
     /// Fork it: a new session of its own harness, with the same history (that of a head, when
     /// given).
     Fork(Option<Box<Branch>>),
+    /// Switch the copy here to a head's branch (written out again along it, in place), and
+    /// resume it.
+    Switch(Box<Branch>),
     /// Continue it in another harness.
     Continue(HarnessKind),
 }
@@ -90,19 +95,35 @@ impl Chooser {
         }
     }
 
+    /// How many switch lines it has: one per head the copy here can be switched to.
+    fn switches(&self) -> usize {
+        self.held.as_ref().map_or(0, |held| held.switches().count())
+    }
+
+    /// The first fork line.
+    pub fn first_fork(&self) -> usize {
+        1 + self.switches()
+    }
+
     pub fn len(&self) -> usize {
-        1 + self.forks() + self.targets.len()
+        1 + self.switches() + self.forks() + self.targets.len()
     }
 
     /// What line `n` does.
     pub fn line(&self, n: usize) -> Destination {
-        let first = 1 + self.forks();
+        let forks = self.first_fork();
+        let first = forks + self.forks();
         match (n, &self.held) {
             (0, None) => Destination::Original,
             (0, Some(held)) => Destination::AsIs(Box::new(held.plan.clone())),
+            (n, Some(held)) if n < forks => held
+                .switches()
+                .nth(n - 1)
+                .cloned()
+                .map_or(Destination::Original, |b| Destination::Switch(Box::new(b))),
             (n, None) if n < first => Destination::Fork(None),
             (n, Some(held)) if n < first => {
-                Destination::Fork(held.branches.get(n - 1).cloned().map(Box::new))
+                Destination::Fork(held.branches.get(n - forks).cloned().map(Box::new))
             }
             (n, _) => self
                 .targets
@@ -228,7 +249,11 @@ impl State {
         let row = &chooser.row;
         let fork = chooser.fork && !self.nothing_to_fork(&row.handle);
         if let Some(held) = &chooser.held {
-            let selected = usize::from(fork && held.why == Why::Live);
+            let selected = if fork && held.why == Why::Live {
+                chooser.first_fork()
+            } else {
+                0
+            };
             if let Some(chooser) = self.chooser.as_mut() {
                 chooser.selected = selected;
             }
@@ -254,7 +279,7 @@ impl State {
     /// Select the chooser's fork line, as if by hand.
     pub fn select_fork(&mut self) {
         if let Some(chooser) = self.chooser.as_mut().filter(|c| c.fork) {
-            chooser.select(1);
+            chooser.select(chooser.first_fork());
         }
     }
 
@@ -339,13 +364,18 @@ impl State {
             _ => "this copy as is",
         };
         let now = (self.now)();
+        let switches = held.switches().map(|b| line(b.switch_line()));
         let forks = held.branches.iter().take(chooser.forks()).map(|b| line(b.line(now)));
         let continued = chooser.targets.iter().map(|target| Choice {
             harness: *target,
             detail: "continue".to_owned(),
             unavailable: None,
         });
-        std::iter::once(line(detail.to_owned())).chain(forks).chain(continued).collect()
+        std::iter::once(line(detail.to_owned()))
+            .chain(switches)
+            .chain(forks)
+            .chain(continued)
+            .collect()
     }
 
     /// A key while the chooser is open: move (up/down, ctrl-p/ctrl-n, k/j, f to the fork), pick

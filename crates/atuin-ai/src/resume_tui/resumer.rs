@@ -26,7 +26,7 @@ use atuin_common::harnesstools::rehydrate::{
 };
 pub use atuin_common::harnesstools::resume::{ResumeError, ResumePlan, ResumeTarget, quote};
 use atuin_common::harnesstools::sync::{
-    AppendOptions, AppendOutcome, Liveness, LocalTip, SessionSync as _, SyncError,
+    AppendOptions, AppendOutcome, Liveness, LocalTip, ReplaceOutcome, SessionSync as _, SyncError,
 };
 use atuin_common::harnesstools::{AnyHarness, Harness as _, fork};
 
@@ -54,6 +54,9 @@ pub enum NotResumable {
 
     #[error("catching it up with sync failed: {0}")]
     CatchUp(String),
+
+    #[error("switching it to another branch failed: {0}")]
+    Switch(String),
 
     /// A continuation or fork of a session with nothing of the conversation in it.
     #[error(transparent)]
@@ -158,6 +161,33 @@ impl Forked {
     }
 }
 
+/// This machine's copy of a session, switched to another branch (in place: [`Resumer::switch`]),
+/// ready to resume with `plan`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Switched {
+    /// The branch's host, as [`catchup::host_label`] names it.
+    pub host: String,
+    /// The messages the copy holds now, as [`catchup::message_count`] counts them.
+    pub messages: usize,
+    /// Where the copy as it was before the switch is kept.
+    pub backup: PathBuf,
+    /// What went wrong once the copy was switched, which the status says too.
+    pub warning: Option<String>,
+    pub plan: ResumePlan,
+}
+
+impl Switched {
+    /// The status line: `switched to @3f9a12bc's branch: 12 messages (your copy is at …)`, and
+    /// what went wrong once it was, if anything.
+    pub fn status(&self) -> String {
+        let status = catchup::switched(self.messages, &self.host, &self.backup);
+        match &self.warning {
+            Some(warning) => format!("{status}; but {warning}"),
+            None => status,
+        }
+    }
+}
+
 /// Why a fork from a [tip](ForkFrom::tip) fails when no row is it.
 const NO_TIP: &str = "no row is the one to fork at";
 
@@ -192,6 +222,21 @@ pub trait Resumer: Send + Sync {
             None => (resume.plan, None),
         };
         Ok(CatchUp::Ready { plan, status })
+    }
+
+    /// Switch this machine's copy of `session` to `head`'s branch (the newest it can be switched
+    /// to when `None`), from what `source` holds of it, and plan resuming it ([`super::catchup`]):
+    /// in place, keeping the history it shares with the branch as it is, and the copy as it was
+    /// as a backup. Refused, with nothing written, unless sync holds every row of the copy, no
+    /// agent here has it open, and its agent's store is a transcript that can be switched so.
+    /// Only once the user has chosen to.
+    async fn switch(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        _head: Option<&SourceId>,
+    ) -> Result<Switched, NotResumable> {
+        Err(NotResumable::Unsupported(harness_label(session.handle.harness)))
     }
 
     /// The harnesses `session` can be continued in here: installed, and not its own.
@@ -287,6 +332,22 @@ pub trait Machine: Send + Sync {
     ) -> Result<AppendOutcome, SyncError> {
         Err(SyncError::Unsupported("this machine can't catch sessions up"))
     }
+
+    /// Switch `harness`'s copy of session `id`, read as `base`, to the branch `branch` (its rows
+    /// root to head), keeping the copy as it was in `backups` ([`SessionSync::replace`]).
+    ///
+    /// [`SessionSync::replace`]: atuin_common::harnesstools::sync::SessionSync::replace
+    async fn replace(
+        &self,
+        _harness: AnyHarness,
+        _id: &str,
+        _base: &LocalTip,
+        _branch: &[RehydrateMessage],
+        _options: &AppendOptions<'_>,
+        _backups: &Path,
+    ) -> Result<ReplaceOutcome, SyncError> {
+        Err(SyncError::Unsupported("this machine can't switch sessions"))
+    }
 }
 
 /// What the status line says of a session restored as `restore`, when anything.
@@ -337,6 +398,18 @@ impl Machine for ThisMachine {
     ) -> Result<AppendOutcome, SyncError> {
         harness.append(id, base, lines, options).await
     }
+
+    async fn replace(
+        &self,
+        harness: AnyHarness,
+        id: &str,
+        base: &LocalTip,
+        branch: &[RehydrateMessage],
+        options: &AppendOptions<'_>,
+        backups: &Path,
+    ) -> Result<ReplaceOutcome, SyncError> {
+        harness.replace(id, base, branch, options, backups).await
+    }
 }
 
 /// The real [`Resumer`]: the harness's own resume command (or the user's template), restoring
@@ -345,11 +418,29 @@ pub struct HarnessResumer {
     templates: AiSessionResume,
     context: ResumeContext,
     machine: Box<dyn Machine>,
+    /// Where a copy switched to another branch is kept as it was: a directory of each harness's
+    /// within it ([`switched_dir`]).
+    switched: PathBuf,
+}
+
+/// Where copies switched to another branch are kept as they were: `ai/switched` in atuin's data
+/// directory (`data_dir`, `ATUIN_DATA_DIR`), which no agent lists sessions from.
+pub fn switched_dir() -> PathBuf {
+    atuin_client::settings::Settings::effective_data_dir().join("ai").join("switched")
 }
 
 impl HarnessResumer {
     pub fn new(context: ResumeContext, templates: AiSessionResume) -> Self {
         Self::on(context, templates, ThisMachine)
+    }
+
+    /// The resumer, keeping copies switched to another branch in `dir` instead of
+    /// [`switched_dir`].
+    #[cfg(test)]
+    #[must_use]
+    pub fn keeping_switched_in(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.switched = dir.into();
+        self
     }
 
     /// A resumer looking at `machine` instead of this one.
@@ -362,6 +453,7 @@ impl HarnessResumer {
             templates,
             context,
             machine: Box::new(machine),
+            switched: switched_dir(),
         }
     }
 
@@ -588,8 +680,19 @@ impl Resumer for HarnessResumer {
         let branches = || catchup::branches(&analysis, Some(&tip), here);
         let (rows, base) = match catchup::classify(&analysis, kind, &head.source_id, &tip) {
             Step::AsIs | Step::Ahead => return ready(resume.plan, None),
-            Step::Choice(why) => return Ok(held(why, kind, resume.plan, branches(), chosen)),
-            Step::FastForward { rows, base } => (rows, base),
+            Step::Choice(why) => {
+                let mut branches = branches();
+                // Offered only for a copy on another line alone: not one with rows sync hasn't
+                // got, which the switch would lose, nor one an agent here has open.
+                if why == Why::Diverged && !resume.live {
+                    for branch in &mut branches {
+                        branch.switch =
+                            catchup::can_switch(&analysis, kind, &branch.head.source_id, &tip);
+                    }
+                }
+                return Ok(held(why, kind, resume.plan, branches, chosen));
+            }
+            Step::FastForward { rows, base } => (rows, *base),
         };
         // Never under an agent that may be writing the session.
         if resume.live {
@@ -630,6 +733,82 @@ impl Resumer for HarnessResumer {
             catchup::caught_up(catchup::message_count(&rows), &catchup::host_label(head, here))
         });
         ready(plan, status)
+    }
+
+    async fn switch(
+        &self,
+        source: &dyn SessionSource,
+        session: &SessionRow,
+        head: Option<&SourceId>,
+    ) -> Result<Switched, NotResumable> {
+        let fail = |why: String| NotResumable::Switch(why);
+        let kind = session.handle.harness;
+        let harness = kind.harness().ok_or(NotResumable::Unsupported(harness_label(kind)))?;
+        let id = session.handle.session.as_ref();
+        // The replace looks for an agent where the plan did, in the copy the plan read.
+        let (resume, copy) = self.plan_here(session).await?;
+        let Some(Copy { tip, dir }) = copy else {
+            return Err(fail("there's no copy of it here: resuming it restores it".to_owned()));
+        };
+        let tip = match tip {
+            Ok(Some(tip)) => tip,
+            Ok(None) => {
+                return Err(fail("there's no copy of it here: resuming it restores it".to_owned()));
+            }
+            Err(e) => return Err(fail(e.to_string())),
+        };
+        let analysis = source.analyse(&session.handle).await.map_err(|e| fail(format!("{e:#}")))?;
+        let analysis = analysis.ok_or_else(|| {
+            fail("its branches aren't known yet: the daemon hasn't synced its messages".to_owned())
+        })?;
+        let head = catchup::switch_to(&analysis, kind, head, &tip).map_err(fail)?;
+        let running = || fail(format!("{} is running this session here", harness_label(kind)));
+        // Never under an agent that may be writing the session: checked again as it is written.
+        if resume.live {
+            return Err(running());
+        }
+        // The branch's rows, with those that go with it beside the tree (pi's prompts from
+        // before ids, extensions' messages, titles), as a restore or a fork writes it: the copy
+        // keeps those it shares, and the rest are appended to them as a fast-forward appends
+        // them.
+        let branch: Vec<RehydrateMessage> =
+            analysis.rows_for(&head.source_id).into_iter().map(|m| m.clone().into()).collect();
+        // Ids the rows appended must not take (pi's are short): every row synced on any branch.
+        let mut taken: HashSet<String> = analysis
+            .heads()
+            .iter()
+            .flat_map(|h| analysis.path_to(&h.source_id))
+            .map(|m| m.source_id.to_string())
+            .collect();
+        for row in &branch {
+            taken.remove(&row.source_id);
+        }
+        let options = AppendOptions {
+            taken_ids: Some(&taken),
+            cwd: dir.as_deref(),
+        };
+        let backups = self.switched.join(harness.name());
+        let replaced = self.machine.replace(harness, id, &tip, &branch, &options, &backups).await;
+        let outcome = match replaced {
+            Ok(outcome) => outcome,
+            Err(SyncError::Live(_) | SyncError::MaybeLive) => return Err(running()),
+            Err(e) => return Err(fail(e.to_string())),
+        };
+        // Resumed from where it was written, which a `{path}` template names.
+        let plan = if outcome.native_path == tip.native_path {
+            resume.plan
+        } else {
+            let mut target = ResumeTarget::new(id).with_native_path(&outcome.native_path);
+            target.cwd.clone_from(&resume.plan.cwd);
+            harness.resume(&target, self.templates.template(kind))?.prepare()?
+        };
+        Ok(Switched {
+            host: catchup::host_label(head, &self.context.host_id),
+            messages: catchup::message_count(&branch),
+            backup: outcome.backup,
+            warning: outcome.warning,
+            plan,
+        })
     }
 
     fn continue_targets(&self, session: &SessionRow) -> Vec<HarnessKind> {

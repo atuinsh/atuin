@@ -20,15 +20,20 @@
 //!   [`crate::resume_tui::catchup`]): when it went on on another machine, the messages this copy
 //!   lacks are appended. When that can't be done (an agent here has it open, it went another way
 //!   here, or this copy has messages sync hasn't got), nothing is written, and it fails saying
-//!   so: `--as-is` resumes this copy as it is, `--fork` forks it instead.
+//!   so: `--as-is` resumes this copy as it is, `--fork` forks it instead, and `--switch` (for a
+//!   copy that went another way, all of it synced) switches it to another branch, in place,
+//!   under the same id: the history it shares with that branch is kept as it is, and the
+//!   branch's messages since are appended from sync. The branch it was on stays in atuin, and the
+//!   copy as it was is kept as a backup in atuin's data directory.
 //! - `--fork` forks it instead: it is written out as a new session of its own harness, with the
 //!   same history, linked to it as a fork (see [`atuin_common::harnesstools::fork`]), and that is
 //!   resumed. The original is left as it is. A session that went on separately on several
 //!   machines forks from its newest branch.
-//! - `--branch` picks the branch to catch up to, or to fork from: `this`, `@<host id>`, or the
-//!   start of its head's id.
-//! - `--as-is` and `--branch` need an id naming a single session that can resume here: anything
-//!   else is an error (listing the sessions an id names), never the picker, which would drop them.
+//! - `--branch` picks the branch to catch up to, to switch to, or to fork from: `this`,
+//!   `@<host id>`, or the start of its head's id.
+//! - `--as-is`, `--switch` and `--branch` need an id naming a single session that can resume here:
+//!   anything else is an error (listing the sessions an id names), never the picker, which would
+//!   drop them.
 //! - From the shell widget (`--shell-widget`), the result goes to stderr using the history
 //!   search's protocol: `__atuin_accept__:<cmd>` to run it, plain `<cmd>` to edit it, nothing to
 //!   leave the command line alone.
@@ -97,8 +102,18 @@ pub struct Cmd {
     #[arg(long, conflicts_with_all = ["fork", "continue_in"])]
     as_is: bool,
 
-    /// The branch of the session QUERY names to catch up to, or to fork from with `--fork`:
-    /// `this`, `@<host id>`, or the start of its head's id. The newest by default.
+    /// Switch this machine's copy of the session QUERY names to another branch (the one
+    /// `--branch` names, else the newest it can be switched to), in place, and resume it: the
+    /// history it shares with that branch is kept as it is, and the branch's messages since are
+    /// appended from sync. The branch it was on stays in atuin, for `--fork` to bring back, and
+    /// the copy as it was is kept as a backup. Only when sync holds all of it and no agent here
+    /// has it open.
+    #[arg(long, conflicts_with_all = ["fork", "continue_in", "as_is"])]
+    switch: bool,
+
+    /// The branch of the session QUERY names to catch up to, to switch to with `--switch`, or to
+    /// fork from with `--fork`: `this`, `@<host id>`, or the start of its head's id. The newest
+    /// by default.
     #[arg(long, value_name = "BRANCH", conflicts_with_all = ["continue_in", "as_is"])]
     branch: Option<String>,
 
@@ -162,6 +177,15 @@ impl Cmd {
     }
 
     /// The query, from the arguments or the widget's `ATUIN_QUERY`.
+    /// The flag given that only resumes the session an id names (`--switch`, `--branch`,
+    /// `--as-is`), which the picker would drop: the first, as errors name it.
+    fn single_session_flag(&self) -> Option<&'static str> {
+        self.switch
+            .then_some("--switch")
+            .or(self.branch.as_ref().map(|_| "--branch"))
+            .or(self.as_is.then_some("--as-is"))
+    }
+
     fn query(&self) -> String {
         if self.query.is_empty() {
             std::env::var("ATUIN_QUERY").unwrap_or_default()
@@ -236,8 +260,9 @@ fn listing(found: &[SessionRow], offset: time::UtcOffset) -> String {
     note
 }
 
-/// What to say when `flag` (`--branch`, `--as-is`) is given with a `query` that names no single
-/// session: the picker would drop the flag, so it is an error, listing what `query` names.
+/// What to say when `flag` (`--switch`, `--branch`, `--as-is`) is given with a `query` that names
+/// no single session: the picker would drop the flag, so it is an error, listing what `query`
+/// names.
 fn be_more_specific(
     flag: &str,
     query: &str,
@@ -256,8 +281,8 @@ fn be_more_specific(
 }
 
 /// The session named, `row`, can't be resumed here, for `why`: the picker opens on it instead, so
-/// the reason shows (and another can be picked). With `flag` (`--branch`, `--as-is`) given, which
-/// the picker would drop, an error saying why.
+/// the reason shows (and another can be picked). With `flag` (`--switch`, `--branch`, `--as-is`)
+/// given, which the picker would drop, an error saying why.
 fn picker_on(
     row: SessionRow,
     why: NotResumable,
@@ -270,8 +295,8 @@ fn picker_on(
     Ok((row, why))
 }
 
-/// With `flag` (`--branch`, `--as-is`) given and `query` naming no single session, the error
-/// saying to be more specific ([`be_more_specific`]).
+/// With `flag` (`--switch`, `--branch`, `--as-is`) given and `query` naming no single session, the
+/// error saying to be more specific ([`be_more_specific`]).
 async fn no_single_session_for(
     source: &dyn SessionSource,
     query: &str,
@@ -388,7 +413,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let mut preselect = None;
     let target = direct_target(source.as_ref(), query.trim()).await?;
     // These only resume the session an id names: the picker would drop them.
-    let flag = cmd.branch.as_ref().map(|_| "--branch").or(cmd.as_is.then_some("--as-is"));
+    let flag = cmd.single_session_flag();
     if target.is_none() {
         no_single_session_for(source.as_ref(), query.trim(), flag).await?;
     }
@@ -407,7 +432,14 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         }
         let branch = cmd.branch.as_deref();
         let (source, resumer) = (source.as_ref(), resumer.as_ref());
-        let plan = direct_plan(source, resumer, &row, cmd.as_is, branch, &context.host_id).await?;
+        let how = if cmd.switch {
+            Direct::Switch
+        } else if cmd.as_is {
+            Direct::AsIs
+        } else {
+            Direct::CatchUp
+        };
+        let plan = direct_plan(source, resumer, &row, how, branch, &context.host_id).await?;
         match plan {
             Ok((plan, status)) => {
                 // The widget reads stderr for the command: nothing else may go there.
@@ -445,18 +477,29 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     finish(outcome, output)
 }
 
+/// How `atuin ai resume <id>` resumes the session in its own agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Direct {
+    /// Caught up with sync first.
+    CatchUp,
+    /// As it is (`--as-is`).
+    AsIs,
+    /// Switched to another branch first (`--switch`).
+    Switch,
+}
+
 /// `atuin ai resume <id>`: the plan resuming `row` in its own agent, caught up with sync first
-/// (with `as_is`, as it is) to the head `branch` names, and what to say of it; inside, why it
-/// can't resume here. A choice to make (see [`Held`]) is an error saying how to make it.
+/// (`how`: or as it is, or switched) to the head `branch` names, and what to say of it; inside,
+/// why it can't resume here. A choice to make (see [`Held`]) is an error saying how to make it.
 async fn direct_plan(
     source: &dyn SessionSource,
     resumer: &dyn Resumer,
     row: &SessionRow,
-    as_is: bool,
+    how: Direct,
     branch: Option<&str>,
     here: &str,
 ) -> Result<Result<(ResumePlan, Option<String>), NotResumable>> {
-    if as_is {
+    if how == Direct::AsIs {
         match resumer.plan(row).await {
             Ok(Resume {
                 plan,
@@ -472,6 +515,12 @@ async fn direct_plan(
         Some(selector) => Some(pick_head(source, row, selector, here).await?),
         None => None,
     };
+    if how == Direct::Switch {
+        return Ok(resumer.switch(source, row, head.as_ref()).await.map(|switched| {
+            let status = switched.status();
+            (switched.plan, Some(status))
+        }));
+    }
     Ok(match resumer.catch_up(source, row, head.as_ref()).await {
         Ok(CatchUp::Ready { plan, status }) => Ok((plan, status)),
         Ok(CatchUp::Choice(held)) => bail!("{}", choice_note(row, &held, here)),
@@ -516,6 +565,18 @@ fn choice_note(row: &SessionRow, held: &Held, here: &str) -> String {
         };
         note.push_str(&format!(
             ", `atuin ai resume {id} --fork{pick}` forks it from {}'s branch",
+            branch.host
+        ));
+    }
+    // Without `--branch`, `--switch` goes to the newest branch it can.
+    if let Some((n, branch)) = held.branches.iter().enumerate().find(|(_, b)| b.switch) {
+        let pick = if n == 0 {
+            String::new()
+        } else {
+            format!(" --branch {}", quote(&branch.selector).escape_non_printable())
+        };
+        note.push_str(&format!(
+            ", `atuin ai resume {id} --switch{pick}` switches this copy to {}'s branch",
             branch.host
         ));
     }
@@ -783,7 +844,7 @@ mod tests {
         let source = FakeSource::new();
         let ambiguous = "ses_4b8e2f1a9c3d7e";
         assert!(direct_target(&source, ambiguous).await.unwrap().is_none());
-        for flag in ["--branch", "--as-is"] {
+        for flag in ["--switch", "--branch", "--as-is"] {
             let err = no_single_session_for(&source, ambiguous, Some(flag)).await.unwrap_err();
             let err = err.to_string();
             assert!(err.contains("be more specific"), "{err}");
@@ -1015,7 +1076,7 @@ mod tests {
             ..FakeResumer::default()
         };
         let here = fake::THIS_HOST_ID;
-        let got = direct_plan(&source, &ready, &row, false, None, here).await.unwrap();
+        let got = direct_plan(&source, &ready, &row, Direct::CatchUp, None, here).await.unwrap();
         assert_eq!(got, Ok((plan.clone(), Some(status))));
 
         let analysis = source.analyse(&row.handle).await.unwrap().unwrap();
@@ -1030,7 +1091,7 @@ mod tests {
             }))),
             ..FakeResumer::default()
         };
-        let err = direct_plan(&source, &held, &row, false, None, here).await.unwrap_err();
+        let err = direct_plan(&source, &held, &row, Direct::CatchUp, None, here).await.unwrap_err();
         let err = err.to_string();
         let id = row.handle.session.as_ref();
         let want = format!(
@@ -1041,9 +1102,11 @@ mod tests {
         assert!(err.starts_with(&want), "{err}");
         assert!(err.contains("\n  d  @00000002 · "), "{err}");
 
-        let got = direct_plan(&source, &held, &row, true, None, here).await.unwrap();
+        let got = direct_plan(&source, &held, &row, Direct::AsIs, None, here).await.unwrap();
         assert_eq!(got, Ok((plan, None)), "as it is");
-        let err = direct_plan(&source, &held, &row, false, Some("nope"), here).await.unwrap_err();
+        let err = direct_plan(&source, &held, &row, Direct::CatchUp, Some("nope"), here)
+            .await
+            .unwrap_err();
         assert!(err.to_string().starts_with("--branch: no branch is \"nope\""), "{err}");
     }
 
@@ -1067,9 +1130,14 @@ mod tests {
         assert_eq!(ids, want);
     }
 
-    /// `--as-is` and `--branch` go with resuming (and `--branch` with `--fork`), not with each
-    /// other or `--in`; `--print` still prints.
+    /// `--as-is`, `--switch` and `--branch` go with resuming (and `--branch` with `--fork` and
+    /// `--switch`), not with each other or `--in`; `--print` still prints.
     #[rstest]
+    #[case::switch(&["--switch", "--print"], true)]
+    #[case::switch_to_a_branch(&["--switch", "--branch", "@00000002"], true)]
+    #[case::switch_and_fork(&["--switch", "--fork"], false)]
+    #[case::switch_and_in(&["--switch", "--in", "pi"], false)]
+    #[case::switch_and_as_is(&["--switch", "--as-is"], false)]
     #[case::as_is(&["--as-is", "--print"], true)]
     #[case::branch(&["--branch", "@00000002"], true)]
     #[case::fork_from_a_branch(&["--fork", "--branch", "d", "--print"], true)]
@@ -1082,7 +1150,60 @@ mod tests {
         assert_eq!(cli.is_ok(), ok, "{flags:?}");
         if let Ok(cli) = cli {
             assert_eq!(cli.cmd.print, flags.contains(&"--print"));
+            // Named first when the id names no single session, or the session can't resume.
+            let named = ["--switch", "--branch", "--as-is"].into_iter().find(|f| flags.contains(f));
+            assert_eq!(cli.cmd.single_session_flag(), named, "{flags:?}");
         }
+    }
+
+    /// `--switch` switches the copy here of the session an id names to the branch `--branch`
+    /// names (else the newest it can), saying so; one that can't be switched is an error saying
+    /// why. A choice catching up needs names `--switch` (with the branch it would take) where
+    /// the copy can be switched.
+    #[rstest]
+    #[tokio::test]
+    async fn switching_by_id_switches_the_copy_or_says_why_not() {
+        use crate::resume_tui::catchup::{Why, branches};
+
+        let (source, row) = branched().await;
+        let here = fake::THIS_HOST_ID;
+        let resumer = FakeResumer::default();
+        let got = direct_plan(&source, &resumer, &row, Direct::Switch, Some("@00000002"), here)
+            .await
+            .unwrap()
+            .unwrap();
+        let said = format!(
+            "switched to @00000002's branch: 4 messages (your copy is at {})",
+            fake::SWITCHED_BACKUP
+        );
+        assert_eq!(got.1, Some(said));
+        assert_eq!(*resumer.switches.lock(), [SourceId::from("d".to_owned())]);
+
+        let fresh = FakeResumer::default();
+        let refused = direct_plan(&source, &fresh, &row, Direct::Switch, None, here);
+        let why = refused.await.unwrap().unwrap_err();
+        assert_eq!(why, NotResumable::Switch("no head named".to_owned()));
+        let err = picker_on(row.clone(), why, Some("--switch")).unwrap_err().to_string();
+        assert!(err.starts_with("can't resume 7f3c9a12"), "{err}");
+        assert!(err.contains("with `--switch`: switching it to another branch failed"), "{err}");
+
+        let analysis = source.analyse(&row.handle).await.unwrap().unwrap();
+        let copy = fake::local_tip(&["a", "b", "x", "y"], Some("y"));
+        let mut branches = branches(&analysis, Some(&copy), here);
+        branches[1].switch = true;
+        let held = Held {
+            why: Why::Diverged,
+            harness: HarnessKind::ClaudeCode,
+            plan: FakeResumer::default().plan(&row).await.unwrap().plan,
+            branches,
+            chosen: 0,
+        };
+        let note = choice_note(&row, &held, here);
+        let id = row.handle.session.as_ref();
+        let want = format!(
+            ", `atuin ai resume {id} --switch --branch d` switches this copy to @00000002's branch"
+        );
+        assert!(note.contains(&want), "{note}");
     }
 
     #[rstest]

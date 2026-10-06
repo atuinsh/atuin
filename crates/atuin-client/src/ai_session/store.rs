@@ -907,7 +907,11 @@ mod tests {
     #[tokio::test]
     async fn resetting_keeps_capture_checkpoints() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        let checkpoint = atuin_common::harnesstools::session::Checkpoint { at: 42, digest: 7 };
+        let checkpoint = atuin_common::harnesstools::session::Checkpoint {
+            at: 42,
+            digest: 7,
+            generation: 0,
+        };
         db.set_checkpoint(&sample_handle(), checkpoint).await.unwrap();
         db.reset().await.unwrap();
         assert_eq!(db.checkpoint(&sample_handle()).await.unwrap(), Some(checkpoint));

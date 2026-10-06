@@ -23,6 +23,13 @@ pub struct Line {
     /// Byte offset just past the line's newline, which a reader made with `at` resumes from.
     pub end: u64,
     pub bytes: Bytes,
+    /// Which read of the file the line is from: 0 for the reader's first, one more each time it
+    /// started over from the file's first byte because the file was replaced or cut short
+    /// ([`ReadLinesError::Replaced`], [`ReadLinesError::Truncated`]). A consumer that keeps
+    /// state per position (what it has seen of the file) starts it over when this changes, which
+    /// [`end`](Self::end) alone can't tell it: the new file's first line may end past where the
+    /// old one was read to.
+    pub generation: u32,
 }
 
 impl Line {
@@ -52,6 +59,7 @@ impl Line {
             return Ok(Some(Self {
                 end,
                 bytes: Bytes::from(buf).slice(from..to),
+                generation: 0,
             }));
         }
     }
@@ -102,6 +110,8 @@ struct Cursor {
     /// The file `offset` belongs to; `None` before the first read, and always on platforms
     /// without file identities.
     identity: Option<FdIdentity>,
+    /// How many times the read started over from the file's start ([`Line::generation`]).
+    generation: u32,
 }
 
 impl Cursor {
@@ -145,22 +155,20 @@ impl Cursor {
         #[cfg(not(any(unix, windows)))]
         let identity = None;
 
-        if self.identity.is_some() && self.identity != identity {
-            *self = Self {
-                identity,
-                ..Self::default()
-            };
-            return Err(ReadLinesError::Replaced);
-        }
-        if meta.len() < self.position() {
-            *self = Self {
-                identity,
-                ..Self::default()
-            };
-            return Err(ReadLinesError::Truncated);
-        }
-        self.identity = identity;
-        Ok(())
+        let restart = if self.identity.is_some() && self.identity != identity {
+            ReadLinesError::Replaced
+        } else if meta.len() < self.position() {
+            ReadLinesError::Truncated
+        } else {
+            self.identity = identity;
+            return Ok(());
+        };
+        *self = Self {
+            identity,
+            generation: self.generation.wrapping_add(1),
+            ..Self::default()
+        };
+        Err(restart)
     }
 
     /// The next complete line, reading on from `file` as needed; `None` once it has none.
@@ -190,6 +198,7 @@ impl Cursor {
         Some(Line {
             end: self.offset,
             bytes,
+            generation: self.generation,
         })
     }
 
@@ -358,6 +367,15 @@ mod tests {
         Line {
             end,
             bytes: Bytes::from_static(text.as_bytes()),
+            generation: 0,
+        }
+    }
+
+    /// `line`, read after the reader started over `n` times.
+    fn after_restarts(n: u32, line: Line) -> Line {
+        Line {
+            generation: n,
+            ..line
         }
     }
 
@@ -404,7 +422,7 @@ mod tests {
     fn a_reader_resumed_past_the_end_restarts(#[with(b"a\n")] file: TempFile) {
         let mut reader = PathLineReader::at(&file.path, 5);
         assert!(matches!(reader.lines(), Err(ReadLinesError::Truncated)));
-        assert_eq!(drain(reader.lines().unwrap()), [line(2, "a")]);
+        assert_eq!(drain(reader.lines().unwrap()), [after_restarts(1, line(2, "a"))]);
     }
 
     #[rstest]
@@ -415,7 +433,7 @@ mod tests {
         // Past the 3 bytes handed out, short of the 7 read.
         std::fs::write(&file.path, b"xyzab\n").unwrap();
         assert!(matches!(reader.lines(), Err(ReadLinesError::Truncated)));
-        assert_eq!(drain(reader.lines().unwrap()), [line(6, "xyzab")]);
+        assert_eq!(drain(reader.lines().unwrap()), [after_restarts(1, line(6, "xyzab"))]);
     }
 
     #[cfg(unix)]
@@ -427,7 +445,15 @@ mod tests {
         // Larger, so only the identity change can reveal the swap.
         replace(&file.path, b"x\ny\n");
         assert!(matches!(reader.lines(), Err(ReadLinesError::Replaced)));
-        assert_eq!(drain(reader.lines().unwrap()), [line(2, "x"), line(4, "y")]);
+        let again = [after_restarts(1, line(2, "x")), after_restarts(1, line(4, "y"))];
+        assert_eq!(drain(reader.lines().unwrap()), again);
+
+        // Each start over is a read of its own; lines appended after are of the same one.
+        replace(&file.path, b"z\n");
+        assert!(matches!(reader.lines(), Err(ReadLinesError::Replaced)));
+        append(&file.path, b"w\n");
+        let again = [after_restarts(2, line(2, "z")), after_restarts(2, line(4, "w"))];
+        assert_eq!(drain(reader.lines().unwrap()), again);
     }
 
     #[cfg(unix)]

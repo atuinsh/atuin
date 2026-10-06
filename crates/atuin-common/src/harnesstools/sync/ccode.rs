@@ -47,14 +47,15 @@ use time::macros::format_description;
 
 use super::liveness::Start;
 use super::{
-    AppendOptions, AppendOutcome, Links, Liveness, LocalTip, Processes, SessionSync, Stamp,
-    SyncError, append_jsonl, blocking, check_segment, jsonl_lines, modified, require_idle,
-    with_merged,
+    AppendOptions, AppendOutcome, Links, Liveness, LocalTip, Processes, ReplaceOutcome,
+    SessionSync, Stamp, SyncError, append_jsonl, blocking, branch_point, capture_key,
+    check_segment, continuing_from, descends, jsonl_lines, kept_lines, modified, past,
+    replace_jsonl, require_idle, resumes_from, switched_to, with_merged,
 };
-use crate::harnesstools::ccode::session::{CcodeMessage, default_root, locate};
+use crate::harnesstools::ccode::session::{CcodeMessage, default_root, locate, spawner_of};
 use crate::harnesstools::ccode::{Ccode, rehydrate};
 use crate::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
-use crate::harnesstools::session::Message;
+use crate::harnesstools::session::{Message, SessionId};
 
 impl SessionSync for Ccode {
     async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
@@ -82,6 +83,20 @@ impl SessionSync for Ccode {
         let (id, base, lines) = (id.to_owned(), base.clone(), lines.to_vec());
         let taken = options.taken_ids.cloned();
         blocking(move || append_to(&id, &base, &lines, taken.as_ref())).await
+    }
+
+    async fn replace(
+        &self,
+        id: &str,
+        base: &LocalTip,
+        branch: &[RehydrateMessage],
+        options: &AppendOptions<'_>,
+        backups: &Path,
+    ) -> Result<ReplaceOutcome, SyncError> {
+        require_idle(self.is_live(id, None).await)?;
+        let (id, base, branch) = (id.to_owned(), base.clone(), branch.to_vec());
+        let (taken, backups) = (options.taken_ids.cloned(), backups.to_path_buf());
+        blocking(move || replace_to(&id, &base, &branch, taken.as_ref(), &backups)).await
     }
 }
 
@@ -206,27 +221,42 @@ fn parse(line: &[u8]) -> Option<Value> {
 /// What the transcript at `path` holds.
 pub(super) fn read_tip(path: &Path) -> Result<LocalTip, SyncError> {
     let bytes = std::fs::read(path)?;
+    Ok(tip_of(path, &bytes))
+}
+
+/// What the transcript at `path`, holding `bytes`, holds: each line under the id capture gives
+/// it, its own (`uuid`), else (titles, summaries: lines with no id) one keyed on its content, as
+/// capture keys a session's lines under the session its file is named for.
+fn tip_of(path: &Path, bytes: &[u8]) -> LocalTip {
+    let session = SessionId::from(
+        path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+    );
+    // A nested subagent's lines name the subagent that spawned it, as capture reads them.
+    let spawner = spawner_of(path);
+    let mut occurrences = HashMap::new();
     let mut known = HashSet::new();
     let mut cwd = None;
-    for line in jsonl_lines(&bytes) {
+    for line in jsonl_lines(bytes) {
         let Ok(message) = CcodeMessage::decode(line) else {
             continue;
         };
-        if let Some(id) = message.id() {
-            known.insert(String::from(id));
+        let message = message.with_spawner(spawner.clone());
+        if let Some(key) = capture_key(&session, &message, &mut occurrences) {
+            known.insert(key);
         }
         cwd = message.cwd().or(cwd);
     }
-    let (known, merged) = with_merged(known, &bytes);
-    Ok(LocalTip {
+    let (known, merged) = with_merged(known, bytes);
+    LocalTip {
         native_path: path.to_path_buf(),
         known_source_ids: known,
         merged,
-        tip_source_id: tip(&bytes),
-        stamp: Stamp::of(&bytes),
+        tip_source_id: tip(bytes),
+        stamp: Stamp::of(bytes),
         modified: modified(path),
         cwd,
-    })
+        unswitchable: None,
+    }
 }
 
 /// The line `claude --resume` continues the transcript `bytes` from (see the module docs).
@@ -478,9 +508,37 @@ pub(super) fn append_to(
     if Stamp::of(&current) != base.stamp {
         return Err(SyncError::Changed);
     }
+    let (out, appended) = extend(session_id, &current, base, lines, taken)?;
+    let Some(last) = appended.last().cloned() else {
+        // Nothing the transcript can carry: it holds the rows already, as far as it can.
+        return Ok(AppendOutcome {
+            native_path: path.clone(),
+            appended,
+            tip_source_id: base.tip_source_id.clone(),
+        });
+    };
+    append_jsonl(path, base.stamp, &out)?;
+    Ok(AppendOutcome {
+        native_path: path.clone(),
+        appended,
+        tip_source_id: Some(last),
+    })
+}
+
+/// The lines that append `lines` to the transcript of session `session_id` holding `current`
+/// (read as `base`), and the source ids of the rows written as lines of their own (see
+/// [`append_to`]); refused, as it is, unless they fast-forward it and Claude Code would resume
+/// from the last of them.
+fn extend(
+    session_id: &str,
+    current: &[u8],
+    base: &LocalTip,
+    lines: &[RehydrateMessage],
+    taken: Option<&HashSet<String>>,
+) -> Result<(Vec<Value>, Vec<String>), SyncError> {
     check_segment(lines, base, taken, Links::Parents)?;
 
-    let cwd = working_dir(&current).or_else(|| lines.iter().find_map(|m| m.cwd.clone()));
+    let cwd = working_dir(current).or_else(|| lines.iter().find_map(|m| m.cwd.clone()));
     let session = RehydrateSession {
         id: session_id.to_owned(),
         title: None,
@@ -495,32 +553,107 @@ pub(super) fn append_to(
     let out = rehydrate::lines(&session, base.tip_source_id.as_deref());
     let appended: Vec<String> =
         out.iter().filter_map(|l| l["uuid"].as_str().map(str::to_owned)).collect();
-    let Some(last) = appended.last().cloned() else {
-        // Nothing the transcript can carry: it holds the rows already, as far as it can.
-        return Ok(AppendOutcome {
-            native_path: path.clone(),
-            appended,
-            tip_source_id: base.tip_source_id.clone(),
-        });
-    };
-    let mut after = current;
-    if !after.is_empty() && !after.ends_with(b"\n") {
-        after.push(b'\n');
-    }
-    for line in &out {
-        after.extend(line.to_string().bytes());
-        after.push(b'\n');
-    }
-    if tip(&after).as_deref() != Some(last.as_str()) {
+    if let Some(last) = appended.last()
+        && tip(&joined(current, &out)).as_ref() != Some(last)
+    {
         return Err(SyncError::Unsupported(
             "Claude Code would not resume from the last row appended to this transcript",
         ));
     }
-    append_jsonl(path, base.stamp, &out)?;
-    Ok(AppendOutcome {
+    Ok((out, appended))
+}
+
+/// The transcript holding `current`, with `lines` appended (as [`append_jsonl`] appends them).
+fn joined(current: &[u8], lines: &[Value]) -> Vec<u8> {
+    let mut after = current.to_vec();
+    if !after.is_empty() && !after.ends_with(b"\n") {
+        after.push(b'\n');
+    }
+    for line in lines {
+        after.extend(line.to_string().bytes());
+        after.push(b'\n');
+    }
+    after
+}
+
+/// The line kinds that name the session (`/rename`, a generated title, an agent's name): kept
+/// wherever they are when the transcript is switched to another branch, so it keeps its title,
+/// and capture finds them where it found them before.
+const TITLE_LINES: [&str; 3] = ["custom-title", "ai-title", "agent-name"];
+
+/// [`SessionSync::replace`] of the transcript `base` read, once the session is known to be idle.
+///
+/// The lines kept ([`shared_lines`]) are the transcript's but for those that went on from the
+/// line `branch` leaves it at; the branch's rows past it are appended to them as
+/// [`append_to`] appends rows, hanging from that line, under the file's own session id. Claude
+/// Code then resumes from the last line, which must be the branch's head (or the line it was
+/// merged into).
+pub(super) fn replace_to(
+    id: &str,
+    base: &LocalTip,
+    branch: &[RehydrateMessage],
+    taken: Option<&HashSet<String>>,
+    backups: &Path,
+) -> Result<ReplaceOutcome, SyncError> {
+    let path = &base.native_path;
+    let session_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|stem| *stem == id)
+        .ok_or_else(|| SyncError::Other(format!("{} is not session {id}", path.display())))?;
+    if branch.is_empty() {
+        return Err(SyncError::Unsupported("the branch has no rows"));
+    }
+    let current = std::fs::read(path)?;
+    if Stamp::of(&current) != base.stamp {
+        return Err(SyncError::Changed);
+    }
+    let (shared, from) = branch_point(base, branch, Links::Parents)?;
+    let kept = shared_lines(&current, &from);
+    let continuing = continuing_from(tip_of(path, &kept), &from)?;
+    let rest = past(branch, shared, &continuing, Links::Parents);
+    let (lines, appended) = extend(session_id, &kept, &continuing, &rest, taken)?;
+    let out = joined(&kept, &lines);
+    let written = tip_of(path, &out);
+    resumes_from(written.tip_source_id.as_deref(), &written.merged, switched_to(&rest, &from))?;
+    let (backup, warning) = replace_jsonl(path, base.stamp, &current, &out, backups)?;
+    Ok(ReplaceOutcome {
         native_path: path.clone(),
         appended,
-        tip_source_id: Some(last),
+        tip_source_id: written.tip_source_id,
+        backup,
+        warning,
+    })
+}
+
+/// The lines of the transcript `bytes` a switch to a branch that leaves it at line `from` keeps:
+/// all but those that went on from `from` here. Those are the lines descending from it (by
+/// `parentUuid`, or across a compaction boundary `logicalParentUuid`), and the lines that name
+/// one of them (a `last-prompt`'s or a summary's `leafUuid`, a file history snapshot's
+/// `messageId`); and any other line after the first of them, but for title lines
+/// ([`TITLE_LINES`]), kept wherever they are.
+fn shared_lines(bytes: &[u8], from: &str) -> Vec<u8> {
+    let parsed: Vec<Option<Value>> = jsonl_lines(bytes).map(parse).collect();
+    let mut parents: HashMap<&str, &str> = HashMap::new();
+    for line in parsed.iter().flatten() {
+        let parent = line["parentUuid"].as_str().or_else(|| line["logicalParentUuid"].as_str());
+        if let (Some(uuid), Some(parent)) = (line["uuid"].as_str(), parent) {
+            parents.entry(uuid).or_insert(parent);
+        }
+    }
+    let mut memo = HashMap::new();
+    let uuids: HashSet<&str> = parsed.iter().flatten().filter_map(|l| l["uuid"].as_str()).collect();
+    let mut lines = parsed.iter();
+    kept_lines(bytes, |_| {
+        let line = lines.next().and_then(Option::as_ref)?;
+        if TITLE_LINES.contains(&line["type"].as_str().unwrap_or_default()) {
+            return Some(true);
+        }
+        if let Some(uuid) = line["uuid"].as_str() {
+            return Some(!descends(&parents, &mut memo, uuid, from));
+        }
+        let named = line["leafUuid"].as_str().or_else(|| line["messageId"].as_str())?;
+        uuids.contains(named).then(|| !descends(&parents, &mut memo, named, from))
     })
 }
 

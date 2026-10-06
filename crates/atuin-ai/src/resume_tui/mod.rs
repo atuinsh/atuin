@@ -44,9 +44,9 @@ pub use source::{SessionRow, SessionSource};
 
 use self::catchup::{Branch, CatchUp};
 use self::chooser::Destination;
-use self::resumer::{Continued, Forked, NotResumable, Resume};
+use self::resumer::{Continued, Forked, NotResumable, Resume, Switched};
 use self::state::{
-    CHILDREN, Continuing, InputAction, PLAN, PREVIEW, Pending, Picked, RESTORE, State,
+    CHILDREN, Continuing, InputAction, PLAN, PREVIEW, Pending, Picked, RESTORE, State, Writing,
 };
 use self::worker::{Request, Requests, Response};
 
@@ -286,7 +286,10 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
         }
         // Handled by `finish_continuation` and `finish_fork`, which may end the picker, and by
         // `caught_up`, which needs the resumer.
-        Response::Continued(..) | Response::Forked(..) | Response::CaughtUp(..) => {}
+        Response::Continued(..)
+        | Response::Forked(..)
+        | Response::Switched(..)
+        | Response::CaughtUp(..) => {}
     }
 }
 
@@ -566,6 +569,7 @@ fn pick(
         Destination::Original => return resume_original(state, &row, action, resumer, requests),
         Destination::AsIs(plan) => return as_is(state, *plan, action),
         Destination::Fork(branch) => start_fork(state, row, branch.map(|b| *b), action, requests),
+        Destination::Switch(branch) => start_switch(state, row, *branch, action, requests),
         Destination::Continue(target) => start_continuation(state, row, target, action, requests),
     }
     None
@@ -610,7 +614,7 @@ fn start_fork(
     state.continuing = Some(Continuing {
         id,
         target,
-        fork: true,
+        kind: Writing::Fork,
         action,
     });
     let head = branch.map(|b| b.head.source_id);
@@ -623,7 +627,8 @@ fn finish_fork(
     id: u64,
     result: Result<Forked, NotResumable>,
 ) -> Option<(Outcome, String)> {
-    let Continuing { action, .. } = state.continuing.take_if(|c| c.id == id && c.fork)?;
+    let Continuing { action, .. } =
+        state.continuing.take_if(|c| c.id == id && c.kind == Writing::Fork)?;
     match result {
         Ok(forked) => {
             let mut status = forked.status();
@@ -634,6 +639,58 @@ fn finish_fork(
         }
         Err(why) => {
             state.status = Some((format!("can't fork: {why}"), Meaning::AlertError));
+            None
+        }
+    }
+}
+
+/// Switch the copy here of `row` to `branch`'s branch, then carry out `action` (see
+/// [`finish_switch`]). Copying writes nothing: the command copied switches it when run.
+fn start_switch(
+    state: &mut State,
+    row: SessionRow,
+    branch: Branch,
+    action: Pending,
+    requests: &Requests,
+) {
+    if action == Pending::Copy {
+        let id = resumer::quote(row.handle.session.as_ref());
+        let pick = resumer::quote(&branch.selector);
+        copy(state, &format!("atuin ai resume {id} --switch --branch {pick}"));
+        return;
+    }
+    let status = format!("switching to {}'s…", branch.host);
+    state.status = Some((status, Meaning::Annotation));
+    state.continued = state.continued.wrapping_add(1);
+    let id = state.continued;
+    state.continuing = Some(Continuing {
+        id,
+        target: row.handle.harness,
+        kind: Writing::Switch,
+        action,
+    });
+    requests.send(Request::Switch(Box::new(row), id, branch.head.source_id));
+}
+
+/// Switch `id` is written (or was refused): as [`finish_continuation`].
+fn finish_switch(
+    state: &mut State,
+    id: u64,
+    result: Result<Switched, NotResumable>,
+) -> Option<(Outcome, String)> {
+    let Continuing { action, .. } =
+        state.continuing.take_if(|c| c.id == id && c.kind == Writing::Switch)?;
+    match result {
+        Ok(switched) => {
+            let status = switched.status();
+            Some(written(state, action, switched.plan, status))
+        }
+        Err(why) => {
+            let message = match why {
+                NotResumable::Switch(why) => format!("can't switch: {why}"),
+                why => format!("can't switch: {why}"),
+            };
+            state.status = Some((message, Meaning::AlertError));
             None
         }
     }
@@ -680,7 +737,7 @@ fn start_continuation(
     state.continuing = Some(Continuing {
         id,
         target,
-        fork: false,
+        kind: Writing::Continuation,
         action,
     });
     requests.send(Request::Continue(Box::new(row), target, id));
@@ -694,7 +751,8 @@ fn finish_continuation(
     id: u64,
     result: Result<Continued, NotResumable>,
 ) -> Option<(Outcome, String)> {
-    let Continuing { target, action, .. } = state.continuing.take_if(|c| c.id == id && !c.fork)?;
+    let Continuing { target, action, .. } =
+        state.continuing.take_if(|c| c.id == id && c.kind == Writing::Continuation)?;
     match result {
         Ok(continued) => {
             let mut status = continued.status();
@@ -885,6 +943,9 @@ impl Picker<'_> {
                             finish_continuation(&mut state, id, result)
                         }
                         Response::Forked(id, result) => finish_fork(&mut state, id, result),
+                        Response::Switched(id, result) => {
+                            finish_switch(&mut state, id, result)
+                        }
                         response => {
                             if let Some(outcome) =
                                 respond(&mut state, response, resumer, &requests)

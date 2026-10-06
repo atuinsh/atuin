@@ -26,7 +26,7 @@ use super::ResumeContext;
 use super::catchup::CatchUp;
 use super::resumer::{
     Continued, ForkFrom, Forked, NotResumable, Restore, Resume, ResumeError, ResumePlan,
-    ResumeTarget, Resumer,
+    ResumeTarget, Resumer, Switched,
 };
 use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
 
@@ -139,6 +139,7 @@ pub fn local_tip(known: &[&str], at: Option<&str>) -> LocalTip {
         stamp: Stamp::of(b""),
         modified: None,
         cwd: None,
+        unswitchable: None,
     }
 }
 
@@ -978,6 +979,9 @@ impl SessionSource for FakeSource {
     }
 }
 
+/// Where [`FakeResumer::switch`] says the copy switched is kept.
+pub const SWITCHED_BACKUP: &str = "/data/ai/switched/claude-code/s1-20260918T100000.000Z.jsonl";
+
 /// A [`Resumer`] for the fake sessions: the harnesses' real plans, with the deleted worktree as the
 /// only missing directory (none of the fake paths exist on this machine, so it can't check).
 /// Other hosts' sessions are restored from sync, into the directory they ran in; restoring
@@ -988,6 +992,8 @@ pub struct FakeResumer {
     pub catch_up: Option<CatchUp>,
     /// What each fork started from.
     pub forks: Arc<Mutex<Vec<ForkFrom>>>,
+    /// The head each switch went to.
+    pub switches: Arc<Mutex<Vec<SourceId>>>,
 }
 
 impl Default for FakeResumer {
@@ -996,6 +1002,7 @@ impl Default for FakeResumer {
             missing: HashSet::from([PathBuf::from(DELETED_WORKTREE)]),
             catch_up: None,
             forks: Arc::default(),
+            switches: Arc::default(),
         }
     }
 }
@@ -1132,6 +1139,24 @@ impl Resumer for FakeResumer {
             id: row.handle.session.to_string(),
             plan: self.plan_for(&row, Some(native))?,
             note: None,
+        })
+    }
+
+    /// Plans resuming the copy as switched, writing nothing.
+    async fn switch(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        head: Option<&SourceId>,
+    ) -> Result<Switched, NotResumable> {
+        let head = head.cloned().ok_or(NotResumable::Switch("no head named".to_owned()))?;
+        self.switches.lock().push(head);
+        Ok(Switched {
+            host: "@00000002".to_owned(),
+            messages: 4,
+            backup: PathBuf::from(SWITCHED_BACKUP),
+            warning: None,
+            plan: self.plan_for(session, None)?,
         })
     }
 }
