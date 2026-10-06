@@ -317,6 +317,7 @@ async fn verify_key_against_remote(
     interactive: bool,
     candidate: Option<paseto_v4::Key>,
 ) -> Result<()> {
+    let given = candidate.is_some();
     let mut key = match candidate {
         Some(key) => key,
         None => paseto_v4::Key::try_load_from_path(&settings.key_path)
@@ -366,12 +367,20 @@ async fn verify_key_against_remote(
                 }
             }
             Some(e) => {
+                tracing::warn!("could not verify encryption key against remote: {e}");
+
+                // A key given for this login only replaces this machine's key once the
+                // account's data accepts it, so one that can't be checked fails the login
+                // rather than risk re-encrypting local history with a wrong key.
+                if given {
+                    delete_sessions().await;
+                    bail!(fl!("login-key-unverified", error = e.to_string()));
+                }
+
                 // Non-key error (e.g. transient network issue). Don't fail the
                 // login — the user is authenticated and can sync later when the
-                // network recovers. A key given for this login can't be checked, so
-                // it's kept on trust, as login always has.
-                tracing::warn!("could not verify encryption key against remote: {e}");
-                return store_key(settings, store, &key).await;
+                // network recovers.
+                return Ok(());
             }
         }
     }
@@ -380,12 +389,16 @@ async fn verify_key_against_remote(
 /// Roll back the saved session so the user is not left in a half-authenticated
 /// state with a key that can't read the data, then exit.
 async fn logout_wrong_key() -> ! {
+    delete_sessions().await;
+    crate::print_error::print_error(&fl!("login-wrong-key-title"), &fl!("login-wrong-key-body"));
+    std::process::exit(1);
+}
+
+async fn delete_sessions() {
     if let Ok(meta) = Settings::meta_store().await {
         let _ = meta.delete_session().await;
         let _ = meta.delete_hub_session().await;
     }
-    crate::print_error::print_error(&fl!("login-wrong-key-title"), &fl!("login-wrong-key-body"));
-    std::process::exit(1);
 }
 
 #[must_use]
