@@ -242,12 +242,19 @@ fn octavo_address(settings: &Settings) -> Url {
 }
 
 fn connect(address: &Url, connect_timeout: Duration) -> Result<Channel, ConnectError> {
+    // Together under the default 30s `network_timeout`, so a call on a dead connection drops it,
+    // and the retry reconnects instead of waiting out the timeout on the same connection.
+    const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
+    const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
     let endpoint = Endpoint::from_shared(address.to_string())
         .map_err(|source| ConnectError::Endpoint {
             address: address.clone(),
             source,
         })?
-        .connect_timeout(connect_timeout);
+        .connect_timeout(connect_timeout)
+        .http2_keep_alive_interval(KEEP_ALIVE_INTERVAL)
+        .keep_alive_timeout(KEEP_ALIVE_TIMEOUT);
 
     Ok(endpoint.connect_with_connector_lazy(connector()?))
 }
