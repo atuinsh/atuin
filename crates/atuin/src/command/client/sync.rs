@@ -25,7 +25,12 @@ pub enum Cmd {
     },
 
     #[command(about = fl!("cmd-auth"))]
-    Auth,
+    Auth {
+        /// Only exit successfully if `auth` would work here, for the installer to decide whether
+        /// to offer it.
+        #[arg(long, hide = true)]
+        check: bool,
+    },
 
     #[command(about = fl!("cmd-login"))]
     Login(account::login::Cmd),
@@ -53,9 +58,13 @@ impl Cmd {
             Self::Sync { force } => run(&settings, force, db, store).await,
             // Logging in and signing up are the same browser flow on the Hub, so `auth` doesn't
             // ask which; the key is only asked for if the account's data needs it.
-            Self::Auth => {
+            Self::Auth { check } => {
                 if !settings.is_hub_sync() {
                     bail!(fl!("auth-hub-only"));
+                }
+
+                if check {
+                    return Ok(());
                 }
 
                 account::login::Cmd::default().run(&settings, &store).await

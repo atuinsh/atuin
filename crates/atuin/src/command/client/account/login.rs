@@ -65,6 +65,15 @@ impl Cmd {
             SyncAuth::NotLoggedIn { .. } => {}
         }
 
+        // A key given for a browser login is checked against the account's data before it's stored,
+        // so a wrong one can't re-encrypt this machine's history on its way to being rejected.
+        let candidate = match self.scripted_key() {
+            Some(key) if settings.is_hub_sync() && self.username.is_none() => {
+                Some(paseto_v4::Key::try_from_mnemonic(key.expose_secret())?)
+            }
+            _ => None,
+        };
+
         let generated_key = if settings.is_hub_sync() {
             self.run_hub_login(settings, store).await?
         } else {
@@ -72,7 +81,7 @@ impl Cmd {
             None
         };
 
-        verify_key_against_remote(settings, store, self.interactive()).await?;
+        verify_key_against_remote(settings, store, self.interactive(), candidate).await?;
 
         // A key made for this login that the account kept, rather than swapping in the key its
         // data needed, exists nowhere else yet.
@@ -147,16 +156,12 @@ impl Cmd {
         } else {
             // Interactive login via browser OAuth flow. Whether the account needs a particular key
             // only shows once we can see its data, so start from this machine's key (or a fresh
-            // one) and let `verify_key_against_remote` ask for another if its data needs it.
-            let generated_key = if self.scripted_key().is_some() {
-                self.prompt_and_store_key(settings, store).await?;
-                None
-            } else {
-                let had_key = settings.key_path.exists();
-                let key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
-                    .context(fl!("login-key-generate-failed"))?;
-                (!had_key).then_some(key)
-            };
+            // one) and let `verify_key_against_remote` swap in a given key, or ask for one, if
+            // its data needs it.
+            let had_key = settings.key_path.exists();
+            let key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .context(fl!("login-key-generate-failed"))?;
+            let generated_key = (!had_key).then_some(key);
 
             self.ensure_hub_session(settings, &endpoint).await?;
             generated_key
@@ -310,9 +315,13 @@ async fn verify_key_against_remote(
     settings: &Settings,
     store: &SqliteStore,
     interactive: bool,
+    candidate: Option<paseto_v4::Key>,
 ) -> Result<()> {
-    let mut key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-        .context(fl!("login-key-load-failed"))?;
+    let mut key = match candidate {
+        Some(key) => key,
+        None => paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context(fl!("login-key-load-failed"))?,
+    };
 
     // Build the session once (this hits the network). The key can change between retries below, so
     // each iteration re-keys the shared session rather than reconnecting.
@@ -359,9 +368,10 @@ async fn verify_key_against_remote(
             Some(e) => {
                 // Non-key error (e.g. transient network issue). Don't fail the
                 // login — the user is authenticated and can sync later when the
-                // network recovers.
+                // network recovers. A key given for this login can't be checked, so
+                // it's kept on trust, as login always has.
                 tracing::warn!("could not verify encryption key against remote: {e}");
-                return Ok(());
+                return store_key(settings, store, &key).await;
             }
         }
     }

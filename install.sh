@@ -142,9 +142,10 @@ Sync your history across all your machines with Atuin Cloud:
 
 EOF
 
-  # This script is served from main but installs the latest release, which may predate `atuin auth`.
-  # Drop the menu below once a release with `auth` is out.
-  if "$ATUIN_BIN" auth --help >/dev/null 2>&1; then
+  # `auth --check` fails for a self-hosted sync server, which still needs the menu below, and for
+  # a release that predates `atuin auth` (this script is served from main but installs the latest
+  # release).
+  if "$ATUIN_BIN" auth --check >/dev/null 2>&1; then
     printf "Set up sync? You'll log in or create an account in your browser. [Y/n] "
     read -r sync_answer </dev/tty || sync_answer="n"
 
