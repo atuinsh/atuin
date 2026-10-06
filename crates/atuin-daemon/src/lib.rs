@@ -348,7 +348,8 @@ pub async fn boot(
         Octavo::open(&settings, handle.clone()).await,
     ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
-    let ai_session_service = AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture));
+    let ai_session_service =
+        AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture.clone()));
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
@@ -357,12 +358,14 @@ pub async fn boot(
     if let Ok(watcher) = global_settings_watcher() {
         let mut settings_rx = watcher.subscribe();
         let watcher_handle = handle.clone();
+        let ai_session_capture = ai_session_capture.clone();
         tokio::spawn(async move {
             tracing::info!("config file watcher started");
             while settings_rx.changed().await.is_ok() {
                 // Use the already-loaded settings from the watcher
                 // (avoids parsing the config file twice)
                 let new_settings = (*settings_rx.borrow()).clone();
+                ai_session_capture.set_capture(new_settings.ai.capture_sessions);
                 watcher_handle.apply_settings((*new_settings).clone()).await;
             }
             tracing::debug!("config file watcher stopped");

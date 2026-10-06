@@ -34,12 +34,6 @@ pub struct SessionCaptureEngine {
 }
 
 impl SessionCaptureEngine {
-    pub fn nop() -> Self {
-        Self {
-            listeners: Vec::new(),
-        }
-    }
-
     pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool) -> Self {
         let mut listeners = Vec::new();
 

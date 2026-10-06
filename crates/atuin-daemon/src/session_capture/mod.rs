@@ -399,6 +399,22 @@ impl Recovery {
     }
 }
 
+/// Keep what `start` returns while `enabled` is on, dropping it when turned off, until the
+/// sender is gone.
+async fn follow<T>(mut enabled: watch::Receiver<bool>, start: impl Fn() -> T) {
+    let mut running = None;
+    loop {
+        let on = *enabled.borrow_and_update();
+        if on != running.is_some() {
+            tracing::info!(enabled = on, "ai-session capture");
+            running = on.then(&start);
+        }
+        if enabled.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
 pub struct AiHarnessSessionCapture {
     sink: Arc<Sink>,
     /// Runs the harness session file reads of capture and import.
@@ -409,6 +425,8 @@ pub struct AiHarnessSessionCapture {
     coordinator: Option<mpsc::UnboundedSender<Msg>>,
     /// How far the replay running has got.
     progress: ReprojectProgress,
+    /// Whether capture is enabled (`ai.capture_sessions`), followed once the store is ready.
+    capture: watch::Sender<bool>,
     /// The coordinator, and the capture engine once startup recovery succeeds; aborted on drop.
     background: Vec<JoinHandle<()>>,
 }
@@ -477,19 +495,21 @@ impl AiHarnessSessionCapture {
         // listeners that copy new transcripts into the synced record store. It starts once the
         // store is first ready: never, if startup recovery failed, as rebuilds are refused then.
         // (Not on the first state after recovering: a rebuild could have left the store
-        // unavailable by the time this looks.)
+        // unavailable by the time this looks.) From then on it follows the setting
+        // ([`Self::set_capture`]), so turning it on or off takes effect without a restart.
+        // Stopping aborts the listeners mid-read, as a restart does: an append runs to the end on
+        // its own (see [`Sink::append`]), and the checkpoint never passes a line not stored, so
+        // turning capture back on reads again whatever was not. Rows a listener holds in memory
+        // for a transcript replaced under it ([`engine::Held`]) go with it, as on a restart.
+        let (capture, enabled) = watch::channel(capture);
         let capturing = tokio::spawn({
             let sink = sink.clone();
             let pool = pool.clone();
             let mut state = state.clone();
             async move {
-                let ready = state.wait_for(|state| *state == StoreState::Ready).await.is_ok();
-                let _engine = if capture && ready {
-                    SessionCaptureEngine::spawn(&sink, &pool)
-                } else {
-                    SessionCaptureEngine::nop()
-                };
-                std::future::pending::<()>().await;
+                if state.wait_for(|state| *state == StoreState::Ready).await.is_ok() {
+                    follow(enabled, || SessionCaptureEngine::spawn(&sink, &pool)).await;
+                }
             }
         });
 
@@ -499,6 +519,7 @@ impl AiHarnessSessionCapture {
             state,
             coordinator: Some(coordinator),
             progress,
+            capture,
             background: vec![coordinating, capturing],
         }
     }
@@ -536,8 +557,15 @@ impl AiHarnessSessionCapture {
             // the test.
             coordinator: None,
             progress: ReprojectProgress::default(),
+            capture: watch::channel(false).0,
             background: Vec::new(),
         }
+    }
+
+    /// Turn capture on or off, as `ai.capture_sessions` is changed in a running daemon. Takes
+    /// effect once the store is first ready, as at startup; a nop facade never captures.
+    pub fn set_capture(&self, enabled: bool) {
+        self.capture.send_if_modified(|on| std::mem::replace(on, enabled) != enabled);
     }
 
     /// Rebuild the sidecar from the record store while serving, for the maintenance commands
@@ -713,6 +741,41 @@ mod tests {
             .role(Role::User)
             .content(vec![Content::Text("hello".to_owned())])
             .build()
+    }
+
+    /// Turning `ai.capture_sessions` on or off in a running daemon starts or stops capture,
+    /// without a restart; setting it to what it already is leaves capture running as it was.
+    #[rstest]
+    #[tokio::test]
+    async fn capture_follows_the_setting() {
+        struct Running(mpsc::UnboundedSender<bool>);
+        impl Drop for Running {
+            fn drop(&mut self) {
+                let _ = self.0.send(false);
+            }
+        }
+
+        let (capture, enabled) = watch::channel(false);
+        let (tx, mut running) = mpsc::unbounded_channel();
+        let following = tokio::spawn(follow(enabled, move || {
+            tx.send(true).unwrap();
+            Running(tx.clone())
+        }));
+        let set = |on: bool| capture.send_if_modified(|was| std::mem::replace(was, on) != on);
+
+        set(true);
+        assert_eq!(running.recv().await, Some(true));
+        set(true);
+        set(false);
+        assert_eq!(running.recv().await, Some(false));
+        set(true);
+        assert_eq!(running.recv().await, Some(true));
+
+        // Gone with the facade's sender.
+        drop(capture);
+        following.await.unwrap();
+        assert_eq!(running.recv().await, Some(false));
+        assert_eq!(running.recv().await, None);
     }
 
     #[rstest]
