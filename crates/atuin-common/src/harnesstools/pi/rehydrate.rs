@@ -44,7 +44,7 @@ use time::macros::format_description;
 use super::session::{default_root, locate, new_session_dir};
 use crate::harnesstools::rehydrate::{
     Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
-    flatten_uncaptured_calls, record_merged,
+    break_line_cycles, flatten_uncaptured_calls, on_parent_cycles, record_merged,
 };
 use crate::harnesstools::resume;
 use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, Usage};
@@ -160,6 +160,7 @@ pub(crate) fn lines(
         writer.title();
     }
     let mut lines = writer.lines;
+    break_line_cycles(&mut lines, "id", &["parentId"]);
     record_merged(&mut lines, &writer.merged, |l| l["id"].as_str().map(str::to_owned));
     lines
 }
@@ -171,6 +172,10 @@ struct Writer<'a> {
     by_id: HashMap<&'a str, &'a RehydrateMessage>,
     /// The rows that are written (the rest have nothing an entry can carry).
     writable: HashSet<&'a str>,
+    /// The rows written so far.
+    written: HashSet<&'a str>,
+    /// The rows on a parent cycle.
+    on_cycle: HashSet<&'a str>,
     /// The last row written.
     last: Option<&'a str>,
     /// The first entry since the last compaction written: the next compaction keeps from it.
@@ -192,11 +197,14 @@ impl<'a> Writer<'a> {
                 _ => None,
             })
             .collect();
+        let by_id = session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect();
         let mut writer = Self {
             session,
             lines: Vec::new(),
-            by_id: session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect(),
+            on_cycle: on_parent_cycles(&by_id),
+            by_id,
             writable: HashSet::new(),
+            written: HashSet::new(),
             last: continuing.after,
             kept_from: continuing.kept_from,
             tools,
@@ -212,20 +220,33 @@ impl<'a> Writer<'a> {
     }
 
     /// The entry `m` hangs from: its nearest written ancestor, however the rows are ordered;
-    /// `None` at the root. A parent that was never synced stands for the entry before.
+    /// `None` at the root. A parent that was never synced stands for the entry before, and so
+    /// does a parent cycle (a corrupt session's) holding no entry written yet.
     fn parent(&self, m: &'a RehydrateMessage) -> Option<&'a str> {
+        let candidates = if self.on_cycle.contains(m.source_id.as_str()) {
+            &self.written
+        } else {
+            &self.writable
+        };
         let mut parent = m.parent_source_id.as_deref();
-        // At most one step per row: a cycle ends it.
+
+        // At most one step per row, and never back to `m`.
         for _ in 0..=self.by_id.len() {
             let p = parent?;
-            if self.writable.contains(p) {
+            if p == m.source_id {
+                break;
+            }
+
+            if candidates.contains(p) {
                 return Some(p);
             }
+
             match self.by_id.get(p) {
                 Some(row) => parent = row.parent_source_id.as_deref(),
                 None => break,
             }
         }
+
         self.last
     }
 
@@ -247,6 +268,7 @@ impl<'a> Writer<'a> {
         line.append(fields);
         self.lines.push(Value::Object(line));
         self.last = Some(&m.source_id);
+        self.written.insert(&m.source_id);
         if compaction {
             self.kept_from = None;
         } else if self.kept_from.is_none() {

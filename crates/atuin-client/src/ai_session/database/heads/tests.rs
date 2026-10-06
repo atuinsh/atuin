@@ -315,6 +315,36 @@ fn odd_sessions_keep_one_head(
     assert_eq!(analysis.heads()[0].source_id.as_ref(), tip);
 }
 
+/// A compaction synced as a parent cycle (the boundary's parent came from `logicalParentUuid`,
+/// attachments between it and the summary) stays one line with the history before it, so a copy
+/// from before the compaction still fast-forwards across it. The cycle follows on from the row
+/// before it, even one first reached after a row below the cycle stamped earlier than it.
+#[rstest]
+#[case::in_order(&[])]
+#[case::below_stamped_earlier(&[("d", Some("3a06"), 1, 1, Tool)])]
+fn a_compaction_cycle_stays_on_the_line(#[case] extra: &[Row<'static>]) {
+    let mut rows = vec![
+        ("u1", None, 1, 0, Prompt),
+        ("a1", Some("u1"), 1, 2, Reply),
+        // The attachment, boundary, attachments and summary: substantive none of them.
+        ("590a", Some("3a06"), 1, 10, Tool),
+        ("8750", Some("590a"), 1, 11, Tool),
+        ("b118", Some("8750"), 1, 12, Tool),
+        ("ec2c", Some("b118"), 1, 13, Tool),
+        ("3a06", Some("ec2c"), 1, 14, Tool),
+        ("u2", Some("3a06"), 1, 15, Prompt),
+        ("a2", Some("u2"), 1, 16, Reply),
+    ];
+    rows.extend_from_slice(extra);
+    let analysis = analyse(CC, &rows);
+
+    assert_eq!(tips(&analysis), [("a2".to_owned(), 4)]);
+    assert!(!analysis.diverged());
+    assert_eq!(path(&analysis, "a2"), [
+        "u1", "a1", "590a", "8750", "b118", "ec2c", "3a06", "u2", "a2"
+    ]);
+}
+
 /// A branch's path runs from the root to its head, through the rows it shares with the others;
 /// a row off the tree has none. Read from the database, as fork and fast-forward will.
 #[rstest]

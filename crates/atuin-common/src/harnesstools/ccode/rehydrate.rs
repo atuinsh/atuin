@@ -49,7 +49,7 @@ use time::macros::format_description;
 use super::session::{default_root, locate};
 use crate::harnesstools::rehydrate::{
     Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
-    flatten_uncaptured_calls, record_merged,
+    break_line_cycles, flatten_uncaptured_calls, on_parent_cycles, record_merged,
 };
 use crate::harnesstools::resume;
 use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, Usage};
@@ -173,6 +173,7 @@ pub(crate) fn lines(session: &RehydrateSession, after: Option<&str>) -> Vec<Valu
         writer.push(message);
     }
     let mut lines = writer.lines;
+    break_line_cycles(&mut lines, "uuid", &["parentUuid", "logicalParentUuid"]);
     record_merged(&mut lines, &writer.merged, |l| l["uuid"].as_str().map(str::to_owned));
     lines
 }
@@ -184,6 +185,10 @@ struct Writer<'a> {
     by_id: HashMap<&'a str, &'a RehydrateMessage>,
     /// The rows that are written (the rest have nothing a line can carry).
     writable: HashSet<&'a str>,
+    /// The rows written so far.
+    written: HashSet<&'a str>,
+    /// The rows on a parent cycle.
+    on_cycle: HashSet<&'a str>,
     /// The last row written.
     last: Option<&'a str>,
     /// Compaction boundaries: the rows a compaction summary hangs from.
@@ -198,17 +203,37 @@ impl<'a> Writer<'a> {
     fn new(session: &'a RehydrateSession, after: Option<&'a str>) -> Self {
         let by_id: HashMap<&'a str, &'a RehydrateMessage> =
             session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect();
-        let boundaries = session
+        let mut boundaries = HashSet::new();
+        for summary in session
             .messages
             .iter()
             .filter(|m| m.role == Role::System && m.content.iter().any(is_summary))
-            .filter_map(|m| m.parent_source_id.as_deref())
-            .filter(|parent| {
-                by_id
-                    .get(parent)
-                    .is_some_and(|p| p.role == Role::System && !p.content.iter().any(is_summary))
-            })
-            .collect();
+        {
+            // Newer Claude Code writes attachments between the boundary and its summary. Capture
+            // drops the boundary's text, so past them a system line with any is something else.
+            let mut at = summary.parent_source_id.as_deref();
+            let mut past_attachments = false;
+            for _ in 0..by_id.len() {
+                let Some(row) = at.and_then(|p| by_id.get(p)) else {
+                    break;
+                };
+                match &row.role {
+                    Role::Other(_) => {
+                        at = row.parent_source_id.as_deref();
+                        past_attachments = true;
+                    }
+                    Role::System
+                        if !row.content.iter().any(is_summary)
+                            && (!past_attachments || row.content.is_empty()) =>
+                    {
+                        boundaries.insert(row.source_id.as_str());
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        }
+
         let server_tools = session
             .messages
             .iter()
@@ -222,8 +247,10 @@ impl<'a> Writer<'a> {
         let mut writer = Self {
             session,
             lines: Vec::new(),
+            on_cycle: on_parent_cycles(&by_id),
             by_id,
             writable: HashSet::new(),
+            written: HashSet::new(),
             last: after,
             boundaries,
             server_tools,
@@ -238,21 +265,34 @@ impl<'a> Writer<'a> {
         writer
     }
 
-    /// The written line `m` hangs from: its nearest written ancestor, however the rows are
-    /// ordered; `None` at the root. A parent that was never synced stands for the line before.
+    /// The line `m` hangs from: its nearest written ancestor, however the rows are ordered;
+    /// `None` at the root. A parent that was never synced stands for the line before, and so
+    /// does a parent cycle (a corrupt transcript's) holding no line written yet.
     fn parent(&self, m: &'a RehydrateMessage) -> Option<&'a str> {
+        let candidates = if self.on_cycle.contains(m.source_id.as_str()) {
+            &self.written
+        } else {
+            &self.writable
+        };
         let mut parent = m.parent_source_id.as_deref();
-        // At most one step per row: a cycle ends it.
+
+        // At most one step per row, and never back to `m`.
         for _ in 0..=self.by_id.len() {
             let p = parent?;
-            if self.writable.contains(p) {
+            if p == m.source_id {
+                break;
+            }
+
+            if candidates.contains(p) {
                 return Some(p);
             }
+
             match self.by_id.get(p) {
                 Some(row) => parent = row.parent_source_id.as_deref(),
                 None => break,
             }
         }
+
         self.last
     }
 
@@ -284,6 +324,7 @@ impl<'a> Writer<'a> {
         }
         self.lines.push(line);
         self.last = Some(&m.source_id);
+        self.written.insert(&m.source_id);
     }
 
     /// The directory a line ran in, moved from the original directory to the resumed one: a

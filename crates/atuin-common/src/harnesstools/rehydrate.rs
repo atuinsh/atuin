@@ -1,7 +1,7 @@
 //! Writing a harness-native transcript back out from captured messages, so a session recorded on
 //! another machine (or whose transcript was deleted) can be resumed here.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use time::OffsetDateTime;
@@ -304,6 +304,99 @@ fn join_notes(
             if !rows[i].content.iter().all(is_reasoning) {
                 host = None;
             }
+        }
+    }
+}
+
+/// The rows on a parent cycle (a corrupt transcript's), of rows by source id. A writer links
+/// such a row only to a line already written: linking along the cycle would close it.
+pub(crate) fn on_parent_cycles<'a>(
+    by_id: &HashMap<&'a str, &'a RehydrateMessage>,
+) -> HashSet<&'a str> {
+    let mut on_cycle = HashSet::new();
+    let mut done = HashSet::new();
+
+    for &start in by_id.keys() {
+        let mut walk = Vec::new();
+        let mut on_walk = HashMap::new();
+        let mut at = Some(start);
+        while let Some(id) = at.filter(|id| !done.contains(id)) {
+            if let Some(&from) = on_walk.get(id) {
+                on_cycle.extend(walk[from..].iter().copied());
+                break;
+            }
+
+            on_walk.insert(id, walk.len());
+            walk.push(id);
+            at = by_id.get(id).and_then(|r| r.parent_source_id.as_deref());
+        }
+        done.extend(walk);
+    }
+
+    on_cycle
+}
+
+/// Break any parent cycle left among `lines`, the JSON lines a writer wrote, each naming its own
+/// id under `id_key` and its parent under the first of `link_keys` holding one. Parents are
+/// resolved however the rows are ordered, so a corrupt cycle and clock skew can still close one;
+/// it is cut at its earliest line, re-pointed to the nearest line before it that doesn't lead
+/// back in, else made a root.
+pub(crate) fn break_line_cycles(lines: &mut [serde_json::Value], id_key: &str, link_keys: &[&str]) {
+    let link = |l: &serde_json::Value| link_keys.iter().copied().find(|k| l[*k].is_string());
+    let index: HashMap<&str, usize> =
+        lines.iter().enumerate().filter_map(|(i, l)| Some((l[id_key].as_str()?, i))).collect();
+    let mut parent: Vec<Option<usize>> =
+        lines.iter().map(|l| link(l).and_then(|k| index.get(l[k].as_str()?).copied())).collect();
+    let n = parent.len();
+
+    // 0: unseen, 1: on the walk in progress, 2: known to reach a root.
+    let mut state = vec![0_u8; n];
+    let mut walk = Vec::new();
+    let mut cuts = Vec::new();
+    for start in 0..n {
+        walk.clear();
+        let mut at = Some(start);
+        while let Some(i) = at {
+            match state[i] {
+                2 => break,
+                1 => {
+                    let from = walk.iter().position(|&w| w == i).expect("on the walk");
+                    let cycle = &walk[from..];
+                    let earliest = *cycle.iter().min().expect("non-empty");
+                    let leads_in = |mut at: Option<usize>| {
+                        for _ in 0..n {
+                            let Some(j) = at else {
+                                return false;
+                            };
+                            if cycle.contains(&j) {
+                                return true;
+                            }
+                            at = parent[j];
+                        }
+                        true
+                    };
+                    let to = (0..earliest).rev().find(|&j| !leads_in(Some(j)));
+
+                    parent[earliest] = to;
+                    cuts.push(earliest);
+                    break;
+                }
+                _ => {
+                    state[i] = 1;
+                    walk.push(i);
+                    at = parent[i];
+                }
+            }
+        }
+        for &i in &walk {
+            state[i] = 2;
+        }
+    }
+
+    for cut in cuts {
+        let to = parent[cut].map_or(serde_json::Value::Null, |j| lines[j][id_key].clone());
+        if let Some(key) = link(&lines[cut]) {
+            lines[cut][key] = to;
         }
     }
 }

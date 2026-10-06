@@ -137,7 +137,7 @@ impl Analysis {
             Model::Interleaving => interleaved_parents(&rows),
             Model::Linear => (0..rows.len()).map(|i| i.checked_sub(1)).collect(),
         };
-        break_cycles(&mut parent, &in_tree);
+        break_cycles(&mut parent, &in_tree, &rows);
 
         let mut analysis = Self {
             rows,
@@ -445,8 +445,10 @@ fn interleaved_parents(rows: &[Message]) -> Vec<Option<usize>> {
     parent
 }
 
-/// Cut each parent cycle (a corrupt transcript's) at its earliest row, which becomes a root.
-fn break_cycles(parent: &mut [Option<usize>], in_tree: &[bool]) {
+/// Cut each parent cycle (a corrupt transcript's) at its earliest row, which then follows on from
+/// the row before it, its host's if any, as a row whose parent is not stored does. As a root it
+/// would split the rows before the cycle from those after it.
+fn break_cycles(parent: &mut [Option<usize>], in_tree: &[bool], rows: &[Message]) {
     // 0: unseen, 1: on the walk in progress, 2: known to reach a root.
     let mut state = vec![0_u8; parent.len()];
     for start in (0..parent.len()).filter(|&i| in_tree[i]) {
@@ -458,8 +460,32 @@ fn break_cycles(parent: &mut [Option<usize>], in_tree: &[bool]) {
                 1 => {
                     // Back at a row of this walk: everything from it on is the cycle.
                     let from = walk.iter().position(|&w| w == i).expect("on the walk");
-                    let earliest = *walk[from..].iter().min().expect("non-empty");
-                    parent[earliest] = None;
+                    let cycle = &walk[from..];
+                    let earliest = *cycle.iter().min().expect("non-empty");
+
+                    // Not a row below the cycle (stamped before it): that would close another.
+                    let leads_in = |mut at: Option<usize>| {
+                        for _ in 0..parent.len() {
+                            let Some(j) = at else {
+                                return false;
+                            };
+                            if cycle.contains(&j) {
+                                return true;
+                            }
+                            at = parent[j];
+                        }
+                        true
+                    };
+                    let before = |same_host: bool| {
+                        (0..earliest).rev().find(|&j| {
+                            in_tree[j]
+                                && (!same_host || rows[j].host == rows[earliest].host)
+                                && !leads_in(Some(j))
+                        })
+                    };
+                    let fallback = before(true).or_else(|| before(false));
+
+                    parent[earliest] = fallback;
                     break;
                 }
                 _ => {

@@ -205,6 +205,7 @@ fn entries_are_linked_named_and_compacted(sessions: TempDir) {
 #[rstest]
 fn the_tree_is_relinked_whatever_the_order(sessions: TempDir) {
     let session = session("s-order", sessions.path(), vec![
+        message("a0", Some("u1"), Role::Assistant, vec![Content::Text("early".to_owned())]),
         message("x1", Some("u1"), Role::Other("label".to_owned()), vec![]),
         message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]),
         message("a1", Some("x1"), Role::Assistant, vec![Content::Text("hello".to_owned())]),
@@ -212,8 +213,47 @@ fn the_tree_is_relinked_whatever_the_order(sessions: TempDir) {
     let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
+    assert_eq!(parent("a0"), "u1");
     assert_eq!(parent("u1"), serde_json::Value::Null);
     assert_eq!(parent("a1"), "u1");
+}
+
+/// A parent cycle (a corrupt session's) never makes an entry its own parent or one written after
+/// it: it hangs from the entry before.
+#[rstest]
+fn a_parent_cycle_hangs_from_the_entry_before(sessions: TempDir) {
+    let session = session("s-cycle", sessions.path(), vec![
+        message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]),
+        message("a1", Some("x1"), Role::Assistant, vec![Content::Text("hello".to_owned())]),
+        message("x1", Some("u2"), Role::Other("label".to_owned()), vec![]),
+        message("u2", Some("a1"), Role::User, vec![Content::Text("again".to_owned())]),
+    ]);
+    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let lines = lines(&path);
+    let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
+
+    assert_eq!(parent("a1"), "u1");
+    assert_eq!(parent("u2"), "a1");
+}
+
+/// A parent cycle (`c`, `d`) under an entry stamped before it (`x`) closes no cycle among the
+/// written entries: it is cut where it starts.
+#[rstest]
+fn a_cycle_closed_by_clock_skew_is_cut(sessions: TempDir) {
+    let session = session("s-skew", sessions.path(), vec![
+        message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]),
+        message("x", Some("c"), Role::User, vec![Content::Text("skewed".to_owned())]),
+        message("w", Some("x"), Role::Assistant, vec![Content::Text("reply".to_owned())]),
+        message("c", Some("d"), Role::User, vec![Content::Text("cycle".to_owned())]),
+        message("d", Some("c"), Role::Other("label".to_owned()), vec![]),
+    ]);
+    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let lines = lines(&path);
+    let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
+
+    assert_eq!(parent("c"), "w");
+    assert_eq!(parent("w"), "x");
+    assert_eq!(parent("x"), "u1");
 }
 
 /// A session is never written twice, wherever pi keeps it.
