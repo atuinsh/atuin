@@ -177,7 +177,12 @@ impl Cmd {
     async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &url::Url) -> Result<()> {
         tracing::info!("Authenticating with Atuin Hub...");
 
-        let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
+        let mut session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
+
+        // Asks the Hub to show signed-out users its signup page rather than its login page.
+        if self.from_registration {
+            session.auth_url.query_pairs_mut().append_pair("signup", "1");
+        }
 
         if session.open_in_browser() {
             println!("{}", fl!("account-hub-browser-opened"));
