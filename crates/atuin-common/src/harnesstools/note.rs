@@ -71,7 +71,7 @@ pub(crate) fn render(parts: &[Part]) -> String {
 /// | Pi | `bash`, `edit`, `write`, `read`, `grep`, `find`, `ls` | as Claude Code's (`path`) |
 /// | any | anything else | ``called `<name>` <compact arguments>`` |
 ///
-/// Without the input (capture no longer keeps it), each says only what was done: `ran a shell
+/// Without the input (capture keeps none by default), each says only what was done: `ran a shell
 /// command`, `edited a file`, `wrote a file`, `read a file`, `applied a patch`, `searched the
 /// files`, `listed files`, `handed work to a subagent`, `fetched a web page`, `searched the
 /// web`; and anything else ``called `<name>` ``. Inputs are cut to their first line and
@@ -95,8 +95,8 @@ pub fn tool_note(name: &str, input: &Value) -> String {
         })
     };
     let path = || field(&["file_path", "filePath", "path", "notebook_path", "file"]);
-    // What was done, on what when the input says (capture keeps none now, only older records
-    // do), else only what.
+    // What was done, on what when the input says (capture keeps none by default, only with
+    // `ai.capture_tools` and in older records), else only what.
     let on = |what: Option<String>, detailed: &dyn Fn(&str) -> String, bare: &str| {
         Some(what.map_or_else(|| bare.to_owned(), |w| detailed(&w)))
     };
@@ -176,7 +176,7 @@ fn code(text: &str) -> String {
 }
 
 /// A command given as its arguments, as a shell line: `bash -lc <script>` is its script.
-fn command_line(argv: &[Value]) -> String {
+pub(crate) fn command_line(argv: &[Value]) -> String {
     let words: Vec<&str> = argv.iter().filter_map(Value::as_str).collect();
     if let [shell, flag, script] = words.as_slice()
         && shell.rsplit('/').next().is_some_and(|s| matches!(s, "bash" | "sh" | "zsh"))

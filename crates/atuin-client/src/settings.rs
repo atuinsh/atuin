@@ -714,14 +714,28 @@ pub struct Ai {
     pub tips: Option<bool>,
 
     /// Whether the daemon captures live AI harness sessions (Claude Code, Codex, ...) into the
-    /// synced record store. Off by default: capture copies full transcripts -- including reasoning
-    /// and tool output -- into the encrypted store used by sync, so it is strictly opt-in.
+    /// synced record store. Off by default: capture copies the conversation (what was said, and
+    /// the tools called, see [`Self::capture_tools`]) into the encrypted store used by sync, so
+    /// it is strictly opt-in.
     #[serde(default)]
     pub capture_sessions: bool,
+
+    /// With [`Self::capture_sessions`], also capture what each tool call was given and what it
+    /// returned (commands and their output, files read and written), so a resumed session has
+    /// them too. On by default, with secrets redacted and each payload held to 64 KiB; off keeps
+    /// only each tool's name.
+    #[serde(default = "Ai::default_capture_tools")]
+    pub capture_tools: bool,
 
     /// The `atuin ai resume` session picker (`[ai.sessions]`).
     #[serde(default)]
     pub sessions: AiSessions,
+}
+
+impl Ai {
+    const fn default_capture_tools() -> bool {
+        true
+    }
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -1617,6 +1631,7 @@ impl Settings {
             .set_default("ai.session_continue_minutes", 60)?
             .set_default("ai.send_cwd", false)?
             .set_default("ai.capture_sessions", false)?
+            .set_default("ai.capture_tools", true)?
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?

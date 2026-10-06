@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 # Enables `atuin_common::harnesstools`.
-ai = ["fs-watcher", "jsonl", "dep:shlex", "dep:xxhash-rust", "sqlite"]
+ai = ["fs-watcher", "jsonl", "dep:xxhash-rust", "sqlite"]
 # Enables `atuin_common::ansi`.
 ansi = ["dep:atuin-vt100"]
 # Enables `atuin_common::db` (but not `db::sqlite`).
@@ -70,7 +70,7 @@ semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
-shlex = { workspace = true, optional = true }
+shlex = { workspace = true }
 sqlx = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }

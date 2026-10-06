@@ -37,8 +37,9 @@
 //!   (the same note several times in a row counted, `×3`; see [`Flatten::Notes`]). Re-captured,
 //!   the part reads back under a part id capture already holds, so nothing is pushed; a part
 //!   merged away is not there to capture again.
-//! - **Tool output**: capture keeps none now; a call kept with its input (older records) is
-//!   written `completed` (or `error`) with [`UNCAPTURED_OUTPUT`] as its output.
+//! - **Tool output**: written back as captured (`ai.capture_tools`). Capture keeps none with
+//!   it off; a call kept with its input (older records) is written `completed` (or `error`) with
+//!   [`UNCAPTURED_OUTPUT`] as its output.
 //! - opencode stamps each part row with the time of the import. Text, reasoning, tool and retry
 //!   parts carry their own clock and read back with the captured timestamp; the rest (`step-start`,
 //!   `step-finish`, whole parts) read back with the import's.

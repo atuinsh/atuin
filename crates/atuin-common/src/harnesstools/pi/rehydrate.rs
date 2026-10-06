@@ -28,7 +28,7 @@
 //!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), as does the entry a row
 //!   with nothing to write hangs from, so the file says which synced rows it holds.
 //! - **Tool results** keep their output; their tool's name comes from the call they answer. With
-//!   none captured (capture keeps none now), a result says [`UNCAPTURED_OUTPUT`], as does a
+//!   none captured (capture keeps none by default), a result says [`UNCAPTURED_OUTPUT`], as does a
 //!   `!command`'s output.
 //! - A `!command` keeps its command, output and whether it failed, not its exit code; one from a
 //!   v1 file (no entry ids) has its result renamed after the id it is written under.

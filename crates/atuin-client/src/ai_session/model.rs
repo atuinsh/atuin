@@ -583,11 +583,14 @@ mod tests {
             .build()
     }
 
-    /// Changing `Message`'s fields breaks v1 records: bump the record version instead.
+    /// Changing `Message`'s fields breaks v1 and v2 records: bump the record version instead.
     #[rstest]
-    fn the_v1_layout_is_pinned() {
+    fn the_v2_layout_is_pinned() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        assert_eq!(hex(&record), V1_LAYOUT);
+        let (kind, body) = record.split_first().unwrap();
+        let mut body = zstd::stream::decode_all(body).unwrap();
+        body.insert(0, *kind);
+        assert_eq!(hex(&body), V1_LAYOUT);
     }
 
     #[rstest]
@@ -628,8 +631,9 @@ mod tests {
     #[rstest]
     fn an_unknown_version_is_refused() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        let err = AiSessionRecord::deserialize(&record, &RecordVersion::V2).unwrap_err();
-        assert!(matches!(err, DecodeError::UnknownVersion(RecordVersion::V2)));
+        let version = RecordVersion::Other("v3".to_owned());
+        let err = AiSessionRecord::deserialize(&record, &version).unwrap_err();
+        assert!(matches!(err, DecodeError::UnknownVersion(v) if v == version));
     }
 
     fn hex(bytes: &[u8]) -> String {

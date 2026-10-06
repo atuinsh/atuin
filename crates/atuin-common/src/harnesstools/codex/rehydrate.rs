@@ -56,8 +56,9 @@
 //!   is left out. The line of the written row before them records the rows written as no line
 //!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), so the rollout says which
 //!   synced rows it holds.
-//! - **Tool output**: capture keeps none now; a call kept with its input (older records) gets
-//!   [`UNCAPTURED_OUTPUT`] as its output (an empty `tools` list for a tool search).
+//! - **Tool output**: written back as captured (`ai.capture_tools`). Capture keeps none with
+//!   it off; a call kept with its input (older records) gets [`UNCAPTURED_OUTPUT`] as its
+//!   output (an empty `tools` list for a tool search).
 //! - Rows whose line carries nothing Codex needs back: thread names (Codex keeps those in its
 //!   `session_index.jsonl` now) and other events.
 //! - Content kinds a line of the kind cannot carry (text inside a tool call, and so on).

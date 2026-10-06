@@ -411,7 +411,7 @@ static SGR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").exp
 macro_rules! executed {
     ($subcommand:literal) => {
         concat!(
-            r"(?:^|[;&|(`\n])[ \t]*(?:(?:sudo|command|exec|time|env|nohup)\s+|\w+=\S*\s+)*(?:\S*/)?atuin\s+",
+            r"(?:^|[;&|(`{!\n])[ \t]*(?:(?:sudo|command|exec|time|env|nohup|then|do|else)\s+|\w+=\S*\s+)*(?:\S*/)?atuin\s+",
             $subcommand
         )
     };
@@ -429,7 +429,34 @@ static OUTPUT_UNSAFE: LazyLock<RegexSet> = LazyLock::new(|| {
 
 #[must_use]
 pub fn output_unsafe(command: &str) -> bool {
-    OUTPUT_UNSAFE.is_match(&SGR.replace_all(command, ""))
+    let command = SGR.replace_all(command, "");
+    OUTPUT_UNSAFE.is_match(&command) || shell_scripts(&command).iter().any(|s| output_unsafe(s))
+}
+
+/// The scripts `command` hands a shell to run (`bash -lc '<script>'`, `fish --command
+/// '<script>'`), which run though they are quoted.
+fn shell_scripts(command: &str) -> Vec<String> {
+    let Some(words) = shlex::split(command) else {
+        return Vec::new();
+    };
+    let mut scripts = Vec::new();
+    let mut shell = false;
+    for (n, word) in words.iter().enumerate() {
+        let name = word.rsplit('/').next().unwrap_or(word);
+        if matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "fish") {
+            shell = true;
+        } else if let Some(script) = shell.then(|| word.strip_prefix("--command=")).flatten() {
+            scripts.push(script.to_owned());
+            shell = false;
+        } else if shell
+            && (word == "--command"
+                || (word.starts_with('-') && !word.starts_with("--") && word.ends_with('c')))
+        {
+            scripts.extend(words.get(n + 1).cloned());
+            shell = false;
+        }
+    }
+    scripts
 }
 
 /// Whether `s` contains anything that looks like it involves a credential.
@@ -1249,6 +1276,17 @@ mod tests {
     #[case::timed("time atuin account register", true)]
     #[case::env_prefix("ATUIN_CONFIG_DIR=/tmp/x atuin login -u me", true)]
     #[case::by_path("./target/debug/atuin key", true)]
+    #[case::brace_group("{ atuin key; }", true)]
+    #[case::shell_script("bash -lc 'atuin key'", true)]
+    #[case::shell_script_flags_apart("/bin/zsh -l -c \"atuin login -u me\"", true)]
+    #[case::shell_script_after("cd ~ && sh -c 'atuin key --base64'", true)]
+    #[case::shell_script_mention("bash -c 'echo atuin key'", false)]
+    #[case::shell_script_long_flag("fish --command 'atuin key'", true)]
+    #[case::shell_script_long_flag_joined("fish --command='atuin login -u me'", true)]
+    #[case::negated("! atuin key", true)]
+    #[case::in_a_branch("if true; then atuin key; fi", true)]
+    #[case::in_a_loop("for i in 1; do atuin login -u me; done", true)]
+    #[case::otherwise("if false; then :; else atuin key; fi", true)]
     #[case::absolute_path("/usr/local/bin/atuin key --base64", true)]
     fn commands_whose_output_holds_the_encryption_key(
         #[case] command: &str,
