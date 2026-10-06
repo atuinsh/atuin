@@ -357,6 +357,7 @@ mod tests {
         OpenOptions::new().append(true).open(path).unwrap().write_all(bytes).unwrap();
     }
 
+    #[cfg(unix)]
     fn replace(path: &Path, contents: &[u8]) {
         let tmp = path.with_file_name("tmp");
         std::fs::write(&tmp, contents).unwrap();

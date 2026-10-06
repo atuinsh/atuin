@@ -32,6 +32,9 @@ pub enum Cmd {
     #[command(about = fl!("cmd-config-enable"))]
     Enable(EnableCmd),
 
+    #[command(about = fl!("cmd-config-disable"))]
+    Disable(DisableCmd),
+
     #[command(about = fl!("cmd-config-print"), long_about = fl!("cmd-config-print", "long"))]
     Print(PrintCmd),
 }
@@ -43,6 +46,7 @@ impl Cmd {
             Self::Get(get) => get.run(settings).await,
             Self::Set(set) => set.run(settings).await,
             Self::Enable(enable) => enable.run(settings).await,
+            Self::Disable(disable) => disable.run(settings).await,
             Self::Print(print) => print.run(settings).await,
         }
     }
@@ -245,14 +249,20 @@ pub struct EnableCmd {
     pub feature: Feature,
 }
 
+#[derive(Args, Debug)]
+pub struct DisableCmd {
+    #[arg(value_enum, help = fl!("arg-config-disable-feature"))]
+    pub feature: Feature,
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Feature {
-    #[value(help = fl!("value-config-enable-feature-daemon"))]
+    #[value(help = fl!("value-config-feature-daemon"))]
     Daemon,
-    #[value(help = fl!("value-config-enable-feature-output-capture"))]
+    #[value(help = fl!("value-config-feature-output-capture"))]
     OutputCapture,
     #[cfg(feature = "octavo")]
-    #[value(help = fl!("value-config-enable-feature-octavo"))]
+    #[value(help = fl!("value-config-feature-octavo"))]
     Octavo,
 }
 
@@ -295,7 +305,7 @@ impl EnableCmd {
         if settings.daemon.enabled && !settings.daemon.autostart {
             println!("Restart the Atuin daemon and your shell for the change to take effect.");
             return backfilled;
-        } else if let Err(e) = daemon::restart_cmd(settings).await {
+        } else if let Err(e) = daemon::restart_cmd(settings, false).await {
             eprintln!(
                 "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
             );
@@ -419,6 +429,72 @@ async fn onboard_octavo(settings: &Settings) -> Result<Option<OctavoOnboarding>>
         backfill,
         old,
     }))
+}
+
+impl DisableCmd {
+    pub async fn run(self, settings: &Settings) -> Result<()> {
+        let config_file = Settings::get_config_path()?;
+        let config_str = tokio::fs::read_to_string(&config_file).await?;
+
+        let updated = self.get_updated_config(&config_str)?;
+        tokio::fs::write(&config_file, &updated).await?;
+
+        println!("Disabled.");
+
+        #[cfg(feature = "daemon")]
+        match self.feature {
+            Feature::Daemon => {
+                if let Err(e) = daemon::stop_cmd(settings).await {
+                    eprintln!(
+                        "Could not stop the Atuin daemon: {e}\nRun `atuin daemon stop` manually."
+                    );
+                    return Ok(());
+                }
+            }
+            Feature::OutputCapture => restart_autostarted_daemon(settings).await,
+            #[cfg(feature = "octavo")]
+            Feature::Octavo => restart_autostarted_daemon(settings).await,
+        }
+
+        println!("Restart your shell for the change to take effect.");
+
+        Ok(())
+    }
+
+    fn get_updated_config(&self, config_str: &str) -> Result<String> {
+        let mut doc: DocumentMut = config_str.parse()?;
+
+        match self.feature {
+            Feature::Daemon => {
+                set_deep_key(&mut doc, "daemon.enabled", Value::from(false))?;
+                set_deep_key(&mut doc, "daemon.autostart", Value::from(false))?;
+                if doc.get("search_mode").and_then(Item::as_str) == Some("daemon-fuzzy") {
+                    set_deep_key(&mut doc, "search_mode", Value::from("fuzzy"))?;
+                }
+            }
+            Feature::OutputCapture => {
+                set_deep_key(&mut doc, "output.enabled", Value::from(false))?;
+            }
+            #[cfg(feature = "octavo")]
+            Feature::Octavo => set_deep_key(&mut doc, "octavo.enabled", Value::from(false))?,
+        }
+
+        let updated = doc.to_string();
+        Settings::validate_str(&updated)
+            .map_err(|e| eyre::eyre!("cannot update config: it would be invalid\n\n{e}"))?;
+
+        Ok(updated)
+    }
+}
+
+#[cfg(feature = "daemon")]
+async fn restart_autostarted_daemon(settings: &Settings) {
+    if settings.daemon.enabled
+        && settings.daemon.autostart
+        && let Err(e) = daemon::restart_cmd(settings, true).await
+    {
+        eprintln!("Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually.");
+    }
 }
 
 #[derive(Args, Debug)]
@@ -749,6 +825,27 @@ mod tests {
     ) {
         let updated = EnableCmd { feature }
             .get_updated_config(input, daemon_enabled)
+            .expect("the update should be accepted");
+
+        assert_eq!(updated, expected);
+    }
+
+    #[rstest]
+    #[case::daemon(Feature::Daemon, "", "[daemon]\nenabled = false\nautostart = false\n")]
+    #[case::output_capture(Feature::OutputCapture, "", "[output]\nenabled = false\n")]
+    #[case::daemon_search(
+        Feature::Daemon,
+        "search_mode = \"daemon-fuzzy\"\n[daemon]\nenabled = true",
+        "search_mode = \"fuzzy\"\n[daemon]\nenabled = false\nautostart = false\n"
+    )]
+    #[case::non_daemon_search(
+        Feature::Daemon,
+        "search_mode = \"prefix\"\n[daemon]\nenabled = true",
+        "search_mode = \"prefix\"\n[daemon]\nenabled = false\nautostart = false\n"
+    )]
+    fn disable_writes(#[case] feature: Feature, #[case] input: &str, #[case] expected: &str) {
+        let updated = DisableCmd { feature }
+            .get_updated_config(input)
             .expect("the update should be accepted");
 
         assert_eq!(updated, expected);

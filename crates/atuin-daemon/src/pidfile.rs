@@ -308,6 +308,7 @@ pub fn try_read_pid(pidfile_path: &Path) -> Option<u32> {
 mod tests {
     use std::fs::OpenOptions;
 
+    #[cfg(unix)]
     use proptest::prelude::*;
     use rstest::{fixture, rstest};
 

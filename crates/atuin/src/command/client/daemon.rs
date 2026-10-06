@@ -95,7 +95,7 @@ impl Cmd {
             Some(SubCmd::Start { force, .. }) => run(settings, store, history_db, force).await,
             Some(SubCmd::Status) => status_cmd(&settings).await,
             Some(SubCmd::Stop) => stop_cmd(&settings).await,
-            Some(SubCmd::Restart) => restart_cmd(&settings).await,
+            Some(SubCmd::Restart) => restart_cmd(&settings, false).await,
         }
     }
 }
@@ -511,7 +511,7 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-async fn stop_cmd(settings: &Settings) -> Result<()> {
+pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
     let Ok(mut client) = connect_client(settings).await else {
         println!("Daemon is not running");
         return Ok(());
@@ -535,7 +535,7 @@ async fn stop_cmd(settings: &Settings) -> Result<()> {
     }
 }
 
-pub(super) async fn restart_cmd(settings: &Settings) -> Result<()> {
+pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> Result<()> {
     // Stop if running
     match probe(settings).await {
         Probe::Ready(_) | Probe::NeedsRestart(_) => {
@@ -550,6 +550,10 @@ pub(super) async fn restart_cmd(settings: &Settings) -> Result<()> {
         }
         Probe::Unreachable(_) => {
             println!("No daemon running");
+
+            if only_if_running {
+                return Ok(());
+            }
         }
     }
 

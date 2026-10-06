@@ -2376,9 +2376,10 @@ fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
 mod tests {
     use atuin_client::database::Context;
     use atuin_client::history::History;
+    #[cfg(unix)]
+    use atuin_client::settings::RequestedSearchMode;
     use atuin_client::settings::{
-        FilterMode, KeymapMode, Preview, PreviewStrategy, RequestedSearchMode, SearchMode,
-        Settings, Shells,
+        FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
     };
     use atuin_common::shell::Shell;
     use rstest::{fixture, rstest};
