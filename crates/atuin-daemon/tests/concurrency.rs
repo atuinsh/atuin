@@ -554,6 +554,7 @@ async fn captures_never_outlive_their_entries_under_contention() {
                         id,
                         capture("out"),
                         &OutputCapture::Enabled(CaptureLimits::default()),
+                        &atuin_common::secrets::files::SensitiveFiles::default(),
                     )
                     .await;
             }));

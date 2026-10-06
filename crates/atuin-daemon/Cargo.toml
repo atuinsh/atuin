@@ -37,6 +37,7 @@ lasso = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
+regex = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

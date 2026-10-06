@@ -80,8 +80,15 @@ Some output is never stored:
 - **Commands in
   [`command_filter`](../configuration/config.md#command_filter).** These stay
   in your history; only their output is dropped.
-- **Atuin's own credential commands**: `atuin key`, `atuin login`,
-  `atuin register`, and `atuin account change-password`.
+- **Commands whose output can hold a credential**: Atuin's own `atuin key`,
+  `atuin login`, `atuin register` and `atuin account change-password`, and
+  other tools' commands that print a token, a password or the environment,
+  such as `gh auth token`, `aws configure get`, `kubectl get secret`,
+  `vault kv get`, `op read` and `printenv`. See
+  [`command_filter`](../configuration/config.md#command_filter) for the list.
+- **Commands that name a file holding credentials**, such as `cat .env` or
+  `cat ~/.aws/credentials`. See
+  [`sensitive_files`](../configuration/config.md#sensitive_files).
 
 When a command prints more than
 [`max_output_size`](../configuration/config.md#max_output_size) (1MB by
@@ -90,15 +97,18 @@ recording that it's missing.
 
 ## Privacy
 
-- Recognised credentials in the output (API keys, tokens, and the like) are
-  replaced with `****` before storage, while
+- Recognised credentials in the output (API keys, tokens, private keys,
+  passwords in URLs and connection strings, values assigned to names like
+  `DB_PASSWORD`) are replaced with `****` before storage, while
   [`secrets_filter`](../configuration/config.md#secrets_filter) is on (the
-  default). This is best-effort: it only knows common formats, and misses a
-  credential that colour codes split apart.
+  default). Add patterns of your own with
+  [`redact_patterns`](../configuration/config.md#redact_patterns). This is
+  best-effort: it only knows common formats, and misses a credential that
+  colour codes split apart. Output that can't be redacted quickly isn't stored.
 - For a command that prints secrets, don't rely on redaction: add it to
   [`command_filter`](../configuration/config.md#command_filter) to keep it in
   your history but never store its output. See
-  [Excluding commands](excluding-commands.md#keep-the-command-drop-its-output-command_filter).
+  [Keeping secrets out](excluding-commands.md#a-commands-output-command_filter).
 - Captured output stays on your machine. **It isn't synced**, even with
   [sync](sync.md) set up. We're actively working on supporting this.
 - Atuin AI only sends output to the LLM when it asks for a specific command's

@@ -162,6 +162,7 @@ async fn apply(env: &TestEnv, model: &mut Model, op: &Op) {
                     id,
                     capture("out"),
                     &OutputCapture::Enabled(CaptureLimits::default()),
+                    &atuin_common::secrets::files::SensitiveFiles::default(),
                 )
                 .await;
             let state = model.slots[usize::from(*slot)].1;

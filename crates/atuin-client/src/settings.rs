@@ -41,6 +41,7 @@ mod kv;
 pub(crate) mod meta;
 pub mod output;
 mod scripts;
+pub mod security;
 pub mod shells;
 pub mod watcher;
 
@@ -49,6 +50,7 @@ pub use daemon::Daemon;
 pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
 use output::OutputCaptureConfig;
 pub use output::{CaptureLimits, CommandFilter, OutputCapture};
+pub use security::Security;
 pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
@@ -1186,6 +1188,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub ai: Ai,
+
+    #[serde(default)]
+    pub security: Security,
 }
 
 impl Settings {
@@ -2247,6 +2252,43 @@ mod tests {
     #[rstest]
     fn output_command_filter_rejects_an_invalid_expression() {
         assert!(Settings::validate_str("[output]\ncommand_filter = [\"(\"]\n").is_err());
+    }
+
+    /// AI session capture applies `command_filter` to the commands agents run, whether or not
+    /// output capture is on.
+    #[rstest]
+    #[case::enabled("enabled = true\n")]
+    #[case::disabled("enabled = false\n")]
+    fn output_command_filter_is_kept_with_capture_off(#[case] enabled: &str) {
+        let settings =
+            parse_settings(&format!("[output]\n{enabled}command_filter = [\"^cat \"]\n"));
+        assert!(settings.output.command_filter().is_match("cat .env"));
+    }
+
+    #[rstest]
+    fn security_settings_load() {
+        let settings = parse_settings(concat!(
+            "[security]\n",
+            "redact_patterns = [\"ACME-[0-9]{6}\"]\n",
+            "sensitive_files = [\"*.secret\"]\n",
+        ));
+        assert_eq!(settings.security.redactor(true).redact("id ACME-123456"), "id ****");
+        let files = settings.security.sensitive_files(&settings.key_path);
+        assert!(files.matches("notes.secret", None));
+        assert!(files.matches(&settings.key_path.to_string_lossy(), None));
+        assert!(files.matches(".env", None), "the built-in files stay");
+    }
+
+    #[rstest]
+    fn security_settings_default_to_the_built_in_rules() {
+        let settings = parse_settings("");
+        assert!(settings.security.redact_patterns.is_empty());
+        assert!(settings.security.sensitive_files(&settings.key_path).matches(".env", None));
+    }
+
+    #[rstest]
+    fn redact_patterns_reject_an_invalid_expression() {
+        assert!(Settings::validate_str("[security]\nredact_patterns = [\"(\"]\n").is_err());
     }
 
     #[rstest]

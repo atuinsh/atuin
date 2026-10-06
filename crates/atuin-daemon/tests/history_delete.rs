@@ -320,6 +320,7 @@ async fn delete_forgets_captured_output(
             id,
             capture("secret output"),
             &OutputCapture::Enabled(CaptureLimits::default()),
+            &atuin_common::secrets::files::SensitiveFiles::default(),
         )
         .await
         .unwrap();
@@ -378,6 +379,7 @@ async fn output_for_a_deleted_or_unknown_id_is_refused(
                 id,
                 capture("late"),
                 &OutputCapture::Enabled(CaptureLimits::default()),
+                &atuin_common::secrets::files::SensitiveFiles::default(),
             )
             .await
             .unwrap_err();
@@ -412,6 +414,7 @@ async fn cancel_discards_captured_output(#[future(awt)] env: TestEnv) {
             id,
             capture("boom"),
             &OutputCapture::Enabled(CaptureLimits::default()),
+            &atuin_common::secrets::files::SensitiveFiles::default(),
         )
         .await
         .unwrap();
@@ -426,6 +429,7 @@ async fn cancel_discards_captured_output(#[future(awt)] env: TestEnv) {
             id,
             capture("late"),
             &OutputCapture::Enabled(CaptureLimits::default()),
+            &atuin_common::secrets::files::SensitiveFiles::default(),
         )
         .await
         .unwrap_err();
@@ -454,6 +458,7 @@ async fn output_arriving_mid_delete_is_refused(#[future(awt)] env: TestEnv) {
             id,
             capture("late"),
             &OutputCapture::Enabled(CaptureLimits::default()),
+            &atuin_common::secrets::files::SensitiveFiles::default(),
         )
         .await
         .unwrap_err();
@@ -501,6 +506,7 @@ async fn abandoned_delete_still_completes(#[future(awt)] env: TestEnv) {
             id,
             capture("late"),
             &OutputCapture::Enabled(CaptureLimits::default()),
+            &atuin_common::secrets::files::SensitiveFiles::default(),
         )
         .await
         .unwrap_err();

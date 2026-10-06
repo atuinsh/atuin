@@ -89,6 +89,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
 use atuin_client::settings::{OutputCapture, Search};
+use atuin_common::secrets::files::SensitiveFiles;
 use atuin_common::sync::AsyncShardedMutex;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
@@ -617,8 +618,9 @@ impl HistoryJournal {
         marks
     }
 
-    /// Store a command's captured output as `output` allows: nothing while capture is disabled, and
-    /// nothing for a command its `command_filter` matches.
+    /// Store a command's captured output as `output` allows: nothing while capture is disabled,
+    /// nothing for a command its `command_filter` matches, and nothing for one that may print a
+    /// credential (`atuin key`, `gh auth token`) or names one of `files` (`cat .env`).
     ///
     /// If the output is received for an unknown command, this returns a
     /// [`RegisterOutputError::NotLive`].
@@ -627,6 +629,7 @@ impl HistoryJournal {
         id: HistoryId,
         capture: CommandCapture,
         output: &OutputCapture,
+        files: &SensitiveFiles,
     ) -> Result<(), RegisterOutputError> {
         let _lifecycle = self.lifecycle_mutex.lock(&id).await;
 
@@ -637,17 +640,17 @@ impl HistoryJournal {
         // Resolve the command backing this id: an in-flight entry wins, otherwise the
         // (non-deleted) history row. `None` means the command is gone or already deleted.
         let command = if let Some(cmd) = self.active_cmds.get(&id) {
-            Some(cmd.history.command.clone())
+            Some((cmd.history.command.clone(), cmd.history.cwd.clone()))
         } else {
             self.history_db
                 .load(id)
                 .await
                 .map_err(|e| RegisterOutputError::HistoryDbFailed(e.into()))?
                 .filter(|h| h.deleted_at.is_none())
-                .map(|h| h.command)
+                .map(|h| (h.command, h.cwd))
         };
 
-        let Some(command) = command else {
+        let Some((command, cwd)) = command else {
             return Err(RegisterOutputError::NotLive(id));
         };
 
@@ -660,6 +663,7 @@ impl HistoryJournal {
         // Never persist output for commands that may carry secrets, or that the user excluded.
         if atuin_common::secrets::output_unsafe(&command)
             || limits.command_filter.is_match(&command)
+            || files.named_in_command(&command, Some(std::path::Path::new(&cwd)))
         {
             return Ok(());
         }

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use enum_dispatch::enum_dispatch;
 
+pub mod access;
 pub mod ccode;
 pub mod codex;
 pub mod continuation;

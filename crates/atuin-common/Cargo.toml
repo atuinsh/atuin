@@ -48,6 +48,7 @@ dirs = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
 flume = { workspace = true }
+glob-match = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }

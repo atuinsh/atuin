@@ -325,6 +325,7 @@ pub async fn boot(
                 db.clone(),
                 settings.ai.capture_sessions,
                 session_capture::ToolCapture::from_setting(settings.ai.capture_tools),
+                session_capture::CapturePolicy::from_settings(&settings),
                 blocking_pool.clone(),
             )
         }

@@ -2,6 +2,8 @@
 
 use serde_json::{Map, Value};
 
+use super::policy::CapturePolicy;
+
 /// The most of one tool call's input, or of its output, capture keeps: bytes of it as stored
 /// (its JSON, strings escaped), past which strings are clipped, keeping their start and end, and
 /// lists lose their last items. Large enough for nearly every result whole (the harnesses clip
@@ -39,13 +41,13 @@ impl ToolCapture {
         }
     }
 
-    /// Applies this policy to a tool call's input or output.
-    pub(super) fn apply(self, payload: &mut Value) {
+    /// Applies this policy to a tool call's input or output, redacting as `policy` does.
+    pub(super) fn apply(self, payload: &mut Value, policy: &CapturePolicy) {
         match self {
             Self::Names => *payload = Value::Null,
             Self::Payloads => {
                 let mut budget = TOOL_PAYLOAD_LIMIT;
-                shape(payload, &mut budget);
+                shape(payload, &mut budget, policy);
                 // `shape` keeps the payload's shape, so a harness reads it back as the same kind
                 // of input or output, and holds it to the limit (give or take the short strings
                 // and first items it always keeps), but for an object of very many keys, which it
@@ -83,7 +85,7 @@ pub(super) fn runs_output_unsafe(input: &Value) -> bool {
 /// clipped (but never one [`SHORT`] enough to be a name), and the items of a list past it
 /// dropped (but never its first); media blocks become a note. Its shape stays as it was, so a
 /// harness reads it back as the same kind of input or output.
-fn shape(value: &mut Value, budget: &mut usize) {
+fn shape(value: &mut Value, budget: &mut usize, policy: &CapturePolicy) {
     match value {
         Value::Object(object) => match media_note(object) {
             Some(note) => {
@@ -100,7 +102,7 @@ fn shape(value: &mut Value, budget: &mut usize) {
                 if let Some(name) = named {
                     for key in ["value", "Value"] {
                         if let Some(Value::String(text)) = object.get_mut(key) {
-                            redact_named(&name, text);
+                            redact_named(&name, text, policy);
                         }
                     }
                 }
@@ -108,9 +110,9 @@ fn shape(value: &mut Value, budget: &mut usize) {
                 for (key, value) in object.iter_mut() {
                     *budget = budget.saturating_sub(stored_len(key) + 2);
                     if let Value::String(text) = value {
-                        redact_named(key, text);
+                        redact_named(key, text, policy);
                     }
-                    shape(value, budget);
+                    shape(value, budget, policy);
                 }
             }
         },
@@ -121,17 +123,19 @@ fn shape(value: &mut Value, budget: &mut usize) {
                 if *budget == 0 && kept > 0 {
                     break;
                 }
-                shape(item, budget);
+                shape(item, budget, policy);
                 kept += 1;
             }
             items.truncate(kept);
         }
         Value::String(text) => {
-            if let Some(shaped) = shape_json_text(text, *budget) {
+            if let Some(shaped) = shape_json_text(text, *budget, policy) {
                 *text = shaped;
             } else {
-                let redacted = atuin_common::secrets::redact(text);
-                *text = fit(&redacted, (*budget).max(SHORT));
+                *text = match policy.redact(text) {
+                    Some(redacted) => fit(&redacted, (*budget).max(SHORT)),
+                    None => NOT_REDACTED.to_owned(),
+                };
             }
             *budget = budget.saturating_sub(stored_len(text) + 1);
         }
@@ -145,13 +149,13 @@ fn shape(value: &mut Value, budget: &mut usize) {
 /// is so it stays JSON: as text, a quoted value's quotes are escaped, which hides it from
 /// redaction, and clipping would cut it mid-string. Kept as written when nothing in it changes;
 /// `None` when `text` isn't a JSON object or list.
-fn shape_json_text(text: &str, budget: usize) -> Option<String> {
+fn shape_json_text(text: &str, budget: usize, policy: &CapturePolicy) -> Option<String> {
     let parsed = json_text(text)?;
     let room = budget.max(SHORT);
     let mut allowance = budget;
     loop {
         let mut shaped = parsed.clone();
-        shape(&mut shaped, &mut allowance.clone());
+        shape(&mut shaped, &mut allowance.clone(), policy);
         let shaped = if shaped == parsed {
             text.to_owned()
         } else {
@@ -199,9 +203,12 @@ fn fit(text: &str, room: usize) -> String {
 
 /// `text`, the value of `key`, redacted as the assignment it is: a secret is often known by the
 /// name it is kept under (`{"AWS_SECRET_ACCESS_KEY": "..."}`), which the value alone doesn't say.
-fn redact_named(key: &str, text: &mut String) {
+fn redact_named(key: &str, text: &mut String, policy: &CapturePolicy) {
     let line = format!("{key}={text}");
-    let redacted = atuin_common::secrets::redact(&line);
+    let Some(redacted) = policy.redact(&line) else {
+        NOT_REDACTED.clone_into(text);
+        return;
+    };
     if redacted != line {
         let value = redacted.strip_prefix(key).and_then(|rest| rest.strip_prefix('='));
         value.unwrap_or(atuin_common::secrets::REDACTED).clone_into(text);
@@ -237,6 +244,56 @@ fn media_note(object: &Map<String, Value>) -> Option<Value> {
     ])))
 }
 
+/// In place of a string that took too long to redact (see
+/// [`REDACT_BUDGET`](atuin_common::secrets::REDACT_BUDGET)).
+pub(super) const NOT_REDACTED: &str = "[not captured: took too long to redact]";
+
+/// In place of what a call writes to a file holding credentials.
+const WITHHELD: &str = "[not captured: a file holding credentials]";
+
+/// `input`, a call writing to a file holding credentials, without what it writes: every string
+/// but the paths it names, and of a patch, all but its headers (`*** Update File: .env`). It keeps
+/// its shape, so a harness reads it back as the same call.
+pub(super) fn withhold_written(input: &mut Value) {
+    fn blank(value: &mut Value) {
+        match value {
+            Value::String(text) => WITHHELD.clone_into(text),
+            Value::Array(items) => items.iter_mut().for_each(blank),
+            Value::Object(object) => object.values_mut().for_each(blank),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+    }
+    match input {
+        Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                if !PATH_KEYS.contains(&key.as_str()) {
+                    blank(value);
+                }
+            }
+        }
+        Value::String(text) => match json_text(text) {
+            Some(mut parsed) => {
+                withhold_written(&mut parsed);
+                *text = parsed.to_string();
+            }
+            None => {
+                let headers: Vec<&str> =
+                    text.lines().filter(|line| line.trim_start().starts_with("*** ")).collect();
+                *text = if headers.is_empty() {
+                    WITHHELD.to_owned()
+                } else {
+                    headers.join("\n")
+                };
+            }
+        },
+        Value::Array(_) | Value::Null | Value::Bool(_) | Value::Number(_) => blank(input),
+    }
+}
+
+/// The keys a call names a file under, kept when what it writes isn't.
+const PATH_KEYS: &[&str] =
+    &["file_path", "filePath", "path", "notebook_path", "filename", "file", "paths", "file_paths"];
+
 /// About the length of [`clip`]'s note.
 const NOTE: usize = 40;
 
@@ -262,7 +319,7 @@ mod tests {
     use super::*;
 
     fn kept(mut value: Value) -> Value {
-        ToolCapture::Payloads.apply(&mut value);
+        ToolCapture::Payloads.apply(&mut value, &CapturePolicy::default());
         value
     }
 
@@ -294,7 +351,7 @@ mod tests {
     #[rstest]
     fn names_only_keeps_nothing() {
         let mut value = json!({"command": "ls"});
-        ToolCapture::Names.apply(&mut value);
+        ToolCapture::Names.apply(&mut value, &CapturePolicy::default());
         assert!(value.is_null());
     }
 
@@ -390,6 +447,29 @@ mod tests {
     #[case::read(json!({"file_path": "/home/me/atuin/key"}), false)]
     fn calls_whose_output_may_hold_a_credential(#[case] input: Value, #[case] unsafe_: bool) {
         assert_eq!(runs_output_unsafe(&input), unsafe_);
+    }
+
+    /// A write to a credential file keeps its shape and its paths, and nothing it writes.
+    #[rstest]
+    #[case::claude(
+        json!({"file_path": ".env", "content": "A=1"}),
+        json!({"file_path": ".env", "content": WITHHELD}),
+    )]
+    #[case::pi_edits(
+        json!({"path": ".env", "edits": [{"oldText": "A=1", "newText": "A=2"}]}),
+        json!({"path": ".env", "edits": [{"oldText": WITHHELD, "newText": WITHHELD}]}),
+    )]
+    #[case::codex_arguments(
+        json!(r#"{"path":".env","content":"A=1"}"#),
+        json!(json!({"path": ".env", "content": WITHHELD}).to_string()),
+    )]
+    #[case::patch(
+        json!("*** Begin Patch\n*** Update File: .env\n@@\n-A=1\n+A=2\n*** End Patch"),
+        json!("*** Begin Patch\n*** Update File: .env\n*** End Patch"),
+    )]
+    fn a_credential_files_writes_are_withheld(#[case] mut input: Value, #[case] want: Value) {
+        withhold_written(&mut input);
+        assert_eq!(input, want);
     }
 
     /// A payload of many values each too short to clip is still held to the limit.

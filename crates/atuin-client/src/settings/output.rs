@@ -6,14 +6,20 @@ use serde::{Deserialize, Serialize};
 use super::DiskUsageLimit;
 
 /// The `[output]` section of `config.toml`: capturing and storing command output.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(from = "OutputCaptureConfig", into = "OutputCaptureConfig")]
 pub enum OutputCapture {
-    /// `enabled = false`: nothing is captured and the other keys are ignored.
-    #[default]
-    Disabled,
+    /// `enabled = false`: nothing is captured, and the other keys are ignored but for
+    /// `command_filter`, which AI session capture also applies to the commands agents run.
+    Disabled(CommandFilter),
     /// `enabled = true`, with the limits that govern what is kept.
     Enabled(CaptureLimits),
+}
+
+impl Default for OutputCapture {
+    fn default() -> Self {
+        Self::Disabled(CommandFilter::default())
+    }
 }
 
 impl OutputCapture {
@@ -21,8 +27,17 @@ impl OutputCapture {
     #[must_use]
     pub const fn limits(&self) -> Option<&CaptureLimits> {
         match self {
-            Self::Disabled => None,
+            Self::Disabled(_) => None,
             Self::Enabled(limits) => Some(limits),
+        }
+    }
+
+    /// Commands whose output is never stored, whether capture is enabled or not.
+    #[must_use]
+    pub const fn command_filter(&self) -> &CommandFilter {
+        match self {
+            Self::Disabled(filter) => filter,
+            Self::Enabled(limits) => &limits.command_filter,
         }
     }
 
@@ -114,7 +129,7 @@ impl Default for OutputCaptureConfig {
 impl From<OutputCaptureConfig> for OutputCapture {
     fn from(config: OutputCaptureConfig) -> Self {
         if !config.enabled {
-            return Self::Disabled;
+            return Self::Disabled(config.command_filter);
         }
 
         Self::Enabled(CaptureLimits {
@@ -129,7 +144,10 @@ impl From<OutputCaptureConfig> for OutputCapture {
 impl From<OutputCapture> for OutputCaptureConfig {
     fn from(capture: OutputCapture) -> Self {
         let (enabled, limits) = match capture {
-            OutputCapture::Disabled => (false, CaptureLimits::default()),
+            OutputCapture::Disabled(command_filter) => (false, CaptureLimits {
+                command_filter,
+                ..CaptureLimits::default()
+            }),
             OutputCapture::Enabled(limits) => (true, limits),
         };
         Self {
@@ -150,7 +168,7 @@ mod tests {
 
     #[rstest]
     fn effective_limits_uses_defaults_when_disabled() {
-        assert_eq!(OutputCapture::Disabled.effective_limits(), CaptureLimits::default());
+        assert_eq!(OutputCapture::default().effective_limits(), CaptureLimits::default());
     }
 
     #[rstest]

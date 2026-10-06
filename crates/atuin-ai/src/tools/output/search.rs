@@ -38,7 +38,7 @@ pub struct AtuinOutputSearchToolCall {
 
 impl AtuinOutputSearchToolCall {
     pub(crate) async fn execute(&self, db: &Sqlite, settings: &Settings) -> ToolOutcome {
-        if matches!(settings.output, OutputCapture::Disabled) {
+        if matches!(settings.output, OutputCapture::Disabled(_)) {
             return ToolOutcome::Error(
                 "Output search is unavailable: output capture is disabled in the Atuin config \
                  (the [output] section), so no command output has been recorded. History search \
