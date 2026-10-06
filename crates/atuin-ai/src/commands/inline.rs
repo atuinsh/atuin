@@ -128,13 +128,19 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
     println!("Authenticating with Atuin Hub...");
 
     let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
-    println!("Open this URL to continue:");
+
+    if session.open_in_browser() {
+        println!("Opened your browser to continue. If it didn't open, visit:");
+    } else {
+        println!("Open this URL to continue:");
+    }
     println!("{}", session.auth_url);
 
     let token = session
         .wait_for_completion(
             atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
             atuin_client::hub::DEFAULT_POLL_INTERVAL,
+            "Waiting for you to authorize in your browser… (Ctrl-C to cancel)",
         )
         .await?;
 

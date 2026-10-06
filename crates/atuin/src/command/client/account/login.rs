@@ -178,13 +178,19 @@ impl Cmd {
         tracing::info!("Authenticating with Atuin Hub...");
 
         let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
-        println!("{}", fl!("account-hub-open-url"));
+
+        if session.open_in_browser() {
+            println!("{}", fl!("account-hub-browser-opened"));
+        } else {
+            println!("{}", fl!("account-hub-open-url"));
+        }
         println!("{}", session.auth_url);
 
         let token = session
             .wait_for_completion(
                 atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
                 atuin_client::hub::DEFAULT_POLL_INTERVAL,
+                &fl!("account-hub-waiting"),
             )
             .await?;
 
