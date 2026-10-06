@@ -2,5 +2,4 @@
 *-lock.json
 *-lock.yaml
 *.svg
-/crates/atuin-octavo/proto/buf/
 /vendor/
