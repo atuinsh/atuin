@@ -65,13 +65,24 @@ impl Cmd {
             SyncAuth::NotLoggedIn { .. } => {}
         }
 
-        if settings.is_hub_sync() {
-            self.run_hub_login(settings, store).await?;
+        let generated_key = if settings.is_hub_sync() {
+            self.run_hub_login(settings, store).await?
         } else {
             self.run_legacy_login(settings, store).await?;
+            None
+        };
+
+        verify_key_against_remote(settings, store, self.interactive()).await?;
+
+        // A key made for this login that the account kept, rather than swapping in the key its
+        // data needed, exists nowhere else yet.
+        if let Some(key) = generated_key
+            && paseto_v4::Key::try_load_from_path(&settings.key_path).is_ok_and(|kept| kept == key)
+        {
+            println!("\n{}", fl!("login-new-key-backup"));
         }
 
-        verify_key_against_remote(settings, store, self.interactive()).await
+        Ok(())
     }
 
     /// Whether a rejected key can be corrected by asking for another one.
@@ -86,10 +97,16 @@ impl Cmd {
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
-    async fn run_hub_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    ///
+    /// Returns the key the browser flow generated, if this machine had none.
+    async fn run_hub_login(
+        &self,
+        settings: &Settings,
+        store: &SqliteStore,
+    ) -> Result<Option<paseto_v4::Key>> {
         let endpoint = settings.hub_endpoint();
 
-        if let Some(username) = &self.username {
+        let generated_key = if let Some(username) = &self.username {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
@@ -125,19 +142,25 @@ impl Cmd {
                 println!("\n{}", fl!("account-not-migrated-note"));
                 println!("{}", fl!("account-not-migrated-hint"));
             }
+
+            None
         } else {
             // Interactive login via browser OAuth flow. Whether the account needs a particular key
             // only shows once we can see its data, so start from this machine's key (or a fresh
             // one) and let `verify_key_against_remote` ask for another if its data needs it.
-            if self.scripted_key().is_some() {
+            let generated_key = if self.scripted_key().is_some() {
                 self.prompt_and_store_key(settings, store).await?;
+                None
             } else {
-                paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                let had_key = settings.key_path.exists();
+                let key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
                     .context(fl!("login-key-generate-failed"))?;
-            }
+                (!had_key).then_some(key)
+            };
 
             self.ensure_hub_session(settings, &endpoint).await?;
-        }
+            generated_key
+        };
 
         // Silently attempt to link CLI account to Hub if one exists
         if let Ok(cli_token) = settings.session_token().await
@@ -147,7 +170,7 @@ impl Cmd {
         }
 
         println!("{}", fl!("login-success"));
-        Ok(())
+        Ok(generated_key)
     }
 
     /// Legacy login: always prompt for username/password interactively

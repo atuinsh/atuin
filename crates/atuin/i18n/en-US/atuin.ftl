@@ -37,6 +37,7 @@ login-upgrading-legacy = You have a legacy sync session. Continuing login to upg
 account-not-migrated-hint = Sync will continue to work, but you can visit hub.atuin.sh to create a Hub account and link it to your existing CLI account.
 login-key-generate-failed = could not load or generate encryption key
 login-success = Successfully authenticated.
+login-new-key-backup = Created an encryption key for your account. Run 'atuin key' to see it and keep it somewhere safe: you'll need it to sync another machine, and it can't be recovered if lost.
 login-legacy-unexpected-2fa = unexpected two-factor requirement from legacy server
 login-legacy-success = Logged in!
 account-hub-open-url = Open this URL to authenticate with Atuin Hub:
