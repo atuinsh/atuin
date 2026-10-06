@@ -6,6 +6,7 @@ mod message_enricher;
 mod recovery;
 mod tools;
 
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +18,7 @@ use atuin_client::ai_session::{
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
-use atuin_common::harnesstools::session::{Content, Role};
+use atuin_common::harnesstools::session::{Content, Role, ToolCallId};
 use atuin_common::sync::BlockingPool;
 use atuin_domain::record::HostId;
 use engine::SessionCaptureEngine;
@@ -90,6 +91,9 @@ pub(crate) struct Sink {
     state: watch::Receiver<StoreState>,
     /// What [`sanitize`] keeps of tool calls, live and imported alike.
     tools: ToolCapture,
+    /// Calls seen running a command whose output may carry a credential, and not answered yet:
+    /// their results' output is never kept (see [`Self::withhold_unsafe_output`]).
+    unsafe_calls: Arc<parking_lot::Mutex<HashSet<(HarnessSession, ToolCallId)>>>,
     #[cfg(test)]
     hooks: Option<Arc<dyn hooks::Hooks>>,
 }
@@ -114,6 +118,7 @@ impl Sink {
             pending_projection: Arc::default(),
             state,
             tools,
+            unsafe_calls: Arc::default(),
             #[cfg(test)]
             hooks: None,
         }
@@ -156,6 +161,7 @@ impl Sink {
     pub(crate) async fn append(&self, mut msg: Message) -> Result<Appended, AppendError> {
         // Apply capture policy before either persistence path or the live tail. Keep structural
         // rows (even with no content) so parent links and usage accounting remain intact.
+        self.withhold_unsafe_output(&mut msg);
         sanitize(&mut msg, self.tools);
         // Captured here, so on this host; a reproject reads the same from the record envelope.
         msg.host = Some(self.records.host_id());
@@ -171,6 +177,34 @@ impl Sink {
             Err(err) => {
                 tracing::error!(?err, "an ai-session capture stopped unexpectedly");
                 Err(AppendError::Aborted)
+            }
+        }
+    }
+
+    /// Drop the output of a call running a command whose output may carry a credential
+    /// (`atuin key`, `atuin login`, ...), which shell output capture never stores either: no
+    /// secret pattern knows a sync key's words. A result usually comes in a later line than its
+    /// call, so the call is remembered until it is answered: a session's lines come here in
+    /// order, live and imported. (One answered across a daemon restart is missed, as the call is
+    /// not read again.)
+    fn withhold_unsafe_output(&self, msg: &mut Message) {
+        if self.tools == ToolCapture::Names {
+            return;
+        }
+        for block in &mut msg.content {
+            match block {
+                Content::ToolUse(call) if tools::runs_output_unsafe(&call.input) => {
+                    self.unsafe_calls.lock().insert((msg.session.clone(), call.id.clone()));
+                }
+                Content::ToolResult(result)
+                    if self
+                        .unsafe_calls
+                        .lock()
+                        .remove(&(msg.session.clone(), result.call.clone())) =>
+                {
+                    result.output = serde_json::Value::Null;
+                }
+                _ => {}
             }
         }
     }
@@ -928,6 +962,63 @@ mod tests {
         };
         assert!(search("flubber").next().await.is_some(), "input is searchable");
         assert!(search("wibble").next().await.is_none(), "output is not indexed");
+    }
+
+    /// The output of a call running `atuin key` (or `login`, ...) is never kept, answered in a
+    /// later line or the same one, while the call itself is, and so are other calls' outputs.
+    #[rstest]
+    #[tokio::test]
+    async fn credential_command_output_is_never_kept() {
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.tools = ToolCapture::Payloads;
+        let call = |id: &str, command: &str| {
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from(id.to_owned()),
+                name: "Bash".to_owned(),
+                input: serde_json::json!({ "command": command }),
+            })
+        };
+        let result = |id: &str| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from(id.to_owned()),
+                output: serde_json::json!("abandon ability able about above absent"),
+                error: false,
+            })
+        };
+        let row = |n: u32, role, content| {
+            let mut msg = sample_message();
+            msg.id = RecordId(atuin_common::utils::uuid_v7());
+            msg.source_id = SourceId::from(format!("line-{n}"));
+            msg.timestamp += time::Duration::seconds(n.into());
+            msg.role = role;
+            msg.content = content;
+            msg
+        };
+        let rows = [
+            row(1, Role::Assistant, vec![call("key", "atuin key"), call("ls", "ls")]),
+            row(2, Role::User, vec![result("key"), result("ls")]),
+            row(3, Role::Assistant, vec![call("login", "atuin login -u me"), result("login")]),
+        ];
+        for msg in &rows {
+            sink.append(msg.clone()).await.unwrap();
+        }
+
+        let mut messages = Box::pin(sink.sidecar.messages(&rows[0].session));
+        let mut outputs = Vec::new();
+        while let Some(stored) = messages.next().await {
+            for block in stored.unwrap().content {
+                match block {
+                    Content::ToolResult(r) => outputs.push((r.call.to_string(), r.output)),
+                    Content::ToolUse(u) => assert!(!u.input.is_null(), "the call is kept"),
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(outputs, [
+            ("key".to_owned(), serde_json::Value::Null),
+            ("ls".to_owned(), serde_json::json!("abandon ability able about above absent")),
+            ("login".to_owned(), serde_json::Value::Null),
+        ]);
     }
 
     #[rstest]

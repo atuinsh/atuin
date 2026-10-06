@@ -227,7 +227,19 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
     let mut calls = HashSet::new();
     for (n, m) in rows.iter().enumerate() {
         assert!(!m.content.is_empty(), "row {n} is empty");
-        assert!(m.usage.is_none() && m.model.is_none() && m.turn_id.is_none());
+        assert!(m.usage.is_none() && m.model.is_none());
+        // opencode's rows name their step, so each is a message of its own.
+        let step = m.turn_id.as_deref().is_some_and(|t| t.starts_with("step-"));
+        let opencode = matches!(target, AnyHarness::Opencode(_)) && m.role == Role::Assistant;
+        assert!(
+            if opencode {
+                step
+            } else {
+                m.turn_id.is_none()
+            },
+            "row {n}: {:?}",
+            m.turn_id
+        );
         for c in &m.content {
             match c {
                 Content::Text(t) => assert!(!t.trim().is_empty(), "row {n}"),
@@ -828,6 +840,57 @@ fn calls_carry_over_in_the_targets_rows(#[case] target: AnyHarness, #[case] want
     pretty_assertions::assert_eq!(layout(&c.session), want);
     assert_eq!(c.flattened, Flattened::default());
     assert_eq!(c.flattened.summary(), "");
+}
+
+/// opencode writes each step of a turn as a message of its own, in order: its text, then its
+/// calls with their results, the next step only once they are answered.
+#[rstest]
+fn opencode_writes_each_step_as_a_message() {
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text("fix the flaky test")], 1),
+        msg(
+            Role::Assistant,
+            vec![text("Looking."), call_as("c1", "Bash", json!({"command": "cargo test"}))],
+            2,
+        ),
+        msg(Role::Tool, vec![answer("c1", "1 failed")], 3),
+        msg(
+            Role::Assistant,
+            vec![call_as(
+                "c2",
+                "Edit",
+                json!({"file_path": "a.rs", "old_string": "a", "new_string": "b"}),
+            )],
+            4,
+        ),
+        msg(Role::Tool, vec![answer("c2", "edited")], 5),
+        msg(Role::Assistant, vec![text("Fixed.")], 6),
+    ]);
+    let c = continue_in(CLAUDE, &original, None, OPENCODE).unwrap();
+    let export = opencode::rehydrate::export(&c.session);
+    let messages: Vec<Vec<String>> = export["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["info"]["role"] == "assistant")
+        .map(|m| {
+            m["parts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| match p["type"].as_str().unwrap() {
+                    "text" => p["text"].as_str().unwrap().to_owned(),
+                    "tool" => format!("{} → {}", p["tool"], p["state"]["output"]),
+                    other => other.to_owned(),
+                })
+                .collect()
+        })
+        .collect();
+    pretty_assertions::assert_eq!(messages, vec![
+        vec!["Looking.".to_owned(), r#""bash" → "1 failed""#.to_owned()],
+        vec![r#""edit" → "edited""#.to_owned()],
+        vec!["Fixed.".to_owned()],
+    ]);
 }
 
 /// What can't be carried as a call is a note: a call captured without its input, one never

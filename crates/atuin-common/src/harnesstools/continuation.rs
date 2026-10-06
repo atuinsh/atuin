@@ -297,6 +297,8 @@ fn continue_at(
         calls: tools::CallIds::default(),
         rows: Vec::with_capacity(turns.len() + 1),
         last: start,
+        steps: 0,
+        step: None,
     };
     let marker = marker_text(source, &original.id, atuin_id);
     // pi has no line the model reads that the user didn't type but its own user message: the
@@ -318,8 +320,11 @@ fn continue_at(
             }
             Kind::Assistant => {
                 let at = turn.at;
+                // The calls ran where the session did, which a continuation on another machine
+                // resumes elsewhere.
+                let ran_in = original.original_cwd.as_deref().unwrap_or(&original.cwd);
                 for step in turn.steps() {
-                    rows.step(at, &step, &original.cwd);
+                    rows.step(at, &step, ran_in, &original.cwd);
                 }
             }
         }
@@ -330,6 +335,7 @@ fn continue_at(
     if last.content.iter().any(|c| matches!(c, Content::ToolResult(_))) {
         let note = Content::Text("[the original session stopped here]".to_owned());
         let at = rows.last;
+        rows.open_step();
         rows.push(at, Role::Assistant, vec![note], Some(StopReason::EndTurn));
     }
     let mut rows = rows.rows;
@@ -366,6 +372,12 @@ struct Rows {
     calls: tools::CallIds,
     rows: Vec<RehydrateMessage>,
     last: OffsetDateTime,
+    /// The steps written so far, and the key of the one being written, for opencode: its rows
+    /// are its parts, which it folds into one message for as long as their turn is the same (see
+    /// `opencode::rehydrate::Draft::holds`), so each step's rows name one of their own. Else
+    /// every call of a turn, and the text after their results, would be one model call's.
+    steps: usize,
+    step: Option<String>,
 }
 
 impl Rows {
@@ -387,7 +399,7 @@ impl Rows {
             model: None,
             usage: None,
             stop_reason: stop,
-            turn_id: None,
+            turn_id: self.step.clone(),
             cwd: None,
             git_branch: None,
         });
@@ -397,13 +409,27 @@ impl Rows {
     /// answered by its result. Claude Code and pi send a message's text and calls together,
     /// then the results (Claude Code all in one message, pi one each); Codex writes every item
     /// as a line of its own, and opencode every part, a call and its result being one.
-    fn step(&mut self, at: OffsetDateTime, step: &Step<'_>, cwd: &Path) {
+    fn step(&mut self, at: OffsetDateTime, step: &Step<'_>, ran_in: &Path, cwd: &Path) {
+        self.open_step();
+        self.write_step(at, step, ran_in, cwd);
+        self.step = None;
+    }
+
+    /// Start a step of the assistant's: for opencode, the rows pushed until it ends name it.
+    fn open_step(&mut self) {
+        if matches!(self.target, AnyHarness::Opencode(_)) {
+            self.steps += 1;
+            self.step = Some(format!("step-{}", self.steps));
+        }
+    }
+
+    fn write_step(&mut self, at: OffsetDateTime, step: &Step<'_>, ran_in: &Path, cwd: &Path) {
         let text = (!step.parts.is_empty()).then(|| Content::Text(render(&step.parts)));
         let (calls, results): (Vec<_>, Vec<_>) = step
             .calls
             .iter()
             .map(|(call, result)| {
-                tools::carry(self.source, self.target, call, result, cwd, &mut self.calls)
+                tools::carry(self.source, self.target, call, result, ran_in, cwd, &mut self.calls)
             })
             .unzip();
         if calls.is_empty() {

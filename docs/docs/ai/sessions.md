@@ -32,7 +32,9 @@ continued in another agent (see [Resuming](#resuming)). That can be a lot of you
 codebase, not just your conversations, so it's off by default. Secrets Atuin
 recognises are redacted from the payloads too, images are left out, and the
 input or output of a single call is clipped to 64 KiB, keeping its start and its
-end. Search covers a call's input, but not its output.
+end. As with [output capture](../guide/output-capture.md), the output of Atuin's
+own credential commands (`atuin key`, `atuin login`, `atuin register` and
+`atuin account change-password`) is never kept. Search covers a call's input, but not its output.
 
 The setting applies to sessions captured or imported after the daemon picks it
 up. Sessions already captured keep what they had.

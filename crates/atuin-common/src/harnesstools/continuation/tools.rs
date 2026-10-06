@@ -75,8 +75,9 @@ fn command(value: Option<&Value>) -> Option<String> {
 
 impl Canonical {
     /// What the call `name` with `input` did, when it is one of these; a command run elsewhere
-    /// than `cwd` (Codex's `workdir`) runs there first.
-    fn parse(name: &str, input: &Value, cwd: &Path) -> Option<Self> {
+    /// than `ran_in`, the directory the session ran in (Codex's `workdir`), runs there first:
+    /// within it, as the same place under the directory the continuation resumes in.
+    fn parse(name: &str, input: &Value, ran_in: &Path) -> Option<Self> {
         let kind = name.to_ascii_lowercase();
         // Before the input is looked at: most calls are of other tools.
         let known = matches!(
@@ -109,7 +110,12 @@ impl Canonical {
                     )
                 };
                 let mut command = command?;
-                if let Some(dir) = workdir.filter(|dir| Path::new(dir) != cwd) {
+                let dir = workdir.and_then(|dir| match Path::new(&dir).strip_prefix(ran_in) {
+                    Ok(within) if within.as_os_str().is_empty() => None,
+                    Ok(within) => Some(within.to_string_lossy().into_owned()),
+                    Err(_) => Some(dir),
+                });
+                if let Some(dir) = dir {
                     let dir = shlex::try_quote(&dir).ok()?;
                     command = format!("cd {dir} && {command}");
                 }
@@ -396,18 +402,19 @@ fn native(target: AnyHarness, name: &str) -> bool {
     names.contains(&name.to_ascii_lowercase().as_str())
 }
 
-/// `call` (made in `source`) and its `result` as `target` writes them, in a session resuming in
-/// `cwd`. A call kept as the tool it was, whose name is one of the target's own tools (which
+/// `call` (made in `source`, in a session that ran in `ran_in`) and its `result` as `target`
+/// writes them, in a session resuming in `cwd`. A call kept as the tool it was, whose name is one of the target's own tools (which
 /// takes other input), is named for its source: `pi_edit`.
 pub(super) fn carry(
     source: AnyHarness,
     target: AnyHarness,
     call: &ToolUse,
     result: &ToolResult,
+    ran_in: &Path,
     cwd: &Path,
     ids: &mut CallIds,
 ) -> (ToolUse, ToolResult) {
-    let (name, input) = Canonical::parse(&call.name, &call.input, cwd)
+    let (name, input) = Canonical::parse(&call.name, &call.input, ran_in)
         .and_then(|canonical| canonical.render(target, cwd))
         .map_or_else(
             || {
@@ -457,17 +464,19 @@ mod tests {
         } else {
             CLAUDE
         };
-        let (call, _) =
-            carry(source, target, &call, &result, Path::new("/work"), &mut CallIds::default());
+        // Resumed elsewhere than it ran (another machine).
+        let (ran_in, cwd) = (Path::new("/work"), Path::new("/here"));
+        let (call, _) = carry(source, target, &call, &result, ran_in, cwd, &mut CallIds::default());
         (call.name, call.input)
     }
 
     #[rstest]
     #[case::claude_to_opencode("Bash", json!({"command": "ls", "description": "list"}), OPENCODE, "bash", json!({"command": "ls"}))]
     #[case::codex_to_claude("exec_command", json!(r#"{"cmd":"cargo test","workdir":"/work"}"#), CLAUDE, "Bash", json!({"command": "cargo test"}))]
+    #[case::codex_within("exec_command", json!(r#"{"cmd":"cargo test","workdir":"/work/crates/x"}"#), CLAUDE, "Bash", json!({"command": "cd crates/x && cargo test"}))]
     #[case::codex_elsewhere("exec_command", json!(r#"{"cmd":"ls","workdir":"/tmp/x y"}"#), PI, "bash", json!({"command": "cd '/tmp/x y' && ls"}))]
     #[case::codex_argv("shell", json!({"command": ["bash", "-lc", "rg foo"]}), CLAUDE, "Bash", json!({"command": "rg foo"}))]
-    #[case::claude_to_codex("Bash", json!({"command": "ls"}), CODEX, "exec_command", json!(r#"{"cmd":"ls","workdir":"/work"}"#))]
+    #[case::claude_to_codex("Bash", json!({"command": "ls"}), CODEX, "exec_command", json!(r#"{"cmd":"ls","workdir":"/here"}"#))]
     #[case::read("Read", json!({"file_path": "/a.rs", "limit": 20}), OPENCODE, "read", json!({"filePath": "/a.rs", "limit": 20}))]
     #[case::edit_to_pi("edit", json!({"filePath": "/a.rs", "oldString": "a", "newString": "b"}), PI, "edit", json!({"path": "/a.rs", "oldText": "a", "newText": "b"}))]
     #[case::pi_edit("edit", json!({"path": "/a.rs", "edits": [{"oldText": "a", "newText": "b"}]}), CLAUDE, "Edit", json!({"file_path": "/a.rs", "old_string": "a", "new_string": "b"}))]

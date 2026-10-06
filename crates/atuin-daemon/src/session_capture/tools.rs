@@ -2,10 +2,11 @@
 
 use serde_json::{Map, Value};
 
-/// The most of one tool call's input, or of its output, capture keeps: the bytes of its strings,
-/// past which they are clipped, keeping their start and end. Large enough for nearly every result
-/// whole (the harnesses clip their own tools' output well below it), small enough that a tool
-/// reading a whole file or dumping a log can't make a huge record.
+/// The most of one tool call's input, or of its output, capture keeps: bytes of it as stored
+/// (its JSON, strings escaped), past which strings are clipped, keeping their start and end, and
+/// lists lose their last items. Large enough for nearly every result whole (the harnesses clip
+/// their own tools' output well below it), small enough that a tool reading a whole file or
+/// dumping a log can't make a huge record.
 const TOOL_PAYLOAD_LIMIT: usize = 64 * 1024;
 
 /// Strings this short are never clipped, whatever is left of the budget: they are names, kinds
@@ -19,7 +20,7 @@ pub enum ToolCapture {
     /// `null` (uncaptured).
     #[default]
     Names,
-    /// Its input and output too, with secrets redacted, media left out, and each clipped to
+    /// Its input and output too, with secrets redacted, media left out, and each held to
     /// 64 KiB.
     Payloads,
 }
@@ -41,45 +42,50 @@ impl ToolCapture {
             Self::Payloads => {
                 let mut budget = TOOL_PAYLOAD_LIMIT;
                 shape(payload, &mut budget);
-                // Many values each too short to clip (a big JSON listing) can still add up past
-                // the limit: a list keeps the items that fit (a harness reads it back as a list,
-                // as Codex does a tool search's `tools`); anything else is kept as its clipped
-                // text, in an object (which an input must stay) or a list as it was one.
-                let fits = TOOL_PAYLOAD_LIMIT + TOOL_PAYLOAD_LIMIT / 4;
-                if let Value::Array(items) = payload {
-                    let mut size = 2;
-                    let kept = items
-                        .iter()
-                        .take_while(|item| {
-                            size += item.to_string().len() + 1;
-                            size <= fits
-                        })
-                        .count();
-                    items.truncate(kept.max(1));
-                }
-                if payload.to_string().len() > fits {
-                    let text = Value::String(clip(&payload.to_string(), TOOL_PAYLOAD_LIMIT));
-                    *payload = match payload {
-                        Value::Object(_) => {
-                            Value::Object(Map::from_iter([("clipped".into(), text)]))
-                        }
-                        Value::Array(_) => Value::Array(vec![text]),
-                        _ => text,
-                    };
+                // `shape` keeps the payload's shape, so a harness reads it back as the same kind
+                // of input or output, and holds it to the limit, but for an object of very many
+                // keys (it never drops one) or short strings it never clips: rather than a huge
+                // record, or a shape no harness takes, that payload is uncaptured, as every
+                // harness's writer expects some to be.
+                if payload.to_string().len() > 2 * TOOL_PAYLOAD_LIMIT {
+                    *payload = Value::Null;
                 }
             }
         }
     }
 }
 
-/// `value` with every string redacted and, once `budget` bytes of them are kept, clipped (but
-/// never one [`SHORT`] enough to be a name); media blocks become a note. Its shape stays as it
-/// was, so a harness reads it back as the same kind of input or output. A string is text, kept
-/// as written (a Codex function call's arguments are JSON text, redacted as text).
+/// Whether a call with `input` runs a command whose output may carry a credential (`atuin key`,
+/// `atuin login`, ...), the output of which capture never keeps, as shell output capture never
+/// does: any of its strings as a command line, a list of them (an argv) joined as one, and JSON
+/// text (a Codex function call's arguments) as the JSON it is.
+pub(super) fn runs_output_unsafe(input: &Value) -> bool {
+    match input {
+        Value::String(text) => {
+            atuin_common::secrets::output_unsafe(text)
+                || json_text(text).is_some_and(|parsed| runs_output_unsafe(&parsed))
+        }
+        Value::Array(items) => {
+            let argv: Option<Vec<&str>> = items.iter().map(Value::as_str).collect();
+            argv.is_some_and(|argv| atuin_common::secrets::output_unsafe(&argv.join(" ")))
+                || items.iter().any(runs_output_unsafe)
+        }
+        Value::Object(object) => object.values().any(runs_output_unsafe),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+/// `value` with every string redacted and, once `budget` bytes of it (as stored) are kept,
+/// clipped (but never one [`SHORT`] enough to be a name), and the items of a list past it
+/// dropped (but never its first); media blocks become a note. Its shape stays as it was, so a
+/// harness reads it back as the same kind of input or output.
 fn shape(value: &mut Value, budget: &mut usize) {
     match value {
         Value::Object(object) => match media_note(object) {
-            Some(note) => *value = note,
+            Some(note) => {
+                *budget = budget.saturating_sub(note.to_string().len());
+                *value = note;
+            }
             None => {
                 // A pair naming its own value (`{"name": "AWS_SECRET_ACCESS_KEY", "value": ...}`,
                 // as Kubernetes, Docker and GitHub list variables) is an assignment too.
@@ -94,8 +100,9 @@ fn shape(value: &mut Value, budget: &mut usize) {
                         }
                     }
                 }
+                *budget = budget.saturating_sub(2);
                 for (key, value) in object.iter_mut() {
-                    *budget = budget.saturating_sub(key.len());
+                    *budget = budget.saturating_sub(stored_len(key) + 2);
                     if let Value::String(text) = value {
                         redact_named(key, text);
                     }
@@ -103,13 +110,86 @@ fn shape(value: &mut Value, budget: &mut usize) {
                 }
             }
         },
-        Value::Array(items) => items.iter_mut().for_each(|v| shape(v, budget)),
-        Value::String(text) => {
-            let redacted = atuin_common::secrets::redact(text).into_owned();
-            *text = clip(&redacted, (*budget).max(SHORT));
-            *budget = budget.saturating_sub(redacted.len());
+        Value::Array(items) => {
+            *budget = budget.saturating_sub(2);
+            let mut kept = 0;
+            for item in items.iter_mut() {
+                if *budget == 0 && kept > 0 {
+                    break;
+                }
+                shape(item, budget);
+                kept += 1;
+            }
+            items.truncate(kept);
         }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        Value::String(text) => {
+            if let Some(shaped) = shape_json_text(text, *budget) {
+                *text = shaped;
+            } else {
+                let redacted = atuin_common::secrets::redact(text);
+                *text = fit(&redacted, (*budget).max(SHORT));
+            }
+            *budget = budget.saturating_sub(stored_len(text) + 1);
+        }
+        Value::Bool(_) | Value::Number(_) | Value::Null => {
+            *budget = budget.saturating_sub(value.to_string().len() + 1);
+        }
+    }
+}
+
+/// JSON text (a Codex function call's arguments, a legacy Codex output), shaped as the JSON it
+/// is so it stays JSON: as text, a quoted value's quotes are escaped, which hides it from
+/// redaction, and clipping would cut it mid-string. Kept as written when nothing in it changes;
+/// `None` when `text` isn't a JSON object or list.
+fn shape_json_text(text: &str, budget: usize) -> Option<String> {
+    let parsed = json_text(text)?;
+    let room = budget.max(SHORT);
+    let mut allowance = budget;
+    loop {
+        let mut shaped = parsed.clone();
+        shape(&mut shaped, &mut allowance.clone());
+        let shaped = if shaped == parsed {
+            text.to_owned()
+        } else {
+            shaped.to_string()
+        };
+        // Escaped again as the string it is stored as, it can still be past the room: shaped
+        // again, with proportionally less.
+        let size = stored_len(&shaped);
+        if size <= room || allowance == 0 {
+            return Some(shaped);
+        }
+        allowance = (allowance * room / size).min(allowance - allowance.div_ceil(8));
+    }
+}
+
+/// `text` parsed, when it is a JSON object or list.
+fn json_text(text: &str) -> Option<Value> {
+    if !text.trim_start().starts_with(['{', '[']) {
+        return None;
+    }
+    serde_json::from_str(text).ok().filter(|v: &Value| v.is_object() || v.is_array())
+}
+
+/// The bytes `text` takes stored, as a JSON string: quoted, and escaped.
+fn stored_len(text: &str) -> usize {
+    serde_json::to_string(text).map_or(text.len(), |json| json.len())
+}
+
+/// `text` clipped until it takes no more than `room` bytes stored (escaping can make it take
+/// several times its length), unless [`SHORT`].
+fn fit(text: &str, room: usize) -> String {
+    if text.len() <= SHORT {
+        return text.to_owned();
+    }
+    let mut keep = room;
+    loop {
+        let kept = clip(text, keep);
+        let size = stored_len(&kept);
+        if size <= room || keep <= SHORT / 4 {
+            return kept;
+        }
+        keep = (keep * room / size).min(keep - keep.div_ceil(8));
     }
 }
 
@@ -120,7 +200,7 @@ fn redact_named(key: &str, text: &mut String) {
     let redacted = atuin_common::secrets::redact(&line);
     if redacted != line {
         let value = redacted.strip_prefix(key).and_then(|rest| rest.strip_prefix('='));
-        value.unwrap_or("****").clone_into(text);
+        value.unwrap_or(atuin_common::secrets::REDACTED).clone_into(text);
     }
 }
 
@@ -153,10 +233,14 @@ fn media_note(object: &Map<String, Value>) -> Option<Value> {
     ])))
 }
 
+/// About the length of [`clip`]'s note.
+const NOTE: usize = 40;
+
 /// `text` cut to about `keep` bytes, its start and end kept around a note of how much was left
 /// out.
 fn clip(text: &str, keep: usize) -> String {
-    if text.len() <= keep {
+    // Within a note's length of `keep`, the note would leave it no shorter.
+    if text.len() <= keep + NOTE {
         return text.to_owned();
     }
     let head = text.floor_char_boundary(keep / 2);
@@ -194,6 +278,9 @@ mod tests {
     #[case::named(json!({"env": {"AWS_SECRET_ACCESS_KEY": "PRIVATEKEY"}}))]
     #[case::name_value(json!({"env": [{"name": "AWS_SECRET_ACCESS_KEY", "value": "PRIVATEKEY"}]}))]
     #[case::named_in_text(json!("{\"AWS_SECRET_ACCESS_KEY\": \"PRIVATEKEY\"}"))]
+    #[case::quoted_in_arguments(json!(r#"{"cmd":"export AWS_SECRET_ACCESS_KEY=\"PRIVATEKEY\" && aws s3 ls"}"#))]
+    #[case::single_quoted_in_arguments(json!(r#"{"cmd":"export AWS_SECRET_ACCESS_KEY='PRIVATEKEY'","workdir":"/w"}"#))]
+    #[case::argv_in_arguments(json!(r#"{"command":["bash","-lc","AWS_SECRET_ACCESS_KEY=\"PRIVATEKEY\" aws s3 ls"]}"#))]
     fn secrets_are_redacted(#[case] value: Value) {
         let kept = kept(value).to_string();
         assert!(!kept.contains("PRIVATEKEY"), "{kept}");
@@ -244,12 +331,60 @@ mod tests {
         assert!(kept[1]["text"].as_str().unwrap().len() < 2 * SHORT);
     }
 
-    /// JSON text (a Codex function call's arguments, a `cat` of a JSON file) is text: kept as
-    /// written, not re-formatted.
+    /// JSON text (a Codex function call's arguments, a `cat` of a JSON file) is kept as written,
+    /// not re-formatted, when nothing in it changes.
     #[rstest]
     fn json_text_is_kept_as_written() {
         let text = "{\n  \"name\": \"x\",\n  \"n\": 12345678901234567890\n}";
         assert_eq!(kept(json!(text)), json!(text));
+    }
+
+    /// JSON text redacted or clipped is still JSON, with every key it had: a Codex writer reads
+    /// a call whose arguments don't parse as a custom tool's.
+    #[rstest]
+    #[case::redacted(r#"{"cmd":"export AWS_SECRET_ACCESS_KEY='x'","workdir":"/w"}"#.to_owned())]
+    #[case::named(r#"{"env":{"AWS_SECRET_ACCESS_KEY":"x"},"workdir":"/w"}"#.to_owned())]
+    #[case::clipped(json!({"cmd": format!("cat <<'EOF'\n{}\nEOF", "x".repeat(3 * TOOL_PAYLOAD_LIMIT)), "workdir": "/w"}).to_string())]
+    #[case::escaped(json!({"cmd": "\"q\"".repeat(TOOL_PAYLOAD_LIMIT / 4), "workdir": "/w"}).to_string())]
+    fn json_text_stays_json(#[case] text: String) {
+        let Value::String(kept) = kept(json!(text)) else {
+            panic!("still a string")
+        };
+        let parsed: Value = serde_json::from_str(&kept).expect("still JSON");
+        assert_eq!(parsed["workdir"], json!("/w"), "{kept:.200}");
+        assert!(stored_len(&kept) <= TOOL_PAYLOAD_LIMIT + 64, "{}", stored_len(&kept));
+    }
+
+    /// Text that escaping makes much longer (colours, quotes, JSON in JSON) is clipped to fit as
+    /// stored, and stays the text it was: never its own JSON encoding, nor anything but the
+    /// shape it had.
+    #[rstest]
+    #[case::coloured("\u{1b}[32mok\u{1b}[0m test\n".repeat(TOOL_PAYLOAD_LIMIT / 16))]
+    #[case::quoted("\"a\",\"b\"\n".repeat(TOOL_PAYLOAD_LIMIT / 6))]
+    fn escaped_text_keeps_its_shape(#[case] text: String) {
+        let Value::String(output) = kept(json!(text)) else {
+            panic!("a string stays one")
+        };
+        assert_eq!(&output[..20], &text[..20]);
+        assert!(stored_len(&output) <= TOOL_PAYLOAD_LIMIT + 64);
+
+        let kept = kept(json!([{"type": "text", "text": text}, {"type": "text", "text": "late"}]));
+        assert_eq!(kept[0]["type"], json!("text"), "blocks stay blocks: {:.200}", kept.to_string());
+        assert!(kept[0]["text"].as_str().unwrap().starts_with(&text[..20]));
+        assert!(kept.to_string().len() <= TOOL_PAYLOAD_LIMIT + 2 * SHORT);
+    }
+
+    #[rstest]
+    #[case::claude(json!({"command": "atuin key"}), true)]
+    #[case::sudo(json!({"command": "cd ~ && atuin login -u me"}), true)]
+    #[case::codex_text(json!(r#"{"cmd":"atuin key --base64","workdir":"/w"}"#), true)]
+    #[case::codex_argv(json!({"command": ["atuin", "key"]}), true)]
+    #[case::bash_lc(json!(r#"{"command":["bash","-lc","atuin register"]}"#), true)]
+    #[case::other(json!({"command": "atuin history list"}), false)]
+    #[case::mention(json!({"command": "echo 'run atuin key later'"}), false)]
+    #[case::read(json!({"file_path": "/home/me/atuin/key"}), false)]
+    fn calls_whose_output_may_hold_a_credential(#[case] input: Value, #[case] unsafe_: bool) {
+        assert_eq!(runs_output_unsafe(&input), unsafe_);
     }
 
     /// A payload of many values each too short to clip is still held to the limit.
@@ -260,28 +395,27 @@ mod tests {
         let (object, array) = (value.is_object(), value.is_array());
         let kept = kept(value);
         assert_eq!(kept.is_array(), array, "a list stays a list");
-        // Kept as its text, which escaped (as stored) is a little longer.
         let size = kept.to_string().len();
-        assert!(size < TOOL_PAYLOAD_LIMIT + TOOL_PAYLOAD_LIMIT / 4, "{size}");
+        assert!(size <= TOOL_PAYLOAD_LIMIT + SHORT, "{size}");
         assert_eq!(kept.is_object(), object, "an input stays an object");
     }
 
     proptest! {
-        /// A payload is held to the limit (its text escaped, as stored, a little over), whatever
-        /// its strings hold, and a list stays a list.
-        #[test]
+        /// A payload is held to the limit (a short string's length over), whatever its strings
+        /// hold, and a list stays a list.
+        #[rstest]
         fn clipping_is_bounded_and_a_list_stays_one(
             strings in proptest::collection::vec(".{0,40000}", 0..4),
         ) {
             let value = Value::Array(strings.iter().cloned().map(Value::String).collect());
             let kept = kept(value);
-            prop_assert!(kept.to_string().len() <= 2 * TOOL_PAYLOAD_LIMIT);
+            prop_assert!(kept.to_string().len() <= TOOL_PAYLOAD_LIMIT + 8 * SHORT);
             // A list stays one, of its first items (all of them when they fit).
             let items = kept.as_array().unwrap();
             prop_assert!(items.len() <= strings.len() && (strings.is_empty() || !items.is_empty()));
         }
 
-        #[test]
+        #[rstest]
         fn clip_keeps_text_that_fits_whole(text in ".{0,50}", keep in 200usize..400) {
             prop_assert_eq!(clip(&text, keep), text);
         }
