@@ -18,6 +18,7 @@ use config::{Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat}
 use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
 use regex::RegexSet;
+use secrecy::SecretString;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -33,9 +34,9 @@ static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
+pub mod ai_sessions;
 pub mod daemon;
 pub mod disk_usage_limit;
-mod dotfiles;
 mod kv;
 pub(crate) mod meta;
 pub mod output;
@@ -43,10 +44,11 @@ mod scripts;
 pub mod shells;
 pub mod watcher;
 
+pub use ai_sessions::{AiSessionFilterMode, AiSessionResume, AiSessions};
 pub use daemon::Daemon;
 pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
 use output::OutputCaptureConfig;
-pub use output::{CaptureLimits, OutputCapture};
+pub use output::{CaptureLimits, CommandFilter, OutputCapture};
 pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
@@ -172,8 +174,9 @@ pub enum ExitMode {
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
 // FIXME: Above PR was merged, but dependency was changed to interim (fork of chrono-english) in the ... interim
-#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Copy, Serialize)]
 pub enum Dialect {
+    #[default]
     #[serde(rename = "us")]
     Us,
 
@@ -387,19 +390,19 @@ pub enum SyncAuth {
     /// Self-hosted Rust server. Uses `Authorization: Token <session>` and
     /// legacy endpoints.
     Legacy {
-        token: String,
+        token: SecretString,
     },
     /// Hub with a valid Hub API token (`atapi_*`). Uses
     /// `Authorization: Bearer <token>` and v0 endpoints.
     Hub {
-        token: String,
+        token: SecretString,
     },
     /// Targeting Hub but only has a CLI session token. Uses
     /// `Authorization: Token <session>` against compat/record endpoints.
     /// Sync, password change, and account deletion still work, but the user
     /// should be nudged to run `atuin login` for full Hub auth.
     HubViaCli {
-        token: String,
+        token: SecretString,
     },
     /// Not authenticated at all. Contains an actionable user-facing message.
     NotLoggedIn {
@@ -537,6 +540,12 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Octavo {
+    pub enabled: bool,
+    pub endpoint: Option<Url>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Search {
     /// The list of enabled filter modes, in order of priority.
@@ -671,7 +680,8 @@ pub struct Ai {
 
     /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
     /// Only necessary for custom AI endpoints.
-    pub api_token: Option<String>,
+    #[serde(skip_serializing)]
+    pub api_token: Option<SecretString>,
 
     /// Path to the AI sessions database.
     pub db_path: String,
@@ -702,6 +712,16 @@ pub struct Ai {
 
     /// Whether the AI TUI surfaces feature tips. `None` = enabled.
     pub tips: Option<bool>,
+
+    /// Whether the daemon captures live AI harness sessions (Claude Code, Codex, ...) into the
+    /// synced record store. Off by default: capture copies full transcripts -- including reasoning
+    /// and tool output -- into the encrypted store used by sync, so it is strictly opt-in.
+    #[serde(default)]
+    pub capture_sessions: bool,
+
+    /// The `atuin ai resume` session picker (`[ai.sessions]`).
+    #[serde(default)]
+    pub sessions: AiSessions,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -1092,8 +1112,8 @@ pub struct Settings {
     /// for services like Cloudflare Access that sit in front of a self-hosted
     /// server. Headers that Atuin sets itself (e.g. Authorization) win over
     /// values configured here.
-    #[serde(default)]
-    pub extra_headers: HashMap<String, String>,
+    #[serde(default, skip_serializing)]
+    pub extra_headers: HashMap<String, SecretString>,
 
     pub enter_accept: bool,
     pub smart_sort: bool,
@@ -1112,9 +1132,6 @@ pub struct Settings {
     pub preview: Preview,
 
     #[serde(default)]
-    pub dotfiles: dotfiles::Settings,
-
-    #[serde(default)]
     pub daemon: Daemon,
 
     #[serde(default)]
@@ -1122,6 +1139,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub output: OutputCapture,
+
+    #[serde(default)]
+    pub octavo: Octavo,
 
     #[serde(default)]
     pub search: Search,
@@ -1204,6 +1224,19 @@ impl Settings {
         Self::effective_data_dir().join("output-capture")
     }
 
+    /// The AI harness session sidecar database, under the [effective data
+    /// dir](Self::effective_data_dir). The daemon owns and writes it; other readers open it
+    /// read-only (`AiSessionDatabase::open_read_only`).
+    #[must_use]
+    pub fn ai_session_sidecar_path() -> PathBuf {
+        Self::effective_data_dir().join("ai_harness_sessions.db")
+    }
+
+    #[must_use]
+    pub fn octavo_queue_path() -> PathBuf {
+        Self::effective_data_dir().join("octavo.db")
+    }
+
     // -- Meta store: lazily initialized on first access --
 
     pub async fn meta_store() -> Result<&'static crate::meta::MetaStore> {
@@ -1254,14 +1287,14 @@ impl Settings {
         Self::meta_store().await?.logged_in().await
     }
 
-    pub async fn session_token(&self) -> Result<String> {
+    pub async fn session_token(&self) -> Result<SecretString> {
         match Self::meta_store().await?.session_token().await? {
             Some(token) => Ok(token),
             None => Err(eyre!("Tried to load session; not logged in")),
         }
     }
 
-    pub async fn hub_session_token(&self) -> Result<String> {
+    pub async fn hub_session_token(&self) -> Result<SecretString> {
         match Self::meta_store().await?.hub_session_token().await? {
             Some(token) => Ok(token),
             None => Err(eyre!("Tried to load hub session; not logged in")),
@@ -1347,7 +1380,7 @@ impl Settings {
 
         // Targeting Hub — check for a valid Hub API token first
         if let Ok(Some(hub_token)) = meta.hub_session_token().await {
-            if hub_token.starts_with("atapi_") {
+            if crate::meta::is_hub_token(&hub_token) {
                 return SyncAuth::Hub { token: hub_token };
             }
 
@@ -1530,7 +1563,7 @@ impl Settings {
             )?
             .set_default("scroll_context_lines", 1)?
             .set_default("shell_up_key_binding", false)?
-            .set_default("workspaces", false)?
+            .set_default("workspaces", true)?
             .set_default("ctrl_n_shortcuts", false)?
             .set_default("secrets_filter", true)?
             .set_default("strip_trailing_whitespace", true)?
@@ -1583,6 +1616,7 @@ impl Settings {
             .set_default("ai.db_path", ai_sessions_path.to_str())?
             .set_default("ai.session_continue_minutes", 60)?
             .set_default("ai.send_cwd", false)?
+            .set_default("ai.capture_sessions", false)?
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
@@ -1608,6 +1642,8 @@ impl Settings {
             )?
             .set_default("no_mouse", false)?
             .set_default("pty_proxy.enabled", false)?
+            .set_default("octavo.enabled", false)?
+            .set_default("octavo.endpoint", None::<String>)?
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 
@@ -1979,7 +2015,7 @@ mod tests {
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather
     /// than panicking at runtime.
-    #[test]
+    #[rstest]
     fn default_addresses_parse() {
         assert_eq!(super::DEFAULT_SYNC_URL.host_str(), Some("api.atuin.sh"));
         assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
@@ -2007,7 +2043,7 @@ mod tests {
         assert_eq!(settings.default_filter_mode(git_root), expected);
     }
 
-    #[test]
+    #[rstest]
     fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
         use std::path::PathBuf;
 
@@ -2066,7 +2102,7 @@ mod tests {
         assert!(err.contains(expected_err), "error should mention `{expected_err}`, got: {err}");
     }
 
-    #[test]
+    #[rstest]
     fn effective_data_dir_returns_default_when_not_set() {
         let effective = super::Settings::effective_data_dir();
         let default = atuin_common::utils::data_dir();
@@ -2075,7 +2111,7 @@ mod tests {
         assert!(effective.ends_with("atuin") || effective == default);
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_simple_binding() {
         let json = r#"{"emacs": {"ctrl-c": "exit"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2085,7 +2121,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_conditional_binding() {
         let json = r#"{
             "emacs": {
@@ -2107,7 +2143,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_deserializes_vim_normal() {
         let json = r#"{"vim-normal": {"j": "select-next", "k": "select-previous"}}"#;
         let config: super::KeymapConfig = serde_json::from_str(json).unwrap();
@@ -2115,13 +2151,13 @@ mod tests {
         assert!(config.emacs.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_is_empty_when_default() {
         let config = super::KeymapConfig::default();
         assert!(config.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn keymap_config_mixed_modes() {
         let json = r#"{
             "emacs": {"ctrl-c": "exit"},
@@ -2172,6 +2208,29 @@ mod tests {
     }
 
     #[rstest]
+    #[case::anchored(Some(r#"["^cat "]"#), "cat .env", true)]
+    #[case::anchor_holds(Some(r#"["^cat "]"#), "echo cat .env", false)]
+    #[case::unanchored(Some(r#"["token"]"#), "gh auth token", true)]
+    #[case::any_of_several(Some(r#"["^cat ", "token"]"#), "gh auth token", true)]
+    #[case::omitted(None, "cat .env", false)]
+    fn output_command_filter_matches_the_command_line(
+        #[case] patterns: Option<&str>,
+        #[case] command: &str,
+        #[case] expected: bool,
+    ) {
+        let filter = patterns.map(|p| format!("command_filter = {p}\n")).unwrap_or_default();
+        let settings = parse_settings(&format!("[output]\nenabled = true\n{filter}"));
+
+        let limits = settings.output.limits().expect("output capture is enabled");
+        assert_eq!(limits.command_filter.is_match(command), expected);
+    }
+
+    #[rstest]
+    fn output_command_filter_rejects_an_invalid_expression() {
+        assert!(Settings::validate_str("[output]\ncommand_filter = [\"(\"]\n").is_err());
+    }
+
+    #[rstest]
     fn sync_frequency_accepts_humantime_and_bare_seconds() {
         let secs = std::time::Duration::from_secs;
         let zero = std::time::Duration::ZERO;
@@ -2189,7 +2248,7 @@ mod tests {
         assert!(Settings::validate_str("sync_frequency = -5\n").is_err());
     }
 
-    #[test]
+    #[rstest]
     fn skim_is_requested_but_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode = \"skim\"\n");
 
@@ -2197,7 +2256,7 @@ mod tests {
         assert_eq!(settings.search_mode(), SearchMode::Fuzzy);
     }
 
-    #[test]
+    #[rstest]
     fn skim_shell_up_key_binding_resolves_to_fuzzy() {
         let settings = parse_settings("search_mode_shell_up_key_binding = \"skim\"\n");
 

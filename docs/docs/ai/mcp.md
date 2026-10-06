@@ -1,6 +1,6 @@
 # MCP Server
 
-Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving external AI tools like Claude Code and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](./command-output.md) set up — read what they printed, or search that output for something it remembers seeing.
+Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving external AI tools like Claude Code and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](../guide/output-capture.md) set up — read what they printed, or search that output for something it remembers seeing.
 
 The server exposes the same history tools that [Atuin AI](./introduction.md) uses, plus output search. All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
 
@@ -53,7 +53,7 @@ History search reads the Atuin database directly, so it works without any extra 
 
 Fetches the captured terminal output of a previous command, identified by a history ID from `atuin_history` results. The agent can fetch specific line ranges, so it doesn't need to read a huge log to find the error at the end.
 
-Output capture requires the [daemon](../reference/daemon.md) and [pty-proxy](../reference/pty-proxy.md) to be running — see [Reading Command Output](./command-output.md) for setup. Without them, the tool responds with an error explaining that no output is available.
+Output capture requires the [daemon](../reference/daemon.md) and [pty-proxy](../reference/pty-proxy.md) to be running — see [Capturing Command Output](../guide/output-capture.md) for setup. Without them, the tool responds with an error explaining that no output is available.
 
 ### `atuin_output_search`
 

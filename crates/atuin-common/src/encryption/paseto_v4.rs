@@ -13,9 +13,10 @@ use base64::engine::general_purpose::{
 use crypto_secretbox::{KeyInit, XSalsa20Poly1305, aead};
 use easy_cast::Conv;
 use rusty_paseto::{Paseto, core as rusty_paseto};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 pub type PaserkV4KeyId = rusty_paserk::KeyId<rusty_paserk::V4, rusty_paserk::Local>;
 pub type PaserkV4PieWrappedKey = rusty_paserk::PieWrappedKey<rusty_paserk::V4, rusty_paserk::Local>;
@@ -89,12 +90,21 @@ pub enum KeyFileLoadOrGenerateError {
     TempFilesExhausted,
 }
 
+/// Owner read/write only, since the key file decrypts all synced data.
+#[cfg(unix)]
+const KEY_FILE_MODE: u32 = 0o600;
+
+fn key_file_options() -> fs::OpenOptions {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, KEY_FILE_MODE);
+    opts
+}
+
 /// A type which contains a [`Key`] encoded as a B64 string. See [`Key::encode`] for more details.
-///
-/// **This should never implement ANY derive.** Most importantly, you should NEVER add `Clone`
-/// (otherwise it is bug-prone and users will copy the plain-text string around) and `Serialize` so
-/// it doesn't accidentally go over the wire.
-pub struct PlainTextEncodedKey(String);
+#[derive(Clone, Debug)]
+pub struct PlainTextEncodedKey(SecretString);
 
 impl PlainTextEncodedKey {
     /// Leaks the plain-text encoded value into a `&str`.
@@ -102,14 +112,8 @@ impl PlainTextEncodedKey {
     /// BEWARE: You should **never** take ownership of that `&str`. Bad things can happen (such as
     /// accidental serialization and transfer over the wire).
     #[must_use]
-    pub const fn dangerously_leak_secret(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
-impl Drop for PlainTextEncodedKey {
-    fn drop(&mut self) {
-        self.0.zeroize();
+    pub fn dangerously_leak_secret(&self) -> &str {
+        self.0.expose_secret()
     }
 }
 
@@ -167,25 +171,25 @@ impl Key {
     pub fn encode(&self) -> PlainTextEncodedKey {
         let key_bytes = self.as_bytes();
         // A msgpack array16 header (3 bytes) followed by each byte as at most a 2-byte uint.
-        let mut buf = Vec::with_capacity(3 + 2 * key_bytes.len());
+        let mut buf = Zeroizing::new(Vec::with_capacity(3 + 2 * key_bytes.len()));
         // Writing to a `Vec` is infallible, so neither of these can actually error.
-        rmp::encode::write_array_len(&mut buf, u32::conv(key_bytes.len()))
+        rmp::encode::write_array_len(&mut *buf, u32::conv(key_bytes.len()))
             .expect("writing to a Vec is infallible");
         for b in key_bytes {
-            rmp::encode::write_uint(&mut buf, u64::from(*b))
+            rmp::encode::write_uint(&mut *buf, u64::from(*b))
                 .expect("writing to a Vec is infallible");
         }
 
-        PlainTextEncodedKey(KEY_ENCODER.encode(buf))
+        PlainTextEncodedKey(KEY_ENCODER.encode(&*buf).into())
     }
 
     pub fn decode(key: &str) -> Result<Self, KeyDecodingError> {
-        let buf = KEY_ENCODER.decode(key.trim_end())?;
+        let buf = Zeroizing::new(KEY_ENCODER.decode(key.trim_end())?);
 
         // Legacy code used to naively encode the base64 string into the string. New code does this
         // rmp dance.
-        match <[u8; 32]>::try_from(&*buf) {
-            Ok(key) => Ok(key.into()),
+        match <[u8; 32]>::try_from(buf.as_slice()).map(Zeroizing::new) {
+            Ok(key) => Ok((*key).into()),
             Err(_) => {
                 if buf.is_empty() {
                     return Err(KeyDecodingError::EmptyKey);
@@ -201,9 +205,9 @@ impl Key {
                             return Err(KeyDecodingError::InvalidSize);
                         }
 
-                        let key = <[u8; 32]>::try_from(bytes.remaining_slice())?;
+                        let key = Zeroizing::new(<[u8; 32]>::try_from(bytes.remaining_slice())?);
 
-                        Ok(key.into())
+                        Ok((*key).into())
                     }
                     rmp::Marker::Array16 => {
                         let len = rmp::decode::read_array_len(&mut bytes)
@@ -212,12 +216,12 @@ impl Key {
                             return Err(KeyDecodingError::InvalidSize);
                         }
 
-                        let mut key = [0u8; 32];
-                        for i in &mut key {
+                        let mut key = Zeroizing::new([0u8; 32]);
+                        for i in key.iter_mut() {
                             *i = rmp::decode::read_int(&mut bytes)
                                 .map_err(|e| KeyDecodingError::DecodingError(e.into()))?;
                         }
-                        Ok(key.into())
+                        Ok((*key).into())
                     }
                     _ => Err(KeyDecodingError::InvalidToken),
                 }
@@ -235,8 +239,8 @@ impl Key {
 
         // TODO(markovejnovic): Whether we should use fs_err or not is up for debate, but it was
         // used here historically, so we'll use it.
-        let text = fs_err::read_to_string(path)?;
-        Ok(Self::decode(&text)?)
+        let text = SecretString::from(fs_err::read_to_string(path)?);
+        Ok(Self::decode(text.expose_secret())?)
     }
 
     /// Attempt to write this [`Self::encode`]d key into the given path.
@@ -286,18 +290,18 @@ impl Key {
             // `tmp_path` is first so it gets dropped after `tmp_file`. `tmp_path` is a
             // `RemoveOnDropPath` so it will remove the file when dropped, but this will fail on
             // Windows if the file is still open.
-            let (tmp_path, mut tmp_file) =
-                match fs::OpenOptions::new().write(true).create_new(true).open(&tmp_path) {
-                    Ok(file) => (crate::fs::RemoveOnDropPath(tmp_path), file),
-                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                        // This error will essentially never happen in practice. It requires
-                        // `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to
-                        // `usize::MAX`.
-                        i = i.checked_add(1).ok_or(KeyFileStoringError::TempFilesExhausted)?;
-                        continue;
-                    }
-                    Err(e) => return Err(e.into()),
-                };
+            let (tmp_path, mut tmp_file) = match key_file_options().create_new(true).open(&tmp_path)
+            {
+                Ok(file) => (crate::fs::RemoveOnDropPath(tmp_path), file),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                    // This error will essentially never happen in practice. It requires
+                    // `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to
+                    // `usize::MAX`.
+                    i = i.checked_add(1).ok_or(KeyFileStoringError::TempFilesExhausted)?;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
 
             tmp_file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
             tmp_file.sync_all()?;
@@ -317,7 +321,7 @@ impl Key {
         // condition where another process could observe a partially written key file, but it is
         // better than unconditionally failing to create the key file. In any case we are careful
         // not to overwrite an existing key file.
-        let mut file = match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+        let mut file = match key_file_options().create_new(true).open(path) {
             Ok(file) => file,
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {
                 return Err(KeyFileStoringError::AlreadyExists);
@@ -336,8 +340,14 @@ impl Key {
         // partially written key file. We should write to a temp file, similar to
         // `Self::try_write_path`, and then use `rename` to move it to the key path (not `hardlink`
         // because we do want it to overwrite an existing key).
-        let mut file = fs::File::create(path)?;
+        let mut file = key_file_options().create(true).truncate(true).open(path)?;
         file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
+        file.sync_all()?;
+        // The mode only applies on creation, so tighten a key file written before it was set.
+        // This goes after the write: callers re-encrypt the store first, so a failed chmod must
+        // not leave the file truncated without the new key.
+        #[cfg(unix)]
+        file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(KEY_FILE_MODE))?;
 
         Ok(())
     }
@@ -534,6 +544,90 @@ pub struct EncryptedData {
     /// On the wire as `content_encryption_key` for the same backwards-compatibility reason.
     #[serde(rename = "content_encryption_key", alias = "cek")]
     pub cek: String,
+}
+
+/// [`EncryptedData`] in its storage form.
+///
+/// The wire form above is what PASETO and PASERK speak: a base64url token and a JSON envelope
+/// holding two base64url PASERK strings. That is what the crypto library produces and what the
+/// server accepts, but on disk it is roughly 40% air. This is the same two values with the
+/// base64 and JSON stripped.
+///
+/// Packing is the trust boundary: it refuses anything that is not in the canonical wire form
+/// rather than guess at it, so every value of this type unpacks to exactly the string it came
+/// from and unpacking cannot fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptedBytes {
+    /// The token payload: nonce, ciphertext, tag.
+    pub data: Vec<u8>,
+    /// The PIE-wrapped content key (tag, nonce, key: 96 bytes) followed by the 33-byte id of the
+    /// key that wrapped it. Both are fixed by the PASERK v4 spec.
+    pub cek: [u8; CEK_LEN],
+}
+
+const WPK_LEN: usize = 96;
+const KID_LEN: usize = 33;
+pub const CEK_LEN: usize = WPK_LEN + KID_LEN;
+
+#[derive(Debug, Error)]
+#[error("`{0}` is not in the PASETO wire form")]
+pub struct NotWireForm(&'static str);
+
+impl EncryptedBytes {
+    const TOKEN_PREFIX: &str = "v4.local.";
+    const WPK_PREFIX: &str = "k4.local-wrap.pie.";
+    const KID_PREFIX: &str = "k4.lid.";
+
+    /// `B64_URL_SAFE_NO_PAD` rejects padding and non-zero trailing bits, so a successful decode
+    /// re-encodes to the same string.
+    fn decode(s: &str, prefix: &str) -> Option<Vec<u8>> {
+        B64_URL_SAFE_NO_PAD.decode(s.strip_prefix(prefix)?).ok()
+    }
+
+    fn pack_cek(cek: &str) -> Option<[u8; CEK_LEN]> {
+        let json: serde_json::Value = serde_json::from_str(cek).ok()?;
+        let obj = json.as_object()?;
+        let wpk = Self::decode(obj.get("wpk")?.as_str()?, Self::WPK_PREFIX)?;
+        let kid = Self::decode(obj.get("kid")?.as_str()?, Self::KID_PREFIX)?;
+        let bytes: [u8; CEK_LEN] = [wpk, kid].concat().try_into().ok()?;
+
+        // The JSON must round-trip too: field order and whitespace are not ours to normalise.
+        (Self::unpack_cek(&bytes) == cek).then_some(bytes)
+    }
+
+    fn unpack_cek(bytes: &[u8; CEK_LEN]) -> String {
+        let (wpk, kid) = bytes.split_at(WPK_LEN);
+
+        serde_json::json!({
+            "wpk": format!("{}{}", Self::WPK_PREFIX, B64_URL_SAFE_NO_PAD.encode(wpk)),
+            "kid": format!("{}{}", Self::KID_PREFIX, B64_URL_SAFE_NO_PAD.encode(kid)),
+        })
+        .to_string()
+    }
+}
+
+impl TryFrom<&EncryptedData> for EncryptedBytes {
+    type Error = NotWireForm;
+
+    fn try_from(data: &EncryptedData) -> Result<Self, Self::Error> {
+        Ok(Self {
+            data: Self::decode(&data.raw, Self::TOKEN_PREFIX).ok_or(NotWireForm("data"))?,
+            cek: Self::pack_cek(&data.cek).ok_or(NotWireForm("cek"))?,
+        })
+    }
+}
+
+impl From<&EncryptedBytes> for EncryptedData {
+    fn from(bytes: &EncryptedBytes) -> Self {
+        Self {
+            raw: format!(
+                "{}{}",
+                EncryptedBytes::TOKEN_PREFIX,
+                B64_URL_SAFE_NO_PAD.encode(&bytes.data)
+            ),
+            cek: EncryptedBytes::unpack_cek(&bytes.cek),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -885,5 +979,78 @@ mod test {
             .collect();
         names.sort();
         assert_eq!(names, ["key"], "the temporary file was left behind");
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn key_file_is_owner_only(#[values(false, true)] preexisting: bool) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("key");
+        let key = Key::from([0x44u8; 32]);
+
+        if preexisting {
+            fs::write(&path, "stale").expect("write stale key");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+            key.overwrite_path(&path).expect("overwrite the key");
+        } else {
+            key.try_write_path(&path).expect("write the key");
+        }
+
+        let mode = fs::metadata(&path).expect("stat key").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[rstest]
+    fn encrypted_bytes_round_trip_and_shrink(key: Key) {
+        let data = encrypt_sync(b"ls -la", None, &key).unwrap();
+        let bytes = EncryptedBytes::try_from(&data).unwrap();
+
+        assert_eq!(EncryptedData::from(&bytes), data);
+        assert!(
+            bytes.data.len() * 4 < data.raw.len() * 3,
+            "{} -> {}",
+            data.raw.len(),
+            bytes.data.len()
+        );
+        assert!(CEK_LEN * 4 < data.cek.len() * 3, "{} -> {CEK_LEN}", data.cek.len());
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::plaintext_manifest("001{\"host\":\"x\"}")]
+    #[case::token_with_footer("v4.local.abc.footer")]
+    #[case::not_base64("v4.local.not base64!")]
+    #[case::non_canonical_base64("v4.local.QR")]
+    #[case::cek_wrong_shape(r#"{"wpk":"x","kid":"y"}"#)]
+    fn encrypted_bytes_refuse_anything_not_in_wire_form(#[case] value: &str, key: Key) {
+        let good = encrypt_sync(b"ls -la", None, &key).unwrap();
+        let bad_data = EncryptedData {
+            raw: value.into(),
+            cek: good.cek.clone(),
+        };
+        let bad_cek = EncryptedData {
+            raw: good.raw,
+            cek: value.into(),
+        };
+
+        assert!(EncryptedBytes::try_from(&bad_data).is_err());
+        assert!(EncryptedBytes::try_from(&bad_cek).is_err());
+    }
+
+    #[rstest]
+    fn encrypted_bytes_refuse_reformatted_cek_json(key: Key) {
+        let good = encrypt_sync(b"ls -la", None, &key).unwrap();
+        let reordered: serde_json::Value = serde_json::from_str(&good.cek).unwrap();
+        let reordered = format!("{{\"kid\":{},\"wpk\":{}}}", reordered["kid"], reordered["wpk"]);
+
+        assert!(
+            EncryptedBytes::try_from(&EncryptedData {
+                cek: reordered,
+                ..good
+            })
+            .is_err()
+        );
     }
 }

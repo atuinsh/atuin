@@ -11,15 +11,17 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
+use crate::i18n::fl;
+
 #[derive(Debug, thiserror::Error)]
 pub enum OtelCtxEnableError {
-    #[error("the given ATUIN_OTEL URL does not appear to be a utf-8 string")]
+    #[error("{}", fl!("otel-url-not-utf8"))]
     NonUtf8EnvVar(OsString),
-    #[error("the given ATUIN_OTEL failed to parse as URL: {0}")]
+    #[error("{}", fl!("otel-url-invalid", error = .0.to_string()))]
     InvalidUrl(#[from] url::ParseError),
-    #[error("the given ATUIN_OTEL URL does not appear to be an HTTP(s) URL")]
+    #[error("{}", fl!("otel-url-not-http"))]
     NonHttpUrl,
-    #[error("failed to construct the exporter: {0}")]
+    #[error("{}", fl!("otel-exporter-build-failed", error = .0.to_string()))]
     ExporterBuild(#[from] ExporterBuildError),
 }
 

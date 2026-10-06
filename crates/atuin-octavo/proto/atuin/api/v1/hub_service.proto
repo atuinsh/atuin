@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package atuin.api.v1;
+
+import "atuin/api/v1/common.proto";
+import "atuin/api/v1/history.proto";
+import "buf/validate/validate.proto";
+
+// The hub's user-facing API.
+service HubService {
+  // Store a finished command for the calling user if the history is not already stored.
+  //
+  // Otherwise fails with `ALREADY_EXISTS` (`HISTORY_ALREADY_EXISTS`), keeping what was stored.
+  rpc InsertHistory(InsertHistoryRequest) returns (InsertHistoryResponse);
+
+  // Stream the calling user's history entries as they are stored, from when the call starts.
+  //
+  // Entries stored before the call, or while no call is open, are not sent.
+  rpc WatchHistory(WatchHistoryRequest) returns (stream WatchHistoryResponse);
+
+  // Delete the calling user's history entry with this id, and keep it from being stored again.
+  //
+  // An id that names no stored entry is still remembered as deleted, so a client can repeat a
+  // deletion, or send it before the upload it races.
+  rpc DeleteHistory(DeleteHistoryRequest) returns (DeleteHistoryResponse);
+
+  // Identify the user the call's token logs in.
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+}
+
+message InsertHistoryRequest {
+  // Logically required.
+  History history = 1 [(buf.validate.field).required = true];
+}
+
+message InsertHistoryResponse {}
+
+message WatchHistoryRequest {}
+
+message WatchHistoryResponse {
+  // An entry the user stored.
+  History history = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteHistoryRequest {
+  // The id of the entry to delete, as `History.id` gave it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteHistoryResponse {}
+
+message WhoAmIRequest {}
+
+message WhoAmIResponse {
+  // The calling user's id. Opaque, and stable for the life of the account.
+  string user_id = 1 [(buf.validate.field).string.min_len = 1];
+}

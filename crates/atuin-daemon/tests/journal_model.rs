@@ -11,11 +11,12 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
-use atuin_client::settings::Search;
+use atuin_client::settings::{CaptureLimits, OutputCapture, Search};
 use atuin_daemon::{CaptureError, CmdEvent, RegisterOutputError};
 use common::{TestEnv, capture, history};
 use futures::{FutureExt, StreamExt};
 use proptest::prelude::*;
+use rstest::rstest;
 
 const SLOTS: u8 = 10;
 
@@ -155,7 +156,14 @@ async fn apply(env: &TestEnv, model: &mut Model, op: &Op) {
         }
         Op::Register(slot) => {
             let id = model.id(*slot);
-            let result = env.journal.register_command_output(id, capture("out")).await;
+            let result = env
+                .journal
+                .register_command_output(
+                    id,
+                    capture("out"),
+                    &OutputCapture::Enabled(CaptureLimits::default()),
+                )
+                .await;
             let state = model.slots[usize::from(*slot)].1;
             let has_output = &mut model.has_output[usize::from(*slot)];
             match (state, *has_output) {
@@ -217,7 +225,7 @@ async fn check_invariants(env: &TestEnv, model: &Model, step: usize, op: &Op) {
     }
     let replayed = env.fresh_db_from_store().await;
     let mut replayed_ids = HashSet::new();
-    let mut pager = replayed.all_paged(100, false, false);
+    let mut pager = replayed.all_paged(100, false);
     while let Some(page) = pager.next().await.unwrap() {
         replayed_ids.extend(page.into_iter().map(|h| h.id));
     }
@@ -227,7 +235,7 @@ async fn check_invariants(env: &TestEnv, model: &Model, step: usize, op: &Op) {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(40))]
 
-    #[test]
+    #[rstest]
     fn journal_agrees_with_its_model(ops in proptest::collection::vec(op(), 1..24)) {
         common::current_thread_runtime().block_on(async {
             let env = TestEnv::builder().build().await;

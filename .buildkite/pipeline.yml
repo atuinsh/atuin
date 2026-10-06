@@ -1,0 +1,426 @@
+# atuin CI. Replaces the GitHub Actions workflows rust.yml (except
+# Windows, which stays in .github/workflows/windows.yml until Buildkite's
+# hosted Windows agents are generally available), nix.yml, codespell.yml,
+# shellcheck.yml, vale.yml, installer.yml and nightly.yml.
+#
+# Each Rust step sources .buildkite/scripts/toolchain.sh (rustup + pinned
+# tools, and the `section` log-group helper). Caching is Buildkite Cache
+# (.buildkite/cache.yml): the cargo registry, plus a per-step target/ pruned
+# to third-party dependency builds (prune-target.sh), keyed on the toolchain
+# and Cargo.lock. Saves run only after the step's commands have succeeded.
+# main saves every cache; branch and PR builds restore main's and save only
+# what had no exact entry to restore (cache-restore.sh, cache-save.sh).
+#
+# Tests build once per OS into a nextest archive (build-tests.sh), which a
+# step of parallel jobs then runs. Buildkite Test Engine splits them across
+# the jobs by how long each test took on main (run-tests.sh,
+# nextest-bktec.py). Raise a test step's parallelism as the suite grows.
+#
+# Queues: light jobs use the cluster's default queue (linux-small, 2 vCPU).
+# Compile-bound jobs use linux-large (8 vCPU) and macOS jobs macos-large
+# (12 vCPU), both default queues in every Buildkite cluster.
+#
+# Not ported yet: the `paths-ignore: ui/**` filters on rust.yml and nix.yml
+# (if_changed needs a diff base set for main builds first).
+#
+# Scheduled builds (the nightly schedule, set in the pipeline settings) run
+# everything plus the nightly tests, which also keeps main's cache entries
+# from expiring.
+
+# YAML anchors for what the steps below repeat; Buildkite ignores this key.
+common:
+  - &main-only build.branch == pipeline.default_branch
+  - &restore ".buildkite/scripts/cache-restore.sh --name cargo_registry --name target --name rustup --name apt_debs"
+  # No rustup cache on macOS: the image ships several toolchains, so the
+  # entry is 1.7 GB (20s to restore) against ~4s to install 1.98.0.
+  - &restore-macos ".buildkite/scripts/cache-restore.sh --name cargo_registry --name target"
+  - &toolchain source .buildkite/scripts/toolchain.sh
+  - &save-toolchain .buildkite/scripts/cache-save.sh --name rustup --name apt_debs
+  - &prune 'section ":broom: Prune target/" .buildkite/scripts/prune-target.sh'
+  - &save-target .buildkite/scripts/cache-save.sh --name target
+  - &linux-large
+    queue: linux-large
+  # Test Engine's client (bktec), for the steps that run tests. It
+  # authenticates with the job's Buildkite OIDC token, which the suite's OIDC
+  # policy accepts from this pipeline, so there's no token to keep secret.
+  - &test-engine
+    BUILDKITE_TEST_ENGINE_SUITE_SLUG: atuin
+    BUILDKITE_TEST_ENGINE_TEST_RUNNER: custom
+    BUILDKITE_TEST_ENGINE_TEST_CMD: "python3 .buildkite/scripts/nextest-bktec.py run {{testExamples}}"
+    BUILDKITE_TEST_ENGINE_RESULT_PATH: test-results/test-engine.json
+  - &macos-large
+    queue: macos-large
+
+env:
+  CARGO_TERM_COLOR: always
+  # No debuginfo in dev/test builds: a big share of their compile and link
+  # time, unused in CI. debug_assertions stay on; panics still report
+  # file:line, backtraces just lose line numbers.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  # .config/nextest.toml's ci profile: writes test-results/junit.xml, which
+  # nextest-bktec.py reports to Test Engine.
+  NEXTEST_PROFILE: ci
+
+steps:
+  - label: ":rust: Build (release)"
+    key: build
+    # main only: PRs are type-checked in the release profile by `check`
+    # (cargo check --release), and nearly all of this job is LLVM codegen
+    # for the atuin binary (~2 min on any machine).
+    if: *main-only
+    agents: *linux-large
+    timeout_in_minutes: 45
+    env:
+      # Only proves the release profile compiles (release.yml ships the
+      # `dist` profile), so skip LTO and spread codegen across more units.
+      CARGO_PROFILE_RELEASE_LTO: "off"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
+    command:
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      - 'section ":hammer: cargo build --release" cargo build --workspace --locked --release'
+      - *prune
+      - *save-target
+
+  # Unit, integration and e2e tests, compiled once and run below.
+  - label: ":package: Build tests (Linux)"
+    key: build-tests
+    agents: *linux-large
+    timeout_in_minutes: 45
+    env:
+      CARGO_TOOLS: nextest
+    command:
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      - .buildkite/scripts/build-tests.sh linux --lib --bins --tests
+      - *prune
+      - *save-target
+
+  - label: ":test_tube: Tests (Linux) %n"
+    key: tests
+    depends_on: build-tests
+    agents: *linux-large
+    # ~60s of test time plus ~15s of setup per job (Postgres, packages, the
+    # archive): two jobs finish in under a minute.
+    parallelism: 2
+    timeout_in_minutes: 30
+    env:
+      <<: *test-engine
+      RUST_TOOLCHAIN: none
+      CARGO_TOOLS: nextest bktec
+      APT_PACKAGES: "zsh fish xz-utils"
+      ATUIN_DB_URI: postgres://atuin:pass@127.0.0.1:5432/atuin
+      ATUIN_E2E_REQUIRE_SHELLS: "1"
+      # Test databases live in tempdirs; tmpfs keeps concurrent SQLite WAL
+      # fsyncs from stalling the disk.
+      TEST_TMPDIR: /dev/shm
+    command:
+      - .buildkite/scripts/start-postgres.sh
+      - .buildkite/scripts/cache-restore.sh --name apt_debs
+      - *toolchain
+      - .buildkite/scripts/cache-save.sh --name apt_debs
+      - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
+      - .buildkite/scripts/run-tests.sh linux
+
+  # Unit and e2e tests; the integration tests need Postgres, which only the
+  # Linux agents run.
+  - label: ":package: Build tests (macOS)"
+    key: build-tests-macos
+    agents: *macos-large
+    timeout_in_minutes: 45
+    env:
+      CARGO_TOOLS: nextest
+    command:
+      - *restore-macos
+      - *toolchain
+      - .buildkite/scripts/build-tests.sh macos --lib --bins --test "e2e_*"
+      - *prune
+      - *save-target
+
+  - label: ":test_tube: Tests (macOS) %n"
+    key: tests-macos
+    depends_on: build-tests-macos
+    agents: *macos-large
+    # ~30s of test time plus ~8s of setup: one job finishes in under a
+    # minute. Kept as a parallel step so raising this is all it takes.
+    parallelism: 1
+    timeout_in_minutes: 30
+    env:
+      <<: *test-engine
+      RUST_TOOLCHAIN: none
+      CARGO_TOOLS: nextest bktec
+      BREW_PACKAGES: "bash fish"
+      ATUIN_E2E_REQUIRE_SHELLS: "1"
+    command:
+      - *toolchain
+      # Test with Homebrew's bash, not macOS's /bin/bash 3.2.
+      # ($$ escapes pipeline-upload interpolation.)
+      - export ATUIN_E2E_BASH="$$(brew --prefix bash)/bin/bash"
+      - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
+      - .buildkite/scripts/run-tests.sh macos
+
+  # All features are type-checked by clippy below.
+  - label: ":mag: Check (Linux)"
+    key: check
+    agents: *linux-large
+    timeout_in_minutes: 45
+    command:
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      - 'section ":package: cargo fetch" cargo fetch --locked'
+      # Registry contents are the same for every step; this one saves them.
+      - .buildkite/scripts/cache-save.sh --name cargo_registry
+      - 'section ":mag: check (no features)" cargo check --no-default-features --workspace'
+      - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
+      - 'section ":mag: check (server)" cargo check -p atuin-server'
+      - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
+      - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
+      - *prune
+      - *save-target
+
+  - label: ":mag: Check (macOS)"
+    key: check-macos
+    agents: *macos-large
+    timeout_in_minutes: 45
+    command:
+      - *restore-macos
+      - *toolchain
+      - 'section ":package: cargo fetch" cargo fetch --locked'
+      # The registry key includes the OS, so macOS saves its own.
+      - .buildkite/scripts/cache-save.sh --name cargo_registry
+      # No system libssl on macOS: --all-features builds vendored OpenSSL,
+      # as the old GitHub Actions job did.
+      - 'section ":mag: check (all features)" cargo check --all-features --workspace'
+      - 'section ":mag: check (no features)" cargo check --no-default-features --workspace'
+      - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
+      - 'section ":mag: check (server)" cargo check -p atuin-server'
+      - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
+      - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
+      - *prune
+      - *save-target
+
+  - label: ":crab: MSRV (1.95.0)"
+    key: msrv
+    timeout_in_minutes: 45
+    env:
+      # rust-toolchain.toml pins the dev toolchain; override it explicitly.
+      RUST_TOOLCHAIN: "1.95.0"
+    command:
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      - 'section ":crab: check on MSRV (all features)" cargo check --locked --workspace --all-features'
+      - *prune
+      - *save-target
+
+  - label: ":paperclip: Clippy"
+    key: clippy
+    timeout_in_minutes: 45
+    env:
+      RUST_COMPONENTS: clippy
+      # --all-features enables vendored-tls, which compiles OpenSSL from
+      # source; linting can use the system libssl instead.
+      OPENSSL_NO_VENDOR: "1"
+    command:
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      # All features, and the union of what `cargo clippy` (lib + bins) and
+      # `cargo clippy --tests` lint, in one run. This also type-checks
+      # everything `cargo check --all-features` did.
+      - 'section ":paperclip: clippy (all features; lib, bins, tests)" cargo clippy --all-features --lib --bins --tests -- -D warnings'
+      - *prune
+      - *save-target
+
+  - label: ":books: Docs"
+    key: docs
+    timeout_in_minutes: 45
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    command:
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      - 'section ":books: cargo doc" cargo doc --document-private-items --no-deps --workspace'
+      - *prune
+      - *save-target
+
+  - label: ":art: Format"
+    key: format
+    timeout_in_minutes: 15
+    env:
+      RUST_TOOLCHAIN: nightly
+      RUST_COMPONENTS: rustfmt
+    command:
+      - *toolchain
+      - 'section ":art: cargo fmt --check" cargo fmt -- --check'
+
+  - label: ":no_entry: cargo-deny"
+    key: deny
+    timeout_in_minutes: 15
+    env:
+      CARGO_TOOLS: deny
+    command:
+      - .buildkite/scripts/cache-restore.sh --name cargo_registry --name rustup --name apt_debs
+      - *toolchain
+      - *save-toolchain
+      # Same arguments cargo-deny-action passes by default.
+      - 'section ":no_entry: cargo deny check" cargo deny --log-level warn --all-features check'
+      # Library crates must never (re)add eyre or anyhow; each has its own
+      # crate-scoped deny.toml.
+      - 'section ":no_entry: bans: atuin-common" cargo deny --log-level warn --manifest-path crates/atuin-common/Cargo.toml --all-features check bans'
+      - 'section ":no_entry: bans: atuin-history" cargo deny --log-level warn --manifest-path crates/atuin-history/Cargo.toml --all-features check bans'
+      - 'section ":no_entry: bans: atuin-domain" cargo deny --log-level warn --manifest-path crates/atuin-domain/Cargo.toml --all-features check bans'
+      - 'section ":no_entry: bans: atuin-pty-proxy" cargo deny --log-level warn --manifest-path crates/atuin-pty-proxy/Cargo.toml --all-features check bans'
+
+  - label: ":package: Package"
+    key: package
+    # main only: this only guards crates.io publishing (every crate builds
+    # from its packaged tarball), which isn't part of the PR flow. On main
+    # it still flags publishing breakage well before a release.
+    if: *main-only
+    agents: *linux-large
+    timeout_in_minutes: 45
+    command:
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      # Make sure the packaged crates build from their tarballs, not from
+      # anything left over from the workspace build. The restored target/
+      # holds only third-party builds (prune-target.sh), which verification
+      # reuses: it builds into the shared target/debug.
+      - rm -rf ~/.cargo/registry/{cache,src}/*/atuin* target/package
+      - 'section ":package: cargo package" cargo package --workspace'
+      - *prune
+      - *save-target
+
+  # rust.yml's "Test in VM (illumos)": builds the client and server on a real
+  # OmniOS VM (KVM-accelerated; hosted agents expose /dev/kvm). main only,
+  # like build and nix-build: it was ~12 min per PR on GitHub Actions.
+  - label: ":sunrise: Build on illumos (OmniOS VM)"
+    key: illumos
+    if: *main-only
+    agents: *linux-large
+    timeout_in_minutes: 45
+    command:
+      - .buildkite/scripts/cache-restore.sh --name anyvm --name apt_debs
+      - .buildkite/scripts/illumos.sh
+      - .buildkite/scripts/cache-save.sh --name anyvm --name apt_debs
+
+  - label: ":moon: Nightly tests"
+    key: nightly
+    if: build.source == "schedule"
+    timeout_in_minutes: 60
+    env:
+      <<: *test-engine
+      CARGO_TOOLS: nextest bktec
+      NEXTEST_COMMAND: cargo nextest run -p atuin-daemon --test nightly --run-ignored all
+      BUILDKITE_TEST_ENGINE_SELECTOR_FILE: test-results/selectors.txt
+    command:
+      - *restore
+      - *toolchain
+      - *save-toolchain
+      # Run through bktec, a one-job split, so the results reach Test Engine
+      # like the other tests'.
+      - mkdir -p test-results
+      - 'echo "--- :hammer: Build and list the nightly tests"'
+      - cargo nextest list -p atuin-daemon --test nightly --run-ignored all --message-format json >test-results/list.json
+      - python3 .buildkite/scripts/nextest-bktec.py selectors test-results/list.json test-results/selectors.txt
+      - test_engine_uploads_on_main
+      - 'section ":moon: cargo nextest (nightly)" bktec run --parallelism 1 --parallel-job 0 || { .buildkite/scripts/proptest-regressions.sh; exit 1; }'
+      - *prune
+      - *save-target
+
+  # nix.yml: flake check, build (and run the result), formatting.
+  - label: ":nix: Nix flake check"
+    key: nix-check
+    timeout_in_minutes: 30
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":nix: Install Nix" install_nix'
+      - 'section ":nix: nix flake check" nix flake check --print-build-logs'
+
+  - label: ":nix: Nix build"
+    key: nix-build
+    # main only, so the cache only ever holds main's builds. Pushes everything
+    # it builds to atuin.cachix.org, including crane's dependency-only
+    # derivation, which isn't in the result's runtime closure.
+    if: *main-only
+    agents: *linux-large
+    timeout_in_minutes: 45
+    secrets:
+      CACHIX_AUTH_TOKEN: CACHIX_AUTH_TOKEN
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":nix: Install Nix" install_nix'
+      - 'section ":nix: nix build" nix run --inputs-from . nixpkgs#cachix -- watch-exec atuin -- nix build --print-build-logs'
+      - 'section ":nix: Run the built binary" env -u CACHIX_AUTH_TOKEN ./result/bin/atuin --version'
+
+  - label: ":nix: nixfmt"
+    key: nixfmt
+    timeout_in_minutes: 15
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":nix: Install Nix" install_nix'
+      - 'section ":nix: nix fmt --ci" nix fmt -- --ci'
+
+  - label: ":pencil2: Codespell"
+    key: codespell
+    timeout_in_minutes: 10
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":pencil2: Install codespell" install_codespell'
+      - 'section ":pencil2: codespell" codespell --count --exclude-file CHANGELOG.md'
+
+  - label: ":shell: Shellcheck"
+    key: shellcheck
+    timeout_in_minutes: 10
+    env:
+      SHELLCHECK_OPTS: "-e SC2148"
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":shell: Install ShellCheck" install_shellcheck'
+      - 'section ":shell: shellcheck" .buildkite/scripts/shellcheck.sh'
+
+  # vale.yml ran only on pull requests touching the docs or the Vale config.
+  # On main builds there's no diff against main, so if_changed skips it there
+  # too.
+  - label: ":memo: Vale (docs prose)"
+    key: vale
+    if_changed:
+      - "docs/docs/**"
+      - ".vale.ini"
+      - ".vale/styles/config/**"
+      - ".buildkite/scripts/vale.sh"
+    timeout_in_minutes: 10
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":memo: Install Vale" install_vale'
+      - 'section ":memo: vale" .buildkite/scripts/vale.sh'
+
+  # installer.yml: the published installer (setup.atuin.sh, served from
+  # main's install.sh), so it runs on main builds only, as before.
+  - label: ":inbox_tray: Installer (Linux)"
+    key: install
+    if: *main-only
+    timeout_in_minutes: 10
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":shell: Install zsh" apt_install zsh'
+      - 'section ":inbox_tray: Installer via bash" .buildkite/scripts/test-installer.sh bash'
+      - 'section ":inbox_tray: Installer via zsh" .buildkite/scripts/test-installer.sh zsh'
+
+  - label: ":inbox_tray: Installer (macOS)"
+    key: install-macos
+    if: *main-only
+    agents:
+      queue: macos-medium
+    timeout_in_minutes: 10
+    command:
+      - source .buildkite/scripts/lib.sh
+      - 'section ":inbox_tray: Installer via bash" .buildkite/scripts/test-installer.sh bash'
+      - 'section ":inbox_tray: Installer via zsh" .buildkite/scripts/test-installer.sh zsh'

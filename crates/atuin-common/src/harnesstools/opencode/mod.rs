@@ -1,7 +1,12 @@
 use std::path::PathBuf;
 
+use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
 use crate::utils::{env_nonempty, home_dir};
+
+pub mod rehydrate;
+pub mod session;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Opencode;
@@ -46,5 +51,22 @@ impl Harness for Opencode {
         tokio::fs::write(&extension_path, PLUGIN_SOURCE).await?;
 
         Ok(extension_path)
+    }
+
+    /// `opencode --session <id>`. opencode looks the id up in its one global database and serves
+    /// the session from the directory recorded for it, but the TUI starts in the directory it is
+    /// run from (its project's session list, config and the new sessions it creates), so the
+    /// session's own is the one to be in.
+    fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
+        let args = ["--session".to_owned(), target.id.clone()];
+        Ok(resume::plan(target, CwdRequirement::Preferred, "opencode", args))
+    }
+
+    async fn locate(&self, id: &str) -> Option<PathBuf> {
+        session::locate(&session::default_db()?, id).await
+    }
+
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
+        rehydrate::rehydrate(session).await
     }
 }

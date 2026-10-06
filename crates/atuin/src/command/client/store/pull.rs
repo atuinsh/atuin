@@ -9,34 +9,53 @@ use atuin_domain::record::RecordTag;
 use clap::Args;
 use eyre::{Context as _, Result};
 
+use crate::i18n::fl;
+
 #[derive(Args, Debug)]
 pub struct Pull {
-    /// The tag to push (eg, 'history'). Defaults to all tags
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-store-tag"))]
     pub tag: Option<RecordTag>,
 
-    /// Force push records
-    ///
-    /// This will first wipe the local store, and then download all records from the remote
-    #[arg(long, default_value = "false")]
+    #[arg(
+        long,
+        default_value = "false",
+        help = fl!("arg-store-pull-force"),
+        long_help = fl!("arg-store-pull-force", "long")
+    )]
     pub force: bool,
 
-    /// Page Size
-    ///
-    /// How many records to download at once. Defaults to 100
-    #[arg(long, default_value = "100")]
+    #[arg(
+        long,
+        default_value = "100",
+        help = fl!("arg-store-pull-page"),
+        long_help = fl!("arg-store-pull-page", "long")
+    )]
     pub page: NonZeroU64,
 }
 
 impl Pull {
     pub async fn run(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
-        if self.force {
-            println!("Forcing local overwrite!");
-            println!("Clearing local store");
-
-            store.delete_all().await?;
+        if !self.force {
+            return self.pull(settings, store, db).await;
         }
 
+        println!("Forcing local overwrite!");
+        println!("Clearing local store");
+        store.delete_all().await?;
+        let pulled = self.pull(settings, store, db).await;
+        // Records only this machine had are gone, and the ai session index must forget what
+        // they projected: rebuilt from what the store holds now, however far the pull got.
+        let reset = super::reset_ai_sessions_after(settings).await;
+        match (pulled, reset) {
+            (Err(pull), Err(reset)) => {
+                eprintln!("{reset:?}");
+                Err(pull)
+            }
+            (pulled, reset) => pulled.and(reset),
+        }
+    }
+
+    async fn pull(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
         // We can actually just use the existing diff/etc to push
         // 1. Diff
         // 2. Get operations

@@ -4,7 +4,7 @@ reason = """panics on overflow; use atuin_common::time::DurationExt::try_new, or
     Duration::from_secs when nanos are 0"""
 
 [[disallowed-methods]]
-path = "time::Duration::new"
+path = "time::SignedDuration::new"
 reason = "panics on overflow; use atuin_common::time::DurationExt::try_new"
 
 [[disallowed-methods]]

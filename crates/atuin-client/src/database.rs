@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use atuin_common::db::sqlite::{Sqlite as CommonSqlite, SqliteBuilder};
 use atuin_common::filter::{self, OrFilter};
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use easy_cast::{CastFloat, Conv};
@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use super::history::History;
 use super::ordering;
-use super::settings::{FilterMode, SearchMode, Settings};
+use super::settings::{Dialect, FilterMode, SearchMode, Settings};
 use crate::history::{AuthorKind, AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
 
 #[derive(Clone)]
@@ -55,6 +55,12 @@ pub struct OptFilters<'a> {
     pub authors: OrFilter<&'a [AuthorPattern]>,
     /// Shell filter. The empty string matches commands that have no recorded shell.
     pub shells: OrFilter<&'a [String]>,
+    /// Offset that `before`/`after` strings without an explicit offset are interpreted in, and
+    /// that relative phrases like "today" are anchored to. Pass `settings.timezone`; the
+    /// `Default` is UTC.
+    pub timezone: UtcOffsetSpec,
+    /// Date dialect (day/month order) for parsing `before`/`after`. Pass `settings.dialect`.
+    pub dialect: Dialect,
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
@@ -424,16 +430,6 @@ impl Sqlite {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
-    async fn delete_row_raw(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        id: HistoryId,
-    ) -> Result<()> {
-        db::query("delete from history where id = ?1").bind(id).execute(&mut **tx).await?;
-
-        Ok(())
-    }
-
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
@@ -503,6 +499,13 @@ impl Sqlite {
         .await?;
 
         Ok(res)
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn active_ids(&self) -> Result<Vec<HistoryId>> {
+        db::query_scalar::<_, HistoryId>("select id from history where deleted_at is null")
+            .fetch_all(self.sqlite.pool())
+            .await
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -820,23 +823,20 @@ impl Sqlite {
 
         filter_options.exclude_cwd.map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
+        let now = OffsetDateTime::now_utc().to_offset(filter_options.timezone.0);
+        let dialect = filter_options.dialect.into();
+
         if let Some(before) = filter_options.before {
-            let parsed =
-                interim::parse_date_string(before, OffsetDateTime::now_utc(), interim::Dialect::Uk)
-                    .map_err(|e| {
-                        sqlx::Error::Decode(
-                            format!("invalid `before` filter {before:?}: {e}").into(),
-                        )
-                    })?;
+            let parsed = interim::parse_date_string(before, now, dialect).map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
+            })?;
             sql.and_where_lt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
         if let Some(after) = filter_options.after {
-            let parsed =
-                interim::parse_date_string(after, OffsetDateTime::now_utc(), interim::Dialect::Uk)
-                    .map_err(|e| {
-                        sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
-                    })?;
+            let parsed = interim::parse_date_string(after, now, dialect).map_err(|e| {
+                sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
+            })?;
             sql.and_where_gt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
         }
 
@@ -996,8 +996,8 @@ impl Sqlite {
     }
 
     #[must_use]
-    pub fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
-        Paged::new(self.clone(), page_size, include_deleted, unique)
+    pub fn all_paged(&self, page_size: usize, include_deleted: bool) -> Paged {
+        Paged::new(self.clone(), page_size, include_deleted)
     }
 
     // This used to scramble the command and set deleted_at, so that sync v1 could
@@ -1017,10 +1017,21 @@ impl Sqlite {
             return Ok(());
         }
 
+        // One `in (...)` statement per chunk that fits the bind-parameter limit, not one
+        // statement per id: per-row deletes made removing 200k entries take ~13s.
+        let ids_per_delete = self.sqlite.info().await.variable_number_limit().max(1);
+
         let mut tx = self.sqlite.pool().begin().await?;
 
-        for id in ids {
-            Self::delete_row_raw(&mut tx, id).await?;
+        while ids.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new("delete from history where id in (");
+            let mut list = builder.separated(", ");
+            for id in ids.by_ref().take(ids_per_delete) {
+                list.push_bind(id);
+            }
+            builder.push(")");
+
+            builder.build().execute(&mut *tx).await?;
         }
 
         tx.commit().await?;
@@ -1141,18 +1152,16 @@ pub struct Paged {
     page_size: usize,
     last_id: Option<String>,
     include_deleted: bool,
-    unique: bool,
 }
 
 impl Paged {
     #[must_use]
-    pub fn new(database: Sqlite, page_size: usize, include_deleted: bool, unique: bool) -> Self {
+    pub fn new(database: Sqlite, page_size: usize, include_deleted: bool) -> Self {
         Self {
             database,
             page_size,
             last_id: None,
             include_deleted,
-            unique,
         }
     }
 
@@ -1164,13 +1173,6 @@ impl Paged {
 
         if !self.include_deleted {
             query.and_where_is_null("deleted_at");
-        }
-
-        if self.unique {
-            // We want to deduplicate on command, but the user can search via cwd, hostname, and session.
-            // Without those fields, filter modes won't work right. With those fields, we get duplicates.
-            // This must be handled upstream.
-            query.group_by("command, cwd, hostname, session").having("max(timestamp)");
         }
 
         query.limit(self.page_size);
@@ -1871,6 +1873,34 @@ mod test {
             assert_eq!(results[0].command, "ls /home/ellie");
         }
     }
+    // The item sits at 15:30:05Z. An explicit offset in the filter must win over the configured
+    // one (+01:00 window = 15:00-16:00Z; misapplying -04:00 would give 20:00-21:00Z), and a bare
+    // string must adopt the configured -04:00 (11:00-12:00 -04:00 = 15:00-16:00Z; UTC would miss).
+    #[rstest]
+    #[case::explicit_offset_wins("2026-01-12T16:00:00+01:00", "2026-01-12T17:00:00+01:00")]
+    #[case::bare_string_uses_configured_offset("2026-01-12T11:00:00", "2026-01-12T12:00:00")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_timezone_before_after(#[case] after: &str, #[case] before: &str) {
+        let item_time = OffsetDateTime::parse("2026-01-12T11:30:05-04:00", &Rfc3339).unwrap();
+
+        let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
+        new_history_item_at(&db, "ls /home/ellie", Some(item_time)).await.unwrap();
+
+        let context = new_context();
+
+        let results = db
+            .search(DbSearchMode::FullText, FilterMode::Global, &context, "", OptFilters {
+                after: Some(after),
+                before: Some(before),
+                timezone: "-04:00".parse().unwrap(),
+                include_duplicates: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+    }
 
     #[rstest]
     #[case::with_duplicates_counts_every_execution(true, 2)]
@@ -2128,6 +2158,7 @@ mod test {
 
     // SQL operators are stripped when performing fuzzy reordering, but this must not affect the
     // initial SQL matching.
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy_operator() {
         let db = db_with(&["use screen", "screenshot tool"]).await;
@@ -2151,7 +2182,7 @@ mod test {
         }
 
         // Create a paged iterator with page_size of 2
-        let mut paged = db.all_paged(2, false, false);
+        let mut paged = db.all_paged(2, false);
 
         // First page should have 2 items
         let page1 = paged.next().await.unwrap();
@@ -2181,35 +2212,11 @@ mod test {
         db: Sqlite,
     ) {
         // Create a paged iterator on empty database
-        let mut paged = db.all_paged(10, false, false);
+        let mut paged = db.all_paged(10, false);
 
         // Should return None immediately
         let page = paged.next().await.unwrap();
         assert!(page.is_none());
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_unique(
-        #[future(awt)]
-        #[from(empty_db)]
-        db: Sqlite,
-    ) {
-        // Add duplicate commands
-        new_history_item(&db, "duplicate").await.unwrap();
-        new_history_item(&db, "duplicate").await.unwrap();
-        new_history_item(&db, "unique1").await.unwrap();
-        new_history_item(&db, "unique2").await.unwrap();
-
-        // Without unique flag - should get all 4
-        let mut paged = db.all_paged(10, false, false);
-        let page = paged.next().await.unwrap().unwrap();
-        assert_eq!(page.len(), 4);
-
-        // With unique flag - should get 3 (duplicates collapsed)
-        let mut paged_unique = db.all_paged(10, false, true);
-        let page_unique = paged_unique.next().await.unwrap().unwrap();
-        assert_eq!(page_unique.len(), 3);
     }
 
     #[rstest]
@@ -2248,11 +2255,11 @@ mod test {
         db.delete(to_delete).await.unwrap();
 
         // Deletes remove the row outright, so both views should get 2
-        let mut paged = db.all_paged(10, false, false);
+        let mut paged = db.all_paged(10, false);
         let page = paged.next().await.unwrap().unwrap();
         assert_eq!(page.len(), 2);
 
-        let mut paged_deleted = db.all_paged(10, true, false);
+        let mut paged_deleted = db.all_paged(10, true);
         let page_deleted = paged_deleted.next().await.unwrap().unwrap();
         assert_eq!(page_deleted.len(), 2);
 
@@ -2261,11 +2268,11 @@ mod test {
         legacy.deleted_at = Some(OffsetDateTime::now_utc());
         db.update(&legacy).await.unwrap();
 
-        let mut paged = db.all_paged(10, false, false);
+        let mut paged = db.all_paged(10, false);
         let page = paged.next().await.unwrap().unwrap();
         assert_eq!(page.len(), 1);
 
-        let mut paged_deleted = db.all_paged(10, true, false);
+        let mut paged_deleted = db.all_paged(10, true);
         let page_deleted = paged_deleted.next().await.unwrap().unwrap();
         assert_eq!(page_deleted.len(), 2);
     }

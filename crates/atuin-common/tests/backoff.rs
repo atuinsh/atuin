@@ -70,7 +70,7 @@ async fn eager_first_call_can_exceed_the_timeout() {
     let calls = AtomicUsize::new(0);
 
     let start = Instant::now();
-    let result: Result<(), ()> = Backoff::Linear(Duration::from_secs(10))
+    let result: Result<(), ()> = Backoff::Constant(Duration::from_secs(10))
         .retry(
             || async {
                 calls.fetch_add(1, Ordering::SeqCst);
@@ -158,14 +158,14 @@ async fn exponential_initial_is_capped_to_max() {
     assert_in_band(observed[0], max, "first delay when initial > max");
 }
 
-/// `Linear(ZERO)` spins -- it polls as fast as possible with no delay -- yet still terminates the
+/// `Constant(ZERO)` spins -- it polls as fast as possible with no delay -- yet still terminates the
 /// instant the closure returns `Break`. Guards the documented busy-poll mode against both a hidden
 /// delay creeping in and an infinite loop that never honors `Break`.
 #[tokio::test(start_paused = true)]
-async fn linear_zero_spins_with_no_delay() {
+async fn constant_zero_spins_with_no_delay() {
     let calls = AtomicUsize::new(0);
     let start = Instant::now();
-    let result: Result<usize, ()> = Backoff::Linear(Duration::ZERO)
+    let result: Result<usize, ()> = Backoff::Constant(Duration::ZERO)
         .retry_sync(
             || {
                 let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
@@ -181,22 +181,22 @@ async fn linear_zero_spins_with_no_delay() {
 
     assert_eq!(result, Ok(500), "spinning must still honor Break and thread its value");
     assert_eq!(calls.load(Ordering::SeqCst), 500);
-    assert_eq!(start.elapsed(), Duration::ZERO, "a ZERO linear backoff must insert no delay");
+    assert_eq!(start.elapsed(), Duration::ZERO, "a ZERO constant backoff must insert no delay");
 }
 
-/// `Linear(period)` waits ~`period` between EVERY pair of attempts, across many failures -- not just
-/// the first. This is the "sync never hammers the server" guarantee: two attempts never fire
+/// `Constant(period)` waits ~`period` between EVERY pair of attempts, across many failures -- not
+/// just the first. This is the "sync never hammers the server" guarantee: two attempts never fire
 /// back-to-back, and the cadence never drifts as failures pile up.
 #[tokio::test(start_paused = true)]
-async fn linear_waits_its_period_between_attempts() {
+async fn constant_waits_its_period_between_attempts() {
     let period = 2 * SEC;
-    let stamps = record(Backoff::Linear(period), 5, Duration::from_secs(10_000)).await;
+    let stamps = record(Backoff::Constant(period), 5, Duration::from_secs(10_000)).await;
 
     assert_eq!(stamps.len(), 6, "expected five failures then a break");
     assert_eq!(stamps[0], Duration::ZERO, "only the eager first attempt is un-delayed");
 
     for (i, got) in gaps(&stamps).iter().enumerate() {
-        assert_in_band(*got, period, &format!("linear gap #{}", i + 1));
+        assert_in_band(*got, period, &format!("constant gap #{}", i + 1));
     }
 }
 
@@ -207,7 +207,7 @@ async fn timeout_mid_backoff_returns_the_last_continue_reason() {
     let calls = AtomicUsize::new(0);
     // Attempts land at ~0s, ~10s, ~20s (reasons 0, 1, 2); the fourth backoff would reach ~30s but
     // the 25s timeout fires first, so the error must carry the reason from attempt #3.
-    let result: Result<(), usize> = Backoff::Linear(10 * SEC)
+    let result: Result<(), usize> = Backoff::Constant(10 * SEC)
         .retry_sync(|| ControlFlow::Continue(calls.fetch_add(1, Ordering::SeqCst)), 25 * SEC)
         .await;
 
@@ -222,7 +222,7 @@ async fn timeout_mid_backoff_returns_the_last_continue_reason() {
 async fn break_before_timeout_returns_the_ok_value() {
     let calls = AtomicUsize::new(0);
     // Attempts at ~0s, ~10s, ~20s; the third breaks at ~20s, comfortably inside the 25s timeout.
-    let result: Result<&str, usize> = Backoff::Linear(10 * SEC)
+    let result: Result<&str, usize> = Backoff::Constant(10 * SEC)
         .retry_sync(
             || {
                 let n = calls.fetch_add(1, Ordering::SeqCst);

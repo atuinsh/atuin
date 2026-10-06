@@ -1,0 +1,647 @@
+{
+ "session": {
+  "id": "ses_W",
+  "title": "Mock title number 1",
+  "parent_id": null,
+  "directory": "/work/proj",
+  "time_created": 1790217606267,
+  "time_updated": 1790218513726
+ },
+ "messages": [
+  {
+   "id": "msg_0d148d4b9001WQdGo06CVdqA3u",
+   "time_created": 1790217606329,
+   "data": {
+    "role": "user",
+    "time": {
+     "created": 1790217606329
+    },
+    "agent": "build",
+    "model": {
+     "providerID": "mock",
+     "modelID": "mock-model"
+    },
+    "summary": {
+     "diffs": []
+    }
+   }
+  },
+  {
+   "id": "msg_0d148d743001qhQZH5hIpZVrlb",
+   "time_created": 1790217606979,
+   "data": {
+    "parentID": "msg_0d148d4b9001WQdGo06CVdqA3u",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "/work/proj",
+     "root": "/"
+    },
+    "cost": 0.000926,
+    "tokens": {
+     "total": 1054,
+     "input": 802,
+     "output": 42,
+     "reasoning": 10,
+     "cache": {
+      "write": 0,
+      "read": 200
+     }
+    },
+    "modelID": "mock-model",
+    "providerID": "mock",
+    "time": {
+     "created": 1790217606979,
+     "completed": 1790217607996
+    },
+    "finish": "stop"
+   }
+  },
+  {
+   "id": "msg_0d149b05a001c4o2UTJB1vX46n",
+   "time_created": 1790217662554,
+   "data": {
+    "role": "user",
+    "time": {
+     "created": 1790217662554
+    },
+    "agent": "build",
+    "model": {
+     "providerID": "mock",
+     "modelID": "mock-model"
+    },
+    "summary": {
+     "diffs": []
+    }
+   }
+  },
+  {
+   "id": "msg_0d149b2d5001gkfmc9bUMDXLJ5",
+   "time_created": 1790217663189,
+   "data": {
+    "parentID": "msg_0d149b05a001c4o2UTJB1vX46n",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "/work/proj",
+     "root": "/"
+    },
+    "cost": 0,
+    "tokens": {
+     "input": 0,
+     "output": 0,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "modelID": "mock-model",
+    "providerID": "mock",
+    "time": {
+     "created": 1790217663189,
+     "completed": 1790217663812
+    },
+    "error": {
+     "name": "APIError",
+     "data": {
+      "message": "mock bad request",
+      "statusCode": 400,
+      "isRetryable": false,
+      "responseBody": "{\"error\": {\"message\": \"mock bad request\", \"type\": \"invalid_request_error\"}}"
+     }
+    }
+   }
+  },
+  {
+   "id": "msg_0d154c3ed001zrhJSNW6BsHlTX",
+   "time_created": 1790218388461,
+   "data": {
+    "role": "user",
+    "time": {
+     "created": 1790218388461
+    },
+    "agent": "build",
+    "model": {
+     "providerID": "mock",
+     "modelID": "mock-model"
+    },
+    "summary": {
+     "diffs": []
+    }
+   }
+  },
+  {
+   "id": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+   "time_created": 1790218389171,
+   "data": {
+    "parentID": "msg_0d154c3ed001zrhJSNW6BsHlTX",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+     "cwd": "/work/proj",
+     "root": "/"
+    },
+    "cost": 0.000944,
+    "tokens": {
+     "total": 1066,
+     "input": 808,
+     "output": 48,
+     "reasoning": 10,
+     "cache": {
+      "write": 0,
+      "read": 200
+     }
+    },
+    "modelID": "mock-model",
+    "providerID": "mock",
+    "time": {
+     "created": 1790218389171,
+     "completed": 1790218389931
+    },
+    "finish": "stop"
+   }
+  }
+ ],
+ "parts": [
+  {
+   "id": "prt_0d148d4bf001JaxA9TwaMgU5vE",
+   "message_id": "msg_0d148d4b9001WQdGo06CVdqA3u",
+   "time_created": 1790217606338,
+   "data": {
+    "type": "text",
+    "text": "\"hello there\""
+   }
+  },
+  {
+   "id": "prt_0d148db28001TznIjdIVqXAvJ3",
+   "message_id": "msg_0d148d743001qhQZH5hIpZVrlb",
+   "time_created": 1790217607976,
+   "data": {
+    "type": "step-start"
+   }
+  },
+  {
+   "id": "prt_0d148db2c001S3pTr5s7fXT3RP",
+   "message_id": "msg_0d148d743001qhQZH5hIpZVrlb",
+   "time_created": 1790217607980,
+   "data": {
+    "type": "text",
+    "text": "## Summary\nthe conversation so far.",
+    "time": {
+     "start": 1790217607980,
+     "end": 1790217607984
+    }
+   }
+  },
+  {
+   "id": "prt_0d148db35001Zcq9788cC4lx83",
+   "message_id": "msg_0d148d743001qhQZH5hIpZVrlb",
+   "time_created": 1790217607989,
+   "data": {
+    "reason": "stop",
+    "type": "step-finish",
+    "tokens": {
+     "total": 1054,
+     "input": 802,
+     "output": 42,
+     "reasoning": 10,
+     "cache": {
+      "write": 0,
+      "read": 200
+     }
+    },
+    "cost": 0.000926
+   }
+  },
+  {
+   "id": "prt_0d149b05c0015TIlARpqWlDXNK",
+   "message_id": "msg_0d149b05a001c4o2UTJB1vX46n",
+   "time_created": 1790217662563,
+   "data": {
+    "type": "text",
+    "text": "\"FAIL400 now\""
+   }
+  },
+  {
+   "id": "prt_0d154c3f0001VPSmfCQt4r6LWN",
+   "message_id": "msg_0d154c3ed001zrhJSNW6BsHlTX",
+   "time_created": 1790218388472,
+   "data": {
+    "type": "text",
+    "text": "\"after the wipe\""
+   }
+  },
+  {
+   "id": "prt_0d154c996001Lr5h4i3jpsGN60",
+   "message_id": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+   "time_created": 1790218389910,
+   "data": {
+    "type": "step-start"
+   }
+  },
+  {
+   "id": "prt_0d154c99a001dtKmLh8SYe2pad",
+   "message_id": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+   "time_created": 1790218389914,
+   "data": {
+    "type": "text",
+    "text": "reply8 to the user.",
+    "time": {
+     "start": 1790218389914,
+     "end": 1790218389920
+    }
+   }
+  },
+  {
+   "id": "prt_0d154c9a5001gvwUYJAY42itXy",
+   "message_id": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+   "time_created": 1790218389925,
+   "data": {
+    "reason": "stop",
+    "type": "step-finish",
+    "tokens": {
+     "total": 1066,
+     "input": 808,
+     "output": 48,
+     "reasoning": 10,
+     "cache": {
+      "write": 0,
+      "read": 200
+     }
+    },
+    "cost": 0.000944
+   }
+  }
+ ],
+ "events": [
+  {
+   "id": "evt_0d154c3f2001n8GyYu5aA5gGCM",
+   "type": "message.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "info": {
+     "id": "msg_0d154c3ed001zrhJSNW6BsHlTX",
+     "sessionID": "ses_W",
+     "role": "user",
+     "time": {
+      "created": 1790218388461
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "mock",
+      "modelID": "mock-model"
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_0d154c3f8001tOJUfnTDKiZj6m",
+   "type": "message.part.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "part": {
+     "id": "prt_0d154c3f0001VPSmfCQt4r6LWN",
+     "sessionID": "ses_W",
+     "messageID": "msg_0d154c3ed001zrhJSNW6BsHlTX",
+     "type": "text",
+     "text": "\"after the wipe\""
+    },
+    "time": 1790218388472
+   }
+  },
+  {
+   "id": "evt_0d154c3fc001ymvSCnGKWnDX34",
+   "type": "session.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "info": {
+     "id": "ses_W",
+     "slug": "silent-otter",
+     "projectID": "global",
+     "directory": "/work/proj",
+     "path": "work/proj",
+     "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+     },
+     "cost": 0.00653,
+     "tokens": {
+      "input": 5630,
+      "output": 310,
+      "reasoning": 70,
+      "cache": {
+       "read": 1400,
+       "write": 0
+      }
+     },
+     "title": "Mock title number 1",
+     "agent": "build",
+     "model": {
+      "id": "mock-model",
+      "providerID": "mock",
+      "variant": "default"
+     },
+     "version": "1.18.32",
+     "time": {
+      "created": 1790217606267,
+      "updated": 1790218388475
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_0d154c6b3001ATot8M0iBvzeR0",
+   "type": "message.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "info": {
+     "id": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+     "sessionID": "ses_W",
+     "role": "assistant",
+     "time": {
+      "created": 1790218389171
+     },
+     "parentID": "msg_0d154c3ed001zrhJSNW6BsHlTX",
+     "modelID": "mock-model",
+     "providerID": "mock",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_0d154c6d0001MFiz73Nqnjju89",
+   "type": "session.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "info": {
+     "id": "ses_W",
+     "slug": "silent-otter",
+     "projectID": "global",
+     "directory": "/work/proj",
+     "path": "work/proj",
+     "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+     },
+     "cost": 0.00653,
+     "tokens": {
+      "input": 5630,
+      "output": 310,
+      "reasoning": 70,
+      "cache": {
+       "read": 1400,
+       "write": 0
+      }
+     },
+     "title": "Mock title number 1",
+     "agent": "build",
+     "model": {
+      "id": "mock-model",
+      "providerID": "mock",
+      "variant": "default"
+     },
+     "version": "1.18.32",
+     "time": {
+      "created": 1790217606267,
+      "updated": 1790218389199
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_0d154c6d500113MJ9Vvyp9K08h",
+   "type": "message.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "info": {
+     "id": "msg_0d154c3ed001zrhJSNW6BsHlTX",
+     "sessionID": "ses_W",
+     "role": "user",
+     "time": {
+      "created": 1790218388461
+     },
+     "summary": {
+      "diffs": []
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "mock",
+      "modelID": "mock-model"
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_0d154c996001w4Xm4Tkhtriz60",
+   "type": "message.part.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "part": {
+     "id": "prt_0d154c996001Lr5h4i3jpsGN60",
+     "sessionID": "ses_W",
+     "messageID": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+     "type": "step-start"
+    },
+    "time": 1790218389910
+   }
+  },
+  {
+   "id": "evt_0d154c99a001aygYd1Nbavmow0",
+   "type": "message.part.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "part": {
+     "id": "prt_0d154c99a001dtKmLh8SYe2pad",
+     "sessionID": "ses_W",
+     "messageID": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+     "type": "text",
+     "text": "",
+     "time": {
+      "start": 1790218389914
+     }
+    },
+    "time": 1790218389914
+   }
+  },
+  {
+   "id": "evt_0d154c9a0001wRnhslqmh80kKi",
+   "type": "message.part.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "part": {
+     "id": "prt_0d154c99a001dtKmLh8SYe2pad",
+     "sessionID": "ses_W",
+     "messageID": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+     "type": "text",
+     "text": "reply8 to the user.",
+     "time": {
+      "start": 1790218389914,
+      "end": 1790218389920
+     }
+    },
+    "time": 1790218389920
+   }
+  },
+  {
+   "id": "evt_0d154c9a50019fxBFC0j4wVyhj",
+   "type": "message.part.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "part": {
+     "id": "prt_0d154c9a5001gvwUYJAY42itXy",
+     "sessionID": "ses_W",
+     "messageID": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+     "type": "step-finish",
+     "reason": "stop",
+     "cost": 0.000944,
+     "tokens": {
+      "total": 1066,
+      "input": 808,
+      "output": 48,
+      "reasoning": 10,
+      "cache": {
+       "read": 200,
+       "write": 0
+      }
+     }
+    },
+    "time": 1790218389925
+   }
+  },
+  {
+   "id": "evt_0d154c9a7001ur7zv81zDAyvNK",
+   "type": "message.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "info": {
+     "id": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+     "sessionID": "ses_W",
+     "role": "assistant",
+     "time": {
+      "created": 1790218389171
+     },
+     "parentID": "msg_0d154c3ed001zrhJSNW6BsHlTX",
+     "modelID": "mock-model",
+     "providerID": "mock",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/"
+     },
+     "cost": 0.000944,
+     "tokens": {
+      "total": 1066,
+      "input": 808,
+      "output": 48,
+      "reasoning": 10,
+      "cache": {
+       "read": 200,
+       "write": 0
+      }
+     },
+     "finish": "stop"
+    }
+   }
+  },
+  {
+   "id": "evt_0d154c9ab001R0XAYPp5RNvshD",
+   "type": "message.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "info": {
+     "id": "msg_0d154c6b200176gyQ9ZgLlw1Sj",
+     "sessionID": "ses_W",
+     "role": "assistant",
+     "time": {
+      "created": 1790218389171,
+      "completed": 1790218389931
+     },
+     "parentID": "msg_0d154c3ed001zrhJSNW6BsHlTX",
+     "modelID": "mock-model",
+     "providerID": "mock",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/"
+     },
+     "cost": 0.000944,
+     "tokens": {
+      "total": 1066,
+      "input": 808,
+      "output": 48,
+      "reasoning": 10,
+      "cache": {
+       "read": 200,
+       "write": 0
+      }
+     },
+     "finish": "stop"
+    }
+   }
+  },
+  {
+   "id": "evt_0d154c9b700110xMmOBjxXmlK6",
+   "type": "session.updated.1",
+   "data": {
+    "sessionID": "ses_W",
+    "info": {
+     "id": "ses_W",
+     "slug": "silent-otter",
+     "projectID": "global",
+     "directory": "/work/proj",
+     "path": "work/proj",
+     "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+     },
+     "cost": 0.007474,
+     "tokens": {
+      "input": 6438,
+      "output": 358,
+      "reasoning": 80,
+      "cache": {
+       "read": 1600,
+       "write": 0
+      }
+     },
+     "title": "Mock title number 1",
+     "agent": "build",
+     "model": {
+      "id": "mock-model",
+      "providerID": "mock",
+      "variant": "default"
+     },
+     "version": "1.18.32",
+     "time": {
+      "created": 1790217606267,
+      "updated": 1790218389942
+     }
+    }
+   }
+  }
+ ]
+}

@@ -48,14 +48,16 @@ default = [
     "daemon",
     "ai",
     "pty-proxy",
+    "octavo",
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
+octavo = ["sync", "daemon", "atuin-daemon/octavo", "dep:atuin-octavo"]
 hex = ["pty-proxy"]
-clipboard = ["arboard"]
+clipboard = ["dep:arboard", "atuin-ai?/clipboard"]
 check-update = ["atuin-client/check-update"]
 vendored-tls = ["atuin-client?/vendored-tls"]
 # `atuin update`: self-update via the cargo-dist install receipt. Not a
@@ -75,19 +77,17 @@ profiling-traced = [
 [dependencies]
 atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
-atuin-client = {
-    path = "../atuin-client",
-    version = "18.22.0",
-    optional = true,
-    default-features = false,
-}
-atuin-common = { workspace = true, features = ["unicode", "os", "ai"] }
+# Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
+# with a TOML 1.0 parser (find-crate -> toml 0.5).
+atuin-client = { path = "../atuin-client", version = "18.23.0", optional = true, default-features = false }
+atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
 atuin-vt100 = { workspace = true }
 atuin-kv = { workspace = true }
+atuin-octavo = { workspace = true, optional = true }
 atuin-pty-proxy = { workspace = true, optional = true }
 atuin-scripts = { workspace = true }
 
@@ -106,6 +106,8 @@ enum_dispatch = { workspace = true }
 eyre = { workspace = true }
 frizbee = { workspace = true }
 futures-util = { workspace = true }
+i18n-embed = { workspace = true }
+i18n-embed-fl = { workspace = true }
 indicatif = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
@@ -118,7 +120,9 @@ ratatui = { workspace = true }
 regex = { workspace = true }
 rpassword = { workspace = true }
 runtime-format = { workspace = true }
+rust-embed = { workspace = true }
 rustix = { workspace = true }
+secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

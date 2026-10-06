@@ -15,8 +15,8 @@ use atuin_domain::record::{
 };
 use easy_cast::Conv;
 use eyre::{Result, eyre};
-use sqlx::Row;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
+use sqlx::{FromRow, Row, Type, ValueRef};
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -48,19 +48,61 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for DbRecord {
             })
         };
 
+        let tag = RecordTag::from(row.try_get::<String, _>("tag")?);
+        let data = stored_data(row, &tag)?;
+
         Ok(Self(Record {
             id: RecordId(parse_uuid("id")?),
             idx: u64::conv(idx),
             host: Host::new(HostId(parse_uuid("host")?)),
             timestamp: u64::conv(timestamp),
-            tag: RecordTag::from(row.try_get::<String, _>("tag")?),
+            tag,
             version: RecordVersion::from(row.try_get::<String, _>("version")?),
-            data: paseto_v4::EncryptedData {
-                raw: row.try_get("data")?,
-                cek: row.try_get("cek")?,
-            },
+            data,
         }))
     }
+}
+
+/// Inverse of [`stored_columns`]. Rows written before it hold the wire form as TEXT and are
+/// taken as is; sqlite is dynamically typed, so the storage class of the cell says which.
+fn stored_data(row: &SqliteRow, tag: &RecordTag) -> ::sqlx::Result<paseto_v4::EncryptedData> {
+    if *row.try_get_raw("data")?.type_info() != <&[u8] as Type<sqlx::Sqlite>>::type_info() {
+        return Ok(paseto_v4::EncryptedData {
+            raw: row.try_get("data")?,
+            cek: row.try_get("cek")?,
+        });
+    }
+
+    let decode = |column: &'static str, source: Box<dyn std::error::Error + Send + Sync>| {
+        ::sqlx::Error::ColumnDecode {
+            index: column.to_owned(),
+            source,
+        }
+    };
+    let (data, cek): (Vec<u8>, Vec<u8>) = (row.try_get("data")?, row.try_get("cek")?);
+
+    if tag.is_plaintext() {
+        return Ok(paseto_v4::EncryptedData {
+            raw: String::from_utf8(data).map_err(|e| decode("data", e.into()))?,
+            cek: String::from_utf8(cek).map_err(|e| decode("cek", e.into()))?,
+        });
+    }
+
+    let cek = cek.try_into().map_err(|_| decode("cek", "wrong length".into()))?;
+
+    Ok((&paseto_v4::EncryptedBytes { data, cek }).into())
+}
+
+/// The `data` and `cek` columns for a record. Plaintext tags (packfile manifests) carry their
+/// bytes as is; everything else is stored as [`paseto_v4::EncryptedBytes`].
+fn stored_columns(record: &Record<paseto_v4::EncryptedData>) -> Result<(Vec<u8>, Vec<u8>)> {
+    if record.tag.is_plaintext() {
+        return Ok((record.data.raw.clone().into_bytes(), record.data.cek.clone().into_bytes()));
+    }
+
+    let bytes = paseto_v4::EncryptedBytes::try_from(&record.data)?;
+
+    Ok((bytes.data, bytes.cek.to_vec()))
 }
 
 impl SqliteStore {
@@ -98,6 +140,8 @@ impl SqliteStore {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         r: &Record<paseto_v4::EncryptedData>,
     ) -> Result<()> {
+        let (data, cek) = stored_columns(r)?;
+
         // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
         db::query(
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
@@ -109,8 +153,8 @@ impl SqliteStore {
         .bind(r.tag.as_str())
         .bind(i64::conv(r.timestamp))
         .bind(r.version.as_str())
-        .bind(r.data.raw.as_str())
-        .bind(r.data.cek.as_str())
+        .bind(data)
+        .bind(cek)
         .execute(&mut **tx)
         .await?;
 
@@ -138,6 +182,44 @@ impl SqliteStore {
         &self,
         records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
     ) -> Result<()> {
+        let mut tx = self.sqlite.pool().begin().await?;
+        self.insert_all(&mut tx, records).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Append `records` atomically: every one is stored, or none is.
+    ///
+    /// The batch version of [`Self::push_unique`]. The write lock is taken up front (a deferred
+    /// `BEGIN` would only lock at the first insert), so no other writer can claim a slot while
+    /// the batch is going in. If any row's `(host, tag, idx)` slot was already held the batch is
+    /// rolled back and `Ok(false)` is returned: the caller re-stamps its indices from the new
+    /// tail and retries. Unlike `push_unique` there is no idempotent re-push: a record whose id
+    /// is already stored counts as a conflict too, so callers must build fresh ids per attempt.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn push_batch_unique(
+        &self,
+        records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
+    ) -> Result<bool> {
+        let mut tx = self.sqlite.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let (attempted, inserted) = self.insert_all(&mut tx, records).await?;
+        if inserted != attempted {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.commit().await?;
+
+        Ok(true)
+    }
+
+    /// Chunked `insert or ignore` of `records` on `tx`. Returns `(attempted, inserted)`; they
+    /// differ when a unique-index conflict swallowed a row.
+    async fn insert_all(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        records: impl Iterator<Item = &Record<paseto_v4::EncryptedData>> + Send + Sync,
+    ) -> Result<(u64, u64)> {
         // `store` has 8 columns, so each row binds 8 parameters; keep a full chunk
         // within the bind-parameter limit. `max(1)` keeps the chunk non-empty on any
         // (implausible) tiny limit.
@@ -145,30 +227,36 @@ impl SqliteStore {
         let rows_per_insert = (self.sqlite.info().await.variable_number_limit() / COLUMNS).max(1);
 
         let mut records = records.peekable();
-        let mut tx = self.sqlite.pool().begin().await?;
+        let mut attempted: u64 = 0;
+        let mut inserted: u64 = 0;
 
         while records.peek().is_some() {
             let mut builder = sqlx::QueryBuilder::new(
                 "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek) ",
             );
 
-            builder.push_values(records.by_ref().take(rows_per_insert), |mut b, r| {
+            let chunk = records
+                .by_ref()
+                .take(rows_per_insert)
+                .map(|r| stored_columns(r).map(|columns| (r, columns)))
+                .collect::<Result<Vec<_>>>()?;
+
+            builder.push_values(chunk, |mut b, (r, (data, cek))| {
+                attempted += 1;
                 b.push_bind(r.id.0.as_hyphenated().to_string())
                     .push_bind(i64::conv(r.idx))
                     .push_bind(r.host.id.0.as_hyphenated().to_string())
                     .push_bind(r.tag.as_str())
                     .push_bind(i64::conv(r.timestamp))
                     .push_bind(r.version.as_str())
-                    .push_bind(r.data.raw.as_str())
-                    .push_bind(r.data.cek.as_str());
+                    .push_bind(data)
+                    .push_bind(cek);
             });
 
-            builder.build().execute(&mut *tx).await?;
+            inserted += builder.build().execute(&mut **tx).await?.rows_affected();
         }
 
-        tx.commit().await?;
-
-        Ok(())
+        Ok((attempted, inserted))
     }
 
     /// Insert a single record, reporting whether its `(host, tag, idx)` slot is now held by
@@ -183,6 +271,7 @@ impl SqliteStore {
     /// tries again.
     #[instrument(level = "trace", skip_all, fields(id = ?record.id, idx = record.idx, host = ?record.host.id, tag = ?record.tag), err)]
     pub async fn push_unique(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<bool> {
+        let (data, cek) = stored_columns(record)?;
         let res = db::query(
             "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
                 values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -193,8 +282,8 @@ impl SqliteStore {
         .bind(record.tag.as_str())
         .bind(i64::conv(record.timestamp))
         .bind(record.version.as_str())
-        .bind(record.data.raw.as_str())
-        .bind(record.data.cek.as_str())
+        .bind(data)
+        .bind(cek)
         .execute(self.sqlite.pool())
         .await?;
 
@@ -212,6 +301,16 @@ impl SqliteStore {
             .is_some();
 
         Ok(ours_present)
+    }
+
+    /// Whether a record with this id is stored.
+    pub async fn contains(&self, id: RecordId) -> Result<bool> {
+        let found = db::query("select 1 from store where id = ?1 limit 1")
+            .bind(id.0.as_hyphenated().to_string())
+            .fetch_optional(self.sqlite.pool())
+            .await?;
+
+        Ok(found.is_some())
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
@@ -408,6 +507,80 @@ impl SqliteStore {
         Ok(res.into_iter().map(Into::into).collect())
     }
 
+    /// Rewrite rows still holding the wire form as TEXT into the blob encoding, then vacuum to
+    /// give the space back. Returns the number of rows rewritten.
+    ///
+    /// Works in chunks, each its own short transaction, so the store's write lock is never held
+    /// long enough for a concurrent writer to hit its busy timeout. Rows written meanwhile are
+    /// already blobs and never match.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn compact(&self) -> Result<u64> {
+        const CHUNK: i64 = 1000;
+
+        let mut rewritten = 0;
+        let mut cursor = 0i64;
+
+        loop {
+            // Select under the write lock: a row deleted and its rowid reused between the select
+            // and the update would otherwise have the new record's payload overwritten.
+            let mut tx = self.sqlite.pool().begin_with("BEGIN IMMEDIATE").await?;
+
+            let rows = db::query(sqlx::AssertSqlSafe(format!(
+                "select rowid, {STORE_COLUMNS} from store
+                    where rowid > ?1 and typeof(data) = 'text' order by rowid limit ?2"
+            )))
+            .bind(cursor)
+            .bind(CHUNK)
+            .fetch_all(&mut *tx)
+            .await?;
+
+            let Some(last) = rows.last() else {
+                break;
+            };
+            cursor = last.try_get("rowid")?;
+
+            for row in &rows {
+                let record: Record<paseto_v4::EncryptedData> = DbRecord::from_row(row)?.into();
+                let (data, cek) = stored_columns(&record)?;
+
+                db::query("update store set data = ?1, cek = ?2 where rowid = ?3")
+                    .bind(data)
+                    .bind(cek)
+                    .bind(row.try_get::<i64, _>("rowid")?)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+
+            tx.commit().await?;
+            rewritten += u64::conv(rows.len());
+        }
+
+        // Vacuum writes the whole file through the WAL; checkpoint so the space is freed now,
+        // not whenever the next checkpoint happens to run. A checkpoint blocked by a reader
+        // reports `busy` in its result row rather than failing, so check it and retry briefly.
+        db::query("vacuum").execute(self.sqlite.pool()).await?;
+
+        for attempt in 0..10 {
+            let busy: i64 = db::query_scalar("pragma wal_checkpoint(truncate)")
+                .fetch_one(self.sqlite.pool())
+                .await?;
+
+            if busy == 0 {
+                return Ok(rewritten);
+            }
+
+            debug!("wal checkpoint busy (attempt {attempt}); retrying");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        warn!(
+            "could not checkpoint the wal after compacting; space is reclaimed on a later \
+             checkpoint"
+        );
+
+        Ok(rewritten)
+    }
+
     /// Reencrypt every single item in this store with a new key
     /// Be careful - this may mess with sync.
     #[instrument(level = "trace", skip_all, err)]
@@ -507,7 +680,7 @@ mod tests {
     };
     use rstest::{fixture, rstest};
 
-    use super::SqliteStore;
+    use super::{SqliteStore, db};
     use crate::settings::test_local_timeout;
 
     #[fixture]
@@ -521,12 +694,10 @@ mod tests {
             .host(Host::new(HostId(uuid_v7())))
             .version("v1".into())
             .tag(RecordTag::Other(uuid_v7().simple().to_string()))
-            .data(paseto_v4::EncryptedData {
-                raw: "1234".into(),
-                cek: "1234".into(),
-            })
+            .data(DecryptedData(b"ls -la".to_vec()))
             .idx(0)
             .build()
+            .encrypt(&paseto_v4::Key::generate())
     }
 
     #[rstest]
@@ -585,11 +756,9 @@ mod tests {
                 .version("v1".into())
                 .tag(tag.clone())
                 .idx(idx)
-                .data(paseto_v4::EncryptedData {
-                    raw: "x".into(),
-                    cek: "x".into(),
-                })
+                .data(DecryptedData(b"x".to_vec()))
                 .build()
+                .encrypt(&paseto_v4::Key::generate())
         };
 
         // Empty stream -> frontier is 0.
@@ -772,5 +941,120 @@ mod tests {
         assert_eq!(store.get(manifest.id).await.unwrap(), manifest, "manifest must be untouched");
         store.get(history.id).await.unwrap().decrypt(&new_key).expect("history was rekeyed");
         store.verify(&new_key).await.unwrap();
+    }
+
+    /// A record in `series` at `idx` with a fresh id.
+    fn series_record(host: &Host, tag: &RecordTag, idx: u64) -> Record<paseto_v4::EncryptedData> {
+        Record::builder()
+            .host(host.clone())
+            .version("v1".into())
+            .tag(tag.clone())
+            .data(DecryptedData(b"ls -la".to_vec()))
+            .idx(idx)
+            .build()
+            .encrypt(&paseto_v4::Key::generate())
+    }
+
+    /// A batch whose `(host, tag, idx)` slots are partly taken is rejected whole, so the caller
+    /// can re-stamp from the new tail; a batch on free slots lands whole.
+    #[rstest]
+    #[tokio::test]
+    async fn push_batch_unique_is_all_or_nothing(#[future(awt)] store: SqliteStore) {
+        let host = Host::new(HostId(uuid_v7()));
+        let tag = RecordTag::Other(uuid_v7().simple().to_string());
+        let at = |idx| series_record(&host, &tag, idx);
+
+        let taken = at(0);
+        store.push(&taken).await.unwrap();
+
+        let (conflicting, free) = (at(0), at(1));
+        assert!(!store.push_batch_unique([&conflicting, &free].into_iter()).await.unwrap());
+        assert!(store.get(free.id).await.is_err(), "rolled back with its conflicting sibling");
+        assert_eq!(store.len_all().await.unwrap(), 1);
+
+        let (first, second) = (at(1), at(2));
+        assert!(store.push_batch_unique([&first, &second].into_iter()).await.unwrap());
+        assert_eq!(store.len_all().await.unwrap(), 3);
+        assert_eq!(store.get(second.id).await.unwrap(), second);
+    }
+
+    /// A conflict in the last chunk of a multi-chunk batch rolls back the earlier chunks too.
+    #[rstest]
+    #[tokio::test]
+    async fn push_batch_unique_rolls_back_across_chunks(#[future(awt)] store: SqliteStore) {
+        let host = Host::new(HostId(uuid_v7()));
+        let tag = RecordTag::Other(uuid_v7().simple().to_string());
+        let rows_per_insert = store.sqlite.info().await.variable_number_limit() / 8;
+
+        let taken = series_record(&host, &tag, u64::try_from(rows_per_insert).unwrap());
+        store.push(&taken).await.unwrap();
+
+        // idx 0..=rows_per_insert: the first chunk is clean, the last row of the second collides.
+        let batch: Vec<_> = (0..=rows_per_insert)
+            .map(|idx| series_record(&host, &tag, u64::try_from(idx).unwrap()))
+            .collect();
+        assert!(!store.push_batch_unique(batch.iter()).await.unwrap());
+        assert_eq!(store.len_all().await.unwrap(), 1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reads_legacy_text_rows_and_new_blob_rows(#[future(awt)] store: SqliteStore) {
+        let legacy = record();
+        // The pre-blob layout: token and cek json stored as TEXT.
+        db::query(
+            "insert into store(id, idx, host, tag, timestamp, version, data, cek)
+                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(legacy.id.0.as_hyphenated().to_string())
+        .bind(0i64)
+        .bind(legacy.host.id.0.as_hyphenated().to_string())
+        .bind(legacy.tag.as_str())
+        .bind(i64::try_from(legacy.timestamp).unwrap())
+        .bind(legacy.version.as_str())
+        .bind(legacy.data.raw.as_str())
+        .bind(legacy.data.cek.as_str())
+        .execute(store.sqlite.pool())
+        .await
+        .unwrap();
+
+        let fresh = record();
+        store.push(&fresh).await.unwrap();
+
+        let manifest = Record::builder()
+            .host(Host::new(HostId(uuid_v7())))
+            .version("v1".into())
+            .tag(RecordTag::Packfile)
+            .data(paseto_v4::EncryptedData {
+                raw: "001{\"host\":\"x\"}".into(),
+                cek: String::new(),
+            })
+            .idx(0)
+            .build();
+        store.push(&manifest).await.unwrap();
+
+        assert_eq!(store.get(legacy.id).await.unwrap(), legacy);
+        assert_eq!(store.get(fresh.id).await.unwrap(), fresh);
+        assert_eq!(store.get(manifest.id).await.unwrap(), manifest);
+
+        let storage_class = |id: String| {
+            db::query_scalar::<_, String>(
+                "select typeof(data) || typeof(cek) from store where id = ?1",
+            )
+            .bind(id)
+            .fetch_one(store.sqlite.pool())
+        };
+        let legacy_id = legacy.id.0.as_hyphenated().to_string();
+        let fresh_id = fresh.id.0.as_hyphenated().to_string();
+        assert_eq!(storage_class(legacy_id.clone()).await.unwrap(), "texttext");
+        assert_eq!(storage_class(fresh_id).await.unwrap(), "blobblob");
+        assert_eq!(
+            storage_class(manifest.id.0.as_hyphenated().to_string()).await.unwrap(),
+            "blobblob"
+        );
+
+        assert_eq!(store.compact().await.unwrap(), 1);
+        assert_eq!(storage_class(legacy_id).await.unwrap(), "blobblob");
+        assert_eq!(store.get(legacy.id).await.unwrap(), legacy);
     }
 }

@@ -2,62 +2,66 @@ use atuin_client::auth::{self, AuthClient, MutateResponse};
 use atuin_client::settings::Settings;
 use clap::Parser;
 use eyre::{Result, bail};
-use rpassword::prompt_password;
+use secrecy::{ExposeSecret, SecretString};
+
+use super::login::read_secret;
+use crate::i18n::fl;
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
-    pub current_password: Option<String>,
+    pub current_password: Option<SecretString>,
 
     #[clap(long, short)]
-    pub new_password: Option<String>,
+    pub new_password: Option<SecretString>,
 
-    /// The two-factor authentication code for your account, if any
-    #[clap(long, short)]
-    pub totp_code: Option<String>,
+    #[clap(long, short, help = fl!("arg-totp-code"))]
+    pub totp_code: Option<SecretString>,
 }
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings) -> Result<()> {
         if !settings.logged_in().await? {
-            bail!("You are not logged in");
+            bail!(fl!("account-not-logged-in"));
         }
 
         let client = auth::auth_client(settings).await;
 
-        let current_password = self.current_password.clone().unwrap_or_else(|| {
-            prompt_password("Please enter the current password: ")
-                .expect("Failed to read from input")
-        });
+        let current_password = self
+            .current_password
+            .clone()
+            .unwrap_or_else(|| read_secret(&fl!("prompt-current-password")));
 
-        if current_password.is_empty() {
-            bail!("please provide the current password");
+        if current_password.expose_secret().is_empty() {
+            bail!(fl!("change-password-provide-current"));
         }
 
-        let new_password = self.new_password.clone().unwrap_or_else(|| {
-            prompt_password("Please enter the new password: ").expect("Failed to read from input")
-        });
+        let new_password =
+            self.new_password.clone().unwrap_or_else(|| read_secret(&fl!("prompt-new-password")));
 
-        if new_password.is_empty() {
-            bail!("please provide a new password");
+        if new_password.expose_secret().is_empty() {
+            bail!(fl!("change-password-provide-new"));
         }
 
         let mut totp_code = self.totp_code.clone();
 
         loop {
             let response = client
-                .change_password(&current_password, &new_password, totp_code.as_deref())
+                .change_password(&current_password, &new_password, totp_code.as_ref())
                 .await?;
 
             match response {
                 MutateResponse::Success => break,
                 MutateResponse::TwoFactorRequired => {
-                    totp_code = Some(super::login::or_user_input(None, "two-factor code"));
+                    totp_code = Some(
+                        super::login::read_user_input(&fl!("prompt-two-factor-code"))
+                            .unwrap_or_default(),
+                    );
                 }
             }
         }
 
-        println!("Account password successfully changed!");
+        println!("{}", fl!("change-password-success"));
 
         Ok(())
     }

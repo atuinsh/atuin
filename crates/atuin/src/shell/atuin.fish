@@ -17,24 +17,41 @@ if not set -q __atuin_pty_proxy_owns_tty
     end
 end
 
-function _atuin_osc133_command_executed
+function _atuin_mark_output_start
     test "$__atuin_pty_proxy_owns_tty" = 1; or return
+
+    if test -n "$__atuin_needs_osc133_reset"
+        set -e __atuin_needs_osc133_reset
+        # Old pty-proxy will reset an in-progress capture on a `B` marker.
+        # Always reset, even if there's no history ID, to avoid capturing a
+        # filtered command.
+        printf '\033]133;B\a'
+    end
+
     test -n "$ATUIN_HISTORY_ID"; or return
 
-    printf '\033]133;C\a'
+    if test "$ATUIN_PTY_PROXY_ACTIVE" = 1
+        printf '\033]133;C\a'
+    else
+        printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"
+    end
 end
 
-function _atuin_osc133_command_finished --argument-names exit_code
+function _atuin_mark_output_end --argument-names exit_code
     test "$__atuin_pty_proxy_owns_tty" = 1; or return
     test -n "$ATUIN_HISTORY_ID"; or return
 
-    printf '\033]133;D;%s;history_id=%s\a' "$exit_code" "$ATUIN_HISTORY_ID"
+    if test "$ATUIN_PTY_PROXY_ACTIVE" = 1
+        printf '\033]133;D;%s;history_id=%s\a' "$exit_code" "$ATUIN_HISTORY_ID"
+    else
+        printf '\033]18188735;D;%s\a' "$ATUIN_HISTORY_ID"
+    end
 end
 
 function _atuin_preexec --on-event fish_preexec
     if not test -n "$fish_private_mode"
         set -g ATUIN_HISTORY_ID (ATUIN_SHELL=fish atuin history start --hook -- "$argv[1]" 2>/dev/null)
-        _atuin_osc133_command_executed
+        _atuin_mark_output_start
     end
 end
 
@@ -42,7 +59,7 @@ function _atuin_postexec --on-event fish_postexec
     set -l s $status
 
     if test -n "$ATUIN_HISTORY_ID"
-        _atuin_osc133_command_finished $s
+        _atuin_mark_output_end $s
         atuin history end --hook --exit $s -- $ATUIN_HISTORY_ID &>/dev/null &
         disown
     end
@@ -172,6 +189,47 @@ function _atuin_search
     commandline -f repaint
 end
 
+# `atuin ai resume`: pick a captured AI coding-agent session. The result uses
+# the same protocol as the history search: `__atuin_accept__:` runs it.
+function _atuin_ai_resume
+    set -l keymap_mode
+    switch $fish_key_bindings
+        case fish_vi_key_bindings fish_hybrid_key_bindings
+            switch $fish_bind_mode
+                case default
+                    set keymap_mode vim-normal
+                case insert
+                    set keymap_mode vim-insert
+            end
+        case '*'
+            set keymap_mode emacs
+    end
+
+    set -l ATUIN_H (ATUIN_SHELL=fish ATUIN_QUERY=(commandline -b) atuin ai resume --shell-widget --keymap-mode=$keymap_mode $argv 3>&1 1>&2 2>&3 3>&- | string collect)
+    set -l ATUIN_STATUS $pipestatus[1]
+
+    if test "$ATUIN_STATUS" -ne 0
+        test -n "$ATUIN_H"; and printf '%s\n' "$ATUIN_H" >&2
+        commandline -f repaint
+        return "$ATUIN_STATUS"
+    end
+
+    set ATUIN_H (string trim -- $ATUIN_H | string collect)
+
+    if test -n "$ATUIN_H"
+        if string match --quiet '__atuin_accept__:*' "$ATUIN_H"
+            commandline -r (string replace "__atuin_accept__:" "" -- "$ATUIN_H" | string collect)
+            commandline -f repaint
+            commandline -f execute
+            return
+        else
+            commandline -r "$ATUIN_H"
+        end
+    end
+
+    commandline -f repaint
+end
+
 function _atuin_bind_up
     # Fallback to fish's builtin up-or-search if we're in search or paging mode
     if commandline --search-mode; or commandline --paging-mode
@@ -192,3 +250,12 @@ end
 
 ATUIN_SHELL=fish atuin __internal prepare-search-index &>/dev/null &
 disown 2>/dev/null
+
+if test "$__atuin_pty_proxy_owns_tty" = 1 && test "$ATUIN_PTY_PROXY_ACTIVE" = 1
+    # We're running in an old pty-proxy that expects OSC 133 markers. The outer
+    # shell may have already sent a `C` marker, causing the proxy to start
+    # capturing output. We need to clear this state before the first command's
+    # output starts, or else the prompt and command itself will be erroneously
+    # included in the output.
+    set __atuin_needs_osc133_reset 1
+end

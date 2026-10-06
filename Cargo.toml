@@ -4,7 +4,7 @@ members = ["crates/*"]
 exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.22.0"
+version = "18.23.0"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
 rust-version = "1.95.0"
 license = "MIT"
@@ -13,17 +13,18 @@ repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
-atuin-ai = { path = "crates/atuin-ai", version = "18.22.0", default-features = false }
-atuin-client = { path = "crates/atuin-client", version = "18.22.0" }
-atuin-common = { path = "crates/atuin-common", version = "18.22.0" }
-atuin-daemon = { path = "crates/atuin-daemon", version = "18.22.0", default-features = false }
-atuin-domain = { path = "crates/atuin-domain", version = "18.22.0" }
-atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.22.0" }
-atuin-history = { path = "crates/atuin-history", version = "18.22.0" }
-atuin-kv = { path = "crates/atuin-kv", version = "18.22.0" }
-atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.22.0", default-features = false }
-atuin-scripts = { path = "crates/atuin-scripts", version = "18.22.0" }
-atuin-server = { path = "crates/atuin-server", version = "18.22.0" }
+atuin-ai = { path = "crates/atuin-ai", version = "18.23.0", default-features = false }
+atuin-client = { path = "crates/atuin-client", version = "18.23.0" }
+atuin-common = { path = "crates/atuin-common", version = "18.23.0" }
+atuin-daemon = { path = "crates/atuin-daemon", version = "18.23.0", default-features = false }
+atuin-domain = { path = "crates/atuin-domain", version = "18.23.0" }
+atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.23.0" }
+atuin-history = { path = "crates/atuin-history", version = "18.23.0" }
+atuin-kv = { path = "crates/atuin-kv", version = "18.23.0" }
+atuin-octavo = { path = "crates/atuin-octavo", version = "18.23.0" }
+atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.23.0", default-features = false }
+atuin-scripts = { path = "crates/atuin-scripts", version = "18.23.0" }
+atuin-server = { path = "crates/atuin-server", version = "18.23.0" }
 atuin-vt100 = "0.19"
 
 ansi-to-tui = { version = "8", default-features = false }
@@ -36,33 +37,21 @@ axoupdater = "0.10"
 axum = "0.8"
 # held at 0.22: sqlx-postgres 0.9 pins base64 0.22; bumping would add a 2nd copy
 base64 = "0.22"
+bytes = "1"
 bytesize = { version = "2", features = ["serde"] }
 chrono = "0.4"
 chrono-humanize = "0.2"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 clap_complete_nushell = "4"
-colored = "2"
+colored = "3"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 crossterm = "0.29"
 crypto_secretbox = "0.1"
 daemonix = "0.1"
 dashmap = "6"
-derive_more = {
-    version = "2",
-    features = [
-        "add",
-        "add_assign",
-        "as_ref",
-        "deref",
-        "display",
-        "error",
-        "from",
-        "into",
-        "debug",
-    ],
-}
-directories = "6"
+derive_more = { version = "2", features = ["add", "add_assign", "as_ref", "deref", "display", "error", "from", "into", "debug"] }
+dirs = "6"
 divan = "0.1"
 # easy-cast 0.5.5+ raises its MSRV to 1.96.
 #
@@ -76,6 +65,7 @@ eye_declare = "0.7"
 eye_declare_engine = { version = "0.7", features = ["test-util"] }
 eyre = "0.6"
 fjall = { version = "3" }
+flume = { version = "0.12", default-features = false, features = ["async"] }
 frizbee = "0.13"
 fs-err = "3"
 futures = "0.3"
@@ -84,7 +74,10 @@ getrandom = "0.4"
 glob-match = "0.2"
 http = "1"
 humantime = "2"
+hyper-tls = "0.6"
 hyper-util = "0.1"
+i18n-embed = { version = "0.16", features = ["fluent-system"] }
+i18n-embed-fl = "0.10"
 imara-diff = "0.2"
 indicatif = "0.18"
 interim = { version = "0.2", features = ["time_0_3"] }
@@ -101,8 +94,10 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 minijinja = "2"
 minspan = "0.1"
+native-tls = "0.2"
 norm = { version = "0.1", features = ["fzf-v2"] }
 notify = "8"
+notify-debouncer-full = "0.7"
 num-traits = "0.2"
 opentelemetry = "0.32"
 opentelemetry-otlp = "0.32"
@@ -120,19 +115,21 @@ rand = { version = "0.8", features = ["std"] }
 ratatui = "0.30"
 ratatui-core = "0.1"
 regex = "1"
-reqwest = {
-    version = "0.13",
-    default-features = false,
-    features = ["json", "native-tls", "stream", "gzip", "zstd"],
-}
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "stream", "gzip", "zstd"] }
 reqwest-middleware = "0.5"
 rmcp = { version = "3", default-features = false, features = ["server", "transport-io", "schemars"] }
 rmp = "0.8"
+rmp-serde = "1"
 rpassword = "7"
 rstest = "0.27"
 runtime-format = "0.1"
-rustix = { version = "1", features = ["process", "fs", "pty", "termios", "stdio"] }
+# The AI session sidecar's synchronous writer. Kept on the libsqlite3-sys that sqlx uses (one
+# bundled SQLite), with unlock_notify as sqlx has it, for shared-cache in-memory databases.
+rusqlite = { version = "0.32", features = ["unlock_notify"] }
+rust-embed = "8"
+rustix = { version = "1", features = ["process", "fs", "pty", "termios", "stdio", "event"] }
 schemars = "1"
+secrecy = { version = "0.10", features = ["serde"] }
 rusty_paserk = { version = "0.5", default-features = false, features = ["v4", "serde"] }
 # rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
 rusty_paseto = { version = "0.8", default-features = false }
@@ -169,10 +166,7 @@ tower-http = { version = "0.6", features = ["trace"] }
 tracing-appender = "0.2"
 tracing-futures = { version = "0.2", features = ["futures-03"] }
 tracing-opentelemetry = "0.33"
-tracing-subscriber = {
-    version = "0.3",
-    features = ["ansi", "fmt", "registry", "env-filter", "json"],
-}
+tracing-subscriber = { version = "0.3", features = ["ansi", "fmt", "registry", "env-filter", "json"] }
 tracing-tree = "0.4"
 tree-sitter = "0.27"
 tree-sitter-bash = "0.25"
@@ -180,21 +174,14 @@ tree-sitter-fish = "3"
 tree-sitter-powershell = "0.26"
 tui-textarea-2 = "0.13"
 typed-builder = "0.23"
+unicode-normalization = "0.1"
 unicode-segmentation = "1"
 unicode-width = "0.2"
 url = { version = "2", features = ["serde"] }
 # Explicitly 1.6 is necessary because the v7 UUID was only added then.
 uuid = { version = "1.6", features = ["v4", "v7", "serde"] }
 whoami = "2"
-windows-sys = {
-    version = "0.61",
-    features = [
-        "Win32_System_Console",
-        "Win32_System_Threading",
-        "Win32_Foundation",
-        "Win32_Storage_FileSystem",
-    ],
-}
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Foundation", "Win32_Storage_FileSystem"] }
 wiremock = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 # held at 0.11: 0.12 pulls hashlink 0.12 (a 2nd copy vs sqlx's 0.11) + an encoding_rs/multiversion subtree
@@ -202,6 +189,18 @@ yaml-rust2 = "0.11"
 zeroize = "1"
 # held at 0.13: compression-codecs (via reqwest) pins zstd 0.13; bumping would add a 2nd copy
 zstd = "0.13"
+
+# Dependencies that are pure hot loops (the bundled SQLite and the record-store
+# crypto) run 10x+ slower unoptimized, which makes every test that touches a
+# database or the record store crawl. Optimize just those in dev/test builds; the
+# workspace crates themselves stay fast to compile and easy to debug.
+[profile.dev.package]
+libsqlite3-sys.opt-level = 3
+chacha20.opt-level = 3
+blake2.opt-level = 3
+rusty_paseto.opt-level = 3
+rusty_paserk.opt-level = 3
+base64.opt-level = 3
 
 # The profile that 'cargo dist' will build with
 [profile.dist]

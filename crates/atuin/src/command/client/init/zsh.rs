@@ -1,7 +1,4 @@
 use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
-use eyre::Result;
 
 use super::StaticInitOptions;
 
@@ -42,21 +39,14 @@ bindkey -M vicmd 'k' atuin-up-search-vicmd";
         if options.enable_ai {
             println!("{}", atuin_ai::shell::ZSH_INIT);
         }
+
+        #[cfg(feature = "ai")]
+        if options.enable_ai_resume {
+            println!(
+                r"bindkey -M emacs '^]' atuin-ai-resume
+bindkey -M viins '^]' atuin-ai-resume-viins
+bindkey -M vicmd '^]' atuin-ai-resume-vicmd"
+            );
+        }
     }
-}
-
-pub async fn init(
-    aliases: AliasStore,
-    vars: VarStore,
-    options: &StaticInitOptions<'_>,
-) -> Result<()> {
-    init_static(options);
-
-    let aliases = atuin_dotfiles::shell::zsh::alias_config(&aliases).await;
-    let vars = atuin_dotfiles::shell::zsh::var_config(&vars).await;
-
-    println!("{aliases}");
-    println!("{vars}");
-
-    Ok(())
 }

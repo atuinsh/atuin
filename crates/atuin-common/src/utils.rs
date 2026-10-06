@@ -4,28 +4,29 @@ use std::path::{Path, PathBuf};
 
 use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
 use getrandom::fill;
+use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox, SecretString};
 use uuid::Uuid;
 
 /// Generate N random bytes, using a cryptographically secure source
 #[must_use]
-pub fn crypto_random_bytes<const N: usize>() -> [u8; N] {
+pub fn crypto_random_bytes<const N: usize>() -> SecretBox<[u8; N]> {
     // rand say they are in principle safe for crypto purposes, but that it is perhaps a better
     // idea to use getrandom for things such as passwords.
-    let mut ret = [0u8; N];
+    let mut ret = SecretBox::new(Box::new([0u8; N]));
 
-    fill(&mut ret).expect("Failed to generate random bytes!");
+    fill(ret.expose_secret_mut()).expect("Failed to generate random bytes!");
 
     ret
 }
 
 /// Generate N random bytes using a cryptographically secure source, return encoded as a string
 #[must_use]
-pub fn crypto_random_string<const N: usize>() -> String {
+pub fn crypto_random_string<const N: usize>() -> SecretString {
     let bytes = crypto_random_bytes::<N>();
 
     // We only use this to create a random string, and won't be reversing it to find the original
     // data - no padding is OK there. It may be in URLs.
-    BASE64_URL_SAFE_NO_PAD.encode(bytes)
+    BASE64_URL_SAFE_NO_PAD.encode(bytes.expose_secret()).into()
 }
 
 #[must_use]
@@ -81,8 +82,21 @@ fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
 // detect if any parent dir has a git repo in it
 // I really don't want to bring in libgit for something simple like this
 // If we start to do anything more advanced, then perhaps
+//
+// A linked worktree resolves to its main repository, so that all of a repository's worktrees
+// share a workspace. [`git_checkout_root`] stops at the worktree instead.
 #[must_use]
 pub fn in_git_repo(path: &str) -> Option<PathBuf> {
+    let root = git_checkout_root(path)?;
+    // if .git is a file (worktree), resolve to the main repo root
+    Some(resolve_git_worktree(&root).unwrap_or(root))
+}
+
+/// The root of the checkout `path` is in: the nearest directory, `path` or above, with a `.git`
+/// entry. Unlike [`in_git_repo`], a linked worktree's root is the worktree's own, not its main
+/// repository's: the directory its files are checked out in, and whose `HEAD` is its branch.
+#[must_use]
+pub fn git_checkout_root(path: &str) -> Option<PathBuf> {
     let mut gitdir = PathBuf::from(path);
 
     while gitdir.parent().is_some() && !has_git_dir(gitdir.to_str().unwrap()) {
@@ -90,15 +104,7 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
     }
 
     // No parent? then we hit root, finding no git
-    if gitdir.parent().is_some() {
-        // if .git is a file (worktree), resolve to the main repo root
-        if let Some(main_repo) = resolve_git_worktree(&gitdir) {
-            return Some(main_repo);
-        }
-        return Some(gitdir);
-    }
-
-    None
+    gitdir.parent().is_some().then_some(gitdir)
 }
 
 // TODO: more reliable, more tested
@@ -107,9 +113,7 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
 
 #[must_use]
 pub fn home_dir() -> PathBuf {
-    directories::BaseDirs::new()
-        .map(|d| d.home_dir().to_path_buf())
-        .expect("could not determine home directory")
+    dirs::home_dir().expect("could not determine home directory")
 }
 
 /// Read an environment variable that must be nonempty.
@@ -358,6 +362,41 @@ mod tests {
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
+    /// Runs `git` in `dir`, failing the test if it fails.
+    #[cfg(unix)]
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=atuin", "-c", "user.email=atuin@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn a_real_worktree_is_its_own_checkout_in_the_main_repository() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "-q", "-b", "trunk"]);
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let worktree = tmp.path().join("feature-wt");
+        git(&main, &["worktree", "add", "-q", "-b", "feature", worktree.to_str().unwrap()]);
+        let deep = worktree.join("src").join("deep");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        assert_eq!(git_checkout_root(deep.to_str().unwrap()), Some(worktree));
+        assert_eq!(git_checkout_root(main.to_str().unwrap()), Some(main.clone()));
+        // Through the `.git` file, whose path may be resolved (on macOS, /var is /private/var).
+        let repo = |path: &Path| in_git_repo(path.to_str()?).map(|p| p.canonicalize().unwrap());
+        assert_eq!(repo(&deep), Some(main.canonicalize().unwrap()));
+        assert_eq!(repo(&main), Some(main.canonicalize().unwrap()));
+    }
+
     #[rstest]
     #[allow(
         clippy::used_underscore_binding,
@@ -367,6 +406,9 @@ mod tests {
         // Obviously not a test of randomness, but make sure we haven't made some
         // catastrophic error
 
-        assert_ne!(crypto_random_string::<N>(), crypto_random_string::<N>());
+        assert_ne!(
+            crypto_random_string::<N>().expose_secret(),
+            crypto_random_string::<N>().expose_secret()
+        );
     }
 }

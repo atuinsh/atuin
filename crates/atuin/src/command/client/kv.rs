@@ -8,58 +8,51 @@ use clap::Subcommand;
 use eyre::{Context, Result, eyre};
 use tracing::instrument;
 
+use crate::i18n::fl;
+
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Set a key-value pair
+    #[command(about = fl!("cmd-kv-set"))]
     Set {
-        /// Key to set
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-kv-set-key"))]
         key: String,
 
-        /// Value to store (reads from stdin if not provided)
+        #[arg(help = fl!("arg-kv-set-value"))]
         value: Option<String>,
 
-        /// Namespace for the key-value pair
-        #[arg(long, short, default_value = "default")]
+        #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]
         namespace: String,
     },
 
-    /// Delete one or more key-value pairs
-    #[command(alias = "rm")]
+    #[command(alias = "rm", about = fl!("cmd-kv-delete"))]
     Delete {
-        /// Keys to delete
-        #[arg(required = true)]
+        #[arg(required = true, help = fl!("arg-kv-delete-keys"))]
         keys: Vec<String>,
 
-        /// Namespace for the key-value pair
-        #[arg(long, short, default_value = "default")]
+        #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]
         namespace: String,
     },
 
-    /// Retrieve a saved value
+    #[command(about = fl!("cmd-kv-get"))]
     Get {
-        /// Key to retrieve
+        #[arg(help = fl!("arg-kv-get-key"))]
         key: String,
 
-        /// Namespace for the key-value pair
-        #[arg(long, short, default_value = "default")]
+        #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]
         namespace: String,
     },
 
-    /// List all keys in a namespace, or in all namespaces
-    #[command(alias = "ls")]
+    #[command(alias = "ls", about = fl!("cmd-kv-list"))]
     List {
-        /// Namespace to list keys from
-        #[arg(long, short, default_value = "default")]
+        #[arg(long, short, default_value = "default", help = fl!("arg-kv-list-namespace"))]
         namespace: String,
 
-        /// List all keys in all namespaces
-        #[arg(long, short, alias = "all")]
+        #[arg(long, short, alias = "all", help = fl!("arg-kv-list-all-namespaces"))]
         all_namespaces: bool,
     },
 
-    /// Rebuild the KV store
+    #[command(about = fl!("cmd-kv-rebuild"))]
     Rebuild,
 }
 

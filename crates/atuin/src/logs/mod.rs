@@ -12,11 +12,13 @@ mod otel;
 use otel::OtelCtx;
 pub use otel::OtelCtxEnableError;
 
+use crate::i18n::fl;
+
 #[derive(Debug, thiserror::Error)]
 pub enum LogCtxEnableError {
-    #[error("failed to build the otel collector: {0}")]
+    #[error("{}", fl!("log-otel-collector-failed", error = .0.to_string()))]
     OtelCtx(#[from] OtelCtxEnableError),
-    #[error("failed to initialize subscriber: {0}")]
+    #[error("{}", fl!("log-subscriber-init-failed", error = .0.to_string()))]
     Subscriber(#[from] TryInitError),
 }
 
@@ -165,7 +167,7 @@ fn clean_up_old_logs(config: &FileConfig) {
 
 #[derive(Debug, thiserror::Error)]
 enum FileWriterError {
-    #[error("log file name must be utf-8")]
+    #[error("{}", fl!("log-file-name-not-utf8"))]
     NonUtf8Filename,
     #[error("{0}")]
     RollingFileAppender(#[from] rolling::InitError),

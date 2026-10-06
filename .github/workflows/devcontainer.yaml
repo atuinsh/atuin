@@ -14,6 +14,8 @@ on:
 
 jobs:
   build:
+    # A /merge points the pull request at the commit it landed as, which CI already ran.
+    if: github.event.action != 'synchronize' || github.actor != 'atuin-bot'
     concurrency:
       group: ${{ github.ref }}-devcontainer
       cancel-in-progress: true

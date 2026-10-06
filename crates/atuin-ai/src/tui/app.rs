@@ -489,7 +489,7 @@ impl AiApp {
                     let endpoint = io.app_ctx.endpoint.clone();
                     let token = io.app_ctx.token.clone();
                     ctx.perform(async move {
-                        let result = crate::models::fetch_models(&endpoint, &token)
+                        let result = crate::models::fetch_models(&endpoint, token.as_ref())
                             .await
                             .map_err(|e| e.to_string());
                         Msg::Fsm(Event::ModelListLoaded(result))
@@ -972,9 +972,9 @@ impl App for AiApp {
     fn init(&mut self, ctx: &mut Ctx<'_, Self>) {
         if self.usage_stale
             && let Some(io) = &self.io
+            && let Some(token) = io.app_ctx.token.clone()
         {
             let endpoint = io.app_ctx.endpoint.clone();
-            let token = io.app_ctx.token.clone();
             ctx.perform(async move {
                 match crate::usage::fetch_usage(&endpoint, &token).await {
                     Ok(snapshot) => Msg::Usage(snapshot),
@@ -1093,9 +1093,11 @@ impl App for AiApp {
             Msg::Fsm(event) => self.handle_fsm(event, ctx),
             Msg::UsageFetchFailed(e) => tracing::debug!("background usage fetch failed: {e}"),
             Msg::Usage(snapshot) => {
-                if let Some(io) = &self.io {
+                if let Some(io) = &self.io
+                    && let Some(token) = &io.app_ctx.token
+                {
                     let _ = io.persist.send(PersistJob::Usage {
-                        key: crate::usage::cache_key(&io.app_ctx.token),
+                        key: crate::usage::cache_key(token),
                         snapshot: snapshot.clone(),
                     });
                 }

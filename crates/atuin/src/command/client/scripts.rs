@@ -16,6 +16,8 @@ use eyre::{Context as _, OptionExt, Result, bail};
 use tempfile::NamedTempFile;
 use tracing::{debug, instrument};
 
+use crate::i18n::fl;
+
 #[derive(Parser, Debug)]
 pub struct NewScript {
     pub name: String,
@@ -34,13 +36,11 @@ pub struct NewScript {
 
     #[allow(clippy::option_option)]
     #[arg(long)]
-    /// Use the last command as the script content
-    ///
-    /// Optionally specify a number to use the last N commands
+    #[arg(help = fl!("arg-scripts-new-last"), long_help = fl!("arg-scripts-new-last", "long"))]
     pub last: Option<Option<usize>>,
 
     #[arg(long)]
-    /// Skip opening editor when using --last
+    #[arg(help = fl!("arg-scripts-new-no-edit"))]
     pub no_edit: bool,
 }
 
@@ -48,10 +48,12 @@ pub struct NewScript {
 pub struct Run {
     pub name: String,
 
-    /// Specify template variables in the format KEY=VALUE
-    ///
-    /// Example: -v name=John -v greeting="Hello there"
-    #[arg(short, long = "var")]
+    #[arg(
+        short,
+        long = "var",
+        help = fl!("arg-scripts-run-var"),
+        long_help = fl!("arg-scripts-run-var", "long")
+    )]
     pub var: Vec<String>,
 }
 
@@ -63,7 +65,7 @@ pub struct Get {
     pub name: String,
 
     #[arg(short, long)]
-    /// Display only the executable script with shebang
+    #[arg(help = fl!("arg-scripts-get-script"))]
     pub script: bool,
 }
 
@@ -74,16 +76,13 @@ pub struct Edit {
     #[arg(short, long)]
     pub description: Option<String>,
 
-    /// Replace all existing tags with these new tags
-    #[arg(short, long)]
+    #[arg(short, long, help = fl!("arg-scripts-edit-tags"))]
     pub tags: Vec<String>,
 
-    /// Remove all tags from the script
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-scripts-edit-no-tags"))]
     pub no_tags: bool,
 
-    /// Rename the script
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-scripts-edit-rename"))]
     pub rename: Option<String>,
 
     #[arg(short, long)]
@@ -93,8 +92,7 @@ pub struct Edit {
     pub script: Option<PathBuf>,
 
     #[allow(clippy::struct_field_names)]
-    /// Skip opening editor
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-scripts-edit-no-edit"))]
     pub no_edit: bool,
 }
 

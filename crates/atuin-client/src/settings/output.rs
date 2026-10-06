@@ -1,4 +1,6 @@
 use atuin_common::units::{ByteSize, Percent};
+use derive_more::From;
+use regex::RegexSet;
 use serde::{Deserialize, Serialize};
 
 use super::DiskUsageLimit;
@@ -34,7 +36,7 @@ impl OutputCapture {
     }
 }
 
-/// How much captured output is kept, and where it goes.
+/// Whose captured output is kept, how much of it, and where it goes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CaptureLimits {
     /// The most output kept for a single command.
@@ -49,6 +51,9 @@ pub struct CaptureLimits {
     /// holding the data directory (`10%`), or `unlimited`. Once the limit is reached the oldest
     /// output is forgotten.
     pub max_disk_usage: DiskUsageLimit,
+
+    /// Commands whose output is never stored, though they are still recorded in history.
+    pub command_filter: CommandFilter,
 }
 
 impl Default for CaptureLimits {
@@ -57,7 +62,28 @@ impl Default for CaptureLimits {
             max_output_size: ByteSize::mb(1),
             sync: false,
             max_disk_usage: DiskUsageLimit::Percent(Percent::new(10.0)),
+            command_filter: CommandFilter::default(),
         }
+    }
+}
+
+/// Unanchored regular expressions matched against a command line (`^cat `), like
+/// `history_filter`.
+#[derive(Clone, Debug, Default, From, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct CommandFilter(#[serde(with = "serde_regex")] RegexSet);
+
+impl CommandFilter {
+    /// Whether any expression matches `command`.
+    #[must_use]
+    pub fn is_match(&self, command: &str) -> bool {
+        self.0.is_match(command)
+    }
+}
+
+impl PartialEq for CommandFilter {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.patterns() == other.0.patterns()
     }
 }
 
@@ -75,6 +101,8 @@ pub(crate) struct OutputCaptureConfig {
     pub(crate) max_output_size: ByteSize,
     pub(crate) sync: bool,
     pub(crate) max_disk_usage: DiskUsageLimit,
+    #[serde(default)]
+    pub(crate) command_filter: CommandFilter,
 }
 
 impl Default for OutputCaptureConfig {
@@ -93,6 +121,7 @@ impl From<OutputCaptureConfig> for OutputCapture {
             max_output_size: config.max_output_size,
             sync: config.sync,
             max_disk_usage: config.max_disk_usage,
+            command_filter: config.command_filter,
         })
     }
 }
@@ -108,20 +137,23 @@ impl From<OutputCapture> for OutputCaptureConfig {
             max_output_size: limits.max_output_size,
             sync: limits.sync,
             max_disk_usage: limits.max_disk_usage,
+            command_filter: limits.command_filter,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
+    #[rstest]
     fn effective_limits_uses_defaults_when_disabled() {
         assert_eq!(OutputCapture::Disabled.effective_limits(), CaptureLimits::default());
     }
 
-    #[test]
+    #[rstest]
     fn effective_limits_returns_the_configured_limits_when_enabled() {
         let limits = CaptureLimits {
             max_output_size: ByteSize::b(42),

@@ -88,7 +88,7 @@ use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
-use atuin_client::settings::Search;
+use atuin_client::settings::{OutputCapture, Search};
 use atuin_common::sync::AsyncShardedMutex;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
@@ -98,8 +98,13 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
+use crate::octavo::Octavo;
 use crate::output_capture::{CaptureError, GetOutputError, OutputCaptureEngine};
 use crate::search::SearchIndex;
+
+/// History-db rows removed per transaction by [`HistoryJournal::delete`]; matches the chunking of
+/// `HistoryStore::build_all`, which this path used to go through.
+const DELETE_ROWS_BATCH_SIZE: usize = 5000;
 
 /// An event describing a change in the lifecycle of a command.
 #[derive(Debug, Clone)]
@@ -208,6 +213,8 @@ pub struct HistoryJournal {
     /// Durable store for captured command output.
     output_capture: OutputCaptureEngine,
 
+    octavo: Octavo,
+
     /// Ids a [`Self::delete`] is currently tearing down, reference-counted across concurrent
     /// deletes. [`Self::register_command_output`] refuses these, so no capture can land between a
     /// delete's output removal and its record removal.
@@ -280,6 +287,7 @@ impl HistoryJournal {
         history_db: HistoryDatabase,
         search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
         output_capture: OutputCaptureEngine,
+        octavo: Octavo,
     ) -> Self {
         const DEFAULT_LIFECYCLE_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
@@ -292,6 +300,7 @@ impl HistoryJournal {
             search_index,
             broadcast,
             output_capture,
+            octavo,
             deleting: DashMap::new(),
             lifecycle_mutex: AsyncShardedMutex::new(DEFAULT_LIFECYCLE_SHARDS),
         }
@@ -402,6 +411,7 @@ impl HistoryJournal {
         //              .read() and the subsequent .write() are completely discarded from the new
         //              index.
         self.search_index.read().await.add_history(&history);
+        self.octavo.push_history(&history, history_record_id).await;
 
         if self.broadcast.receiver_count() > 0 {
             let _ = self.broadcast.send(CmdEvent::Finished(history));
@@ -477,21 +487,23 @@ impl HistoryJournal {
             );
         }
 
-        // Remove records from the record store.
+        // Append delete tombstones to the record store.
         //
         // This returns a tuple where the first element is the total number of history elements that
-        // were erased from Atuin's memory, and the second element is a vector of [`RecordId`]s that
-        // must be subsequently removed from the history database via [`HistoryStore::build_all`].
-        // Note the passed database argument.
+        // were erased from Atuin's memory, and the second element is the ids that must be
+        // subsequently removed from the history database.
         //
-        // Furthermore, note that `.0 != .1.len()`, because there may very well be history entries
-        // that atuin has forgotten about that were never in the record store.
+        // Note that `.0 != .1.len()`, because there may very well be history entries that atuin has
+        // forgotten about that were never in the record store.
         //
         // This happens as a result of the fact that [`HistoryJournal`] might be tracking started,
         // but not finished commands. These get cancelled via [`HistoryJournal::cancel`].
+        //
+        // The tombstones go into the store as one batch: per-record pushes cost three sqlite
+        // round-trips each, which made large deletes take minutes.
         let delete_records = async || {
             let mut deleted: usize = 0;
-            let mut record_ids = Vec::new();
+            let mut to_delete = Vec::with_capacity(ids.len());
             for &id in ids {
                 let mutex = self.active_cmds.get(&id).map(|cmd| cmd.finalization_mutex.clone());
                 let cancelled = if let Some(mutex) = mutex {
@@ -509,32 +521,39 @@ impl HistoryJournal {
 
                 if cancelled {
                     deleted += 1;
-                    continue;
-                }
-
-                match self.history_store.delete(id).await {
-                    Ok((record_id, _)) => {
-                        record_ids.push(record_id);
-                        deleted += 1;
-                    }
-                    Err(e) => {
-                        return Err(CmdDeleteError::HistoryStoreFailed(e));
-                    }
+                } else {
+                    to_delete.push(id);
                 }
             }
 
-            Ok((deleted, record_ids))
+            self.history_store
+                .delete_batch(to_delete.iter().copied())
+                .await
+                .map_err(CmdDeleteError::HistoryStoreFailed)?;
+            deleted += to_delete.len();
+
+            Ok((deleted, to_delete))
         };
 
-        let (deleted, record_ids) = delete_records().await?;
-        if record_ids.is_empty() {
+        let (deleted, to_delete) = delete_records().await?;
+        if to_delete.is_empty() {
             return Ok(deleted);
         }
 
-        self.history_store
-            .build_all(&self.history_db, &record_ids)
-            .await
-            .map_err(CmdDeleteError::HistoryDbFailed)?;
+        // The tombstones commit the deletion, so Octavo hears of it even if a chunk below fails.
+        self.octavo.delete_history(&to_delete).await;
+
+        // The tombstones were just written above, so replaying them through
+        // `HistoryStore::build_all` would only read and decrypt them back into these same ids.
+        // Chunked like `build_all` is: one transaction over the whole set would hold the history
+        // db's write lock for seconds at 100k+ ids, past the busy timeout a concurrent
+        // `finish()` is willing to wait.
+        for chunk in to_delete.chunks(DELETE_ROWS_BATCH_SIZE) {
+            self.history_db
+                .delete_rows(chunk.iter().copied())
+                .await
+                .map_err(|e| CmdDeleteError::HistoryDbFailed(e.into()))?;
+        }
 
         self.reload_search_index(search_settings).await;
 
@@ -598,7 +617,8 @@ impl HistoryJournal {
         marks
     }
 
-    /// Store a command's captured output.
+    /// Store a command's captured output as `output` allows: nothing while capture is disabled, and
+    /// nothing for a command its `command_filter` matches.
     ///
     /// If the output is received for an unknown command, this returns a
     /// [`RegisterOutputError::NotLive`].
@@ -606,6 +626,7 @@ impl HistoryJournal {
         &self,
         id: HistoryId,
         capture: CommandCapture,
+        output: &OutputCapture,
     ) -> Result<(), RegisterOutputError> {
         let _lifecycle = self.lifecycle_mutex.lock(&id).await;
 
@@ -630,8 +651,16 @@ impl HistoryJournal {
             return Err(RegisterOutputError::NotLive(id));
         };
 
-        // Never persist output for commands that may carry secrets.
-        if atuin_common::secrets::output_unsafe(&command) {
+        // Capture turned off on a running daemon: proxies started before it keep sending output
+        // until their shells restart.
+        let OutputCapture::Enabled(limits) = output else {
+            return Ok(());
+        };
+
+        // Never persist output for commands that may carry secrets, or that the user excluded.
+        if atuin_common::secrets::output_unsafe(&command)
+            || limits.command_filter.is_match(&command)
+        {
             return Ok(());
         }
 
@@ -679,8 +708,14 @@ mod tests {
         let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
         let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
         let caps = CapClient::new("http://127.0.0.1:1".parse().unwrap(), reqwest::Client::new());
-        let journal =
-            HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);
+        let journal = HistoryJournal::new(
+            caps,
+            history_store,
+            history_db,
+            search_index,
+            output_capture,
+            Octavo::nop(),
+        );
         (journal, tmp)
     }
 

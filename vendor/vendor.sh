@@ -5,7 +5,9 @@
 # shellcheck disable=SC2016  # `$n` is a jq variable
 set -euf
 
-root_dir=$(command git rev-parse --show-toplevel)
+# Not `git rev-parse --show-toplevel`: when this repository is a subdirectory of
+# another one, that's the outer repository's root.
+root_dir=$(cd -- "$(dirname -- "$0")/.." && pwd)
 vendor_dir=vendor
 db_path=$vendor_dir/.repositories.json
 script_name=$(basename "$0")

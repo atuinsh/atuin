@@ -21,33 +21,35 @@ use eyre::Result;
 use indicatif::ProgressBar;
 use tracing::instrument;
 
+use crate::i18n::fl;
+
 #[derive(Parser, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Import history for the current shell
+    #[command(about = fl!("cmd-import-auto"))]
     Auto,
 
-    /// Import history from the zsh history file
+    #[command(about = fl!("cmd-import-shell", shell = "zsh"))]
     Zsh,
-    /// Import history from the zsh history file
+    #[command(about = fl!("cmd-import-zsh-hist-db"))]
     ZshHistDb,
-    /// Import history from the bash history file
+    #[command(about = fl!("cmd-import-shell", shell = "bash"))]
     Bash,
-    /// Import history from the replxx history file
+    #[command(about = fl!("cmd-import-shell", shell = "replxx"))]
     Replxx,
-    /// Import history from the resh history file
+    #[command(about = fl!("cmd-import-shell", shell = "resh"))]
     Resh,
-    /// Import history from the fish history file
+    #[command(about = fl!("cmd-import-shell", shell = "fish"))]
     Fish,
-    /// Import history from the nu history file
+    #[command(about = fl!("cmd-import-shell", shell = "nu"))]
     Nu,
-    /// Import history from the nu history file
+    #[command(about = fl!("cmd-import-nu-hist-db"))]
     NuHistDb,
-    /// Import history from xonsh json files
+    #[command(about = fl!("cmd-import-xonsh"))]
     Xonsh,
-    /// Import history from xonsh sqlite db
+    #[command(about = fl!("cmd-import-xonsh-sqlite"))]
     XonshSqlite,
-    /// Import history from the powershell history file
+    #[command(about = fl!("cmd-import-shell", shell = "powershell"))]
     Powershell,
 }
 

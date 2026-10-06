@@ -4,6 +4,8 @@ use eyre::Result;
 #[cfg(not(windows))]
 use rustix::{fs::Mode, process::umask};
 
+use crate::i18n::fl;
+
 #[cfg(feature = "client")]
 mod client;
 
@@ -21,20 +23,18 @@ pub enum AtuinCmd {
     #[command(flatten)]
     Client(client::Cmd),
 
-    /// PTY proxy for atuin
     #[cfg(feature = "pty-proxy")]
-    #[command(alias = "hex")]
+    #[command(alias = "hex", about = fl!("cmd-pty-proxy"))]
     PtyProxy(atuin_pty_proxy::PtyProxy),
 
-    /// Generate a UUID
     // Plumbing: every shell init calls `atuin uuid` to seed ATUIN_SESSION; not for interactive use.
-    #[command(hide = true)]
+    #[command(hide = true, about = fl!("cmd-uuid"))]
     Uuid,
 
-    /// List the people who have contributed to Atuin
+    #[command(about = fl!("cmd-contributors"))]
     Contributors,
 
-    /// Generate shell completions
+    #[command(about = fl!("cmd-gen-completions"))]
     GenCompletions(gen_completions::Cmd),
 
     #[command(external_subcommand)]

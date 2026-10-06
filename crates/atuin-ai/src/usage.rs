@@ -11,6 +11,7 @@ use std::time::Duration;
 use atuin_common::url::UrlAppendExt;
 use eyre::{Context, Result};
 use reqwest::header::USER_AGENT;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 /// Cached usage older than this triggers a background refresh on TUI open.
@@ -83,19 +84,19 @@ pub fn format_reset_delta(delta: Duration) -> String {
 /// Key for the local usage cache. The client never learns its hub user id,
 /// so rows are keyed by a hash of the auth token: a different login (or a
 /// rotated token) simply misses the cache and refetches.
-pub fn cache_key(token: &str) -> String {
-    format!("{:016x}", xxhash_rust::xxh3::xxh3_64(token.as_bytes()))
+pub fn cache_key(token: &SecretString) -> String {
+    format!("{:016x}", xxhash_rust::xxh3::xxh3_64(token.expose_secret().as_bytes()))
 }
 
 /// Fetch current usage from the hub. Mirrors the `credits` object on the
 /// chat `done` event, for refreshing without starting a chat.
-pub async fn fetch_usage(endpoint: &reqwest::Url, token: &str) -> Result<UsageSnapshot> {
+pub async fn fetch_usage(endpoint: &reqwest::Url, token: &SecretString) -> Result<UsageSnapshot> {
     let url = endpoint.append_path("api/cli/usage")?;
 
     let response = reqwest::Client::new()
         .get(url)
         .header(USER_AGENT, crate::stream::APP_USER_AGENT)
-        .bearer_auth(token)
+        .bearer_auth(token.expose_secret())
         .timeout(Duration::from_secs(10))
         .send()
         .await
@@ -115,7 +116,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[rstest]
     fn deserializes_server_payload() {
         // Shape documented in the hub's CliUsageController / credits_payload.
         let json = r#"{
@@ -133,7 +134,7 @@ mod tests {
         assert_eq!(snapshot.output.limit, 1_000_000);
     }
 
-    #[test]
+    #[rstest]
     fn snapshot_roundtrips_through_json() {
         let snapshot = UsageSnapshot {
             period: "calendar_monthly".into(),
@@ -147,7 +148,7 @@ mod tests {
         assert_eq!(serde_json::from_str::<UsageSnapshot>(&json).unwrap(), snapshot);
     }
 
-    #[test]
+    #[rstest]
     fn as_percentage_uses_higher_limited_bucket() {
         let mut snapshot = UsageSnapshot {
             period: "calendar_monthly".into(),
@@ -181,9 +182,11 @@ mod tests {
         assert_eq!(format_reset_delta(delta), expected);
     }
 
-    #[test]
+    #[rstest]
     fn cache_key_distinguishes_tokens() {
-        assert_ne!(cache_key("token-a"), cache_key("token-b"));
-        assert_eq!(cache_key("token-a"), cache_key("token-a"));
+        let a = SecretString::from("token-a");
+        let b = SecretString::from("token-b");
+        assert_ne!(cache_key(&a), cache_key(&b));
+        assert_eq!(cache_key(&a), cache_key(&a.clone()));
     }
 }

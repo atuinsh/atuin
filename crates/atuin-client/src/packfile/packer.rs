@@ -95,8 +95,9 @@ pub async fn try_pack(
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
-    use atuin_domain::record::{EncryptedData, HostId};
+    use atuin_domain::record::{DecryptedData, HostId};
     use proptest::prelude::*;
     use rstest::{fixture, rstest};
 
@@ -120,11 +121,9 @@ mod tests {
             .version("v1".into())
             .tag(RecordTag::History)
             .idx(idx)
-            .data(EncryptedData {
-                raw: "d".into(),
-                cek: "k".into(),
-            })
-            .build();
+            .data(DecryptedData(b"d".to_vec()))
+            .build()
+            .encrypt(&paseto_v4::Key::generate());
         store.push(&record).await.unwrap();
     }
 

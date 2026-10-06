@@ -12,13 +12,27 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-ai = []
-ansi = ["dep:atuin-vt100", "dep:memchr"]
+# Enables `atuin_common::harnesstools`.
+ai = ["fs-watcher", "jsonl", "dep:shlex", "dep:xxhash-rust", "sqlite"]
+# Enables `atuin_common::ansi`.
+ansi = ["dep:atuin-vt100"]
+# Enables `atuin_common::db` (but not `db::sqlite`).
 db = ["dep:sqlx"]
+# Enables `atuin_common::fs::tree_watcher`.
+fs-watcher = ["os"]
+# Enables `atuin_common::json::jsonl`.
+jsonl = ["io"]
+# Enables `atuin_common::io`.
+io = ["os"]
+# Enables `atuin_common::os`.
 os = ["dep:rustix", "dep:windows-sys"]
+# Enables protobuf derives and conversions throughout the crate.
 proto = ["dep:prost"]
+# Enables `atuin_common::db::sqlite`.
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
+# Enables `atuin_common::test_utils`, for use in tests.
 test-utils = ["dep:tracing-subscriber"]
+# Enables various items in `atuin_common::string` that require Unicode data.
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 
 [dependencies]
@@ -26,19 +40,23 @@ atuin-vt100 = { workspace = true, optional = true }
 
 async-stream = { workspace = true }
 base64 = { workspace = true }
+bytes = { workspace = true }
 bytesize = { workspace = true }
 crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
-directories = { workspace = true }
+dirs = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
+flume = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 humantime = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
-memchr = { workspace = true, optional = true }
+memchr = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true, optional = true }
@@ -47,12 +65,17 @@ rmp = { workspace = true }
 schemars = { workspace = true }
 rusty_paserk = { workspace = true }
 rusty_paseto = { workspace = true }
+secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
+shlex = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 sysinfo = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 tiny-bip39 = { workspace = true }
@@ -60,10 +83,13 @@ tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }
+typed-builder = { workspace = true }
 unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true }
+# Digests the item a session checkpoint was taken after; xxh3 is stable across versions.
+xxhash-rust = { workspace = true, optional = true }
 zeroize = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
@@ -78,7 +104,6 @@ pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [[bench]]

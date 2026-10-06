@@ -5,19 +5,19 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sync::{ClientSource, SyncError as ClientSyncError, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
 use atuin_domain::record::RecordId;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
 use futures::StreamExt;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use tokio::time;
 
 use crate::daemon::DaemonHandle;
 use crate::search::SearchIndex;
+use crate::session_capture::Recovery;
 
 /// Cap on the exponential backoff between failed sync attempts. Once a failing sync has ramped to
 /// this interval it keeps retrying at that cadence until it succeeds -- it is never abandoned, and
@@ -34,10 +34,9 @@ const DISABLED_SYNC_POLL: Duration = Duration::from_secs(300);
 pub struct Worker {
     handle: DaemonHandle,
     index: Arc<RwLock<SearchIndex>>,
-    /// TODO(markovejnovic): Would be good to have a StoreCtx which is a bundle of all these stores.
     history_store: HistoryStore,
-    alias_store: AliasStore,
-    var_store: VarStore,
+    /// Tells [`spawn_ai_session_projector`] records were downloaded; `None` without a sidecar.
+    ai_session_projector: Option<mpsc::UnboundedSender<()>>,
 }
 
 /// Errors that prevent the sync worker from starting.
@@ -80,10 +79,44 @@ impl From<SyncTickError> for ControlFlow<()> {
     }
 }
 
+/// Project downloaded AI-session records into the sidecar: each signal (a sync downloaded some)
+/// reprojects everything past the watermarks, so records a failed or interrupted earlier one left
+/// out are retried too. Signals that queued up meanwhile are taken together.
+///
+/// Nothing is projected until startup recovery is over, and each reprojection takes
+/// [`AiSessionDatabase::lock_reprojection`], so one runs at a time beside recovery's and
+/// rebuilds' replays: two at once would race each other's watermarks. A rebuild's wipe landing
+/// meanwhile fails its watermark moves (compare-and-set on the sidecar's generation), and it
+/// starts over. This host's own series is included, under capture's lock
+/// ([`AiSessionDatabase::lock_local_projection`]): its own records can arrive from the server
+/// (a reinstall that kept the host id), and capture dedups against the sidecar.
+///
+/// This never sets the store's state, and never deletes a row of this host (see
+/// [`Recovery::project_synced`]): a series rewritten under its watermark whose forgetting would
+/// is handed to the recovery coordinator, which holds capture off while it forgets and replays
+/// it. The task ends once the sender is dropped.
+pub fn spawn_ai_session_projector(
+    store: AiSessionStore,
+    db: AiSessionDatabase,
+    recovery: Recovery,
+) -> mpsc::UnboundedSender<()> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+    tokio::spawn(async move {
+        recovery.finished().await;
+        while rx.recv().await.is_some() {
+            while rx.try_recv().is_ok() {}
+            recovery.project_synced(&store, &db).await;
+        }
+    });
+    tx
+}
+
 impl Worker {
     pub async fn new(
         handle: DaemonHandle,
         index: Arc<RwLock<SearchIndex>>,
+        ai_session_db: Option<AiSessionDatabase>,
+        ai_session_recovery: Recovery,
     ) -> Result<Self, StartError> {
         let host_id = Settings::host_id().await.map_err(StartError::HostId)?;
 
@@ -92,15 +125,20 @@ impl Worker {
         //                      us having the concept of a "store bundle".
         let history_store =
             HistoryStore::new(handle.store().clone(), host_id, encryption_key.clone());
-        let alias_store = AliasStore::new(handle.store().clone(), host_id, encryption_key.clone());
-        let var_store = VarStore::new(handle.store().clone(), host_id, encryption_key.clone());
+        let ai_session_store = AiSessionStore::builder()
+            .store(handle.store().clone())
+            .host_id(host_id)
+            .key(encryption_key.clone())
+            .build();
+
+        let ai_session_projector = ai_session_db
+            .map(|db| spawn_ai_session_projector(ai_session_store, db, ai_session_recovery));
 
         Ok(Self {
             handle,
             index,
             history_store,
-            alias_store,
-            var_store,
+            ai_session_projector,
         })
     }
 
@@ -181,21 +219,15 @@ impl Worker {
             "sync complete"
         );
 
-        let history_build = self.index_downloaded_records(&downloaded_records);
+        // Queued rather than awaited: the projector may still be waiting out startup recovery, and
+        // that must not hold up this sync or the next.
+        if let Some(projector) = &self.ai_session_projector
+            && !downloaded_records.is_empty()
+        {
+            let _ = projector.send(());
+        }
 
-        let alias_build = async {
-            if let Err(e) = self.alias_store.build().await {
-                tracing::error!("failed to rebuild alias store: {e}");
-            }
-        };
-
-        let var_build = async {
-            if let Err(e) = self.var_store.build().await {
-                tracing::error!("failed to rebuild var store: {e}");
-            }
-        };
-
-        tokio::join!(history_build, alias_build, var_build);
+        self.index_downloaded_records(&downloaded_records).await;
 
         // Store sync time
         if let Err(e) = Settings::save_sync_time().await {
@@ -258,5 +290,64 @@ impl Worker {
                 Err(e) => tracing::error!("failed to load synced history for indexing: {e}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use atuin_client::ai_session::{
+        AiSessionDatabase, AiSessionStore, HarnessKind, HarnessSession, Message, NativeSessionId,
+        SourceId,
+    };
+    use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_common::encryption::paseto_v4::Key;
+    use atuin_common::harnesstools::session::{Content, Role};
+    use atuin_domain::record::{HostId, RecordId};
+    use rstest::rstest;
+    use time::OffsetDateTime;
+
+    use super::spawn_ai_session_projector;
+    use crate::session_capture::{AiHarnessSessionCapture, StoreState};
+
+    #[rstest]
+    #[tokio::test]
+    async fn downloaded_ai_sessions_are_projected_after_recovery() {
+        let store = AiSessionStore::builder()
+            .store(SqliteStore::in_memory(Duration::from_secs(5)).await.unwrap())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = Message::builder()
+            .id(RecordId(atuin_common::utils::uuid_v7()))
+            .session(HarnessSession {
+                harness: HarnessKind::ClaudeCode,
+                session: NativeSessionId::from("downloaded".to_owned()),
+            })
+            .source_id(SourceId::from("source".to_owned()))
+            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .role(Role::User)
+            .content(vec![Content::Text("hello".to_owned())])
+            .build();
+        store.push(&msg).await.unwrap();
+        let projected = async || db.contains_message(&msg.session, &msg.source_id).await.unwrap();
+
+        let (capture, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
+        let projector = spawn_ai_session_projector(store, db.clone(), capture.recovery());
+        // Accepted at once, so a sync never waits on recovery.
+        projector.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!projected().await, "nothing is projected while recovery replays");
+
+        state.send_replace(StoreState::Ready);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !projected().await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("queued records are projected once recovery ends");
     }
 }

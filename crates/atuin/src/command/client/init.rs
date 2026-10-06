@@ -1,11 +1,9 @@
-use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{Settings, Tmux};
-use atuin_common::encryption::paseto_v4;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
 use clap::{Parser, ValueEnum};
-use eyre::{Result, WrapErr};
+use eyre::Result;
 use tracing::instrument;
+
+use crate::i18n::fl;
 
 mod bash;
 mod fish;
@@ -15,45 +13,51 @@ mod xonsh;
 mod zsh;
 
 #[derive(Parser, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Cmd {
     shell: Shell,
 
-    /// Disable the binding of CTRL-R to atuin
-    #[clap(long)]
+    #[clap(long, help = fl!("arg-init-disable-ctrl-r"))]
     disable_ctrl_r: bool,
 
-    /// Disable the binding of the Up Arrow key to atuin
-    #[clap(long)]
+    #[clap(long, help = fl!("arg-init-disable-up-arrow"))]
     disable_up_arrow: bool,
 
-    /// Disable the binding of ? to Atuin AI
-    #[clap(long)]
+    #[clap(long, help = fl!("arg-init-disable-ai"))]
     disable_ai: bool,
+
+    #[clap(long, help = fl!("arg-init-bind-ai-resume"))]
+    bind_ai_resume: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
 #[value(rename_all = "lower")]
 #[allow(clippy::enum_variant_names, clippy::doc_markdown)]
 pub enum Shell {
-    /// Zsh setup
+    #[value(help = fl!("value-init-shell-zsh"))]
     Zsh,
-    /// Bash setup
+    #[value(help = fl!("value-init-shell-bash"))]
     Bash,
-    /// Fish setup
+    #[value(help = fl!("value-init-shell-fish"))]
     Fish,
-    /// Nu setup
+    #[value(help = fl!("value-init-shell-nu"))]
     Nu,
-    /// Xonsh setup
+    #[value(help = fl!("value-init-shell-xonsh"))]
     Xonsh,
-    /// PowerShell setup
+    #[value(help = fl!("value-init-shell-powershell"))]
     PowerShell,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct StaticInitOptions<'a> {
     pub enable_up_arrow: bool,
     pub enable_ctrl_r: bool,
     #[cfg_attr(not(feature = "ai"), allow(dead_code))]
     pub enable_ai: bool,
+    /// Bind ctrl-] to `atuin ai resume`. Off unless asked for: it replaces the shell's own
+    /// binding (character search). The widgets are defined either way.
+    #[cfg_attr(not(feature = "ai"), allow(dead_code))]
+    pub enable_ai_resume: bool,
     pub tmux: &'a Tmux,
 }
 
@@ -83,46 +87,12 @@ impl Cmd {
         }
     }
 
-    async fn dotfiles_init(&self, settings: &Settings) -> Result<()> {
-        let record_store_path = &settings.record_store_path;
-        let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
-
-        let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
-            .context("could not load or generate encryption key")?;
-        let host_id = Settings::host_id().await?;
-
-        let alias_store = AliasStore::new(sqlite_store.clone(), host_id, encryption_key.clone());
-        let var_store = VarStore::new(sqlite_store.clone(), host_id, encryption_key);
-
-        let options = self.to_options(settings);
-
-        match self.shell {
-            Shell::Zsh => {
-                zsh::init(alias_store, var_store, &options).await?;
-            }
-            Shell::Bash => {
-                bash::init(alias_store, var_store, &options).await?;
-            }
-            Shell::Fish => {
-                fish::init(alias_store, var_store, &options).await?;
-            }
-            Shell::Nu => nu::init_static(&options),
-            Shell::Xonsh => {
-                xonsh::init(alias_store, var_store, &options).await?;
-            }
-            Shell::PowerShell => {
-                powershell::init(alias_store, var_store, &options).await?;
-            }
-        }
-
-        Ok(())
-    }
-
     fn to_options<'a>(&self, settings: &'a Settings) -> StaticInitOptions<'a> {
         StaticInitOptions {
             enable_up_arrow: !self.disable_up_arrow,
             enable_ctrl_r: !self.disable_ctrl_r,
             enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
+            enable_ai_resume: self.bind_ai_resume && settings.ai.enabled.unwrap_or(true),
             tmux: &settings.tmux,
         }
     }
@@ -177,12 +147,27 @@ impl Cmd {
 
         self.pty_proxy_init(settings);
 
-        if settings.dotfiles.enabled {
-            self.dotfiles_init(settings).await?;
-        } else {
-            self.static_init(settings);
-        }
+        self.static_init(settings);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::settings::Settings;
+    use clap::Parser;
+    use rstest::rstest;
+
+    use super::Cmd;
+
+    /// ctrl-] stays the shell's own unless `--bind-ai-resume` asks for the resume picker.
+    #[rstest]
+    #[case::default(&[], false)]
+    #[case::asked(&["--bind-ai-resume"], true)]
+    fn ai_resume_is_bound_only_when_asked(#[case] args: &[&str], #[case] bound: bool) {
+        let settings = Settings::utc();
+        let cmd = Cmd::try_parse_from([&["init", "zsh"], args].concat()).unwrap();
+        assert_eq!(cmd.to_options(&settings).enable_ai_resume, bound);
     }
 }

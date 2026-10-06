@@ -77,7 +77,7 @@ pub async fn register_inner(
 
     // registration works
     let registration_response =
-        api_client::register(address, username, &email, password, &Default::default())
+        api_client::register(address, username, &email, &password.into(), &Default::default())
             .await
             .unwrap();
 
@@ -98,7 +98,11 @@ pub async fn login(address: &url::Url, username: String, password: String) -> ap
     // registration works
     let login_response = api_client::login(
         address,
-        atuin_domain::api::LoginRequest { username, password },
+        atuin_domain::api::LoginRequest {
+            username,
+            password: password.into(),
+            totp_code: None,
+        },
         &Default::default(),
     )
     .await

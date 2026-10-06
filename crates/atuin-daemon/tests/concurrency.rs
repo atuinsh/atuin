@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
-use atuin_client::settings::Search;
+use atuin_client::settings::{CaptureLimits, OutputCapture, Search};
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use common::corpus::HistoryGen;
 use common::{TestEnv, capture, history};
@@ -149,7 +149,7 @@ async fn delete_racing_finish_leaves_no_row_anywhere() {
         }
     }
     let replay = env.fresh_db_from_store().await;
-    let mut pager = replay.all_paged(100, false, false);
+    let mut pager = replay.all_paged(100, false);
     while let Some(page) = pager.next().await.unwrap() {
         leaked_replay.extend(page.into_iter().map(|h| h.command));
     }
@@ -538,6 +538,7 @@ async fn tail_orders_events_per_command_under_concurrency() {
 /// Registers racing deletes, cancels and finishes over a small id set must leave the store holding
 /// output only for commands that are still in flight or persisted -- the invariant the per-id gate
 /// and the deletion marks exist to keep -- under scheduling the harness does not control.
+#[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn captures_never_outlive_their_entries_under_contention() {
     let env = TestEnv::builder().build().await;
@@ -548,7 +549,13 @@ async fn captures_never_outlive_their_entries_under_contention() {
         for (i, id) in ids.iter().copied().enumerate() {
             let journal = env.journal.clone();
             tasks.push(tokio::spawn(async move {
-                let _ = journal.register_command_output(id, capture("out")).await;
+                let _ = journal
+                    .register_command_output(
+                        id,
+                        capture("out"),
+                        &OutputCapture::Enabled(CaptureLimits::default()),
+                    )
+                    .await;
             }));
             let journal = env.journal.clone();
             tasks.push(tokio::spawn(async move {

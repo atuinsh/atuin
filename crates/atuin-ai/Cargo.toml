@@ -14,11 +14,12 @@ version.workspace = true
 [features]
 default = []
 daemon = []
+clipboard = ["dep:arboard"]
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
 atuin-client = { workspace = true }
-atuin-common = { workspace = true, features = ["unicode", "ansi", "sqlite"] }
+atuin-common = { workspace = true, features = ["ai", "ansi", "sqlite", "unicode"] }
 atuin-daemon = { workspace = true }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
@@ -30,7 +31,6 @@ chrono-humanize = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
 derive_more = { workspace = true }
-directories = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
 eventsource-stream = { workspace = true }
@@ -40,6 +40,7 @@ fs-err = { workspace = true }
 futures = { workspace = true }
 glob-match = { workspace = true }
 imara-diff = { workspace = true }
+interim = { workspace = true }
 parking_lot = { workspace = true }
 pulldown-cmark = { workspace = true }
 ratatui = { workspace = true }
@@ -48,6 +49,7 @@ regex = { workspace = true }
 reqwest = { workspace = true }
 rmcp = { workspace = true }
 schemars = { workspace = true }
+secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 shellexpand = { workspace = true }
@@ -65,6 +67,7 @@ tree-sitter-bash = { workspace = true, optional = true }
 tree-sitter-fish = { workspace = true, optional = true }
 tui-textarea-2 = { workspace = true }
 typed-builder = { workspace = true }
+unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
@@ -73,8 +76,15 @@ yaml-rust2 = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+arboard = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { workspace = true, optional = true, features = ["wayland-data-control"] }
+
 [dev-dependencies]
 eye_declare_engine = { workspace = true }
+proptest = { workspace = true }
 rstest = { workspace = true }
 
 [lints]

@@ -16,8 +16,8 @@ enum HarnessKind {
 }
 
 enum Role {
-  // Not stated by the harness.
-  ROLE_UNKNOWN = 0;
+  // A role the harness named that is none of the below; Message.role_label carries it.
+  ROLE_OTHER = 0;
   // Something you typed to the AI.
   ROLE_USER = 1;
   // The AI's reply.
@@ -28,9 +28,19 @@ enum Role {
   ROLE_TOOL = 4;
 }
 
+// How a session relates to the one it names as its parent.
+enum ParentKind {
+  // Spawned by its parent to do part of its work: a fragment of the parent.
+  PARENT_KIND_SUBAGENT = 0;
+  // A copy of the parent's conversation that went its own way (a fork or branch).
+  PARENT_KIND_FORK = 1;
+  // The parent's conversation carried on under a new session (a Codex revert).
+  PARENT_KIND_CONTINUATION = 2;
+}
+
 enum StopReason {
-  // Not stated by the harness.
-  STOP_REASON_UNKNOWN = 0;
+  // A reason the harness named that is none of the below; Message.stop_reason_label carries it.
+  STOP_REASON_OTHER = 0;
   // The AI finished its reply on its own.
   STOP_REASON_END_TURN = 1;
   // The AI paused to run a tool.
@@ -41,17 +51,26 @@ enum StopReason {
   STOP_REASON_ABORTED = 4;
   // Something went wrong before it could finish.
   STOP_REASON_ERROR = 5;
+  // The reply hit one of the caller's stop sequences.
+  STOP_REASON_STOP_SEQUENCE = 6;
+  // The AI declined to answer.
+  STOP_REASON_REFUSAL = 7;
 }
 
+// Token counts as the harness reported them. A count the harness did not report is
+// absent, never 0. Extern-pathed to `atuin_common::harnesstools::session::Usage`, whose prost
+// tags are these field numbers.
 message Tokens {
   // How much text was fed into the model, in tokens.
-  uint64 input = 1;
+  optional uint64 input = 1;
   // How much text the model produced, in tokens.
-  uint64 output = 2;
+  optional uint64 output = 2;
   // Tokens reused from an earlier prompt instead of resent (cheaper).
-  uint64 cache_read = 3;
+  optional uint64 cache_read = 3;
   // Tokens saved so a later prompt can reuse them.
-  uint64 cache_write = 4;
+  optional uint64 cache_write = 4;
+  // Of `output`, how much the model spent reasoning (thinking).
+  optional uint64 reasoning = 5;
 }
 
 // The AI's request to run a tool.
@@ -60,18 +79,24 @@ message ToolCall {
   string id = 1;
   // Which tool the AI used, such as reading a file or running a command.
   string name = 2;
-  // The arguments the AI passed to the tool, as JSON.
-  string input = 3;
+  // The arguments the AI passed to the tool, as JSON. Absent when capture did not keep them.
+  optional string input = 3;
 }
 
 // The result handed back from a tool the AI ran.
 message ToolResult {
   // Identifier of the ToolCall this result answers.
   string tool_use_id = 1;
-  // The tool's output.
-  string content = 2;
+  // The tool's output, as JSON. Absent when capture did not keep it.
+  optional string output = 2;
   // Whether the tool reported failure.
   bool is_error = 3;
+}
+
+// Reasoning the harness recorded without its text.
+message ReasoningSummary {
+  // Tokens of the model call the reasoning happened in, if the harness reported them.
+  optional uint64 tokens = 1;
 }
 
 // One ordered piece of a message's content. A single turn interleaves these:
@@ -88,29 +113,38 @@ message ContentBlock {
     ToolResult tool_result = 3;
     // The model's private reasoning, when the harness records it.
     string thinking = 4;
+    // The model reasoned, but the harness kept only that it did.
+    ReasoningSummary reasoning_summary = 5;
+    // A block Atuin does not model, as JSON.
+    string other = 6;
+    // A model-written summary standing in for earlier conversation (compaction,
+    // an abandoned branch).
+    string summary = 7;
+    // Why a model call failed or was aborted, as the harness reported it.
+    string error = 8;
   }
 }
 
-// A session this one was handed off from. Present or absent as a unit -- absence
-// means "no parent", never overloaded onto a field's zero value.
-message Parent {
-  // Harness owning the parent session (may differ from the child's harness).
+// A native session handle: a harness plus its harness-native session id. Used as
+// a session's own identity and as a parent link. Present or absent as a unit --
+// absence means "no parent", never overloaded onto a field's zero value.
+message HarnessSession {
+  // The harness that owns this session.
   HarnessKind harness = 1;
-  // Harness-native id of the parent session.
+  // Harness-native session id.
   string session_id = 2;
 }
 
 message Message {
   // Atuin's stable identifier for this message (UUIDv7).
   common.Uuid id = 1;
-  // The harness that produced this message.
-  HarnessKind harness = 2;
-  // Harness-native session identifier this message belongs to.
-  string session_id = 3;
+  // The session this message belongs to.
+  HarnessSession session = 2;
   // Session this one was handed off from, if any.
-  optional Parent parent = 4;
-  // Harness-native thread identifier, if any.
-  optional string thread = 5;
+  optional HarnessSession parent = 4;
+  // Was a harness-native thread identifier that no harness supplied.
+  reserved 5;
+  reserved "thread";
   // Harness-native message identifier, unique within the session.
   string source_id = 6;
   // Harness-native identifier of the message this one replies to.
@@ -127,29 +161,54 @@ message Message {
   optional string git_branch = 12;
   // Model that produced the message.
   optional string model = 13;
-  // Token usage attributed to this message.
+  // Token usage attributed to this message, if the harness reported any.
   Tokens tokens = 14;
-  // Why an assistant turn ended.
-  StopReason stop_reason = 15;
+  // Why an assistant turn ended. Absent when the harness did not say.
+  optional StopReason stop_reason = 15;
+  // The harness's own role string (e.g. codex "developer"); set exactly when role is
+  // ROLE_OTHER.
+  optional string role_label = 16;
+  // The harness's own stop reason; set exactly when stop_reason is STOP_REASON_OTHER.
+  optional string stop_reason_label = 17;
+  // How this message's session relates to `parent`, when known.
+  optional ParentKind parent_kind = 18;
+  // The host that captured the message (a hyphenated host id), when known.
+  optional string host_id = 19;
 }
 
 message Session {
-  // Atuin's stable identifier for this session (UUIDv7). Use this as the handle
-  // for GetSession / GetTranscript.
-  common.Uuid id = 1;
-  // The harness that produced this session.
-  HarnessKind harness = 2;
-  // Harness-native session identifier.
-  string session_id = 3;
+  // This session's own identity.
+  HarnessSession handle = 1;
   // Session this one was handed off from, if any.
-  optional Parent parent = 4;
-  optional string cwd = 5;
-  optional string git_branch = 6;
-  optional string model = 7;
-  google.protobuf.Timestamp started_at = 8;
-  google.protobuf.Timestamp updated_at = 9;
-  uint64 message_count = 10;
-  Tokens tokens = 11;
-  optional string title = 12;
-  optional string preview = 13;
+  optional HarnessSession parent = 3;
+  optional string cwd = 4;
+  optional string git_branch = 5;
+  optional string model = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  uint64 message_count = 9;
+  Tokens tokens = 10;
+  optional string title = 11;
+  optional string preview = 12;
+  // The most recent assistant reply, clipped: how the session ended, or where it is now.
+  optional string last_reply = 13;
+  // How this session relates to `parent`, when known.
+  optional ParentKind parent_kind = 14;
+  // The host that captured the session (a hyphenated host id), when known.
+  optional string host_id = 15;
+  // The top-most stored ancestor this session is grouped under; absent for a root.
+  optional HarnessSession root = 16;
+  // Sessions grouped under this one; only counted by roots-only queries.
+  uint64 child_count = 17;
+  // For a session with no parent, the session it was found to be a copy of (from the model
+  // calls they share); always of the same harness.
+  optional HarnessSession copy_of = 19;
+  // Atuin's id for the session.
+  optional common.Uuid atuin_id = 20;
+  // The atuin ids of `parent` and `root`, when those sessions are stored: links are resolved
+  // when read, never recorded.
+  optional common.Uuid parent_atuin_id = 21;
+  optional common.Uuid root_atuin_id = 22;
+  // The atuin ids of the stored sessions naming this one their parent, oldest first.
+  repeated common.Uuid child_atuin_ids = 23;
 }

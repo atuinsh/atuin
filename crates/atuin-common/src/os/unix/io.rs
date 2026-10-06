@@ -1,62 +1,57 @@
 //! File descriptor write helpers.
 
-use std::num::NonZeroU32;
-use std::ops::ControlFlow;
-use std::os::fd::AsFd;
-use std::time::Duration;
+use std::os::fd::{AsFd, BorrowedFd};
 
+use rustix::event::{PollFd, PollFlags, poll};
 use rustix::io::{Errno, write};
-
-use crate::futures::Backoff;
 
 /// Write an entire buffer to a file descriptor.
 pub trait WriteAllExt: AsFd {
-    /// Write all of `buf`, looping over short writes and retrying `EINTR`. On `EAGAIN` it backs off
-    /// (sleeping the thread) and retries up to `timeout`, then returns `ETIMEDOUT`; other errors
-    /// propagate.
-    fn write_all_retrying(&self, buf: &[u8], timeout: Duration) -> Result<(), Errno> {
-        if buf.is_empty() {
-            return Ok(());
-        }
-
+    /// Write all of `buf`, looping over short writes and retrying on `EINTR` and `EAGAIN`.
+    ///
+    /// If the file descriptor is in non-blocking mode and is temporarily full (`EAGAIN`), this
+    /// function blocks until the file descriptor can accept more data (repeatedly, until the entire
+    /// buffer is written). This is unlike [`std::io::Stdout`], which immediately returns after
+    /// receiving `EAGAIN`.
+    fn write_all_retrying(&self, buf: &[u8]) -> Result<(), Errno> {
         let fd = self.as_fd();
         let mut buf = buf;
 
-        let backoff = Backoff::Exponential {
-            initial: Duration::from_millis(1),
-            max: Duration::from_millis(50),
-            factor: NonZeroU32::new(2).unwrap(),
-        };
+        while !buf.is_empty() {
+            match write(fd, buf) {
+                // A 0-byte write on a non-empty buffer makes no progress.
+                Ok(0) => return Err(Errno::IO),
+                Ok(n) => buf = &buf[n..],
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => wait_until_writable(fd)?,
+                Err(e) => return Err(e),
+            }
+        }
 
-        let done = backoff.retry_blocking(
-            || loop {
-                match write(fd, buf) {
-                    // A 0-byte write on a non-empty buffer makes no progress.
-                    Ok(0) => return ControlFlow::Break(Err(Errno::IO)),
-                    Ok(n) => {
-                        buf = &buf[n..];
-                        if buf.is_empty() {
-                            return ControlFlow::Break(Ok(()));
-                        }
-                    }
-                    Err(Errno::INTR) => {}
-                    Err(Errno::AGAIN) => return ControlFlow::Continue(()),
-                    Err(e) => return ControlFlow::Break(Err(e)),
-                }
-            },
-            timeout,
-        );
-
-        done.unwrap_or(Err(Errno::TIMEDOUT))
+        Ok(())
     }
 }
 
 impl<Fd: AsFd + ?Sized> WriteAllExt for Fd {}
 
+/// Block until a file descriptor is writable.
+fn wait_until_writable(fd: BorrowedFd<'_>) -> Result<(), Errno> {
+    let mut fds = [PollFd::new(&fd, PollFlags::OUT)];
+
+    loop {
+        match poll(&mut fds, None) {
+            Ok(_) => return Ok(()),
+            Err(Errno::INTR) => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Read, pipe};
     use std::thread;
+    use std::time::Duration;
 
     use rstest::rstest;
     use rustix::io::ioctl_fionbio;
@@ -70,8 +65,9 @@ mod tests {
     #[rstest]
     #[case::single_write(4 * 1024)]
     #[case::short_write_loop(BIG)]
-    fn writes_everything(#[case] size: usize) {
+    fn writes_everything(#[case] size: usize, #[values(false, true)] nonblocking: bool) {
         let (mut reader, writer) = pipe().unwrap();
+        ioctl_fionbio(&writer, nonblocking).unwrap();
         let collector = thread::spawn(move || {
             let mut got = Vec::new();
             reader.read_to_end(&mut got).unwrap();
@@ -79,19 +75,49 @@ mod tests {
         });
 
         let data = vec![0xACu8; size];
-        writer.write_all_retrying(&data, Duration::from_secs(10)).unwrap();
+        writer.write_all_retrying(&data).unwrap();
         drop(writer); // EOF for the reader
 
         assert_eq!(collector.join().unwrap(), data);
     }
 
+    /// A non-blocking sink that is full *right now* is not a failure: the write waits for it
+    /// to drain. The stall is far longer than the 150ms the pty-proxy forwarder used to give
+    /// up after, which is the whole point of having no deadline.
     #[rstest]
-    fn times_out_when_the_fd_never_drains() {
-        // Nobody reads `_reader`, so a non-blocking write fills the pipe and stalls.
-        let (_reader, writer) = pipe().unwrap();
+    #[timeout(Duration::from_secs(30))]
+    fn waits_out_a_stalled_nonblocking_fd() {
+        let (mut reader, writer) = pipe().unwrap();
         ioctl_fionbio(&writer, true).unwrap();
-        let err =
-            writer.write_all_retrying(&vec![0u8; BIG], Duration::from_millis(50)).unwrap_err();
-        assert_eq!(err, Errno::TIMEDOUT);
+
+        let collector = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(500));
+            let mut got = Vec::new();
+            reader.read_to_end(&mut got).unwrap();
+            got
+        });
+
+        let data = vec![0xACu8; BIG];
+        writer.write_all_retrying(&data).unwrap();
+        drop(writer); // EOF for the reader
+
+        assert_eq!(collector.join().unwrap(), data);
+    }
+
+    /// Waiting forever is only safe if a descriptor that will never drain still ends the
+    /// loop. Fill the pipe so the write parks in `poll`, then close the read end under it.
+    #[rstest]
+    #[timeout(Duration::from_secs(30))]
+    fn a_reader_that_vanishes_mid_write_errors_instead_of_hanging() {
+        let (reader, writer) = pipe().unwrap();
+        ioctl_fionbio(&writer, true).unwrap();
+
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            drop(reader);
+        });
+
+        let err = writer.write_all_retrying(&vec![0u8; BIG]).unwrap_err();
+        assert_eq!(err, Errno::PIPE);
     }
 }

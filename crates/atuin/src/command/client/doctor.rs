@@ -258,9 +258,12 @@ impl SyncInfo {
         // that a diagnostic command should not trigger.
         let meta = Settings::meta_store().await.ok();
         let has_hub_token = match &meta {
-            Some(m) => {
-                m.hub_session_token().await.ok().flatten().is_some_and(|t| t.starts_with("atapi_"))
-            }
+            Some(m) => m
+                .hub_session_token()
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|t| atuin_client::meta::is_hub_token(&t)),
             None => false,
         };
         let has_cli_token = match &meta {

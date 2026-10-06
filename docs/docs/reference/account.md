@@ -22,7 +22,7 @@ atuin account register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
 |------|-------------|
 | `--username`/`-u` | Your desired username. Must be unique, alphanumerics and hyphens only |
 | `--email`/`-e` | Used only for important notifications, such as security issues |
-| `--password`/`-p` | Omit this and Atuin asks for it instead, keeping it out of your shell history |
+| `--password`/`-p` | Omit this and Atuin asks for it instead, keeping it out of your shell history. Pass `-` to read it from `stdin` |
 
 Registering logs you in and generates your encryption key. Save the key — see
 [`atuin key`](sync.md#key).
@@ -38,12 +38,22 @@ atuin account login -u <USERNAME>
 | Flag | Description |
 |------|-------------|
 | `--username`/`-u` | Your username |
-| `--password`/`-p` | Omit and Atuin asks for it |
+| `--password`/`-p` | Omit and Atuin asks for it. Pass `-` to read it from `stdin` |
 | `--key`/`-k` | Your encryption key. Omit and Atuin asks for it |
 | `--totp-code`/`-t` | Your two-factor authentication code, if your account has 2FA |
 
 Omitting `--password` and `--key` is recommended: Atuin asks for both,
 so neither ends up in your shell history.
+
+For unattended logins, set `ATUIN_PASSWORD` and `ATUIN_ENCRYPTION_KEY`, or
+pipe the password in with `--password -`. Unlike flag values, neither shows up
+in the process list:
+
+```shell
+ATUIN_ENCRYPTION_KEY="$KEY" atuin login -u <USERNAME> --password - < password.txt
+```
+
+`atuin register` also reads `ATUIN_PASSWORD`.
 
 ### `atuin account logout`
 

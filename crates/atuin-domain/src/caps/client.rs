@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use reqwest::header::HeaderValue;
 use serde::de::DeserializeOwned;
 use tokio;
 use url::Url;
@@ -12,7 +13,9 @@ use super::{CapKey, Capability, CapsBundle, DuplicateCapability};
 use crate::api::CapabilitiesResponse;
 
 /// The future an [`AuthHeaderProvider`] resolves an Authorization header with.
-pub type AuthHeaderFuture = Pin<Box<dyn Future<Output = Option<String>> + Send>>;
+///
+/// Mark the value [sensitive](HeaderValue::set_sensitive) so it stays out of `Debug` output.
+pub type AuthHeaderFuture = Pin<Box<dyn Future<Output = Option<HeaderValue>> + Send>>;
 
 /// Resolves the `Authorization` header value for each capability fetch.
 ///
@@ -27,7 +30,7 @@ impl AuthHeaderProvider {
         Self(Arc::new(f))
     }
 
-    async fn resolve(&self) -> Option<String> {
+    async fn resolve(&self) -> Option<HeaderValue> {
         (self.0)().await
     }
 }

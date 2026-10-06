@@ -36,11 +36,7 @@ impl LazyClient {
     }
 
     async fn connect(&self, settings: &Settings) -> Result<SearchClient> {
-        #[cfg(unix)]
-        return SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await;
-
-        #[cfg(not(unix))]
-        SearchClient::new(settings.daemon.tcp_port).await
+        SearchClient::from_settings(settings).await
     }
 
     /// Call a method on [`SearchClient`], autostarting the daemon and retrying if necessary.

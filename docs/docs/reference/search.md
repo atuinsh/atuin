@@ -12,6 +12,7 @@ appended with a wildcard).
 | `--exclude-exit`     | Exclude an exit code; repeat to exclude all listed codes (default: none)      |
 | `--before`           | Only include commands run before this time (default: none)                    |
 | `--after`            | Only include commands run after this time (default: none)                     |
+| `--timezone`/`--tz`  | Timezone to display times in and to read `--before`/`--after` in (default: configured `timezone`) |
 | `--interactive`/`-i` | Open the interactive search UI (default: false)                               |
 | `--human`            | Use human-readable formatting for the timestamp and duration (default: false) |
 | `--limit`            | Limit the number of results (default: none)                                   |

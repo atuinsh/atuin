@@ -3,8 +3,6 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
 use atuin_scripts::store::ScriptStore;
 use clap::Args;
 use eyre::{Context as _, Result, bail};
@@ -33,12 +31,14 @@ impl Rebuild {
                 self.rebuild_history(settings, store.clone(), database).await?;
             }
 
-            "dotfiles" => {
-                self.rebuild_dotfiles(settings, store.clone()).await?;
-            }
-
             "scripts" => {
                 self.rebuild_scripts(settings, store.clone()).await?;
+            }
+
+            // The daemon owns the sidecar, and rebuilds it.
+            "ai-session" => {
+                super::reset_ai_sessions(settings).await?;
+                println!("The daemon is rebuilding the ai session index");
             }
 
             tag => {
@@ -69,21 +69,6 @@ impl Rebuild {
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         history_store.build(database).await?;
-
-        Ok(())
-    }
-
-    async fn rebuild_dotfiles(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-            .context("could not load encryption key")?;
-
-        let host_id = Settings::host_id().await?;
-
-        let alias_store = AliasStore::new(store.clone(), host_id, encryption_key.clone());
-        let var_store = VarStore::new(store.clone(), host_id, encryption_key);
-
-        alias_store.build().await?;
-        var_store.build().await?;
 
         Ok(())
     }

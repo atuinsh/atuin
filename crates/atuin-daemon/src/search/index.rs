@@ -403,7 +403,7 @@ impl SearchIndex {
     /// Stream every history entry in `db`, one page at a time.
     pub fn history_pages(db: &Sqlite) -> impl Stream<Item = Result<Vec<History>, LoadFromDbError>> {
         stream::try_unfold(
-            db.all_paged(Self::HISTORY_LOAD_PAGE_SIZE, false, true),
+            db.all_paged(Self::HISTORY_LOAD_PAGE_SIZE, false),
             |mut pager| async move {
                 match pager.next().await {
                     Ok(Some(histories)) => Ok(Some((histories, pager))),
@@ -478,9 +478,12 @@ impl SearchIndex {
         let frecency_map = self.frecency_map.read().clone();
 
         let query = super::truncate_query(query);
-        // Match accent-insensitively: the haystack side is normalized in
-        // add_history, so an accented query must be normalized too
-        let query = query.normalize_diacritics();
+        // Parse operators before normalization: e.g. `¡` normalizes to `!`, but must
+        // remain literal text rather than becoming a negation operator.
+        let mut patterns = frizbee::Pattern::parse_query(query);
+        for pattern in &mut patterns {
+            pattern.needle = pattern.needle.normalize_diacritics().into_owned();
+        }
 
         let haystack = self.haystack.read();
         let filter = filter_mode.compile(&self.interner);
@@ -524,7 +527,7 @@ impl SearchIndex {
         let config = frizbee::Config::default()
             .casing(frizbee::CaseMatching::Smart)
             .sort(frizbee::SortStrategy::IndexAsc);
-        let mut matcher = frizbee::Matcher::from_query(&query, &config);
+        let mut matcher = frizbee::Matcher::from_patterns(&patterns, &config);
 
         // An empty query matches every candidate with fuzzy score 0, so skip
         // the matcher and rank purely by frecency
@@ -638,10 +641,16 @@ mod tests {
     use super::*;
 
     fn make_history(command: &str, cwd: &str, timestamp: OffsetDateTime) -> History {
-        History::import().timestamp(timestamp).command(command).cwd(cwd).build().into()
+        History::import()
+            .timestamp(timestamp)
+            .command(command)
+            .cwd(cwd)
+            .author("test-user")
+            .build()
+            .into()
     }
 
-    #[test]
+    #[rstest]
     fn frecency_data_compute() {
         let now = 1_000_000_i64;
 
@@ -668,7 +677,7 @@ mod tests {
         assert!(frequent_old.compute(now, 1.0, 1.0) > 50);
     }
 
-    #[test]
+    #[rstest]
     fn frecency_data_compute_with_multipliers() {
         let now = 1_000_000_i64;
 
@@ -711,7 +720,7 @@ mod tests {
         assert!(boost_recency < double_recency);
     }
 
-    #[test]
+    #[rstest]
     fn command_data_add_invocation() {
         let interner = ThreadedRodeo::new();
 
@@ -736,7 +745,7 @@ mod tests {
         assert_ne!(id1, id2);
     }
 
-    #[test]
+    #[rstest]
     fn command_data_filters() {
         let interner = ThreadedRodeo::new();
 
@@ -791,7 +800,7 @@ mod tests {
         assert!(!data.has_invocation_in_workspace(&check3, &interner));
     }
 
-    #[test]
+    #[rstest]
     fn search_index_add_and_search() {
         let index = SearchIndex::default();
 
@@ -829,7 +838,7 @@ mod tests {
     /// Regression test for #3702: a frequently-run command whose match is
     /// scattered across words must not outrank a contiguous match, no matter
     /// how large its frecency score is.
-    #[test]
+    #[rstest]
     fn contiguous_match_beats_frequent_scattered_match() {
         let index = SearchIndex::default();
 
@@ -859,7 +868,7 @@ mod tests {
     /// Frecency still orders results between equally good matches, so
     /// most-recently/frequently-used behavior is preserved where match
     /// quality can't differentiate.
-    #[test]
+    #[rstest]
     fn equal_matches_order_by_frecency() {
         let index = SearchIndex::default();
 
@@ -885,7 +894,7 @@ mod tests {
     /// the index normalizes both sides — an unaccented query must keep
     /// matching accented history entries (nucleo's old Normalization::Smart
     /// behavior), and an accented query must still find its own entry.
-    #[test]
+    #[rstest]
     fn diacritics_normalized_for_matching() {
         let index = SearchIndex::default();
 
@@ -899,6 +908,22 @@ mod tests {
 
         let results: Vec<_> = index.search("déjà", &IndexFilterMode::Global, 10).collect();
         assert_eq!(results, vec![expected]);
+    }
+
+    #[rstest]
+    fn normalization_does_not_introduce_query_operators() {
+        let index = SearchIndex::default();
+        let literal = make_history("¡\"", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let plain = make_history("plain", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        index.add_history(&literal);
+        index.add_history(&plain);
+
+        for query in ["¡\"", "^¡\"$", "'¡\"", "\\!\""] {
+            let results: Vec<_> = index.search(query, &IndexFilterMode::Global, 10).collect();
+            assert_eq!(results, vec![literal.id], "query {query:?}");
+        }
+        let results: Vec<_> = index.search("!¡\"", &IndexFilterMode::Global, 10).collect();
+        assert_eq!(results, vec![plain.id]);
     }
 
     /// A deterministic synthetic corpus large enough to cross the 10k
@@ -922,7 +947,7 @@ mod tests {
     /// frizbee's match_list_parallel must return exactly the same matches,
     /// scores, and order as match_list for our config. Guards the 10k
     /// threshold in search(), which machines cross as history grows.
-    #[test]
+    #[rstest]
     fn parallel_matching_equals_serial() {
         let corpus = equivalence_corpus();
         let haystack: Vec<&str> = corpus.iter().map(String::as_str).collect();
@@ -950,7 +975,7 @@ mod tests {
 
     /// End-to-end determinism above the parallel threshold: the same query
     /// against the same index must return the same ranked IDs every time.
-    #[test]
+    #[rstest]
     fn search_results_stable_above_parallel_threshold() {
         let index = SearchIndex::default();
         for (i, command) in equivalence_corpus().iter().enumerate() {
@@ -972,13 +997,36 @@ mod tests {
 
     /// Queries longer than frizbee can score are truncated instead of
     /// panicking in Matcher::from_query.
-    #[test]
+    #[rstest]
     fn long_query_truncated_not_panicking() {
         let index = SearchIndex::default();
         index.add_history(&make_history("echo hello", "/tmp", datetime!(2024-01-01 10:00 UTC)));
 
         let long_query = "a".repeat(5000);
         assert!(index.search(&long_query, &IndexFilterMode::Global, 10).next().is_none());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn load_from_db_counts_every_invocation() {
+        let db = Sqlite::in_memory(std::time::Duration::from_secs(5)).await.unwrap();
+
+        // One group by (command, cwd, host, session), with the newest id holding the oldest
+        // timestamp: the grouped load picked that row and its cursor skipped the rest.
+        for minute in 0..3 {
+            let mut run = make_history(
+                "cargo build",
+                "/tmp",
+                datetime!(2024-01-01 10:00 UTC) - time::Duration::minutes(minute),
+            );
+            run.session = "0199b2f0aaaa7000800000000000000a".to_owned();
+            db.save(&run).await.unwrap();
+        }
+
+        let index = SearchIndex::default();
+        index.load_from_db(&db).await.unwrap();
+
+        assert_eq!(index.commands.get("cargo build").unwrap().global_frecency.count, 3);
     }
 
     #[rstest]

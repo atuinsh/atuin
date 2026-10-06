@@ -1,6 +1,5 @@
 use std::io::{Read, Write};
 use std::sync::mpsc;
-use std::time::Duration;
 
 use atuin_common::os::unix::io::WriteAllExt;
 use atuin_common::os::unix::tty::TtyId;
@@ -8,9 +7,19 @@ use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::cwd_updater::CwdUpdater;
-use crate::debug::{Osc133DebugHighlighter, RESET};
+use crate::debug::{MarkerDebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg, SocketServer};
+
+/// The current version of the pty-proxy protocol.
+///
+/// This enables the shell integration to be compatible with older pty-proxy versions.
+///
+/// # Version history
+///
+/// * 1: Initial version. Expects OSC 133 escape sequences.
+/// * 2: Switched from OSC 133 to OSC 18188735.
+const PROTOCOL_VERSION: &str = "2";
 
 pub fn main(options: RuntimeOptions) {
     if let Err(e) = run(options) {
@@ -41,7 +50,7 @@ enum InitError {
 /// the server failed to initialize), this sets `ATUIN_PTY_PROXY_FAILED` to stop the child shell
 /// from endlessly trying to spawn additional PTY proxies.
 fn set_child_env(cmd: &mut CommandBuilder, socket_path: Option<&std::path::Path>) {
-    cmd.env("ATUIN_PTY_PROXY_ACTIVE", "1");
+    cmd.env("ATUIN_PTY_PROXY_ACTIVE", PROTOCOL_VERSION);
 
     if let Some(path) = socket_path {
         cmd.env("ATUIN_PTY_PROXY_SOCKET", path);
@@ -108,7 +117,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
     let _parser_handle = screen::spawn_parser_thread(rows, cols, msg_rx, screen::ParserOptions {
         command_capture: options.command_capture,
-        debug_osc133: options.debug_osc133,
+        debug_markers: options.debug_markers,
     });
 
     let socket_path = if let Some((server, path)) = server_and_path {
@@ -118,17 +127,15 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         None
     };
 
-    let mut cmd = match options.shell {
-        Some(ref path) => CommandBuilder::new(path),
-        None => CommandBuilder::new_default_prog(),
-    };
+    let shell = options.shell.first().cloned();
+    let mut cmd = CommandBuilder::from_argv(options.shell);
     cmd.cwd(std::env::current_dir()?);
     // Reflect the shell we actually spawn in `$SHELL` so the child — and
     // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
     // shell the user asked for instead of a stale value inherited from the
     // parent environment.
-    if let Some(ref path) = options.shell {
-        cmd.env("SHELL", path);
+    if let Some(shell) = shell {
+        cmd.env("SHELL", shell);
     }
     set_child_env(&mut cmd, socket_path.as_deref());
     // Atuin sets a restrictive process-wide umask on startup to protect the
@@ -161,8 +168,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     let stdout_thread = std::thread::spawn(move || {
         let stdout = rustix::stdio::stdout();
 
-        const WRITE_TIMEOUT: Duration = Duration::from_millis(150);
-        let mut highlighter = options.debug_osc133.then(Osc133DebugHighlighter::new);
+        let mut highlighter = options.debug_markers.then(MarkerDebugHighlighter::new);
         let mut buf = [0u8; 8192];
 
         loop {
@@ -181,7 +187,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
                         raw_data
                     };
 
-                    if stdout.write_all_retrying(data, WRITE_TIMEOUT).is_err() {
+                    if stdout.write_all_retrying(data).is_err() {
                         break;
                     }
                 }
@@ -189,7 +195,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         }
 
         if highlighter.is_some() {
-            let _ = stdout.write_all_retrying(RESET, WRITE_TIMEOUT);
+            let _ = stdout.write_all_retrying(RESET);
         }
     });
 

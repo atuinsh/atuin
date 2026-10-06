@@ -32,6 +32,8 @@ impl BenchCtx {
     ///
     /// Using the standard library will provide timestamps which are not stable and will result in
     /// irreproducible benchmarks.
+    // Instance accessor by design, mirroring `rng`, so callers read a value off the same `ctx`.
+    #[allow(clippy::unused_self)]
     pub fn now(&self) -> OffsetDateTime {
         Self::SEED_NOW
     }

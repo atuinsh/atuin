@@ -1,5 +1,6 @@
 //! A string proven to contain no NUL bytes.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::ops::Deref;
 
@@ -29,6 +30,21 @@ impl<T: AsRef<str>> NonNulStr<T> {
     /// The wrapped string as a slice.
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<'a> NonNulStr<Cow<'a, str>> {
+    /// Wrap `inner` with its NUL bytes removed, still borrowing it if it has none.
+    pub fn stripping(inner: impl Into<Cow<'a, str>>) -> Self {
+        let mut inner = inner.into();
+        if inner.contains('\0') {
+            inner.to_mut().retain(|c| c != '\0');
+        }
+        Self(inner)
     }
 }
 

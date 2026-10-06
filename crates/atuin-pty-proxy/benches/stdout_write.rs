@@ -20,7 +20,6 @@ mod unix {
     use std::fs::{File, OpenOptions};
     use std::io::{LineWriter, Write};
     use std::os::fd::AsFd;
-    use std::time::Duration;
 
     use atuin_common::os::unix::io::WriteAllExt;
     use divan::Bencher;
@@ -69,7 +68,7 @@ mod unix {
             .bench_values(|(chunks, file)| {
                 let fd = file.as_fd();
                 for chunk in &chunks {
-                    fd.write_all_retrying(divan::black_box(chunk), Duration::MAX).unwrap();
+                    fd.write_all_retrying(divan::black_box(chunk)).unwrap();
                 }
                 divan::black_box(&file);
             });

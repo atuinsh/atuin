@@ -7,6 +7,14 @@ use std::time::Duration;
 use rustix::io::Errno;
 use rustix::process::{self, Pid, Signal};
 
+/// Try to convert a [`u32`] PID into a typed [`Pid`].
+///
+/// Standard library functions like [`std::process::id`] use [`u32`], but functions in this module
+/// expect [`Pid`].
+pub fn pid_from_u32(pid: u32) -> Option<Pid> {
+    i32::try_from(pid).ok().and_then(rustix::process::Pid::from_raw)
+}
+
 /// Gracefully terminate the process via `SIGTERM`.
 ///
 /// If the process does not gracefully terminate, it is forcefully killed via `SIGKILL`.
@@ -172,5 +180,15 @@ mod tests {
         child.wait().unwrap();
 
         assert_eq!(cwd(pid), None);
+    }
+
+    #[rstest]
+    #[case::zero(0, None)]
+    #[case::one(1, Some(1))]
+    #[case::max(i32::MAX.cast_unsigned(), Some(i32::MAX))]
+    #[case::just_over_max(i32::MAX.cast_unsigned() + 1, None)]
+    #[case::minus_one_if_wrapped(u32::MAX, None)]
+    fn test_pid_from_u32(#[case] pid: u32, #[case] expected: Option<i32>) {
+        assert_eq!(pid_from_u32(pid).map(Pid::as_raw_pid), expected);
     }
 }

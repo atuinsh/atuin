@@ -1,0 +1,1828 @@
+{
+ "about": "opencode 1.18.32 then 2.0.15 driven against a local mock provider; see v2/tests.rs",
+ "legacy": {
+  "project": [
+   {
+    "id": "global",
+    "worktree": "/",
+    "time_created": 1790273216275,
+    "time_updated": 1790273222413,
+    "sandboxes": "[]"
+   }
+  ],
+  "event_sequence": [
+   {
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 15
+   },
+   {
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 44
+   }
+  ],
+  "event": [
+   {
+    "id": "evt_0d499786a0016DqI9hdzXFrVie",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 0,
+    "type": "session.created.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"slug\":\"witty-garden\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:07:02.761Z\",\"version\":\"1.18.32\",\"time\":{\"created\":1790273222761,\"updated\":1790273222761},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49978ae001r6RUOfv2pJFh3j",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 1,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"slug\":\"witty-garden\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:07:02.761Z\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273222761,\"updated\":1790273222828},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49978b4001T3CBmfNlqEjEp5",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 2,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"msg_0d49978ac001LyEXb8L3pcQYjJ\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"role\":\"user\",\"time\":{\"created\":1790273222828},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d49978b7001cTurwUZgKZYmgB",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 3,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"part\":{\"id\":\"prt_0d49978b3001eC80ci61VUcU65\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"messageID\":\"msg_0d49978ac001LyEXb8L3pcQYjJ\",\"type\":\"text\",\"text\":\"\\\"second legacy session\\\"\"},\"time\":1790273222839}"
+   },
+   {
+    "id": "evt_0d49978bb001Pmd7LxwZn5HLJb",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 4,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"slug\":\"witty-garden\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:07:02.761Z\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273222761,\"updated\":1790273222842},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d4997b50001arIyD77EY4m4nh",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 5,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"msg_0d4997b4f00182zhQI8vciKU3c\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"role\":\"assistant\",\"time\":{\"created\":1790273223503},\"parentID\":\"msg_0d49978ac001LyEXb8L3pcQYjJ\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}}"
+   },
+   {
+    "id": "evt_0d4997b81001STl3BK1CooMnC0",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 6,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"slug\":\"witty-garden\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:07:02.761Z\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273222761,\"updated\":1790273223552},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d4997b86001eAurFvCCztUzuk",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 7,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"msg_0d49978ac001LyEXb8L3pcQYjJ\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"role\":\"user\",\"time\":{\"created\":1790273222828},\"summary\":{\"diffs\":[]},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d4997bb1001Znq0zJIxSmFNmT",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 8,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"slug\":\"witty-garden\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"Mock title number 5\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273222761,\"updated\":1790273223552},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d4997dca001lS96qV3T7DflLu",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 9,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"part\":{\"id\":\"prt_0d4997dca001zb1ANw47nVCYVU\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"messageID\":\"msg_0d4997b4f00182zhQI8vciKU3c\",\"type\":\"step-start\"},\"time\":1790273224138}"
+   },
+   {
+    "id": "evt_0d4997dce001PwdhBLasEd2eIo",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 10,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"part\":{\"id\":\"prt_0d4997dce0019duF9QPCD0UOND\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"messageID\":\"msg_0d4997b4f00182zhQI8vciKU3c\",\"type\":\"text\",\"text\":\"\",\"time\":{\"start\":1790273224142}},\"time\":1790273224142}"
+   },
+   {
+    "id": "evt_0d4997dd1001mR1b0vezR2tSVV",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 11,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"part\":{\"id\":\"prt_0d4997dce0019duF9QPCD0UOND\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"messageID\":\"msg_0d4997b4f00182zhQI8vciKU3c\",\"type\":\"text\",\"text\":\"reply6 to the user.\",\"time\":{\"start\":1790273224142,\"end\":1790273224145}},\"time\":1790273224145}"
+   },
+   {
+    "id": "evt_0d4997dd4001losQtjavxiVnC4",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 12,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"part\":{\"id\":\"prt_0d4997dd4001AYH3boOl6eRNIn\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"messageID\":\"msg_0d4997b4f00182zhQI8vciKU3c\",\"type\":\"step-finish\",\"reason\":\"stop\",\"cost\":0.000938,\"tokens\":{\"total\":1062,\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}},\"time\":1790273224148}"
+   },
+   {
+    "id": "evt_0d4997dd6001PvEdhFSfidnhxM",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 13,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"msg_0d4997b4f00182zhQI8vciKU3c\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"role\":\"assistant\",\"time\":{\"created\":1790273223503},\"parentID\":\"msg_0d49978ac001LyEXb8L3pcQYjJ\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000938,\"tokens\":{\"total\":1062,\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d4997dd9001s4apW5L2dxOjwm",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 14,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"msg_0d4997b4f00182zhQI8vciKU3c\",\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"role\":\"assistant\",\"time\":{\"created\":1790273223503,\"completed\":1790273224153},\"parentID\":\"msg_0d49978ac001LyEXb8L3pcQYjJ\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000938,\"tokens\":{\"total\":1062,\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d4997dee00116QaEifwtF5shD",
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 15,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"info\":{\"id\":\"ses_f2b668796ffe7eBzqVGu7k59OB\",\"slug\":\"witty-garden\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.000938,\"tokens\":{\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"title\":\"Mock title number 5\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273222761,\"updated\":1790273224173},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d4996165001uB82CxZX4T19E7",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 0,
+    "type": "session.created.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:06:56.868Z\",\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273216868},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49961a3001sN6irPmqP801YP",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 1,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:06:56.868Z\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273216930},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49961a9001541Rtb0j0lJ973",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 2,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49961a200172rKlvRUvfkGsX\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"user\",\"time\":{\"created\":1790273216930},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d49961ac001wPw5Ku7ZkYoHG7",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 3,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49961a8001ZoePhPd814t9gr\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49961a200172rKlvRUvfkGsX\",\"type\":\"text\",\"text\":\"\\\"hello THINK there\\\"\"},\"time\":1790273216939}"
+   },
+   {
+    "id": "evt_0d49961af0017clfDnzh7IYyFm",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 4,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:06:56.868Z\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273216942},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49963fe0015guslva0ROKNFx",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 5,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49963fe001GW2EnIePavyxOW\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273217534},\"parentID\":\"msg_0d49961a200172rKlvRUvfkGsX\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}}"
+   },
+   {
+    "id": "evt_0d49964380018FliH084yhtanb",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 6,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:06:56.868Z\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273217591},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d499643c001QenJuU0oE9VJR7",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 7,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49961a200172rKlvRUvfkGsX\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"user\",\"time\":{\"created\":1790273216930},\"summary\":{\"diffs\":[]},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d49964610019VtXslOeteYZQe",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 8,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"Mock title number 1\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273217591},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49966b1001dnRXw7B5Ygxvqs",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 9,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49966b10010rGUklxe2G5Yzs\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49963fe001GW2EnIePavyxOW\",\"type\":\"step-start\"},\"time\":1790273218225}"
+   },
+   {
+    "id": "evt_0d49966b6001pYL2QdLsOG6YNL",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 10,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49966b5001LVqWk2iMs10XBA\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49963fe001GW2EnIePavyxOW\",\"type\":\"reasoning\",\"text\":\"\",\"time\":{\"start\":1790273218229}},\"time\":1790273218230}"
+   },
+   {
+    "id": "evt_0d49966b9001TU1LhEiOrBDNKX",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 11,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49966b5001LVqWk2iMs10XBA\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49963fe001GW2EnIePavyxOW\",\"type\":\"reasoning\",\"text\":\"Let me think about it.\",\"time\":{\"start\":1790273218229,\"end\":1790273218233}},\"time\":1790273218233}"
+   },
+   {
+    "id": "evt_0d49966bb0012KS2B5lX619W2e",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 12,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49966bb001iUBH6qbKxwca4a\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49963fe001GW2EnIePavyxOW\",\"type\":\"text\",\"text\":\"\",\"time\":{\"start\":1790273218235}},\"time\":1790273218235}"
+   },
+   {
+    "id": "evt_0d49966be0032tgS92nc0e5Mz9",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 13,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49966bb001iUBH6qbKxwca4a\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49963fe001GW2EnIePavyxOW\",\"type\":\"text\",\"text\":\"reply2 to the user.\",\"time\":{\"start\":1790273218235,\"end\":1790273218238}},\"time\":1790273218238}"
+   },
+   {
+    "id": "evt_0d49966c2001Y8P4Wys5UA3L25",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 14,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49966c1001yNCGKe8FuQSB9L\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49963fe001GW2EnIePavyxOW\",\"type\":\"step-finish\",\"reason\":\"stop\",\"cost\":0.000926,\"tokens\":{\"total\":1054,\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}},\"time\":1790273218242}"
+   },
+   {
+    "id": "evt_0d49966c4001cETLO76Yq2mEaO",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 15,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49963fe001GW2EnIePavyxOW\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273217534},\"parentID\":\"msg_0d49961a200172rKlvRUvfkGsX\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000926,\"tokens\":{\"total\":1054,\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d49966c7001zNPUmHangxBtoO",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 16,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49963fe001GW2EnIePavyxOW\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273217534,\"completed\":1790273218247},\"parentID\":\"msg_0d49961a200172rKlvRUvfkGsX\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000926,\"tokens\":{\"total\":1054,\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d49966e6001Z258hrTZfjgqmt",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 17,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.000926,\"tokens\":{\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"title\":\"Mock title number 1\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273218277},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d4996ce2001P3XxLiEkf1DZOu",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 18,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"user\",\"time\":{\"created\":1790273219785},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d4996ce9001DBdalxfFmcnDXW",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 19,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d4996ccb001532fkfIHwYW52n\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"type\":\"text\",\"text\":\"\\\"run TOOL now\\\"\"},\"time\":1790273219817}"
+   },
+   {
+    "id": "evt_0d4996ced0014HJz7pqtm0b036",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 20,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.000926,\"tokens\":{\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"title\":\"Mock title number 1\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273219820},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d4996efb0010F8apqCtq35yAH",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 21,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273220346},\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}}"
+   },
+   {
+    "id": "evt_0d4996f13001rOHt3BTK0V2yVe",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 22,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.000926,\"tokens\":{\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"title\":\"Mock title number 1\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273220371},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d4996f17001VxffMAsdxkKAwH",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 23,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"user\",\"time\":{\"created\":1790273219785},\"summary\":{\"diffs\":[]},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d49971b00015UmfGDFjN0RjOz",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 24,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49971b0001mgQsJikTTPqbHH\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"type\":\"step-start\"},\"time\":1790273221040}"
+   },
+   {
+    "id": "evt_0d49971b5001PWinjSCuLgB6Bu",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 25,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49971b4001x2y0QeBf3tXiLP\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"type\":\"text\",\"text\":\"\",\"time\":{\"start\":1790273221044}},\"time\":1790273221045}"
+   },
+   {
+    "id": "evt_0d49971b8001Yyp5UjBqAB2Amc",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 26,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49971b8001kIf74N4ZunOlAj\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"type\":\"tool\",\"callID\":\"call_3\",\"tool\":\"bash\",\"state\":{\"status\":\"pending\",\"input\":{},\"raw\":\"\"}},\"time\":1790273221048}"
+   },
+   {
+    "id": "evt_0d49971c0001pboDIXZcw1wOdk",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 27,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49971b8001kIf74N4ZunOlAj\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"type\":\"tool\",\"callID\":\"call_3\",\"tool\":\"bash\",\"state\":{\"status\":\"running\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"time\":{\"start\":1790273221056}}},\"time\":1790273221056}"
+   },
+   {
+    "id": "evt_0d49971c9001zTawsG3U33aELq",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 28,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49971b4001x2y0QeBf3tXiLP\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"type\":\"text\",\"text\":\"Running it.\",\"time\":{\"start\":1790273221044,\"end\":1790273221065}},\"time\":1790273221065}"
+   },
+   {
+    "id": "evt_0d499720a001ybQOuaxRdyASLR",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 29,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49971b8001kIf74N4ZunOlAj\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"type\":\"tool\",\"callID\":\"call_3\",\"tool\":\"bash\",\"state\":{\"status\":\"running\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"metadata\":{\"output\":\"\"},\"time\":{\"start\":1790273221056}}},\"time\":1790273221130}"
+   },
+   {
+    "id": "evt_0d499721700107Eo44nti7cmVh",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 30,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49971b8001kIf74N4ZunOlAj\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"type\":\"tool\",\"callID\":\"call_3\",\"tool\":\"bash\",\"state\":{\"status\":\"running\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"metadata\":{\"output\":\"hi-from-tool\\n\"},\"time\":{\"start\":1790273221056}}},\"time\":1790273221143}"
+   },
+   {
+    "id": "evt_0d4997244001FiaAvV5p7SDIzd",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 31,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49971b8001kIf74N4ZunOlAj\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"type\":\"tool\",\"callID\":\"call_3\",\"tool\":\"bash\",\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"output\":\"hi-from-tool\\n\",\"title\":\"echo hi-from-tool\",\"metadata\":{\"output\":\"hi-from-tool\\n\",\"exit\":0,\"truncated\":false},\"time\":{\"start\":1790273221056,\"end\":1790273221188}}},\"time\":1790273221188}"
+   },
+   {
+    "id": "evt_0d499724a001FOX7f6upsPomO2",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 32,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d4997249001SGr7NL5Za26XuI\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"type\":\"step-finish\",\"reason\":\"tool-calls\",\"cost\":0.000929,\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}},\"time\":1790273221193}"
+   },
+   {
+    "id": "evt_0d499724c001rsApvpqsRGMUYk",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 33,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273220346},\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000929,\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"tool-calls\"}}"
+   },
+   {
+    "id": "evt_0d4997251001SnYfyHt307QvtE",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 34,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d4996efa001RdGqV7YyP3yS5g\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273220346,\"completed\":1790273221201},\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000929,\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"tool-calls\"}}"
+   },
+   {
+    "id": "evt_0d4997254001gml9c7FaBoaKIU",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 35,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d4997254001wyUBKI9Y1lrMGr\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273221204},\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}}"
+   },
+   {
+    "id": "evt_0d499725b001mdbgbn1xZAJ8Jg",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 36,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.0018549999999999999,\"tokens\":{\"input\":1605,\"output\":85,\"reasoning\":20,\"cache\":{\"read\":400,\"write\":0}},\"title\":\"Mock title number 1\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273221210},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d499725d001D3E8JbUldmW0Js",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 37,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"user\",\"time\":{\"created\":1790273219785},\"summary\":{\"diffs\":[]},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d4997293001T3h9UAQj4OFSuK",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 38,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d4997293001313aH0fY6zN55T\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4997254001wyUBKI9Y1lrMGr\",\"type\":\"step-start\"},\"time\":1790273221267}"
+   },
+   {
+    "id": "evt_0d4997296001jHc51ImFQhWijn",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 39,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d4997296001p5Tygx1fYi6zSo\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4997254001wyUBKI9Y1lrMGr\",\"type\":\"text\",\"text\":\"\",\"time\":{\"start\":1790273221270}},\"time\":1790273221270}"
+   },
+   {
+    "id": "evt_0d4997299002OaV9cVxwIozRlO",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 40,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d4997296001p5Tygx1fYi6zSo\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4997254001wyUBKI9Y1lrMGr\",\"type\":\"text\",\"text\":\"reply4 to the user.\",\"time\":{\"start\":1790273221270,\"end\":1790273221273}},\"time\":1790273221273}"
+   },
+   {
+    "id": "evt_0d499729b001Tt8I473Yu4pjng",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 41,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d499729b001WCI6KJIpP5m8Bj\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d4997254001wyUBKI9Y1lrMGr\",\"type\":\"step-finish\",\"reason\":\"stop\",\"cost\":0.000932,\"tokens\":{\"total\":1058,\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}},\"time\":1790273221275}"
+   },
+   {
+    "id": "evt_0d499729d001ymU2vuqJ4yzoQq",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 42,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d4997254001wyUBKI9Y1lrMGr\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273221204},\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000932,\"tokens\":{\"total\":1058,\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d499729f001FXIGZWy02rxyOq",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 43,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d4997254001wyUBKI9Y1lrMGr\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273221204,\"completed\":1790273221279},\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000932,\"tokens\":{\"total\":1058,\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d49972b5001SpRKE3Cz0dBqpS",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 44,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.002787,\"tokens\":{\"input\":2409,\"output\":129,\"reasoning\":30,\"cache\":{\"read\":600,\"write\":0}},\"title\":\"Mock title number 1\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273221300},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   }
+  ],
+  "session": [
+   {
+    "id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "project_id": "global",
+    "parent_id": null,
+    "slug": "witty-garden",
+    "directory": "/home/user/project",
+    "title": "Mock title number 5",
+    "version": "1.18.32",
+    "time_created": 1790273222761,
+    "time_updated": 1790273224173
+   },
+   {
+    "id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "project_id": "global",
+    "parent_id": null,
+    "slug": "cosmic-nebula",
+    "directory": "/home/user/project",
+    "title": "Mock title number 1",
+    "version": "1.18.32",
+    "time_created": 1790273216868,
+    "time_updated": 1790273221300
+   }
+  ],
+  "message": [
+   {
+    "id": "msg_0d49961a200172rKlvRUvfkGsX",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273216930,
+    "time_updated": 1790273217597,
+    "data": "{\"role\":\"user\",\"time\":{\"created\":1790273216930},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"},\"summary\":{\"diffs\":[]}}"
+   },
+   {
+    "id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273217534,
+    "time_updated": 1790273218248,
+    "data": "{\"parentID\":\"msg_0d49961a200172rKlvRUvfkGsX\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000926,\"tokens\":{\"total\":1054,\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273217534,\"completed\":1790273218247},\"finish\":\"stop\"}"
+   },
+   {
+    "id": "msg_0d4996cc9001Zyb5eqPoelJDRa",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273219785,
+    "time_updated": 1790273221214,
+    "data": "{\"role\":\"user\",\"time\":{\"created\":1790273219785},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"},\"summary\":{\"diffs\":[]}}"
+   },
+   {
+    "id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273220346,
+    "time_updated": 1790273221201,
+    "data": "{\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000929,\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273220346,\"completed\":1790273221201},\"finish\":\"tool-calls\"}"
+   },
+   {
+    "id": "msg_0d4997254001wyUBKI9Y1lrMGr",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221204,
+    "time_updated": 1790273221279,
+    "data": "{\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000932,\"tokens\":{\"total\":1058,\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273221204,\"completed\":1790273221279},\"finish\":\"stop\"}"
+   },
+   {
+    "id": "msg_0d49978ac001LyEXb8L3pcQYjJ",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273222828,
+    "time_updated": 1790273223559,
+    "data": "{\"role\":\"user\",\"time\":{\"created\":1790273222828},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"},\"summary\":{\"diffs\":[]}}"
+   },
+   {
+    "id": "msg_0d4997b4f00182zhQI8vciKU3c",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273223503,
+    "time_updated": 1790273224153,
+    "data": "{\"parentID\":\"msg_0d49978ac001LyEXb8L3pcQYjJ\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000938,\"tokens\":{\"total\":1062,\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273223503,\"completed\":1790273224153},\"finish\":\"stop\"}"
+   }
+  ],
+  "part": [
+   {
+    "id": "prt_0d49961a8001ZoePhPd814t9gr",
+    "message_id": "msg_0d49961a200172rKlvRUvfkGsX",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273216939,
+    "time_updated": 1790273216941,
+    "data": "{\"type\":\"text\",\"text\":\"\\\"hello THINK there\\\"\"}"
+   },
+   {
+    "id": "prt_0d49966b10010rGUklxe2G5Yzs",
+    "message_id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273218225,
+    "time_updated": 1790273218227,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d49966b5001LVqWk2iMs10XBA",
+    "message_id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273218230,
+    "time_updated": 1790273218234,
+    "data": "{\"type\":\"reasoning\",\"text\":\"Let me think about it.\",\"time\":{\"start\":1790273218229,\"end\":1790273218233}}"
+   },
+   {
+    "id": "prt_0d49966bb001iUBH6qbKxwca4a",
+    "message_id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273218235,
+    "time_updated": 1790273218239,
+    "data": "{\"type\":\"text\",\"text\":\"reply2 to the user.\",\"time\":{\"start\":1790273218235,\"end\":1790273218238}}"
+   },
+   {
+    "id": "prt_0d49966c1001yNCGKe8FuQSB9L",
+    "message_id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273218242,
+    "time_updated": 1790273218243,
+    "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"total\":1054,\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000926}"
+   },
+   {
+    "id": "prt_0d4996ccb001532fkfIHwYW52n",
+    "message_id": "msg_0d4996cc9001Zyb5eqPoelJDRa",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273219817,
+    "time_updated": 1790273219818,
+    "data": "{\"type\":\"text\",\"text\":\"\\\"run TOOL now\\\"\"}"
+   },
+   {
+    "id": "prt_0d49971b0001mgQsJikTTPqbHH",
+    "message_id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221040,
+    "time_updated": 1790273221043,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d49971b4001x2y0QeBf3tXiLP",
+    "message_id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221045,
+    "time_updated": 1790273221066,
+    "data": "{\"type\":\"text\",\"text\":\"Running it.\",\"time\":{\"start\":1790273221044,\"end\":1790273221065}}"
+   },
+   {
+    "id": "prt_0d49971b8001kIf74N4ZunOlAj",
+    "message_id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221048,
+    "time_updated": 1790273221189,
+    "data": "{\"type\":\"tool\",\"tool\":\"bash\",\"callID\":\"call_3\",\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"output\":\"hi-from-tool\\n\",\"metadata\":{\"output\":\"hi-from-tool\\n\",\"exit\":0,\"truncated\":false},\"title\":\"echo hi-from-tool\",\"time\":{\"start\":1790273221056,\"end\":1790273221188}}}"
+   },
+   {
+    "id": "prt_0d4997249001SGr7NL5Za26XuI",
+    "message_id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221193,
+    "time_updated": 1790273221195,
+    "data": "{\"reason\":\"tool-calls\",\"type\":\"step-finish\",\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000929}"
+   },
+   {
+    "id": "prt_0d4997293001313aH0fY6zN55T",
+    "message_id": "msg_0d4997254001wyUBKI9Y1lrMGr",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221267,
+    "time_updated": 1790273221268,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d4997296001p5Tygx1fYi6zSo",
+    "message_id": "msg_0d4997254001wyUBKI9Y1lrMGr",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221270,
+    "time_updated": 1790273221274,
+    "data": "{\"type\":\"text\",\"text\":\"reply4 to the user.\",\"time\":{\"start\":1790273221270,\"end\":1790273221273}}"
+   },
+   {
+    "id": "prt_0d499729b001WCI6KJIpP5m8Bj",
+    "message_id": "msg_0d4997254001wyUBKI9Y1lrMGr",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221275,
+    "time_updated": 1790273221276,
+    "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"total\":1058,\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000932}"
+   },
+   {
+    "id": "prt_0d49978b3001eC80ci61VUcU65",
+    "message_id": "msg_0d49978ac001LyEXb8L3pcQYjJ",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273222839,
+    "time_updated": 1790273222841,
+    "data": "{\"type\":\"text\",\"text\":\"\\\"second legacy session\\\"\"}"
+   },
+   {
+    "id": "prt_0d4997dca001zb1ANw47nVCYVU",
+    "message_id": "msg_0d4997b4f00182zhQI8vciKU3c",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273224138,
+    "time_updated": 1790273224140,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d4997dce0019duF9QPCD0UOND",
+    "message_id": "msg_0d4997b4f00182zhQI8vciKU3c",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273224142,
+    "time_updated": 1790273224146,
+    "data": "{\"type\":\"text\",\"text\":\"reply6 to the user.\",\"time\":{\"start\":1790273224142,\"end\":1790273224145}}"
+   },
+   {
+    "id": "prt_0d4997dd4001AYH3boOl6eRNIn",
+    "message_id": "msg_0d4997b4f00182zhQI8vciKU3c",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273224148,
+    "time_updated": 1790273224149,
+    "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"total\":1062,\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000938}"
+   }
+  ],
+  "session_message": []
+ },
+ "final": {
+  "project": [
+   {
+    "id": "913ebee005998f8decb89c3fd75a76e79b8fa43c",
+    "worktree": "/home/user/project",
+    "time_created": 1790273237088,
+    "time_updated": 1790273237088,
+    "sandboxes": "[]"
+   },
+   {
+    "id": "global",
+    "worktree": "/",
+    "time_created": 1790273216275,
+    "time_updated": 1790273487840,
+    "sandboxes": "[]"
+   }
+  ],
+  "event_sequence": [
+   {
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 15
+   },
+   {
+    "aggregate_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "seq": 75
+   },
+   {
+    "aggregate_id": "ses_f2b662462ffe5m3IWk5lDCkJD9",
+    "seq": 10
+   },
+   {
+    "aggregate_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "seq": 82
+   },
+   {
+    "aggregate_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "seq": 1
+   },
+   {
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 40
+   }
+  ],
+  "event": [
+   {
+    "id": "evt_0d49d8570001jKL8QTSY3O07Gh",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 0,
+    "type": "session.created.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"slug\":\"tidy-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:11:28.239Z\",\"version\":\"1.18.32\",\"time\":{\"created\":1790273488239,\"updated\":1790273488239},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49d85bf0013yiBm41MryFajC",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 1,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"slug\":\"tidy-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:11:28.239Z\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273488239,\"updated\":1790273488317},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49d85c7001Q5oBkUCDrAePWs",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 2,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"msg_0d49d85bd001L3Wxv46C2Us7Xj\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"role\":\"user\",\"time\":{\"created\":1790273488317},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d49d85cc001nOFfQlwJD5HeP9",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 3,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"part\":{\"id\":\"prt_0d49d85c6001NIfzMOA6R0BMBR\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"messageID\":\"msg_0d49d85bd001L3Wxv46C2Us7Xj\",\"type\":\"text\",\"text\":\"\\\"a legacy session after the migration\\\"\"},\"time\":1790273488332}"
+   },
+   {
+    "id": "evt_0d49d85d0001RYMtYzzoS8Z0nu",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 4,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"slug\":\"tidy-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:11:28.239Z\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273488239,\"updated\":1790273488335},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49d88c6001x7ZZCKXsByfYHC",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 5,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"msg_0d49d88c60019BZqLW4KYwfY57\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"role\":\"assistant\",\"time\":{\"created\":1790273489094},\"parentID\":\"msg_0d49d85bd001L3Wxv46C2Us7Xj\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}}"
+   },
+   {
+    "id": "evt_0d49d8901001e6WJGO1rqKAs1O",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 6,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"slug\":\"tidy-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"New session - 2026-09-24T18:11:28.239Z\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273488239,\"updated\":1790273489152},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49d8906001rNG9Vz0AMCalZm",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 7,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"msg_0d49d85bd001L3Wxv46C2Us7Xj\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"role\":\"user\",\"time\":{\"created\":1790273488317},\"summary\":{\"diffs\":[]},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d49d8931001Jwf7mXiBpOEFxw",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 8,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"slug\":\"tidy-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"title\":\"Mock title number 2\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273488239,\"updated\":1790273489152},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49d8b90001NBMpPr6o2D2U9x",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 9,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"part\":{\"id\":\"prt_0d49d8b8f001MXRTCHiQV6tPM4\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"messageID\":\"msg_0d49d88c60019BZqLW4KYwfY57\",\"type\":\"step-start\"},\"time\":1790273489807}"
+   },
+   {
+    "id": "evt_0d49d8b93001yUxWJlAqeDdBTn",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 10,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"part\":{\"id\":\"prt_0d49d8b93001GdfF2fCcAEPAsp\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"messageID\":\"msg_0d49d88c60019BZqLW4KYwfY57\",\"type\":\"text\",\"text\":\"\",\"time\":{\"start\":1790273489811}},\"time\":1790273489811}"
+   },
+   {
+    "id": "evt_0d49d8b97001wV7tUlCaxO3HzF",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 11,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"part\":{\"id\":\"prt_0d49d8b93001GdfF2fCcAEPAsp\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"messageID\":\"msg_0d49d88c60019BZqLW4KYwfY57\",\"type\":\"text\",\"text\":\"reply3 to the user.\",\"time\":{\"start\":1790273489811,\"end\":1790273489815}},\"time\":1790273489815}"
+   },
+   {
+    "id": "evt_0d49d8b9a001Xdg2nSJP1PHgrH",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 12,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"part\":{\"id\":\"prt_0d49d8b9a0017vBehUFby5AXBW\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"messageID\":\"msg_0d49d88c60019BZqLW4KYwfY57\",\"type\":\"step-finish\",\"reason\":\"stop\",\"cost\":0.000929,\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}},\"time\":1790273489818}"
+   },
+   {
+    "id": "evt_0d49d8b9d001cD54M6I2wOBowI",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 13,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"msg_0d49d88c60019BZqLW4KYwfY57\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"role\":\"assistant\",\"time\":{\"created\":1790273489094},\"parentID\":\"msg_0d49d85bd001L3Wxv46C2Us7Xj\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000929,\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d49d8ba0001b3ZlmjNc4xoEuU",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 14,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"msg_0d49d88c60019BZqLW4KYwfY57\",\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"role\":\"assistant\",\"time\":{\"created\":1790273489094,\"completed\":1790273489824},\"parentID\":\"msg_0d49d85bd001L3Wxv46C2Us7Xj\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000929,\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d49d8bb7001twf5FqwDtuCYHc",
+    "aggregate_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "seq": 15,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"info\":{\"id\":\"ses_f2b627a90ffe3Kkao0Ukcp43QI\",\"slug\":\"tidy-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.000929,\"tokens\":{\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"title\":\"Mock title number 2\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273488239,\"updated\":1790273489846},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49d7940001vNNksY34N3HjhR",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 28,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49d793a001eruAfgjKTmKhfO\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"user\",\"time\":{\"created\":1790273485114},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d49d7949001LprrKEI3gGzzca",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 29,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49d793d001Jecyy6lnf1T9jt\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49d793a001eruAfgjKTmKhfO\",\"type\":\"text\",\"text\":\"\\\"one eighteen continues a migrated session\\\"\"},\"time\":1790273485129}"
+   },
+   {
+    "id": "evt_0d49d794f001gxPJGkj4bNqO2T",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 30,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.002787,\"tokens\":{\"input\":2409,\"output\":129,\"reasoning\":30,\"cache\":{\"read\":600,\"write\":0}},\"title\":\"Mock title number 1\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273485133},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49d7bf700151iKZCvOT0p9GU",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 31,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49d7bf7001FH7OMhpXglnuRU\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273485815},\"parentID\":\"msg_0d49d793a001eruAfgjKTmKhfO\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}}"
+   },
+   {
+    "id": "evt_0d49d7c13001XX73J3r4Yy3o4e",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 32,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.002787,\"tokens\":{\"input\":2409,\"output\":129,\"reasoning\":30,\"cache\":{\"read\":600,\"write\":0}},\"title\":\"Mock title number 1\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273485843},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   },
+   {
+    "id": "evt_0d49d7c180012QOy2EB79Zl0JI",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 33,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49d793a001eruAfgjKTmKhfO\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"user\",\"time\":{\"created\":1790273485114},\"summary\":{\"diffs\":[]},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"}}}"
+   },
+   {
+    "id": "evt_0d49d7f450015f12VZ5pLaq0Da",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 34,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49d7f45001yJO88vGM6NaSDm\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49d7bf7001FH7OMhpXglnuRU\",\"type\":\"step-start\"},\"time\":1790273486661}"
+   },
+   {
+    "id": "evt_0d49d7f49001lvAgJe9aPfy6m9",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 35,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49d7f49001qvlM7IGNEUgpFE\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49d7bf7001FH7OMhpXglnuRU\",\"type\":\"text\",\"text\":\"\",\"time\":{\"start\":1790273486665}},\"time\":1790273486665}"
+   },
+   {
+    "id": "evt_0d49d7f4f0013Sng6j60fLOR0i",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 36,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49d7f49001qvlM7IGNEUgpFE\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49d7bf7001FH7OMhpXglnuRU\",\"type\":\"text\",\"text\":\"reply1 to the user.\",\"time\":{\"start\":1790273486665,\"end\":1790273486670}},\"time\":1790273486670}"
+   },
+   {
+    "id": "evt_0d49d7f54001QbJIePOY8LLNmA",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 37,
+    "type": "message.part.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"part\":{\"id\":\"prt_0d49d7f54001B2LIOb2E39s3P7\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"messageID\":\"msg_0d49d7bf7001FH7OMhpXglnuRU\",\"type\":\"step-finish\",\"reason\":\"stop\",\"cost\":0.000923,\"tokens\":{\"total\":1052,\"input\":801,\"output\":41,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}},\"time\":1790273486676}"
+   },
+   {
+    "id": "evt_0d49d7f570016Yd5386cu2X1Je",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 38,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49d7bf7001FH7OMhpXglnuRU\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273485815},\"parentID\":\"msg_0d49d793a001eruAfgjKTmKhfO\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000923,\"tokens\":{\"total\":1052,\"input\":801,\"output\":41,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d49d7f89001X2WcLEF1FgAqSH",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 39,
+    "type": "message.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"msg_0d49d7bf7001FH7OMhpXglnuRU\",\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"role\":\"assistant\",\"time\":{\"created\":1790273485815,\"completed\":1790273486729},\"parentID\":\"msg_0d49d793a001eruAfgjKTmKhfO\",\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000923,\"tokens\":{\"total\":1052,\"input\":801,\"output\":41,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"finish\":\"stop\"}}"
+   },
+   {
+    "id": "evt_0d49d7fa6001gp75zpwzEg6TMe",
+    "aggregate_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "seq": 40,
+    "type": "session.updated.1",
+    "data": "{\"sessionID\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"info\":{\"id\":\"ses_f2b669e9bffejWGIuiJJ77cvry\",\"slug\":\"cosmic-nebula\",\"projectID\":\"global\",\"directory\":\"/home/user/project\",\"path\":\"home/user/project\",\"summary\":{\"additions\":0,\"deletions\":0,\"files\":0},\"cost\":0.0037099999999999998,\"tokens\":{\"input\":3210,\"output\":170,\"reasoning\":40,\"cache\":{\"read\":800,\"write\":0}},\"title\":\"Mock title number 1\",\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"version\":\"1.18.32\",\"time\":{\"created\":1790273216868,\"updated\":1790273486757},\"permission\":[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]}}"
+   }
+  ],
+  "session": [
+   {
+    "id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "project_id": "global",
+    "parent_id": null,
+    "slug": "tidy-nebula",
+    "directory": "/home/user/project",
+    "title": "Mock title number 2",
+    "version": "1.18.32",
+    "time_created": 1790273488239,
+    "time_updated": 1790273489846
+   },
+   {
+    "id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "project_id": "global",
+    "parent_id": null,
+    "slug": "witty-garden",
+    "directory": "/home/user/project",
+    "title": "Mock title number 5",
+    "version": "1.18.32",
+    "time_created": 1790273222761,
+    "time_updated": 1790273224173
+   },
+   {
+    "id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "project_id": "global",
+    "parent_id": null,
+    "slug": "cosmic-nebula",
+    "directory": "/home/user/project",
+    "title": "Mock title number 1",
+    "version": "1.18.32",
+    "time_created": 1790273216868,
+    "time_updated": 1790273486757
+   }
+  ],
+  "message": [
+   {
+    "id": "msg_0d49961a200172rKlvRUvfkGsX",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273216930,
+    "time_updated": 1790273217597,
+    "data": "{\"role\":\"user\",\"time\":{\"created\":1790273216930},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"},\"summary\":{\"diffs\":[]}}"
+   },
+   {
+    "id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273217534,
+    "time_updated": 1790273218248,
+    "data": "{\"parentID\":\"msg_0d49961a200172rKlvRUvfkGsX\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000926,\"tokens\":{\"total\":1054,\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273217534,\"completed\":1790273218247},\"finish\":\"stop\"}"
+   },
+   {
+    "id": "msg_0d4996cc9001Zyb5eqPoelJDRa",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273219785,
+    "time_updated": 1790273221214,
+    "data": "{\"role\":\"user\",\"time\":{\"created\":1790273219785},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"},\"summary\":{\"diffs\":[]}}"
+   },
+   {
+    "id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273220346,
+    "time_updated": 1790273221201,
+    "data": "{\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000929,\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273220346,\"completed\":1790273221201},\"finish\":\"tool-calls\"}"
+   },
+   {
+    "id": "msg_0d4997254001wyUBKI9Y1lrMGr",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221204,
+    "time_updated": 1790273221279,
+    "data": "{\"parentID\":\"msg_0d4996cc9001Zyb5eqPoelJDRa\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000932,\"tokens\":{\"total\":1058,\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273221204,\"completed\":1790273221279},\"finish\":\"stop\"}"
+   },
+   {
+    "id": "msg_0d49978ac001LyEXb8L3pcQYjJ",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273222828,
+    "time_updated": 1790273223559,
+    "data": "{\"role\":\"user\",\"time\":{\"created\":1790273222828},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"},\"summary\":{\"diffs\":[]}}"
+   },
+   {
+    "id": "msg_0d4997b4f00182zhQI8vciKU3c",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273223503,
+    "time_updated": 1790273224153,
+    "data": "{\"parentID\":\"msg_0d49978ac001LyEXb8L3pcQYjJ\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000938,\"tokens\":{\"total\":1062,\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273223503,\"completed\":1790273224153},\"finish\":\"stop\"}"
+   },
+   {
+    "id": "msg_0d49d793a001eruAfgjKTmKhfO",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273485114,
+    "time_updated": 1790273485849,
+    "data": "{\"role\":\"user\",\"time\":{\"created\":1790273485114},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"},\"summary\":{\"diffs\":[]}}"
+   },
+   {
+    "id": "msg_0d49d7bf7001FH7OMhpXglnuRU",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273485815,
+    "time_updated": 1790273486731,
+    "data": "{\"parentID\":\"msg_0d49d793a001eruAfgjKTmKhfO\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000923,\"tokens\":{\"total\":1052,\"input\":801,\"output\":41,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273485815,\"completed\":1790273486729},\"finish\":\"stop\"}"
+   },
+   {
+    "id": "msg_0d49d85bd001L3Wxv46C2Us7Xj",
+    "session_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "time_created": 1790273488317,
+    "time_updated": 1790273489159,
+    "data": "{\"role\":\"user\",\"time\":{\"created\":1790273488317},\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"modelID\":\"mock-model\"},\"summary\":{\"diffs\":[]}}"
+   },
+   {
+    "id": "msg_0d49d88c60019BZqLW4KYwfY57",
+    "session_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "time_created": 1790273489094,
+    "time_updated": 1790273489825,
+    "data": "{\"parentID\":\"msg_0d49d85bd001L3Wxv46C2Us7Xj\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"/home/user/project\",\"root\":\"/\"},\"cost\":0.000929,\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"modelID\":\"mock-model\",\"providerID\":\"mock\",\"time\":{\"created\":1790273489094,\"completed\":1790273489824},\"finish\":\"stop\"}"
+   }
+  ],
+  "part": [
+   {
+    "id": "prt_0d49961a8001ZoePhPd814t9gr",
+    "message_id": "msg_0d49961a200172rKlvRUvfkGsX",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273216939,
+    "time_updated": 1790273216941,
+    "data": "{\"type\":\"text\",\"text\":\"\\\"hello THINK there\\\"\"}"
+   },
+   {
+    "id": "prt_0d49966b10010rGUklxe2G5Yzs",
+    "message_id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273218225,
+    "time_updated": 1790273218227,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d49966b5001LVqWk2iMs10XBA",
+    "message_id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273218230,
+    "time_updated": 1790273218234,
+    "data": "{\"type\":\"reasoning\",\"text\":\"Let me think about it.\",\"time\":{\"start\":1790273218229,\"end\":1790273218233}}"
+   },
+   {
+    "id": "prt_0d49966bb001iUBH6qbKxwca4a",
+    "message_id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273218235,
+    "time_updated": 1790273218239,
+    "data": "{\"type\":\"text\",\"text\":\"reply2 to the user.\",\"time\":{\"start\":1790273218235,\"end\":1790273218238}}"
+   },
+   {
+    "id": "prt_0d49966c1001yNCGKe8FuQSB9L",
+    "message_id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273218242,
+    "time_updated": 1790273218243,
+    "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"total\":1054,\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000926}"
+   },
+   {
+    "id": "prt_0d4996ccb001532fkfIHwYW52n",
+    "message_id": "msg_0d4996cc9001Zyb5eqPoelJDRa",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273219817,
+    "time_updated": 1790273219818,
+    "data": "{\"type\":\"text\",\"text\":\"\\\"run TOOL now\\\"\"}"
+   },
+   {
+    "id": "prt_0d49971b0001mgQsJikTTPqbHH",
+    "message_id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221040,
+    "time_updated": 1790273221043,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d49971b4001x2y0QeBf3tXiLP",
+    "message_id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221045,
+    "time_updated": 1790273221066,
+    "data": "{\"type\":\"text\",\"text\":\"Running it.\",\"time\":{\"start\":1790273221044,\"end\":1790273221065}}"
+   },
+   {
+    "id": "prt_0d49971b8001kIf74N4ZunOlAj",
+    "message_id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221048,
+    "time_updated": 1790273221189,
+    "data": "{\"type\":\"tool\",\"tool\":\"bash\",\"callID\":\"call_3\",\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"output\":\"hi-from-tool\\n\",\"metadata\":{\"output\":\"hi-from-tool\\n\",\"exit\":0,\"truncated\":false},\"title\":\"echo hi-from-tool\",\"time\":{\"start\":1790273221056,\"end\":1790273221188}}}"
+   },
+   {
+    "id": "prt_0d4997249001SGr7NL5Za26XuI",
+    "message_id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221193,
+    "time_updated": 1790273221195,
+    "data": "{\"reason\":\"tool-calls\",\"type\":\"step-finish\",\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000929}"
+   },
+   {
+    "id": "prt_0d4997293001313aH0fY6zN55T",
+    "message_id": "msg_0d4997254001wyUBKI9Y1lrMGr",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221267,
+    "time_updated": 1790273221268,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d4997296001p5Tygx1fYi6zSo",
+    "message_id": "msg_0d4997254001wyUBKI9Y1lrMGr",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221270,
+    "time_updated": 1790273221274,
+    "data": "{\"type\":\"text\",\"text\":\"reply4 to the user.\",\"time\":{\"start\":1790273221270,\"end\":1790273221273}}"
+   },
+   {
+    "id": "prt_0d499729b001WCI6KJIpP5m8Bj",
+    "message_id": "msg_0d4997254001wyUBKI9Y1lrMGr",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273221275,
+    "time_updated": 1790273221276,
+    "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"total\":1058,\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000932}"
+   },
+   {
+    "id": "prt_0d49978b3001eC80ci61VUcU65",
+    "message_id": "msg_0d49978ac001LyEXb8L3pcQYjJ",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273222839,
+    "time_updated": 1790273222841,
+    "data": "{\"type\":\"text\",\"text\":\"\\\"second legacy session\\\"\"}"
+   },
+   {
+    "id": "prt_0d4997dca001zb1ANw47nVCYVU",
+    "message_id": "msg_0d4997b4f00182zhQI8vciKU3c",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273224138,
+    "time_updated": 1790273224140,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d4997dce0019duF9QPCD0UOND",
+    "message_id": "msg_0d4997b4f00182zhQI8vciKU3c",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273224142,
+    "time_updated": 1790273224146,
+    "data": "{\"type\":\"text\",\"text\":\"reply6 to the user.\",\"time\":{\"start\":1790273224142,\"end\":1790273224145}}"
+   },
+   {
+    "id": "prt_0d4997dd4001AYH3boOl6eRNIn",
+    "message_id": "msg_0d4997b4f00182zhQI8vciKU3c",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "time_created": 1790273224148,
+    "time_updated": 1790273224149,
+    "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"total\":1062,\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000938}"
+   },
+   {
+    "id": "prt_0d49d793d001Jecyy6lnf1T9jt",
+    "message_id": "msg_0d49d793a001eruAfgjKTmKhfO",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273485129,
+    "time_updated": 1790273485131,
+    "data": "{\"type\":\"text\",\"text\":\"\\\"one eighteen continues a migrated session\\\"\"}"
+   },
+   {
+    "id": "prt_0d49d7f45001yJO88vGM6NaSDm",
+    "message_id": "msg_0d49d7bf7001FH7OMhpXglnuRU",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273486661,
+    "time_updated": 1790273486663,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d49d7f49001qvlM7IGNEUgpFE",
+    "message_id": "msg_0d49d7bf7001FH7OMhpXglnuRU",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273486665,
+    "time_updated": 1790273486671,
+    "data": "{\"type\":\"text\",\"text\":\"reply1 to the user.\",\"time\":{\"start\":1790273486665,\"end\":1790273486670}}"
+   },
+   {
+    "id": "prt_0d49d7f54001B2LIOb2E39s3P7",
+    "message_id": "msg_0d49d7bf7001FH7OMhpXglnuRU",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "time_created": 1790273486676,
+    "time_updated": 1790273486677,
+    "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"total\":1052,\"input\":801,\"output\":41,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000923}"
+   },
+   {
+    "id": "prt_0d49d85c6001NIfzMOA6R0BMBR",
+    "message_id": "msg_0d49d85bd001L3Wxv46C2Us7Xj",
+    "session_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "time_created": 1790273488332,
+    "time_updated": 1790273488334,
+    "data": "{\"type\":\"text\",\"text\":\"\\\"a legacy session after the migration\\\"\"}"
+   },
+   {
+    "id": "prt_0d49d8b8f001MXRTCHiQV6tPM4",
+    "message_id": "msg_0d49d88c60019BZqLW4KYwfY57",
+    "session_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "time_created": 1790273489807,
+    "time_updated": 1790273489809,
+    "data": "{\"type\":\"step-start\"}"
+   },
+   {
+    "id": "prt_0d49d8b93001GdfF2fCcAEPAsp",
+    "message_id": "msg_0d49d88c60019BZqLW4KYwfY57",
+    "session_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "time_created": 1790273489811,
+    "time_updated": 1790273489816,
+    "data": "{\"type\":\"text\",\"text\":\"reply3 to the user.\",\"time\":{\"start\":1790273489811,\"end\":1790273489815}}"
+   },
+   {
+    "id": "prt_0d49d8b9a0017vBehUFby5AXBW",
+    "message_id": "msg_0d49d88c60019BZqLW4KYwfY57",
+    "session_id": "ses_f2b627a90ffe3Kkao0Ukcp43QI",
+    "time_created": 1790273489818,
+    "time_updated": 1790273489819,
+    "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"total\":1056,\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"write\":0,\"read\":200}},\"cost\":0.000929}"
+   }
+  ],
+  "session_v2": [
+   {
+    "id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "project_id": "913ebee005998f8decb89c3fd75a76e79b8fa43c",
+    "parent_id": null,
+    "fork_session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "fork_boundary": "{\"type\":\"through\",\"messageID\":\"msg_0d499e313001Kr44JdE8C50yzc\"}",
+    "slug": "shiny-wizard",
+    "directory": "/home/user/project",
+    "path": "",
+    "title": "Mock title number 1 (fork #1)",
+    "version": "2.0.15",
+    "time_created": 1790273258734,
+    "time_updated": 1790273475857
+   },
+   {
+    "id": "ses_f2b662462ffe5m3IWk5lDCkJD9",
+    "project_id": "913ebee005998f8decb89c3fd75a76e79b8fa43c",
+    "parent_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "fork_session_id": null,
+    "fork_boundary": null,
+    "slug": "hidden-engine",
+    "directory": "/home/user/project",
+    "path": "",
+    "title": "mock subtask",
+    "version": "2.0.15",
+    "time_created": 1790273248163,
+    "time_updated": 1790273248167
+   },
+   {
+    "id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "project_id": "913ebee005998f8decb89c3fd75a76e79b8fa43c",
+    "parent_id": null,
+    "fork_session_id": null,
+    "fork_boundary": null,
+    "slug": "cosmic-star",
+    "directory": "/home/user/project",
+    "path": "",
+    "title": "Mock title number 1",
+    "version": "2.0.15",
+    "time_created": 1790273246061,
+    "time_updated": 1790273435179
+   },
+   {
+    "id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "project_id": "global",
+    "parent_id": null,
+    "fork_session_id": null,
+    "fork_boundary": null,
+    "slug": "witty-garden",
+    "directory": "/home/user/project",
+    "path": "home/user/project",
+    "title": "Mock title number 5",
+    "version": "1.18.32",
+    "time_created": 1790273222761,
+    "time_updated": 1790273224173
+   },
+   {
+    "id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "project_id": "global",
+    "parent_id": null,
+    "fork_session_id": null,
+    "fork_boundary": null,
+    "slug": "cosmic-nebula",
+    "directory": "/home/user/project",
+    "path": "home/user/project",
+    "title": "Mock title number 1",
+    "version": "1.18.32",
+    "time_created": 1790273216868,
+    "time_updated": 1790273472589
+   }
+  ],
+  "session_message": [
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_4",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "user",
+    "seq": 4,
+    "time_created": 1790273246175,
+    "time_updated": 1790273246176,
+    "data": "{\"time\":{\"created\":1790273246175},\"text\":\"\\\"hello THINK native\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_7",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "assistant",
+    "seq": 7,
+    "time_created": 1790273246202,
+    "time_updated": 1790273246240,
+    "data": "{\"time\":{\"created\":1790273246202,\"streamed\":1790273246236,\"completed\":1790273246239},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"reasoning\",\"text\":\"Let me think about it.\",\"state\":{\"reasoningField\":\"reasoning_content\"},\"time\":{\"created\":1790273246223,\"completed\":1790273246231}},{\"type\":\"text\",\"text\":\"reply2 to the user.\"}],\"finish\":\"stop\",\"rawFinish\":\"stop\",\"cost\":0.000926,\"tokens\":{\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_14",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "idle",
+    "seq": 14,
+    "time_created": 1790273246243,
+    "time_updated": 1790273246243,
+    "data": "{\"time\":{\"created\":1790273246243},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_17",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "user",
+    "seq": 17,
+    "time_created": 1790273247100,
+    "time_updated": 1790273247101,
+    "data": "{\"time\":{\"created\":1790273247100},\"text\":\"\\\"run TOOL now\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_18",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "assistant",
+    "seq": 18,
+    "time_created": 1790273247120,
+    "time_updated": 1790273247220,
+    "data": "{\"time\":{\"created\":1790273247120,\"streamed\":1790273247147,\"completed\":1790273247219},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"Running it.\"},{\"type\":\"tool\",\"id\":\"call_3\",\"name\":\"shell\",\"executed\":false,\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"content\":[{\"type\":\"text\",\"text\":\"hi-from-tool\\n\"}],\"metadata\":{\"status\":\"completed\",\"truncated\":false,\"exit\":0}},\"time\":{\"created\":1790273247136,\"ran\":1790273247142,\"completed\":1790273247215}}],\"finish\":\"tool-calls\",\"rawFinish\":\"tool_calls\",\"cost\":0.000929,\"tokens\":{\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_27",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "assistant",
+    "seq": 27,
+    "time_created": 1790273247239,
+    "time_updated": 1790273247255,
+    "data": "{\"time\":{\"created\":1790273247239,\"streamed\":1790273247253,\"completed\":1790273247254},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"reply4 to the user.\"}],\"finish\":\"stop\",\"rawFinish\":\"stop\",\"cost\":0.000932,\"tokens\":{\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_32",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "idle",
+    "seq": 32,
+    "time_created": 1790273247257,
+    "time_updated": 1790273247258,
+    "data": "{\"time\":{\"created\":1790273247257},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_35",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "user",
+    "seq": 35,
+    "time_created": 1790273248106,
+    "time_updated": 1790273248108,
+    "data": "{\"time\":{\"created\":1790273248106},\"text\":\"\\\"delegate TASK now\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_36",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "assistant",
+    "seq": 36,
+    "time_created": 1790273248129,
+    "time_updated": 1790273248220,
+    "data": "{\"time\":{\"created\":1790273248129,\"streamed\":1790273248153,\"completed\":1790273248219},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"tool\",\"id\":\"call_5\",\"name\":\"subagent\",\"executed\":false,\"state\":{\"status\":\"completed\",\"input\":{\"description\":\"mock subtask\",\"prompt\":\"say hi from the subagent\",\"agent\":\"general\"},\"content\":[{\"type\":\"text\",\"text\":\"<subagent sessionID=\\\"ses_f2b662462ffe5m3IWk5lDCkJD9\\\" state=\\\"completed\\\">\\nreply6 to the user.\\n</subagent>\"}],\"metadata\":{\"sessionID\":\"ses_f2b662462ffe5m3IWk5lDCkJD9\",\"status\":\"completed\",\"truncated\":false}},\"time\":{\"created\":1790273248143,\"ran\":1790273248150,\"completed\":1790273248216}}],\"finish\":\"tool-calls\",\"rawFinish\":\"tool_calls\",\"cost\":0.000935,\"tokens\":{\"input\":805,\"output\":45,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_43",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "assistant",
+    "seq": 43,
+    "time_created": 1790273248242,
+    "time_updated": 1790273248279,
+    "data": "{\"time\":{\"created\":1790273248242,\"streamed\":1790273248277,\"completed\":1790273248278},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"reply7 to the user.\"}],\"finish\":\"stop\",\"rawFinish\":\"stop\",\"cost\":0.000941,\"tokens\":{\"input\":807,\"output\":47,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_48",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "idle",
+    "seq": 48,
+    "time_created": 1790273248281,
+    "time_updated": 1790273248282,
+    "data": "{\"time\":{\"created\":1790273248281},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_51",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "user",
+    "seq": 51,
+    "time_created": 1790273249129,
+    "time_updated": 1790273249130,
+    "data": "{\"time\":{\"created\":1790273249129},\"text\":\"\\\"please FAIL400\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_52",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "assistant",
+    "seq": 52,
+    "time_created": 1790273249149,
+    "time_updated": 1790273249164,
+    "data": "{\"time\":{\"created\":1790273249149,\"completed\":1790273249163},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[],\"finish\":\"error\",\"error\":{\"type\":\"provider.invalid-request\",\"message\":\"mock bad request\",\"status\":400}}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_54",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "idle",
+    "seq": 54,
+    "time_created": 1790273249166,
+    "time_updated": 1790273249167,
+    "data": "{\"time\":{\"created\":1790273249166},\"outcome\":\"failed\"}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_57",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "user",
+    "seq": 57,
+    "time_created": 1790273250010,
+    "time_updated": 1790273250011,
+    "data": "{\"time\":{\"created\":1790273250010},\"text\":\"\\\"LENGTH limit\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_58",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "assistant",
+    "seq": 58,
+    "time_created": 1790273250034,
+    "time_updated": 1790273250064,
+    "data": "{\"time\":{\"created\":1790273250034,\"streamed\":1790273250060,\"completed\":1790273250063},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"reply9 to the user.\"}],\"finish\":\"length\",\"rawFinish\":\"length\",\"cost\":0.000947,\"tokens\":{\"input\":809,\"output\":49,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d49a04ee001ZdRtMZSRXWjxt0_63",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "idle",
+    "seq": 63,
+    "time_created": 1790273250067,
+    "time_updated": 1790273250068,
+    "data": "{\"time\":{\"created\":1790273250067},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d49a0590001uAR9YyhvbFt3Jm",
+    "session_id": "ses_f2b65fb12ffel8KFRA9rRZabhb",
+    "type": "system",
+    "seq": 66,
+    "time_created": 1790273258896,
+    "time_updated": 1790273258897,
+    "data": "{\"time\":{\"created\":1790273258896},\"text\":\"The environment you are running in is now:\\n<env>\\n  Current conversation session ID: ses_f2b65fb12ffel8KFRA9rRZabhb\\n  Working directory: /home/user/project\\n  Workspace root folder: /home/user/project\\n  Is directory a git repo: no\\n  Platform: linux\\n  Prefer /tmp/opencode over generic system temporary directories such as /tmp; it is pre-created and approved for external access.\\n</env>\",\"description\":\"Instructions updated: core/environment\"}"
+   },
+   {
+    "id": "msg_0d499dba6001LkGdMslVSQGQqR",
+    "session_id": "ses_f2b662462ffe5m3IWk5lDCkJD9",
+    "type": "user",
+    "seq": 4,
+    "time_created": 1790273248180,
+    "time_updated": 1790273248181,
+    "data": "{\"time\":{\"created\":1790273248180},\"text\":\"You are a subagent spawned by another session.\\nsay hi from the subagent\"}"
+   },
+   {
+    "id": "msg_0d499dbb9001m36u1ujOgffABQ",
+    "session_id": "ses_f2b662462ffe5m3IWk5lDCkJD9",
+    "type": "assistant",
+    "seq": 5,
+    "time_created": 1790273248191,
+    "time_updated": 1790273248209,
+    "data": "{\"time\":{\"created\":1790273248191,\"streamed\":1790273248206,\"completed\":1790273248208},\"agent\":\"general\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"reply6 to the user.\"}],\"finish\":\"stop\",\"rawFinish\":\"stop\",\"cost\":0.000938,\"tokens\":{\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d499dbd4001fVhCNWjbF7mjXg",
+    "session_id": "ses_f2b662462ffe5m3IWk5lDCkJD9",
+    "type": "idle",
+    "seq": 10,
+    "time_created": 1790273248212,
+    "time_updated": 1790273248212,
+    "data": "{\"time\":{\"created\":1790273248212},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d499d376001JE6C7LQelc1wB5",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "user",
+    "seq": 4,
+    "time_created": 1790273246175,
+    "time_updated": 1790273246176,
+    "data": "{\"time\":{\"created\":1790273246175},\"text\":\"\\\"hello THINK native\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d499d3f2001UoFywOqgxK1QvO",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "assistant",
+    "seq": 7,
+    "time_created": 1790273246202,
+    "time_updated": 1790273246240,
+    "data": "{\"time\":{\"created\":1790273246202,\"streamed\":1790273246236,\"completed\":1790273246239},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"reasoning\",\"text\":\"Let me think about it.\",\"state\":{\"reasoningField\":\"reasoning_content\"},\"time\":{\"created\":1790273246223,\"completed\":1790273246231}},{\"type\":\"text\",\"text\":\"reply2 to the user.\"}],\"finish\":\"stop\",\"rawFinish\":\"stop\",\"cost\":0.000926,\"tokens\":{\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d499d423001uHh5fwa6lYY5g2",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "idle",
+    "seq": 14,
+    "time_created": 1790273246243,
+    "time_updated": 1790273246243,
+    "data": "{\"time\":{\"created\":1790273246243},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d499d710001dQZEhjAU1Wkv0K",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "user",
+    "seq": 17,
+    "time_created": 1790273247100,
+    "time_updated": 1790273247101,
+    "data": "{\"time\":{\"created\":1790273247100},\"text\":\"\\\"run TOOL now\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d499d787001BmaP3St51t6BIB",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "assistant",
+    "seq": 18,
+    "time_created": 1790273247120,
+    "time_updated": 1790273247220,
+    "data": "{\"time\":{\"created\":1790273247120,\"streamed\":1790273247147,\"completed\":1790273247219},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"Running it.\"},{\"type\":\"tool\",\"id\":\"call_3\",\"name\":\"shell\",\"executed\":false,\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"content\":[{\"type\":\"text\",\"text\":\"hi-from-tool\\n\"}],\"metadata\":{\"status\":\"completed\",\"truncated\":false,\"exit\":0}},\"time\":{\"created\":1790273247136,\"ran\":1790273247142,\"completed\":1790273247215}}],\"finish\":\"tool-calls\",\"rawFinish\":\"tool_calls\",\"cost\":0.000929,\"tokens\":{\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d499d800001fXr2tRT8Tb1qrm",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "assistant",
+    "seq": 27,
+    "time_created": 1790273247239,
+    "time_updated": 1790273247255,
+    "data": "{\"time\":{\"created\":1790273247239,\"streamed\":1790273247253,\"completed\":1790273247254},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"reply4 to the user.\"}],\"finish\":\"stop\",\"rawFinish\":\"stop\",\"cost\":0.000932,\"tokens\":{\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d499d819001yNya67EEz8On4h",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "idle",
+    "seq": 32,
+    "time_created": 1790273247257,
+    "time_updated": 1790273247258,
+    "data": "{\"time\":{\"created\":1790273247257},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d499daee001s4WuAnlijrAWw4",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "user",
+    "seq": 35,
+    "time_created": 1790273248106,
+    "time_updated": 1790273248108,
+    "data": "{\"time\":{\"created\":1790273248106},\"text\":\"\\\"delegate TASK now\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d499db77001nvT3mOZOfJ3VOR",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "assistant",
+    "seq": 36,
+    "time_created": 1790273248129,
+    "time_updated": 1790273248220,
+    "data": "{\"time\":{\"created\":1790273248129,\"streamed\":1790273248153,\"completed\":1790273248219},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"tool\",\"id\":\"call_5\",\"name\":\"subagent\",\"executed\":false,\"state\":{\"status\":\"completed\",\"input\":{\"description\":\"mock subtask\",\"prompt\":\"say hi from the subagent\",\"agent\":\"general\"},\"content\":[{\"type\":\"text\",\"text\":\"<subagent sessionID=\\\"ses_f2b662462ffe5m3IWk5lDCkJD9\\\" state=\\\"completed\\\">\\nreply6 to the user.\\n</subagent>\"}],\"metadata\":{\"sessionID\":\"ses_f2b662462ffe5m3IWk5lDCkJD9\",\"status\":\"completed\",\"truncated\":false}},\"time\":{\"created\":1790273248143,\"ran\":1790273248150,\"completed\":1790273248216}}],\"finish\":\"tool-calls\",\"rawFinish\":\"tool_calls\",\"cost\":0.000935,\"tokens\":{\"input\":805,\"output\":45,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d499dbe8001LN8sDCPLU9MSnC",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "assistant",
+    "seq": 43,
+    "time_created": 1790273248242,
+    "time_updated": 1790273248279,
+    "data": "{\"time\":{\"created\":1790273248242,\"streamed\":1790273248277,\"completed\":1790273248278},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"reply7 to the user.\"}],\"finish\":\"stop\",\"rawFinish\":\"stop\",\"cost\":0.000941,\"tokens\":{\"input\":807,\"output\":47,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d499dc19001jwdNipqiD7a8Qf",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "idle",
+    "seq": 48,
+    "time_created": 1790273248281,
+    "time_updated": 1790273248282,
+    "data": "{\"time\":{\"created\":1790273248281},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d499defb001lpMoOSZyaimFIp",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "user",
+    "seq": 51,
+    "time_created": 1790273249129,
+    "time_updated": 1790273249130,
+    "data": "{\"time\":{\"created\":1790273249129},\"text\":\"\\\"please FAIL400\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d499df74001BC57VsQoup8v9V",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "assistant",
+    "seq": 52,
+    "time_created": 1790273249149,
+    "time_updated": 1790273249164,
+    "data": "{\"time\":{\"created\":1790273249149,\"completed\":1790273249163},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[],\"finish\":\"error\",\"error\":{\"type\":\"provider.invalid-request\",\"message\":\"mock bad request\",\"status\":400}}"
+   },
+   {
+    "id": "msg_0d499df8e001MmLe48WSmbFf7E",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "idle",
+    "seq": 54,
+    "time_created": 1790273249166,
+    "time_updated": 1790273249167,
+    "data": "{\"time\":{\"created\":1790273249166},\"outcome\":\"failed\"}"
+   },
+   {
+    "id": "msg_0d499e261001xKGjR2ozSsW3jg",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "user",
+    "seq": 57,
+    "time_created": 1790273250010,
+    "time_updated": 1790273250011,
+    "data": "{\"time\":{\"created\":1790273250010},\"text\":\"\\\"LENGTH limit\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d499e2e700105mkQ5YXK0ZRD4",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "assistant",
+    "seq": 58,
+    "time_created": 1790273250034,
+    "time_updated": 1790273250064,
+    "data": "{\"time\":{\"created\":1790273250034,\"streamed\":1790273250060,\"completed\":1790273250063},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"reply9 to the user.\"}],\"finish\":\"length\",\"rawFinish\":\"length\",\"cost\":0.000947,\"tokens\":{\"input\":809,\"output\":49,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d499e313001Kr44JdE8C50yzc",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "idle",
+    "seq": 63,
+    "time_created": 1790273250067,
+    "time_updated": 1790273250068,
+    "data": "{\"time\":{\"created\":1790273250067},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d49a0876001fMuS6jIzFG514j",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "user",
+    "seq": 66,
+    "time_created": 1790273259761,
+    "time_updated": 1790273259762,
+    "data": "{\"time\":{\"created\":1790273259761},\"text\":\"\\\"squeeze the context\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d49a08fe001PXqJXu1Dkq8LH6",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "compaction",
+    "seq": 67,
+    "time_created": 1790273259774,
+    "time_updated": 1790273259816,
+    "data": "{\"time\":{\"created\":1790273259774},\"status\":\"failed\",\"reason\":\"auto\",\"error\":{\"type\":\"compaction.failed\",\"message\":\"Compaction summary did not match the required template\"},\"cost\":0.0018549999999999999,\"tokens\":{\"input\":1605,\"output\":85,\"reasoning\":20,\"cache\":{\"read\":400,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d49a0929001BrvuD95mVMHobk",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "idle",
+    "seq": 70,
+    "time_created": 1790273259817,
+    "time_updated": 1790273259818,
+    "data": "{\"time\":{\"created\":1790273259817},\"outcome\":\"failed\"}"
+   },
+   {
+    "id": "msg_0d49cb5be001p5lZqb0Z6KP8z4",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "user",
+    "seq": 73,
+    "time_created": 1790273435233,
+    "time_updated": 1790273435236,
+    "data": "{\"time\":{\"created\":1790273435233},\"text\":\"\\\"squeeze again\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d49cb672001KyLiy1W9XtZz0u",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "compaction",
+    "seq": 74,
+    "time_created": 1790273435250,
+    "time_updated": 1790273435288,
+    "data": "{\"time\":{\"created\":1790273435250},\"status\":\"completed\",\"reason\":\"auto\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"summary\":\"## Objective\\n- mock objective\\n\\n## Next Move\\n1. (none)\\n\",\"recent\":\"[User]: \\\"squeeze again\\\"\",\"cost\":0.000923,\"tokens\":{\"input\":801,\"output\":41,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d49cb699001YoivaHgTsjZI4l",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "assistant",
+    "seq": 77,
+    "time_created": 1790273435307,
+    "time_updated": 1790273435328,
+    "data": "{\"time\":{\"created\":1790273435307,\"streamed\":1790273435324,\"completed\":1790273435327},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\"},\"content\":[{\"type\":\"text\",\"text\":\"reply2 to the user.\"}],\"finish\":\"stop\",\"rawFinish\":\"stop\",\"cost\":0.000926,\"tokens\":{\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d49cb6c3001m2nsawCCapGy63",
+    "session_id": "ses_f2b662ccdffe16PlkJxD3iQBym",
+    "type": "idle",
+    "seq": 82,
+    "time_created": 1790273435331,
+    "time_updated": 1790273435331,
+    "data": "{\"time\":{\"created\":1790273435331},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d49978ac001LyEXb8L3pcQYjJ",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "type": "user",
+    "seq": 0,
+    "time_created": 1790273222828,
+    "time_updated": 1790273223559,
+    "data": "{\"text\":\"\\\"second legacy session\\\"\",\"time\":{\"created\":1790273222828}}"
+   },
+   {
+    "id": "msg_0d4997b4f00182zhQI8vciKU3c",
+    "session_id": "ses_f2b668796ffe7eBzqVGu7k59OB",
+    "type": "assistant",
+    "seq": 1,
+    "time_created": 1790273223503,
+    "time_updated": 1790273224153,
+    "data": "{\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"id\":\"mock-model\",\"variant\":\"default\"},\"content\":[{\"type\":\"text\",\"text\":\"reply6 to the user.\"}],\"finish\":\"stop\",\"cost\":0.000938,\"tokens\":{\"input\":806,\"output\":46,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"time\":{\"created\":1790273223503,\"completed\":1790273224153}}"
+   },
+   {
+    "id": "msg_0d49961a200172rKlvRUvfkGsX",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "user",
+    "seq": 0,
+    "time_created": 1790273216930,
+    "time_updated": 1790273217597,
+    "data": "{\"text\":\"\\\"hello THINK there\\\"\",\"time\":{\"created\":1790273216930}}"
+   },
+   {
+    "id": "msg_0d49963fe001GW2EnIePavyxOW",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "assistant",
+    "seq": 1,
+    "time_created": 1790273217534,
+    "time_updated": 1790273218248,
+    "data": "{\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"id\":\"mock-model\",\"variant\":\"default\"},\"content\":[{\"type\":\"reasoning\",\"text\":\"Let me think about it.\",\"time\":{\"created\":1790273218229,\"completed\":1790273218233}},{\"type\":\"text\",\"text\":\"reply2 to the user.\"}],\"finish\":\"stop\",\"cost\":0.000926,\"tokens\":{\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"time\":{\"created\":1790273217534,\"completed\":1790273218248}}"
+   },
+   {
+    "id": "msg_0d4996cc9001Zyb5eqPoelJDRa",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "user",
+    "seq": 2,
+    "time_created": 1790273219785,
+    "time_updated": 1790273221214,
+    "data": "{\"text\":\"\\\"run TOOL now\\\"\",\"time\":{\"created\":1790273219785}}"
+   },
+   {
+    "id": "msg_0d4996efa001RdGqV7YyP3yS5g",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "assistant",
+    "seq": 3,
+    "time_created": 1790273220346,
+    "time_updated": 1790273221201,
+    "data": "{\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"id\":\"mock-model\",\"variant\":\"default\"},\"content\":[{\"type\":\"text\",\"text\":\"Running it.\"},{\"type\":\"tool\",\"id\":\"call_3\",\"name\":\"bash\",\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"content\":[{\"type\":\"text\",\"text\":\"hi-from-tool\\n\"}],\"metadata\":{\"output\":\"hi-from-tool\\n\",\"exit\":0,\"truncated\":false}},\"time\":{\"created\":1790273221056,\"completed\":1790273221188}}],\"finish\":\"tool-calls\",\"cost\":0.000929,\"tokens\":{\"input\":803,\"output\":43,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"time\":{\"created\":1790273220346,\"completed\":1790273221201}}"
+   },
+   {
+    "id": "msg_0d4997254001wyUBKI9Y1lrMGr",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "assistant",
+    "seq": 4,
+    "time_created": 1790273221204,
+    "time_updated": 1790273221279,
+    "data": "{\"agent\":\"build\",\"model\":{\"providerID\":\"mock\",\"id\":\"mock-model\",\"variant\":\"default\"},\"content\":[{\"type\":\"text\",\"text\":\"reply4 to the user.\"}],\"finish\":\"stop\",\"cost\":0.000932,\"tokens\":{\"input\":804,\"output\":44,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}},\"time\":{\"created\":1790273221204,\"completed\":1790273221279}}"
+   },
+   {
+    "id": "msg_0d499b0ba001KApQtlOlf9pDeC",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "agent-switched",
+    "seq": 5,
+    "time_created": 1790273237178,
+    "time_updated": 1790273237180,
+    "data": "{\"time\":{\"created\":1790273237178},\"agent\":\"build\",\"previous\":\"build\"}"
+   },
+   {
+    "id": "msg_0d499b0ae001OhH90RwBX8LSo5",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "user",
+    "seq": 9,
+    "time_created": 1790273237291,
+    "time_updated": 1790273237292,
+    "data": "{\"time\":{\"created\":1790273237291},\"text\":\"\\\"continue after upgrade TOOL please\\\"\",\"files\":[]}"
+   },
+   {
+    "id": "msg_0d499b134001jvK9F1pmdMp3Hv",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "assistant",
+    "seq": 10,
+    "time_created": 1790273237307,
+    "time_updated": 1790273237392,
+    "data": "{\"time\":{\"created\":1790273237307,\"streamed\":1790273237331,\"completed\":1790273237391},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"content\":[{\"type\":\"text\",\"text\":\"Running it.\"},{\"type\":\"tool\",\"id\":\"call_1\",\"name\":\"shell\",\"executed\":false,\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"echo hi-from-tool\",\"description\":\"echo\"},\"content\":[{\"type\":\"text\",\"text\":\"hi-from-tool\\n\"}],\"metadata\":{\"status\":\"completed\",\"truncated\":false,\"exit\":0}},\"time\":{\"created\":1790273237321,\"ran\":1790273237326,\"completed\":1790273237388}}],\"finish\":\"tool-calls\",\"rawFinish\":\"tool_calls\",\"cost\":0.000923,\"tokens\":{\"input\":801,\"output\":41,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d499b19c001vEZmnszkKcuAwD",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "assistant",
+    "seq": 19,
+    "time_created": 1790273237410,
+    "time_updated": 1790273237426,
+    "data": "{\"time\":{\"created\":1790273237410,\"streamed\":1790273237424,\"completed\":1790273237425},\"agent\":\"build\",\"model\":{\"id\":\"mock-model\",\"providerID\":\"mock\",\"variant\":\"default\"},\"content\":[{\"type\":\"text\",\"text\":\"reply2 to the user.\"}],\"finish\":\"stop\",\"rawFinish\":\"stop\",\"cost\":0.000926,\"tokens\":{\"input\":802,\"output\":42,\"reasoning\":10,\"cache\":{\"read\":200,\"write\":0}}}"
+   },
+   {
+    "id": "msg_0d499b1b4001iZbsyDeOSp5DYp",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "idle",
+    "seq": 24,
+    "time_created": 1790273237428,
+    "time_updated": 1790273237428,
+    "data": "{\"time\":{\"created\":1790273237428},\"outcome\":\"succeeded\"}"
+   },
+   {
+    "id": "msg_0d49d483e001yXP8yr1CNUG6Zn",
+    "session_id": "ses_f2b669e9bffejWGIuiJJ77cvry",
+    "type": "shell",
+    "seq": 25,
+    "time_created": 1790273472574,
+    "time_updated": 1790273472586,
+    "data": "{\"metadata\":{\"background\":true},\"time\":{\"created\":1790273472574,\"completed\":1790273472584},\"shellID\":\"sh_0d49d4838001lYRqla2mCuL48f\",\"command\":\"echo shell-hi\",\"status\":\"exited\",\"exit\":0,\"output\":{\"output\":\"shell-hi\\n\",\"cursor\":9,\"size\":9,\"truncated\":false}}"
+   }
+  ]
+ }
+}

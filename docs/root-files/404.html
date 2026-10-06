@@ -7,12 +7,13 @@
   <title>Page not found - Atuin Docs</title>
   <link rel="icon" type="image/png" href="/latest/assets/atuin-turtle.png">
   <script>
-    // Top-level sections of the pre-versioned docs site. Every known legacy
-    // page has a static meta-refresh stub (see scripts/gen_legacy_stubs.py);
-    // this JS hop is the net for anything unmapped. It lands on the
-    // mkdocs-redirects stubs inside /latest/, which chain mapped stragglers
-    // on to their new home.
-    var LEGACY_PREFIXES = ["cli"];
+    // Legacy inbound links that predate mike versioning. Two eras: the old
+    // separate-repo `cli/*` URLs (which also have static meta-refresh stubs,
+    // see scripts/gen_legacy_stubs.py) and the bare top-level section URLs from
+    // the unversioned era -- atuin.sh still links `/self-hosting/server-setup/`.
+    // For any first segment below, hop to the same path under /latest/, where
+    // the mkdocs-redirects stubs chain mapped stragglers on to their new home.
+    var LEGACY_PREFIXES = ["cli", "guide", "configuration", "reference", "self-hosting", "ai"];
     var first = window.location.pathname.split("/")[1];
     if (LEGACY_PREFIXES.indexOf(first) !== -1) {
       window.location.replace(
@@ -69,7 +70,7 @@
 
     main { position: relative; z-index: 1; max-width: 520px; }
 
-    .logo { width: 132px; height: auto; margin-bottom: 40px; }
+    .logo { display: block; width: 132px; height: auto; margin: 0 auto; }
 
     .eyebrow {
       display: inline-flex;
@@ -127,20 +128,6 @@
 
     .hex-button:hover { filter: brightness(1.08); }
 
-    .hex-button.secondary {
-      background: rgba(56, 200, 90, 0.06);
-      color: var(--text-1);
-    }
-
-    .hex-button.secondary::before {
-      content: "";
-      position: absolute;
-      inset: 1px;
-      z-index: -1;
-      border: 1px solid rgba(56, 200, 90, 0.34);
-      clip-path: inherit;
-    }
-
     .footnote { margin-top: 34px; margin-bottom: 0; color: var(--text-3); font-family: var(--font-mono); font-size: 12px; }
     .footnote a { color: var(--text-2); }
     .footnote a:hover { color: var(--green); }
@@ -162,7 +149,6 @@
     </p>
     <div class="actions">
       <a class="hex-button" href="/">Latest docs</a>
-      <a class="hex-button secondary" href="/latest/cli/">CLI docs</a>
     </div>
     <p class="footnote">
       Still stuck? Ask on the <a href="https://forum.atuin.sh">forum</a>

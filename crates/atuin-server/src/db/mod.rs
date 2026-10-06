@@ -62,6 +62,7 @@ use async_trait::async_trait;
 use atuin_common::db::OwnedDbUrl;
 use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use easy_cast::Conv;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 pub use sqlite::Sqlite;
 mod mysql;
@@ -183,14 +184,14 @@ impl Dialect for PositionalBindingDialect {
 /// A database backend, used at runtime behind `Arc<dyn Database>`.
 #[async_trait]
 pub trait DynDatabase: Send + Sync + 'static {
-    async fn get_session(&self, token: &str) -> DbResult<Session>;
-    async fn get_session_user(&self, token: &str) -> DbResult<User>;
+    async fn get_session(&self, token: &SecretString) -> DbResult<Session>;
+    async fn get_session_user(&self, token: &SecretString) -> DbResult<User>;
     async fn add_session(&self, session: &NewSession) -> DbResult<()>;
 
     async fn get_user(&self, username: &str) -> DbResult<User>;
     async fn get_user_session(&self, u: &User) -> DbResult<Session>;
     async fn add_user(&self, user: &NewUser) -> DbResult<i64>;
-    async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64>;
+    async fn add_user_with_session(&self, user: &NewUser, token: &SecretString) -> DbResult<i64>;
 
     async fn update_user_password(&self, u: &User) -> DbResult<()>;
 
@@ -242,18 +243,18 @@ where
     async fn connect(url: Self::Url) -> DbResult<Self>;
 
     #[instrument(skip_all)]
-    async fn get_session(&self, token: &str) -> DbResult<Session> {
+    async fn get_session(&self, token: &SecretString) -> DbResult<Session> {
         db::query_as(Self::Dialect::GET_SESSION)
-            .bind(token)
+            .bind(token.expose_secret())
             .fetch_one(self.pool())
             .await
             .map_err(Into::into)
     }
 
     #[instrument(skip_all)]
-    async fn get_session_user(&self, token: &str) -> DbResult<User> {
+    async fn get_session_user(&self, token: &SecretString) -> DbResult<User> {
         db::query_as(Self::Dialect::GET_SESSION_USER)
-            .bind(token)
+            .bind(token.expose_secret())
             .fetch_one(self.pool())
             .await
             .map_err(Into::into)
@@ -263,7 +264,7 @@ where
     async fn add_session(&self, session: &NewSession) -> DbResult<()> {
         db::query(Self::Dialect::ADD_SESSION)
             .bind(session.user_id)
-            .bind(session.token.as_str())
+            .bind(session.token.expose_secret())
             .execute(self.pool())
             .await?;
         Ok(())
@@ -300,7 +301,7 @@ where
 
     /// Atomically create a user and their initial session in a single transaction.
     #[instrument(skip_all)]
-    async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64> {
+    async fn add_user_with_session(&self, user: &NewUser, token: &SecretString) -> DbResult<i64> {
         let mut tx = self.pool().begin().await?;
 
         let (user_id,): (i64,) = db::query_as(Self::Dialect::ADD_USER)
@@ -310,7 +311,11 @@ where
             .fetch_one(&mut *tx)
             .await?;
 
-        db::query(Self::Dialect::ADD_SESSION).bind(user_id).bind(token).execute(&mut *tx).await?;
+        db::query(Self::Dialect::ADD_SESSION)
+            .bind(user_id)
+            .bind(token.expose_secret())
+            .execute(&mut *tx)
+            .await?;
 
         tx.commit().await?;
 
@@ -421,11 +426,11 @@ where
     i64: Type<T::Db> + for<'q> Encode<'q, T::Db>,
     Uuid: Type<T::Db> + for<'q> Encode<'q, T::Db>,
 {
-    async fn get_session(&self, token: &str) -> DbResult<Session> {
+    async fn get_session(&self, token: &SecretString) -> DbResult<Session> {
         Database::get_session(self, token).await
     }
 
-    async fn get_session_user(&self, token: &str) -> DbResult<User> {
+    async fn get_session_user(&self, token: &SecretString) -> DbResult<User> {
         Database::get_session_user(self, token).await
     }
 
@@ -445,7 +450,7 @@ where
         Database::add_user(self, user).await
     }
 
-    async fn add_user_with_session(&self, user: &NewUser, token: &str) -> DbResult<i64> {
+    async fn add_user_with_session(&self, user: &NewUser, token: &SecretString) -> DbResult<i64> {
         Database::add_user_with_session(self, user, token).await
     }
 

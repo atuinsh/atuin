@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::ffi::OsString;
 
 use clap::{Args, Subcommand, ValueEnum};
 
@@ -6,14 +6,17 @@ use crate::{CaptureConfig, runtime};
 
 #[derive(Args, Debug)]
 pub struct PtyProxy {
-    /// Highlight OSC 133 prompt, input, output, and exit-code regions
+    /// Highlight `OSC 18188735` escape sequences used to mark the start and end of command output.
     #[arg(long)]
-    debug_osc133: bool,
+    debug_markers: bool,
 
     /// Path to the shell binary that atuin pty-proxy should spawn.
+    ///
     /// Defaults to the system login shell. Only valid when no subcommand is given.
-    #[arg(long, value_name = "PATH")]
-    shell: Option<PathBuf>,
+    ///
+    /// Pass multiple times to provide arguments to the shell.
+    #[arg(long, value_name = "PATH", allow_hyphen_values = true)]
+    shell: Vec<OsString>,
 
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -47,21 +50,21 @@ pub enum Shell {
 }
 
 pub struct RuntimeOptions {
-    pub(crate) debug_osc133: bool,
-    pub(crate) shell: Option<PathBuf>,
+    pub(crate) debug_markers: bool,
+    pub(crate) shell: Vec<OsString>,
     pub(crate) command_capture: Option<CaptureConfig>,
     pub(crate) child_umask: Option<u32>,
 }
 
 impl RuntimeOptions {
     fn new(
-        debug_osc133: bool,
-        shell: Option<PathBuf>,
+        debug_markers: bool,
+        shell: Vec<OsString>,
         command_capture: Option<CaptureConfig>,
         child_umask: Option<u32>,
     ) -> Self {
         Self {
-            debug_osc133: debug_osc133 || env_flag("ATUIN_PTY_PROXY_DEBUG"),
+            debug_markers: debug_markers || env_flag("ATUIN_PTY_PROXY_DEBUG"),
             shell,
             command_capture,
             child_umask,
@@ -74,7 +77,7 @@ impl PtyProxy {
     /// a restrictive process-wide umask early in startup, which the shell
     /// would otherwise inherit (#3695).
     pub fn run(self, command_capture: Option<CaptureConfig>, child_umask: Option<u32>) {
-        if self.cmd.is_some() && self.shell.is_some() {
+        if self.cmd.is_some() && !self.shell.is_empty() {
             eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");
             std::process::exit(2);
         }
@@ -86,7 +89,7 @@ impl PtyProxy {
                 }
             }
             None => runtime::main(RuntimeOptions::new(
-                self.debug_osc133,
+                self.debug_markers,
                 self.shell,
                 command_capture,
                 child_umask,
@@ -180,7 +183,11 @@ then
     # trying to spawn more proxies.
     :
   elif [[ -n "${BASH_VERSION:-}" ]]; then
-    exec atuin pty-proxy --shell "$BASH"
+    __atuin_pty_proxy_args=(--shell "$BASH")
+    if shopt -q login_shell; then
+      __atuin_pty_proxy_args+=(--shell -l)
+    fi
+    exec atuin pty-proxy "${__atuin_pty_proxy_args[@]}"
   elif [[ -n "${ZSH_VERSION:-}" ]]; then
     # Prefer ZSH_ARGZERO (zsh 5.3+) -- it preserves the path zsh was
     # invoked with -- and fall back to PATH lookup otherwise. Login shells
@@ -189,8 +196,12 @@ then
     # a bare command name ("zsh") rather than a path; the :c modifier
     # resolves that to an absolute path via $PATH, leaves an absolute path
     # unchanged, and leaves an unresolvable name as-is.
-    _atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
-    exec atuin pty-proxy --shell "${${_atuin_pty_proxy_zsh#-}:c}"
+    __atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
+    __atuin_pty_proxy_args=(--shell "${${__atuin_pty_proxy_zsh#-}:c}")
+    if [[ -o login ]]; then
+        __atuin_pty_proxy_args+=(--shell -l)
+    fi
+    exec atuin pty-proxy "${__atuin_pty_proxy_args[@]}"
   else
     exec atuin pty-proxy
   fi
@@ -201,7 +212,8 @@ fi
 /// Preamble for fish.
 // Unlike other shells, we only test whether stdout is a tty rather than also checking stdin,
 // because we instruct users to pipe `atuin init fish` to `source`, which puts the script itself
-// on stdin, making it necessarily not a tty.
+// on stdin, making it necessarily not a tty. This is also why we do `</dev/tty` when invoking
+// `atuin pty-proxy` if stdin is not a terminal.
 const FISH_INIT: &str = r#"if status is-interactive; and test -t 1
     and not set -q __atuin_pty_proxy_owns_tty
 
@@ -213,7 +225,15 @@ const FISH_INIT: &str = r#"if status is-interactive; and test -t 1
     else if test "$__atuin_pty_proxy_answer" = 1
         set -g __atuin_pty_proxy_owns_tty 1
     else if not set -q ATUIN_PTY_PROXY_FAILED
-        exec atuin pty-proxy --shell (status fish-path)
+        set __atuin_pty_proxy_args --shell (status fish-path)
+        if status is-login
+            set -a __atuin_pty_proxy_args --shell -l
+        end
+        if test -t 0
+            exec atuin pty-proxy $__atuin_pty_proxy_args
+        else
+            exec atuin pty-proxy $__atuin_pty_proxy_args </dev/tty
+        end
     end
 end
 "#;
@@ -233,13 +253,18 @@ const NU_INIT: &str = r#"if (is-terminal --stdin) and (is-terminal --stdout) and
     } else if ($atuin_proxy_check.stdout | str trim) == "1" {
         $env.__atuin_pty_proxy = { owns_tty: true }
     } else if ('ATUIN_PTY_PROXY_FAILED' not-in $env) {
-        exec atuin pty-proxy --shell $nu.current-exe
+        mut pty_proxy_args = [--shell $nu.current-exe]
+        if $nu.is-login {
+            $pty_proxy_args = ($pty_proxy_args ++ [--shell -l])
+        }
+        exec atuin pty-proxy ...$pty_proxy_args
     }
 }
 "#;
 
 #[cfg(test)]
 mod tests {
+    use regex::Regex;
     use rstest::rstest;
 
     use super::{Shell, init_script, shell_from_name};
@@ -295,17 +320,52 @@ mod tests {
     #[rstest]
     fn init_scripts_forward_shell_path() {
         let posix = init_script(Shell::Bash);
-        assert!(posix.contains(r#"exec atuin pty-proxy --shell "$BASH""#));
+        assert!(posix.contains(r#"__atuin_pty_proxy_args=(--shell "$BASH")"#));
         // zsh: capture ZSH_ARGZERO (with PATH fallback), strip the leading
         // dash present on login shells, then resolve a bare command name to
         // an absolute path with the :c modifier before forwarding it.
-        assert!(posix.contains(r#"_atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
-        assert!(posix.contains(r#"exec atuin pty-proxy --shell "${${_atuin_pty_proxy_zsh#-}:c}""#));
+        assert!(posix.contains(r#"__atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
+        assert!(
+            posix.contains(r#"__atuin_pty_proxy_args=(--shell "${${__atuin_pty_proxy_zsh#-}:c}")"#)
+        );
 
         let fish = init_script(Shell::Fish);
-        assert!(fish.contains("exec atuin pty-proxy --shell (status fish-path)"));
+        assert!(fish.contains("set __atuin_pty_proxy_args --shell (status fish-path)"));
 
         let nu = init_script(Shell::Nu);
-        assert!(nu.contains("exec atuin pty-proxy --shell $nu.current-exe"));
+        assert!(nu.contains("mut pty_proxy_args = [--shell $nu.current-exe]"));
+    }
+
+    #[rstest]
+    fn fish_init_execs_the_proxy_with_the_terminal_on_stdin() {
+        // When a script is piped into `source` in fish, stdin is not a terminal. `atuin pty-proxy`
+        // expects stdin to be a terminal, so we need to make sure we explicitly connect it to one.
+        let exec = r"exec atuin pty-proxy \$__atuin_pty_proxy_args";
+        let branch =
+            Regex::new(&format!(r"if test -t 0\s+{exec}\s+else\s+{exec} </dev/tty\s+end")).unwrap();
+
+        assert!(
+            branch.is_match(init_script(Shell::Fish)),
+            "fish init: {}",
+            init_script(Shell::Fish)
+        );
+    }
+
+    #[rstest]
+    #[case::bash(
+        Shell::Bash,
+        r"if shopt -q login_shell; then\s+__atuin_pty_proxy_args\+=\(--shell -l\)"
+    )]
+    #[case::zsh(
+        Shell::Zsh,
+        r"if \[\[ -o login \]\]; then\s+__atuin_pty_proxy_args\+=\(--shell -l\)"
+    )]
+    #[case::fish(Shell::Fish, r"if status is-login\s+set -a __atuin_pty_proxy_args --shell -l")]
+    #[case::nu(
+        Shell::Nu,
+        r"if \$nu\.is-login \{\s+\$pty_proxy_args = \(\$pty_proxy_args \+\+ \[--shell -l\]\)"
+    )]
+    fn init_scripts_maintain_login_status(#[case] shell: Shell, #[case] expected: &str) {
+        assert!(Regex::new(expected).unwrap().is_match(init_script(shell)));
     }
 }

@@ -2,86 +2,29 @@
 
 Atuin AI can read the output of commands you've run. Ask "why did that fail?" and it can look at the actual error message, rather than guessing from the command alone.
 
-Atuin doesn't capture output by default — it needs two pieces set up: the [daemon](../reference/daemon.md), which stores recent output in memory, and [pty-proxy](../reference/pty-proxy.md), which captures it from your terminal.
+Atuin doesn't capture output by default. See [Capturing Command Output](../guide/output-capture.md) for how capture works, what it keeps, and how to control it.
 
 ## Setup
 
-### 1. Enable the daemon
+Turn on output capture, which sets up the [daemon](../reference/daemon.md) and [pty-proxy](../reference/pty-proxy.md) it needs:
 
-Add the following to your Atuin config file (`~/.config/atuin/config.toml` by default):
-
-```toml
-[daemon]
-enabled = true
-autostart = true
+```shell
+atuin config enable output-capture
 ```
 
-With `autostart = true`, Atuin starts and manages the daemon for you. If you'd rather run it yourself (for example via systemd), see the [daemon documentation](../reference/daemon.md).
+Then open a new terminal. To set it up by hand instead, see [Setting it up](../guide/output-capture.md#setting-it-up).
 
-### 2. Enable pty-proxy
-
-Add the pty-proxy init line to your shell's init script, as high in the file as possible, _before_ your normal `atuin init` call:
-
-=== "zsh"
-
-    ```shell
-    eval "$(atuin pty-proxy init zsh)"
-    ```
-
-=== "bash"
-
-    ```shell
-    eval "$(atuin pty-proxy init bash)"
-    ```
-
-=== "fish"
-
-    Add
-
-    ```shell
-    atuin pty-proxy init fish | source
-    ```
-
-    to your `is-interactive` block in your `~/.config/fish/config.fish` file
-
-=== "Nushell"
-
-    Run in *Nushell*:
-
-    ```shell
-    mkdir ~/.local/share/atuin/
-    atuin pty-proxy init nu | save -f ~/.local/share/atuin/pty-proxy-init.nu
-    ```
-
-    Add to `config.nu`, **before** the regular `atuin init`:
-
-    ```shell
-    source ~/.local/share/atuin/pty-proxy-init.nu
-    ```
-
-See the [pty-proxy documentation](../reference/pty-proxy.md) for more detail, including what to do if `atuin` isn't on your `PATH` when your shell starts.
-
-### 3. Restart your shell
-
-Open a new terminal (or re-source your shell config). From now on, pty-proxy captures the output of every command you run in that session and makes it available to the AI.
-
-To try it out, run a command that fails, then press `?` and ask Atuin AI why it failed. It will ask permission to use the `AtuinOutput` tool, then read the output and answer.
+To try it out, run a command that fails, then press ++question++ and ask Atuin AI why it failed. It will ask permission to use the `AtuinOutput` tool, then read the output and answer.
 
 ## How it works
 
-pty-proxy sits between your terminal and your shell, and uses your shell's prompt markers to work out where each command's output starts and ends. It then sends each captured command to the daemon, which keeps it in memory alongside its Atuin history ID. When Atuin AI wants to see what a command printed, it asks the daemon for the output by history ID.
+pty-proxy sits between your terminal and your shell, and uses your shell's prompt markers to work out where each command's output starts and ends. It then sends each captured command to the daemon, which stores it on disk alongside its Atuin history ID. When Atuin AI wants to see what a command printed, it asks the daemon for the output by history ID, and can ask for just the lines it needs.
 
-## Privacy and retention
+## Privacy
 
-Captured output is stored in memory, on your machine:
+Captured output stays on your machine, and Atuin sends nothing to the LLM until the LLM requests the output of a specific command. By default, Atuin AI asks your permission first.
 
-- The daemon keeps up to 1MB of output per command, and the most recent 128 commands (up to 32MB of output) per shell session.
-- When a command's output exceeds 1MB, the first 512KB and last 512KB are kept — these are typically the most relevant portions.
-- Output is lost when the daemon stops. Only commands captured while the daemon was running are available.
-- When you delete a history entry, Atuin also deletes its captured output.
-- Atuin only keeps output for commands in your history. If Atuin doesn't record a command (for example a failing command when `store_failed = false`), it discards that command's output too.
-
-Atuin sends nothing to the LLM until the LLM requests the output of a specific command, and by default Atuin AI asks your permission first.
+To keep a command's output away from the AI, keep it out of the store: add the command to [`command_filter`](../configuration/config.md#command_filter) to keep it in your history without its output. See [Privacy](../guide/output-capture.md#privacy) for what else is filtered or redacted.
 
 ## Permissions
 

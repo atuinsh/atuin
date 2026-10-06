@@ -27,18 +27,33 @@ if '__atuin_pty_proxy' not-in $env {
     } else { false }) }
 }
 
-def _atuin_osc133_command_executed [] {
+def _atuin_mark_output_start [] {
     if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
         return
     }
+
+    if $env.__atuin_pty_proxy.needs_osc133_reset? == true {
+        $env.__atuin_pty_proxy.needs_osc133_reset = false
+        # Old pty-proxy will reset an in-progress capture on a `B` marker.
+        # Always reset, even if there's no history ID, to avoid capturing a
+        # filtered command.
+        print -n $"(char -u '1b')]133;B(char bel)"
+    }
+
     if 'ATUIN_HISTORY_ID' not-in $env or ($env.ATUIN_HISTORY_ID | is-empty) {
         return
     }
 
-    print -n $"(char -u '1b')]133;C(char bel)"
+    if $env.ATUIN_PTY_PROXY_ACTIVE? == 1 {
+        # Current pty-proxy is an older version that expects OSC 133; new
+        # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
+        print -n $"(char -u '1b')]133;C(char bel)"
+    } else {
+        print -n $"(char -u '1b')]18188735;C;($env.ATUIN_HISTORY_ID)(char bel)"
+    }
 }
 
-def _atuin_osc133_command_finished [exit_code: int] {
+def _atuin_mark_output_end [exit_code: int] {
     if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
         return
     }
@@ -46,7 +61,11 @@ def _atuin_osc133_command_finished [exit_code: int] {
         return
     }
 
-    print -n $"(char -u '1b')]133;D;($exit_code);history_id=($env.ATUIN_HISTORY_ID)(char bel)"
+    if $env.ATUIN_PTY_PROXY_ACTIVE? == 1 {
+        print -n $"(char -u '1b')]133;D;($exit_code);history_id=($env.ATUIN_HISTORY_ID)(char bel)"
+    } else {
+        print -n $"(char -u '1b')]18188735;D;($env.ATUIN_HISTORY_ID)(char bel)"
+    }
 }
 
 # Magic token to make sure we don't record commands run by keybindings
@@ -64,7 +83,7 @@ let _atuin_pre_execution = {||
         $env.ATUIN_HISTORY_ID = (with-env { ATUIN_SHELL: nu } {
             atuin history start --hook -- $cmd | complete | get stdout | str trim
         })
-        _atuin_osc133_command_executed
+        _atuin_mark_output_start
     }
 }
 
@@ -73,7 +92,7 @@ let _atuin_pre_prompt = {||
     if 'ATUIN_HISTORY_ID' not-in $env {
         return
     }
-    _atuin_osc133_command_finished $last_exit
+    _atuin_mark_output_end $last_exit
     if (version).minor >= 104 or (version).major > 0 {
         job spawn {
             ^atuin history end --hook $'--exit=($env.LAST_EXIT_CODE)' -- $env.ATUIN_HISTORY_ID | complete
@@ -95,7 +114,9 @@ def _atuin_search_cmd [...flags: string] {
                         ($flags | append [--interactive] | each {|e| $'"($e)"'}),
                         'e>| str trim)',
                     ] | flatten | str join ' '),
-                    'if ($output | str starts-with "__atuin_accept__:") {',
+                    # An empty result (return-original) keeps the command line as typed.
+                    'if ($output | is-empty) {',
+                    '} else if ($output | str starts-with "__atuin_accept__:") {',
                     'commandline edit --accept ($output | str replace "__atuin_accept__:" "")',
                     '} else {',
                     'commandline edit $output',
@@ -138,4 +159,13 @@ if (version).minor >= 104 or (version).major > 0 {
             atuin __internal prepare-search-index | complete
         } | ignore
     }
+}
+
+if $env.__atuin_pty_proxy?.owns_tty? == true and $env.ATUIN_PTY_PROXY_ACTIVE? == 1 {
+    # We're running in an old pty-proxy that expects OSC 133 markers. The outer
+    # shell may have already sent a `C` marker, causing the proxy to start
+    # capturing output. We need to clear this state before the first command's
+    # output starts, or else the prompt and command itself will be erroneously
+    # included in the output.
+    $env.__atuin_pty_proxy.needs_osc133_reset = true
 }

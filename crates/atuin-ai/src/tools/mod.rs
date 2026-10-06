@@ -20,6 +20,7 @@ pub const DEFAULT_HISTORY_RESULTS: i64 = 10;
 pub const MAX_HISTORY_RESULTS: i64 = 50;
 pub mod descriptor;
 pub mod output;
+pub mod session;
 
 pub use output::get::AtuinOutputToolCall;
 
@@ -280,7 +281,7 @@ impl ClientToolCall {
 ///
 /// Tool call paths arrive as raw strings from the API without shell
 /// expansion. Uses `shellexpand` (same as `atuin-client`).
-fn expand_path(path: &str) -> PathBuf {
+pub fn expand_path(path: &str) -> PathBuf {
     PathBuf::from(shellexpand::tilde(path).into_owned())
 }
 

@@ -1,7 +1,4 @@
 use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::AliasStore;
-use atuin_dotfiles::store::var::VarStore;
-use eyre::Result;
 
 use super::StaticInitOptions;
 
@@ -24,19 +21,20 @@ fn print_bindings(
 ) {
     if options.enable_ctrl_r {
         println!("{indent}{bind_ctrl_r}");
+        println!("{indent}{bind_ctrl_r_ins}");
     }
     if options.enable_up_arrow {
         println!("{indent}{bind_up_arrow}");
+        println!("{indent}{bind_up_arrow_ins}");
     }
+}
 
-    println!("{indent}if bind -M insert >/dev/null 2>&1");
-    if options.enable_ctrl_r {
-        println!("{indent}{indent}{bind_ctrl_r_ins}");
+/// ctrl-] opens `atuin ai resume`, in the default and insert modes.
+fn print_ai_resume_bindings(indent: &str, options: &StaticInitOptions<'_>, key: &str) {
+    if cfg!(feature = "ai") && options.enable_ai_resume {
+        println!("{indent}bind {key} _atuin_ai_resume");
+        println!("{indent}bind -M insert {key} _atuin_ai_resume");
     }
-    if options.enable_up_arrow {
-        println!("{indent}{indent}{bind_up_arrow_ins}");
-    }
-    println!("{indent}end");
 }
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
@@ -58,6 +56,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
             "bind -M insert ctrl-r _atuin_search",
             "bind -M insert up _atuin_bind_up",
         );
+        print_ai_resume_bindings(&indent, options, "ctrl-]");
 
         println!("else");
 
@@ -80,6 +79,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
             ]
             .join("; "),
         );
+        print_ai_resume_bindings(&indent, options, r"\c]");
 
         println!("end");
 
@@ -88,20 +88,4 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
             println!("{}", atuin_ai::shell::FISH_INIT);
         }
     }
-}
-
-pub async fn init(
-    aliases: AliasStore,
-    vars: VarStore,
-    options: &StaticInitOptions<'_>,
-) -> Result<()> {
-    init_static(options);
-
-    let aliases = atuin_dotfiles::shell::fish::alias_config(&aliases).await;
-    let vars = atuin_dotfiles::shell::fish::var_config(&vars).await;
-
-    println!("{aliases}");
-    println!("{vars}");
-
-    Ok(())
 }

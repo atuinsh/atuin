@@ -3,7 +3,10 @@ use atuin_client::settings::Settings;
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use atuin_common::shell::Shell;
 use clap::{Args, Subcommand};
+use secrecy::SecretString;
 pub(crate) mod inline;
+pub(crate) mod resume;
+pub(crate) mod session;
 
 #[derive(Args, Debug)]
 pub struct AiArgs {
@@ -17,7 +20,7 @@ pub struct AiArgs {
 
     /// Custom API token; defaults to reading from the `ai.api_token` setting.
     #[arg(long, global = true)]
-    api_token: Option<String>,
+    api_token: Option<SecretString>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -42,6 +45,12 @@ pub enum Command {
         #[arg(hide = true)]
         _shell: Option<std::ffi::OsString>,
     },
+
+    /// Browse AI sessions captured by the daemon
+    Session(session::Cmd),
+
+    /// Pick a captured AI coding-agent session and resume it
+    Resume(resume::Cmd),
 }
 
 impl Command {
@@ -51,7 +60,12 @@ impl Command {
                 file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
                 stderr: args.verbose.then(StderrConfig::default),
             }),
-            Self::Init { .. } => None,
+            // File only: the shell widget reads the result from stderr.
+            Self::Resume(_) => Some(LogConfig {
+                file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
+                stderr: None,
+            }),
+            Self::Init { .. } | Self::Session(_) => None,
         }
     }
 }
@@ -73,6 +87,8 @@ pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
             );
             Ok(())
         }
+        Command::Session(cmd) => session::run(cmd, settings).await,
+        Command::Resume(cmd) => resume::run(cmd, settings).await,
     }
 }
 

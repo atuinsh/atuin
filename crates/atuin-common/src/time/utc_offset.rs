@@ -79,6 +79,12 @@ impl FromStr for UtcOffsetSpec {
     }
 }
 
+impl Default for UtcOffsetSpec {
+    fn default() -> Self {
+        Self(UtcOffset::UTC)
+    }
+}
+
 /// format: `<+|-><hour>[:<minute>[:<second>]]`
 static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
     "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional \

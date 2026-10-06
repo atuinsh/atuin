@@ -3,6 +3,8 @@ use clap_complete::{Generator, Shell, generate, generate_to};
 use clap_complete_nushell::Nushell;
 use eyre::Result;
 
+use crate::i18n::fl;
+
 // clap put nushell completions into a separate package due to the maintainers
 // being a little less committed to support them.
 // This means we have to do a tiny bit of legwork to combine these completions
@@ -50,12 +52,10 @@ impl Generator for GenShell {
 
 #[derive(Debug, Parser)]
 pub struct Cmd {
-    /// Set the shell for generating completions
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-gen-completions-shell"))]
     shell: GenShell,
 
-    /// Set the output directory
-    #[arg(long, short)]
+    #[arg(long, short, help = fl!("arg-gen-completions-out-dir"))]
     out_dir: Option<String>,
 }
 

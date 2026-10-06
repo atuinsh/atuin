@@ -10,11 +10,11 @@ mod var;
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Manage shell aliases with Atuin
+    /// List legacy shell aliases synced with Atuin
     #[command(subcommand)]
     Alias(alias::Cmd),
 
-    /// Manage shell and environment variables with Atuin
+    /// List legacy shell and environment variables synced with Atuin
     #[command(subcommand)]
     Var(var::Cmd),
 }

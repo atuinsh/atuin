@@ -1,10 +1,12 @@
 use atuin_client::settings::Settings;
-use eyre::{Context, Result};
+#[cfg(unix)]
+use eyre::Context;
+use eyre::Result;
 
 use crate::components::search::SearchGrpcService;
 use crate::daemon::DaemonHandle;
 use crate::grpc;
-use crate::grpc::ai_session::pb::ai_session_server::AiSessionServer;
+use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
 use crate::search::search_server::SearchServer;
 

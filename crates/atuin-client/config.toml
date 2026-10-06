@@ -17,7 +17,8 @@
 ## date format used, either "us" or "uk"
 # dialect = "us"
 
-## default timezone to use when displaying time
+## default timezone to use when displaying time, and when reading date filters
+## (e.g. `--before`/`--after`) that don't carry an explicit offset
 ## either "l", "local" to use the system's current local timezone, or an offset
 ## from UTC in the format of "<+|->H[H][:M[M][:S[S]]]"
 ## for example: "+9", "-05", "+03:30", "-01:23:45", etc.
@@ -61,12 +62,12 @@
 # filter_mode_shell_up_key_binding = "global"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
-## in any directory within a git repository tree (default: false).
+## in any directory within a git repository tree (default: true).
 ##
-## To use workspace mode by default when available, set this to true and
-## set filter_mode to "workspace" or leave it unspecified and
-## set search.filters to include "workspace" before other filter modes.
-# workspaces = false
+## To use workspace mode by default when available, set filter_mode to
+## "workspace" or leave it unspecified and set search.filters to include
+## "workspace" before other filter modes.
+# workspaces = true
 
 ## which display style to use
 ## possible values: auto, full, compact
@@ -338,6 +339,42 @@ enter_accept = true
 ## - array of strings: show commands run by any shell in the array; "" includes
 ##   commands that have no recorded shell
 # shells = "auto"
+
+[ai.sessions]
+## Settings for `atuin ai resume`, the picker over captured AI coding-agent sessions.
+## It follows the history search's style, invert, show_preview, max_preview_height,
+## enter_accept, keymap_mode and theme settings.
+
+## The filter the picker opens in. Unset: "workspace", widening to "global" when
+## not in a git repository or when the workspace has no sessions. ctrl-r cycles
+## through workspace, global, host, directory and branch.
+# filter_mode = "workspace"
+
+## Height of the inline picker. Defaults to the top-level inline_height.
+# inline_height = 40
+
+## Ask where to resume a session once it's chosen: in its own agent (the default
+## choice, so enter-enter resumes it), or continued in another agent installed here.
+## When false, enter and tab resume in its own agent straight away; the chooser still
+## opens for a session that can't be resumed there.
+# resume_chooser = true
+
+## Take the mouse: the wheel scrolls the preview under it, or moves the selection over the
+## list. While the picker has it, most terminals select text with shift held while dragging.
+## Defaults to the top-level no_mouse (so on, unless that is set).
+# mouse = true
+
+## Per-agent resume commands, in place of the built-in ones (run after `cd -- <cwd> &&`).
+## {id} is the native session id, {path} its transcript on this machine and {cwd} its
+## working directory. Each is substituted within its word, unquoted, so don't quote them.
+## Don't pass them through another shell either (e.g. `sh -c "cd {cwd} && ..."`): that
+## shell would split and expand them, so a directory with a space or `;` in it breaks the
+## command or runs part of it as a separate one.
+# [ai.sessions.resume]
+# claude = "claude --resume {id}"
+# codex = "codex resume {id}"
+# opencode = "opencode --session {id}"
+# pi = "pi --session {id}"
 
 [tmux]
 ## Enable using atuin with tmux popup (requires tmux >= 3.2)
