@@ -4,6 +4,22 @@ With `capture_sessions = true` under `[ai]`, the Atuin daemon records the sessio
 
 The daemon keeps a local search index of these sessions beside the record store, and brings it up to date as sessions are captured, synced in from your other machines, or imported.
 
+## What's captured
+
+Capture keeps the conversation (what you and the agent said) and its tool calls: each call's input and output (the commands run and what they printed, the files read and written). A session resumed from them, on this machine or another, has its tool calls back as they were, and so does a session continued in another agent (see [Resuming](#resuming)). Reasoning is kept only as a marker that the model reasoned.
+
+Secrets Atuin recognises are replaced with `****`, in the conversation and the tool calls alike. Images are left out, and the input or output of a single call is clipped to 64 KiB, keeping its start and its end. As with [output capture](https://docs.atuin.sh/guide/output-capture/index.md), the output of Atuin's own credential commands (`atuin key`, `atuin login`, `atuin register` and `atuin account change-password`) is never kept. Search covers a call's input, but not its output.
+
+Tool calls can be a lot of your codebase, not just your conversations. To keep only the name of each tool called (and whether the call failed), set `capture_tools = false` under `[ai]`:
+
+```
+[ai]
+capture_sessions = true
+capture_tools = false
+```
+
+The setting applies to sessions captured or imported after the daemon picks it up. Sessions already captured keep what they had.
+
 ## Searching
 
 ```
@@ -83,7 +99,7 @@ Once you choose a session, with `Enter` (or `Tab` to edit the command first), At
 
 - The session's own agent comes first and is already selected, so `Enter` `Enter` resumes it. If the session was recorded on another machine, or its transcript was deleted, Atuin writes the transcript back out from the synced messages before resuming it ("from sync").
 - Right under it, forking writes the session out as a new session of the same agent, with the same history, tool calls and all, and resumes that. The original is left as it is. The fork is linked to it the way the agent links its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Pi's `parentSession`; opencode gets a line it keeps from the model), so it's grouped under the original, with an Atuin id of its own. It keeps the original's title. Pi names the original by its file, so a Pi session that isn't on this machine is written out first. Forking is selected instead of the original when the original can't resume here, or its agent has it open on this machine. Copilot sessions, and sessions with no messages, can't be forked.
-- Every other agent installed on this machine follows. Picking one continues the session there as a new session: the conversation carries over, but that agent can't replay the original's tool calls, so they become notes in the text, and reasoning is dropped. The line says how much. The new session opens with a note to the agent naming the session it continues, by its own agent's id and its Atuin id (in Pi, the note opens the first prompt, so you see it too). Agents that aren't installed aren't listed, and with nothing else to offer (no other agent installed, and a session that can't be forked) `Enter` resumes straight away.
+- Every other agent installed on this machine follows. Picking one continues the session there as a new session: the conversation carries over, and so do the tool calls captured with their input and output (`capture_tools`), with what they returned. Each becomes the new agent's own tool where it has one that does the same (a shell command, reading, writing or editing a file, a search), and stays the tool it was otherwise: the agent reads it, it just can't call it again. Calls captured without their input, calls that never got a result, and web searches the model's provider ran itself become notes in the text, and reasoning is dropped. The line says how much. The new session opens with a note to the agent naming the session it continues, by its own agent's id and its Atuin id (in Pi, the note opens the first prompt, so you see it too). Agents that aren't installed aren't listed, and with nothing else to offer (no other agent installed, and a session that can't be forked) `Enter` resumes straight away.
 - If the session's own agent can't resume it here (a Copilot session, an agent that isn't installed, or a session whose transcript is here but whose directory is gone, for an agent that needs it), its line is dimmed with the reason, and the next one is selected instead.
 
 A session keeps one id on every machine. When you resume one in its own agent and its transcript is on this machine, Atuin first catches it up with the synced messages:
