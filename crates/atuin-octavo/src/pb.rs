@@ -6,6 +6,7 @@ mod codegen {
 use std::time::{Duration, SystemTime};
 
 use atuin_client::history::{History as DomainHistory, HistoryId};
+use atuin_common::string::NonNulStr;
 use atuin_domain::record::{CmdOrigin as DomainCmdOrigin, RecordId};
 pub use codegen::*;
 use prost::Message;
@@ -49,8 +50,8 @@ impl From<Uuid> for UuidV7 {
 impl From<&DomainCmdOrigin> for CmdOrigin {
     fn from(origin: &DomainCmdOrigin) -> Self {
         Self {
-            host: origin.host().into_inner().to_owned(),
-            user: origin.user().into_inner().to_owned(),
+            host: NonNulStr::stripping(origin.host().into_inner()).into_inner().into_owned(),
+            user: NonNulStr::stripping(origin.user().into_inner()).into_inner().into_owned(),
         }
     }
 }
@@ -83,14 +84,15 @@ impl TryFrom<DomainHistory> for History {
             .ok()
             .map(|nanos| prost_types::Duration::try_from(Duration::from_nanos(nanos)))
             .transpose()?;
-        if history.author.len() > MAX_AUTHOR_NAME_BYTES {
-            return Err(HistoryConversionError::AuthorTooLong(history.author.len()));
-        }
         let kind = if history.is_agent() {
             AuthorKind::Agent
         } else {
             AuthorKind::User
         };
+        let author = NonNulStr::stripping(history.author);
+        if author.len() > MAX_AUTHOR_NAME_BYTES {
+            return Err(HistoryConversionError::AuthorTooLong(author.len()));
+        }
 
         let converted = Self {
             id: Some(history.id.try_into()?),
@@ -98,16 +100,18 @@ impl TryFrom<DomainHistory> for History {
             cmd_origin: Some(CmdOrigin::from(&history.cmd_origin)),
             start_time: Some(SystemTime::from(history.timestamp).into()),
             duration,
-            session: session_key(history.session),
+            session: session_key(NonNulStr::stripping(history.session).into_inner().into_owned()),
             author: Some(Author {
-                name: history.author,
+                name: author.into_inner().into_owned(),
                 kind: kind.into(),
             }),
-            command: history.command,
-            cwd: history.cwd,
+            command: NonNulStr::stripping(history.command).into_inner().into_owned(),
+            cwd: NonNulStr::stripping(history.cwd).into_inner().into_owned(),
             exit,
-            intent: history.intent,
-            shell: history.shell,
+            intent: history
+                .intent
+                .map(|intent| NonNulStr::stripping(intent).into_inner().into_owned()),
+            shell: history.shell.map(|shell| NonNulStr::stripping(shell).into_inner().into_owned()),
         };
 
         match converted.encoded_len() {
