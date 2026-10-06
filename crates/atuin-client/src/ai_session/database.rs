@@ -1386,10 +1386,11 @@ impl AiSessionDatabase {
                 out.push('\n');
                 Self::push_json_text(out, &tool.input);
             }
-            Content::ToolResult(result) => Self::push_json_text(out, &result.output),
             Content::Other(value) => Self::push_json_text(out, value),
-            // Activity metadata is not conversational text and adds no useful search terms.
-            Content::ReasoningSummary { .. } => {}
+            // Tool output (with `ai.capture_tools`) is most of a session's bytes, and would grow
+            // the index as much, with files and logs rather than what was said or done. Activity
+            // metadata is not conversational text and adds no useful search terms.
+            Content::ToolResult(_) | Content::ReasoningSummary { .. } => {}
         }
     }
 
@@ -2488,7 +2489,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn search_matches_reasoning_tool_calls_results_and_metadata() {
+    async fn search_matches_reasoning_tool_calls_and_metadata() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
         let mut message = message_with(&session, 0, Role::Assistant, vec![
@@ -2515,7 +2516,6 @@ mod tests {
             "tradeoffs",             // reasoning
             "execute_shell_command", // tool name
             "nextest",               // tool input
-            "ENOSPC",                // tool result output
             "peculiar",              // Content::Other
             "atuin",                 // cwd
             "feat",                  // git branch
@@ -2524,6 +2524,7 @@ mod tests {
         ] {
             assert_eq!(search(&db, query).await.len(), 1, "query {query:?} should match");
         }
+        assert!(search(&db, "ENOSPC").await.is_empty(), "tool output is not indexed");
     }
 
     #[rstest]

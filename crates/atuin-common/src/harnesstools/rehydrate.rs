@@ -70,9 +70,9 @@ pub enum RehydrateError {
     Io(#[from] std::io::Error),
 }
 
-/// What a restored tool result says when capture kept no output (it keeps none now): the formats
-/// all want some output for a result, and an empty one would tell the model the tool printed
-/// nothing.
+/// What a restored tool result says when capture kept no output (by default it keeps none): the
+/// formats all want some output for a result, and an empty one would tell the model the tool
+/// printed nothing.
 pub const UNCAPTURED_OUTPUT: &str = "(output not captured)";
 
 /// How a writer lays out the calls [`flatten_uncaptured_calls`] turns into notes.
@@ -95,7 +95,7 @@ pub enum Flatten<'f> {
     },
 }
 
-/// A tool call capture kept without its input: capture now syncs a call's name only.
+/// A tool call capture kept without its input: by default, capture syncs a call's name only.
 #[must_use]
 pub fn is_uncaptured(content: &Content) -> bool {
     matches!(content, Content::ToolUse(call) if call.input.is_null())
@@ -107,7 +107,8 @@ pub fn is_uncaptured(content: &Content) -> bool {
 ///
 /// No harness's API takes a call without its input (Claude's `tool_use.input` must be an object,
 /// a Codex `function_call`'s `arguments` a JSON string, ...), and one made up would tell the model
-/// it called a tool on nothing. Calls kept with their input (older records) stay calls.
+/// it called a tool on nothing. Calls kept with their input (`ai.capture_tools`, older records)
+/// stay calls.
 ///
 /// Rows keep their source ids: a row whose content changed reads back under its own id, which
 /// capture already holds, so re-capturing the transcript pushes nothing for it; a row merged away
@@ -351,7 +352,7 @@ pub(crate) mod testing {
     use super::*;
     use crate::harnesstools::session::{ToolResult, ToolUse};
 
-    /// `content` of a `role` row as capture syncs it (the daemon's `sanitize_message`): calls
+    /// `content` of a `role` row as capture syncs it (the daemon's `sanitize`): calls
     /// without their input, results without their output, reasoning as a marker, text only of
     /// what the user or the model said, nothing kept raw.
     pub fn sanitize(role: &Role, content: &[Content]) -> Vec<Content> {

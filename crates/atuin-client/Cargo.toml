@@ -88,7 +88,7 @@ palette = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 
-# packfile
+# packfiles, and ai-session record bodies
 zstd = { workspace = true }
 
 [dev-dependencies]

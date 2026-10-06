@@ -66,6 +66,18 @@ Default: `true`
 
 Display tips in Atuin AI at the bottom of agent turns.
 
+### `capture_sessions`
+
+Default: `false`
+
+Capture the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) into the encrypted record store, and sync them. See [Agent sessions](./sessions.md).
+
+### `capture_tools`
+
+Default: `false`
+
+With `capture_sessions`, also capture what each tool call was given and what it returned, so a resumed session has its tool calls back. See [What's captured](./sessions.md#whats-captured).
+
 ## Capabilities
 
 Settings that control what capabilities are sent to the LLM, which the LLM uses to understand what features the client has available. These are specified under `[ai.capabilities]`.

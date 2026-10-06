@@ -8,16 +8,19 @@
 //!
 //! # What is carried over
 //!
-//! Only the conversation, as text:
+//! The conversation, and the work done in it:
 //!
 //! - What the user said, and what the model answered.
-//! - **Tool calls, flattened into notes.** The target has other tools than the source, and a
-//!   model must never see calls to tools it doesn't have, so each call becomes a short line of
-//!   text in its assistant turn saying what was called (see [`tool_note`]): `[ran a shell
-//!   command]`, `[edited a file]`, and on what where the input is known: ``[ran `cargo
-//!   test`]``, ``[edited `src/store.rs`]``. Capture keeps neither a call's input nor its output
-//!   (it syncs the tool's name only; records from before it stopped may carry an input), so a
-//!   note never says how a call turned out, and tool results are dropped, whatever they hold.
+//! - **Tool calls, as calls.** A call captured with its input and its result (`ai.capture_tools`)
+//!   is carried over as a call of the target, with its result: as the target's own tool where it
+//!   has one that does the same (a shell command, a file read, written or edited, a search: see
+//!   `tools`), else as the tool it was. A model reads a call to a tool it doesn't have like any
+//!   other; it just can't make it again.
+//! - **Other calls, as notes**: a short line of text in the assistant's turn saying what was
+//!   called (see [`tool_note`]): `[ran a shell command]`, ``[edited `src/store.rs`]``. That is a
+//!   call captured without its input (by default capture keeps the tool's name only), one with no
+//!   result (interrupted, or a Codex web search), and one the model's provider ran itself (a
+//!   Claude Code web search), whose result only that provider reads.
 //! - Summaries (compactions, abandoned branches), as text of the user's turn.
 //! - Failed model calls, as a short note of the error in the assistant's turn.
 //!
@@ -28,8 +31,10 @@
 //! The target's history then has a valid shape for any of the APIs behind it: after the marker,
 //! user and assistant turns alternate, starting with the user and ending with the assistant.
 //! Rows of one role in a row (two prompts whose reply was only tool calls, say) are merged into
-//! one turn. Timestamps keep the original's, nudged forward where needed so every row is later
-//! than the one before (opencode orders messages by ids minted from their time).
+//! one turn. An assistant turn's calls are written in the target's own rows, each answered by
+//! its result before the turn goes on. Timestamps keep the original's, nudged forward where
+//! needed so every row is later than the one before (opencode orders messages by ids minted from
+//! their time).
 //!
 //! # The marker
 //!
@@ -43,7 +48,8 @@
 //! of the first prompt, a short first line the user sees too. Capture reads it back as the
 //! session's parent ([`continued_from_message`]).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -52,7 +58,23 @@ use super::note::{Part, clip, render, tool_note};
 use super::rehydrate::{RehydrateMessage, RehydrateSession};
 use super::resume::is_plain_name;
 use super::{AnyHarness, Harness as _, opencode};
-use crate::harnesstools::session::{Content, Message, ParentKind, Role, StopReason};
+use crate::harnesstools::session::{
+    Content, Message, ParentKind, Role, StopReason, ToolCallId, ToolResult, ToolUse,
+};
+
+mod tools;
+
+/// The tools Anthropic's API runs itself (Claude Code's `server_tool_use`), answered in the
+/// assistant's own message.
+const PROVIDER_TOOLS: &[&str] = &[
+    "web_search",
+    "web_fetch",
+    "code_execution",
+    "bash_code_execution",
+    "text_editor_code_execution",
+    "tool_search_tool_regex",
+    "tool_search_tool_bm25",
+];
 
 /// How much of an error a note shows.
 const NOTE_ERROR: usize = 200;
@@ -85,9 +107,9 @@ pub struct Continuation {
 /// What a continuation left out, or carried over only as text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Flattened {
-    /// Tool calls turned into notes.
+    /// Tool calls turned into notes (the rest are carried over as calls).
     pub tool_calls: usize,
-    /// Tool results dropped.
+    /// Tool results dropped: those of calls turned into notes, and any answering no call.
     pub tool_results: usize,
     /// Messages whose reasoning was dropped.
     pub reasoning: usize,
@@ -133,9 +155,9 @@ pub fn marker_text(source: AnyHarness, id: &str, atuin_id: Option<&str>) -> Stri
     let atuin_id = atuin_id.map(|a| format!("{MARKER_ATUIN_ID}{a})")).unwrap_or_default();
     format!(
         "{MARKER_HEAD}{} session {id}{atuin_id}{MARKER_TAIL}\nThe conversation below was recorded \
-         in {} and carried over as text. Its tool calls are shown as notes in [brackets], without \
-         their output, and may name tools you don't have: use your own. Check the files before \
-         relying on what a note says was done.",
+         in {} and carried over. Its tool calls may name tools you don't have: use your own. \
+         Calls it couldn't carry are shown as notes in [brackets]. The files may have changed \
+         since: check them before relying on what was done.",
         source.name(),
         label(source),
     )
@@ -265,35 +287,52 @@ fn continue_at(
     let Some(start) = turns.first().map(|t| t.at) else {
         return Err(NothingToContinue);
     };
-    let mut ids = Ids::new(target, now);
+    let ids = Ids::new(target, now);
     let id = ids.session();
 
-    let mut rows = Vec::with_capacity(turns.len() + 1);
+    let mut rows = Rows {
+        source,
+        target,
+        ids,
+        calls: tools::CallIds::default(),
+        rows: Vec::with_capacity(turns.len() + 1),
+        last: start,
+    };
     let marker = marker_text(source, &original.id, atuin_id);
     // pi has no line the model reads that the user didn't type but its own user message: the
     // marker is the first block of the first prompt (see the module docs).
     let pi = matches!(target, AnyHarness::Pi(_));
-    if !pi {
-        rows.push(row(&mut ids, None, start, Role::System, marker.clone()));
+    if pi {
+        rows.last -= Duration::milliseconds(1);
+    } else {
+        rows.push(start, Role::System, vec![Content::Text(marker.clone())], None);
     }
-    let mut last = start - Duration::milliseconds(i64::from(pi));
     for turn in turns {
-        let at = turn.at.max(last + Duration::milliseconds(1));
-        last = at;
-        let parent = rows.last().map(|r: &RehydrateMessage| r.source_id.clone());
-        let role = match turn.kind {
-            Kind::User => Role::User,
-            Kind::Assistant => Role::Assistant,
-        };
-        let mut message = row(&mut ids, parent, at, role, turn.render());
-        if turn.kind == Kind::Assistant {
-            message.stop_reason = Some(StopReason::EndTurn);
+        match turn.kind {
+            Kind::User => {
+                let mut content = vec![Content::Text(turn.render())];
+                if pi && rows.rows.is_empty() {
+                    content.insert(0, Content::Text(marker.clone()));
+                }
+                rows.push(turn.at, Role::User, content, None);
+            }
+            Kind::Assistant => {
+                let at = turn.at;
+                for step in turn.steps() {
+                    rows.step(at, &step, &original.cwd);
+                }
+            }
         }
-        if pi && rows.is_empty() {
-            message.content.insert(0, Content::Text(marker.clone()));
-        }
-        rows.push(message);
     }
+    // A session that stopped with its calls answered (interrupted, or out of tokens) still ends
+    // on the assistant's turn.
+    let last = rows.rows.last().expect("a continuation has turns");
+    if last.content.iter().any(|c| matches!(c, Content::ToolResult(_))) {
+        let note = Content::Text("[the original session stopped here]".to_owned());
+        let at = rows.last;
+        rows.push(at, Role::Assistant, vec![note], Some(StopReason::EndTurn));
+    }
+    let mut rows = rows.rows;
     // Only Claude Code and Pi keep a tree; opencode reads a row's parent as the message it
     // answers, which it finds on its own.
     if !matches!(target, AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_)) {
@@ -318,25 +357,89 @@ fn continue_at(
     })
 }
 
-fn row(
-    ids: &mut Ids,
-    parent: Option<String>,
-    at: OffsetDateTime,
-    role: Role,
-    text: String,
-) -> RehydrateMessage {
-    RehydrateMessage {
-        source_id: ids.row(at),
-        parent_source_id: parent,
-        timestamp: at,
-        role,
-        content: vec![Content::Text(text)],
-        model: None,
-        usage: None,
-        stop_reason: None,
-        turn_id: None,
-        cwd: None,
-        git_branch: None,
+/// A continuation's rows as they are written, each later than the one before and hanging from
+/// it.
+struct Rows {
+    source: AnyHarness,
+    target: AnyHarness,
+    ids: Ids,
+    calls: tools::CallIds,
+    rows: Vec<RehydrateMessage>,
+    last: OffsetDateTime,
+}
+
+impl Rows {
+    fn push(
+        &mut self,
+        at: OffsetDateTime,
+        role: Role,
+        content: Vec<Content>,
+        stop: Option<StopReason>,
+    ) {
+        let at = at.max(self.last + Duration::milliseconds(1));
+        self.last = at;
+        self.rows.push(RehydrateMessage {
+            source_id: self.ids.row(at),
+            parent_source_id: self.rows.last().map(|r| r.source_id.clone()),
+            timestamp: at,
+            role,
+            content,
+            model: None,
+            usage: None,
+            stop_reason: stop,
+            turn_id: None,
+            cwd: None,
+            git_branch: None,
+        });
+    }
+
+    /// A step of an assistant's turn, as the target writes one: its text, then its calls, each
+    /// answered by its result. Claude Code and pi send a message's text and calls together,
+    /// then the results (Claude Code all in one message, pi one each); Codex writes every item
+    /// as a line of its own, and opencode every part, a call and its result being one.
+    fn step(&mut self, at: OffsetDateTime, step: &Step<'_>, cwd: &Path) {
+        let text = (!step.parts.is_empty()).then(|| Content::Text(render(&step.parts)));
+        let (calls, results): (Vec<_>, Vec<_>) = step
+            .calls
+            .iter()
+            .map(|(call, result)| {
+                tools::carry(self.source, self.target, call, result, cwd, &mut self.calls)
+            })
+            .unzip();
+        if calls.is_empty() {
+            self.push(at, Role::Assistant, text.into_iter().collect(), Some(StopReason::EndTurn));
+            return;
+        }
+        let calling = Some(StopReason::ToolUse);
+        match self.target {
+            AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_) => {
+                let content = text.into_iter().chain(calls.into_iter().map(Content::ToolUse));
+                self.push(at, Role::Assistant, content.collect(), calling);
+                if matches!(self.target, AnyHarness::ClaudeCode(_)) {
+                    let results = results.into_iter().map(Content::ToolResult).collect();
+                    self.push(at, Role::Tool, results, None);
+                } else {
+                    for result in results {
+                        self.push(at, Role::Tool, vec![Content::ToolResult(result)], None);
+                    }
+                }
+            }
+            AnyHarness::Codex(_) | AnyHarness::Opencode(_) => {
+                if let Some(text) = text {
+                    self.push(at, Role::Assistant, vec![text], Some(StopReason::EndTurn));
+                }
+                let codex = matches!(self.target, AnyHarness::Codex(_));
+                for (call, result) in calls.into_iter().zip(results) {
+                    let (call, result) = (Content::ToolUse(call), Content::ToolResult(result));
+                    if codex {
+                        self.push(at, Role::Assistant, vec![call], calling.clone());
+                        self.push(at, Role::Tool, vec![result], None);
+                    } else {
+                        self.push(at, Role::Assistant, vec![call, result], calling.clone());
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -346,48 +449,139 @@ enum Kind {
     Assistant,
 }
 
-/// One side's turn: the rows of one role in a row, merged.
+/// A piece of a turn: text or a note, a call carried over with its result, or where the model
+/// was called again once results came back.
 #[derive(Debug)]
-struct Turn {
-    kind: Kind,
-    at: OffsetDateTime,
-    parts: Vec<Part>,
+enum Item<'m> {
+    Part(Part),
+    Call(&'m ToolUse, &'m ToolResult),
+    Answered,
 }
 
-impl Turn {
+/// One side's turn: the rows of one role in a row, merged.
+#[derive(Debug)]
+struct Turn<'m> {
+    kind: Kind,
+    at: OffsetDateTime,
+    items: Vec<Item<'m>>,
+}
+
+/// A stretch of an assistant's turn: what it said, then the calls it made.
+#[derive(Debug, Default)]
+struct Step<'m> {
+    parts: Vec<Part>,
+    calls: Vec<(&'m ToolUse, &'m ToolResult)>,
+}
+
+impl<'m> Turn<'m> {
+    fn parts(kind: Kind, at: OffsetDateTime, parts: Vec<Part>) -> Self {
+        Self {
+            kind,
+            at,
+            items: parts.into_iter().map(Item::Part).collect(),
+        }
+    }
+
+    /// The turn's text and notes, as one text.
     fn render(&self) -> String {
-        render(&self.parts)
+        let parts: Vec<Part> = self
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Part(part) => Some(part.clone()),
+                Item::Call(..) | Item::Answered => None,
+            })
+            .collect();
+        render(&parts)
+    }
+
+    /// The turn in [steps](Step): a new one starts at text after calls, and where the model was
+    /// called again.
+    fn steps(self) -> Vec<Step<'m>> {
+        let mut steps: Vec<Step<'m>> = Vec::new();
+        for item in self.items {
+            match (item, steps.last_mut()) {
+                (Item::Answered, Some(step)) if !step.calls.is_empty() => {
+                    steps.push(Step::default());
+                }
+                (Item::Answered, _) => {}
+                (Item::Part(part), Some(step)) if step.calls.is_empty() => step.parts.push(part),
+                (Item::Part(part), _) => steps.push(Step {
+                    parts: vec![part],
+                    calls: Vec::new(),
+                }),
+                (Item::Call(call, result), Some(step)) => step.calls.push((call, result)),
+                (Item::Call(call, result), None) => steps.push(Step {
+                    parts: Vec::new(),
+                    calls: vec![(call, result)],
+                }),
+            }
+        }
+        steps
     }
 }
 
 /// The conversation of `messages` as alternating turns, user first and assistant last, and
 /// what was left out of it.
-fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn>, Flattened) {
+fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
+    // A call is carried over with its result. One of a tool the model's provider ran itself,
+    // answered in the assistant's own row (opencode keeps every result there), is only for that
+    // provider to read: its results are opaque, encrypted.
+    let mut results: HashMap<&ToolCallId, &ToolResult> = HashMap::new();
+    let mut in_reply: HashSet<&ToolCallId> = HashSet::new();
+    for m in messages {
+        for content in &m.content {
+            if let Content::ToolResult(result) = content {
+                results.entry(&result.call).or_insert(result);
+                if m.role == Role::Assistant {
+                    in_reply.insert(&result.call);
+                }
+            }
+        }
+    }
+    let hosted = |call: &ToolUse| {
+        in_reply.contains(&call.id) && PROVIDER_TOOLS.contains(&call.name.as_str())
+    };
     let mut flattened = Flattened::default();
+    let mut carried: HashSet<&ToolCallId> = HashSet::new();
     let mut turns: Vec<Turn> = Vec::new();
+    // Results came back since the model's last row, or its row is of another model call (its
+    // turn id up to a step's usage key: Claude Code's message id, opencode's call): its next is
+    // another call of the model. (opencode answers calls in the assistant's own rows.)
+    let mut answered = false;
+    let mut call_of: Option<&str> = None;
     for m in messages {
         let mut user = Vec::new();
         let mut assistant = Vec::new();
         let mut reasoned = false;
         for content in &m.content {
             match content {
-                Content::ToolResult(_) => flattened.tool_results += 1,
                 Content::Reasoning(_) | Content::ReasoningSummary { .. } => reasoned = true,
                 Content::Summary(summary) if !summary.trim().is_empty() => user.push(Part::Text(
                     format!("[Summary of the earlier conversation]\n{}", summary.trim()),
                 )),
                 Content::Text(text) if !text.trim().is_empty() => match m.role {
                     Role::User => user.push(Part::Text(text.clone())),
-                    Role::Assistant => assistant.push(Part::Text(text.clone())),
+                    Role::Assistant => assistant.push(Item::Part(Part::Text(text.clone()))),
                     // Context the source harness injected, for its own tools and its own model.
                     _ => {}
                 },
                 Content::ToolUse(call) if m.role == Role::Assistant => {
-                    flattened.tool_calls += 1;
-                    assistant.push(Part::Note(tool_note(&call.name, &call.input)));
+                    match results.get(&call.id).filter(|_| !hosted(call)) {
+                        Some(result) if !call.input.is_null() => {
+                            carried.insert(&call.id);
+                            assistant.push(Item::Call(call, result));
+                        }
+                        _ => {
+                            flattened.tool_calls += 1;
+                            let note = tool_note(&call.name, &call.input);
+                            assistant.push(Item::Part(Part::Note(note)));
+                        }
+                    }
                 }
                 Content::Error(why) if m.role == Role::Assistant && !why.trim().is_empty() => {
-                    assistant.push(Part::Note(format!("[error: {}]", clip(why, NOTE_ERROR))));
+                    let note = format!("[error: {}]", clip(why, NOTE_ERROR));
+                    assistant.push(Item::Part(Part::Note(note)));
                 }
                 Content::Other(raw) if m.role == Role::User => {
                     if let Some(kind) = raw["type"].as_str().filter(|k| is_media(k)) {
@@ -398,41 +592,54 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn>, Flattened) {
             }
         }
         flattened.reasoning += usize::from(reasoned);
-        for (kind, parts) in [(Kind::User, user), (Kind::Assistant, assistant)] {
-            if parts.is_empty() {
+        if m.role != Role::Assistant
+            && m.content.iter().any(|c| matches!(c, Content::ToolResult(_)))
+        {
+            answered = true;
+        } else if m.role == Role::Assistant {
+            let call = m.turn_id.as_deref().and_then(|t| t.split('#').next());
+            answered |= call.is_some() && call_of.is_some() && call != call_of;
+            call_of = call.or(call_of);
+            if answered && !assistant.is_empty() {
+                assistant.insert(0, Item::Answered);
+                answered = false;
+            }
+        }
+        let user = user.into_iter().map(Item::Part).collect();
+        for (kind, items) in [(Kind::User, user), (Kind::Assistant, assistant)] {
+            if items.is_empty() {
                 continue;
             }
             match turns.last_mut() {
-                Some(turn) if turn.kind == kind => turn.parts.extend(parts),
+                Some(turn) if turn.kind == kind => turn.items.extend(items),
                 _ => turns.push(Turn {
                     kind,
                     at: m.timestamp,
-                    parts,
+                    items,
                 }),
             }
         }
     }
+    flattened.tool_results = messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter(|c| matches!(c, Content::ToolResult(r) if !carried.contains(&r.call)))
+        .count();
     if let Some(first) = turns.first().filter(|t| t.kind == Kind::Assistant) {
         let at = first.at;
-        turns.insert(0, Turn {
-            kind: Kind::User,
-            at,
-            parts: vec![Part::Note("[the recorded conversation opens with this reply]".into())],
-        });
+        let note = Part::Note("[the recorded conversation opens with this reply]".into());
+        turns.insert(0, Turn::parts(Kind::User, at, vec![note]));
     }
     if let Some(last) = turns.last().filter(|t| t.kind == Kind::User) {
         let at = last.at;
-        turns.push(Turn {
-            kind: Kind::Assistant,
-            at,
-            parts: vec![Part::Note("[the original session ended before a reply to this]".into())],
-        });
+        let note = Part::Note("[the original session ended before a reply to this]".into());
+        turns.push(Turn::parts(Kind::Assistant, at, vec![note]));
     }
     (turns, flattened)
 }
 
 fn is_media(kind: &str) -> bool {
-    matches!(kind, "image" | "input_image" | "document" | "file")
+    matches!(kind, "image" | "input_image" | "document" | "file" | "input_file")
 }
 
 /// A new session's id for `harness`, in its own format, minted at `now`.

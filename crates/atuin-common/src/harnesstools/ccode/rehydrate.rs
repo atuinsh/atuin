@@ -24,8 +24,9 @@
 //!   results are not there to capture again. The line records which synced rows went into it
 //!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), as does the line a row
 //!   with nothing to write hangs from, so the transcript says which synced rows it holds.
-//! - **Tool output**: capture keeps none now; a call kept with its input (older records) gets
-//!   [`UNCAPTURED_OUTPUT`] as its `tool_result` content, which says so to the model.
+//! - **Tool output**: written back as captured (`ai.capture_tools`). Capture keeps none by
+//!   default; a call kept with its input (older records) gets [`UNCAPTURED_OUTPUT`] as its
+//!   `tool_result` content, which says so to the model.
 //! - **Pasted images and documents**: capture keeps what they were, not their bytes. Each becomes
 //!   a text placeholder saying so. Other blocks capture kept raw are dropped.
 //! - **Empty lines**: rows with nothing left to write (attachments, hook records, turn timings)
@@ -536,4 +537,4 @@ fn usage_json(usage: &Usage) -> Value {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

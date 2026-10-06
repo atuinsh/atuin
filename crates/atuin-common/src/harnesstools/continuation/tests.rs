@@ -181,11 +181,18 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     }
 }
 
-/// The marker first, then user and assistant turns in turn, user first and assistant last,
-/// each one text; nothing a tool call or result, nothing reasoning.
+/// A tool name or call id every model API takes.
+fn api_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// The marker first, then user and assistant turns in turn, user first and assistant last; the
+/// user's turns text, the assistant's text and calls, each call answered by its result in the
+/// rows the target writes them in; nothing reasoning.
 fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &RehydrateSession) {
     // A line of its own (the harness's), or pi's first prompt's first block.
-    let (marker, turns) = match target {
+    let (marker, rows) = match target {
         AnyHarness::Pi(_) => (&s.messages[0], s.messages.as_slice()),
         _ => s.messages.split_first().expect("a marker"),
     };
@@ -201,35 +208,92 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
         assert_eq!(marker.role, Role::System);
     }
 
-    assert!(!turns.is_empty());
-    assert_eq!(turns.len() % 2, 0, "user first, assistant last");
-    for (n, m) in turns.iter().enumerate() {
-        let want = if n % 2 == 0 {
-            Role::User
-        } else {
-            Role::Assistant
-        };
-        assert_eq!(m.role, want, "turn {n}");
-        let content = match (n, target) {
-            (0, AnyHarness::Pi(_)) => &m.content[1..],
-            _ => &m.content[..],
-        };
-        let [Content::Text(text)] = content else {
-            panic!("turn {n} is one text: {m:?}");
-        };
-        assert!(!text.trim().is_empty());
+    // The user's turns and the assistant's (its calls' results included) alternate.
+    let mut sides: Vec<Role> = rows
+        .iter()
+        .map(|m| match m.role {
+            Role::User => Role::User,
+            Role::Assistant | Role::Tool => Role::Assistant,
+            ref other => panic!("a {other:?} row: {m:?}"),
+        })
+        .collect();
+    sides.dedup();
+    assert!(
+        sides.len() >= 2 && sides.len().is_multiple_of(2),
+        "user first, assistant last: {sides:?}"
+    );
+    assert!(sides.iter().step_by(2).all(|r| *r == Role::User), "{sides:?}");
+
+    let mut calls = HashSet::new();
+    for (n, m) in rows.iter().enumerate() {
+        assert!(!m.content.is_empty(), "row {n} is empty");
         assert!(m.usage.is_none() && m.model.is_none() && m.turn_id.is_none());
+        for c in &m.content {
+            match c {
+                Content::Text(t) => assert!(!t.trim().is_empty(), "row {n}"),
+                Content::ToolUse(call) => {
+                    assert_eq!(m.role, Role::Assistant);
+                    assert!(api_name(&call.name) && api_name(call.id.as_ref()), "{call:?}");
+                    assert!(calls.insert(call.id.as_ref()), "{} is called twice", call.id);
+                }
+                Content::ToolResult(_) => {}
+                other => panic!("row {n} holds {other:?}"),
+            }
+        }
+        if m.role == Role::User {
+            assert!(m.content.iter().all(|c| matches!(c, Content::Text(_))), "{m:?}");
+        }
     }
+    // Each call is answered where the target's API wants its result.
+    let ids = |m: &RehydrateMessage, results: bool| -> Vec<String> {
+        m.content
+            .iter()
+            .filter_map(|c| match c {
+                Content::ToolUse(u) if !results => Some(u.id.to_string()),
+                Content::ToolResult(r) if results => Some(r.call.to_string()),
+                _ => None,
+            })
+            .collect()
+    };
+    for (n, m) in rows.iter().enumerate() {
+        let called = ids(m, false);
+        if called.is_empty() {
+            continue;
+        }
+        let answered: Vec<String> = match target {
+            // A message of calls, then one of their results.
+            AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
+            // A message of calls, then a result each.
+            AnyHarness::Pi(_) => rows[n + 1..=n + called.len()]
+                .iter()
+                .flat_map(|r| {
+                    assert_eq!(r.role, Role::Tool);
+                    ids(r, true)
+                })
+                .collect(),
+            // A line per call, then its output's.
+            AnyHarness::Codex(_) => {
+                assert_eq!(m.content.len(), 1, "{m:?}");
+                ids(&rows[n + 1], true)
+            }
+            // A part per call, holding its result.
+            AnyHarness::Opencode(_) => ids(m, true),
+        };
+        assert_eq!(answered, called, "row {n}'s calls are answered");
+    }
+    let results: usize = rows.iter().map(|m| ids(m, true).len()).sum();
+    assert_eq!(results, calls.len(), "every result answers a call");
+
     let times: Vec<_> = s.messages.iter().map(|m| m.timestamp).collect();
     assert!(times.windows(2).all(|w| w[0] < w[1]), "every row after the one before");
     assert_eq!(s.model, None);
 }
 
-/// Every source into every other target: fresh ids in the target's format, only text left, and
-/// a conversation of the shape every API takes.
+/// Every source into every other target: fresh ids in the target's format, calls carried over
+/// as calls (or notes, those it can't carry), and a conversation of the shape every API takes.
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_pair_flattens_to_alternating_text(
+async fn every_pair_continues_in_the_targets_shape(
     #[values(CLAUDE, CODEX, OPENCODE, PI)] source: AnyHarness,
     #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
 ) {
@@ -237,19 +301,23 @@ async fn every_pair_flattens_to_alternating_text(
         return;
     }
     let original = recorded(source).await;
-    let calls = original
-        .messages
-        .iter()
-        .flat_map(|m| &m.content)
-        .filter(|c| matches!(c, Content::ToolUse(_)))
-        .count();
+    let count = |s: &RehydrateSession| {
+        s.messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter(|c| matches!(c, Content::ToolUse(_)))
+            .count()
+    };
+    let calls = count(&original);
     assert!(calls > 0, "the {} fixture calls tools", source.name());
 
     let continued = continue_in(source, &original, Some(ATUIN_ID), target).unwrap();
     assert_ids(target, &continued.session);
     assert_shape(target, source, &original.id, &continued.session);
     assert_ne!(continued.session.id, original.id);
-    assert_eq!(continued.flattened.tool_calls, calls);
+    let carried = count(&continued.session);
+    assert!(carried > 0, "the {} fixture's calls are carried", source.name());
+    assert_eq!(carried + continued.flattened.tool_calls, calls);
     let notes: usize = continued
         .session
         .messages
@@ -266,7 +334,8 @@ async fn every_pair_flattens_to_alternating_text(
             _ => 0,
         })
         .sum();
-    assert!(notes >= calls, "each call is a note ({notes} < {calls})");
+    let flattened = continued.flattened.tool_calls;
+    assert!(notes >= flattened, "each call not carried is a note ({notes} < {flattened})");
 }
 
 /// The rows a continuation's transcript reads back as, through the target's own reader (the
@@ -279,6 +348,7 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
         AnyHarness::ClaudeCode(_) => {
             let path = ccode::rehydrate::rehydrate_into(root, session).unwrap();
             assert_eq!(ccode::session::locate(root, &session.id), Some(path.clone()));
+            ccode::rehydrate::tests::assert_the_api_takes(&ccode::rehydrate::tests::lines(&path));
             let lines: Vec<_> =
                 CcodeSession::open(id, path, pool()).read().try_collect().await.unwrap();
             rows_of(&lines)
@@ -315,15 +385,16 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     }
 }
 
-/// What a transcript says in the conversation, in order: role and text, merged where one role
-/// speaks twice in a row (the marker is the user's turn, as every target sends it).
+/// What a transcript says and does, in order: role and text, merged where one role speaks
+/// twice in a row (the marker is the user's turn, as every target sends it); each call, by its
+/// id, name and input; and each result, by the call it answers and its output.
 fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
     let mut out: Vec<(Role, String)> = Vec::new();
     for r in rows {
         let role = match r.role {
             Role::Assistant => Role::Assistant,
+            Role::Tool => Role::Tool,
             Role::User | Role::System | Role::Other(_) => Role::User,
-            Role::Tool => panic!("a tool row was written: {r:?}"),
         };
         for c in &r.content {
             match c {
@@ -335,7 +406,16 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
                     _ => out.push((role.clone(), t.clone())),
                 },
                 Content::Text(_) => {}
-                other => panic!("only text is written: {other:?}"),
+                Content::ToolUse(call) => {
+                    let input = tools::object(&call.input)
+                        .map_or_else(|| call.input.clone(), Value::Object);
+                    out.push((Role::Assistant, format!("{} {}({input})", call.id, call.name)));
+                }
+                Content::ToolResult(result) => {
+                    let output = tools::output_text(&result.output);
+                    out.push((Role::Tool, format!("{} -> {output}", result.call)));
+                }
+                other => panic!("only text and calls are written: {other:?}"),
             }
         }
     }
@@ -639,4 +719,176 @@ fn rows_chain_where_the_target_keeps_a_tree(#[case] target: AnyHarness, #[case] 
 #[case(Flattened::default(), "")]
 fn summaries_are_short(#[case] flattened: Flattened, #[case] expected: &str) {
     assert_eq!(flattened.summary(), expected);
+}
+
+fn call_as(id: &str, name: &str, input: Value) -> Content {
+    Content::ToolUse(ToolUse {
+        id: ToolCallId::from(id.to_owned()),
+        name: name.to_owned(),
+        input,
+    })
+}
+
+fn answer(id: &str, output: &str) -> Content {
+    Content::ToolResult(ToolResult {
+        call: ToolCallId::from(id.to_owned()),
+        output: json!(output),
+        error: false,
+    })
+}
+
+/// Each row, briefly: its role and what it holds.
+fn layout(s: &RehydrateSession) -> Vec<String> {
+    s.messages
+        .iter()
+        .map(|m| {
+            let content: Vec<String> = m
+                .content
+                .iter()
+                .map(|c| match c {
+                    Content::Text(t) if t.starts_with(MARKER_HEAD) => "marker".to_owned(),
+                    Content::Text(t) => format!("{t:?}"),
+                    Content::ToolUse(u) => format!("{}({})", u.name, u.id),
+                    Content::ToolResult(r) => format!("{} -> {}", r.call, r.output),
+                    other => format!("{other:?}"),
+                })
+                .collect();
+            format!("{:?}: {}", m.role, content.join(", "))
+        })
+        .collect()
+}
+
+/// Calls captured with their input and output (`ai.capture_tools`) are carried over as calls, in
+/// the rows the target writes them in, as the target's own tools where it has them.
+#[rstest]
+#[case::claude(CLAUDE, &[
+    "System: marker",
+    r#"User: "fix the flaky test""#,
+    r#"Assistant: "Looking.", Bash(c1)"#,
+    r#"Tool: c1 -> "1 failed""#,
+    "Assistant: Edit(c2), mcp__atuin__history(c3)",
+    r#"Tool: c2 -> "edited", c3 -> "cargo test""#,
+    r#"Assistant: "Fixed.""#,
+])]
+#[case::codex(CODEX, &[
+    "System: marker",
+    r#"User: "fix the flaky test""#,
+    r#"Assistant: "Looking.""#,
+    "Assistant: exec_command(c1)",
+    r#"Tool: c1 -> "1 failed""#,
+    "Assistant: Edit(c2)",
+    r#"Tool: c2 -> "edited""#,
+    "Assistant: mcp__atuin__history(c3)",
+    r#"Tool: c3 -> "cargo test""#,
+    r#"Assistant: "Fixed.""#,
+])]
+#[case::opencode(OPENCODE, &[
+    "System: marker",
+    r#"User: "fix the flaky test""#,
+    r#"Assistant: "Looking.""#,
+    r#"Assistant: bash(c1), c1 -> "1 failed""#,
+    r#"Assistant: edit(c2), c2 -> "edited""#,
+    r#"Assistant: mcp__atuin__history(c3), c3 -> "cargo test""#,
+    r#"Assistant: "Fixed.""#,
+])]
+#[case::pi(PI, &[
+    r#"User: marker, "fix the flaky test""#,
+    r#"Assistant: "Looking.", bash(c1)"#,
+    r#"Tool: c1 -> "1 failed""#,
+    "Assistant: edit(c2), mcp__atuin__history(c3)",
+    r#"Tool: c2 -> "edited""#,
+    r#"Tool: c3 -> "cargo test""#,
+    r#"Assistant: "Fixed.""#,
+])]
+fn calls_carry_over_in_the_targets_rows(#[case] target: AnyHarness, #[case] want: &[&str]) {
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text("fix the flaky test")], 1),
+        msg(
+            Role::Assistant,
+            vec![text("Looking."), call_as("c1", "Bash", json!({"command": "cargo test"}))],
+            2,
+        ),
+        msg(Role::Tool, vec![answer("c1", "1 failed")], 3),
+        msg(
+            Role::Assistant,
+            vec![
+                call_as(
+                    "c2",
+                    "Edit",
+                    json!({"file_path": "a.rs", "old_string": "a", "new_string": "b"}),
+                ),
+                call_as("c3", "mcp__atuin__history", json!({"query": "cargo"})),
+            ],
+            4,
+        ),
+        msg(Role::Tool, vec![answer("c2", "edited"), answer("c3", "cargo test")], 5),
+        msg(Role::Assistant, vec![text("Fixed.")], 6),
+    ]);
+    let c = continue_in(CLAUDE, &original, None, target).unwrap();
+    pretty_assertions::assert_eq!(layout(&c.session), want);
+    assert_eq!(c.flattened, Flattened::default());
+    assert_eq!(c.flattened.summary(), "");
+}
+
+/// What can't be carried as a call is a note: a call captured without its input, one never
+/// answered, and a search the model's provider ran itself, whose results only it can read.
+#[rstest]
+fn calls_that_cant_be_carried_become_notes() {
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text("what changed?")], 1),
+        msg(Role::Assistant, vec![call_as("c1", "Bash", Value::Null)], 2),
+        msg(Role::Tool, vec![answer("c1", "SECRET")], 3),
+        msg(Role::Assistant, vec![call_as("c2", "Read", json!({"file_path": "a.rs"}))], 4),
+        msg(
+            Role::Assistant,
+            vec![
+                call_as("c3", "web_search", json!({"query": "atuin"})),
+                answer("c3", "ENCRYPTED"),
+                text("Nothing much."),
+            ],
+            5,
+        ),
+    ]);
+    let c = continue_in(CLAUDE, &original, None, OPENCODE).unwrap();
+    pretty_assertions::assert_eq!(layout(&c.session), vec![
+        "System: marker".to_owned(),
+        r#"User: "what changed?""#.to_owned(),
+        r#"Assistant: "[ran a shell command]\n[read `a.rs`]\n[searched the web for `atuin`]\n\nNothing much.""#.to_owned(),
+    ]);
+    assert_eq!(c.flattened, Flattened {
+        tool_calls: 3,
+        tool_results: 2,
+        reasoning: 0,
+    });
+}
+
+/// opencode answers calls in the assistant's own rows: its model calls (turn ids) still stay
+/// steps of their own, each sent before the next was made. A session that stopped on its results
+/// still ends on the assistant's turn.
+#[rstest]
+fn each_model_call_is_a_step_and_the_assistant_ends() {
+    let row = |at, turn: &str, id: &str, name: &str| {
+        let mut m = msg(
+            Role::Assistant,
+            vec![call_as(id, name, json!({"filePath": "a.rs"})), answer(id, "ok")],
+            at,
+        );
+        m.turn_id = Some(format!("{turn}#1/2/0/0/0"));
+        m
+    };
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text("read it")], 1),
+        row(2, "1700:opencode/big-pickle", "c1", "read"),
+        row(3, "1701:opencode/big-pickle", "c2", "read"),
+    ]);
+    let c = continue_in(OPENCODE, &original, None, CLAUDE).unwrap();
+    pretty_assertions::assert_eq!(layout(&c.session), vec![
+        "System: marker",
+        r#"User: "read it""#,
+        "Assistant: Read(c1)",
+        r#"Tool: c1 -> "ok""#,
+        "Assistant: Read(c2)",
+        r#"Tool: c2 -> "ok""#,
+        r#"Assistant: "[the original session stopped here]""#,
+    ]);
 }

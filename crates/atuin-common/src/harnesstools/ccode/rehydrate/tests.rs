@@ -149,7 +149,7 @@ async fn a_session_reads_back_as_it_was_captured(projects: TempDir, #[case] json
 /// `tool_use` has an object for its `input` and is answered, in the user message right after it,
 /// by a `tool_result` of its id; and every `tool_result` answers a `tool_use` of the assistant
 /// message right before it.
-fn assert_the_api_takes(lines: &[serde_json::Value]) {
+pub fn assert_the_api_takes(lines: &[serde_json::Value]) {
     use serde_json::Value;
     let mut messages: Vec<(&str, Vec<Value>)> = Vec::new();
     let mut last_id: Option<&str> = None;
@@ -207,6 +207,43 @@ fn assert_the_api_takes(lines: &[serde_json::Value]) {
             assert!(results.is_subset(&asked), "results {results:?} answer no call of {asked:?}");
         }
     }
+}
+
+/// What capture syncs with `ai.capture_tools` keeps every call's input and output: written back,
+/// each is a call and its result again, which the API takes. (Not session2: its call ids were
+/// redacted alike, so its results can't be told apart.)
+#[rstest]
+#[case::session1(include_str!("../../../../tests/fixtures/ccode/session1.jsonl"))]
+#[case::session3(include_str!("../../../../tests/fixtures/ccode/session3.jsonl"))]
+#[case::compacted(include_str!("../../../../tests/fixtures/ccode/session4.jsonl"))]
+fn calls_synced_with_their_payloads_come_back_as_calls_the_api_takes(
+    projects: TempDir,
+    #[case] jsonl: &str,
+) {
+    let mut messages = captured(jsonl);
+    // The fixtures' message ids were redacted: each run of assistant lines gets one, as Claude
+    // Code writes the lines of one response.
+    let mut turn = None;
+    for m in &mut messages {
+        if m.role != Role::Assistant {
+            turn = None;
+        } else if m.turn_id.as_deref() == Some("<redacted>") {
+            m.turn_id = Some(turn.get_or_insert_with(|| format!("msg_{}", m.source_id)).clone());
+        }
+    }
+    let session = session("5d1f0b1e-4a8e-4f1b-9d59-2c0f2f3f0a11", projects.path(), messages);
+    let written = lines(&rehydrate_into(projects.path(), &session).unwrap());
+    assert_the_api_takes(&written);
+    let blocks = |kind: &str| {
+        written
+            .iter()
+            .filter_map(|l| l["message"]["content"].as_array())
+            .flatten()
+            .filter(|b| b["type"] == kind)
+            .count()
+    };
+    assert!(blocks("tool_use") > 0 && blocks("tool_result") > 0, "the calls stay calls");
+    assert!(!written.iter().any(|l| l.to_string().contains(UNCAPTURED_OUTPUT)));
 }
 
 /// What capture syncs keeps no call's input and no output. Written back, each such call is a
@@ -294,7 +331,7 @@ fn message(id: &str, parent: Option<&str>, role: Role, content: Vec<Content>) ->
     }
 }
 
-fn lines(path: &Path) -> Vec<serde_json::Value> {
+pub fn lines(path: &Path) -> Vec<serde_json::Value> {
     std::fs::read_to_string(path)
         .unwrap()
         .lines()

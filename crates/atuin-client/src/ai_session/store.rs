@@ -14,6 +14,10 @@ use crate::ai_session::database::{AiSessionDatabase, DbError, PreparedMessage, W
 use crate::record::decode::decode_parallel;
 use crate::record::sqlite_store::SqliteStore;
 
+/// The zstd level of a v2 record's body: on captured messages, higher levels shrink them only a
+/// little more, for several times the time.
+const RECORD_ZSTD_LEVEL: i32 = 3;
+
 /// Records read from the record store at a time while reprojecting, each page appended in one
 /// transaction: fewer, larger commits flush and merge the search index far less often. A page
 /// holds capture off for as long as it takes to append (a fraction of a second).
@@ -46,6 +50,8 @@ pub enum DecodeError {
     UnknownVersion(RecordVersion),
     #[error("failed to decode ai-session record body: {0}")]
     Body(#[from] rmp_serde::decode::Error),
+    #[error("failed to decompress ai-session record body: {0}")]
+    Decompress(#[source] std::io::Error),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -76,16 +82,21 @@ impl AiSessionRecord {
     const MESSAGE_KIND: u8 = 0;
 
     /// v0: named msgpack, without [`Message::atuin_id`]. v1: positional, so any change to
-    /// [`Message`]'s fields needs a new version.
-    pub const VERSION: RecordVersion = RecordVersion::V1;
+    /// [`Message`]'s fields needs a new version. v2: v1's body, compressed with zstd (captured
+    /// tool payloads compress about 2.4 times).
+    pub const VERSION: RecordVersion = RecordVersion::V2;
 
-    /// A kind byte, then the positional msgpack body.
+    /// A kind byte, then the zstd-compressed positional msgpack body.
     #[must_use]
     pub fn serialize(&self) -> Vec<u8> {
         match self {
             Self::Message(msg) => {
+                let body = rmp_serde::to_vec(msg).expect("Message is always serializable");
                 let mut out = vec![Self::MESSAGE_KIND];
-                out.extend(rmp_serde::to_vec(msg).expect("Message is always serializable"));
+                out.extend(
+                    zstd::bulk::compress(&body, RECORD_ZSTD_LEVEL)
+                        .expect("compressing to memory cannot fail"),
+                );
                 out
             }
         }
@@ -97,12 +108,16 @@ impl AiSessionRecord {
             return Err(DecodeError::UnknownKind(kind));
         }
 
-        // from_slice reads a map by name (v0) or an array by position (v1).
+        // from_slice reads a map by name (v0) or an array by position (v1, v2).
         match version {
             RecordVersion::V0 | RecordVersion::V1 => {
                 Ok(Self::Message(rmp_serde::from_slice(body)?))
             }
-            other => Err(DecodeError::UnknownVersion(other.clone())),
+            RecordVersion::V2 => {
+                let body = zstd::stream::decode_all(body).map_err(DecodeError::Decompress)?;
+                Ok(Self::Message(rmp_serde::from_slice(&body)?))
+            }
+            other @ RecordVersion::Other(_) => Err(DecodeError::UnknownVersion(other.clone())),
         }
     }
 }
