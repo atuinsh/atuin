@@ -17,7 +17,7 @@ use crate::i18n::fl;
 
 const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
@@ -126,12 +126,14 @@ impl Cmd {
                 println!("{}", fl!("account-not-migrated-hint"));
             }
         } else {
-            // Interactive login via browser OAuth flow.
-            if self.from_registration {
+            // Interactive login via browser OAuth flow. Whether the account needs a particular key
+            // only shows once we can see its data, so start from this machine's key (or a fresh
+            // one) and let `verify_key_against_remote` ask for another if its data needs it.
+            if self.scripted_key().is_some() {
+                self.prompt_and_store_key(settings, store).await?;
+            } else {
                 paseto_v4::Key::try_load_or_generate(&settings.key_path)
                     .context(fl!("login-key-generate-failed"))?;
-            } else {
-                self.prompt_and_store_key(settings, store).await?;
             }
 
             self.ensure_hub_session(settings, &endpoint).await?;
