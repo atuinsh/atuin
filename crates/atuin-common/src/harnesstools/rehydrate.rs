@@ -70,9 +70,9 @@ pub enum RehydrateError {
     Io(#[from] std::io::Error),
 }
 
-/// What a restored tool result says when capture kept no output (by default it keeps none): the
-/// formats all want some output for a result, and an empty one would tell the model the tool
-/// printed nothing.
+/// What a restored tool result says when capture kept no output (`ai.capture_tools` off, a policy
+/// withheld it, or it was over the size limit): the formats all want some output for a result, and
+/// an empty one would tell the model the tool printed nothing.
 pub const UNCAPTURED_OUTPUT: &str = "(output not captured)";
 
 /// How a writer lays out the calls [`flatten_uncaptured_calls`] turns into notes.
@@ -95,7 +95,8 @@ pub enum Flatten<'f> {
     },
 }
 
-/// A tool call capture kept without its input: by default, capture syncs a call's name only.
+/// A tool call capture kept without its input (`ai.capture_tools` off, a policy withheld it, or it
+/// was over the size limit): only its name is synced.
 #[must_use]
 pub fn is_uncaptured(content: &Content) -> bool {
     matches!(content, Content::ToolUse(call) if call.input.is_null())
@@ -107,8 +108,7 @@ pub fn is_uncaptured(content: &Content) -> bool {
 ///
 /// No harness's API takes a call without its input (Claude's `tool_use.input` must be an object,
 /// a Codex `function_call`'s `arguments` a JSON string, ...), and one made up would tell the model
-/// it called a tool on nothing. Calls kept with their input (`ai.capture_tools`, older records)
-/// stay calls.
+/// it called a tool on nothing. Calls kept with their input stay calls.
 ///
 /// Rows keep their source ids: a row whose content changed reads back under its own id, which
 /// capture already holds, so re-capturing the transcript pushes nothing for it; a row merged away
@@ -449,15 +449,24 @@ pub(crate) mod testing {
     use super::*;
     use crate::harnesstools::session::{ToolResult, ToolUse};
 
-    /// `content` of a `role` row as capture syncs it (the daemon's `sanitize`): calls
-    /// without their input, results without their output, reasoning as a marker, text only of
-    /// what the user or the model said, nothing kept raw.
+    /// `content` of a `role` row as capture syncs it with `ai.capture_tools` off (the daemon's
+    /// `sanitize`): calls without their input, results without their output, no patches,
+    /// reasoning as a marker, text only of what the user or the model said, nothing kept raw.
     pub fn sanitize(role: &Role, content: &[Content]) -> Vec<Content> {
+        sanitize_as(role, content, false)
+    }
+
+    /// [`sanitize`], keeping tool inputs, outputs and patches when `tools` (`ai.capture_tools`
+    /// on, the default).
+    pub fn sanitize_as(role: &Role, content: &[Content], tools: bool) -> Vec<Content> {
         let conversation = matches!(role, Role::User | Role::Assistant);
         content
             .iter()
             .filter_map(|c| match c {
                 Content::Text(_) if conversation => Some(c.clone()),
+                Content::ToolUse(_) | Content::ToolResult(_) | Content::Patch(_) if tools => {
+                    Some(c.clone())
+                }
                 Content::ToolUse(call) => Some(Content::ToolUse(ToolUse {
                     input: serde_json::Value::Null,
                     ..call.clone()
@@ -476,9 +485,14 @@ pub(crate) mod testing {
     }
 
     /// `rows` as capture syncs them (see [`sanitize`]).
-    pub fn synced(mut rows: Vec<RehydrateMessage>) -> Vec<RehydrateMessage> {
+    pub fn synced(rows: Vec<RehydrateMessage>) -> Vec<RehydrateMessage> {
+        synced_as(rows, false)
+    }
+
+    /// `rows` as capture syncs them, keeping tool payloads when `tools` (see [`sanitize_as`]).
+    pub fn synced_as(mut rows: Vec<RehydrateMessage>, tools: bool) -> Vec<RehydrateMessage> {
         for row in &mut rows {
-            row.content = sanitize(&row.role, &row.content);
+            row.content = sanitize_as(&row.role, &row.content, tools);
         }
         rows
     }

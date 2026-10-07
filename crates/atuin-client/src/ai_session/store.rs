@@ -6,7 +6,7 @@ use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
 };
-use tracing::warn;
+use tracing::{debug, warn};
 use typed_builder::TypedBuilder;
 
 use crate::ai_session::Message;
@@ -48,6 +48,9 @@ pub enum DecodeError {
     UnknownKind(u8),
     #[error("unknown ai-session record version {}", .0.as_str())]
     UnknownVersion(RecordVersion),
+    /// Only written by builds from before records stored the session's id.
+    #[error("ai-session record version {} is no longer read", .0.as_str())]
+    Retired(RecordVersion),
     #[error("failed to decode ai-session record body: {0}")]
     Body(#[from] rmp_serde::decode::Error),
     #[error("failed to decompress ai-session record body: {0}")]
@@ -81,9 +84,9 @@ pub enum BuildError {
 impl AiSessionRecord {
     const MESSAGE_KIND: u8 = 0;
 
-    /// v0: named msgpack, without [`Message::atuin_id`]. v1: positional, so any change to
-    /// [`Message`]'s fields needs a new version. v2: v1's body, compressed with zstd (captured
-    /// tool payloads compress about 2.4 times).
+    /// v1: positional msgpack, so any change to [`Message`]'s fields needs a new version. v2:
+    /// v1's body, compressed with zstd (captured tool payloads compress about 2.4 times). v0
+    /// (named msgpack, without [`Message::atuin_id`]) is no longer read.
     pub const VERSION: RecordVersion = RecordVersion::V2;
 
     /// A kind byte, then the zstd-compressed positional msgpack body.
@@ -108,11 +111,9 @@ impl AiSessionRecord {
             return Err(DecodeError::UnknownKind(kind));
         }
 
-        // from_slice reads a map by name (v0) or an array by position (v1, v2).
         match version {
-            RecordVersion::V0 | RecordVersion::V1 => {
-                Ok(Self::Message(rmp_serde::from_slice(body)?))
-            }
+            RecordVersion::V0 => Err(DecodeError::Retired(RecordVersion::V0)),
+            RecordVersion::V1 => Ok(Self::Message(rmp_serde::from_slice(body)?)),
             RecordVersion::V2 => {
                 let body = zstd::stream::decode_all(body).map_err(DecodeError::Decompress)?;
                 Ok(Self::Message(rmp_serde::from_slice(&body)?))
@@ -177,6 +178,8 @@ impl AiSessionStore {
         //   series' later records on each reprojection, but never stops them projecting.
         // - One that decrypts but whose kind or version this build does not know is held until
         //   an upgrade.
+        // - One of a version this build no longer reads (from before records stored the
+        //   session's id) is skipped: no later build reads it either.
         // - One that decrypts to a known kind but fails to decode is skipped: decryption
         //   authenticates it, so it is exactly what its writer wrote, and no retry reads it.
         let decrypted = match record.decrypt(key) {
@@ -194,6 +197,10 @@ impl AiSessionStore {
             Err(err @ (DecodeError::UnknownKind(_) | DecodeError::UnknownVersion(_))) => {
                 warn!(?err, id = %id.0, "unknown ai-session record kind or version, holding it back");
                 return Ok(Projected::Held);
+            }
+            Err(DecodeError::Retired(version)) => {
+                debug!(id = %id.0, version = version.as_str(), "skipping retired ai-session record");
+                return Ok(Projected::Skipped);
             }
             Err(err) => {
                 warn!(?err, id = %id.0, "failed to deserialize ai-session record, skipping");
@@ -1360,7 +1367,7 @@ mod tests {
         let record = Record::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .host(Host::new(s.host_id))
-            .version(RecordVersion::V0)
+            .version(AiSessionRecord::VERSION)
             .tag(RecordTag::AiSession)
             .idx(1)
             .data(DecryptedData(vec![99]))
@@ -1498,7 +1505,7 @@ mod tests {
         let record = Record::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .host(Host::new(s.host_id))
-            .version(RecordVersion::V0)
+            .version(RecordVersion::V1)
             .tag(RecordTag::AiSession)
             .idx(1)
             // A message kind, then a msgpack byte that is never valid.
@@ -1511,6 +1518,35 @@ mod tests {
         assert_eq!(s.reproject(&db).await.unwrap().replayed, 4);
         assert_eq!(count(&db, &handle).await, Some(3));
         assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(3));
+    }
+
+    /// A v0 record (from before records stored the session's id) is passed over, not held: it
+    /// would hold the watermark forever.
+    #[rstest]
+    #[tokio::test]
+    async fn a_v0_record_is_skipped() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        let handle = sample_handle();
+        push_range(&s, &handle, 0..1).await;
+        let msg = message_in(&session_named("v0"), 1, "text");
+        let record = Record::builder()
+            .id(msg.id)
+            .host(Host::new(s.host_id))
+            .version(RecordVersion::V0)
+            .tag(RecordTag::AiSession)
+            .idx(1)
+            .data(DecryptedData(AiSessionRecord::Message(msg).serialize()))
+            .build();
+        store.push(&record.encrypt(&key())).await.unwrap();
+        push_range(&s, &handle, 1..3).await;
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 4);
+        assert_eq!(count(&db, &handle).await, Some(3));
+        assert_eq!(count(&db, &session_named("v0")).await, None);
+        assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(3));
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 0);
     }
 
     /// Startup reprojection cost on a large store, before (a full replay into an already

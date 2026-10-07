@@ -15,8 +15,8 @@
 //!   result as an ordinary tool call and result, losing the block types the API needs to replay
 //!   them, and a bare `tool_use` with no `tool_result` after it is invalid. Both are dropped
 //!   (one captured without its input becomes a note, as below).
-//! - **Tool calls captured without their input** (capture keeps only a call's name now): the API
-//!   rejects a `tool_use` whose `input` is not an object, so each becomes a note in its turn's
+//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//!   it): the API rejects a `tool_use` whose `input` is not an object, so each becomes a note in its turn's
 //!   text (`[ran a shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its `tool_result` is dropped.
 //!   The run of assistant lines the dropped results stood between is merged into its first line,
 //!   so user and assistant turns still alternate ([`Flatten::Runs`]). Re-captured, that line keeps
@@ -24,13 +24,12 @@
 //!   results are not there to capture again. The line records which synced rows went into it
 //!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), as does the line a row
 //!   with nothing to write hangs from, so the transcript says which synced rows it holds.
-//! - **Tool output**: written back as captured (`ai.capture_tools`). Capture keeps none with
-//!   it off; a call kept with its input (older records) gets [`UNCAPTURED_OUTPUT`] as its
+//! - **Tool output**: written back as captured. A call kept with its input but not its output
+//!   (withheld by a policy, or over the size limit) gets [`UNCAPTURED_OUTPUT`] as its
 //!   `tool_result` content, which says so to the model. An edit's or write's result gets back
 //!   the record Claude Code shows its diff from (`toolUseResult.structuredPatch`) where capture
 //!   kept the patch, without the file as it was before, which is never synced.
-//! - **Pasted images and documents**: capture keeps what they were, not their bytes. Each becomes
-//!   a text placeholder saying so. Other blocks capture kept raw are dropped.
+//! - **Pasted images and documents**: capture keeps none of them, so they are not written back.
 //! - **Empty lines**: rows with nothing left to write (attachments, hook records, turn timings)
 //!   are skipped, and lines under them are linked to their nearest written ancestor.
 //! - **Line kinds**: harness-written user-role text (captured as [`Role::System`]) is written
@@ -365,19 +364,16 @@ impl<'a> Writer<'a> {
         match &m.role {
             Role::User => user_line(&m.content),
             Role::Tool => tool_line(&m.content, &self.calls),
-            Role::System if self.boundaries.contains(m.source_id.as_str()) => {
-                let text = joined_text(&m.content);
-                Some(json!({
-                    "parentUuid": null,
-                    "logicalParentUuid": parent,
-                    "type": "system",
-                    "subtype": "compact_boundary",
-                    "content": text.as_deref().unwrap_or("Conversation compacted"),
-                    "isMeta": false,
-                    "level": "info",
-                    "compactMetadata": {"trigger": "manual", "preTokens": 0},
-                }))
-            }
+            Role::System if self.boundaries.contains(m.source_id.as_str()) => Some(json!({
+                "parentUuid": null,
+                "logicalParentUuid": parent,
+                "type": "system",
+                "subtype": "compact_boundary",
+                "content": "Conversation compacted",
+                "isMeta": false,
+                "level": "info",
+                "compactMetadata": {"trigger": "manual", "preTokens": 0},
+            })),
             Role::System => system_line(&m.content),
             Role::Assistant => self.assistant_line(m),
             Role::Other(_) => None,
@@ -461,16 +457,11 @@ fn joined_text(content: &[Content]) -> Option<String> {
     (!texts.is_empty()).then(|| texts.join("\n"))
 }
 
-/// A user-role content block for `c`, if it has one: text, or a placeholder for media whose
-/// bytes were never captured.
+/// A user-role text block for `c`, if it is text.
 fn user_block(c: &Content) -> Option<Value> {
     match c {
         Content::Text(t) | Content::Summary(t) if !t.is_empty() => {
             Some(json!({"type": "text", "text": t}))
-        }
-        Content::Other(raw) => {
-            let kind = raw["type"].as_str().filter(|k| matches!(*k, "image" | "document"))?;
-            Some(json!({"type": "text", "text": format!("[{kind} not restored]")}))
         }
         _ => None,
     }
@@ -524,7 +515,7 @@ fn tool_line(content: &[Content], calls: &HashMap<&str, &ToolUse>) -> Option<Val
         .iter()
         .filter_map(|c| match c {
             Content::ToolResult(r) => Some(tool_result_block(r)),
-            other => user_block(other),
+            _ => None,
         })
         .collect();
     if blocks.is_empty() {

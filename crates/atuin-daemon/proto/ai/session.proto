@@ -28,12 +28,7 @@ message SessionFilter {
 }
 
 message ListSessionsRequest {
-  // Superseded by filter.harness, which wins when both are set.
-  optional ai.agent.HarnessKind harness = 1;
-  // Only sessions active at or after this time.
-  // Superseded by filter.updated_since, which wins when both are set.
-  google.protobuf.Timestamp updated_since = 2;
-  SessionFilter filter = 3;
+  SessionFilter filter = 1;
 }
 
 message GetSessionRequest {
@@ -55,16 +50,10 @@ message SearchSessionsRequest {
   // unbounded: every matching session is ranked and streamed. Ranking is eager
   // (the full match set is scored before the first result), so prefer a bound.
   uint32 limit = 2;
-  // Only search sessions from this harness. Absent searches every harness.
-  // Superseded by filter.harness, which wins when both are set.
-  optional ai.agent.HarnessKind harness = 3;
-  // Only match sessions whose directory is this one or beneath it. Absent searches everywhere.
-  // Superseded by filter.workspace, which wins when both are set.
-  optional string cwd = 4;
   // Match messages containing any of the query's terms, each as a prefix, instead of all of them
   // as whole words.
-  bool any_term = 5;
-  SessionFilter filter = 6;
+  bool any_term = 3;
+  SessionFilter filter = 4;
 }
 
 message SearchSessionsMatch {

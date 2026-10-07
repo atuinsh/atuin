@@ -19,7 +19,7 @@ use super::watermark::BUMP_GENERATION;
 use super::{
     AiSessionDatabase, Appended, CallRow, Claimant, DbError, Generation, SessionKey, Tokens,
 };
-use crate::ai_session::Message;
+use crate::ai_session::{AtuinSessionId, Message};
 
 /// Long enough to wait out the other connection's write, as sqlx's default is.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -270,9 +270,9 @@ impl AiSessionDatabase {
         let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
         let host = msg.host.map(Self::host_repr);
 
-        // v0 rows carry no id. The earliest row's derived id is the smallest, so MIN settles on
-        // the one from the session's start.
-        let atuin_id = msg.atuin_id.unwrap_or_else(|| msg.session.atuin_id(msg.timestamp));
+        // Capture gives every row it stores its session's id. A row appended without one (only
+        // ever directly, as tests do) gets a fresh one, which MIN settles like any other.
+        let atuin_id = msg.atuin_id.unwrap_or_else(|| AtuinSessionId::mint(msg.timestamp));
         let atuin_id = atuin_id.as_bytes().as_slice();
         let before = Self::session_key(conn, harness, session_id)?;
 

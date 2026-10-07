@@ -99,120 +99,74 @@ const SUBAGENT_PROMPT: &str = "You are a subagent spawned by another session.";
 /// Light rows a pass reads at a time.
 const ROWS: usize = 256;
 
-/// A place in one layout of a session: the `seq` of the last row passed and a digest of its id.
+/// A place in one layout of a session: the `seq` of the last row passed and the low half of its
+/// id's xxh3, which is what a [`checkpoint`] holding both layouts has room for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Mark {
     pub(super) seq: i64,
-    digest: Digest,
-}
-
-/// How much of an id's xxh3 a mark keeps: all of it, or the low half a checkpoint holding both
-/// layouts has room for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Digest {
-    Full(u64),
-    Low(u32),
+    digest: u32,
 }
 
 impl Mark {
     pub(super) fn of(seq: i64, id: &str) -> Self {
         Self {
             seq,
-            digest: Digest::Full(xxh3_64(id.as_bytes())),
+            digest: Self::digest_of(id),
         }
     }
 
     /// Whether `id` is the id of the row this mark was taken at.
     pub(super) fn names(&self, id: &str) -> bool {
-        let hash = xxh3_64(id.as_bytes());
-        match self.digest {
-            Digest::Full(digest) => hash == digest,
-            Digest::Low(low) => Self::low_of(hash) == low,
-        }
-    }
-
-    const fn low(&self) -> u32 {
-        match self.digest {
-            Digest::Full(hash) => Self::low_of(hash),
-            Digest::Low(low) => low,
-        }
+        Self::digest_of(id) == self.digest
     }
 
     #[allow(clippy::cast_possible_truncation, reason = "the low half is the point")]
-    const fn low_of(hash: u64) -> u32 {
-        hash as u32
+    fn digest_of(id: &str) -> u32 {
+        xxh3_64(id.as_bytes()) as u32
     }
 }
 
-/// The bit a checkpoint holding both layouts sets.
-const BOTH: u64 = 1 << 63;
-/// How many bits of such a checkpoint hold the 2.0 layout's place.
+/// The top bit, which every checkpoint sets above the places it packs.
+const PACKED: u64 = 1 << 63;
+/// How many bits of a checkpoint hold the 2.0 layout's place.
 const NEXT_BITS: u32 = 31;
 
 /// The checkpoint of a session whose 1.x layout was read up to `legacy` and whose 2.0 layout up
-/// to `next`.
-///
-/// A session read in its 1.x layout alone keeps the checkpoint it always had: the row's `seq`
-/// and the full digest of its id, so a checkpoint stored before 2.0 support still resumes. Once
-/// the 2.0 layout has a place, both are packed into one: the top bit set, then each place's `seq`
-/// plus one (zero for none), the 1.x one above the 2.0 one, so that the checkpoint grows as
-/// either place does; the digest holds the low halves of both ids' digests. A place too far on
-/// to pack -- two billion events into one session -- is left out and read again.
+/// to `next`: the top bit set, then each place's `seq` plus one (zero for none), the 1.x one above
+/// the 2.0 one, so that the checkpoint grows as either place does; the digest holds both marks'
+/// digests. A place too far on to pack -- two billion events into one session -- is left out and
+/// read again.
 pub(super) fn checkpoint(legacy: Option<(i64, &str)>, next: Option<Mark>) -> Checkpoint {
-    let legacy = legacy.map(|(seq, id)| Mark::of(seq, id));
-    let Some(next) = next else {
-        return match legacy {
-            Some(mark) => Checkpoint {
-                at: u64::try_from(mark.seq).unwrap_or_default(),
-                digest: match mark.digest {
-                    Digest::Full(digest) => digest,
-                    Digest::Low(low) => u64::from(low),
-                },
-                generation: 0,
-            },
-            None => Checkpoint {
-                at: BOTH,
-                digest: 0,
-                generation: 0,
-            },
-        };
-    };
     let plus_one = |mark: Option<Mark>, bits: u32| {
         mark.and_then(|mark| u64::try_from(mark.seq).ok())
             .map(|seq| seq + 1)
             .filter(|place| *place < 1 << bits)
             .zip(mark)
     };
-    let (legacy_at, legacy_low) =
-        plus_one(legacy, 32).map_or((0, 0), |(at, mark)| (at, mark.low()));
-    let (next_at, next_low) =
-        plus_one(Some(next), NEXT_BITS).map_or((0, 0), |(at, mark)| (at, mark.low()));
+    let legacy = legacy.map(|(seq, id)| Mark::of(seq, id));
+    let (legacy_at, legacy_digest) =
+        plus_one(legacy, 32).map_or((0, 0), |(at, mark)| (at, mark.digest));
+    let (next_at, next_digest) =
+        plus_one(next, NEXT_BITS).map_or((0, 0), |(at, mark)| (at, mark.digest));
     Checkpoint {
-        at: BOTH | legacy_at << NEXT_BITS | next_at,
-        digest: u64::from(legacy_low) << 32 | u64::from(next_low),
+        at: PACKED | legacy_at << NEXT_BITS | next_at,
+        digest: u64::from(legacy_digest) << 32 | u64::from(next_digest),
         generation: 0,
     }
 }
 
 /// The places a checkpoint names in each layout (see [`checkpoint`]).
 pub(super) fn unpack(from: Checkpoint) -> (Option<Mark>, Option<Mark>) {
-    if from.at & BOTH == 0 {
-        let legacy = i64::try_from(from.at).ok().map(|seq| Mark {
-            seq,
-            digest: Digest::Full(from.digest),
-        });
-        return (legacy, None);
-    }
     let place = |at: u64, low: u64| {
         let seq = i64::try_from(at.checked_sub(1)?).ok()?;
         Some(Mark {
             seq,
-            digest: Digest::Low(u32::try_from(low & 0xffff_ffff).unwrap_or_default()),
+            digest: u32::try_from(low & 0xffff_ffff).unwrap_or_default(),
         })
     };
     let next_mask = (1 << NEXT_BITS) - 1;
     (
-        place((from.at & !BOTH) >> NEXT_BITS, from.digest >> 32),
+        place((from.at & !PACKED) >> NEXT_BITS, from.digest >> 32),
         place(from.at & next_mask, from.digest),
     )
 }

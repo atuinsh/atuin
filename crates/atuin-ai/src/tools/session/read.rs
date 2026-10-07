@@ -34,24 +34,17 @@ const WINDOW_CHARS: usize = 20_000;
 /// volume, and a reader mostly needs what was asked, said and decided. A single-message read
 /// (`full`) cuts nothing per part; it is windowed as a whole instead.
 const TEXT_CHARS: usize = 2_000;
-const THINKING_CHARS: usize = 600;
 const TOOL_INPUT_CHARS: usize = 300;
 const TOOL_RESULT_CHARS: usize = 400;
-/// Text a harness wrote into the conversation (standing context such as AGENTS.md or a sandbox
-/// policy, but also one-off notes like a subagent's report) gets a line, not its bulk, on a page.
-const HARNESS_CHARS: usize = 200;
 /// How much of a message around a query match a filtered page shows, when the abridged message
 /// leaves the match out.
 const SNIPPET_CHARS: usize = 240;
 
 /// The labels a page puts on blocks, so a query match can tell them from what was said.
-const HARNESS_LABEL: &str = "(harness)";
-const THINKING_LABEL: &str = "(thinking)";
 const SUMMARY_LABEL: &str = "(summary of earlier conversation)";
 const MODEL_ERROR_LABEL: &str = "(model error)";
 const TOOL_ERROR_MARK: &str = "← error";
-const LABELS: [&str; 5] =
-    [HARNESS_LABEL, THINKING_LABEL, SUMMARY_LABEL, MODEL_ERROR_LABEL, TOOL_ERROR_MARK];
+const LABELS: [&str; 3] = [SUMMARY_LABEL, MODEL_ERROR_LABEL, TOOL_ERROR_MARK];
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -574,20 +567,7 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
                 }
             }
             (Block::Readable, Content::Text(text)) => {
-                // Only people and the model write user and assistant text; the parsers file
-                // what a harness wrote (Codex developer prompts, Claude Code reminders, subagent
-                // reports) under other roles. Often bulky and repeated every session, it gets a
-                // line on a page.
-                let text = text.trim();
-                if full || matches!(m.role, Role::User | Role::Assistant) {
-                    let _ = writeln!(body, "{}", clip(text, TEXT_CHARS, full));
-                } else {
-                    let _ = writeln!(body, "{HARNESS_LABEL} {}", one_line(text, HARNESS_CHARS));
-                }
-            }
-            (Block::Readable, Content::Reasoning(text)) => {
-                let _ =
-                    writeln!(body, "{THINKING_LABEL} {}", clip(text.trim(), THINKING_CHARS, full));
+                let _ = writeln!(body, "{}", clip(text.trim(), TEXT_CHARS, full));
             }
             // A compaction summary stands in for the conversation before it, so it is often the
             // best account of what an earlier stretch of a long session did.
@@ -630,7 +610,11 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
                     }
                 }
             }
-            (Block::Readable, Content::ReasoningSummary { .. } | Content::Other(_)) => {}
+            // Empty (see `classify`).
+            (
+                Block::Readable,
+                Content::Reasoning(_) | Content::ReasoningSummary { .. } | Content::Other(_),
+            ) => {}
         }
     }
     if body.is_empty() {
@@ -750,10 +734,7 @@ enum Block<'a> {
 
 fn classify(block: &Content) -> Block<'_> {
     match block {
-        Content::Text(text)
-        | Content::Reasoning(text)
-        | Content::Summary(text)
-        | Content::Error(text) => {
+        Content::Text(text) | Content::Summary(text) | Content::Error(text) => {
             if text.trim().is_empty() {
                 Block::Empty
             } else {
@@ -773,8 +754,11 @@ fn classify(block: &Content) -> Block<'_> {
             }
         }
         Content::ToolUse(_) | Content::ToolResult(_) | Content::Patch(_) => Block::Readable,
-        // Capture keeps only that reasoning happened, which says nothing to a reader.
-        Content::ReasoningSummary { .. } | Content::Other(_) => Block::Empty,
+        // Capture keeps only that reasoning happened, which says nothing to a reader, and never
+        // stores reasoning text or raw blocks.
+        Content::ReasoningSummary { .. } | Content::Reasoning(_) | Content::Other(_) => {
+            Block::Empty
+        }
     }
 }
 
@@ -1032,30 +1016,6 @@ mod tests {
         let one = render(json!({"session_id": "abc", "limit": 1}), &msgs);
         assert!(one.matches("detail").count() == 200, "{one}");
         assert!(one.contains("(model error) overloaded\ndetail"), "{one}");
-    }
-
-    #[rstest]
-    fn harness_text_gets_a_line_unless_full() {
-        let msgs = vec![
-            text(
-                Role::Other("developer".to_owned()),
-                &format!("<permissions instructions>sandbox rules{}", " policy".repeat(2_000)),
-            ),
-            // The Codex parser files `<environment_context>` under the system role.
-            text(Role::System, "<environment_context><cwd>/x</cwd></environment_context>"),
-            text(Role::User, "fix this"),
-        ];
-        let abridged = render(json!({"session_id": "abc"}), &msgs);
-        assert!(abridged.contains("#0 developer"), "{abridged}");
-        assert!(
-            abridged.contains("(harness) <permissions instructions>sandbox rules"),
-            "{abridged}"
-        );
-        assert!(abridged.len() < 2_000, "a long harness blob is one line: {}", abridged.len());
-        assert!(abridged.contains("#2 user 00:00\nfix this"), "{abridged}");
-
-        let full = render(json!({"session_id": "abc", "limit": 1}), &msgs);
-        assert!(full.matches(" policy").count() >= 2_000, "a single-message read shows it all");
     }
 
     #[rstest]

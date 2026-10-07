@@ -423,8 +423,8 @@ fn content_row(id: &str, role: Role, content: Vec<Content>) -> RehydrateMessage 
     }
 }
 
-/// A branch holds the rows beside the tree that go with it (pi's prompts from before ids,
-/// extensions' messages, titles: keyed on their content, with no parent): the switch passes over
+/// A branch holds the rows beside the tree that go with it (pi's prompts from before ids, titles:
+/// keyed on their content, with no parent): the switch passes over
 /// those before where the branch leaves the copy, writes those after it it hasn't got (each
 /// hanging from the entry before it, as a restore writes them; metadata merged into it), and pi
 /// resumes from the last of them.
@@ -436,8 +436,7 @@ fn a_switch_writes_the_rows_beside_the_tree_that_go_with_the_branch(dir: TempDir
     let mut branch = their_branch();
     let said = |text: &str| vec![Content::Text(text.to_owned())];
     branch.insert(0, content_row("syn-0000000000000001", Role::User, said("before ids")));
-    let custom = Role::Other("custom".into());
-    branch.insert(5, content_row("syn-0000000000000002", custom, said("an extension's")));
+    branch.insert(5, content_row("syn-0000000000000002", Role::User, said("also before ids")));
     let title = Role::Other("session_info".into());
     branch.push(content_row("syn-0000000000000003", title, Vec::new()));
 

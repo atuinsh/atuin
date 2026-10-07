@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{
-    AiSessionDatabase, Analysis, HarnessKind, HarnessSession, Message, NativeSessionId, SourceId,
+    AiSessionDatabase, Analysis, AtuinSessionId, HarnessKind, HarnessSession, Message,
+    NativeSessionId, SourceId,
 };
 use atuin_common::harnesstools::Harness as _;
 use atuin_common::harnesstools::continuation::Flattened;
@@ -54,7 +55,7 @@ pub fn context() -> ResumeContext {
 pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
     let started_at = now() - Duration::hours(1);
     SessionRow {
-        atuin_id: handle(harness, id).atuin_id(started_at),
+        atuin_id: atuin_id(harness, id, started_at),
         handle: handle(harness, id),
         parent: None,
         relation: Relation::Root,
@@ -79,6 +80,16 @@ fn handle(harness: HarnessKind, id: &str) -> HarnessSession {
         harness,
         session: NativeSessionId::from(id.to_owned()),
     }
+}
+
+/// A fake session's atuin id: a UUIDv7 at its start, like a minted one, but with its other bits
+/// from its handle, so renders are deterministic.
+fn atuin_id(harness: HarnessKind, id: &str, started_at: OffsetDateTime) -> AtuinSessionId {
+    let millis = u64::try_from(started_at.unix_timestamp_nanos() / 1_000_000).unwrap_or(0);
+    let hash = xxhash_rust::xxh3::xxh3_128(format!("{harness:?}:{id}").as_bytes()).to_le_bytes();
+    let mut bits = [0; 10];
+    bits.copy_from_slice(&hash[..10]);
+    uuid::Builder::from_unix_timestamp_millis(millis, &bits).into_uuid().into()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -210,7 +221,7 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
     };
     FakeSession {
         row: SessionRow {
-            atuin_id: handle(spec.harness, spec.id).atuin_id(updated_at - spec.duration),
+            atuin_id: atuin_id(spec.harness, spec.id, updated_at - spec.duration),
             handle: handle(spec.harness, spec.id),
             parent: parent.map(|p| p.handle.clone()),
             relation,

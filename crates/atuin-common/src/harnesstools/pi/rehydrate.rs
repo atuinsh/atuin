@@ -8,8 +8,8 @@
 //!
 //! - **Thinking.** Capture keeps only a marker ([`Content::ReasoningSummary`]), no text or
 //!   signature, so it is dropped; pi itself drops a thinking block it can't replay.
-//! - **Pasted images**: capture keeps their type, not their bytes; each becomes a text
-//!   placeholder saying so.
+//! - **Pasted images** and extension-injected messages (`custom_message`): capture keeps
+//!   neither, so they are not written back.
 //! - **Compactions** become `compaction` entries keeping every entry since the one before
 //!   (capture doesn't record which entries pi kept): the model sees the summary and the full
 //!   history since the previous compaction. A branch summary is written the same way.
@@ -17,19 +17,19 @@
 //!   content and are skipped, so pi starts on its configured thinking level; the model is named
 //!   by each assistant turn, its provider guessed from the model's name, and pi falls back to its
 //!   default model when it can't use it. A system-role text entry is skipped too.
-//! - **Tool calls captured without their input** (capture keeps only a call's name now): pi-ai
-//!   sends a `toolCall` without `arguments` as an empty input to Anthropic and as `"null"` to
-//!   OpenAI, a call on nothing either way, so each becomes a note in its turn's text (`[ran a
-//!   shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its `toolResult` is dropped. The run of
-//!   assistant messages the dropped results stood between is merged into its first one, so the
+//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//!   it): pi-ai sends a `toolCall` without `arguments` as an empty input to Anthropic and as
+//!   `"null"` to OpenAI, a call on nothing either way, so each becomes a note in its turn's text
+//!   (`[ran a shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its
+//!   `toolResult` is dropped. The run of assistant messages the dropped results stood between is merged into its first one, so the
 //!   turns still alternate ([`Flatten::Runs`]). Re-captured, that entry keeps its id (capture
 //!   already holds it: nothing is pushed), and the entries merged away and the results are not
 //!   there to capture again. The entry records which synced rows went into it
 //!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), as does the entry a row
 //!   with nothing to write hangs from, so the file says which synced rows it holds.
 //! - **Tool results** keep their output; their tool's name comes from the call they answer. With
-//!   none captured (capture keeps none by default), a result says [`UNCAPTURED_OUTPUT`], as does a
-//!   `!command`'s output. An `edit`'s result whose patch capture kept gets back the `details` pi
+//!   none captured (withheld by a policy, or over the size limit), a result says
+//!   [`UNCAPTURED_OUTPUT`], as does a `!command`'s output. An `edit`'s result whose patch capture kept gets back the `details` pi
 //!   shows its diff from: the unified diff (`patch`), pi's own line-numbered one (`diff`) and the
 //!   first line it changed.
 //! - A `!command` keeps its command, output and whether it failed, not its exit code; one from a
@@ -368,33 +368,18 @@ impl<'a> Writer<'a> {
                 }
                 Some(entry)
             }
-            Role::Other(kind) if kind == "custom" => {
-                let content = user_blocks(&m.content);
-                (!content.is_empty()).then(|| {
-                    json!({
-                        "type": "custom_message",
-                        "customType": "atuin-restored",
-                        "content": content,
-                        "display": true,
-                    })
-                })
-            }
             Role::Other(_) => None,
         }
     }
 }
 
-/// Text blocks for user-role content, with a placeholder for media whose bytes were never
-/// captured.
+/// Text blocks for user-role content.
 fn user_blocks(content: &[Content]) -> Vec<Value> {
     content
         .iter()
         .filter_map(|c| match c {
             Content::Text(t) | Content::Summary(t) if !t.is_empty() => {
                 Some(json!({"type": "text", "text": t}))
-            }
-            Content::Other(raw) if raw["type"] == "image" => {
-                Some(json!({"type": "text", "text": "[image not restored]"}))
             }
             _ => None,
         })

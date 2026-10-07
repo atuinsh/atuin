@@ -37,22 +37,18 @@ pub struct SessionFilter {
 pub enum Relation {
     #[default]
     Root,
-    /// Spawned by its parent to do part of its work.
+    /// Spawned by its parent to do part of its work. Also a child of a kind this build does not
+    /// know (a newer build's).
     Subagent,
     /// Branches off its parent's conversation, or copies it.
     Fork,
     /// Carries its parent's conversation on under a new session (maybe in another harness).
     Continuation,
-    /// Has a parent, but no kind was recorded and the harness doesn't say which kind of child it
-    /// is.
-    Child,
 }
 
 impl Relation {
     /// Whether the picker shows sessions of this kind: roots, forks and continuations (which
-    /// resume like any session). Subagents never resume, so they are left out everywhere, with
-    /// the children whose kind is unknown: before capture recorded kinds, Codex and opencode
-    /// linked their spawned agents (by far the most of their children) and forks alike.
+    /// resume like any session). Subagents never resume, so they are left out everywhere.
     pub fn is_listed(self) -> bool {
         matches!(self, Self::Root | Self::Fork | Self::Continuation)
     }

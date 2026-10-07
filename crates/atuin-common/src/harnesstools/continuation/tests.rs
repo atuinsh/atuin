@@ -13,6 +13,7 @@ use crate::harnesstools::codex::session::CodexSession;
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::session::PiSession;
+use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
 use crate::harnesstools::{ccode, codex, opencode, pi};
 use crate::sync::BlockingPool;
@@ -71,8 +72,15 @@ fn session_of(id: &str, messages: Vec<RehydrateMessage>) -> RehydrateSession {
     }
 }
 
-/// A real session recorded by `source`, as capture holds it.
+/// A real session recorded by `source`, as capture holds it (with `ai.capture_tools` on).
 pub async fn recorded(source: AnyHarness) -> RehydrateSession {
+    let mut session = read(source).await;
+    session.messages = testing::synced_as(session.messages, true);
+    session
+}
+
+/// A real session recorded by `source`, as its harness wrote it.
+async fn read(source: AnyHarness) -> RehydrateSession {
     match source {
         AnyHarness::ClaudeCode(_) => {
             let text = std::fs::read_to_string(fixture("ccode/session1.jsonl")).unwrap();

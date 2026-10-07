@@ -160,20 +160,19 @@ fn elsewhere_note<'a>(
 
 /// A subagent: a fragment of the session that spawned it, only meaningful as part of it. Not any
 /// session with a parent: forks and continuations have one too, and those are sessions a person
-/// ran. A parent of unknown kind (records captured before the kind was) counts as a subagent,
-/// the cautious reading, since most sessions with a parent are subagents.
+/// ran. A child of a kind this build does not know (a newer build's) is taken for one, as the
+/// sidecar does.
 fn is_subagent(s: &Session) -> bool {
-    s.parent.is_some()
-        && !matches!(s.parent_kind, Some(ParentKind::Fork | ParentKind::Continuation))
+    s.parent.is_some() && matches!(s.parent_kind, Some(ParentKind::Subagent) | None)
 }
 
-/// How a session relates to its parent, phrased to precede the parent's id.
+/// How a session relates to its parent, phrased to precede the parent's id. A kind this build
+/// does not know reads as a subagent, as in [`is_subagent`].
 const fn relation(kind: Option<ParentKind>) -> &'static str {
     match kind {
-        Some(ParentKind::Subagent) => "subagent of",
+        Some(ParentKind::Subagent) | None => "subagent of",
         Some(ParentKind::Fork) => "forked from",
         Some(ParentKind::Continuation) => "continues from",
-        None => "started from",
     }
 }
 
@@ -313,7 +312,6 @@ mod tests {
 
     #[rstest]
     #[case::subagent(Some(ParentKind::Subagent), true)]
-    #[case::unknown_kind(None, true)]
     #[case::fork(Some(ParentKind::Fork), false)]
     #[case::continuation(Some(ParentKind::Continuation), false)]
     fn subagents_are_children_not_known_to_be_forks(
@@ -335,7 +333,6 @@ mod tests {
     #[case::subagent(Some(ParentKind::Subagent), "subagent of")]
     #[case::fork(Some(ParentKind::Fork), "forked from")]
     #[case::continuation(Some(ParentKind::Continuation), "continues from")]
-    #[case::unknown_kind(None, "started from")]
     fn relation_names_the_parent_kind(#[case] kind: Option<ParentKind>, #[case] want: &str) {
         assert_eq!(relation(kind), want);
     }

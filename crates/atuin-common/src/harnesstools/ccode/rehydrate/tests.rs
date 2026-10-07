@@ -81,12 +81,8 @@ fn carried(messages: &[RehydrateMessage]) -> Vec<(String, Role, Vec<Content>)> {
                     Content::Reasoning(_) | Content::ReasoningSummary { .. } => None,
                     Content::ToolUse(u) if server.contains(&u.id) => None,
                     Content::ToolResult(_) if m.role == Role::Assistant => None,
-                    Content::Other(raw) => match raw["type"].as_str() {
-                        Some(kind @ ("image" | "document")) => {
-                            Some(Content::Text(format!("[{kind} not restored]")))
-                        }
-                        _ => None,
-                    },
+                    // Capture keeps no raw block.
+                    Content::Other(_) => None,
                     other => Some(other.clone()),
                 })
                 .collect();
@@ -363,9 +359,7 @@ fn thinking_and_server_tools_are_dropped_and_the_tree_relinked(projects: TempDir
             Content::Text("found it".to_owned()),
         ]),
         message("x1", Some("a2"), Role::Other("attachment".to_owned()), vec![]),
-        message("u2", Some("x1"), Role::User, vec![Content::Other(
-            json!({"type": "image", "source": {"type": "base64", "media_type": "image/png"}}),
-        )]),
+        message("u2", Some("x1"), Role::User, vec![Content::Text("and now?".to_owned())]),
     ]);
     let path = rehydrate_into(projects.path(), &session).unwrap();
     let lines = lines(&path);
@@ -375,9 +369,9 @@ fn thinking_and_server_tools_are_dropped_and_the_tree_relinked(projects: TempDir
     let reply = by_uuid("a2").unwrap();
     assert_eq!(reply["parentUuid"], "u1");
     assert_eq!(reply["message"]["content"], json!([{"type": "text", "text": "found it"}]));
-    let image = by_uuid("u2").unwrap();
-    assert_eq!(image["parentUuid"], "a2");
-    assert_eq!(image["message"]["content"], "[image not restored]");
+    let prompt = by_uuid("u2").unwrap();
+    assert_eq!(prompt["parentUuid"], "a2");
+    assert_eq!(prompt["message"]["content"], "and now?");
     assert!(!std::fs::read_to_string(&path).unwrap().contains("thinking"));
 }
 

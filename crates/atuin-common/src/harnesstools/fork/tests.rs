@@ -109,19 +109,9 @@ async fn written(
     }
 }
 
-/// What `rows` say, without the ids a part kept whole carries (a fork's are its own).
+/// What `rows` say.
 fn said(rows: &[RehydrateMessage]) -> Vec<(Role, Vec<Content>)> {
-    let unkeyed = |c: &Content| match c {
-        Content::Other(serde_json::Value::Object(part)) => {
-            let mut part = part.clone();
-            for key in ["id", "messageID", "sessionID"] {
-                part.remove(key);
-            }
-            Content::Other(serde_json::Value::Object(part))
-        }
-        c => c.clone(),
-    };
-    rows.iter().map(|r| (r.role.clone(), r.content.iter().map(unkeyed).collect())).collect()
+    rows.iter().map(|r| (r.role.clone(), r.content.clone())).collect()
 }
 
 /// A fork, written by its harness's writer next to the original and read back by its reader, is

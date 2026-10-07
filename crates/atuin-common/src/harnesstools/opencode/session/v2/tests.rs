@@ -661,13 +661,6 @@ fn a_session_s_info_names_its_title_and_where_it_came_from() {
     assert_eq!(titled.cwd(), Some(PathBuf::from("/work/proj")));
 }
 
-#[rstest]
-fn a_1x_checkpoint_keeps_its_old_shape() {
-    assert_eq!(checkpoint(Some((7, "evt_7")), None), Checkpoint::new(7, b"evt_7"));
-    assert_eq!(unpack(Checkpoint::new(7, b"evt_7")).1, None);
-    assert!(unpack(Checkpoint::new(7, b"evt_7")).0.unwrap().names("evt_7"));
-}
-
 proptest! {
     /// Both places come back out of the checkpoint they were packed into.
     #[test]
@@ -1220,7 +1213,8 @@ async fn a_session_in_both_layouts_is_one_session(#[future] mixed: Db) {
     legacy_event("evt_3", "message.part.updated.1", text_event("prt_2", "one point x again")).await;
     db.append("ses_m", "msg_newer", "user", user("two point oh again")).await;
     let at = stored.lock()[&SessionId::from("ses_m".to_owned())];
-    assert_ne!(at.at & BOTH, 0, "the checkpoint holds both places");
+    let (legacy, next) = unpack(at);
+    assert!(legacy.is_some() && next.is_some(), "the checkpoint holds both places");
     let mut stream = events(&db.path, ReplayBehavior::All, &stored);
     let mut got = lines(&next_n(&mut stream, &stored, 3).await);
     got.sort();

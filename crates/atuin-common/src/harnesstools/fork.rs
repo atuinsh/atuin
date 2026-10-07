@@ -2,9 +2,9 @@
 //! id, linked to the original as its fork. The original is left as it is.
 //!
 //! A fork is written out from the captured rows by the harness's own writer, as a restore is
-//! ([`Harness::rehydrate`](crate::harnesstools::Harness::rehydrate)): tool calls and reasoning
-//! carry over as far as a restore carries them, never flattened into notes as a continuation's
-//! are ([`continuation`]). What differs is its id, and that it
+//! ([`Harness::rehydrate`](crate::harnesstools::Harness::rehydrate)): tool calls carry over as a
+//! restore writes them (as calls where capture kept their input), not mapped onto another
+//! harness's tools as a continuation's are ([`continuation`]). What differs is its id, and that it
 //! names the session it was forked from ([`RehydrateSession::fork_of`]), which each writer puts
 //! where its harness puts a fork's origin, out of the model's sight:
 //!

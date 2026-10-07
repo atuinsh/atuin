@@ -5,9 +5,8 @@
 //! Every row capture keys on a native id is written back under that id, so re-capturing the
 //! rollout finds the rows already synced:
 //!
-//! - messages (`response_item` `message`), under their `id`; a system row is written as a
-//!   `developer` message, or as the `user` message Codex injected it as when its text is one of
-//!   Codex's contextual fragments (AGENTS.md, `<environment_context>`, ...);
+//! - messages (`response_item` `message`), under their `id`; a system row (a continuation's
+//!   marker) is written as a `developer` message;
 //! - tool calls and their outputs (`function_call`, `custom_tool_call`, `local_shell_call`,
 //!   `web_search_call`, `image_generation_call`, `tool_search_call` and their `*_output`s), under
 //!   their `id`, or with none when capture keyed them on their `call_id` (`<call_id>#out` for an
@@ -46,7 +45,8 @@
 //!   API by `id`, which a store-less request cannot resolve. The model's earlier reasoning is not
 //!   something it needs to continue, so these items are left out, and re-capture has no row to
 //!   compare them with.
-//! - **Tool calls captured without their input** (capture keeps only a call's name now). A
+//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//!   it). A
 //!   `function_call`'s `arguments` must be a string of JSON, a `custom_tool_call`'s `input` a
 //!   string, a `local_shell_call`'s `action` an object: Codex cannot read the line back, let alone
 //!   send it. Each becomes a note (`[ran a shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its
@@ -60,9 +60,9 @@
 //!   is left out. The line of the written row before them records the rows written as no line
 //!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), so the rollout says which
 //!   synced rows it holds.
-//! - **Tool output**: written back as captured (`ai.capture_tools`). Capture keeps none with
-//!   it off; a call kept with its input (older records) gets [`UNCAPTURED_OUTPUT`] as its
-//!   output (an empty `tools` list for a tool search).
+//! - **Tool output**: written back as captured. A call kept with its input but not its output
+//!   (withheld by a policy, or over the size limit) gets [`UNCAPTURED_OUTPUT`] as its output (an
+//!   empty `tools` list for a tool search).
 //! - Rows whose line carries nothing Codex needs back: thread names (Codex keeps those in its
 //!   `session_index.jsonl` now) and other events.
 //! - Content kinds a line of the kind cannot carry (text inside a tool call, and so on).
@@ -74,7 +74,7 @@ use serde_json::{Map, Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
 
-use super::session::{self, archive_of, is_contextual_user_text, session_id_of};
+use super::session::{self, archive_of, session_id_of};
 use crate::harnesstools::rehydrate::{
     Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
     flatten_uncaptured_calls, record_merged,
@@ -586,25 +586,15 @@ fn file_change(
 }
 
 fn is_message_block(content: &Content) -> bool {
-    matches!(content, Content::Text(_) | Content::Other(_))
+    matches!(content, Content::Text(_))
 }
 
 /// A `message` item, and for what the user said or the model answered, the event Codex shows it
 /// from on resume.
 fn text_message(message: &RehydrateMessage, at: &str) -> Vec<Value> {
-    let texts: Vec<&str> = message
-        .content
-        .iter()
-        .filter_map(|content| match content {
-            Content::Text(text) => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
     let (role, block) = match &message.role {
         Role::User => ("user", "input_text"),
         Role::Assistant => ("assistant", "output_text"),
-        // Context Codex injected as a user message reads back as the system's again.
-        _ if texts.iter().any(|text| is_contextual_user_text(text)) => ("user", "input_text"),
         _ => ("developer", "input_text"),
     };
     let blocks: Vec<Value> = message
@@ -612,8 +602,6 @@ fn text_message(message: &RehydrateMessage, at: &str) -> Vec<Value> {
         .iter()
         .filter_map(|content| match content {
             Content::Text(text) => Some(json!({"type": block, "text": text})),
-            // A block capture kept whole (an image, say): back as it was.
-            Content::Other(value) => Some(value.clone()),
             _ => None,
         })
         .collect();
@@ -637,7 +625,6 @@ fn said(message: &RehydrateMessage) -> Option<String> {
         .iter()
         .map(|content| match content {
             Content::Text(text) => Some(text.as_str()),
-            Content::Other(_) => Some(""),
             _ => None,
         })
         .collect::<Option<_>>()?;

@@ -61,7 +61,7 @@ fn carried(messages: &[RehydrateMessage]) -> Vec<(String, Role, Vec<Content>)> {
     messages
         .iter()
         .filter(|m| match &m.role {
-            Role::Other(kind) => kind == "custom",
+            Role::Other(_) => false,
             Role::System => m.content.iter().any(|c| matches!(c, Content::Summary(_))),
             _ => true,
         })
@@ -72,10 +72,6 @@ fn carried(messages: &[RehydrateMessage]) -> Vec<(String, Role, Vec<Content>)> {
                 .filter_map(|c| match c {
                     Content::Reasoning(_) | Content::ReasoningSummary { .. } => None,
                     Content::Text(t) if t.is_empty() && m.role != Role::Assistant => None,
-                    Content::Other(raw) if raw["type"] == "image" => {
-                        Some(Content::Text("[image not restored]".to_owned()))
-                    }
-                    Content::Other(_) => None,
                     // A v1 `!command` had no id to name its result after; it has now.
                     Content::ToolResult(r) if r.call.as_ref().starts_with("bash:") => {
                         Some(Content::ToolResult(ToolResult {
@@ -111,7 +107,8 @@ async fn read_back(path: &Path) -> Vec<PiMessage> {
 #[tokio::test]
 async fn a_session_reads_back_as_it_was_captured(sessions: TempDir, #[case] jsonl: &str) {
     let cwd = sessions.path().join("here");
-    let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", &cwd, captured(jsonl));
+    let synced = testing::synced_as(captured(jsonl), true);
+    let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", &cwd, synced);
     let dir = sessions.path().join("--here--");
     let path = rehydrate_into(sessions.path(), &dir, &session).unwrap();
     assert_eq!(path.parent(), Some(dir.as_path()));

@@ -143,39 +143,36 @@ message Message {
   // The session this message belongs to.
   HarnessSession session = 2;
   // Session this one was handed off from, if any.
-  optional HarnessSession parent = 4;
-  // Was a harness-native thread identifier that no harness supplied.
-  reserved 5;
-  reserved "thread";
+  optional HarnessSession parent = 3;
   // Harness-native message identifier, unique within the session.
-  string source_id = 6;
+  string source_id = 4;
   // Harness-native identifier of the message this one replies to.
-  optional string parent_source_id = 7;
+  optional string parent_source_id = 5;
   // When the message was produced.
-  google.protobuf.Timestamp timestamp = 8;
+  google.protobuf.Timestamp timestamp = 6;
   // Who or what produced this message.
-  Role role = 9;
+  Role role = 7;
   // The message's content, in order.
-  repeated ContentBlock content = 10;
+  repeated ContentBlock content = 8;
   // Working directory at the time of the message.
-  optional string cwd = 11;
+  optional string cwd = 9;
   // Git branch checked out at the time of the message.
-  optional string git_branch = 12;
+  optional string git_branch = 10;
   // Model that produced the message.
-  optional string model = 13;
+  optional string model = 11;
   // Token usage attributed to this message, if the harness reported any.
-  Tokens tokens = 14;
+  Tokens tokens = 12;
   // Why an assistant turn ended. Absent when the harness did not say.
-  optional StopReason stop_reason = 15;
+  optional StopReason stop_reason = 13;
   // The harness's own role string (e.g. codex "developer"); set exactly when role is
   // ROLE_OTHER.
-  optional string role_label = 16;
+  optional string role_label = 14;
   // The harness's own stop reason; set exactly when stop_reason is STOP_REASON_OTHER.
-  optional string stop_reason_label = 17;
+  optional string stop_reason_label = 15;
   // How this message's session relates to `parent`, when known.
-  optional ParentKind parent_kind = 18;
+  optional ParentKind parent_kind = 16;
   // The host that captured the message (a hyphenated host id), when known.
-  optional string host_id = 19;
+  optional string host_id = 17;
 }
 
 message Session {
@@ -206,7 +203,7 @@ message Session {
   // calls they share); always of the same harness.
   optional HarnessSession copy_of = 19;
   // Atuin's id for the session.
-  optional common.Uuid atuin_id = 20;
+  common.Uuid atuin_id = 20;
   // The atuin ids of `parent` and `root`, when those sessions are stored: links are resolved
   // when read, never recorded.
   optional common.Uuid parent_atuin_id = 21;

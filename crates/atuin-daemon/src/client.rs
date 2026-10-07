@@ -534,13 +534,10 @@ impl AiClient {
     /// Wait while the daemon is still rebuilding AI sessions after starting: until then every
     /// session read but a tail is refused rather than answered partially. Calls `on_wait` each
     /// time it finds the daemon rebuilding, with how far it has got (records replayed, and
-    /// roughly how many there are to replay) when the daemon says, and returns at once when it
-    /// is not. After this the daemon serves reads until a store command has it rebuild again
-    /// (`atuin store rebuild ai-session`, a purge or a forced pull), which is rare.
-    pub async fn wait_for_sessions(
-        &mut self,
-        mut on_wait: impl FnMut(Option<(u64, u64)>),
-    ) -> Result<()> {
+    /// roughly how many there are to replay), and returns at once when it is not. After this the
+    /// daemon serves reads until a store command has it rebuild again (`atuin store rebuild
+    /// ai-session`, a purge or a forced pull), which is rare.
+    pub async fn wait_for_sessions(&mut self, mut on_wait: impl FnMut((u64, u64))) -> Result<()> {
         let mut delay = REBUILD_POLL_START;
         while let Some(progress) = self.rebuild_status().await? {
             on_wait(progress);
@@ -552,22 +549,24 @@ impl AiClient {
 
     /// Whether the daemon is rebuilding AI sessions right now (see [`Self::wait_for_sessions`]),
     /// without waiting for it to finish: `Some` while it is, with how far it has got (records
-    /// replayed, and roughly how many there are to replay) when the daemon says; `None` when it
-    /// serves reads.
-    pub async fn rebuild_status(&mut self) -> Result<Option<Option<(u64, u64)>>> {
+    /// replayed, and roughly how many there are to replay); `None` when it serves reads.
+    pub async fn rebuild_status(&mut self) -> Result<Option<(u64, u64)>> {
         // A listing filtered to the future matches nothing, so the probe costs little beyond the
         // rebuild check every read makes first.
         let future = OffsetDateTime::now_utc() + time::Duration::days(365);
-        let probe = list_sessions_request(&SessionFilter {
+        let filter = SessionFilter {
             updated_since: Some(future),
             ..SessionFilter::default()
-        });
+        };
+        let probe = ListSessionsRequest {
+            filter: Some((&filter).into()),
+        };
         match self.client.list_sessions(probe).await {
-            Err(status) if crate::grpc::ai::session::is_rebuilding(&status) => {
-                Ok(Some(crate::grpc::ai::session::rebuild_progress(&status)))
-            }
-            Err(status) => Err(status.into()),
             Ok(_) => Ok(None),
+            Err(status) => match crate::grpc::ai::session::rebuild_progress(&status) {
+                Some(progress) => Ok(Some(progress)),
+                None => Err(status.into()),
+            },
         }
     }
 
@@ -579,7 +578,9 @@ impl AiClient {
         &mut self,
         filter: &SessionFilter,
     ) -> Result<tonic::Streaming<AiSession>> {
-        let request = list_sessions_request(filter);
+        let request = ListSessionsRequest {
+            filter: Some(filter.into()),
+        };
         Ok(self.client.list_sessions(request).await?.into_inner())
     }
 
@@ -618,7 +619,12 @@ impl AiClient {
         filter: &SessionFilter,
         limit: u32,
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
-        let request = search_sessions_request(query, terms, filter, limit);
+        let request = SearchSessionsRequest {
+            query: query.to_owned(),
+            limit,
+            any_term: terms == SearchTerms::Any,
+            filter: Some(filter.into()),
+        };
         Ok(self.client.search_sessions(request).await?.into_inner())
     }
 
@@ -638,69 +644,6 @@ impl AiClient {
             harness: harness.map(|h| h as i32),
         };
         Ok(self.client.import_sessions(request).await?.into_inner())
-    }
-}
-
-/// A listing of the sessions passing `filter`. The harness and `updated_since` go in the bare
-/// fields as well as the filter, for a daemon from before `filter` (still running after an
-/// upgrade), which ignores it; a newer one reads the filter's first, so the two never disagree.
-fn list_sessions_request(filter: &SessionFilter) -> ListSessionsRequest {
-    ListSessionsRequest {
-        harness: filter.harness.map(|h| h as i32),
-        updated_since: filter.updated_since.map(|ts| prost_types::Timestamp {
-            seconds: ts.unix_timestamp(),
-            nanos: ts.nanosecond().cast_signed(),
-        }),
-        filter: Some(filter.into()),
-    }
-}
-
-/// A search for `query` over the sessions passing `filter`, with the harness and workspace in the
-/// bare fields too (see [`list_sessions_request`]).
-fn search_sessions_request(
-    query: &str,
-    terms: SearchTerms,
-    filter: &SessionFilter,
-    limit: u32,
-) -> SearchSessionsRequest {
-    SearchSessionsRequest {
-        query: query.to_owned(),
-        limit,
-        harness: filter.harness.map(|h| h as i32),
-        cwd: filter.workspace.as_ref().map(|w| w.to_string_lossy().into_owned()),
-        any_term: terms == SearchTerms::Any,
-        filter: Some(filter.into()),
-    }
-}
-
-#[cfg(test)]
-mod request_tests {
-    use atuin_client::ai_session::{HarnessKind, SearchTerms, SessionFilter};
-    use rstest::rstest;
-
-    use super::{list_sessions_request, search_sessions_request};
-
-    /// An older daemon reads only the legacy `harness` field, so it must carry the filter's.
-    #[rstest]
-    #[case::none(None)]
-    #[case::codex(Some(HarnessKind::Codex))]
-    fn requests_carry_the_harness_in_the_legacy_field(#[case] harness: Option<HarnessKind>) {
-        let filter = SessionFilter {
-            harness,
-            branch: Some("main".to_owned()),
-            ..SessionFilter::default()
-        };
-        let expected = harness.map(|h| h as i32);
-
-        let list = list_sessions_request(&filter);
-        assert_eq!(list.harness, expected);
-        assert_eq!(list.filter.as_ref().and_then(|f| f.harness), expected);
-        assert_eq!(list.filter.and_then(|f| f.branch).as_deref(), Some("main"));
-
-        let search = search_sessions_request("words", SearchTerms::All, &filter, 7);
-        assert_eq!(search.harness, expected);
-        assert_eq!(search.filter.as_ref().and_then(|f| f.harness), expected);
-        assert_eq!((search.query.as_str(), search.limit), ("words", 7));
     }
 }
 
@@ -794,7 +737,7 @@ mod rebuild_tests {
             client
                 .wait_for_sessions(|progress| {
                     // The test's store replays nothing: the daemon reports that it has none to.
-                    assert_eq!(progress, Some((0, 0)));
+                    assert_eq!(progress, (0, 0));
                     counter.fetch_add(1, Ordering::SeqCst);
                 })
                 .await
@@ -833,7 +776,7 @@ mod rebuild_tests {
     async fn reads_the_rebuild_status_without_waiting() {
         let (mut client, state, _dir) = serve(StoreState::Recovering).await;
         // The test's store replays nothing: the daemon reports that it has none to.
-        assert_eq!(client.rebuild_status().await.unwrap(), Some(Some((0, 0))));
+        assert_eq!(client.rebuild_status().await.unwrap(), Some((0, 0)));
         state.send_replace(StoreState::Ready);
         assert_eq!(client.rebuild_status().await.unwrap(), None);
     }

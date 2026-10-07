@@ -52,10 +52,12 @@ impl SidecarSource {
     /// A picker row for `s`.
     fn row(&self, s: Session) -> SessionRow {
         let relation = match s.inferred_parent_kind() {
+            // A child of unknown kind is a newer build's: taken for a subagent, as group sizes
+            // take it.
             Some(ParentKind::Subagent) => Relation::Subagent,
+            None if s.parent.is_some() => Relation::Subagent,
             Some(ParentKind::Fork) => Relation::Fork,
             Some(ParentKind::Continuation) => Relation::Continuation,
-            None if s.parent.is_some() => Relation::Child,
             None => Relation::Root,
         };
         // A session with no recorded host predates host tracking: it can only be this host's.
@@ -206,12 +208,20 @@ mod tests {
         }
     }
 
+    /// A row of session `id`: like Claude Code's, an `agent-*` child is a subagent and any
+    /// other a fork.
     fn message(id: &str, parent: Option<&str>, role: Role, text: &str, minutes: i64) -> Message {
+        let kind = if id.starts_with("agent-") {
+            ParentKind::Subagent
+        } else {
+            ParentKind::Fork
+        };
         Message::builder()
             .id(RecordId(uuid_v7()))
             .session(handle(id))
             .source_id(SourceId::from(format!("{id}-{minutes}")))
             .parent(parent.map(handle))
+            .parent_kind(parent.map(|_| kind))
             .timestamp(OffsetDateTime::UNIX_EPOCH + Duration::minutes(minutes))
             .role(role)
             .content(vec![Content::Text(text.to_owned())])

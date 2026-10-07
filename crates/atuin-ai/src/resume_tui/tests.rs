@@ -2123,7 +2123,7 @@ async fn a_rebuild_in_progress_is_said_in_the_status_row() {
     assert!(!before.contains("rebuilding"), "{before}");
 
     state.rebuilding = Some(Rebuilding {
-        progress: Some((1200, 5000)),
+        progress: (1200, 5000),
     });
     let out = text(&render(&mut state, &s, 100, 30));
     let line = "rebuilding the session index: 1200 of 5000 records; results may be incomplete";

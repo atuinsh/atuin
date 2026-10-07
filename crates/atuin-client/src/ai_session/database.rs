@@ -92,17 +92,15 @@ macro_rules! message_columns {
     };
 }
 
-/// Whether the session `c` is a subagent, or a child of unknown kind: what
+/// Whether the session `c` is a subagent, or a child of unknown kind, as
 /// [`Session::inferred_parent_kind`] tells from its parent kind (`ParentKind` as
-/// [`parent_kind_repr`] stores it), else from its harness and id, in SQL. Such a session is
-/// grouped under its root but not counted in its size.
+/// [`parent_kind_repr`] stores it), in SQL. Such a session is grouped under its root but not
+/// counted in its size.
 ///
 /// [`parent_kind_repr`]: AiSessionDatabase::parent_kind_repr
 macro_rules! subagent_like {
     () => {
-        "(c.parent_session_id IS NOT NULL AND (c.parent_kind IS 0 OR (c.parent_kind IS NULL AND \
-         c.parent_harness = c.harness AND (c.harness NOT IN (1, 5) OR (c.harness = 1 AND \
-         substr(c.session_id, 1, 6) = 'agent-')))))"
+        "(c.parent_session_id IS NOT NULL AND (c.parent_kind IS 0 OR c.parent_kind IS NULL))"
     };
 }
 
@@ -626,7 +624,7 @@ impl AiSessionDatabase {
         .await?;
 
         Ok(row.map(|(at, digest)| Checkpoint {
-            at: u64::try_from(at).unwrap_or(0),
+            at: at.cast_unsigned(),
             digest: digest.cast_unsigned(),
             generation: 0,
         }))
@@ -643,7 +641,9 @@ impl AiSessionDatabase {
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
-        .bind(i64::try_from(checkpoint.at).unwrap_or(i64::MAX))
+        // Both are kept bit for bit: a checkpoint may use every bit of either (opencode's packs
+        // two places into `at`, its top bit set).
+        .bind(checkpoint.at.cast_signed())
         .bind(checkpoint.digest.cast_signed())
         .execute(self.db.pool())
         .await?;
@@ -1869,9 +1869,9 @@ mod tests {
         })
         .await
         .unwrap();
-        // A digest with its top bit set survives the signed column.
+        // An offset and a digest with their top bits set survive the signed columns.
         let latest = Checkpoint {
-            at: 4096,
+            at: 1 << 63 | 4096,
             digest: u64::MAX - 1,
             generation: 0,
         };
@@ -2428,13 +2428,9 @@ mod tests {
         let session = sample_handle();
         let parent = handle(HarnessKind::ClaudeCode, "parent");
         let mut first = message_in(&session, 0, "copied from the parent");
-        first.parent = Some(parent.clone());
+        first.parent = Some(parent);
         first.parent_kind = Some(ParentKind::Fork);
         db.append(&first).await.unwrap();
-        // A record from an older build carries the parent but not the kind: it must not erase it.
-        let mut older = message_in(&session, 1, "carried on");
-        older.parent = Some(parent);
-        db.append(&older).await.unwrap();
 
         let s = db.get_session(&session).await.unwrap().unwrap();
         assert_eq!(s.parent_kind, Some(ParentKind::Fork));
@@ -3210,11 +3206,19 @@ mod tests {
 
     // --- grouping -------------------------------------------------------------------------------
 
-    /// A row of session `id` with parent `parent`, at `seconds`, saying `text`.
+    /// A row of session `id` with parent `parent`, at `seconds`, saying `text`. Like Claude
+    /// Code's, an `agent-*` child is a subagent and any other a fork.
     fn tree_row(id: &str, parent: Option<&str>, seconds: i64, text: &str) -> Message {
         let mut m = message_in(&handle(HarnessKind::ClaudeCode, id), seconds, text);
         m.source_id = SourceId::from(format!("{id}-{seconds}"));
         m.parent = parent.map(|p| handle(HarnessKind::ClaudeCode, p));
+        m.parent_kind = m.parent.as_ref().map(|_| {
+            if id.starts_with("agent-") {
+                ParentKind::Subagent
+            } else {
+                ParentKind::Fork
+            }
+        });
         m
     }
 
@@ -3306,19 +3310,17 @@ mod tests {
 
     /// Sessions continued in other harnesses group under the session
     /// they continue, in whichever order their rows arrive (as a reprojection from the synced
-    /// records replays them), and are its continuations: by the kind capture recorded, else
-    /// (in records from before kinds were) because they name another harness's session.
+    /// records replays them), and are its continuations.
     #[rstest]
     #[tokio::test]
     async fn continuations_in_other_harnesses_group_under_the_original(
         #[values(false, true)] reversed: bool,
-        #[values(None, Some(ParentKind::Continuation))] kind: Option<ParentKind>,
     ) {
         let row = |harness, id: &str, parent: Option<(HarnessKind, &str)>, seconds| {
             let mut m = message_in(&handle(harness, id), seconds, "words");
             m.source_id = SourceId::from(format!("{id}-{seconds}"));
             m.parent = parent.map(|(h, p)| handle(h, p));
-            m.parent_kind = m.parent.as_ref().and(kind);
+            m.parent_kind = m.parent.as_ref().map(|_| ParentKind::Continuation);
             m
         };
         let mut rows = vec![
@@ -3340,8 +3342,7 @@ mod tests {
         for (harness, id) in [(HarnessKind::ClaudeCode, "in-claude"), (HarnessKind::Pi, "in-pi")] {
             let s = db.get_session(&handle(harness, id)).await.unwrap().unwrap();
             assert_eq!(s.group(), &original, "{id}");
-            assert_eq!(s.parent_kind, kind, "{id}");
-            assert_eq!(s.inferred_parent_kind(), Some(ParentKind::Continuation), "{id}");
+            assert_eq!(s.parent_kind, Some(ParentKind::Continuation), "{id}");
         }
         let children: Vec<String> = db
             .children(&original)
@@ -3873,9 +3874,9 @@ mod tests {
         ]);
     }
 
-    /// Where capture recorded how a child relates to its parent, that decides, whatever the
-    /// harness or id suggest: a Codex subagent is not counted in its root's group size, a Codex
-    /// fork is, and so is a Claude Code child named like a subagent that is a fork.
+    /// How capture recorded a child relates to its parent decides, whatever its harness or id: a
+    /// Codex subagent is not counted in its root's group size, a Codex fork is, and so is a
+    /// Claude Code child named like a subagent that is a fork.
     #[rstest]
     #[case::codex_subagent(HarnessKind::Codex, "t2", ParentKind::Subagent)]
     #[case::codex_fork(HarnessKind::Codex, "t2", ParentKind::Fork)]
@@ -3903,36 +3904,24 @@ mod tests {
         assert_eq!(groups[0].child_count, u64::from(kind != ParentKind::Subagent));
     }
 
-    /// Without a recorded kind, a group's size (counted in SQL) counts a child exactly when
-    /// [`Session::inferred_parent_kind`] makes it a fork or a continuation.
+    /// A child of a kind this build does not know (a newer build's) is grouped under its root
+    /// but, like a subagent, not counted in its size.
     #[rstest]
-    #[case::claude_subagent(HarnessKind::ClaudeCode, "agent-z", HarnessKind::ClaudeCode)]
-    #[case::claude_fork(HarnessKind::ClaudeCode, "sub", HarnessKind::ClaudeCode)]
-    #[case::pi_branch(HarnessKind::Pi, "sub", HarnessKind::Pi)]
-    #[case::codex_child(HarnessKind::Codex, "sub", HarnessKind::Codex)]
-    #[case::opencode_child(HarnessKind::Opencode, "ses_2", HarnessKind::Opencode)]
-    #[case::continued_elsewhere(HarnessKind::Codex, "agent-z", HarnessKind::ClaudeCode)]
     #[tokio::test]
-    async fn without_a_kind_the_group_size_agrees_with_the_inferred_kind(
-        #[case] harness: HarnessKind,
-        #[case] child: &str,
-        #[case] parent_harness: HarnessKind,
-    ) {
+    async fn a_child_of_unknown_kind_is_not_counted() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        let root = handle(parent_harness, "root");
+        let root = handle(HarnessKind::Codex, "root");
         db.append(&message_in(&root, 0, "root words")).await.unwrap();
-        let mut m = message_in(&handle(harness, child), 1, "child words");
-        m.parent = Some(root);
+        let mut m = message_in(&handle(HarnessKind::Codex, "child"), 1, "child words");
+        m.parent = Some(root.clone());
         db.append(&m).await.unwrap();
 
-        let stored = db.get_session(&handle(harness, child)).await.unwrap().unwrap();
-        let counted = matches!(
-            stored.inferred_parent_kind(),
-            Some(ParentKind::Fork | ParentKind::Continuation)
-        );
+        let stored = db.get_session(&handle(HarnessKind::Codex, "child")).await.unwrap().unwrap();
+        assert_eq!(stored.inferred_parent_kind(), None);
+        assert_eq!(stored.root, Some(root));
         let groups = db.list_sessions(&roots_only()).await.unwrap();
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].child_count, u64::from(counted));
+        assert_eq!(groups[0].child_count, 0);
     }
 
     /// A match in a nested child is its root's, snippet included.
@@ -4206,15 +4195,19 @@ mod tests {
     async fn an_atuin_id_or_its_prefix_finds_a_session(#[case] len: usize, #[case] found: usize) {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let wanted = handle(HarnessKind::ClaudeCode, "wanted");
-        // Same start, so the ids share their timestamp digits.
-        let started = OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap();
-        for session in [&wanted, &handle(HarnessKind::Pi, "other")] {
+        // The same start, so the ids share their timestamp digits (the first 12).
+        let id = |n: u128| {
+            AtuinSessionId::from(Uuid::from_u128(
+                0x0199_6dc4_0800_7000_8000_0000_0000_0000 | n << 64,
+            ))
+        };
+        for (session, n) in [(&wanted, 1), (&handle(HarnessKind::Pi, "other"), 2)] {
             let mut msg = message_in(session, 1_790_000_000, "words");
-            msg.atuin_id = Some(session.atuin_id(started));
+            msg.atuin_id = Some(id(n));
             db.append(&msg).await.unwrap();
         }
 
-        let id = wanted.atuin_id(started);
+        let id = id(1);
         let sessions = db.sessions_with_id_prefix(&id.to_string()[..len]).await.unwrap();
         assert_eq!(sessions.len(), found);
         assert!(sessions.iter().any(|s| s.handle == wanted));
@@ -4233,36 +4226,6 @@ mod tests {
         if reversed {
             rows.reverse();
         }
-        for row in &rows {
-            db.append(row).await.unwrap();
-        }
-
-        assert_eq!(
-            db.get_session(&session).await.unwrap().unwrap().atuin_id,
-            AtuinSessionId::from(Uuid::from_u128(1))
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn rows_without_the_id_stand_for_a_derived_one(#[values(false, true)] fixed_first: bool) {
-        let db = AiSessionDatabase::in_memory().await.unwrap();
-        let session = sample_handle();
-        let old = message_in(&session, 5, "one");
-        db.append(&old).await.unwrap();
-        assert_eq!(
-            db.get_session(&session).await.unwrap().unwrap().atuin_id,
-            session.atuin_id(old.timestamp)
-        );
-
-        let mut fixed = message_in(&session, 6, "two");
-        fixed.atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(1)));
-        let older = message_in(&session, 0, "three");
-        let rows = if fixed_first {
-            [fixed, older]
-        } else {
-            [older, fixed]
-        };
         for row in &rows {
             db.append(row).await.unwrap();
         }
@@ -4302,7 +4265,10 @@ mod tests {
             handle(HarnessKind::Codex, "child"),
             handle(HarnessKind::Codex, "grandchild"),
         );
-        let id = |s: &HarnessSession| s.atuin_id(OffsetDateTime::UNIX_EPOCH);
+        let id = |s: &HarnessSession| {
+            let n = ["root", "child", "grandchild"].iter().position(|n| *n == s.session.as_ref());
+            AtuinSessionId::from(Uuid::from_u128(n.unwrap() as u128 + 1))
+        };
         let store = |session: &HarnessSession, parent: Option<&HarnessSession>, index| {
             let mut m = message_in(session, index, "words");
             m.parent = parent.cloned();

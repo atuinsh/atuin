@@ -146,10 +146,8 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
                 if reported.is_none() {
                     eprintln!("AI sessions are being rebuilt from the record store; waiting...");
                 }
-                if let Some((replayed, pending)) = progress
-                    && reported != Some(progress)
-                    && pending > 0
-                {
+                let (replayed, pending) = progress;
+                if reported != Some(progress) && pending > 0 {
                     eprintln!("  {replayed} of {pending} records replayed");
                 }
                 reported = Some(progress);
@@ -624,8 +622,8 @@ fn write_message_text(out: &mut dyn Write, m: &Message) -> io::Result<()> {
     for block in &m.content {
         match block {
             Content::Text(t) => writeln!(out, "{}", sanitize(t))?,
-            Content::Other(json) => writeln!(out, "{}", sanitize(&json.to_string()))?,
-            Content::Reasoning(t) => writeln!(out, "[thinking] {}", sanitize(t))?,
+            // Capture never stores reasoning text or raw blocks.
+            Content::Reasoning(_) | Content::Other(_) => {}
             Content::ReasoningSummary { tokens } => {
                 let tokens = tokens.or(m.usage.and_then(|u| u.reasoning));
                 writeln!(out, "[thinking] {}", reasoning_label(tokens))?;
@@ -730,18 +728,8 @@ fn message_summary(m: &Message) -> Option<Summary> {
                     return Some(Summary::Text(line));
                 }
             }
-            Content::Other(json) => {
-                let line = one_line(&json.to_string(), SUMMARY_WIDTH);
-                if !line.is_empty() {
-                    return Some(Summary::Text(line));
-                }
-            }
-            Content::Reasoning(t) => {
-                let line = one_line(t, SUMMARY_WIDTH);
-                if !line.is_empty() {
-                    return Some(Summary::Thinking(line));
-                }
-            }
+            // Capture never stores reasoning text or raw blocks.
+            Content::Reasoning(_) | Content::Other(_) => {}
             Content::ReasoningSummary { tokens } => {
                 let tokens = tokens.or(m.usage.and_then(|u| u.reasoning));
                 return Some(Summary::Thinking(reasoning_label(tokens)));
@@ -1196,13 +1184,11 @@ fn session_json(s: &Session) -> SessionJson {
 }
 
 /// `reasoning` is the message's reasoning token count, for a summary block that lacks its own.
-fn content_json(block: &Content, reasoning: Option<u64>) -> ContentJson {
-    match block {
+/// `None` for what capture never stores (reasoning text, raw blocks).
+fn content_json(block: &Content, reasoning: Option<u64>) -> Option<ContentJson> {
+    Some(match block {
         Content::Text(t) => ContentJson::Text { text: t.clone() },
-        Content::Other(json) => ContentJson::Text {
-            text: json.to_string(),
-        },
-        Content::Reasoning(t) => ContentJson::Thinking { text: t.clone() },
+        Content::Reasoning(_) | Content::Other(_) => return None,
         Content::ReasoningSummary { tokens } => ContentJson::Thinking {
             text: reasoning_label(tokens.or(reasoning)),
         },
@@ -1237,7 +1223,7 @@ fn content_json(block: &Content, reasoning: Option<u64>) -> ContentJson {
                 })
                 .collect(),
         },
-    }
+    })
 }
 
 fn message_json(m: &Message) -> MessageJson {
@@ -1249,7 +1235,7 @@ fn message_json(m: &Message) -> MessageJson {
         model: m.model.clone(),
         cwd: m.cwd.as_ref().map(|cwd| cwd.to_string_lossy().into_owned()),
         git_branch: m.git_branch.clone(),
-        content: m.content.iter().map(|block| content_json(block, reasoning)).collect(),
+        content: m.content.iter().filter_map(|block| content_json(block, reasoning)).collect(),
         tokens: m.usage,
         stop_reason: match &m.stop_reason {
             Some(StopReason::Other(label)) => label.clone(),
@@ -1279,7 +1265,9 @@ mod tests {
     fn session(harness: HarnessKind, id: &str) -> Session {
         Session::builder()
             .handle(handle(harness, id))
-            .atuin_id(handle(harness, id).atuin_id(OffsetDateTime::UNIX_EPOCH))
+            .atuin_id(AtuinSessionId::from(uuid::Uuid::from_u128(xxhash_rust::xxh3::xxh3_128(
+                format!("{harness:?}:{id}").as_bytes(),
+            ))))
             .started_at(OffsetDateTime::UNIX_EPOCH)
             .updated_at(OffsetDateTime::UNIX_EPOCH)
             .usage(Usage::default())
@@ -1540,8 +1528,8 @@ mod tests {
 
     #[rstest]
     fn summary_marks_thinking() {
-        let m = msg(Role::Assistant, vec![Content::Reasoning("pondering".to_owned())]);
-        assert_eq!(message_summary(&m).unwrap().render(false), "» pondering");
+        let m = msg(Role::Assistant, vec![Content::ReasoningSummary { tokens: Some(7) }]);
+        assert_eq!(message_summary(&m).unwrap().render(false), "» Reasoning · 7 tokens");
     }
 
     #[rstest]

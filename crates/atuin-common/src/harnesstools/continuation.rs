@@ -18,7 +18,7 @@
 //!   other; it just can't make it again.
 //! - **Other calls, as notes**: a short line of text in the assistant's turn saying what was
 //!   called (see [`tool_note`]): `[ran a shell command]`, ``[edited `src/store.rs`]``. That is a
-//!   call captured without its input (by default capture keeps the tool's name only), one with no
+//!   call captured without its input (`ai.capture_tools` off, or a policy withheld it), one with no
 //!   result (interrupted, or a Codex web search), and one the model's provider ran itself (a
 //!   Claude Code web search), whose result only that provider reads.
 //! - Summaries (compactions, abandoned branches), as text of the user's turn.
@@ -609,11 +609,6 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
                     let note = format!("[error: {}]", clip(why, NOTE_ERROR));
                     assistant.push(Item::Part(Part::Note(note)));
                 }
-                Content::Other(raw) if m.role == Role::User => {
-                    if let Some(kind) = raw["type"].as_str().filter(|k| is_media(k)) {
-                        user.push(Part::Note(format!("[{kind} not carried over]")));
-                    }
-                }
                 _ => {}
             }
         }
@@ -662,10 +657,6 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
         turns.push(Turn::parts(Kind::Assistant, at, vec![note]));
     }
     (turns, flattened)
-}
-
-fn is_media(kind: &str) -> bool {
-    matches!(kind, "image" | "input_image" | "document" | "file" | "input_file")
 }
 
 /// A new session's id for `harness`, in its own format, minted at `now`.

@@ -8,20 +8,21 @@
 //!
 //! # What survives
 //!
-//! Every part capture delivered, under its own id: text (the user's, the model's, and what
-//! opencode injected, `synthetic`), reasoning, tool calls with their result or error, retries,
-//! each model call's `step-finish` with its token counts and finish reason, and the parts capture
-//! kept whole (`step-start`, files, compaction markers, subtasks...) as they were. A failed
-//! model call is its assistant message's `error`, under the message id capture keyed it on.
+//! Every part capture keeps, under its own id: text (the user's, the model's, and a continuation's
+//! or fork's marker, `synthetic` or `ignored`), tool calls with their result or error, retries,
+//! and each model call's `step-finish` with its token counts and finish reason. A failed model
+//! call is its assistant message's `error`, under the message id capture keyed it on. Reasoning
+//! (kept only as a marker) and the parts capture keeps nothing of (`step-start`, files,
+//! compaction markers, subtasks...) are left out.
 //!
 //! What capture keeps of a message is less than opencode's info for it, so the rest is rebuilt:
 //!
 //! - **Which message a part belongs to.** Rows carry no message id, so parts are grouped back
 //!   into messages: an assistant's by the user message it answers and the model call it was
 //!   (`MessageInfo::turn_of`, which also gives back its creation time, provider and model), the
-//!   rest in the order they came. A message's id is recovered where a row names it -- a part
-//!   kept whole carries its `messageID`, a failure is keyed on it, an assistant message names the
-//!   user message it answers -- and minted otherwise. Only part and failure ids are row keys, so a
+//!   rest in the order they came. A message's id is recovered where a row names it -- an
+//!   opencode 2.0 row and a failure are keyed on it, an assistant message names the user message
+//!   it answers -- and minted otherwise. Only part and failure ids are row keys, so a
 //!   minted message id costs nothing on re-capture.
 //! - **Agent and mode** (`build`), cost (`0`), and a tool call's title (empty) and metadata:
 //!   empty, but for a call whose patch capture kept, which gets back the diff opencode shows an
@@ -31,20 +32,21 @@
 //!
 //! # What is not the same
 //!
-//! - **Tool calls captured without their input** (capture keeps only a call's name now) are not
-//!   written as tool parts: opencode would send the model a call on no input (`{"input": null}`,
-//!   the object its state needs) with an output it never had. Each becomes a text part under the
-//!   call's own part id, reading as a [note](crate::harnesstools::note::tool_note) (`[ran a shell command]`), or joins a
-//!   text part of the same message before it, with nothing but reasoning or other notes between
-//!   (the same note several times in a row counted, `×3`; see [`Flatten::Notes`]). Re-captured,
+//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//!   it) are not written as tool parts: opencode would send the model a call on no input
+//!   (`{"input": null}`, the object its state needs) with an output it never had. Each becomes a
+//!   text part under the call's own part id, reading as a
+//!   [note](crate::harnesstools::note::tool_note) (`[ran a shell command]`), or joins a text part
+//!   of the same message before it, with nothing but reasoning or other notes between (the same
+//!   note several times in a row counted, `×3`; see [`Flatten::Notes`]). Re-captured,
 //!   the part reads back under a part id capture already holds, so nothing is pushed; a part
 //!   merged away is not there to capture again.
-//! - **Tool output**: written back as captured (`ai.capture_tools`). Capture keeps none with
-//!   it off; a call kept with its input (older records) is written `completed` (or `error`) with
+//! - **Tool output**: written back as captured. A call kept with its input but not its output
+//!   (withheld by a policy, or over the size limit) is written `completed` (or `error`) with
 //!   [`UNCAPTURED_OUTPUT`] as its output.
-//! - opencode stamps each part row with the time of the import. Text, reasoning, tool and retry
-//!   parts carry their own clock and read back with the captured timestamp; the rest (`step-start`,
-//!   `step-finish`, whole parts) read back with the import's.
+//! - opencode stamps each part row with the time of the import. Text, tool and retry parts carry
+//!   their own clock and read back with the captured timestamp; a `step-finish` reads back with
+//!   the import's.
 //! - opencode reads a message's parts in id order, where capture delivered them as they finished:
 //!   parallel tool calls that finished out of order come back in id order.
 //! - A tool call captured without a result (one opencode stopped mid-way) is written `pending`,
@@ -402,16 +404,9 @@ fn turn_base(row: &RehydrateMessage) -> Option<String> {
     Some(turn.split_once('#').map_or(turn, |(turn, _)| turn).to_owned())
 }
 
-/// The message a row names as its own: a part kept whole carries its `messageID`, a row of
-/// opencode 2.0 is keyed `<message>/<part>`, and a failure is keyed on its message.
+/// The message a row names as its own: a row of opencode 2.0 is keyed `<message>/<part>`, and a
+/// failure is keyed on its message.
 fn named_message(row: &RehydrateMessage) -> Option<String> {
-    for content in &row.content {
-        if let Content::Other(part) = content
-            && let Some(id) = part["messageID"].as_str()
-        {
-            return Some(id.to_owned());
-        }
-    }
     if let Some((message, _)) = row.source_id.split_once('/') {
         return Some(message.to_owned());
     }
@@ -944,9 +939,6 @@ fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
             draft.summary = true;
             Some(json!({"type": "text", "text": text, "time": {"start": at, "end": at}}))
         }
-        [Content::Reasoning(text)] => {
-            Some(json!({"type": "reasoning", "text": text, "time": {"start": at, "end": at}}))
-        }
         [Content::ToolUse(call)] => Some(tool_part(call, None, None, at)),
         [Content::ToolUse(call), Content::ToolResult(result)] => {
             Some(tool_part(call, Some(result), None, at))
@@ -961,7 +953,6 @@ fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
             "error": {"name": "APIError", "data": {"message": why, "isRetryable": true}},
             "time": {"created": at},
         })),
-        [Content::Other(part)] if part["type"].is_string() => Some(part.clone()),
         _ => None,
     }
 }
@@ -1189,14 +1180,14 @@ pub(crate) mod tests {
         }
     }
 
-    /// Captures `original` from `original_db`, writes it back as `opencode import` would and
-    /// captures it again: the rows (bar the session's own) and the session's title row.
+    /// Captures `original` from `original_db` as capture syncs it (tool payloads kept), writes it
+    /// back as `opencode import` would and captures it again.
     async fn round_trip(
         original_db: &Path,
         id: &str,
         title: Option<&str>,
     ) -> (Vec<RehydrateMessage>, Vec<RehydrateMessage>) {
-        let original = captured(original_db).await;
+        let original = testing::synced_as(captured(original_db).await, true);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
         let mut conn = database(&path).await;
@@ -1276,6 +1267,13 @@ pub(crate) mod tests {
 
         let title = s["title"].as_str();
         let (original, again) = round_trip(&path, id, title).await;
+        // A part capture kept nothing of is not written, but for a model call's `step-finish`;
+        // nor is reasoning capture kept no text of.
+        let original: Vec<RehydrateMessage> = original
+            .into_iter()
+            .filter(|m| !m.content.is_empty() || m.usage.is_some() || is_session(id, m))
+            .filter(|m| !matches!(m.content.as_slice(), [Content::ReasoningSummary { .. }]))
+            .collect();
         assert!(original.len() > 5);
         let rows = |rows: &[RehydrateMessage]| -> Vec<RehydrateMessage> {
             rows.iter().filter(|r| !is_session(id, r)).cloned().collect()
@@ -1358,8 +1356,6 @@ pub(crate) mod tests {
         let mut failure =
             answer(A2, 1_790_217_663, U2, TURN2, vec![Content::Error("mock bad request".into())]);
         failure.stop_reason = Some(StopReason::Error);
-        let step_start = json!({"type": "step-start", "id": "prt_0d148db28001TznIjdIVqXAvJ3",
-                                "messageID": "msg_0d148d743001qhQZH5hIpZVrlb", "sessionID": SES});
         vec![
             row(&format!("{SES}:title:Fix the build"), 1_790_217_606, Role::System, vec![]),
             row("prt_0d148d4bf001JaxA9TwaMgU5vE", 1_790_217_606, Role::User, vec![Content::Text(
@@ -1367,12 +1363,6 @@ pub(crate) mod tests {
             )]),
             row("prt_0d148d4c0001JaxA9TwaMgU5vF", 1_790_217_606, Role::System, vec![
                 Content::Text("Called the Read tool".into()),
-            ]),
-            answer("prt_0d148db28001TznIjdIVqXAvJ3", 1_790_217_607, U1, TURN1, vec![
-                Content::Other(step_start),
-            ]),
-            answer("prt_0d148db29001TznIjdIVqXAvJ4", 1_790_217_607, U1, TURN1, vec![
-                Content::Reasoning("thinking it over".into()),
             ]),
             answer("prt_0d148db2a001TznIjdIVqXAvJ5", 1_790_217_607, U1, TURN1, vec![
                 Content::Error("overloaded".into()),
@@ -1413,8 +1403,7 @@ pub(crate) mod tests {
     }
 
     /// Every kind of row comes back under its own id, in its message: the user message the
-    /// assistant's answers is named for it, the assistant's for the part that carried its id
-    /// or the failure keyed on it.
+    /// assistant's answers is named for it, a failed assistant's for the failure keyed on it.
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn every_kind_of_row_recaptures_as_itself() {
@@ -1427,9 +1416,9 @@ pub(crate) mod tests {
         conn.close().await.unwrap();
         let again = captured(&path).await;
         pretty_assertions::assert_eq!(keys(&again), keys(&rows));
-        assert_eq!(again[9].usage, rows[9].usage);
-        assert_eq!(again[9].turn_id, rows[9].turn_id);
-        assert_eq!(again[11].stop_reason, Some(StopReason::Error));
+        assert_eq!(again[7].usage, rows[7].usage);
+        assert_eq!(again[7].turn_id, rows[7].turn_id);
+        assert_eq!(again[9].stop_reason, Some(StopReason::Error));
 
         let ids: Vec<&str> = exported["messages"]
             .as_array()
@@ -1437,7 +1426,8 @@ pub(crate) mod tests {
             .iter()
             .map(|m| m["info"]["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, [U1, "msg_0d148d743001qhQZH5hIpZVrlb", U2, A2]);
+        assert_eq!([ids[0], ids[2], ids[3]], [U1, U2, A2]);
+        assert!(ids[1].starts_with("msg_"), "the answer's id is minted: {ids:?}");
         let assistant = &exported["messages"][1]["info"];
         assert_eq!(assistant["parentID"], U1);
         assert_eq!(assistant["providerID"], "openai");

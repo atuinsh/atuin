@@ -434,11 +434,11 @@ struct UnsafeCalls {
     cwds: HashMap<HarnessSession, PathBuf>,
 }
 
-/// Retain conversation text, and of tool calls what `tools` keeps: by default payload-free
-/// breadcrumbs, never execution payloads (null payloads, which keep the wire format without
-/// storing arguments or results). Text is redacted as `policy` does, and text that takes too long
-/// to redact is not kept. This only affects new captures; existing synced records are not
-/// rewritten.
+/// Retain conversation text, and of tool calls what `tools` keeps: their inputs and outputs,
+/// unless `ai.capture_tools` is off, `policy` withholds them, or they are over the size limit
+/// (then null, which keeps the wire format without storing them). Reasoning is kept only as a
+/// marker; raw blocks, and text on roles other than user and assistant, are dropped. Text is
+/// redacted as `policy` does, and text that takes too long to redact is not kept.
 fn sanitize(msg: &mut Message, tools: ToolCapture, policy: &CapturePolicy) {
     let redact = |text: &mut String| match policy.redact(text) {
         Some(Cow::Borrowed(_)) => {}
@@ -952,8 +952,6 @@ mod tests {
             }
         }
         assert_eq!(carried, [Some(fixed), Some(fixed)]);
-        // Minted, not derived from the session.
-        assert_ne!(fixed, first.session.atuin_id(first.timestamp));
         assert_eq!(uuid::Uuid::from(fixed).get_version(), Some(uuid::Version::SortRand));
     }
 

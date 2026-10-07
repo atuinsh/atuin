@@ -363,12 +363,7 @@ impl TryFrom<Session> for DomainSession {
         };
         let handle: DomainHarnessSession =
             value.handle.ok_or(ParseError::Missing("handle"))?.try_into()?;
-        let started_at = at(value.started_at, "started_at")?;
-        // Older daemons don't send it.
-        let atuin_id = match value.atuin_id {
-            Some(id) => atuin_id_domain(&id)?,
-            None => handle.atuin_id(started_at),
-        };
+        let atuin_id = value.atuin_id.as_ref().ok_or(ParseError::Missing("atuin_id"))?;
 
         Ok(Self {
             handle,
@@ -376,7 +371,7 @@ impl TryFrom<Session> for DomainSession {
             cwd: value.cwd.map(PathBuf::from),
             git_branch: value.git_branch,
             model: value.model,
-            started_at,
+            started_at: at(value.started_at, "started_at")?,
             updated_at: at(value.updated_at, "updated_at")?,
             message_count: value.message_count,
             usage: value.tokens.ok_or(ParseError::Missing("tokens"))?,
@@ -391,7 +386,7 @@ impl TryFrom<Session> for DomainSession {
             child_count: value.child_count,
             // Not carried on the wire.
             group_updated_at: None,
-            atuin_id,
+            atuin_id: atuin_id_domain(atuin_id)?,
             parent_atuin_id: value.parent_atuin_id.as_ref().map(atuin_id_domain).transpose()?,
             root_atuin_id: value.root_atuin_id.as_ref().map(atuin_id_domain).transpose()?,
             child_atuin_ids: value
