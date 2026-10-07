@@ -578,12 +578,47 @@ pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> R
 /// runtime corrupts its internal state.
 #[cfg(unix)]
 pub fn daemonize_current_process() -> Result<()> {
-    let cwd =
-        std::env::current_dir().wrap_err("could not determine current directory for daemon")?;
+    let settings = Settings::new().wrap_err("could not load client settings")?;
 
-    Daemonize::new().working_directory(cwd).start().wrap_err("failed to daemonize process")?;
+    // Run from `/`, not the directory we were autostarted in: that directory may since have been
+    // deleted, and holding it open would stop its filesystem from being unmounted. A relative path
+    // in the config resolves against the working directory, though, so keep it then, or the daemon
+    // would look for its files somewhere other than the client that started it.
+    let working_directory = if uses_relative_paths(&settings) {
+        std::env::current_dir().wrap_err("could not determine current directory for daemon")?
+    } else {
+        PathBuf::from("/")
+    };
+
+    Daemonize::new()
+        .working_directory(working_directory)
+        .start()
+        .wrap_err("failed to daemonize process")?;
 
     Ok(())
+}
+
+/// Whether any of the paths the daemon uses is configured relative to the working directory.
+#[cfg(unix)]
+fn uses_relative_paths(settings: &Settings) -> bool {
+    // The data dir holds the stores the daemon finds through it: captured output, the AI session
+    // sidecar and the Octavo queue.
+    let data_dir = Settings::effective_data_dir();
+    // The config is read again once the daemon has started, so its location counts too.
+    let config_dir = std::env::var_os("ATUIN_CONFIG_DIR").map(PathBuf::from);
+    [
+        settings.db_path.as_path(),
+        settings.record_store_path.as_path(),
+        settings.key_path.as_path(),
+        Path::new(&settings.daemon.pidfile_path),
+        Path::new(&settings.logs.dir),
+        Path::new(&settings.meta.db_path),
+        data_dir.as_path(),
+    ]
+    .into_iter()
+    .chain(settings.daemon.socket_path.as_deref())
+    .chain(config_dir.as_deref())
+    .any(Path::is_relative)
 }
 
 async fn run(
@@ -649,6 +684,36 @@ mod tests {
             err.to_string(),
             "failed to remove daemon socket /run/atuin.sock: permission denied"
         );
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn default_paths_are_absolute() {
+        assert!(!uses_relative_paths(&Settings::default()));
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::db(|s: &mut Settings| s.db_path = "history.db".into())]
+    #[case::socket(|s: &mut Settings| s.daemon.socket_path = Some("atuin.sock".into()))]
+    #[case::pidfile(|s: &mut Settings| s.daemon.pidfile_path = "atuin.pid".into())]
+    #[case::meta(|s: &mut Settings| s.meta.db_path = "meta.db".into())]
+    fn relative_paths_are_detected(#[case] set: fn(&mut Settings)) {
+        let mut settings = Settings::default();
+        set(&mut settings);
+        assert!(uses_relative_paths(&settings));
+    }
+
+    /// Paths only the client uses don't tie the daemon to its working directory.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::kv(|s: &mut Settings| s.kv.db_path = "kv.db".into())]
+    #[case::scripts(|s: &mut Settings| s.scripts.db_path = "scripts.db".into())]
+    #[case::ai(|s: &mut Settings| s.ai.db_path = "ai.db".into())]
+    fn client_only_relative_paths_are_ignored(#[case] set: fn(&mut Settings)) {
+        let mut settings = Settings::default();
+        set(&mut settings);
+        assert!(!uses_relative_paths(&settings));
     }
 
     #[rstest]
