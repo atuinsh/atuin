@@ -21,7 +21,7 @@ history_filter = [
 
 You can also exclude commands by directory with `cwd_filter`, or prefix individual commands with a space.
 
-See [Excluding Commands from History](https://docs.atuin.sh/guide/excluding-commands/index.md) for more options.
+See [Keeping Secrets Out of Atuin](https://docs.atuin.sh/guide/excluding-commands/index.md) for more options.
 
 ## How do I remove the default up arrow binding?
 

@@ -2,7 +2,7 @@
 
 Atuin uses shell hooks to capture your command history. This page explains how the integration works, and why Atuin might not record commands in certain environments.
 
-To keep specific commands *out* of your history on purpose, see [Excluding Commands from History](https://docs.atuin.sh/guide/excluding-commands/index.md).
+To keep specific commands *out* of your history on purpose, see [Keeping Secrets Out of Atuin](https://docs.atuin.sh/guide/excluding-commands/index.md).
 
 ## How Atuin's Shell Integration Works
 

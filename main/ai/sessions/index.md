@@ -8,7 +8,15 @@ The daemon keeps a local search index of these sessions beside the record store,
 
 Capture keeps the conversation (what you and the agent said) and its tool calls: each call's input and output (the commands run and what they printed, the files read and written). A session resumed from them, on this machine or another, has its tool calls back as they were, and so does a session continued in another agent (see [Resuming](#resuming)). Reasoning is kept only as a marker that the model reasoned.
 
-Secrets Atuin recognises are replaced with `****`, in the conversation and the tool calls alike. Images are left out, and the input or output of a single call is clipped to 64 KiB, keeping its start and its end. As with [output capture](https://docs.atuin.sh/guide/output-capture/index.md), the output of Atuin's own credential commands (`atuin key`, `atuin login`, `atuin register` and `atuin account change-password`) is never kept. Search covers a call's input, but not its output.
+Secrets Atuin recognises are replaced with `****`, in the conversation and the tool calls alike: the [same patterns](https://docs.atuin.sh/configuration/config/#secrets_filter) as for captured command output, and your own [`redact_patterns`](https://docs.atuin.sh/configuration/config/#redact_patterns). Images are left out, and the input or output of a single call is clipped to 64 KiB, keeping its start and its end. Search covers a call's input, but not its output.
+
+The rules that keep things out of your history and your captured output apply to your agents' tool calls too:
+
+- A command [`history_filter`](https://docs.atuin.sh/configuration/config/#history_filter) excludes, or one [`secrets_filter`](https://docs.atuin.sh/configuration/config/#secrets_filter) recognises a credential in, is kept as the name of its tool only, without its input or output. Every call in a directory [`cwd_filter`](https://docs.atuin.sh/configuration/config/#cwd_filter) excludes is kept the same way.
+- A command whose output is never stored is kept without its output: one [`command_filter`](https://docs.atuin.sh/configuration/config/#command_filter) matches, one of Atuin's own credential commands (such as `atuin key` and `atuin login`), or another tool's that prints a credential, such as `gh auth token` or `kubectl get secret`.
+- A file holding credentials (`.env`, `~/.ssh/id_ed25519`, `~/.aws/credentials`, any of your [`sensitive_files`](https://docs.atuin.sh/configuration/config/#sensitive_files)) is never captured: a call that reads one, or a command naming one, is kept without its output, and a call that writes to one without what it wrote.
+
+Text that can't be redacted quickly isn't kept. To keep more out, see [Keeping Secrets Out of Atuin](https://docs.atuin.sh/guide/excluding-commands/index.md).
 
 Tool calls can be a lot of your codebase, not just your conversations. To keep only the name of each tool called (and whether the call failed), set `capture_tools = false` under `[ai]`:
 
@@ -18,7 +26,7 @@ capture_sessions = true
 capture_tools = false
 ```
 
-The setting applies to sessions captured or imported after the daemon picks it up. Sessions already captured keep what they had.
+These settings, and the filters above, apply to sessions captured or imported after the daemon restarts. Sessions already captured keep what they had.
 
 ## Searching
 

@@ -56,14 +56,15 @@ Some output is never stored:
 - **Full-screen programs** such as `vim`, `less`, and `htop`. Anything drawn on the terminal's alternate screen is skipped.
 - **Commands Atuin doesn't record.** Output belongs to a history entry, so a command typed with a leading space, one excluded by [`history_filter`](https://docs.atuin.sh/configuration/config/#history_filter) or [`cwd_filter`](https://docs.atuin.sh/configuration/config/#cwd_filter), or a failing command with [`store_failed = false`](https://docs.atuin.sh/configuration/config/#store_failed) has none.
 - **Commands in [`command_filter`](https://docs.atuin.sh/configuration/config/#command_filter).** These stay in your history; only their output is dropped.
-- **Atuin's own credential commands**: `atuin key`, `atuin login`, `atuin register`, and `atuin account change-password`.
+- **Commands whose output can hold a credential**: Atuin's own `atuin key`, `atuin login`, `atuin register` and `atuin account change-password`, and other tools' commands that print a token, a password or the environment, such as `gh auth token`, `aws configure get`, `kubectl get secret`, `vault kv get`, `op read` and `printenv`. See [`command_filter`](https://docs.atuin.sh/configuration/config/#command_filter) for the list.
+- **Commands that name a file holding credentials**, such as `cat .env` or `cat ~/.aws/credentials`. See [`sensitive_files`](https://docs.atuin.sh/configuration/config/#sensitive_files).
 
 When a command prints more than [`max_output_size`](https://docs.atuin.sh/configuration/config/#max_output_size) (1MB by default), Atuin keeps the start and the end, half each, and drops the middle, recording that it's missing.
 
 ## Privacy
 
-- Recognised credentials in the output (API keys, tokens, and the like) are replaced with `****` before storage, while [`secrets_filter`](https://docs.atuin.sh/configuration/config/#secrets_filter) is on (the default). This is best-effort: it only knows common formats, and misses a credential that colour codes split apart.
-- For a command that prints secrets, don't rely on redaction: add it to [`command_filter`](https://docs.atuin.sh/configuration/config/#command_filter) to keep it in your history but never store its output. See [Excluding commands](https://docs.atuin.sh/guide/excluding-commands/#keep-the-command-drop-its-output-command_filter).
+- Recognised credentials in the output (API keys, tokens, private keys, passwords in URLs and connection strings, values assigned to names like `DB_PASSWORD`) are replaced with `****` before storage, while [`secrets_filter`](https://docs.atuin.sh/configuration/config/#secrets_filter) is on (the default). Add patterns of your own with [`redact_patterns`](https://docs.atuin.sh/configuration/config/#redact_patterns). This is best-effort: it only knows common formats, and misses a credential that colour codes split apart. Output that can't be redacted quickly isn't stored.
+- For a command that prints secrets, don't rely on redaction: add it to [`command_filter`](https://docs.atuin.sh/configuration/config/#command_filter) to keep it in your history but never store its output. See [Keeping secrets out](https://docs.atuin.sh/guide/excluding-commands/#a-commands-output-command_filter).
 - Captured output stays on your machine. **It isn't synced**, even with [sync](https://docs.atuin.sh/guide/sync/index.md) set up. We're actively working on supporting this.
 - Atuin AI only sends output to the LLM when it asks for a specific command's output, and asks your permission first by default. See [Reading Command Output](https://docs.atuin.sh/ai/command-output/#permissions).
 
