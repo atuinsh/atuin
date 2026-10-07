@@ -8,7 +8,7 @@
 //! Anything that clears watermarks or deletes projected rows is an invalidation, and bumps the
 //! [`Generation`] in the same transaction. A reprojection moves a watermark only while the
 //! generation is the one it read before replaying, so it never records as projected what an
-//! invalidation removed or asked to be replayed meanwhile (see the `incremental_sidecar` migration).
+//! invalidation removed or asked to be replayed meanwhile (see `projection_state` in the schema).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -179,8 +179,8 @@ impl AiSessionDatabase {
     }
 
     /// Make sure the watermarks were made with the key whose PASERK id is `key_id`, clearing
-    /// them all when they were not (or when that is unknown, as right after the `incremental_sidecar`
-    /// migration). Returns whether it cleared them.
+    /// them all when they were not (or when that is unknown, as in a new sidecar). Returns whether
+    /// it cleared them.
     ///
     /// A record the key cannot decrypt holds its series' watermark below it, so a stale key
     /// never moves a watermark past what the right one could project. This covers the rest: once
@@ -214,8 +214,7 @@ impl AiSessionDatabase {
     /// Make the next reprojection into the sidecar at `path` a full one, without migrating or
     /// otherwise opening it for use. For the maintenance commands that rewrite the record store
     /// while the daemon (which owns the sidecar) may be running: a reprojection the daemon has in
-    /// flight notices, and starts over. A missing sidecar, or one from before watermarks, is
-    /// replayed in full anyway.
+    /// flight notices, and starts over. A missing sidecar is replayed in full anyway.
     pub async fn invalidate_projection(path: impl AsRef<Path>) -> Result<(), DbError> {
         let path = path.as_ref();
         if !path.exists() {
@@ -260,21 +259,11 @@ impl AiSessionDatabase {
         Ok(())
     }
 
-    /// [`Self::invalidate_projection`] over an open sidecar, at whatever schema version it is.
+    /// [`Self::invalidate_projection`] over an open sidecar.
     async fn invalidate_tables(sqlite: &Sqlite) -> Result<(), DbError> {
         let mut tx = sqlite.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let tables: Vec<String> = db::query_scalar(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN \
-             ('reproject_watermark', 'projection_state')",
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-        if tables.iter().any(|t| t == "reproject_watermark") {
-            db::query("DELETE FROM reproject_watermark").execute(&mut *tx).await?;
-        }
-        if tables.iter().any(|t| t == "projection_state") {
-            Self::bump_generation(&mut tx).await?;
-        }
+        db::query("DELETE FROM reproject_watermark").execute(&mut *tx).await?;
+        Self::bump_generation(&mut tx).await?;
         tx.commit().await?;
         Ok(())
     }

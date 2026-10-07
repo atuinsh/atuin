@@ -47,13 +47,6 @@ enum SubCmd {
         session: String,
     },
 
-    /// Print a session's rendered transcript. Accepts a session id or `latest`.
-    Transcript {
-        /// Session id (a unique prefix is enough), or `latest` for the most recently active session.
-        #[arg(value_name = "ID|latest")]
-        session: String,
-    },
-
     #[command(about = "Full-text search across captured sessions, most relevant first.")]
     Search {
         #[arg(
@@ -167,7 +160,6 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let result = match cmd.cmd {
         SubCmd::List => list(&mut client, style).await,
         SubCmd::Show { session } => show(&mut client, &session, style).await,
-        SubCmd::Transcript { session } => transcript(&mut client, &session, style).await,
         SubCmd::Search {
             query,
             harness,
@@ -279,36 +271,6 @@ async fn show(client: &mut AiClient, selector: &str, style: Style) -> Result<()>
             for m in &messages {
                 write_message_text(&mut out, m)?;
             }
-        }
-    }
-
-    Ok(())
-}
-
-async fn transcript(client: &mut AiClient, selector: &str, style: Style) -> Result<()> {
-    let session = resolve(client, selector).await?;
-
-    let mut stream = client.get_transcript(session.clone()).await?;
-    let mut text = String::new();
-    while let Some(chunk) = stream.next().await {
-        text.push_str(&chunk?.chunk);
-    }
-
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-
-    if style.is_json() {
-        let record = TranscriptJson {
-            harness: harness_name(session.harness).to_owned(),
-            session_id: session.session.into(),
-            transcript: text,
-        };
-        serde_json::to_writer(&mut out, &record)?;
-        writeln!(out)?;
-    } else {
-        write!(out, "{}", sanitize(&text))?;
-        if !text.ends_with('\n') {
-            writeln!(out)?;
         }
     }
 
@@ -1144,13 +1106,6 @@ enum TailEventJson {
     Lagged {
         dropped: u64,
     },
-}
-
-#[derive(Serialize)]
-struct TranscriptJson {
-    harness: String,
-    session_id: String,
-    transcript: String,
 }
 
 #[derive(Serialize)]

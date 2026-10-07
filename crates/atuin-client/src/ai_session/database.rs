@@ -14,7 +14,7 @@ use atuin_common::harnesstools::session::{
 use atuin_common::string::TruncateCharsExt;
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, TryStreamExt};
 use sqlx::migrate::MigrateError;
 use time::OffsetDateTime;
 use tracing::warn;
@@ -31,16 +31,15 @@ mod watermark;
 pub use heads::{Analysis, FastForward, Head};
 pub use watermark::{Generation, Watermark};
 pub use write::PreparedMessage;
-use write::Writer;
+use write::{Interned, Writer};
 
 const COMPRESS_THRESHOLD: usize = 256;
 const ZSTD_LEVEL: i32 = 3;
-const REINDEX_CHUNK: i64 = 512;
 const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 1;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -83,10 +82,13 @@ macro_rules! message_columns {
     () => {
         "m.id, m.harness, (SELECT session_id FROM sessions WHERE id = m.session) AS session_id, \
          (SELECT parent_kind FROM sessions WHERE id = m.session) AS parent_kind, m.source_id, \
-         m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, m.role, \
-         m.content, m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, m.usage_output, \
-         m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, m.stop_reason, \
-         m.usage_present, m.turn_id, m.title_change, m.host_id"
+         m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, (SELECT value \
+         FROM interned WHERE id = m.role) AS role, m.content, m.content_z, (SELECT value FROM \
+         interned WHERE id = m.cwd) AS cwd, (SELECT value FROM interned WHERE id = m.git_branch) \
+         AS git_branch, (SELECT value FROM interned WHERE id = m.model) AS model, m.usage_input, \
+         m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
+         m.stop_reason, m.usage_present, m.turn_id, m.title_change, (SELECT value FROM interned \
+         WHERE id = m.host) AS host_id"
     };
 }
 
@@ -278,7 +280,7 @@ struct SessionRow {
     root_harness: Option<i64>,
     root_session_id: Option<String>,
     copy_of_session_id: Option<String>,
-    atuin_id: Option<Vec<u8>>,
+    atuin_id: Vec<u8>,
     parent_atuin_id: Option<Vec<u8>>,
     root_atuin_id: Option<Vec<u8>>,
     child_atuin_ids: Option<String>,
@@ -403,14 +405,6 @@ struct SearchRow {
     score: f64,
 }
 
-#[derive(sqlx::FromRow)]
-struct ReindexRow {
-    rowid: i64,
-    #[sqlx(flatten)]
-    message: MessageRow,
-    session_title: Option<String>,
-}
-
 impl AiSessionDatabase {
     /// Open the sidecar at `path` to write, creating and migrating it as needed.
     ///
@@ -433,12 +427,11 @@ impl AiSessionDatabase {
             },
             err => err,
         })?;
-        db.reindex().await?;
         Ok(db)
     }
 
     /// Open the sidecar to read beside the daemon that writes it (WAL keeps the two apart): no
-    /// migration or reindex, and no writes. Fails when the file is missing, and with
+    /// migration, and no writes. Fails when the file is missing, and with
     /// [`DbError::Uninitialized`], [`DbError::OutdatedSchema`] or [`DbError::UnknownSchema`]
     /// unless it is at exactly the schema this build reads.
     pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self, DbError> {
@@ -518,33 +511,6 @@ impl AiSessionDatabase {
     async fn migrate(&self) -> Result<(), DbError> {
         let pool = self.db.pool();
         db::migrate!(pool, "./src/ai_session/migrations").await?;
-        self.write(Self::group_migrated).await?;
-        self.write(Self::recount_migrated).await?;
-        self.atuin_id_migrated().await
-    }
-
-    /// Derive ids for sessions stored before the `atuin_id` migration.
-    async fn atuin_id_migrated(&self) -> Result<(), DbError> {
-        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let unset: Vec<(i64, i64, String, i64)> = db::query_as(
-            "SELECT id, harness, session_id, started_at FROM sessions WHERE atuin_id IS NULL",
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-
-        for (id, harness, session_id, started_at) in unset {
-            let handle = HarnessSession {
-                harness: Self::harness_from_repr(harness)?,
-                session: NativeSessionId::from(session_id),
-            };
-            let atuin_id = handle.atuin_id(Self::time_from_millis(started_at)?);
-            db::query("UPDATE sessions SET atuin_id = ? WHERE id = ?")
-                .bind(atuin_id.as_bytes().as_slice())
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
-        }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -557,9 +523,18 @@ impl AiSessionDatabase {
         self.writer.as_ref().ok_or(DbError::ReadOnly)?.run(write).await
     }
 
+    /// Run `write` on the writer with its interned ids (see [`Writer::run_interning`]).
+    async fn write_interning<T, F>(&self, write: F) -> Result<T, DbError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut rusqlite::Connection, &mut Interned) -> Result<T, DbError> + Send + 'static,
+    {
+        self.writer.as_ref().ok_or(DbError::ReadOnly)?.run_interning(write).await
+    }
+
     pub async fn append(&self, msg: &Message) -> Result<Appended, DbError> {
         let msg = PreparedMessage::new(msg.clone())?;
-        self.write(move |conn| Self::append_one(conn, &msg)).await
+        self.write_interning(move |conn, interned| Self::append_one(conn, interned, &msg)).await
     }
 
     /// [`Self::append`] each of `msgs` in order, in one transaction: all of them or, on an error,
@@ -577,7 +552,10 @@ impl AiSessionDatabase {
         if msgs.is_empty() {
             return Ok(true);
         }
-        self.write(move |conn| Self::append_page(conn, &msgs, generation)).await
+        self.write_interning(move |conn, interned| {
+            Self::append_page(conn, interned, &msgs, generation)
+        })
+        .await
     }
 
     pub async fn contains_message(
@@ -634,13 +612,12 @@ impl AiSessionDatabase {
         Ok(ids.into_iter().map(SourceId::from).collect())
     }
 
-    /// Where capture resumes a session, if it checkpointed one with a digest; one without a
-    /// digest reads as `None`, so the session is read again from its start.
+    /// Where capture resumes a session, if it checkpointed one.
     pub async fn checkpoint(
         &self,
         session: &HarnessSession,
     ) -> Result<Option<Checkpoint>, DbError> {
-        let row: Option<(i64, Option<i64>)> = db::query_as(
+        let row: Option<(i64, i64)> = db::query_as(
             "SELECT \"offset\", digest FROM checkpoints WHERE harness = ? AND session_id = ?",
         )
         .bind(session.harness as i64)
@@ -648,12 +625,10 @@ impl AiSessionDatabase {
         .fetch_optional(self.db.pool())
         .await?;
 
-        Ok(row.and_then(|(at, digest)| {
-            Some(Checkpoint {
-                at: u64::try_from(at).unwrap_or(0),
-                digest: digest?.cast_unsigned(),
-                generation: 0,
-            })
+        Ok(row.map(|(at, digest)| Checkpoint {
+            at: u64::try_from(at).unwrap_or(0),
+            digest: digest.cast_unsigned(),
+            generation: 0,
         }))
     }
 
@@ -798,15 +773,15 @@ impl AiSessionDatabase {
         let Some(id) = id else {
             return Ok(parts);
         };
-        // Roles are stored as their JSON, so a role is matched as that text: SQLite walks the
-        // session's messages in time order (`messages_session_timestamp`) and stops at the first
-        // match, without the roles of the rest ever reaching here.
+        // Roles are stored as their JSON's `interned` id, so a role is matched by that: SQLite walks
+        // the session's messages in time order (`messages_session_timestamp`) and stops at the
+        // first match, without the roles of the rest ever reaching here.
         let user = serde_json::to_string(&Role::User)?;
         let assistant = serde_json::to_string(&Role::Assistant)?;
 
         let first: Option<(String, Option<Vec<u8>>)> = db::query_as(
-            "SELECT content, content_z FROM messages WHERE session = ? AND role = ? ORDER BY \
-             timestamp, id LIMIT 1",
+            "SELECT content, content_z FROM messages WHERE session = ? AND role = (SELECT id FROM \
+             interned WHERE value = ?) ORDER BY timestamp, id LIMIT 1",
         )
         .bind(id)
         .bind(&user)
@@ -826,7 +801,8 @@ impl AiSessionDatabase {
                 None => {
                     db::query_as(
                         "SELECT timestamp, id, content, content_z FROM messages WHERE session = ? \
-                         AND role = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
+                         AND role = (SELECT id FROM interned WHERE value = ?) ORDER BY timestamp \
+                         DESC, id DESC LIMIT 1",
                     )
                     .bind(id)
                     .bind(&assistant)
@@ -836,8 +812,8 @@ impl AiSessionDatabase {
                 Some((timestamp, message)) => {
                     db::query_as(
                         "SELECT timestamp, id, content, content_z FROM messages WHERE session = ? \
-                         AND role = ? AND (timestamp < ? OR (timestamp = ? AND id < ?)) ORDER BY \
-                         timestamp DESC, id DESC LIMIT 1",
+                         AND role = (SELECT id FROM interned WHERE value = ?) AND (timestamp < ? \
+                         OR (timestamp = ? AND id < ?)) ORDER BY timestamp DESC, id DESC LIMIT 1",
                     )
                     .bind(id)
                     .bind(&assistant)
@@ -979,13 +955,6 @@ impl AiSessionDatabase {
                 yield Self::message_from_row(row)?;
             }
         }
-    }
-
-    pub fn transcript(
-        &self,
-        session: &HarnessSession,
-    ) -> impl Stream<Item = Result<String, DbError>> + Send + 'static {
-        self.messages(session).map(|result| result.map(|msg| Self::render_transcript_chunk(&msg)))
     }
 
     /// Sessions matching `query` (its terms matching as `terms` says) and passing `filter`, most
@@ -1141,70 +1110,6 @@ impl AiSessionDatabase {
                 };
             }
         }
-    }
-
-    pub async fn reindex(&self) -> Result<(), DbError> {
-        let pool = self.db.pool();
-        // messages_fts rowids are always a contiguous prefix of messages rowids: append writes the
-        // message and its FTS row in one tx, and this backfill (the only other writer, running
-        // under open() before the daemon serves) walks rowids ascending. So the highest indexed
-        // rowid alone determines coverage — gate on max(rowid) (O(log N)) rather than counting
-        // both tables. This also repopulates the index from scratch after a migration rebuilds
-        // messages_fts.
-        let mut watermark: i64 =
-            db::query_scalar("SELECT coalesce(max(rowid), 0) FROM messages_fts")
-                .fetch_one(pool)
-                .await?;
-        let last_message: i64 = db::query_scalar("SELECT coalesce(max(rowid), 0) FROM messages")
-            .fetch_one(pool)
-            .await?;
-        if watermark >= last_message {
-            return Ok(());
-        }
-
-        loop {
-            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-            let rows: Vec<ReindexRow> = db::query_as::<_, ReindexRow>(
-                "SELECT m.rowid AS rowid, m.id, m.harness, s.session_id, m.source_id, \
-                 m.parent_harness, m.parent_session_id, s.parent_kind, m.parent_source_id, \
-                 m.timestamp, m.role, m.content, m.content_z, m.cwd, m.git_branch, m.model, \
-                 m.usage_input, m.usage_output, m.usage_cache_read, m.usage_cache_write, \
-                 m.usage_reasoning, m.stop_reason, m.usage_present, m.turn_id, m.title_change, \
-                 m.host_id, s.title AS session_title FROM messages m JOIN sessions s ON s.id = \
-                 m.session WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
-            )
-            .bind(watermark)
-            .bind(REINDEX_CHUNK)
-            .fetch_all(&mut *tx)
-            .await?;
-
-            let Some(last) = rows.last() else {
-                break;
-            };
-            watermark = last.rowid;
-
-            for row in rows {
-                let rowid = row.rowid;
-                let title = row.session_title.unwrap_or_default();
-                let body = match Self::message_from_row(row.message) {
-                    Ok(msg) => Self::searchable_body(&msg),
-                    Err(err) => {
-                        warn!(?err, rowid, "failed to decode ai-session message; indexing empty");
-                        String::new()
-                    }
-                };
-                db::query(
-                    "INSERT OR REPLACE INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)",
-                )
-                .bind(rowid)
-                .bind(&title)
-                .bind(&body)
-                .execute(&mut *tx)
-                .await?;
-            }
-            tx.commit().await?;
-        }
-        Ok(())
     }
 
     /// The index of the first whitespace word where a query term matches the way the FTS index
@@ -1576,35 +1481,6 @@ impl AiSessionDatabase {
             .build())
     }
 
-    fn render_transcript_chunk(message: &Message) -> String {
-        let role = match &message.role {
-            Role::User => "user",
-            Role::Assistant => "assistant",
-            Role::System => "system",
-            Role::Tool => "tool",
-            Role::Other(other) => other.as_str(),
-        };
-
-        let body = message
-            .content
-            .iter()
-            .filter_map(|content| match content {
-                Content::Text(text) | Content::Reasoning(text) => Some(text.clone()),
-                Content::ReasoningSummary { tokens } => {
-                    Some(atuin_common::harnesstools::session::model::reasoning_label(
-                        tokens.or(message.usage.and_then(|u| u.reasoning)),
-                    ))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Trailing newline: chunks are concatenated verbatim by consumers, so the separator has
-        // to live in the chunk or every message would run together on one line.
-        format!("{role}: {body}\n")
-    }
-
     const fn parent_kind_repr(kind: ParentKind) -> i64 {
         match kind {
             ParentKind::Subagent => 0,
@@ -1656,11 +1532,7 @@ impl AiSessionDatabase {
             session: NativeSessionId::from(row.session_id),
         };
         let started_at = Self::time_from_millis(row.started_at)?;
-        let atuin_id = match row.atuin_id.as_deref() {
-            Some(bytes) => Uuid::from_slice(bytes).map_err(|_| DbError::InvalidAtuinId)?.into(),
-            // A reader can open the sidecar between the migration and its backfill.
-            None => handle.atuin_id(started_at),
-        };
+        let atuin_id = Uuid::from_slice(&row.atuin_id).map_err(|_| DbError::InvalidAtuinId)?.into();
         // A link whose session is not stored yet (or has no stored id) resolves to nothing.
         let linked = |bytes: Option<&[u8]>| {
             bytes.and_then(|bytes| Uuid::from_slice(bytes).ok()).map(AtuinSessionId::from)
@@ -1957,52 +1829,6 @@ mod tests {
         assert_eq!(got[0].turn_id.as_deref(), Some("msg_01"));
     }
 
-    /// Upgrading keeps each message's rowid, which its contentless messages_fts row is keyed by.
-    #[rstest]
-    #[tokio::test]
-    async fn interning_sessions_keeps_the_search_index_aligned() {
-        let sqlite = atuin_common::db::sqlite::Sqlite::builder_in_memory().open().await.unwrap();
-        let pool = sqlite.pool();
-        sqlx::raw_sql(include_str!("migrations/0001_init.sql")).execute(pool).await.unwrap();
-        sqlx::raw_sql(
-            "INSERT INTO sessions (harness, session_id, started_at, updated_at) VALUES (1, 's', \
-             0, 0);
-            INSERT INTO messages (rowid, id, harness, session_id, source_id, timestamp, role, \
-             content)
-                VALUES (7, x'01', 1, 's', 'a', 0, '\"User\"', '[{\"Text\":\"hello\"}]');
-            INSERT INTO messages_fts (rowid, title, body) VALUES (7, '', 'hello');",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-
-        sqlx::raw_sql(include_str!("migrations/0002_intern_sessions.sql"))
-            .execute(pool)
-            .await
-            .unwrap();
-        for migration in [
-            include_str!("migrations/0003_last_reply.sql"),
-            include_str!("migrations/0004_parent_kind.sql"),
-            include_str!("migrations/0005_sessions_updated_at.sql"),
-            include_str!("migrations/0006_incremental_sidecar.sql"),
-            include_str!("migrations/0007_session_scoped_calls.sql"),
-            include_str!("migrations/0008_atuin_id.sql"),
-        ] {
-            sqlx::raw_sql(migration).execute(pool).await.unwrap();
-        }
-
-        // Read-only but for the migration it runs, which goes through the pool.
-        let db = AiSessionDatabase::from_sqlite(sqlite, None);
-        db.atuin_id_migrated().await.unwrap();
-        let hits: Vec<SessionMatch> = db
-            .search("hello", SearchTerms::Typed, &SessionFilter::default(), 0)
-            .try_collect()
-            .await
-            .unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].session.handle.session.as_ref(), "s");
-    }
-
     /// Rows that carry only usage, a title or session context are stored, but are no messages.
     #[rstest]
     #[tokio::test]
@@ -2051,20 +1877,6 @@ mod tests {
         };
         db.set_checkpoint(&session, latest).await.unwrap();
         assert_eq!(db.checkpoint(&session).await.unwrap(), Some(latest));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn a_checkpoint_without_a_digest_reads_as_none() {
-        let db = AiSessionDatabase::in_memory().await.unwrap();
-        let session = sample_handle();
-        db::query("INSERT INTO checkpoints (harness, session_id, \"offset\") VALUES (?, ?, 42)")
-            .bind(session.harness as i64)
-            .bind(session.session.as_ref())
-            .execute(db.db.pool())
-            .await
-            .unwrap();
-        assert_eq!(db.checkpoint(&session).await.unwrap(), None);
     }
 
     #[rstest]
@@ -2418,20 +2230,6 @@ mod tests {
             SourceId::from("syn-1".to_owned()),
             SourceId::from("syn-1-1".to_owned())
         ]);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn transcript_separates_messages() {
-        let db = AiSessionDatabase::in_memory().await.unwrap();
-        let session = sample_handle();
-        for m in ordered_messages(&session) {
-            db.append(&m).await.unwrap();
-        }
-
-        let chunks: Vec<String> = db.transcript(&session).try_collect().await.unwrap();
-        assert!(chunks.iter().all(|c| c.ends_with('\n')), "each chunk must be newline-terminated");
-        assert_eq!(chunks.concat().lines().count(), 3, "messages must not run together");
     }
 
     fn handle(harness: HarnessKind, id: &str) -> HarnessSession {
@@ -3014,48 +2812,33 @@ mod tests {
         assert!(db.contains_message(&first.session, &first.source_id).await.unwrap());
     }
 
+    /// Text interned by a page that failed is gone with the rest of it: a later row with the
+    /// same text stores it afresh rather than pointing at the id the failed page gave it.
     #[rstest]
     #[tokio::test]
-    async fn reindex_backfills_messages_indexed_before_the_fts_row_existed() {
+    async fn text_interned_by_a_failed_page_is_stored_again() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
-        let long: String = (0..64).map(|i| format!("chunk-{i:03}-buried ")).collect();
-        assert!(long.len() >= COMPRESS_THRESHOLD);
-        db.append(&message_in(&session, 0, &long)).await.unwrap();
-        db.append(&message_in(&session, 1, "plain buried token")).await.unwrap();
-
-        // Simulate a sidecar upgraded to the FTS migration with no index rows yet.
-        atuin_common::db::query("DELETE FROM messages_fts").execute(db.db.pool()).await.unwrap();
-        assert!(search(&db, "buried").await.is_empty());
-
-        db.reindex().await.unwrap();
-        assert_eq!(search(&db, "buried").await.len(), 1);
-
-        // A second pass must not duplicate the index or change results.
-        db.reindex().await.unwrap();
-        assert_eq!(search(&db, "buried").await.len(), 1);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn reindex_resumes_from_an_interrupted_backfill() {
-        let db = AiSessionDatabase::in_memory().await.unwrap();
-        let session = sample_handle();
-        db.append(&message_in(&session, 0, "alpha unique-a")).await.unwrap();
-        db.append(&message_in(&session, 1, "beta unique-b")).await.unwrap();
-        db.append(&message_in(&session, 2, "gamma unique-c")).await.unwrap();
-
-        atuin_common::db::query(
-            "DELETE FROM messages_fts WHERE rowid = (SELECT max(rowid) FROM messages_fts)",
+        let in_dir = |index| {
+            let mut msg = message_in(&session, index, "text");
+            msg.cwd = Some(std::path::PathBuf::from("/only/here"));
+            msg
+        };
+        db::query(
+            "CREATE TRIGGER fail_second BEFORE INSERT ON messages WHEN NEW.source_id = 'source-1' \
+             BEGIN SELECT RAISE(ABORT, 'fail'); END",
         )
         .execute(db.db.pool())
         .await
         .unwrap();
-        assert!(search(&db, "unique-c").await.is_empty(), "the highest-rowid row is unindexed");
-        assert_eq!(search(&db, "unique-a").await.len(), 1, "the prefix stays indexed");
+        let page = [0, 1].map(|i| super::PreparedMessage::new(in_dir(i)).unwrap());
+        let generation = db.projection_generation().await.unwrap();
+        db.append_all(page.into(), generation).await.expect_err("the trigger fails the page");
 
-        db.reindex().await.unwrap();
-        assert_eq!(search(&db, "unique-c").await.len(), 1, "reindex fills the suffix gap");
+        db.append(&in_dir(2)).await.unwrap();
+        let stored: Vec<Message> = db.messages(&session).try_collect().await.unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].cwd, Some(std::path::PathBuf::from("/only/here")));
     }
 
     #[rstest]
@@ -3982,60 +3765,6 @@ mod tests {
         assert_eq!(output_in(&db, HarnessKind::ClaudeCode, "resumed").await, 3);
     }
 
-    /// Migrating links the copies stored before by the same rule as rows arriving later.
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_links_only_by_harness_given_turn_ids() {
-        let forms = turn_forms();
-        let db = sidecar_at(BEFORE_INCREMENTAL, &[]).await;
-        for (i, (harness, turn, _)) in forms.iter().enumerate() {
-            for (n, copy) in ["first", "second"].into_iter().enumerate() {
-                let id = format!("{copy}-{i}");
-                let at = i64::try_from(n).unwrap();
-                db::query(
-                    "INSERT INTO sessions (harness, session_id, started_at, updated_at) VALUES \
-                     (?, ?, ?, ?)",
-                )
-                .bind(*harness as i64)
-                .bind(&id)
-                .bind(at)
-                .bind(at)
-                .execute(db.db.pool())
-                .await
-                .unwrap();
-                db::query(
-                    "INSERT INTO messages (id, harness, session, source_id, timestamp, role, \
-                     content, turn_id) VALUES (randomblob(16), ?1, (SELECT id FROM sessions WHERE \
-                     harness = ?1 AND session_id = ?2), 'a1', ?3, '\"Assistant\"', '[]', ?4)",
-                )
-                .bind(*harness as i64)
-                .bind(&id)
-                .bind(at)
-                .bind(*turn)
-                .execute(db.db.pool())
-                .await
-                .unwrap();
-            }
-        }
-
-        db.migrate().await.unwrap();
-
-        for (i, (harness, turn, links)) in forms.into_iter().enumerate() {
-            let second = handle(harness, &format!("second-{i}"));
-            let second = db.get_session(&second).await.unwrap().unwrap();
-            let expected = links.then(|| handle(harness, &format!("first-{i}")));
-            assert_eq!(second.copy_of, expected, "{harness:?} {turn}");
-            assert_eq!(
-                second.group().session.as_ref(),
-                if links {
-                    format!("first-{i}")
-                } else {
-                    format!("second-{i}")
-                }
-            );
-        }
-    }
-
     /// One roots-only row for the lot, with the copies counted as its children and shown as
     /// forks (the copy's subagent is grouped under it too, but is no child a person carried on).
     #[rstest]
@@ -4562,47 +4291,6 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_to_atuin_ids_derives_them_and_replays_every_record() {
-        let db = sidecar_at(7, &[("s", None)]).await;
-        db::query("INSERT INTO reproject_watermark VALUES ('h', 't', 3, 'r')")
-            .execute(db.db.pool())
-            .await
-            .unwrap();
-        let before = db.projection_generation().await.unwrap();
-
-        db.migrate().await.unwrap();
-
-        let session = handle(HarnessKind::ClaudeCode, "s");
-        let stored: Option<Vec<u8>> = db::query_scalar("SELECT atuin_id FROM sessions")
-            .fetch_one(db.db.pool())
-            .await
-            .unwrap();
-        assert_eq!(
-            stored.as_deref(),
-            Some(session.atuin_id(OffsetDateTime::UNIX_EPOCH).as_bytes().as_slice())
-        );
-        let marks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
-            .fetch_one(db.db.pool())
-            .await
-            .unwrap();
-        assert_eq!(marks, 0);
-        assert_ne!(db.projection_generation().await.unwrap(), before);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn a_reader_before_the_backfill_derives_the_id() {
-        let db = sidecar_at(8, &[("s", None)]).await;
-        let session = handle(HarnessKind::ClaudeCode, "s");
-
-        assert_eq!(
-            db.get_session(&session).await.unwrap().unwrap().atuin_id,
-            session.atuin_id(OffsetDateTime::UNIX_EPOCH)
-        );
-    }
-
     /// Links stay (harness, native id): their atuin ids are looked up when read, so a child
     /// stored before its parent names the parent's id once the parent arrives.
     #[rstest]
@@ -4654,22 +4342,6 @@ mod tests {
         let listed = db.list_sessions(&SessionFilter::default()).await.unwrap();
         let listed_child = listed.iter().find(|s| s.handle == child).unwrap();
         assert_eq!(listed_child, &c);
-    }
-
-    /// Sessions stored before the `atuin_id` migration resolve their links once it backfills.
-    #[rstest]
-    #[tokio::test]
-    async fn links_of_sessions_from_before_atuin_ids_resolve() {
-        let db = sidecar_at(7, &[("p", None), ("c", Some("p"))]).await;
-        db.migrate().await.unwrap();
-
-        let (p, c) = (handle(HarnessKind::ClaudeCode, "p"), handle(HarnessKind::ClaudeCode, "c"));
-        let (p, c) = (
-            db.get_session(&p).await.unwrap().unwrap(),
-            db.get_session(&c).await.unwrap().unwrap(),
-        );
-        assert_eq!(c.parent_atuin_id, Some(p.atuin_id));
-        assert_eq!(p.child_atuin_ids, vec![c.atuin_id]);
     }
 
     #[rstest]
@@ -4762,10 +4434,14 @@ mod tests {
         for index in [0, 2, 3, 6] {
             corrupt(&db, &s, index).await;
         }
+        db::query("INSERT INTO interned (value) VALUES ('not json')")
+            .execute(db.db.pool())
+            .await
+            .unwrap();
         for index in [0, 6] {
             db::query(
-                "UPDATE messages SET role = 'not json' WHERE session = (SELECT id FROM sessions \
-                 WHERE session_id = ?) AND source_id = ?",
+                "UPDATE messages SET role = (SELECT id FROM interned WHERE value = 'not json') \
+                 WHERE session = (SELECT id FROM sessions WHERE session_id = ?) AND source_id = ?",
             )
             .bind(s.session.as_ref())
             .bind(format!("source-{index}"))
@@ -4816,11 +4492,11 @@ mod tests {
     async fn preview_parts_use_the_session_time_index() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         for sql in [
-            "SELECT content, content_z FROM messages WHERE session = 1 AND role = '\"User\"' \
-             ORDER BY timestamp, id LIMIT 1",
+            "SELECT content, content_z FROM messages WHERE session = 1 AND role = (SELECT id FROM \
+             interned WHERE value = '\"User\"') ORDER BY timestamp, id LIMIT 1",
             "SELECT timestamp, id, content, content_z FROM messages WHERE session = 1 AND role = \
-             '\"Assistant\"' AND (timestamp < 5 OR (timestamp = 5 AND id < x'00')) ORDER BY \
-             timestamp DESC, id DESC LIMIT 1",
+             (SELECT id FROM interned WHERE value = '\"Assistant\"') AND (timestamp < 5 OR \
+             (timestamp = 5 AND id < x'00')) ORDER BY timestamp DESC, id DESC LIMIT 1",
         ] {
             let plan: Vec<(i64, i64, i64, String)> =
                 db::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
@@ -4945,237 +4621,6 @@ mod tests {
         assert_eq!(newest, Some(SCHEMA_VERSION));
     }
 
-    /// A sidecar at `version`, holding `sessions`, (harness, id, parent) rows written as that
-    /// version stored them.
-    async fn sidecar_at(version: i64, sessions: &[(&str, Option<&str>)]) -> AiSessionDatabase {
-        let (db, writer) = AiSessionDatabase::memory().await.unwrap();
-        #[allow(clippy::disallowed_macros)]
-        let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
-        migrator.migrations =
-            migrator.migrations.iter().filter(|m| m.version <= version).cloned().collect();
-        migrator.run(db.pool()).await.unwrap();
-        for (i, (id, parent)) in sessions.iter().enumerate() {
-            db::query(
-                "INSERT INTO sessions (harness, session_id, parent_harness, parent_session_id, \
-                 started_at, updated_at) VALUES (1, ?, ?, ?, ?, ?)",
-            )
-            .bind(*id)
-            .bind(parent.map(|_| 1))
-            .bind(*parent)
-            .bind(i64::try_from(i).unwrap())
-            .bind(i64::try_from(i).unwrap())
-            .execute(db.pool())
-            .await
-            .unwrap();
-        }
-        AiSessionDatabase::from_sqlite(db, Some(writer))
-    }
-
-    /// The version before the `incremental_sidecar` migration: a released sidecar.
-    const BEFORE_INCREMENTAL: i64 = 5;
-
-    /// Store a row of `session` holding model call `turn` in a sidecar at
-    /// [`BEFORE_INCREMENTAL`], as that version stored them.
-    async fn old_row(db: &AiSessionDatabase, i: usize, session: &str, turn: &str) {
-        db::query(
-            "INSERT INTO messages (id, harness, session, source_id, timestamp, role, content, \
-             turn_id) VALUES (?, 1, (SELECT id FROM sessions WHERE harness = 1 AND session_id = \
-             ?), 'a1', ?, '\"Assistant\"', '[]', ?)",
-        )
-        .bind(vec![u8::try_from(i).unwrap(); 16])
-        .bind(session)
-        .bind(i64::try_from(i).unwrap())
-        .bind(turn)
-        .execute(db.db.pool())
-        .await
-        .unwrap();
-    }
-
-    /// Migrating groups the sessions already stored, and starts without reproject watermarks so
-    /// the next daemon start replays every record (filling in hosts).
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_groups_stored_sessions_and_forces_a_reproject() {
-        let db = sidecar_at(BEFORE_INCREMENTAL, &[
-            ("agent-b", Some("fork")),
-            ("fork", Some("root")),
-            ("root", None),
-            ("orphan", Some("ghost")),
-            ("a", Some("b")),
-            ("b", Some("a")),
-        ])
-        .await;
-
-        db.migrate().await.unwrap();
-
-        let roots = roots_of(&db).await;
-        let root_of = |id: &str| roots.iter().find(|(s, _)| s == id).unwrap().1.clone();
-        assert_eq!(root_of("agent-b"), "root");
-        assert_eq!(root_of("fork"), "root");
-        assert_eq!(root_of("root"), "root");
-        assert_eq!(root_of("orphan"), "orphan");
-        // A parent cycle has no top: its least member heads it.
-        assert_eq!(root_of("a"), "a");
-        assert_eq!(root_of("b"), "a");
-        let watermarks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
-            .fetch_one(db.db.pool())
-            .await
-            .unwrap();
-        assert_eq!(watermarks, 0);
-
-        // Grouping carries on incrementally from the migrated state.
-        db.append(&tree_row("agent-c", Some("agent-b"), 50, "x")).await.unwrap();
-        assert_eq!(roots_of(&db).await.iter().find(|(s, _)| s == "agent-c").unwrap().1, "root");
-    }
-
-    /// Migrating groups a chain of any length under its top.
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_groups_a_deep_chain_under_its_top() {
-        let ids = chain_ids(100);
-        let sessions: Vec<_> = ids.iter().map(|(id, p)| (id.as_str(), p.as_deref())).collect();
-        let db = sidecar_at(BEFORE_INCREMENTAL, &sessions).await;
-
-        db.migrate().await.unwrap();
-
-        let roots = roots_of(&db).await;
-        assert!(roots.iter().all(|(_, root)| root == "s000"), "{roots:?}");
-    }
-
-    /// Migrating links the copies already stored to their originals from the calls they share,
-    /// and regroups them, from the rows alone.
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_links_stored_copies() {
-        let db = sidecar_at(BEFORE_INCREMENTAL, &[
-            ("original", None),
-            ("resumed", None),
-            ("agent-x", Some("resumed")),
-            ("zeta", None),
-        ])
-        .await;
-        for (i, (session, turn)) in
-            [("original", "msg_A"), ("resumed", "msg_A"), ("zeta", "msg_Z")].into_iter().enumerate()
-        {
-            old_row(&db, i, session, turn).await;
-        }
-
-        db.migrate().await.unwrap();
-
-        let links = copy_links(&db).await;
-        let link = |id: &str| links.iter().find(|(s, ..)| s == id).unwrap().clone();
-        assert_eq!(link("resumed").1, "original");
-        assert_eq!(link("resumed").2.as_deref(), Some("original"));
-        assert_eq!(link("agent-x").1, "original");
-        assert_eq!(link("zeta").1, "zeta");
-
-        // Linking carries on incrementally from the migrated state.
-        db.append(&claude_row("twice", None, "a1", 5, Some("msg_A"), 1)).await.unwrap();
-        let links = copy_links(&db).await;
-        assert_eq!(links.iter().find(|(s, ..)| s == "twice").unwrap().1, "original");
-    }
-
-    /// The version before the `session_scoped_calls` migration.
-    const BEFORE_SCOPED_CALLS: i64 = 6;
-
-    /// Migrating attributes the usage already stored afresh from the stored rows: unrelated
-    /// Codex sessions whose content-derived call the old rule merged into one get theirs back,
-    /// a call shared under a harness-given id still counts once, and rows outside any call
-    /// keep counting.
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_recounts_stored_usage() {
-        let db = sidecar_at(BEFORE_SCOPED_CALLS, &[]).await;
-        let codex = HarnessKind::Codex as i64;
-        let claude = HarnessKind::ClaudeCode as i64;
-        let token_count = "token_count:12000.0.40.0.12040";
-        // (harness, session, started, output as the old rule attributed it)
-        let sessions = [
-            (codex, "first", 0, 10 + 4),
-            (codex, "second", 5, 0),
-            (claude, "original", 0, 20),
-            (claude, "resumed", 5, 0),
-        ];
-        for (harness, id, at, output) in sessions {
-            db::query(
-                "INSERT INTO sessions (harness, session_id, started_at, updated_at, usage_output, \
-                 root_harness, root_session_id) VALUES (?1, ?2, ?3, ?3, ?4, ?1, ?2)",
-            )
-            .bind(harness)
-            .bind(id)
-            .bind(at)
-            .bind(output)
-            .execute(db.db.pool())
-            .await
-            .unwrap();
-        }
-        // (harness, session, source, turn, output)
-        let rows = [
-            (codex, "first", "c1", Some(token_count), 10),
-            (codex, "first", "c2", None, 4),
-            (codex, "second", "c1", Some(token_count), 7),
-            (claude, "original", "a1", Some("msg_A"), 20),
-            (claude, "resumed", "a1", Some("msg_A"), 20),
-        ];
-        for (i, (harness, id, source, turn, output)) in rows.into_iter().enumerate() {
-            db::query(
-                "INSERT INTO messages (id, harness, session, source_id, timestamp, role, content, \
-                 turn_id, usage_output, usage_present) VALUES (?1, ?2, (SELECT id FROM sessions \
-                 WHERE harness = ?2 AND session_id = ?3), ?4, ?5, '\"Assistant\"', '[]', ?6, ?7, \
-                 1)",
-            )
-            .bind(vec![u8::try_from(i).unwrap(); 16])
-            .bind(harness)
-            .bind(id)
-            .bind(source)
-            .bind(i64::try_from(i).unwrap())
-            .bind(turn)
-            .bind(output)
-            .execute(db.db.pool())
-            .await
-            .unwrap();
-        }
-        for (harness, turn, owner, output) in
-            [(codex, token_count, "first", 10), (claude, "msg_A", "original", 20)]
-        {
-            db::query(
-                "INSERT INTO calls (harness, turn_id, session_id, usage_input, usage_output, \
-                 usage_cache_read, usage_cache_write, usage_reasoning) VALUES (?, ?, ?, 0, ?, 0, \
-                 0, 0)",
-            )
-            .bind(harness)
-            .bind(turn)
-            .bind(owner)
-            .bind(output)
-            .execute(db.db.pool())
-            .await
-            .unwrap();
-        }
-
-        db.migrate().await.unwrap();
-
-        let sessions = [
-            (HarnessKind::Codex, "first"),
-            (HarnessKind::Codex, "second"),
-            (HarnessKind::ClaudeCode, "original"),
-            (HarnessKind::ClaudeCode, "resumed"),
-        ];
-        let mut got = Vec::new();
-        for (harness, id) in sessions {
-            got.push(output_in(&db, harness, id).await);
-        }
-        assert_eq!(got, vec![14, 7, 20, 0]);
-
-        // Once: migrating again leaves the recount alone, and attribution carries on from it.
-        db.migrate().await.unwrap();
-        db.append(&usage_row(HarnessKind::Codex, "second", None, 6, token_count, 8)).await.unwrap();
-        let mut got = Vec::new();
-        for (harness, id) in sessions {
-            got.push(output_in(&db, harness, id).await);
-        }
-        assert_eq!(got, vec![14, 8, 20, 0]);
-    }
-
     // --- read-only open -------------------------------------------------------------------------
 
     #[fixture]
@@ -5213,8 +4658,7 @@ mod tests {
 
     #[rstest]
     #[case::uninitialized(None)]
-    #[case::outdated(Some(1))]
-    #[case::one_behind(Some(SCHEMA_VERSION - 1))]
+    #[case::outdated(Some(SCHEMA_VERSION - 1))]
     #[case::unknown(Some(99))]
     #[tokio::test]
     async fn a_read_only_open_refuses_another_schema(
@@ -5226,20 +4670,12 @@ mod tests {
             let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
             if let Some(version) = version {
                 #[allow(clippy::disallowed_macros)]
-                let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
-                migrator.migrations =
-                    migrator.migrations.iter().filter(|m| m.version <= version).cloned().collect();
-                migrator.run(db.pool()).await.unwrap();
-                if version > SCHEMA_VERSION {
-                    db::query(
-                        "INSERT INTO _sqlx_migrations (version, description, success, checksum, \
-                         execution_time) VALUES (?, 'future', 1, x'00', 0)",
-                    )
+                sqlx::migrate!("./src/ai_session/migrations").run(db.pool()).await.unwrap();
+                db::query("UPDATE _sqlx_migrations SET version = ?")
                     .bind(version)
                     .execute(db.pool())
                     .await
                     .unwrap();
-                }
             }
             db.close().await;
         }
@@ -5260,15 +4696,12 @@ mod tests {
 
     // --- sidecars from other builds -------------------------------------------------------------
 
-    /// A sidecar a development build migrated with its own numbering: this build's first
-    /// migration, then others at versions this build uses for different ones.
+    /// A sidecar another build migrated past this one: this build's migration, then others it
+    /// does not know.
     async fn dev_build_sidecar(path: &Path) {
         let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
         #[allow(clippy::disallowed_macros)]
-        let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
-        migrator.migrations =
-            migrator.migrations.iter().filter(|m| m.version == 1).cloned().collect();
-        migrator.run(db.pool()).await.unwrap();
+        sqlx::migrate!("./src/ai_session/migrations").run(db.pool()).await.unwrap();
         for (version, description) in [(2, "reproject watermark"), (3, "hosts and roots")] {
             db::query(
                 "INSERT INTO _sqlx_migrations (version, description, success, checksum, \
@@ -5281,8 +4714,8 @@ mod tests {
             .unwrap();
         }
         db::query(
-            "INSERT INTO sessions (harness, session_id, started_at, updated_at) VALUES (1, 'old', \
-             0, 0)",
+            "INSERT INTO sessions (harness, session_id, atuin_id, started_at, updated_at) VALUES \
+             (1, 'old', x'00', 0, 0)",
         )
         .execute(db.pool())
         .await
@@ -5310,40 +4743,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sessions, 1, "the sidecar was touched");
-    }
-
-    /// A sidecar a released daemon left (every migration before `incremental_sidecar`) is
-    /// migrated in place, what it holds kept.
-    #[rstest]
-    #[tokio::test]
-    async fn a_sidecar_from_main_is_migrated_in_place(dir: tempfile::TempDir) {
-        let path = dir.path().join("sidecar.db");
-        {
-            let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
-            #[allow(clippy::disallowed_macros)]
-            let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
-            migrator.migrations = migrator
-                .migrations
-                .iter()
-                .filter(|m| m.version <= BEFORE_INCREMENTAL)
-                .cloned()
-                .collect();
-            migrator.run(db.pool()).await.unwrap();
-            db::query(
-                "INSERT INTO sessions (harness, session_id, parent_harness, parent_session_id, \
-                 parent_kind, started_at, updated_at) VALUES (1, 'kept', 1, 'root', 1, 0, 0)",
-            )
-            .execute(db.pool())
-            .await
-            .unwrap();
-            db.close().await;
-        }
-
-        let db = AiSessionDatabase::open(&path).await.unwrap();
-        db.check_schema().await.unwrap();
-        let kept = db.get_session(&handle(HarnessKind::ClaudeCode, "kept")).await.unwrap().unwrap();
-        assert_eq!(kept.parent_kind, Some(ParentKind::Fork));
-        assert_eq!(kept.inferred_parent_kind(), Some(ParentKind::Fork));
     }
 
     /// A newer build's sidecar is left alone: that build owns it, and this one reports it.

@@ -1251,7 +1251,7 @@ impl Settings {
     /// read-only (`AiSessionDatabase::open_read_only`).
     #[must_use]
     pub fn ai_session_sidecar_path() -> PathBuf {
-        Self::effective_data_dir().join("ai_harness_sessions.db")
+        Self::effective_data_dir().join("ai_session_sidecar.db")
     }
 
     #[must_use]

@@ -221,12 +221,6 @@ impl SessionRefRequest for GetSessionRequest {
     }
 }
 
-impl SessionRefRequest for GetTranscriptRequest {
-    fn session_ref(self) -> Option<agent::HarnessSession> {
-        self.session
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use atuin_client::ai_session::NativeSessionId;

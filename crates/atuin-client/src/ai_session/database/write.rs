@@ -5,7 +5,7 @@
 //! more than the statements themselves; here the whole write runs on a blocking thread, against
 //! a rusqlite connection opened on the same database as the sqlx pool that serves the reads.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,7 +29,57 @@ const STATEMENT_CACHE: usize = 64;
 
 /// The sidecar's writing connection, shared by clones. Writes take turns on it.
 #[derive(Debug, Clone)]
-pub(super) struct Writer(Arc<Mutex<Connection>>);
+pub(super) struct Writer {
+    conn: Arc<Mutex<Connection>>,
+    interned: Arc<Mutex<Interned>>,
+}
+
+/// The `interned` ids this writer has looked up or stored, so the few values a session repeats
+/// on every row cost no query after the first. Only what a committed transaction stored is
+/// kept: an id from one rolled back would point at nothing.
+#[derive(Debug, Default)]
+pub(super) struct Interned {
+    committed: HashMap<String, i64>,
+    pending: HashMap<String, i64>,
+}
+
+impl Interned {
+    /// The `interned` id of `value`, storing it the first time it is seen.
+    fn id(&mut self, conn: &Connection, value: Option<&str>) -> Result<Option<i64>, DbError> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        if let Some(id) = self.committed.get(value).or_else(|| self.pending.get(value)) {
+            return Ok(Some(*id));
+        }
+        let id = match query_scalar("SELECT id FROM interned WHERE value = ?")
+            .bind(value)
+            .fetch_optional(conn)?
+        {
+            Some(id) => id,
+            None => query("INSERT INTO interned (value) VALUES (?)")
+                .bind(value)
+                .execute(conn)?
+                .last_insert_rowid(),
+        };
+        self.pending.insert(value.to_owned(), id);
+        Ok(Some(id))
+    }
+
+    /// Run `write` in a transaction it commits, keeping the ids it stored only if it did.
+    fn transaction<T>(
+        &mut self,
+        write: impl FnOnce(&mut Self) -> Result<(T, bool), DbError>,
+    ) -> Result<T, DbError> {
+        self.pending.clear();
+        let (result, committed) = write(self)?;
+        if committed {
+            let pending = std::mem::take(&mut self.pending);
+            self.committed.extend(pending);
+        }
+        Ok(result)
+    }
+}
 
 impl Writer {
     /// Open `location`, a file the sqlx pool has created or a shared in-memory database's URI,
@@ -40,7 +90,20 @@ impl Writer {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE);
-        Ok(Self(Arc::new(Mutex::new(conn))))
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            interned: Arc::default(),
+        })
+    }
+
+    /// [`Self::run`], with this writer's [`Interned`] ids.
+    pub(super) async fn run_interning<T, F>(&self, write: F) -> Result<T, DbError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection, &mut Interned) -> Result<T, DbError> + Send + 'static,
+    {
+        let interned = Arc::clone(&self.interned);
+        self.run(move |conn| write(conn, &mut interned.lock())).await
     }
 
     /// Run `write` on the connection, on a blocking thread. A panic in it is raised here, as if it
@@ -50,7 +113,7 @@ impl Writer {
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> Result<T, DbError> + Send + 'static,
     {
-        let conn = Arc::clone(&self.0);
+        let conn = Arc::clone(&self.conn);
         let task = tokio::task::spawn_blocking(move || {
             // A write that panicked rolled its transaction back as it unwound: the connection is
             // as good as before it.
@@ -148,34 +211,44 @@ impl AiSessionDatabase {
     /// `generation`: see [`Self::append_all`].
     pub(super) fn append_page(
         conn: &mut Connection,
+        interned: &mut Interned,
         msgs: &[PreparedMessage],
         generation: Generation,
     ) -> Result<bool, DbError> {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current: i64 =
-            query_scalar("SELECT generation FROM projection_state WHERE id = 0").fetch_one(&tx)?;
-        if current != generation.0 {
-            return Ok(false);
-        }
-        for msg in msgs {
-            Self::append_in(&tx, msg)?;
-        }
-        tx.commit()?;
-        Ok(true)
+        interned.transaction(|interned| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let current: i64 = query_scalar("SELECT generation FROM projection_state WHERE id = 0")
+                .fetch_one(&tx)?;
+            if current != generation.0 {
+                return Ok((false, false));
+            }
+            for msg in msgs {
+                Self::append_in(&tx, interned, msg)?;
+            }
+            tx.commit()?;
+            Ok((true, true))
+        })
     }
 
     /// Append `msg` in its own transaction: see [`Self::append`].
     pub(super) fn append_one(
         conn: &mut Connection,
+        interned: &mut Interned,
         msg: &PreparedMessage,
     ) -> Result<Appended, DbError> {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let appended = Self::append_in(&tx, msg)?;
-        tx.commit()?;
-        Ok(appended)
+        interned.transaction(|interned| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let appended = Self::append_in(&tx, interned, msg)?;
+            tx.commit()?;
+            Ok((appended, true))
+        })
     }
 
-    fn append_in(conn: &Connection, prepared: &PreparedMessage) -> Result<Appended, DbError> {
+    fn append_in(
+        conn: &Connection,
+        interned: &mut Interned,
+        prepared: &PreparedMessage,
+    ) -> Result<Appended, DbError> {
         let msg = &prepared.msg;
         let harness = msg.session.harness as i64;
         let session_id = msg.session.session.as_ref();
@@ -226,7 +299,7 @@ impl AiSessionDatabase {
                 id, harness, session, source_id, parent_harness, parent_session_id,
                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
                 usage_input, usage_output, usage_cache_read, usage_cache_write,
-                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host_id
+                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session, source_id) DO NOTHING",
         )
@@ -238,12 +311,12 @@ impl AiSessionDatabase {
         .bind(parent_session_id.clone())
         .bind(msg.parent_source_id.as_ref().map(|s| s.as_ref()))
         .bind(timestamp)
-        .bind(&prepared.role)
+        .bind(interned.id(conn, Some(&prepared.role))?)
         .bind(&prepared.content)
         .bind(prepared.content_z.as_deref())
-        .bind(cwd.clone())
-        .bind(msg.git_branch.as_deref())
-        .bind(msg.model.as_deref())
+        .bind(interned.id(conn, cwd.as_deref())?)
+        .bind(interned.id(conn, msg.git_branch.as_deref())?)
+        .bind(interned.id(conn, msg.model.as_deref())?)
         .bind(usage_input)
         .bind(usage_output)
         .bind(usage_cache_read)
@@ -253,13 +326,13 @@ impl AiSessionDatabase {
         .bind(i64::from(msg.usage.is_some()))
         .bind(msg.turn_id.as_deref())
         .bind(prepared.title_change.as_deref())
-        .bind(host.as_deref())
+        .bind(interned.id(conn, host.as_deref())?)
         .execute(conn)?;
 
         if inserted.rows_affected() == 0 {
-            // A row stored before hosts were tracked learns its host when the reproject replays
-            // its record (see the `incremental_sidecar` migration).
+            // A row stored without a host learns it when the reproject replays its record.
             if let Some(host) = &host {
+                let host = interned.id(conn, Some(host))?;
                 Self::backfill_host(conn, session, source_id, host)?;
             }
             // Another host may have captured this row under another id.
@@ -356,8 +429,8 @@ impl AiSessionDatabase {
             Self::regroup(conn, harness, session_id)?;
         }
         // A copy names no parent, so it is linked to its original through the calls they share
-        // (see the `incremental_sidecar` migration). A link that moves other than by being made regroups
-        // everything.
+        // (see `sessions.copy_of_session_id` in the schema). A link that moves other than by being
+        // made regroups everything.
         let mut relinked = false;
         if let Some(before) = &before {
             if gained_parent {
@@ -435,8 +508,9 @@ impl AiSessionDatabase {
             type BodyRow =
                 (i64, String, Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
             let rows: Vec<BodyRow> = query_as(
-                "SELECT rowid, content, content_z, cwd, git_branch, model FROM messages WHERE \
-                 session = ?",
+                "SELECT rowid, content, content_z, (SELECT value FROM interned WHERE id = cwd), \
+                 (SELECT value FROM interned WHERE id = git_branch), (SELECT value FROM interned \
+                 WHERE id = model) FROM messages WHERE session = ?",
             )
             .bind(session)
             .fetch_all(conn)?;
@@ -555,8 +629,9 @@ impl AiSessionDatabase {
 
     /// For a row of `session` holding call `turn`, just stored: offer each other session holding
     /// the call as the other's original. Each keeps the lowest-ranked original it is offered (see
-    /// the `incremental_sidecar` migration), so this only ever lowers a link, and while no session's start or
-    /// parent moves, the links end up the same whatever order the rows arrive in.
+    /// `sessions.copy_of_session_id` in the schema), so this only ever lowers a link, and while no
+    /// session's start or parent moves, the links end up the same whatever order the rows arrive
+    /// in.
     ///
     /// A session linked for the first time was a root, and is placed like one learning its
     /// parent. Returns whether an existing link moved instead, which needs
@@ -614,8 +689,8 @@ impl AiSessionDatabase {
         Ok(moved)
     }
 
-    /// Link `session` to its original afresh from every call it shares, as
-    /// [`Self::group_migrated`] does. Returns whether its link changed.
+    /// Link `session` to its original afresh from every call it shares. Returns whether its link
+    /// changed.
     fn relink(conn: &Connection, harness: i64, session_id: &str) -> Result<bool, DbError> {
         let (previous, parent): (Option<String>, Option<String>) = query_as(
             "SELECT copy_of_session_id, parent_session_id FROM sessions WHERE harness = ? AND \
@@ -692,16 +767,16 @@ impl AiSessionDatabase {
         Ok(changed)
     }
 
-    /// Record `host` on a stored row that has none, and work its session's host out again.
+    /// Record `host` (its `interned` id) on a stored row that has none, and work its session's
+    /// host out again.
     fn backfill_host(
         conn: &Connection,
         session: i64,
         source_id: &str,
-        host: &str,
+        host: Option<i64>,
     ) -> Result<(), DbError> {
         let filled = query(
-            "UPDATE messages SET host_id = ? WHERE session = ? AND source_id = ? AND host_id IS \
-             NULL",
+            "UPDATE messages SET host = ? WHERE session = ? AND source_id = ? AND host IS NULL",
         )
         .bind(host)
         .bind(session)
@@ -720,8 +795,9 @@ impl AiSessionDatabase {
     /// whatever it has.
     fn refresh_session_host(conn: &Connection, session: i64) -> Result<(), DbError> {
         query(
-            "UPDATE sessions SET host_id = COALESCE((SELECT host_id FROM messages WHERE session = \
-             ?1 AND host_id IS NOT NULL ORDER BY timestamp, id LIMIT 1), host_id) WHERE id = ?1",
+            "UPDATE sessions SET host_id = COALESCE((SELECT (SELECT value FROM interned WHERE id \
+             = host) FROM messages WHERE session = ?1 AND host IS NOT NULL ORDER BY timestamp, id \
+             LIMIT 1), host_id) WHERE id = ?1",
         )
         .bind(session)
         .execute(conn)?;
@@ -995,78 +1071,6 @@ impl AiSessionDatabase {
         Ok(false)
     }
 
-    /// Attribute the usage stored before the `session_scoped_calls` migration afresh from the
-    /// stored rows: that migration empties `calls`, whose rows were attributed by a rule that
-    /// merged unrelated sessions' calls sharing a content-derived turn id. Each session's usage
-    /// starts over from its rows outside any model call, and every call is attributed as rows
-    /// arriving later are ([`Self::attribute_call`]), which depends only on the rows stored and
-    /// how they are grouped (so this runs after [`Self::group_migrated`]: a content-derived call
-    /// is counted once per group of its holders). Runs until it has committed once, and then
-    /// never again.
-    pub(super) fn recount_migrated(conn: &mut Connection) -> Result<(), DbError> {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let recount: i64 = query_scalar("SELECT recount_calls FROM projection_state WHERE id = 0")
-            .fetch_one(&tx)?;
-        if recount == 0 {
-            return Ok(());
-        }
-        query("DELETE FROM calls").execute(&tx)?;
-        query(
-            "UPDATE sessions SET (usage_input, usage_output, usage_cache_read, usage_cache_write, \
-             usage_reasoning) = (SELECT COALESCE(SUM(m.usage_input), 0), \
-             COALESCE(SUM(m.usage_output), 0), COALESCE(SUM(m.usage_cache_read), 0), \
-             COALESCE(SUM(m.usage_cache_write), 0), COALESCE(SUM(m.usage_reasoning), 0) FROM \
-             messages m WHERE m.session = sessions.id AND m.usage_present = 1 AND m.turn_id IS \
-             NULL)",
-        )
-        .execute(&tx)?;
-        let turns: Vec<(i64, String)> = query_as(
-            "SELECT DISTINCT harness, turn_id FROM messages WHERE usage_present = 1 AND turn_id \
-             IS NOT NULL",
-        )
-        .fetch_all(&tx)?;
-        for (harness, turn) in &turns {
-            Self::attribute_call(&tx, *harness, turn)?;
-        }
-        query("UPDATE projection_state SET recount_calls = 0 WHERE id = 0").execute(&tx)?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Link and group the sessions stored before the `incremental_sidecar` migration, which
-    /// leaves them without a root: in Rust rather than in the migration, so it links copies by
-    /// the same [`linkable_turn`] rule and groups them with the same query ([`Self::regroup_all`])
-    /// as rows arriving later are. Every session stored since has a root, so this runs until it
-    /// has committed once, and then never again.
-    pub(super) fn group_migrated(conn: &mut Connection) -> Result<(), DbError> {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let ungrouped: Option<i64> =
-            query_scalar("SELECT 1 FROM sessions WHERE root_harness IS NULL LIMIT 1")
-                .fetch_optional(&tx)?;
-        if ungrouped.is_none() {
-            return Ok(());
-        }
-        // Each parentless session links to the lowest-ranked other parentless session sharing a
-        // call, when that ranks below it (see the migration), as `relink` does one at a time.
-        query(concat!(
-            "UPDATE sessions SET copy_of_session_id = (SELECT t.session_id FROM messages m CROSS \
-             JOIN messages o ON o.harness = m.harness AND o.turn_id = m.turn_id AND o.session <> \
-             m.session CROSS JOIN sessions t ON t.id = o.session WHERE m.session = sessions.id \
-             AND ",
-            linkable_turn!(),
-            " AND t.parent_session_id IS NULL AND (t.started_at, t.session_id) < \
-             (sessions.started_at, sessions.session_id) ORDER BY t.started_at, t.session_id LIMIT \
-             1) WHERE parent_session_id IS NULL"
-        ))
-        .execute(&tx)?;
-        Self::regroup_all(&tx)?;
-        for (harness, turn) in Self::take_regrouped_calls(&tx)? {
-            Self::attribute_call(&tx, harness, &turn)?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
     /// [`Self::forget_host_sparing`], on the writer.
     pub(super) fn forget_host_in(
         conn: &mut Connection,
@@ -1081,7 +1085,7 @@ impl AiSessionDatabase {
         // The sessions going, as a JSON array of their row ids for `json_each`.
         let going: String = query_scalar(
             "SELECT json_group_array(id) FROM sessions WHERE host_id = ?1 OR id IN (SELECT \
-             session FROM messages WHERE host_id = ?1)",
+             session FROM messages WHERE host = (SELECT id FROM interned WHERE value = ?1))",
         )
         .bind(&host)
         .fetch_one(&tx)?;
@@ -1096,8 +1100,9 @@ impl AiSessionDatabase {
         .collect();
         // Every other host with a row in the sessions going: NULL for a row of unknown host.
         let contributors: Vec<Option<String>> = query_scalar(
-            "SELECT DISTINCT m.host_id FROM messages m WHERE m.session IN (SELECT value FROM \
-             json_each(?1)) AND m.host_id IS NOT ?2",
+            "SELECT DISTINCT (SELECT value FROM interned WHERE id = m.host) FROM messages m WHERE \
+             m.session IN (SELECT value FROM json_each(?1)) AND m.host IS NOT (SELECT id FROM \
+             interned WHERE value = ?2)",
         )
         .bind(&going)
         .bind(&host)

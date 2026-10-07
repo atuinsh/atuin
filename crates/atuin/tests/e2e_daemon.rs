@@ -206,7 +206,7 @@ async fn stale_ai_session_index(env: &FreshEnv) -> PathBuf {
     use atuin_common::harnesstools::session::{Content, Role};
 
     std::fs::create_dir_all(env.data_dir()).unwrap();
-    let path = env.data_dir().join("ai_harness_sessions.db");
+    let path = env.data_dir().join("ai_session_sidecar.db");
     let db = AiSessionDatabase::open(&path).await.unwrap();
     let msg = Message::builder()
         .id(atuin_domain::record::RecordId(atuin_common::utils::uuid_v7()))

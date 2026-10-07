@@ -13,12 +13,11 @@ use tonic::{Code, Request, Response, Status};
 use crate::grpc::ai::agent::pb as agent;
 use crate::grpc::ai::session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai::session::pb::{
-    GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    HarnessFilterRequest, ImportSessionsEvent, ImportSessionsProgress, ImportSessionsRequest,
-    ImportSessionsSummary, ListSessionsRequest, RebuildSessionsReply, RebuildSessionsRequest,
-    SearchSessionsMatch, SearchSessionsRequest, SessionFilterRequest, SessionRefRequest,
-    TailSessionsEvent, TailSessionsRequest, get_session_event, import_sessions_event,
-    tail_sessions_event,
+    GetSessionEvent, GetSessionRequest, HarnessFilterRequest, ImportSessionsEvent,
+    ImportSessionsProgress, ImportSessionsRequest, ImportSessionsSummary, ListSessionsRequest,
+    RebuildSessionsReply, RebuildSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
+    SessionFilterRequest, SessionRefRequest, TailSessionsEvent, TailSessionsRequest,
+    get_session_event, import_sessions_event, tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
@@ -91,8 +90,6 @@ pub fn is_rebuilding(status: &Status) -> bool {
 impl GrpcService for Service {
     type ListSessionsStream = Pin<Box<dyn Stream<Item = Result<agent::Session, Status>> + Send>>;
     type GetSessionStream = Pin<Box<dyn Stream<Item = Result<GetSessionEvent, Status>> + Send>>;
-    type GetTranscriptStream =
-        Pin<Box<dyn Stream<Item = Result<GetTranscriptChunk, Status>> + Send>>;
     type SearchSessionsStream =
         Pin<Box<dyn Stream<Item = Result<SearchSessionsMatch, Status>> + Send>>;
     type TailSessionsStream = Pin<Box<dyn Stream<Item = Result<TailSessionsEvent, Status>> + Send>>;
@@ -149,22 +146,6 @@ impl GrpcService for Service {
         let stream = futures::stream::once(async move { Ok(leading) }).chain(messages);
 
         Ok(Response::new(Box::pin(stream)))
-    }
-
-    async fn get_transcript(
-        &self,
-        request: Request<GetTranscriptRequest>,
-    ) -> Result<Response<Self::GetTranscriptStream>, Status> {
-        self.ensure_recovered()?;
-        let handle = request.into_inner().session()?;
-
-        let chunks = self.capture.transcript(&handle).map(|chunk| {
-            chunk
-                .map(|chunk| GetTranscriptChunk { chunk })
-                .map_err(|e| Status::internal(e.to_string()))
-        });
-
-        Ok(Response::new(Box::pin(chunks)))
     }
 
     async fn search_sessions(

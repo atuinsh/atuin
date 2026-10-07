@@ -842,13 +842,6 @@ impl AiHarnessSessionCapture {
         self.sink.sidecar.messages(session)
     }
 
-    pub fn transcript(
-        &self,
-        session: &HarnessSession,
-    ) -> impl Stream<Item = Result<String, DbError>> + Send + 'static {
-        self.sink.sidecar.transcript(session)
-    }
-
     pub fn search(
         &self,
         query: &str,
@@ -1443,14 +1436,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case(None, "Reasoned")]
-    #[case(Some(185), "Reasoning · 185 tokens")]
-    #[case(Some(0), "Reasoning · 0 tokens")]
+    #[case(None)]
+    #[case(Some(185))]
+    #[case(Some(0))]
     #[tokio::test]
-    async fn reasoning_metadata_survives_storage_and_rendering(
-        #[case] tokens: Option<u64>,
-        #[case] label: &str,
-    ) {
+    async fn reasoning_metadata_survives_storage(#[case] tokens: Option<u64>) {
         let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
         let mut msg = sample_message();
         msg.role = Role::Assistant;
@@ -1468,8 +1458,6 @@ mod tests {
                 crate::grpc::ai::agent::pb::ReasoningSummary { tokens }
             ))
         );
-        let mut transcript = Box::pin(rebuilt.transcript(&msg.session));
-        assert_eq!(transcript.next().await.unwrap().unwrap(), format!("assistant: {label}\n"));
     }
 
     /// A row of model call `turn` reporting `output` tokens, `reasoning` of them thinking.
@@ -2415,6 +2403,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn split_and_interleaved_calls_count_reasoning_once() {
+        use futures::TryStreamExt;
         let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
         for (index, (turn, marker, output, reasoning)) in [
             ("a", true, 10, None),
@@ -2434,12 +2423,16 @@ mod tests {
             sink.append(msg).await.unwrap();
         }
         assert_eq!(charged(&sink.sidecar).await, (1049, 227));
-        let transcript: Vec<String> =
-            sink.sidecar.transcript(&sample_handle()).map(Result::unwrap).collect().await;
-        assert_eq!(transcript[..2], [
-            "assistant: Reasoned\n".to_owned(),
-            "assistant: Reasoning · 42 tokens\n".to_owned()
-        ]);
+        let markers: Vec<(Vec<Content>, Option<u64>)> = sink
+            .sidecar
+            .messages(&sample_handle())
+            .map(|msg| msg.map(|msg| (msg.content, msg.usage.and_then(|usage| usage.reasoning))))
+            .take(2)
+            .try_collect()
+            .await
+            .unwrap();
+        let marker = || vec![Content::ReasoningSummary { tokens: None }];
+        assert_eq!(markers, [(marker(), None), (marker(), Some(42))]);
     }
 
     #[rstest]

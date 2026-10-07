@@ -26,9 +26,9 @@ use tracing::{Level, instrument, span};
 use crate::grpc::ai::agent::pb::Session as AiSession;
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
 use crate::grpc::ai::session::pb::{
-    GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    ImportSessionsEvent, ImportSessionsRequest, ListSessionsRequest, RebuildSessionsRequest,
-    SearchSessionsMatch, SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
+    GetSessionEvent, GetSessionRequest, ImportSessionsEvent, ImportSessionsRequest,
+    ListSessionsRequest, RebuildSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
+    TailSessionsEvent, TailSessionsRequest,
 };
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
@@ -592,17 +592,6 @@ impl AiClient {
             session: Some(session.into()),
         };
         Ok(self.client.get_session(request).await?.into_inner())
-    }
-
-    /// Stream a rendered plain-text transcript in chunks; concatenate them in arrival order.
-    pub async fn get_transcript(
-        &mut self,
-        session: HarnessSession,
-    ) -> Result<tonic::Streaming<GetTranscriptChunk>> {
-        let request = GetTranscriptRequest {
-            session: Some(session.into()),
-        };
-        Ok(self.client.get_transcript(request).await?.into_inner())
     }
 
     /// Follow sessions and messages as they are recorded. `harness` filters to one harness when set.
