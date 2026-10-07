@@ -64,12 +64,7 @@ where
                                     pending.push(debounced.event);
                                 }
                             }
-                            if !pending.is_empty() {
-                                let kinds = Self::resolve_kinds(&self.stat, &pending).await;
-                                for event in &pending {
-                                    self.observe_event(event, &kinds);
-                                }
-                            }
+                            self.apply(&pending).await;
                             if force_scan {
                                 self.walk.poll(&mut self.tracker).await;
                             }
@@ -80,6 +75,45 @@ where
                 }
             }
         }
+    }
+
+    /// Bring the tracker in line with a batch of filesystem events, and with what is in any
+    /// directory they created.
+    async fn apply(&mut self, events: &[notify::Event]) {
+        if events.is_empty() {
+            return;
+        }
+        let kinds = Self::resolve_kinds(&self.stat, events).await;
+        for event in events {
+            self.observe_event(event, &kinds);
+        }
+        self.walk.discover(Self::appeared_dirs(events, &kinds), &mut self.tracker).await;
+    }
+
+    /// The directories `events` say appeared (created, or moved in) that are still there. Of a
+    /// rename with both ends, only where it went: a case-only rename on a case-insensitive
+    /// filesystem leaves the old name resolving to the same directory, which would be walked
+    /// again under it.
+    fn appeared_dirs(
+        events: &[notify::Event],
+        kinds: &HashMap<Arc<Path>, PathFingerprint>,
+    ) -> Vec<Arc<Path>> {
+        events
+            .iter()
+            .flat_map(|event| match event.kind {
+                EventKind::Create(_)
+                | EventKind::Modify(ModifyKind::Name(
+                    RenameMode::To | RenameMode::Any | RenameMode::Other,
+                )) => event.paths.as_slice(),
+                EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+                    event.paths.get(1..).unwrap_or_default()
+                }
+                _ => &[],
+            })
+            .filter_map(|path| kinds.get_key_value(path.as_path()))
+            .filter(|(_, fingerprint)| matches!(fingerprint, PathFingerprint::Dir))
+            .map(|(path, _)| Arc::clone(path))
+            .collect()
     }
 
     /// Stat every path referenced by `events`, keeping only the ones that still exist.
@@ -257,6 +291,46 @@ mod tests {
         poller.observe_event(&ev, &kinds);
         assert_eq!(poller.tracker.contains(Path::new("/r/a")), exists);
         assert_eq!(found.len(), yielded);
+    }
+
+    /// A directory created with a file already in it -- written before the backend began watching
+    /// the directory, so no event of its own says so -- yields the file at once, not at the next
+    /// full scan. So does one nested deeper, and one in a directory moved in. A rename with both
+    /// ends walks only where it went, even while the old name still resolves (a case-only rename
+    /// on a case-insensitive filesystem), so no file is yielded under a name it no longer has.
+    #[rstest]
+    #[case::created(EventKind::Create(notify::event::CreateKind::Folder))]
+    #[case::moved_in(EventKind::Modify(ModifyKind::Name(RenameMode::To)))]
+    #[case::renamed(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))]
+    #[tokio::test]
+    async fn a_new_directory_yields_the_files_already_in_it(#[case] kind: EventKind) {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("project");
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        for file in [dir.join("a.jsonl"), dir.join("nested/b.jsonl")] {
+            std::fs::write(file, "{}\n").unwrap();
+        }
+        // Where a rename came from, still there: a stand-in for the old name of a case-only one.
+        let old = root.path().join("old");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("c.jsonl"), "{}\n").unwrap();
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        let (found, files) = flume::unbounded();
+        let mut poller = TreeWatcherPoller::new(
+            WalkPoller::new(pool.clone(), root.path().to_owned(), true),
+            StatPoller::new(pool, Duration::ZERO),
+            FileTracker::new(|_: &Path| true, found),
+        );
+
+        let paths = match kind {
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => vec![old, dir.clone()],
+            _ => vec![dir.clone()],
+        };
+        poller.apply(&[event(kind, paths)]).await;
+
+        let yielded: HashSet<PathBuf> = files.drain().map(|f| f.path().to_owned()).collect();
+        let want = HashSet::from([dir.join("a.jsonl"), dir.join("nested/b.jsonl")]);
+        assert_eq!(yielded, want);
     }
 
     #[rstest]

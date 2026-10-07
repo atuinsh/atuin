@@ -75,10 +75,10 @@ after the daemon restarts. Sessions already captured keep what they had.
 atuin ai session search "flaky test"
 ```
 
-- The last word of the query matches as a prefix once it's at least two
-  characters long, so `atuin ai session search "migr"` finds sessions
-  mentioning "migration." A single character still matches only a whole word.
-  Earlier words always match whole.
+- Each word of the query matches a whole word: `atuin ai session search
+  "migration"` finds sessions mentioning migration, but `"migr"` doesn't.
+  The `atuin ai resume` picker searches as you type, so there the last word
+  also matches as a prefix once it's at least two characters long.
 - An empty query (`atuin ai session search ""`) lists the newest sessions
   first, rather than returning nothing.
 - `--harness` limits the search to one agent.

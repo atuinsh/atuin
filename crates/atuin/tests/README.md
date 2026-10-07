@@ -13,6 +13,16 @@ macOS, with Homebrew Bash on macOS.
 - `e2e_fresh_install`: CLI startup, keys, shell init, and doctor.
 - `e2e_pty`: shell hooks, search, selection, quoting, resize, and filters.
 - `e2e_daemon`: startup, concurrent writers, persistence, and restart.
+- `e2e_ai_sessions`: AI agent sessions captured from each agent's transcripts,
+  synced between two machines through an in-process sync server, and resumed:
+  restored, caught up, forked, switched, or continued in another agent.
+- `e2e_ai_resume_picker`: `atuin ai resume`'s picker and chooser on a PTY, and
+  through each shell's widget.
+
+The AI session tests write transcripts the way Claude Code, Codex, opencode and
+Pi do (`common/agents.rs`), and put stand-ins for those agents on `PATH` that
+print how they were run. Set `ATUIN_E2E_LOG` (an `ATUIN_LOG` filter) to have
+their daemons log more for a failure to show.
 
 ## Add a shell setup
 
