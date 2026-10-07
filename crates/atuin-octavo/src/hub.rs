@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, History, HistoryId};
-use atuin_client::settings::{Settings, SyncAuth};
+use atuin_client::settings::{DEFAULT_HUB_URL, DEFAULT_SYNC_URL, Settings, SyncAuth};
 use atuin_domain::record::RecordId;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -45,8 +45,8 @@ pub enum HubCallError {
     Meta(eyre::Report),
     #[error(transparent)]
     Connect(#[from] ConnectError),
-    #[error("the Octavo endpoint is now {0}; restart the daemon to use it")]
-    EndpointChanged(Url),
+    #[error("Octavo runs only on Atuin's hosted hub, not {0}")]
+    SelfHostedHub(Url),
     #[error("the hub token is not a valid header value")]
     InvalidToken(#[source] InvalidMetadataValue),
     #[error("the hub named no user for the token")]
@@ -65,7 +65,7 @@ impl HubCallError {
             Self::NotLoggedIn
             | Self::Meta(_)
             | Self::Connect(_)
-            | Self::EndpointChanged(_)
+            | Self::SelfHostedHub(_)
             | Self::InvalidToken(_)
             | Self::HistoryNotStored(_)
             | Self::NoUserId => false,
@@ -91,28 +91,28 @@ impl UserId {
     }
 }
 
-/// The hub Octavo's settings pointed at when the client was made.
+/// Atuin's hosted hub, which serves Octavo at `api.atuin.sh`.
 #[derive(Debug, Clone)]
 pub struct HubClient {
-    address: Url,
     service: HubServiceClient<Channel>,
 }
 
 impl HubClient {
     pub fn new(settings: &Settings) -> Result<Self, ConnectError> {
-        let address = octavo_address(settings);
-        let service = HubServiceClient::new(connect(&address, settings.network_connect_timeout)?);
-        Ok(Self { address, service })
+        let channel = connect(&DEFAULT_SYNC_URL, settings.network_connect_timeout)?;
+        Ok(Self {
+            service: HubServiceClient::new(channel),
+        })
     }
 
     /// The hub token logged in now, so work done for this moment's user later still goes to them
     /// after another login.
     pub async fn token(&self, settings: &Settings) -> Result<HubToken, HubCallError> {
-        // A token for one hub must never reach another, so a client keeps to the hub it was made
-        // for.
-        let configured = octavo_address(settings);
-        if configured != self.address {
-            return Err(HubCallError::EndpointChanged(configured));
+        // The hub session belongs to whichever hub is logged in, and a self-hosted hub's token
+        // must never reach Atuin's.
+        let hub = settings.hub_endpoint();
+        if hub != *DEFAULT_HUB_URL {
+            return Err(HubCallError::SelfHostedHub(hub));
         }
 
         let SyncAuth::Hub { token } = settings.resolve_sync_auth().await else {
@@ -272,10 +272,6 @@ impl Caller {
     }
 }
 
-fn octavo_address(settings: &Settings) -> Url {
-    settings.octavo.endpoint.clone().unwrap_or_else(|| settings.hub_endpoint())
-}
-
 fn connect(address: &Url, connect_timeout: Duration) -> Result<Channel, ConnectError> {
     // Together under the default 30s `network_timeout`, so a call on a dead connection drops it,
     // and the retry reconnects instead of waiting out the timeout on the same connection.
@@ -302,4 +298,27 @@ fn connector() -> Result<HttpsConnector<HttpConnector>, ConnectError> {
         .build()
         .map_err(ConnectError::Tls)?;
     Ok(HttpsConnector::from((http, tls.into())))
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::settings::{Settings, SyncProtocol};
+    use rstest::rstest;
+    use url::Url;
+
+    use super::{HubCallError, HubClient};
+
+    #[rstest]
+    #[tokio::test]
+    async fn self_hosted_hub_token_stays_home() {
+        let settings = Settings {
+            sync_address: Url::parse("http://localhost:4000").unwrap(),
+            sync_protocol: SyncProtocol::Hub,
+            ..Settings::default()
+        };
+
+        let token = HubClient::new(&settings).unwrap().token(&settings).await;
+
+        assert!(matches!(token, Err(HubCallError::SelfHostedHub(_))));
+    }
 }
