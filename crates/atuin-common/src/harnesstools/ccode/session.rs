@@ -18,8 +18,8 @@ use crate::harnesstools::session::model::{
     ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
-    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
-    Sessions, WatchError, scan_sessions,
+    Change, Checkpoint, FilePatch, Hunk, Listener, Message, MessageError, Observable, Patch,
+    RuntimeError, Session, SessionId, Sessions, WatchError, scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
@@ -456,7 +456,7 @@ pub struct CcodeMessage {
     /// The error class of an API error line (`rate_limit`, `unknown`, ...).
     error: Option<Box<serde_json::Value>>,
     /// Present on the user lines that carry a tool's result (the tool's own record of it).
-    tool_use_result: Option<IgnoredAny>,
+    tool_use_result: Option<ToolUseResult>,
     /// What the user typed when rejecting a tool call, on the line with its `tool_result`.
     user_feedback: Option<Box<serde_json::Value>>,
     /// The subagent that spawned a nested subagent, from its transcript's metadata file (see
@@ -467,6 +467,132 @@ pub struct CcodeMessage {
     /// `compact_boundary` that kept messages (see [`Self::kept_messages`]).
     #[serde(skip)]
     line_before: Option<String>,
+}
+
+/// What capture reads of a tool's own record of its result (`toolUseResult`): the file an edit or
+/// write changed and its diff (`structuredPatch`), and nothing else. The rest of the record can
+/// hold the whole file before and after (`originalFile`, `content`), which is never parsed.
+#[derive(Debug, Clone, Default)]
+struct ToolUseResult {
+    /// `create` or `update`, on a `Write`'s record.
+    kind: Option<String>,
+    file_path: Option<String>,
+    /// Kept as JSON until read: a record whose patch has a shape this build doesn't know still
+    /// leaves the line readable.
+    structured_patch: Option<Box<serde_json::Value>>,
+}
+
+impl<'de> Deserialize<'de> for ToolUseResult {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Fields;
+
+        impl<'de> serde::de::Visitor<'de> for Fields {
+            type Value = ToolUseResult;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a tool's record of its result")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<ToolUseResult, A::Error> {
+                let mut out = ToolUseResult::default();
+                let text = |value: serde_json::Value| value.as_str().map(str::to_owned);
+                while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                    match key.as_ref() {
+                        "type" => out.kind = text(map.next_value()?),
+                        "filePath" => out.file_path = text(map.next_value()?),
+                        "structuredPatch" => out.structured_patch = Some(map.next_value()?),
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(out)
+            }
+
+            // Any other record (a string, a list) says nothing of a patch.
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<ToolUseResult, A::Error> {
+                while seq.next_element::<IgnoredAny>()?.is_some() {}
+                Ok(ToolUseResult::default())
+            }
+
+            fn visit_str<E>(self, _: &str) -> Result<ToolUseResult, E> {
+                Ok(ToolUseResult::default())
+            }
+
+            fn visit_bool<E>(self, _: bool) -> Result<ToolUseResult, E> {
+                Ok(ToolUseResult::default())
+            }
+
+            fn visit_i64<E>(self, _: i64) -> Result<ToolUseResult, E> {
+                Ok(ToolUseResult::default())
+            }
+
+            fn visit_u64<E>(self, _: u64) -> Result<ToolUseResult, E> {
+                Ok(ToolUseResult::default())
+            }
+
+            fn visit_f64<E>(self, _: f64) -> Result<ToolUseResult, E> {
+                Ok(ToolUseResult::default())
+            }
+
+            fn visit_unit<E>(self) -> Result<ToolUseResult, E> {
+                Ok(ToolUseResult::default())
+            }
+        }
+
+        deserializer.deserialize_any(Fields)
+    }
+}
+
+/// A hunk of a `structuredPatch` (jsdiff's `structuredPatch`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StructuredHunk {
+    old_start: u64,
+    old_lines: u64,
+    new_start: u64,
+    new_lines: u64,
+    lines: Vec<String>,
+}
+
+impl ToolUseResult {
+    /// The file the call `call` changed, when the record has a diff of it (`Edit`, `MultiEdit`,
+    /// `Write`). A new file's diff is empty: its content is the call's input.
+    fn patch(&self, call: &ToolCallId) -> Option<Patch> {
+        let path = self.file_path.clone()?;
+        let hunks: Vec<StructuredHunk> =
+            serde_json::from_value((**self.structured_patch.as_ref()?).clone()).ok()?;
+        let change = if self.kind.as_deref() == Some("create") {
+            Change::Add
+        } else {
+            Change::Update
+        };
+        let hunks = hunks
+            .into_iter()
+            .map(|h| Hunk {
+                old_start: h.old_start,
+                old_lines: h.old_lines,
+                new_start: h.new_start,
+                new_lines: h.new_lines,
+                lines: h.lines,
+            })
+            .collect();
+        Some(Patch {
+            call: call.clone(),
+            files: vec![FilePatch {
+                path,
+                change,
+                moved_to: None,
+                hunks,
+            }],
+        })
+    }
 }
 
 /// The model Claude Code names on the assistant lines it writes itself (API errors, canned
@@ -909,6 +1035,14 @@ impl Message for CcodeMessage {
         }
         if let Some(feedback) = self.user_feedback() {
             content.push(Content::Text(feedback.to_owned()));
+        }
+        // The diff an edit's record keeps, beside the result it is the record of.
+        let call = content.iter().find_map(|block| match block {
+            Content::ToolResult(result) => Some(&result.call),
+            _ => None,
+        });
+        if let Some(patch) = call.zip(self.tool_use_result.as_ref()).and_then(|(c, r)| r.patch(c)) {
+            content.push(Content::Patch(patch));
         }
         content
     }
@@ -2038,6 +2172,53 @@ mod tests {
         let mut raw = serde_json::json!({"type": "user", "uuid": "t1"});
         raw.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
         assert_eq!(parse(&raw).role(), Role::Tool);
+    }
+
+    /// An edit's or write's record of its result keeps the file it changed and the diff, beside
+    /// the result; the rest of the record (the file before and after) is not read.
+    #[rstest]
+    #[case::edit(
+        serde_json::json!({"filePath": "/w/a.rs", "oldString": "b", "newString": "c",
+            "originalFile": "a\nb\n", "structuredPatch": [{"oldStart": 1, "oldLines": 2,
+            "newStart": 1, "newLines": 2, "lines": [" a", "-b", "+c"]}],
+            "userModified": false, "replaceAll": false}),
+        Some((Change::Update, vec![Hunk { old_start: 1, old_lines: 2, new_start: 1,
+            new_lines: 2, lines: vec![" a".into(), "-b".into(), "+c".into()] }]))
+    )]
+    #[case::created(
+        serde_json::json!({"type": "create", "filePath": "/w/a.rs", "content": "x\n",
+            "structuredPatch": [], "originalFile": null}),
+        Some((Change::Add, vec![]))
+    )]
+    #[case::shell(serde_json::json!({"stdout": "ok", "stderr": ""}), None)]
+    #[case::text(serde_json::json!("Error: rejected"), None)]
+    #[case::unknown_patch_shape(
+        serde_json::json!({"filePath": "/w/a.rs", "structuredPatch": "@@ -1 +1 @@"}),
+        None
+    )]
+    #[case::path_not_text(serde_json::json!({"filePath": 1, "structuredPatch": []}), None)]
+    fn an_edits_record_keeps_its_patch(
+        #[case] record: serde_json::Value,
+        #[case] expected: Option<(Change, Vec<Hunk>)>,
+    ) {
+        let m = parse(&serde_json::json!({"type": "user", "uuid": "t1", "toolUseResult": record,
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "done"}]}}));
+        let patch = m.content().into_iter().find_map(|c| match c {
+            Content::Patch(patch) => Some(patch),
+            _ => None,
+        });
+        let expected = expected.map(|(change, hunks)| Patch {
+            call: ToolCallId::from("toolu_1".to_owned()),
+            files: vec![FilePatch {
+                path: "/w/a.rs".into(),
+                change,
+                moved_to: None,
+                hunks,
+            }],
+        });
+        assert_eq!(patch, expected);
+        assert_eq!(m.role(), Role::Tool);
     }
 
     /// What the user typed when rejecting a tool call is their turn (`userFeedback`, CC

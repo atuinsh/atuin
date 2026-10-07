@@ -158,6 +158,9 @@ impl From<Content> for ContentBlock {
             Content::Summary(text) => Block::Summary(text),
             Content::Error(text) => Block::Error(text),
             Content::Other(v) => Block::Other(v.to_string()),
+            Content::Patch(patch) => {
+                Block::Patch(serde_json::to_string(&patch).expect("a patch is always serializable"))
+            }
         };
 
         Self { block: Some(block) }
@@ -193,6 +196,7 @@ impl TryFrom<ContentBlock> for Content {
             Block::Summary(text) => Self::Summary(text),
             Block::Error(text) => Self::Error(text),
             Block::Other(json) => Self::Other(serde_json::from_str(&json)?),
+            Block::Patch(json) => Self::Patch(serde_json::from_str(&json)?),
         })
     }
 }
@@ -403,7 +407,7 @@ impl TryFrom<Session> for DomainSession {
 mod tests {
     use std::collections::BTreeMap;
 
-    use atuin_common::harnesstools::session::Usage;
+    use atuin_common::harnesstools::session::{Change, FilePatch, Hunk, Patch, Usage};
     use proptest::prelude::*;
     use prost::Message as _;
     use rstest::{fixture, rstest};
@@ -514,6 +518,25 @@ mod tests {
             ".{0,8}".prop_map(Content::Summary),
             ".{0,8}".prop_map(Content::Error),
             arb_json().prop_map(Content::Other),
+            ("[a-z0-9]{1,8}", "[a-z/.]{1,12}", prop::collection::vec("[ +-].{0,8}", 0..4))
+                .prop_map(|(call, path, lines)| {
+                    let n = lines.len() as u64;
+                    Content::Patch(Patch {
+                        call: ToolCallId::from(call),
+                        files: vec![FilePatch {
+                            path,
+                            change: Change::Update,
+                            moved_to: None,
+                            hunks: vec![Hunk {
+                                old_start: 1,
+                                old_lines: n,
+                                new_start: 1,
+                                new_lines: n,
+                                lines,
+                            }],
+                        }],
+                    })
+                }),
         ]
     }
 

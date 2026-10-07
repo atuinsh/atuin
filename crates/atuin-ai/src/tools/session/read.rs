@@ -331,6 +331,16 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
                 };
                 let _ = writeln!(body, "{mark} {output}");
             }
+            // The files a call changed, and with `full` how: the diff is the call's input again,
+            // with line numbers and context.
+            (Block::Readable, Content::Patch(patch)) => {
+                let _ = writeln!(body, "± {}", patch.summary());
+                if full {
+                    for file in patch.files.iter().filter(|file| !file.hunks.is_empty()) {
+                        body.push_str(&file.unified());
+                    }
+                }
+            }
             (Block::Readable, Content::ReasoningSummary { .. } | Content::Other(_)) => {}
         }
     }
@@ -340,7 +350,8 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
 
     // A tool result is labelled `tool` whatever the envelope role: some harnesses model tool
     // output as a user turn.
-    let role = if m.content.iter().all(|b| matches!(b, Content::ToolResult(_))) {
+    let role = if m.content.iter().all(|b| matches!(b, Content::ToolResult(_) | Content::Patch(_)))
+    {
         "tool".to_owned()
     } else {
         message_role(m)
@@ -467,7 +478,7 @@ fn classify(block: &Content) -> Block<'_> {
                 error: result.error,
             }
         }
-        Content::ToolUse(_) | Content::ToolResult(_) => Block::Readable,
+        Content::ToolUse(_) | Content::ToolResult(_) | Content::Patch(_) => Block::Readable,
         // Capture keeps only that reasoning happened, which says nothing to a reader.
         Content::ReasoningSummary { .. } | Content::Other(_) => Block::Empty,
     }

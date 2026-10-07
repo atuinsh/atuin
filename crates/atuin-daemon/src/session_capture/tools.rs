@@ -1,5 +1,6 @@
 //! What capture keeps of a tool call's input and output (`ai.capture_tools`).
 
+use atuin_common::harnesstools::session::{FilePatch, Patch};
 use serde_json::{Map, Value};
 
 use super::policy::CapturePolicy;
@@ -58,6 +59,58 @@ impl ToolCapture {
                 }
             }
         }
+    }
+}
+
+impl ToolCapture {
+    /// Applies this policy to the changes a call made to files, returning whether any are kept:
+    /// none with [`Self::Names`], else every file, its lines redacted as `policy` does. A file
+    /// whose redaction would join or split its lines, or takes too long, and every file once
+    /// their lines are past [`TOOL_PAYLOAD_LIMIT`], are kept as the file without its hunks.
+    pub(super) fn apply_patch(self, patch: &mut Patch, policy: &CapturePolicy) -> bool {
+        if self == Self::Names {
+            return false;
+        }
+        let lines = patch.files.iter().flat_map(|f| &f.hunks).flat_map(|h| &h.lines);
+        if lines.map(|l| l.len() + 1).sum::<usize>() > TOOL_PAYLOAD_LIMIT {
+            for file in &mut patch.files {
+                file.hunks.clear();
+            }
+        }
+        for file in &mut patch.files {
+            redact_hunks(file, policy);
+        }
+        true
+    }
+}
+
+/// `file`'s hunks with their lines redacted as the text they make up together, without their
+/// prefixes (` `, `-`, `+`), which would run into a secret a line starts with; a file whose
+/// redaction joins or splits lines, or takes too long, is kept without its hunks, which would no
+/// longer add up or might hold a secret.
+fn redact_hunks(file: &mut FilePatch, policy: &CapturePolicy) {
+    for hunk in &mut file.hunks {
+        let split: Vec<(&str, &str)> = hunk
+            .lines
+            .iter()
+            .map(|line| line.split_at(line.chars().next().map_or(0, char::len_utf8)))
+            .collect();
+        let text = split.iter().map(|(_, text)| *text).collect::<Vec<_>>().join("\n");
+        let redacted = match policy.redact(&text) {
+            Some(std::borrow::Cow::Borrowed(_)) => continue,
+            Some(std::borrow::Cow::Owned(redacted)) => redacted,
+            None => {
+                file.hunks.clear();
+                return;
+            }
+        };
+        let texts: Vec<&str> = redacted.split('\n').collect();
+        if texts.len() != split.len() {
+            file.hunks.clear();
+            return;
+        }
+        hunk.lines =
+            split.iter().zip(texts).map(|((prefix, _), text)| format!("{prefix}{text}")).collect();
     }
 }
 
@@ -512,5 +565,69 @@ mod tests {
         fn clip_keeps_text_that_fits_whole(text in ".{0,50}", keep in 200usize..400) {
             prop_assert_eq!(clip(&text, keep), text);
         }
+    }
+
+    fn patch(lines: &[&str]) -> Patch {
+        use atuin_common::harnesstools::session::{Change, Hunk};
+        let n = lines.len() as u64;
+        Patch {
+            call: "call_1".to_owned().into(),
+            files: vec![FilePatch {
+                path: "/w/.env".to_owned(),
+                change: Change::Update,
+                moved_to: None,
+                hunks: vec![Hunk {
+                    old_start: 1,
+                    old_lines: n,
+                    new_start: 1,
+                    new_lines: n,
+                    lines: lines.iter().map(|l| (*l).to_owned()).collect(),
+                }],
+            }],
+        }
+    }
+
+    /// A patch is kept with its lines, unless only tool names are captured.
+    #[rstest]
+    fn a_patch_is_kept_unless_only_names_are() {
+        let lines = [" a", "-b", "+c"];
+        let mut kept = patch(&lines);
+        assert!(ToolCapture::Payloads.apply_patch(&mut kept, &CapturePolicy::default()));
+        assert_eq!(kept, patch(&lines));
+        assert!(!ToolCapture::Names.apply_patch(&mut patch(&lines), &CapturePolicy::default()));
+    }
+
+    /// A secret on a line is redacted, the line keeping its side.
+    #[rstest]
+    fn a_patchs_secrets_are_redacted() {
+        let mut kept = patch(&[" a", "-AWS_SECRET_ACCESS_KEY=old", "+AWS_SECRET_ACCESS_KEY=new"]);
+        assert!(ToolCapture::Payloads.apply_patch(&mut kept, &CapturePolicy::default()));
+        let lines = &kept.files[0].hunks[0].lines;
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].starts_with('-') && lines[2].starts_with('+'), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.contains("old") || l.contains("new")), "{lines:?}");
+    }
+
+    /// A token a line starts with is found without the line's prefix, which would otherwise run
+    /// into it, and redacted with the line keeping its side.
+    #[rstest]
+    fn a_token_starting_a_line_is_redacted() {
+        let token = "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";
+        let mut kept = patch(&[" a", &format!("-{token}"), &format!("+{token}")]);
+        assert!(ToolCapture::Payloads.apply_patch(&mut kept, &CapturePolicy::default()));
+        let lines = &kept.files[0].hunks[0].lines;
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].starts_with('-') && lines[2].starts_with('+'), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.contains(token)), "{lines:?}");
+    }
+
+    /// Past the payload limit, every file is kept without its lines.
+    #[rstest]
+    fn a_patch_past_the_limit_keeps_only_its_files() {
+        let long = format!("+{}", "x".repeat(TOOL_PAYLOAD_LIMIT));
+        let mut kept = patch(&[&long]);
+        assert!(ToolCapture::Payloads.apply_patch(&mut kept, &CapturePolicy::default()));
+        assert_eq!(kept.files.len(), 1);
+        assert!(kept.files[0].hunks.is_empty());
     }
 }

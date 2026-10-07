@@ -601,3 +601,117 @@ fn refuses_ids_that_are_not_file_names(projects: TempDir, #[case] id: &str) {
     let s = session(id, projects.path(), Vec::new());
     assert!(matches!(rehydrate_into(projects.path(), &s), Err(RehydrateError::Other(_))));
 }
+
+/// An edit's or write's result whose patch capture kept is written with the record Claude Code
+/// shows its diff from, the call's own strings filled in; one without a patch keeps its text.
+#[rstest]
+#[case::edit(
+    "Edit",
+    json!({"file_path": "/w/a.rs", "old_string": "b", "new_string": "c"}),
+    Change::Update,
+    json!({"filePath": "/w/a.rs", "oldString": "b", "newString": "c", "originalFile": null,
+        "structuredPatch": [{"oldStart": 1, "oldLines": 2, "newStart": 1, "newLines": 2,
+            "lines": [" a", "-b", "+c"]}],
+        "userModified": false, "replaceAll": false})
+)]
+#[case::write(
+    "Write",
+    json!({"file_path": "/w/a.rs", "content": "a\nc\n"}),
+    Change::Update,
+    json!({"type": "update", "filePath": "/w/a.rs", "content": "a\nc\n",
+        "structuredPatch": [{"oldStart": 1, "oldLines": 2, "newStart": 1, "newLines": 2,
+            "lines": [" a", "-b", "+c"]}],
+        "originalFile": null})
+)]
+#[case::multi_edit(
+    "MultiEdit",
+    json!({"file_path": "/w/a.rs", "edits": [{"old_string": "b", "new_string": "c"}]}),
+    Change::Update,
+    json!({"filePath": "/w/a.rs", "edits": [{"old_string": "b", "new_string": "c"}],
+        "originalFileContents": null,
+        "structuredPatch": [{"oldStart": 1, "oldLines": 2, "newStart": 1, "newLines": 2,
+            "lines": [" a", "-b", "+c"]}],
+        "userModified": false})
+)]
+#[case::created(
+    "Write",
+    json!({"file_path": "/w/a.rs", "content": "a\n"}),
+    Change::Add,
+    json!({"type": "create", "filePath": "/w/a.rs", "content": "a\n", "structuredPatch": [],
+        "originalFile": null})
+)]
+fn an_edits_result_gets_its_record_back(
+    projects: TempDir,
+    #[case] tool: &str,
+    #[case] input: serde_json::Value,
+    #[case] change: Change,
+    #[case] record: serde_json::Value,
+) {
+    let call = ToolCallId::from("toolu_1".to_owned());
+    let hunks = if change == Change::Add {
+        Vec::new()
+    } else {
+        vec![crate::harnesstools::session::Hunk {
+            old_start: 1,
+            old_lines: 2,
+            new_start: 1,
+            new_lines: 2,
+            lines: vec![" a".into(), "-b".into(), "+c".into()],
+        }]
+    };
+    let patch = Patch {
+        call: call.clone(),
+        files: vec![crate::harnesstools::session::FilePatch {
+            path: "/w/a.rs".into(),
+            change,
+            moved_to: None,
+            hunks,
+        }],
+    };
+    let messages = vec![
+        message("u1", None, Role::User, vec![Content::Text("edit it".into())]),
+        message("a1", Some("u1"), Role::Assistant, vec![Content::ToolUse(ToolUse {
+            id: call.clone(),
+            name: tool.into(),
+            input,
+        })]),
+        message("t1", Some("a1"), Role::Tool, vec![
+            Content::ToolResult(ToolResult {
+                call,
+                output: json!("done"),
+                error: false,
+            }),
+            Content::Patch(patch.clone()),
+        ]),
+    ];
+    let session = session("5d1f0b1e-4a8e-4f1b-9d59-2c0f2f3f0a11", projects.path(), messages);
+    let written = lines(&rehydrate_into(projects.path(), &session).unwrap());
+    let result = written.iter().find(|l| l["uuid"] == "t1").unwrap();
+    assert_eq!(result["toolUseResult"], record);
+    // Read back, the line carries the same patch.
+    let read: CcodeMessage = serde_json::from_value(result.clone()).unwrap();
+    assert!(read.content().contains(&Content::Patch(patch)));
+}
+
+/// A result without a patch keeps its text as its record.
+#[rstest]
+fn a_result_without_a_patch_keeps_its_text(projects: TempDir) {
+    let call = ToolCallId::from("toolu_1".to_owned());
+    let messages = vec![
+        message("u1", None, Role::User, vec![Content::Text("run it".into())]),
+        message("a1", Some("u1"), Role::Assistant, vec![Content::ToolUse(ToolUse {
+            id: call.clone(),
+            name: "Bash".into(),
+            input: json!({"command": "ls"}),
+        })]),
+        message("t1", Some("a1"), Role::Tool, vec![Content::ToolResult(ToolResult {
+            call,
+            output: json!("a.rs"),
+            error: false,
+        })]),
+    ];
+    let session = session("5d1f0b1e-4a8e-4f1b-9d59-2c0f2f3f0a11", projects.path(), messages);
+    let written = lines(&rehydrate_into(projects.path(), &session).unwrap());
+    let result = written.iter().find(|l| l["uuid"] == "t1").unwrap();
+    assert_eq!(result["toolUseResult"], json!("a.rs"));
+}

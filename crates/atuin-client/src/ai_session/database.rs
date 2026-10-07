@@ -1388,6 +1388,16 @@ impl AiSessionDatabase {
                 Self::push_json_text(out, &tool.input);
             }
             Content::Other(value) => Self::push_json_text(out, value),
+            // The files a call changed are what a search for them looks for; their lines are
+            // tool output like any other.
+            Content::Patch(patch) => {
+                for file in &patch.files {
+                    for path in std::iter::once(&file.path).chain(&file.moved_to) {
+                        out.push_str(path);
+                        out.push('\n');
+                    }
+                }
+            }
             // Tool output (with `ai.capture_tools`) is most of a session's bytes, and would grow
             // the index as much, with files and logs rather than what was said or done. Activity
             // metadata is not conversational text and adds no useful search terms.
@@ -2533,6 +2543,40 @@ mod tests {
             assert_eq!(search(&db, query).await.len(), 1, "query {query:?} should match");
         }
         assert!(search(&db, "ENOSPC").await.is_empty(), "tool output is not indexed");
+    }
+
+    /// A session is found by the files its calls changed, a moved file by both its names; not
+    /// by the lines changed.
+    #[rstest]
+    #[tokio::test]
+    async fn search_matches_the_files_a_patch_changed() {
+        use atuin_common::harnesstools::session::{Change, FilePatch, Hunk, Patch};
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let moved = FilePatch {
+            path: "src/renamed_from.rs".to_owned(),
+            change: Change::Update,
+            moved_to: Some("src/renamed_to.rs".to_owned()),
+            hunks: vec![Hunk {
+                old_start: 1,
+                old_lines: 1,
+                new_start: 1,
+                new_lines: 1,
+                lines: vec!["-quokka".to_owned(), "+wombat".to_owned()],
+            }],
+        };
+        db.append(&message_with(&session, 0, Role::Tool, vec![Content::Patch(Patch {
+            call: ToolCallId::from("call-1".to_owned()),
+            files: vec![moved],
+        })]))
+        .await
+        .unwrap();
+
+        for query in ["renamed_from", "renamed_to"] {
+            assert_eq!(search(&db, query).await.len(), 1, "query {query:?} should match");
+        }
+        assert!(search(&db, "wombat").await.is_empty(), "changed lines are not indexed");
     }
 
     #[rstest]

@@ -103,7 +103,7 @@ pub fn is_uncaptured(content: &Content) -> bool {
 
 /// `messages` with every tool call captured without its input turned into a note in the text of
 /// its assistant turn ([`tool_note`]: `[ran a shell command]`, the same one several times in a
-/// row counted, `×3`), and its result dropped.
+/// row counted, `×3`), and its result (and any patch of it) dropped.
 ///
 /// No harness's API takes a call without its input (Claude's `tool_use.input` must be an object,
 /// a Codex `function_call`'s `arguments` a JSON string, ...), and one made up would tell the model
@@ -133,7 +133,11 @@ pub fn flatten_uncaptured_calls(
         return rows;
     }
     for row in &mut rows {
-        row.content.retain(|c| !matches!(c, Content::ToolResult(r) if calls.contains(&r.call)));
+        row.content.retain(|c| match c {
+            Content::ToolResult(r) => !calls.contains(&r.call),
+            Content::Patch(p) => !calls.contains(&p.call),
+            _ => true,
+        });
     }
     match how {
         Flatten::Runs => merge_runs(&mut rows),
@@ -466,7 +470,7 @@ pub(crate) mod testing {
                 Content::Summary(_) | Content::Error(_) | Content::ReasoningSummary { .. } => {
                     Some(c.clone())
                 }
-                Content::Text(_) | Content::Other(_) => None,
+                Content::Text(_) | Content::Other(_) | Content::Patch(_) => None,
             })
             .collect()
     }

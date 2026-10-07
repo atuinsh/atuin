@@ -404,3 +404,52 @@ fn output_not_captured_says_so(sessions: TempDir) {
         json!([{"type": "text", "text": UNCAPTURED_OUTPUT}])
     );
 }
+
+/// An `edit` result whose patch capture kept gets back the `details` pi shows its diff from,
+/// and reads back as the same patch.
+#[rstest]
+fn an_edits_result_gets_its_details_back(sessions: TempDir) {
+    use crate::harnesstools::session::{Change, FilePatch, Hunk, ToolCallId, ToolUse};
+
+    let call = ToolCallId::from("t1".to_owned());
+    let patch = Patch {
+        call: call.clone(),
+        files: vec![FilePatch {
+            path: "src/a.ts".to_owned(),
+            change: Change::Update,
+            moved_to: None,
+            hunks: vec![Hunk {
+                old_start: 1,
+                old_lines: 2,
+                new_start: 1,
+                new_lines: 2,
+                lines: vec![" a".into(), "-b".into(), "+c".into()],
+            }],
+        }],
+    };
+    let session = session("s-edit", sessions.path(), vec![
+        message("u1", None, Role::User, vec![Content::Text("edit it".to_owned())]),
+        message("a1", Some("u1"), Role::Assistant, vec![Content::ToolUse(ToolUse {
+            id: call.clone(),
+            name: "edit".to_owned(),
+            input: json!({"path": "src/a.ts", "edits": [{"oldText": "b", "newText": "c"}]}),
+        })]),
+        message("r1", Some("a1"), Role::Tool, vec![
+            Content::ToolResult(ToolResult {
+                call,
+                output: json!([{"type": "text", "text": "Successfully replaced 1 block(s)."}]),
+                error: false,
+            }),
+            Content::Patch(patch.clone()),
+        ]),
+    ]);
+    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let lines = lines(&path);
+    let result = lines.iter().find(|l| l["id"] == "r1").unwrap();
+    assert_eq!(
+        result["message"]["details"],
+        json!({"diff": " 1 a\n-2 b\n+2 c", "patch": "--- src/a.ts\n+++ src/a.ts\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n", "firstChangedLine": 2})
+    );
+    let read: PiMessage = serde_json::from_value(result.clone()).unwrap();
+    assert!(read.content().contains(&Content::Patch(patch)));
+}

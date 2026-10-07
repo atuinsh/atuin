@@ -1,6 +1,7 @@
 mod checkpoint;
 pub mod error;
 pub mod model;
+pub mod patch;
 pub mod synthetic;
 
 use std::future::Future;
@@ -14,6 +15,7 @@ pub use model::{
     Content, MessageId, ParentKind, Role, SessionEvent, SessionId, StopReason, TitleChange,
     TitleSource, ToolCallId, ToolResult, ToolUse, Usage, is_substantive,
 };
+pub use patch::{Change, FilePatch, Hunk, Patch};
 use time::OffsetDateTime;
 
 use crate::sync::BlockingPool;

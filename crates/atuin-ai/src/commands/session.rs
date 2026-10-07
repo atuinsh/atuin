@@ -691,6 +691,12 @@ fn write_message_text(out: &mut dyn Write, m: &Message) -> io::Result<()> {
                 }
                 writeln!(out)?;
             }
+            Content::Patch(patch) => {
+                writeln!(out, "[patch] {}", sanitize(&patch.summary()))?;
+                for file in patch.files.iter().filter(|file| !file.hunks.is_empty()) {
+                    write!(out, "{}", sanitize(&file.unified()))?;
+                }
+            }
         }
     }
     writeln!(out)
@@ -722,6 +728,8 @@ enum Summary {
         is_error: bool,
         body: String,
     },
+    /// The files a tool call changed.
+    Patch(String),
 }
 
 impl Summary {
@@ -732,6 +740,7 @@ impl Summary {
             Self::Thinking(t) => format!("{} {t}", paint("»", Ansi::Dim, color)),
             Self::ToolCall(name) => format!("{} {name}", paint("⚙", Ansi::Blue, color)),
             Self::Error(body) => format!("{} {body}", paint("✗", Ansi::Red, color)),
+            Self::Patch(files) => format!("{} {files}", paint("±", Ansi::Yellow, color)),
             Self::ToolResult { is_error, body } => {
                 let mark = if *is_error {
                     paint("✗", Ansi::Red, color)
@@ -791,6 +800,9 @@ fn message_summary(m: &Message) -> Option<Summary> {
                         .map(|output| one_line(&output, SUMMARY_WIDTH))
                         .unwrap_or_default(),
                 });
+            }
+            Content::Patch(patch) => {
+                return Some(Summary::Patch(one_line(&patch.summary(), SUMMARY_WIDTH)));
             }
         }
     }
@@ -1074,6 +1086,22 @@ enum ContentJson {
         content: String,
         is_error: bool,
     },
+    Patch {
+        tool_use_id: String,
+        files: Vec<FilePatchJson>,
+    },
+}
+
+#[derive(Serialize)]
+struct FilePatchJson {
+    path: String,
+    change: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    moved_to: Option<String>,
+    additions: usize,
+    deletions: usize,
+    /// The file's hunks as a unified diff; empty when capture kept the file but not its lines.
+    diff: String,
 }
 
 #[derive(Serialize)]
@@ -1238,6 +1266,21 @@ fn content_json(block: &Content, reasoning: Option<u64>) -> ContentJson {
             tool_use_id: tr.call.to_string(),
             content: tr.output_text().unwrap_or_default().into_owned(),
             is_error: tr.error,
+        },
+        Content::Patch(patch) => ContentJson::Patch {
+            tool_use_id: patch.call.to_string(),
+            files: patch
+                .files
+                .iter()
+                .map(|file| FilePatchJson {
+                    path: file.path.clone(),
+                    change: file.change.as_str(),
+                    moved_to: file.moved_to.clone(),
+                    additions: file.additions(),
+                    deletions: file.deletions(),
+                    diff: file.hunks_text(),
+                })
+                .collect(),
         },
     }
 }

@@ -26,7 +26,9 @@
 //!   with nothing to write hangs from, so the transcript says which synced rows it holds.
 //! - **Tool output**: written back as captured (`ai.capture_tools`). Capture keeps none with
 //!   it off; a call kept with its input (older records) gets [`UNCAPTURED_OUTPUT`] as its
-//!   `tool_result` content, which says so to the model.
+//!   `tool_result` content, which says so to the model. An edit's or write's result gets back
+//!   the record Claude Code shows its diff from (`toolUseResult.structuredPatch`) where capture
+//!   kept the patch, without the file as it was before, which is never synced.
 //! - **Pasted images and documents**: capture keeps what they were, not their bytes. Each becomes
 //!   a text placeholder saying so. Other blocks capture kept raw are dropped.
 //! - **Empty lines**: rows with nothing left to write (attachments, hook records, turn timings)
@@ -53,7 +55,9 @@ use crate::harnesstools::rehydrate::{
     break_line_cycles, flatten_uncaptured_calls, on_parent_cycles, record_merged,
 };
 use crate::harnesstools::resume;
-use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, Usage};
+use crate::harnesstools::session::{
+    Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
+};
 
 /// The longest project directory name Claude Code writes before shortening it with a hash
 /// (`Kne` in CC 2.1.283).
@@ -198,6 +202,8 @@ struct Writer<'a> {
     merged: Vec<(String, String)>,
     /// Calls of tools the API ran itself: their results came back on an assistant line.
     server_tools: HashSet<&'a str>,
+    /// Every call, by id: a result's record of an edit says what the edit was.
+    calls: HashMap<&'a str, &'a ToolUse>,
 }
 
 impl<'a> Writer<'a> {
@@ -245,6 +251,15 @@ impl<'a> Writer<'a> {
                 _ => None,
             })
             .collect();
+        let calls = session
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|c| match c {
+                Content::ToolUse(u) => Some((u.id.as_ref(), u)),
+                _ => None,
+            })
+            .collect();
         let mut writer = Self {
             session,
             lines: Vec::new(),
@@ -255,6 +270,7 @@ impl<'a> Writer<'a> {
             last: after,
             boundaries,
             server_tools,
+            calls,
             merged: Vec::new(),
         };
         writer.writable = session
@@ -348,7 +364,7 @@ impl<'a> Writer<'a> {
     fn line(&self, m: &RehydrateMessage, parent: Option<&str>) -> Option<Value> {
         match &m.role {
             Role::User => user_line(&m.content),
-            Role::Tool => tool_line(&m.content),
+            Role::Tool => tool_line(&m.content, &self.calls),
             Role::System if self.boundaries.contains(m.source_id.as_str()) => {
                 let text = joined_text(&m.content);
                 Some(json!({
@@ -501,8 +517,9 @@ fn user_line(content: &[Content]) -> Option<Value> {
     Some(json!({"type": "user", "message": {"role": "user", "content": content}}))
 }
 
-/// Tool results, sent in the user's turn with the tool's own record of them (`toolUseResult`).
-fn tool_line(content: &[Content]) -> Option<Value> {
+/// Tool results, sent in the user's turn with the tool's own record of them (`toolUseResult`):
+/// an edit's ([`edit_record`]) where capture kept its patch, else the result's text.
+fn tool_line(content: &[Content], calls: &HashMap<&str, &ToolUse>) -> Option<Value> {
     let blocks: Vec<Value> = content
         .iter()
         .filter_map(|c| match c {
@@ -513,18 +530,79 @@ fn tool_line(content: &[Content]) -> Option<Value> {
     if blocks.is_empty() {
         return None;
     }
-    let record = content
-        .iter()
-        .find_map(|c| match c {
+    let edit = content.iter().find_map(|c| match c {
+        Content::Patch(patch) => edit_record(patch, calls.get(patch.call.as_ref()).copied()),
+        _ => None,
+    });
+    let record = edit.unwrap_or_else(|| {
+        let text = content.iter().find_map(|c| match c {
             Content::ToolResult(r) => r.output_text().map(|t| t.into_owned()),
             _ => None,
-        })
-        .unwrap_or_default();
+        });
+        json!(text.unwrap_or_default())
+    });
     Some(json!({
         "type": "user",
         "message": {"role": "user", "content": blocks},
         "toolUseResult": record,
     }))
+}
+
+/// The record Claude Code keeps of an edit's (or older `MultiEdit`'s) or write's result, from its
+/// patch and its `call`:
+/// what it shows the change with, on resume and when rewinding. The file as it was before is not
+/// synced (`originalFile` is null, as Claude Code writes it for a file too large to keep).
+fn edit_record(patch: &Patch, call: Option<&ToolUse>) -> Option<Value> {
+    let file = patch.files.first()?;
+    let hunks: Vec<Value> = file
+        .hunks
+        .iter()
+        .map(|h| {
+            json!({
+                "oldStart": h.old_start,
+                "oldLines": h.old_lines,
+                "newStart": h.new_start,
+                "newLines": h.new_lines,
+                "lines": h.lines,
+            })
+        })
+        .collect();
+    let input = call.map_or(&Value::Null, |c| &c.input);
+    let written = call.is_some_and(|c| c.name == "Write") || file.change == Change::Add;
+    // Older Claude Code's `MultiEdit`, several edits of one file.
+    if call.is_some_and(|c| c.name == "MultiEdit") {
+        return Some(json!({
+            "filePath": file.path,
+            "edits": input["edits"],
+            "originalFileContents": null,
+            "structuredPatch": hunks,
+            "userModified": false,
+        }));
+    }
+    Some(if written {
+        let kind = if file.change == Change::Add {
+            "create"
+        } else {
+            "update"
+        };
+        json!({
+            "type": kind,
+            "filePath": file.path,
+            "content": input["content"].as_str().unwrap_or_default(),
+            "structuredPatch": hunks,
+            "originalFile": null,
+        })
+    } else {
+        json!({
+            "filePath": file.path,
+            "oldString": input["old_string"].as_str().unwrap_or_default(),
+            "newString": input["new_string"].as_str().unwrap_or_default(),
+            "originalFile": null,
+            "structuredPatch": hunks,
+            "userModified": false,
+            "replaceAll": input["replace_all"].as_bool().unwrap_or(false),
+        })
+    })
 }
 
 /// A compaction summary, or text the harness put in the user's turn itself (`isMeta`).

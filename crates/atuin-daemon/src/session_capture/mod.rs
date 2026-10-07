@@ -166,6 +166,11 @@ impl Sink {
     /// own, which dropping this does not stop. (Stopped between its push and its projection, the
     /// record would be in the record store but neither projected nor pending, so the next
     /// capture of the line would find it missing from the sidecar and push it again.)
+    /// Whether capture keeps the patches of calls (see [`MessageEnricher::keeping_patches`](message_enricher::MessageEnricher::keeping_patches)).
+    pub(crate) fn keeps_patches(&self) -> bool {
+        self.tools != ToolCapture::Names
+    }
+
     pub(crate) async fn append(&self, mut msg: Message) -> Result<Appended, AppendError> {
         // Apply capture policy before either persistence path or the live tail. Keep structural
         // rows (even with no content) so parent links and usage accounting remain intact.
@@ -248,6 +253,9 @@ impl Sink {
             None => calls.cwds.get(&msg.session).cloned(),
         };
         let ignored_dir = cwd.as_deref().is_some_and(|cwd| self.policy.ignores_dir(cwd));
+        // The calls whose results this row withholds: a patch of one is withheld too, whether it
+        // comes before the result (Codex) or after it, in the same row (the rest).
+        let mut withheld = HashSet::new();
         for block in &mut msg.content {
             match block {
                 Content::ToolUse(call) => {
@@ -268,11 +276,29 @@ impl Sink {
                     let pending = calls.pending.remove(&(msg.session.clone(), result.call.clone()));
                     if pending || ignored_dir {
                         result.output = serde_json::Value::Null;
+                        withheld.insert(result.call.clone());
                     }
                 }
                 _ => {}
             }
         }
+        // A patch shows what was written: none of a call whose output is withheld, and none
+        // touching a credential file, whatever the call said it did.
+        msg.content.retain(|block| match block {
+            Content::Patch(patch) => {
+                let call = (msg.session.clone(), patch.call.clone());
+                let unsafe_file = patch.files.iter().any(|file| {
+                    std::iter::once(&file.path)
+                        .chain(&file.moved_to)
+                        .any(|path| self.policy.protects(path, cwd.as_deref()))
+                });
+                !(ignored_dir
+                    || withheld.contains(&patch.call)
+                    || calls.pending.contains(&call)
+                    || unsafe_file)
+            }
+            _ => true,
+        });
         drop(calls);
         Ok(())
     }
@@ -433,6 +459,7 @@ fn sanitize(msg: &mut Message, tools: ToolCapture, policy: &CapturePolicy) {
             tools.apply(&mut result.output, policy);
             true
         }
+        Content::Patch(patch) => tools.apply_patch(patch, policy),
         Content::Reasoning(_) => {
             *block = Content::ReasoningSummary { tokens: None };
             true
@@ -1216,6 +1243,105 @@ mod tests {
             matches!(&last.content[..], [Content::ToolResult(r)] if r.output.is_null()),
             "{last:?}"
         );
+    }
+
+    /// A patch shows what a call wrote: it is kept with the call's output, and dropped where that
+    /// is withheld (a write to `.env`, before its result or beside it), where it touches a
+    /// credential file whatever the call said, and in a directory `cwd_filter` matches.
+    #[rstest]
+    #[tokio::test]
+    async fn a_patch_is_kept_out_with_what_its_call_wrote() {
+        use atuin_common::harnesstools::session::{Change, FilePatch, Hunk, Patch};
+
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.tools = ToolCapture::Payloads;
+        sink.policy = Arc::new(policy::tests::policy());
+        let call = |id: &str, name: &str, input: serde_json::Value| {
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from(id.to_owned()),
+                name: name.to_owned(),
+                input,
+            })
+        };
+        let result = |id: &str| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from(id.to_owned()),
+                output: serde_json::json!("done"),
+                error: false,
+            })
+        };
+        let patch = |id: &str, path: &str| {
+            Content::Patch(Patch {
+                call: ToolCallId::from(id.to_owned()),
+                files: vec![FilePatch {
+                    path: path.to_owned(),
+                    change: Change::Update,
+                    moved_to: None,
+                    hunks: vec![Hunk {
+                        old_start: 1,
+                        old_lines: 1,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec!["-A=0".to_owned(), "+A=violetmeadow".to_owned()],
+                    }],
+                }],
+            })
+        };
+        let row = |n: u32, role, cwd: Option<&str>, content| {
+            let mut msg = sample_message();
+            msg.id = RecordId(atuin_common::utils::uuid_v7());
+            msg.source_id = SourceId::from(format!("line-{n}"));
+            msg.timestamp += time::Duration::seconds(n.into());
+            msg.role = role;
+            msg.cwd = cwd.map(Into::into);
+            msg.content = content;
+            msg
+        };
+        let edit = |id: &str, path: &str| {
+            call(
+                id,
+                "Edit",
+                serde_json::json!({"file_path": path, "old_string": "A=0",
+                "new_string": "A=1"}),
+            )
+        };
+        let rows = [
+            row(1, Role::Assistant, Some("/w"), vec![
+                edit("src", "src/a.rs"),
+                edit("env", ".env"),
+                call(
+                    "codex",
+                    "apply_patch",
+                    serde_json::json!(
+                        "*** Begin Patch\n*** Update File: .env\n+A=1\n*** End Patch"
+                    ),
+                ),
+                edit("lies", "src/b.rs"),
+            ]),
+            row(2, Role::Tool, None, vec![result("src"), patch("src", "src/a.rs")]),
+            row(3, Role::Tool, None, vec![result("env"), patch("env", ".env")]),
+            // Codex keeps a patch on a row of its own, before the result.
+            row(4, Role::Tool, None, vec![patch("codex", ".env")]),
+            row(5, Role::Tool, None, vec![result("codex")]),
+            row(6, Role::Tool, None, vec![result("lies"), patch("lies", ".env")]),
+            row(7, Role::User, Some("/secret/project"), vec![]),
+            row(8, Role::Assistant, None, vec![edit("there", "src/c.rs")]),
+            row(9, Role::Tool, None, vec![result("there"), patch("there", "src/c.rs")]),
+        ];
+        for msg in &rows {
+            sink.append(msg.clone()).await.unwrap();
+        }
+
+        let mut messages = Box::pin(sink.sidecar.messages(&rows[0].session));
+        let mut patches = Vec::new();
+        while let Some(stored) = messages.next().await {
+            for block in stored.unwrap().content {
+                if let Content::Patch(patch) = block {
+                    patches.push(patch.call.to_string());
+                }
+            }
+        }
+        assert_eq!(patches, ["src"]);
     }
 
     /// What history and the credential files keep out, capture keeps out of a session: a read of

@@ -35,8 +35,8 @@ use crate::harnesstools::session::model::{
     ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
-    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
-    Sessions, WatchError, scan_sessions,
+    Checkpoint, FilePatch, Listener, Message, MessageError, Observable, Patch, RuntimeError,
+    Session, SessionId, Sessions, WatchError, scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
@@ -284,6 +284,17 @@ impl Listener for PiListener {
             }
         }
     }
+}
+
+/// The file pi's `edit` tool changed, from the unified diff its result keeps (`details.patch`,
+/// headed by the file's path). Older pi kept only its own line-numbered diff (`details.diff`),
+/// which names no file: no patch is read from it.
+fn edit_patch(call: &ToolCallId, details: &serde_json::Value) -> Option<Patch> {
+    let files = FilePatch::from_diff(details["patch"].as_str()?);
+    (!files.is_empty()).then(|| Patch {
+        call: call.clone(),
+        files,
+    })
 }
 
 /// What the first line of a would-be session file says.
@@ -686,13 +697,17 @@ impl Message for PiMessage {
             return Vec::new();
         };
         match self.message_role() {
-            Some("toolResult") => vec![Content::ToolResult(ToolResult {
-                call: ToolCallId::from(
-                    message["toolCallId"].as_str().unwrap_or_default().to_owned(),
-                ),
-                output: message["content"].clone(),
-                error: message["isError"].as_bool().unwrap_or(false),
-            })],
+            Some("toolResult") => {
+                let call =
+                    ToolCallId::from(message["toolCallId"].as_str().unwrap_or_default().to_owned());
+                let patch = edit_patch(&call, &message["details"]);
+                let result = Content::ToolResult(ToolResult {
+                    call,
+                    output: message["content"].clone(),
+                    error: message["isError"].as_bool().unwrap_or(false),
+                });
+                std::iter::once(result).chain(patch.map(Content::Patch)).collect()
+            }
             // A `!command` the user ran in pi's own shell, with what it printed; `!!command`
             // when the user kept it out of the model's context (messages.ts
             // `BashExecutionMessage.excludeFromContext`). It has no tool call of its own, so the
@@ -1909,5 +1924,43 @@ mod tests {
         let second =
             tokio::time::timeout(timeout, sessions.next()).await.unwrap().unwrap().unwrap();
         assert_eq!(second.id(), SessionId::from("0199aaaa".to_owned()));
+    }
+
+    /// An `edit`'s result keeps the file it changed and its diff, from the unified diff pi keeps
+    /// (`details.patch`); older pi's line-numbered diff alone (`details.diff`) names no file.
+    #[rstest]
+    #[case::patch(
+        serde_json::json!({"diff": " 1 a\n-2 b\n+2 c", "firstChangedLine": 2,
+            "patch": "--- src/a.ts\n+++ src/a.ts\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n"}),
+        true
+    )]
+    #[case::diff_only(serde_json::json!({"diff": " 1 a\n-2 b\n+2 c"}), false)]
+    #[case::no_details(serde_json::Value::Null, false)]
+    fn an_edits_result_keeps_its_patch(#[case] details: serde_json::Value, #[case] kept: bool) {
+        let line = serde_json::json!({"type": "message", "id": "r1", "parentId": "a1",
+            "timestamp": "2026-09-24T02:46:32.543Z", "message": {"role": "toolResult",
+                "toolCallId": "t1", "toolName": "edit", "isError": false, "details": details,
+                "content": [{"type": "text", "text": "Successfully replaced 1 block(s)."}]}});
+        let m: PiMessage = serde_json::from_value(line).unwrap();
+        let patch = m.content().into_iter().find_map(|c| match c {
+            Content::Patch(patch) => Some(patch),
+            _ => None,
+        });
+        let expected = kept.then(|| Patch {
+            call: ToolCallId::from("t1".to_owned()),
+            files: vec![FilePatch {
+                path: "src/a.ts".to_owned(),
+                change: crate::harnesstools::session::Change::Update,
+                moved_to: None,
+                hunks: vec![crate::harnesstools::session::Hunk {
+                    old_start: 1,
+                    old_lines: 2,
+                    new_start: 1,
+                    new_lines: 2,
+                    lines: vec![" a".into(), "-b".into(), "+c".into()],
+                }],
+            }],
+        });
+        assert_eq!(patch, expected);
     }
 }

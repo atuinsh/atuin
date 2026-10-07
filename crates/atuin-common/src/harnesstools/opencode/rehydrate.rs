@@ -23,7 +23,9 @@
 //!   kept whole carries its `messageID`, a failure is keyed on it, an assistant message names the
 //!   user message it answers -- and minted otherwise. Only part and failure ids are row keys, so a
 //!   minted message id costs nothing on re-capture.
-//! - **Agent and mode** (`build`), cost (`0`), and a tool call's title and metadata (empty).
+//! - **Agent and mode** (`build`), cost (`0`), and a tool call's title (empty) and metadata:
+//!   empty, but for a call whose patch capture kept, which gets back the diff opencode shows an
+//!   `edit` or `apply_patch` with (`filediff`, `files`, `diff`).
 //!
 //! The session takes the directory `opencode import` runs in, its project, and its title.
 //!
@@ -51,7 +53,7 @@
 //!   names its original in a marker instead, and gets fresh message and part ids.
 //! - Rows opencode 2.0 wrote (`session_v2`, the experimental event system) name no part id of the
 //!   older layout `opencode import` writes; their parts get minted ids and would be captured again
-//!   as new rows.
+//!   as new rows. Their calls and results, rows apart, are joined into one tool part.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -69,7 +71,9 @@ use crate::harnesstools::rehydrate::{
     Flatten, ForkOf, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
     flatten_uncaptured_calls,
 };
-use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, ToolUse, Usage};
+use crate::harnesstools::session::{
+    Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
+};
 use crate::harnesstools::{AnyHarness, continuation};
 
 /// How long `opencode import` may take before it is given up on.
@@ -447,6 +451,7 @@ pub(crate) fn export_minting(session: &RehydrateSession) -> (Value, HashSet<Stri
         },
         own: &|_| true,
     });
+    let rows = join_results(rows);
     for row in &rows {
         if is_session_row(session, row) {
             continue;
@@ -887,6 +892,34 @@ fn step_tokens(row: &RehydrateMessage, usage: &Usage) -> Value {
 }
 
 /// The part a row is, without its ids; `None` for a row no part can carry.
+/// `rows` with each result kept on a row apart from its call's (opencode 2.0's, whose call and
+/// result are events of their own), and the patch beside it, joined to its call's row: opencode
+/// writes a call and its result as one tool part. A result whose call row is not there stays a row
+/// of its own, which no part is written for.
+fn join_results(rows: Vec<RehydrateMessage>) -> Vec<RehydrateMessage> {
+    let mut calls: HashMap<String, usize> = HashMap::new();
+    let mut out: Vec<RehydrateMessage> = Vec::with_capacity(rows.len());
+    for row in rows {
+        match row.content.as_slice() {
+            [Content::ToolUse(call)] => {
+                calls.insert(call.id.to_string(), out.len());
+            }
+            [Content::ToolResult(result), rest @ ..]
+                if rest.iter().all(|c| matches!(c, Content::Patch(_))) =>
+            {
+                let call = calls.remove(result.call.as_ref());
+                if let Some(at) = call {
+                    out[at].content.extend(row.content);
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        out.push(row);
+    }
+    out
+}
+
 fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
     let at = millis(row.timestamp);
     if row.content.is_empty() {
@@ -914,9 +947,12 @@ fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
         [Content::Reasoning(text)] => {
             Some(json!({"type": "reasoning", "text": text, "time": {"start": at, "end": at}}))
         }
-        [Content::ToolUse(call)] => Some(tool_part(call, None, at)),
+        [Content::ToolUse(call)] => Some(tool_part(call, None, None, at)),
         [Content::ToolUse(call), Content::ToolResult(result)] => {
-            Some(tool_part(call, Some(result), at))
+            Some(tool_part(call, Some(result), None, at))
+        }
+        [Content::ToolUse(call), Content::ToolResult(result), Content::Patch(patch)] => {
+            Some(tool_part(call, Some(result), Some(patch), at))
         }
         // An API error the call was retried after.
         [Content::Error(why)] => Some(json!({
@@ -930,8 +966,9 @@ fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
     }
 }
 
-/// A tool part: `completed` or `error` with its result, `pending` without one.
-fn tool_part(call: &ToolUse, result: Option<&ToolResult>, at: i64) -> Value {
+/// A tool part: `completed` or `error` with its result, `pending` without one. A completed call
+/// whose patch capture kept gets the metadata opencode shows its diff from ([`tool_metadata`]).
+fn tool_part(call: &ToolUse, result: Option<&ToolResult>, patch: Option<&Patch>, at: i64) -> Value {
     // opencode's tool input is always an object.
     let input = match &call.input {
         Value::Object(_) => call.input.clone(),
@@ -954,12 +991,57 @@ fn tool_part(call: &ToolUse, result: Option<&ToolResult>, at: i64) -> Value {
             "input": input,
             "output": text(&result.output),
             "title": "",
-            "metadata": {},
+            "metadata": patch.map_or_else(|| json!({}), |p| tool_metadata(&call.name, p)),
             "time": {"start": at, "end": at},
         }),
         None => json!({"status": "pending", "input": input, "raw": ""}),
     };
     json!({"type": "tool", "callID": call.id.as_ref(), "tool": call.name, "state": state})
+}
+
+/// The metadata opencode keeps of a call that changed files, which its TUI and app show the diff
+/// from (`tool/edit.ts`, `tool/apply_patch.ts`): an `apply_patch`'s `files`, else (an `edit`) the
+/// file's `filediff`; each with the unified diff (`diff`), and no diagnostics.
+fn tool_metadata(tool: &str, patch: &Patch) -> Value {
+    if tool == "apply_patch" {
+        let files: Vec<Value> = patch
+            .files
+            .iter()
+            .map(|file| {
+                let kind = match (file.change, &file.moved_to) {
+                    (Change::Update, Some(_)) => "move",
+                    (change, _) => change.as_str(),
+                };
+                let mut entry = json!({
+                    "filePath": file.path,
+                    "relativePath": file.moved_to.as_deref().unwrap_or(&file.path),
+                    "type": kind,
+                    "patch": file.unified(),
+                    "additions": file.additions(),
+                    "deletions": file.deletions(),
+                });
+                if let Some(to) = &file.moved_to {
+                    entry["movePath"] = json!(to);
+                }
+                entry
+            })
+            .collect();
+        return json!({"diff": patch.unified(), "files": files, "diagnostics": {}});
+    }
+    let Some(file) = patch.files.first() else {
+        return json!({});
+    };
+    let diff = file.unified();
+    json!({
+        "diff": diff,
+        "filediff": {
+            "file": file.path,
+            "patch": diff,
+            "additions": file.additions(),
+            "deletions": file.deletions(),
+        },
+        "diagnostics": {},
+    })
 }
 
 #[cfg(test)]
@@ -1672,5 +1754,161 @@ touch {}/ran
             .await
             .unwrap_err();
         assert!(matches!(err, RehydrateError::Other(_)));
+    }
+
+    fn file(
+        path: &str,
+        change: Change,
+        moved_to: Option<&str>,
+    ) -> crate::harnesstools::session::FilePatch {
+        crate::harnesstools::session::FilePatch {
+            path: path.to_owned(),
+            change,
+            moved_to: moved_to.map(str::to_owned),
+            hunks: vec![crate::harnesstools::session::Hunk {
+                old_start: 1,
+                old_lines: 2,
+                new_start: 1,
+                new_lines: 2,
+                lines: vec![" a".into(), "-b".into(), "+c".into()],
+            }],
+        }
+    }
+
+    fn patch_of(files: Vec<crate::harnesstools::session::FilePatch>) -> Patch {
+        Patch {
+            call: "call_1".to_owned().into(),
+            files,
+        }
+    }
+
+    /// What opencode keeps of a call that changed files reads as its patch: an `edit`'s
+    /// `filediff`, an `apply_patch`'s `files`, the experimental runner's `files`, or a bare
+    /// `diff`; a call that changed none has none.
+    #[rstest]
+    #[case::edit(
+        json!({"diff": "x", "diagnostics": {}, "filediff": {"file": "/w/a.ts",
+            "patch": "Index: /w/a.ts\n===\n--- /w/a.ts\n+++ /w/a.ts\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n",
+            "additions": 1, "deletions": 1}}),
+        Some(vec![file("/w/a.ts", Change::Update, None)])
+    )]
+    #[case::apply_patch(
+        json!({"diff": "x", "diagnostics": {}, "files": [
+            {"filePath": "/w/a.ts", "relativePath": "a.ts", "type": "update",
+                "patch": "@@ -1,2 +1,2 @@\n a\n-b\n+c\n", "additions": 1, "deletions": 1},
+            {"filePath": "/w/b.ts", "relativePath": "c.ts", "type": "move", "movePath": "/w/c.ts",
+                "patch": "@@ -1,2 +1,2 @@\n a\n-b\n+c\n", "additions": 1, "deletions": 1}]}),
+        Some(vec![file("/w/a.ts", Change::Update, None), file("/w/b.ts", Change::Update, Some("/w/c.ts"))])
+    )]
+    #[case::runner(
+        json!({"replacements": 1, "files": [{"file": "/w/a.ts", "status": "added",
+            "patch": "@@ -1,2 +1,2 @@\n a\n-b\n+c\n", "additions": 1, "deletions": 1}]}),
+        Some(vec![file("/w/a.ts", Change::Add, None)])
+    )]
+    #[case::older_filediff(
+        json!({"diff": "Index: /w/a.ts\n===\n--- /w/a.ts\n+++ /w/a.ts\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n",
+            "filediff": {"file": "/w/a.ts", "before": "a\nb\n", "after": "a\nc\n",
+                "additions": 1, "deletions": 1}}),
+        Some(vec![file("/w/a.ts", Change::Update, None)])
+    )]
+    #[case::bare_diff(
+        json!({"diff": "--- /w/a.ts\n+++ /w/a.ts\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n"}),
+        Some(vec![file("/w/a.ts", Change::Update, None)])
+    )]
+    #[case::read(json!({"preview": "a\nb", "truncated": false}), None)]
+    #[case::glob(json!({"count": 2, "files": ["/w/a.ts", "/w/b.ts"]}), None)]
+    #[case::none(json!({}), None)]
+    fn a_calls_metadata_reads_as_its_patch(
+        #[case] metadata: Value,
+        #[case] files: Option<Vec<crate::harnesstools::session::FilePatch>>,
+    ) {
+        let call = "call_1".to_owned().into();
+        assert_eq!(
+            crate::harnesstools::opencode::session::tool_patch(&call, &metadata),
+            files.map(patch_of)
+        );
+    }
+
+    /// The metadata written back for a call with a patch is what opencode shows its diff from, and
+    /// reads back as the same patch.
+    #[rstest]
+    #[case::edit("edit", vec![file("/w/a.ts", Change::Update, None)])]
+    #[case::apply_patch(
+        "apply_patch",
+        vec![
+            file("/w/a.ts", Change::Update, None),
+            file("/w/b.ts", Change::Update, Some("/w/c.ts")),
+            file("/w/d.ts", Change::Add, None),
+            file("/w/e.ts", Change::Delete, None),
+        ]
+    )]
+    fn a_patch_comes_back_as_the_metadata_opencode_shows(
+        #[case] tool: &str,
+        #[case] files: Vec<crate::harnesstools::session::FilePatch>,
+    ) {
+        let patch = patch_of(files);
+        let call = ToolUse {
+            id: patch.call.clone(),
+            name: tool.to_owned(),
+            input: json!({}),
+        };
+        let result = ToolResult {
+            call: patch.call.clone(),
+            output: json!("done"),
+            error: false,
+        };
+        let part = tool_part(&call, Some(&result), Some(&patch), 0);
+        let metadata = &part["state"]["metadata"];
+        if tool == "edit" {
+            assert_eq!(metadata["filediff"]["file"], "/w/a.ts");
+            assert_eq!(metadata["filediff"]["additions"], 1);
+            assert_eq!(metadata["diff"], metadata["filediff"]["patch"]);
+        } else {
+            let kinds: Vec<&str> = metadata["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["type"].as_str().unwrap())
+                .collect();
+            assert_eq!(kinds, ["update", "move", "add", "delete"]);
+        }
+        let read = crate::harnesstools::opencode::session::tool_patch(&patch.call, metadata);
+        assert_eq!(read, Some(patch));
+    }
+
+    /// opencode 2.0 keeps a call and its result on rows apart: they are written as one tool
+    /// part, with the metadata of the result's patch.
+    #[rstest]
+    fn a_result_apart_from_its_call_joins_it() {
+        let patch = patch_of(vec![file("/w/a.ts", Change::Update, None)]);
+        let call = ToolUse {
+            id: patch.call.clone(),
+            name: "edit".to_owned(),
+            input: json!({}),
+        };
+        let result = ToolResult {
+            call: patch.call.clone(),
+            output: json!("done"),
+            error: false,
+        };
+        let rows = vec![
+            row("msg_u/text", 1, Role::User, vec![Content::Text("edit it".to_owned())]),
+            row("msg_a/call_1", 2, Role::Assistant, vec![Content::ToolUse(call)]),
+            row("msg_a/call_1/result", 3, Role::Assistant, vec![
+                Content::ToolResult(result),
+                Content::Patch(patch),
+            ]),
+        ];
+        let exported = export(&session(SES, None, rows));
+        let tools: Vec<&Value> = exported["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m["parts"].as_array().unwrap())
+            .filter(|p| p["type"] == "tool")
+            .collect();
+        assert_eq!(tools.len(), 1, "{tools:?}");
+        assert_eq!(tools[0]["state"]["status"], "completed");
+        assert_eq!(tools[0]["state"]["metadata"]["filediff"]["file"], "/w/a.ts");
     }
 }

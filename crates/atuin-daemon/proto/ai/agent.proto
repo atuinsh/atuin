@@ -122,6 +122,8 @@ message ContentBlock {
     string summary = 7;
     // Why a model call failed or was aborted, as the harness reported it.
     string error = 8;
+    // The changes a tool call made to files, as JSON (`atuin_common::harnesstools::session::Patch`).
+    string patch = 9;
   }
 }
 

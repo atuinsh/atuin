@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use derive_more::{AsRef, Display, From, Into};
 use serde::{Deserialize, Serialize};
 
-use crate::harnesstools::session::Checkpoint;
+use crate::harnesstools::session::{Checkpoint, Patch};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Display, From, Into, AsRef, Serialize, Deserialize)]
 pub struct SessionId(#[as_ref(str)] String);
@@ -43,6 +43,9 @@ pub enum Content {
     Summary(String),
     /// Why a model call failed or was aborted, as the harness reported it.
     Error(String),
+    /// The changes a tool call made to files, as its harness recorded them beside the call's
+    /// result (or, for Codex, after it).
+    Patch(Patch),
 }
 
 /// Human-readable breadcrumb shared by the transcript and `atuin ai session` rendering.

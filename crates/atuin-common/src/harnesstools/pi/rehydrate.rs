@@ -29,7 +29,9 @@
 //!   with nothing to write hangs from, so the file says which synced rows it holds.
 //! - **Tool results** keep their output; their tool's name comes from the call they answer. With
 //!   none captured (capture keeps none by default), a result says [`UNCAPTURED_OUTPUT`], as does a
-//!   `!command`'s output.
+//!   `!command`'s output. An `edit`'s result whose patch capture kept gets back the `details` pi
+//!   shows its diff from: the unified diff (`patch`), pi's own line-numbered one (`diff`) and the
+//!   first line it changed.
 //! - A `!command` keeps its command, output and whether it failed, not its exit code; one from a
 //!   v1 file (no entry ids) has its result renamed after the id it is written under.
 //! - The title is written as a `session_info` entry, under the id of the row that set it.
@@ -47,7 +49,7 @@ use crate::harnesstools::rehydrate::{
     break_line_cycles, flatten_uncaptured_calls, on_parent_cycles, record_merged,
 };
 use crate::harnesstools::resume;
-use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, Usage};
+use crate::harnesstools::session::{Content, Patch, Role, StopReason, ToolResult, Usage, patch};
 
 /// The session file format version this writes (session-manager.ts `CURRENT_SESSION_VERSION`).
 const VERSION: u32 = 3;
@@ -330,7 +332,7 @@ impl<'a> Writer<'a> {
                     _ => None,
                 })?;
                 let name = self.tools.get(result.call.as_ref()).copied().unwrap_or_default();
-                Some(json!({
+                let mut entry = json!({
                     "type": "message",
                     "message": {
                         "role": "toolResult",
@@ -340,7 +342,15 @@ impl<'a> Writer<'a> {
                         "isError": result.error,
                         "timestamp": at,
                     },
-                }))
+                });
+                let patch = m.content.iter().find_map(|c| match c {
+                    Content::Patch(p) if p.call == result.call => Some(p),
+                    _ => None,
+                });
+                if let Some(details) = patch.and_then(edit_details) {
+                    entry["message"]["details"] = details;
+                }
+                Some(entry)
             }
             Role::System => {
                 let summary = m.content.iter().find_map(|c| match c {
@@ -389,6 +399,19 @@ fn user_blocks(content: &[Content]) -> Vec<Value> {
             _ => None,
         })
         .collect()
+}
+
+/// The `details` pi's `edit` tool keeps of the file `patch` changed (edit.ts): its diff as pi
+/// shows it (`diff`, see [`patch::pi_diff`]), as a unified diff (`patch`), and the first line it
+/// changed, numbered in the new file.
+fn edit_details(patch: &Patch) -> Option<Value> {
+    let file = patch.files.first().filter(|f| !f.hunks.is_empty())?;
+    let (diff, first) = patch::pi_diff(&file.hunks);
+    let mut details = json!({"diff": diff, "patch": file.unified()});
+    if let Some(first) = first {
+        details["firstChangedLine"] = json!(first);
+    }
+    Some(details)
 }
 
 /// A tool result's content blocks: the ones captured, a text of what was, else

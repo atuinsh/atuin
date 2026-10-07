@@ -25,8 +25,10 @@ enum Kind {
     Title,
     /// Context an extension gave the model (pi's `custom_message`): no metadata.
     Custom,
+    /// The files a call changed (a Codex patch's row).
+    Patched,
 }
-use Kind::{Custom, Header, Prompt, Reply, Title, Tool};
+use Kind::{Custom, Header, Patched, Prompt, Reply, Title, Tool};
 
 /// A row: its source id, parent, host, timestamp (ms) and kind.
 type Row<'a> = (&'a str, Option<&'a str>, u8, i64, Kind);
@@ -50,6 +52,10 @@ fn message(harness: HarnessKind, (id, parent, on, at, kind): Row<'_>) -> Message
         Header => (Role::Other("session".to_owned()), Vec::new()),
         Title => (Role::Other("session_info".to_owned()), Vec::new()),
         Custom => (Role::Other("custom".to_owned()), vec![Content::Text(format!("ctx {id}"))]),
+        Patched => (Role::Tool, vec![Content::Patch(atuin_common::harnesstools::session::Patch {
+            call: format!("{id}-call").into(),
+            files: Vec::new(),
+        })]),
     };
     Message::builder()
         .id(RecordId(atuin_common::utils::uuid_v7()))
@@ -518,6 +524,55 @@ fn a_copy_fast_forwards_only_along_the_heads_line(
     assert_eq!(found, behind.map(|rows| rows.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>()));
 }
 
+/// A Codex session's rows with a patch beside the line, hanging from its call.
+const PATCHED: &[Row<'static>] = &[
+    ("u1", None, 1, 0, Prompt),
+    ("a1", Some("u1"), 1, 1, Reply),
+    ("c1", Some("a1"), 1, 2, Tool),
+    ("patch", Some("c1"), 1, 3, Patched),
+    ("o1", Some("c1"), 1, 4, Tool),
+    ("a2", Some("o1"), 1, 5, Reply),
+];
+
+/// A copy fast-forwarded past a call gets the patch beside it too, unless it holds it already.
+#[rstest]
+#[case::behind_the_call(local(&["u1", "a1"], None, &[]), &["c1", "patch", "o1", "a2"][..])]
+#[case::at_the_call(local(&["u1", "a1", "c1"], None, &[]), &["patch", "o1", "a2"][..])]
+#[case::holding_the_patch(local(&["u1", "a1", "c1", "patch"], Some("c1"), &[]), &["o1", "a2"][..])]
+#[case::up_to_date(local(&["u1", "a1", "c1", "patch", "o1", "a2"], None, &[]), &[][..])]
+fn a_fast_forward_takes_the_patches_beside_the_line(
+    #[case] local: LocalTip,
+    #[case] behind: &[&str],
+) {
+    let analysis = analyse(CODEX, PATCHED);
+    let found = match analysis.fast_forward(&SourceId::from("a2".to_owned()), &local) {
+        FastForward::Elsewhere => panic!("not on the head's line"),
+        FastForward::NotBehind => Vec::new(),
+        FastForward::Behind(rows) => rows.into_iter().map(|r| r.source_id).collect(),
+    };
+    assert_eq!(found, behind);
+}
+
+/// Rows of one moment sort by id, which can put a row before its parent: a fast-forward keeps
+/// them in the order the line links them.
+#[rstest]
+fn a_fast_forward_keeps_the_lines_order() {
+    let rows: &[Row<'static>] = &[
+        ("u1", None, 1, 0, Prompt),
+        ("a1", Some("u1"), 1, 1, Reply),
+        ("z2", Some("a1"), 1, 2, Tool),
+        ("b3", Some("z2"), 1, 2, Reply),
+    ];
+    let analysis = analyse(CC, rows);
+    let FastForward::Behind(found) =
+        analysis.fast_forward(&SourceId::from("b3".to_owned()), &local(&["u1", "a1"], None, &[]))
+    else {
+        panic!("behind the head");
+    };
+    let found: Vec<String> = found.into_iter().map(|r| r.source_id).collect();
+    assert_eq!(found, ["z2", "b3"]);
+}
+
 /// A copy is held whole by sync only when every row of it is synced, its own line's and those
 /// merged into its lines alike, wherever they are in the tree.
 #[rstest]
@@ -600,6 +655,34 @@ fn a_hosts_rows_before_its_first_node_go_with_its_branch(
         .map(|m| m.source_id.as_ref())
         .collect();
     assert_eq!(rows, want);
+}
+
+/// A Codex patch's row hangs beside the line, from the call it patched: it goes with the
+/// branch that call is on, and is no head of its own.
+#[rstest]
+#[case::its_branch("r1", &["p0", "r0", "c1", "patch", "o1", "r1"])]
+#[case::the_other("r2", &["p0", "r0", "p2", "r2"])]
+fn a_patch_beside_the_line_goes_with_its_calls_branch(#[case] head: &str, #[case] want: &[&str]) {
+    let rows: &[Row<'static>] = &[
+        ("p0", None, 1, 0, Prompt),
+        ("r0", Some("p0"), 1, 1, Reply),
+        ("c1", Some("r0"), 1, 2, Tool),
+        ("patch", Some("c1"), 1, 3, Patched),
+        ("o1", Some("c1"), 1, 4, Tool),
+        ("r1", Some("o1"), 1, 5, Reply),
+        ("p2", Some("r0"), 2, 6, Prompt),
+        ("r2", Some("p2"), 2, 7, Reply),
+    ];
+    let analysis = analyse(CODEX, rows);
+    let mut heads: Vec<String> = tips(&analysis).into_iter().map(|(tip, _)| tip).collect();
+    heads.sort();
+    assert_eq!(heads, ["r1", "r2"]);
+    let got: Vec<&str> = analysis
+        .rows_for(&SourceId::from(head.to_owned()))
+        .iter()
+        .map(|m| m.source_id.as_ref())
+        .collect();
+    assert_eq!(got, want);
 }
 
 /// With every row a node of the tree, a branch's rows are its path.

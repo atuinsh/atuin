@@ -7,7 +7,7 @@ use atuin_common::harnesstools::continuation;
 pub(super) use atuin_common::harnesstools::session::synthetic::SYNTHETIC;
 use atuin_common::harnesstools::session::synthetic::{self, content_hash};
 use atuin_common::harnesstools::session::{
-    AnyMessage, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
+    AnyMessage, Content, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
 };
 use atuin_domain::record::RecordId;
 use time::OffsetDateTime;
@@ -22,6 +22,8 @@ use time::OffsetDateTime;
 pub struct MessageEnricher {
     harness: HarnessKind,
     sessions: HashMap<String, SessionState>,
+    /// Whether capture keeps the patches of calls (`ai.capture_tools`).
+    patches: bool,
 }
 
 impl MessageEnricher {
@@ -29,7 +31,17 @@ impl MessageEnricher {
         Self {
             harness,
             sessions: HashMap::new(),
+            patches: true,
         }
+    }
+
+    /// With `patches` false (capture keeps no patches), a line holding nothing but a call's patch
+    /// (Codex records one per applied patch) makes no row, rather than an empty one. Left out
+    /// here, not when appended: a Codex row is chained to the row before it, which must exist.
+    #[must_use]
+    pub fn keeping_patches(mut self, patches: bool) -> Self {
+        self.patches = patches;
+        self
     }
 
     pub fn handle(&self, session: &SessionId) -> HarnessSession {
@@ -140,7 +152,7 @@ impl MessageEnricher {
             }
         }
 
-        let row = build(handle, session, m, state);
+        let row = build(handle, session, m, state, self.patches);
         let Some(ts) = state.last_ts else {
             state.untimed.extend(row);
             return Vec::new();
@@ -200,8 +212,12 @@ fn build(
     session: &SessionId,
     m: &AnyMessage,
     state: &mut SessionState,
+    patches: bool,
 ) -> Option<Message> {
     let content = m.content();
+    if !patches && !content.is_empty() && content.iter().all(|c| matches!(c, Content::Patch(_))) {
+        return None;
+    }
     let usage = m.usage();
     let stop_reason = m.stop_reason();
     let model = m.model();
@@ -231,7 +247,13 @@ fn build(
     };
     // Codex lines name no parent: each row follows the row captured before it, so the rows of
     // two hosts continuing one rollout part where they did (see `AiSessionDatabase::analyse`).
-    let parent_source_id = if handle.harness == HarnessKind::Codex {
+    // An applied patch's row hangs beside the line rather than on it, so the rows around it link
+    // the same whether it was captured or not (a rollout captured before patches were, read
+    // again): a branch's rows take it from the row it hangs from (`Analysis::rows_for`).
+    let patch_only = !content.is_empty() && content.iter().all(|c| matches!(c, Content::Patch(_)));
+    let parent_source_id = if handle.harness == HarnessKind::Codex && patch_only {
+        state.previous.clone()
+    } else if handle.harness == HarnessKind::Codex {
         state.previous.replace(source_id.clone())
     } else {
         m.parent_id().map(|id| SourceId::from(String::from(id)))
@@ -323,7 +345,7 @@ mod tests {
     use atuin_common::harnesstools::ccode::session::CcodeMessage;
     use atuin_common::harnesstools::codex::session::CodexMessage;
     use atuin_common::harnesstools::pi::session::PiMessage;
-    use atuin_common::harnesstools::session::{Content, Role};
+    use atuin_common::harnesstools::session::Role;
     use rstest::rstest;
 
     use super::*;
@@ -748,6 +770,43 @@ mod tests {
         let parents: Vec<Option<&str>> =
             rows.iter().map(|r| r.parent_source_id.as_ref().map(AsRef::as_ref)).collect();
         assert_eq!(parents, [None, Some(ids[0]), Some(ids[1])]);
+    }
+
+    /// An applied Codex patch is a row of its own, hanging from the row before it beside the
+    /// line, which goes on from that row as it would without it; with patches not kept it makes
+    /// no row.
+    #[rstest]
+    #[case::kept(true)]
+    #[case::not_kept(false)]
+    fn a_codex_patch_row_is_chained_or_left_out(#[case] kept: bool) {
+        let at = "2026-09-24T03:00:00.000Z";
+        let lines = [
+            codex(&serde_json::json!({"timestamp": at, "type": "response_item",
+                "payload": {"type": "custom_tool_call", "id": "ctc_1", "call_id": "call_1",
+                    "name": "apply_patch", "input": "*** Begin Patch\n*** End Patch"}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "event_msg",
+                "payload": {"type": "patch_apply_end", "call_id": "call_1", "stdout": "",
+                    "stderr": "", "success": true, "status": "completed",
+                    "changes": {"/w/a.rs": {"type": "add", "content": "a\n"}}}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "response_item",
+                "payload": {"type": "custom_tool_call_output", "id": "ctco_1",
+                    "call_id": "call_1", "output": "Done"}})),
+        ];
+        let mut n = MessageEnricher::new(HarnessKind::Codex).keeping_patches(kept);
+        let rows = rows(&mut n, &session(), &lines);
+        let chain: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.source_id.as_ref(), r.parent_source_id.as_ref().map(AsRef::as_ref)))
+            .collect();
+        if kept {
+            assert_eq!(chain, [
+                ("ctc_1", None),
+                ("call_1#patch", Some("ctc_1")),
+                ("ctco_1", Some("ctc_1"))
+            ]);
+        } else {
+            assert_eq!(chain, [("ctc_1", None), ("ctco_1", Some("ctc_1"))]);
+        }
     }
 
     /// Codex has no turn id: a bookkeeping line must not make the accounting line that follows

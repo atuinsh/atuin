@@ -18,8 +18,8 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::synthetic::{content_hash, synthetic_id};
 use crate::harnesstools::session::{
-    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
-    Sessions, WatchError, scan_sessions,
+    Change, Checkpoint, FilePatch, Hunk, Listener, Message, MessageError, Observable, Patch,
+    RuntimeError, Session, SessionId, Sessions, WatchError, scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
@@ -990,6 +990,54 @@ impl CodexMessage {
         }
     }
 
+    /// The call an applied patch's event names, and the files it changed (`{path: FileChange}`):
+    /// a legacy rollout's `patch_apply_end`, a paginated one's `item_completed` of a
+    /// `FileChange` item (which Codex shows the diff from on resume). A patch that failed or was
+    /// declined changed nothing.
+    fn file_changes(&self) -> Option<(&str, &serde_json::Map<String, serde_json::Value>)> {
+        let payload = self.payload.as_ref()?;
+        let (call, changes, applied) = if self.is_event("patch_apply_end") {
+            let applied = match payload["status"].as_str() {
+                Some(status) => status == "completed",
+                None => payload["success"].as_bool().unwrap_or(false),
+            };
+            (&payload["call_id"], &payload["changes"], applied)
+        } else if self.is_event("item_completed") && payload["item"]["type"] == "FileChange" {
+            let item = &payload["item"];
+            let applied = item["status"].as_str().is_none_or(|status| status == "completed");
+            (&item["id"], &item["changes"], applied)
+        } else {
+            return None;
+        };
+        let changes = changes.as_object().filter(|changes| applied && !changes.is_empty())?;
+        Some((call.as_str().filter(|call| !call.is_empty())?, changes))
+    }
+
+    /// The patch [`Self::file_changes`] names.
+    fn patch(&self) -> Option<Patch> {
+        let (call, changes) = self.file_changes()?;
+        let files = changes
+            .iter()
+            .map(|(path, change)| {
+                let content = change["content"].as_str().unwrap_or_default();
+                match change["type"].as_str() {
+                    Some("add") => FilePatch::added(path.clone(), content),
+                    Some("delete") => FilePatch::deleted(path.clone(), content),
+                    _ => FilePatch {
+                        path: path.clone(),
+                        change: Change::Update,
+                        moved_to: change["move_path"].as_str().map(str::to_owned),
+                        hunks: Hunk::parse(change["unified_diff"].as_str().unwrap_or_default()),
+                    },
+                }
+            })
+            .collect();
+        Some(Patch {
+            call: ToolCallId::from(call.to_owned()),
+            files,
+        })
+    }
+
     /// Why the turn this event ends failed or stopped, when it did.
     fn failure(&self) -> Option<(StopReason, String)> {
         let payload = self.payload.as_ref()?;
@@ -1034,8 +1082,12 @@ impl Message for CodexMessage {
             return self.own_meta()?["id"].as_str().map(|id| MessageId::from(id.to_owned()));
         }
         // Events carry no item id; some name a tool call (`patch_apply_end`, `mcp_tool_call_end`),
-        // an id the call's own item already holds. Items that are no conversation (a compaction's
+        // an id the call's own item already holds: the files an applied patch changed are kept
+        // under the call's id marked as its patch. Items that are no conversation (a compaction's
         // opaque checkpoint, a configuration update) would only keep an empty row.
+        if let Some((call, _)) = self.file_changes() {
+            return Some(MessageId::from(format!("{call}#patch")));
+        }
         if !self.is_item() || self.payload_type().is_some_and(is_opaque_item) {
             return None;
         }
@@ -1068,6 +1120,9 @@ impl Message for CodexMessage {
         // InterAgentCommunication`): the harness delivered them, no user typed them.
         if self.kind == "inter_agent_communication" {
             return Role::System;
+        }
+        if self.file_changes().is_some() {
+            return Role::Tool;
         }
         let payload = self.payload.as_ref();
         match self.payload_type() {
@@ -1114,6 +1169,9 @@ impl Message for CodexMessage {
         }
         if let Some((_, why)) = self.failure() {
             return vec![Content::Error(why)];
+        }
+        if let Some(patch) = self.patch() {
+            return vec![Content::Patch(patch)];
         }
         if !self.is_item() {
             return Vec::new();
@@ -2619,6 +2677,61 @@ mod tests {
         let m = line(&raw);
         assert_eq!(m.id(), None);
         assert!(!kept(&m));
+    }
+
+    /// An applied patch's event keeps the files it changed, under its call's id marked as its
+    /// patch: a legacy rollout's `patch_apply_end`, a paginated one's `FileChange` item. One that
+    /// failed or was declined changed nothing.
+    #[rstest]
+    #[case::legacy(serde_json::json!({"type": "event_msg", "payload": {"type": "patch_apply_end",
+        "call_id": "call_1", "turn_id": "u", "stdout": "", "stderr": "", "success": true,
+        "status": "completed", "changes": {
+            "/w/a.rs": {"type": "update", "unified_diff": "@@ -1 +1 @@\n-x\n+y\n",
+                "move_path": null},
+            "/w/b.rs": {"type": "add", "content": "b\n"}}}}), true)]
+    #[case::legacy_without_status(serde_json::json!({"type": "event_msg", "payload": {
+        "type": "patch_apply_end", "call_id": "call_1", "stdout": "", "stderr": "",
+        "success": true, "changes": {
+            "/w/a.rs": {"type": "update", "unified_diff": "@@ -1 +1 @@\n-x\n+y\n"},
+            "/w/b.rs": {"type": "add", "content": "b\n"}}}}), true)]
+    #[case::paginated(serde_json::json!({"type": "event_msg", "payload": {
+        "type": "item_completed", "thread_id": "t", "turn_id": "u", "completed_at_ms": 1,
+        "item": {"type": "FileChange", "id": "call_1", "status": "completed", "changes": {
+            "/w/a.rs": {"type": "update", "unified_diff": "@@ -1 +1 @@\n-x\n+y\n",
+                "move_path": null},
+            "/w/b.rs": {"type": "add", "content": "b\n"}}}}}), true)]
+    #[case::declined(serde_json::json!({"type": "event_msg", "payload": {"type": "patch_apply_end",
+        "call_id": "call_1", "stdout": "", "stderr": "", "success": false, "status": "declined",
+        "changes": {"/w/a.rs": {"type": "add", "content": "a"}}}}), false)]
+    #[case::failed_item(serde_json::json!({"type": "event_msg", "payload": {
+        "type": "item_completed", "thread_id": "t", "turn_id": "u",
+        "item": {"type": "FileChange", "id": "call_1", "status": "failed", "changes": {
+            "/w/a.rs": {"type": "add", "content": "a"}}}}}), false)]
+    fn an_applied_patch_keeps_its_file_changes(#[case] raw: serde_json::Value, #[case] kept: bool) {
+        let m = line(&raw);
+        if !kept {
+            assert_eq!(m.id(), None);
+            assert!(m.content().is_empty());
+            return;
+        }
+        assert_eq!(m.id(), Some(MessageId::from("call_1#patch".to_owned())));
+        assert_eq!(m.role(), Role::Tool);
+        let update = FilePatch {
+            path: "/w/a.rs".to_owned(),
+            change: Change::Update,
+            moved_to: None,
+            hunks: vec![Hunk {
+                old_start: 1,
+                old_lines: 1,
+                new_start: 1,
+                new_lines: 1,
+                lines: vec!["-x".into(), "+y".into()],
+            }],
+        };
+        assert_eq!(m.content(), vec![Content::Patch(Patch {
+            call: ToolCallId::from("call_1".to_owned()),
+            files: vec![update, FilePatch::added("/w/b.rs".to_owned(), "b\n")],
+        })]);
     }
 
     /// A message from another agent (multi-agent v2, codex-rs `ResponseItem::AgentMessage`) was

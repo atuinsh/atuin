@@ -47,7 +47,7 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 use atuin_common::harnesstools::rehydrate::RehydrateMessage;
-use atuin_common::harnesstools::session::{Role, is_substantive};
+use atuin_common::harnesstools::session::{Content, Role, is_substantive};
 use atuin_common::harnesstools::sync::LocalTip;
 use atuin_domain::record::HostId;
 use futures::TryStreamExt;
@@ -327,6 +327,7 @@ impl Analysis {
                 off.push(i);
             }
         }
+        let path = self.with_beside(&path, |_| true);
         let mut off = off.into_iter().peekable();
         let mut rows = Vec::with_capacity(path.len() + off.len());
         for p in path {
@@ -337,6 +338,33 @@ impl Analysis {
         }
         rows.extend(off.map(|i| &self.rows[i]));
         rows
+    }
+
+    /// `path` with the patches hanging beside it from a row on it (a Codex patch's row, see the
+    /// daemon's `MessageEnricher`), each right after the row it hangs from, as `keep` says: the
+    /// branch's, what a call on the path did. The path keeps its own (parent) order.
+    fn with_beside(&self, path: &[usize], keep: impl Fn(usize) -> bool) -> Vec<usize> {
+        let on: HashSet<usize> = path.iter().copied().collect();
+        let mut beside: HashMap<usize, Vec<usize>> = HashMap::new();
+        for i in 0..self.rows.len() {
+            let patch = &self.rows[i].content;
+            let parent = self.parent[i].filter(|p| on.contains(p));
+            if let Some(parent) = parent
+                && self.in_tree[i]
+                && !on.contains(&i)
+                && !patch.is_empty()
+                && patch.iter().all(|c| matches!(c, Content::Patch(_)))
+                && keep(i)
+            {
+                beside.entry(parent).or_default().push(i);
+            }
+        }
+        let mut out = Vec::with_capacity(path.len());
+        for &p in path {
+            out.push(p);
+            out.extend(beside.remove(&p).unwrap_or_default());
+        }
+        out
     }
 
     /// [`Self::path_to`], as indices into the rows.
@@ -373,18 +401,23 @@ impl Analysis {
     /// on [the head's path](Self::path_to), and the copy holds nothing of the path after it.
     #[must_use]
     pub fn fast_forward(&self, head: &SourceId, local: &LocalTip) -> FastForward {
-        let path = self.path_to(head);
+        let path = self.path_indices(head);
         // The tip, or the last row merged into its line.
-        let Some(at) = path.iter().rposition(|m| local.is_tip(m.source_id.as_ref())) else {
+        let Some(at) = path.iter().rposition(|&i| local.is_tip(self.rows[i].source_id.as_ref()))
+        else {
             return FastForward::Elsewhere;
         };
-        let rest = &path[at + 1..];
-        if rest.iter().any(|m| local.known_source_ids.contains(m.source_id.as_ref())) {
-            FastForward::Elsewhere
-        } else if rest.is_empty() {
+        let known = |i: usize| local.known_source_ids.contains(self.rows[i].source_id.as_ref());
+        if path[at + 1..].iter().any(|&i| known(i)) {
+            return FastForward::Elsewhere;
+        }
+        // From the tip on, with the patches beside those rows that the copy doesn't hold yet.
+        let rows: Vec<usize> =
+            self.with_beside(&path[at..], |i| !known(i)).into_iter().skip(1).collect();
+        if rows.is_empty() {
             FastForward::NotBehind
         } else {
-            FastForward::Behind(rest.iter().map(|&m| m.clone().into()).collect())
+            FastForward::Behind(rows.into_iter().map(|i| self.rows[i].clone().into()).collect())
         }
     }
 }

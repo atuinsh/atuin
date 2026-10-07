@@ -12,6 +12,10 @@
 //!   `web_search_call`, `image_generation_call`, `tool_search_call` and their `*_output`s), under
 //!   their `id`, or with none when capture keyed them on their `call_id` (`<call_id>#out` for an
 //!   output);
+//! - the files an applied patch changed, as the `item_completed` event of a `FileChange` item
+//!   (under the patch's call, in the turn it was applied in), which Codex shows the diff from on
+//!   resume; capture reads it back as the same row, whether it first read a legacy rollout's
+//!   `patch_apply_end` or a paginated one's `item_completed`;
 //! - usage, as the line it was captured from: a `token_usage_record` under its response (or the
 //!   thread total it was keyed on), a `token_count` under the running total its key spells out;
 //! - the session itself, as the rollout's `session_meta` (under the session id).
@@ -76,7 +80,9 @@ use crate::harnesstools::rehydrate::{
     flatten_uncaptured_calls, record_merged,
 };
 use crate::harnesstools::resume::is_plain_name;
-use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, ToolUse, Usage};
+use crate::harnesstools::session::{
+    Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
+};
 
 /// What Codex puts ahead of a compaction summary (codex-rs
 /// `prompts/templates/compact/summary_prefix.md`), which its reader strips again.
@@ -430,6 +436,14 @@ fn turns(session: &RehydrateSession, messages: &[RehydrateMessage], rows: &mut [
                        "item": item, "started_at_ms": millis, "completed_at_ms": millis}),
             )
         };
+        // The patches applied in the turn are its file changes.
+        for i in start..end {
+            if matches!(messages[i].content.as_slice(), [Content::Patch(_)])
+                && let Some(change) = rows[i].lines.first_mut()
+            {
+                change["payload"]["turn_id"] = json!(id);
+            }
+        }
         let mut answer = None;
         for i in prompt..end {
             let Some(said) = said(&messages[i]).filter(|_| written(i)) else {
@@ -527,12 +541,48 @@ fn message_lines(
         [Content::ToolResult(result)] => {
             vec![line(&at, "response_item", tool_output(message, result, calls))]
         }
+        [Content::Patch(patch)] => vec![file_change(session, message, patch, &at)],
         content if !content.is_empty() && content.iter().all(is_message_block) => {
             text_message(message, &at)
         }
         // Reasoning (see the module docs), and shapes no Codex line has.
         _ => Vec::new(),
     }
+}
+
+/// The `item_completed` event of a `FileChange` item, which Codex shows an applied patch's diff
+/// from on resume: each file as Codex records it (`{"type": "add", "content"}`, `delete` the
+/// same, `{"type": "update", "unified_diff", "move_path"}`). Its turn is filled in by [`turns`].
+fn file_change(
+    session: &RehydrateSession,
+    message: &RehydrateMessage,
+    patch: &Patch,
+    at: &str,
+) -> Value {
+    let changes: Map<String, Value> = patch
+        .files
+        .iter()
+        .map(|file| {
+            let change = match file.change {
+                Change::Add => json!({"type": "add", "content": file.side('+')}),
+                Change::Delete => json!({"type": "delete", "content": file.side('-')}),
+                Change::Update => json!({"type": "update", "unified_diff": file.hunks_text(),
+                    "move_path": file.moved_to}),
+            };
+            (file.path.clone(), change)
+        })
+        .collect();
+    let millis =
+        i64::try_from(message.timestamp.unix_timestamp_nanos() / 1_000_000).unwrap_or_default();
+    line(
+        at,
+        "event_msg",
+        json!({"type": "item_completed", "thread_id": session::resume_id(&session.id),
+            "turn_id": "",
+            "item": {"type": "FileChange", "id": patch.call, "changes": changes,
+                "status": "completed"},
+            "started_at_ms": millis, "completed_at_ms": millis}),
+    )
 }
 
 fn is_message_block(content: &Content) -> bool {
@@ -1098,6 +1148,65 @@ pub(crate) mod tests {
         pretty_assertions::assert_eq!(keys(&again), keys(&messages));
         assert_eq!(again[5].usage, messages[5].usage);
         assert_eq!(again[6].usage, messages[6].usage);
+    }
+
+    /// An applied patch comes back as the `FileChange` item Codex shows its diff from, in the
+    /// turn it was applied in, and recaptures as the same row.
+    #[rstest]
+    #[tokio::test]
+    async fn a_patch_comes_back_as_its_file_changes() {
+        use crate::harnesstools::session::{FilePatch, Hunk};
+
+        let update = FilePatch {
+            path: "/w/a.rs".to_owned(),
+            change: Change::Update,
+            moved_to: None,
+            hunks: vec![Hunk {
+                old_start: 2,
+                old_lines: 2,
+                new_start: 2,
+                new_lines: 2,
+                lines: vec![" bar".into(), "-baz".into(), "+BAZ".into()],
+            }],
+        };
+        let moved = FilePatch {
+            path: "/w/b.rs".to_owned(),
+            moved_to: Some("/w/c.rs".to_owned()),
+            ..update.clone()
+        };
+        let patch = Patch {
+            call: "call_2".to_owned().into(),
+            files: vec![
+                update,
+                moved,
+                FilePatch::added("/w/new.rs".to_owned(), "fn main() {}\n"),
+                FilePatch::deleted("/w/old.rs".to_owned(), "gone"),
+            ],
+        };
+        let text = |t: &str| vec![Content::Text(t.to_owned())];
+        let messages = vec![
+            row(ID, 0, Role::Other("session_meta".into()), vec![]),
+            row("msg_u1", 1, Role::User, text("fix it")),
+            row("ctc_2", 2, Role::Assistant, vec![tool_use(
+                "call_2",
+                "apply_patch",
+                json!("*** Begin Patch\n*** End Patch"),
+            )]),
+            row("call_2#patch", 3, Role::Tool, vec![Content::Patch(patch)]),
+            row("ctco_2", 3, Role::Tool, vec![tool_result("call_2", "Done", false)]),
+            row("msg_a1", 4, Role::Assistant, text("fixed")),
+        ];
+        let lines = turn_lines(&messages);
+        let change = lines.iter().find(|l| l["payload"]["item"]["type"] == "FileChange").unwrap();
+        let started = lines.iter().find(|l| l["payload"]["type"] == "task_started").unwrap();
+        assert_eq!(change["payload"]["turn_id"], started["payload"]["turn_id"]);
+        assert_eq!(change["payload"]["item"]["changes"]["/w/b.rs"]["move_path"], "/w/c.rs");
+        assert_eq!(change["payload"]["item"]["changes"]["/w/old.rs"]["content"], "gone");
+
+        let root = tempfile::tempdir().unwrap();
+        let path = write(root.path(), &session(ID, messages.clone())).unwrap();
+        let again = captured(ID, &read(ID, path).await);
+        pretty_assertions::assert_eq!(keys(&again), keys(&messages));
     }
 
     /// Checks a rollout as strictly as Codex and the Responses API check the history Codex

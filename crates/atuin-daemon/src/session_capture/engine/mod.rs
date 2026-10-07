@@ -99,7 +99,7 @@ async fn capture(
     grace: Duration,
 ) {
     futures::pin_mut!(events);
-    let mut enricher = MessageEnricher::new(kind);
+    let mut enricher = MessageEnricher::new(kind).keeping_patches(sink.keeps_patches());
     // Sessions with a failed append: their checkpoint must not move past the line that was
     // lost, or a restart would never re-read it.
     let mut stuck: HashSet<SessionId> = HashSet::new();

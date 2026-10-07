@@ -718,6 +718,43 @@ mod tests {
         });
     }
 
+    fn with_patch() -> Message {
+        use atuin_common::harnesstools::session::{Change, FilePatch, Hunk, Patch};
+        let mut msg = sample_message();
+        msg.role = Role::Tool;
+        msg.content = vec![Content::Patch(Patch {
+            call: "toolu_1".to_owned().into(),
+            files: vec![FilePatch {
+                path: "/w/a.rs".to_owned(),
+                change: Change::Update,
+                moved_to: None,
+                hunks: vec![Hunk {
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec!["-b".to_owned(), "+c".to_owned()],
+                }],
+            }],
+        })];
+        msg
+    }
+
+    /// A message holding a patch round-trips through its record.
+    #[rstest]
+    #[tokio::test]
+    async fn a_patch_round_trips() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let s = AiSessionStore::builder().store(store.clone()).host_id(hid()).key(key()).build();
+        let msg = with_patch();
+        s.push(&msg).await.unwrap();
+        let recs = store.all_tagged(&RecordTag::AiSession).await.unwrap();
+        let decrypted = recs[0].decrypt(&key()).unwrap();
+        let AiSessionRecord::Message(got) =
+            AiSessionRecord::deserialize(&decrypted.data.0, &decrypted.version).unwrap();
+        assert_eq!(got, msg);
+    }
+
     #[rstest]
     #[tokio::test]
     async fn build_reconstructs_sidecar_from_all_records() {

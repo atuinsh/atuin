@@ -114,7 +114,7 @@ impl SessionImporter {
                         // One enricher per session: it carries that session's bookkeeping (title,
                         // timestamps, parent, synthetic ids) across its lines, exactly as live
                         // capture does, so a backfilled row matches the captured one.
-                        let mut enricher = MessageEnricher::new(kind);
+                        let mut enricher = MessageEnricher::new(kind).keeping_patches(sink.keeps_patches());
                         let sid = session.id();
                         let mut imported = 0u64;
                         let mut skipped = 0u64;

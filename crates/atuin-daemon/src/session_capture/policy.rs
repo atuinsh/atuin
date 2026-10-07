@@ -102,6 +102,11 @@ impl CapturePolicy {
         Verdict::Keep
     }
 
+    /// Whether `path`, as a call made in `cwd` names it, is a file whose contents are credentials.
+    pub(super) fn protects(&self, path: &str, cwd: Option<&Path>) -> bool {
+        self.files.matches(path, cwd)
+    }
+
     /// `text` redacted, or `None` when that takes too long (see [`REDACT_BUDGET`]): then it is
     /// better not kept.
     pub(super) fn redact<'a>(&self, text: &'a str) -> Option<Cow<'a, str>> {
