@@ -76,7 +76,7 @@ Capture the sessions of your AI coding agents (Claude Code, Codex, opencode and 
 
 Default: `true`
 
-With `capture_sessions`, also capture what each tool call was given and what it returned, so a resumed session has its tool calls back. Set it to `false` to keep only the name of each tool called. See [What's captured](https://docs.atuin.sh/ai/sessions/#whats-captured).
+With `capture_sessions`, also capture what each tool call was given and what it returned, and the diff of each edit, so a resumed session has its tool calls and edits back. Set it to `false` to keep only the name of each tool called. See [What's captured](https://docs.atuin.sh/ai/sessions/#whats-captured).
 
 ## Capabilities
 

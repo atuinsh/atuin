@@ -8,7 +8,9 @@ The daemon keeps a local search index of these sessions beside the record store,
 
 Capture keeps the conversation (what you and the agent said) and its tool calls: each call's input and output (the commands run and what they printed, the files read and written). A session resumed from them, on this machine or another, has its tool calls back as they were, and so does a session continued in another agent (see [Resuming](#resuming)). Reasoning is kept only as a marker that the model reasoned.
 
-Secrets Atuin recognises are replaced with `****`, in the conversation and the tool calls alike: the [same patterns](https://docs.atuin.sh/configuration/config/#secrets_filter) as for captured command output, and your own [`redact_patterns`](https://docs.atuin.sh/configuration/config/#redact_patterns). Images are left out, and the input or output of a single call is clipped to 64 KiB, keeping its start and its end. Search covers a call's input, but not its output.
+When an agent edits a file, capture also keeps the diff the agent recorded for the edit (Claude Code, Codex, opencode and pi each keep one), so a resumed session shows its edits as the agent showed them, and `atuin ai session show` prints them. A diff names its file and the lines changed, with a few lines around them, not the whole file. Search covers the names of the files a session changed.
+
+Secrets Atuin recognises are replaced with `****`, in the conversation and the tool calls alike: the [same patterns](https://docs.atuin.sh/configuration/config/#secrets_filter) as for captured command output, and your own [`redact_patterns`](https://docs.atuin.sh/configuration/config/#redact_patterns). Images are left out, and the input or output of a single call is clipped to 64 KiB, keeping its start and its end. An edit's diff past 64 KiB keeps only the files it changed. Search covers a call's input, but not its output.
 
 The rules that keep things out of your history and your captured output apply to your agents' tool calls too:
 
@@ -18,7 +20,7 @@ The rules that keep things out of your history and your captured output apply to
 
 Text that can't be redacted quickly isn't kept. To keep more out, see [Keeping Secrets Out of Atuin](https://docs.atuin.sh/guide/excluding-commands/index.md).
 
-Tool calls can be a lot of your codebase, not just your conversations. To keep only the name of each tool called (and whether the call failed), set `capture_tools = false` under `[ai]`:
+Tool calls can be a lot of your codebase, not just your conversations. To keep only the name of each tool called (and whether the call failed), and no diffs, set `capture_tools = false` under `[ai]`:
 
 ```
 [ai]
