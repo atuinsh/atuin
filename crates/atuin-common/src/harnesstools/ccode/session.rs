@@ -314,16 +314,19 @@ impl Session for CcodeSession {
                 None => lines.read_to_end().right_stream(),
             }
             .json_with(CcodeMessage::decode);
+            let mut before = LineBefore::new(&probe, start);
             for await item in messages {
                 if spawner.is_none() && item.is_ok() {
                     spawner = probe.spawned_by().await;
                 }
                 let known = spawner.clone().flatten();
-                yield item
-                    .map(|(line, message)| {
-                        (Checkpoint::after(&line).started_over(over), message.with_spawner(known))
-                    })
-                    .map_err(MessageError::from);
+                yield match item {
+                    Ok((line, message)) => {
+                        let message = before.stamp(&line, message).await;
+                        Ok((Checkpoint::after(&line).started_over(over), message.with_spawner(known)))
+                    }
+                    Err(err) => Err(MessageError::from(err)),
+                };
             }
         }
     }
@@ -332,6 +335,7 @@ impl Session for CcodeSession {
         let session = self.clone();
         async_stream::stream! {
             let spawner = session.spawned_by().await.flatten();
+            let mut before = LineBefore::new(&session, 0);
             let messages = FollowLines::new(PooledReadLines::new(
                 PathLineReader::new(&session.path),
                 session.pool,
@@ -339,12 +343,76 @@ impl Session for CcodeSession {
             .read_to_end()
             .json_with(CcodeMessage::decode);
             for await item in messages {
-                yield item
-                    .map(|(_, message)| message.with_spawner(spawner.clone()))
-                    .map_err(MessageError::from);
+                yield match item {
+                    Ok((line, message)) => {
+                        Ok(before.stamp(&line, message).await.with_spawner(spawner.clone()))
+                    }
+                    Err(err) => Err(MessageError::from(err)),
+                };
             }
         }
     }
+}
+
+/// The id of the last line read that has one, which a `compact_boundary` that kept messages
+/// follows (see [`CcodeMessage::kept_messages`]).
+struct LineBefore {
+    path: PathBuf,
+    pool: BlockingPool,
+    /// Where reading started: lines before it were never seen, so the one with an id is looked
+    /// up in the file, once, when a boundary needs it.
+    start: u64,
+    generation: u32,
+    uuid: Option<String>,
+}
+
+impl LineBefore {
+    fn new(session: &CcodeSession, start: u64) -> Self {
+        Self {
+            path: session.path.clone(),
+            pool: session.pool.clone(),
+            start,
+            generation: 0,
+            uuid: None,
+        }
+    }
+
+    async fn stamp(&mut self, line: &Line, mut message: CcodeMessage) -> CcodeMessage {
+        // Started over from the file's first byte: nothing before this line counts.
+        if line.generation != self.generation {
+            self.generation = line.generation;
+            self.start = 0;
+            self.uuid = None;
+        }
+        if message.kept_messages() {
+            if self.uuid.is_none() && self.start > 0 {
+                let (path, start) = (self.path.clone(), self.start);
+                self.uuid =
+                    self.pool.run(move || last_uuid_before(&path, start)).await.ok().flatten();
+                self.start = 0;
+            }
+            message.line_before.clone_from(&self.uuid);
+        }
+        if message.uuid.is_some() {
+            self.uuid.clone_from(&message.uuid);
+        }
+        message
+    }
+}
+
+/// The id of the last line with one in the transcript at `path` ending before byte `end`.
+fn last_uuid_before(path: &Path, mut end: u64) -> Option<String> {
+    let file = File::open(path).ok()?;
+    while let Some(line) = Line::ending_at(&file, end).ok()? {
+        if let Ok(CcodeMessage {
+            uuid: Some(uuid), ..
+        }) = CcodeMessage::decode(&line.bytes)
+        {
+            return Some(uuid);
+        }
+        end = line.end.checked_sub(line.bytes.len() as u64 + 1)?;
+    }
+    None
 }
 
 /// One line of a Claude Code transcript (`~/.claude/projects/<project>/<session>.jsonl`).
@@ -371,6 +439,9 @@ pub struct CcodeMessage {
     parent_uuid: Option<String>,
     /// The predecessor of a line written with a null `parentUuid`: a `compact_boundary`.
     logical_parent_uuid: Option<String>,
+    /// On a `compact_boundary`: what it replaced, and the recent messages it kept, if any
+    /// (`preservedSegment`, `preservedMessages`).
+    compact_metadata: Option<Box<serde_json::Value>>,
     session_id: Option<String>,
     /// `{sessionId, messageUuid}` on every line `/branch` copied. `--fork-session` (and a
     /// `--resume` Claude Code turns into a fork) copies lines without it: only `sessionId` is
@@ -392,6 +463,10 @@ pub struct CcodeMessage {
     /// `CcodeSession::spawned_by`): no line names it.
     #[serde(skip)]
     spawner: Option<SessionId>,
+    /// The id of the transcript's last line with one before this, from its reader: set on a
+    /// `compact_boundary` that kept messages (see [`Self::kept_messages`]).
+    #[serde(skip)]
+    line_before: Option<String>,
 }
 
 /// The model Claude Code names on the assistant lines it writes itself (API errors, canned
@@ -592,6 +667,18 @@ impl CcodeMessage {
 
     pub(crate) fn with_spawner(self, spawner: Option<SessionId>) -> Self {
         Self { spawner, ..self }
+    }
+
+    /// A `compact_boundary` that kept recent messages verbatim, which Claude Code hangs after the
+    /// summary (as its loader tells, in CC 2.1.291). Its `logicalParentUuid` names the last of
+    /// them, which Claude Code writes after the summary when it was not in the file yet: the
+    /// kept run then hangs off the summary, the summary off the boundary, and the boundary off
+    /// the run, a loop.
+    fn kept_messages(&self) -> bool {
+        self.subtype.as_deref() == Some("compact_boundary")
+            && self.compact_metadata.as_deref().is_some_and(|meta| {
+                !meta["preservedSegment"].is_null() || !meta["preservedMessages"].is_null()
+            })
     }
 
     fn block(value: &serde_json::Value) -> Content {
@@ -881,7 +968,16 @@ impl Message for CcodeMessage {
     }
 
     fn parent_id(&self) -> Option<MessageId> {
-        self.parent_uuid.clone().or_else(|| self.logical_parent_uuid.clone()).map(MessageId::from)
+        // A `compact_boundary` that kept messages follows the line before it in the file, the
+        // last it did not keep or one of the kept already written, rather than its
+        // `logicalParentUuid` (see `kept_messages`).
+        let line_before = self.line_before.as_ref().filter(|_| self.kept_messages());
+        self.parent_uuid
+            .as_ref()
+            .or(line_before)
+            .or(self.logical_parent_uuid.as_ref())
+            .cloned()
+            .map(MessageId::from)
     }
 
     /// The session a fork was copied from (`forkedFrom`), else the subagent that spawned a nested
@@ -1539,6 +1635,84 @@ mod tests {
             "content": "Conversation compacted", "compactMetadata": {"trigger": "auto"},
         }));
         assert_eq!(m.parent_id(), Some(MessageId::from("u41".to_owned())));
+    }
+
+    /// A compaction that kept the conversation's last message, an attachment Claude Code had not
+    /// written yet, as in a real session (CC 2.1.291): the boundary names it as its logical parent
+    /// but it is written after the summary, hung off it. Lines `[0]` to `[3]` come before the
+    /// boundary, `[4]`.
+    fn kept_compaction() -> Vec<String> {
+        let segment = serde_json::json!({"headUuid": "k1", "anchorUuid": "s1", "tailUuid": "k1"});
+        [
+            serde_json::json!({"type": "user", "uuid": "u1", "parentUuid": null,
+                "message": {"role": "user", "content": "hi"}}),
+            serde_json::json!({"type": "assistant", "uuid": "a1", "parentUuid": "u1",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "yo"}]}}),
+            serde_json::json!({"type": "custom-title", "customTitle": "t", "sessionId": "s"}),
+            serde_json::json!({"type": "ai-title", "aiTitle": "t", "sessionId": "s"}),
+            serde_json::json!({"type": "system", "subtype": "compact_boundary", "uuid": "b1",
+                "parentUuid": null, "logicalParentUuid": "k1",
+                "compactMetadata": {"trigger": "auto", "preservedSegment": segment}}),
+            serde_json::json!({"type": "attachment", "uuid": "x1", "parentUuid": "b1"}),
+            serde_json::json!({"type": "user", "uuid": "s1", "parentUuid": "x1",
+                "isCompactSummary": true, "message": {"role": "user", "content": "Summary"}}),
+            serde_json::json!({"type": "attachment", "uuid": "k1", "parentUuid": "s1"}),
+        ]
+        .iter()
+        .map(|line| format!("{line}\n"))
+        .collect()
+    }
+
+    fn parents(messages: &[CcodeMessage]) -> Vec<(String, Option<String>)> {
+        messages
+            .iter()
+            .filter_map(|m| Some((String::from(m.id()?), m.parent_id().map(String::from))))
+            .collect()
+    }
+
+    /// A compaction that kept messages follows the line before it, so the transcript stays one
+    /// line rather than a loop through the kept message, however far in reading began: from the
+    /// start, or resumed at the boundary past lines with no id.
+    #[rstest]
+    #[tokio::test]
+    async fn a_compaction_that_kept_messages_follows_the_line_before_it(
+        projects: Projects,
+        #[values(0, 2, 4)] resumed_after: usize,
+    ) {
+        let lines = kept_compaction();
+        let path = projects.project.join("s.jsonl");
+        std::fs::write(&path, lines.concat()).unwrap();
+        let session = CcodeSession::open(SessionId::from("s".to_owned()), path, pool());
+        let from = (resumed_after > 0).then(|| {
+            let at = lines[..resumed_after].concat().len();
+            let last = lines[resumed_after - 1].trim_end();
+            Checkpoint::new(u64::try_from(at).unwrap(), last.as_bytes())
+        });
+        let read: Vec<CcodeMessage> =
+            session.messages_from(from).map(|item| item.unwrap().1).collect().await;
+        assert_eq!(read.len(), lines.len() - resumed_after, "read from the checkpoint");
+        let boundary = parents(&read).into_iter().find(|(id, _)| id == "b1");
+        assert_eq!(boundary, Some(("b1".to_owned(), Some("a1".to_owned()))));
+    }
+
+    /// The whole transcript read at once: the boundary follows the line before it, the rest the
+    /// parents they name.
+    #[rstest]
+    #[tokio::test]
+    async fn a_compaction_that_kept_messages_reads_as_one_line(projects: Projects) {
+        let path = projects.project.join("s.jsonl");
+        std::fs::write(&path, kept_compaction().concat()).unwrap();
+        let session = CcodeSession::open(SessionId::from("s".to_owned()), path, pool());
+        let read: Vec<CcodeMessage> = session.read().map(Result::unwrap).collect().await;
+        let parent = |of: &str| Some(of.to_owned());
+        assert_eq!(parents(&read), vec![
+            ("u1".to_owned(), None),
+            ("a1".to_owned(), parent("u1")),
+            ("b1".to_owned(), parent("a1")),
+            ("x1".to_owned(), parent("b1")),
+            ("s1".to_owned(), parent("x1")),
+            ("k1".to_owned(), parent("s1")),
+        ]);
     }
 
     /// The compaction summary is the only record of the conversation it replaced.
