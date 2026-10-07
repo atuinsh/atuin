@@ -137,10 +137,10 @@ struct InFlightCmd {
     /// finish is supposed to:
     ///   1. x := read(active_cmds, cmd)
     ///      ^--- BORROW (not pop) the command from the shared active_cmds map into the stack.
-    ///   2. history_db.save(x).await
-    ///      ^--- store the command into the history database (new row)
-    ///   3. history_store.push(create(X)).await
+    ///   2. history_store.push(create(X)).await
     ///      ^--- append a creation event to the history store.
+    ///   3. history_db.save(x).await
+    ///      ^--- store the command into the history database (new row)
     ///   4. pop(active_cmds, cmd)
     ///      ^--- remove the entry from the active_cmds
     ///
@@ -159,6 +159,25 @@ struct InFlightCmd {
     ///
     /// Really, we need a critical section between finish:1-4 and delete:1.
     finalization_mutex: Arc<tokio::sync::Mutex<()>>,
+}
+
+/// Takes a command [`HistoryJournal::finish`] has stored the record of out of
+/// [`HistoryJournal::active_cmds`] when dropped, whether `finish` ran to the end or was dropped
+/// partway. A command whose history.db write didn't succeed (`unsaved`) goes into
+/// [`HistoryJournal::unsaved_cmds`] first, so output arriving meanwhile always finds it.
+struct Recorded<'j> {
+    journal: &'j HistoryJournal,
+    id: HistoryId,
+    unsaved: Option<(String, String)>,
+}
+
+impl Drop for Recorded<'_> {
+    fn drop(&mut self) {
+        if let Some(cmd) = self.unsaved.take() {
+            self.journal.unsaved_cmds.insert(self.id, cmd);
+        }
+        self.journal.active_cmds.remove(&self.id);
+    }
 }
 
 /// Increments each id's entry in [`HistoryJournal::deleting`] on creation and decrements it on
@@ -204,6 +223,11 @@ pub struct HistoryJournal {
     /// to be completed.
     active_cmds: DashMap<HistoryId, InFlightCmd>,
 
+    /// Commands [`Self::finish`] stored a record for but couldn't save to the history db, with
+    /// their command line and working directory. [`Self::register_command_output`] still accepts output for these, since
+    /// rebuilding the history db brings their rows back. [`Self::delete`] forgets them.
+    unsaved_cmds: DashMap<HistoryId, (String, String)>,
+
     /// We hold a reference to the search index which allows us to add a new history record into it.
     search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
 
@@ -235,8 +259,6 @@ pub enum CmdFinishError {
     NotFound(HistoryId),
     #[error("storing into history store failed: {0}")]
     HistoryStoreFailed(eyre::Report),
-    #[error("storing into history db failed: {0}")]
-    HistoryDbFailed(eyre::Report),
 }
 
 /// Errors returned by [`HistoryJournal::delete`].
@@ -298,6 +320,7 @@ impl HistoryJournal {
             history_store,
             history_db,
             active_cmds: DashMap::new(),
+            unsaved_cmds: DashMap::new(),
             search_index,
             broadcast,
             output_capture,
@@ -378,12 +401,8 @@ impl HistoryJournal {
         span.record("exit_code", exit_code);
         span.record("duration", history.duration);
 
-        self.history_db
-            .save(&history)
-            .instrument(span.clone())
-            .await
-            .map_err(|e| CmdFinishError::HistoryDbFailed(e.into()))?;
-
+        // The record store is the source of truth that history.db is built from, so it's written
+        // first: once the record is in, the command is recorded even if the history.db write fails.
         let (history_record_id, history_record_idx) = self
             .history_store
             .push(history.clone())
@@ -391,8 +410,26 @@ impl HistoryJournal {
             .await
             .map_err(CmdFinishError::HistoryStoreFailed)?;
 
-        self.active_cmds.remove(&history_id);
+        // From here on the command is recorded, so it must leave `active_cmds` even if this future
+        // is dropped (the client went away) during the history.db write: a delete would otherwise
+        // take it for in flight and not tombstone the record.
+        let mut recorded = Recorded {
+            journal: self,
+            id: history_id,
+            unsaved: Some((history.command.clone(), history.cwd.clone())),
+        };
 
+        // Not an error for the caller: a retry would push a second record. The row comes back the
+        // next time history.db is rebuilt from the store.
+        match self.history_db.save(&history).instrument(span.clone()).await {
+            Ok(()) => recorded.unsaved = None,
+            Err(e) => tracing::error!(
+                "recorded command {history_id}, but could not save it to the history db; run \
+                 `atuin store rebuild history` to restore it: {e}"
+            ),
+        }
+
+        drop(recorded);
         drop(lock);
 
         // TODO(markovejnovic): This is a little bit hacked-together. I'm thinking it would be good
@@ -532,6 +569,9 @@ impl HistoryJournal {
                 .await
                 .map_err(CmdDeleteError::HistoryStoreFailed)?;
             deleted += to_delete.len();
+            for id in &to_delete {
+                self.unsaved_cmds.remove(id);
+            }
 
             Ok((deleted, to_delete))
         };
@@ -637,10 +677,13 @@ impl HistoryJournal {
             return Err(RegisterOutputError::NotLive(id));
         }
 
-        // Resolve the command backing this id: an in-flight entry wins, otherwise the
-        // (non-deleted) history row. `None` means the command is gone or already deleted.
+        // Resolve the command backing this id: an in-flight entry wins, then a recorded command
+        // missing from the history db, otherwise the (non-deleted) history row. `None` means the
+        // command is gone or already deleted.
         let command = if let Some(cmd) = self.active_cmds.get(&id) {
             Some((cmd.history.command.clone(), cmd.history.cwd.clone()))
+        } else if let Some(cmd) = self.unsaved_cmds.get(&id) {
+            Some(cmd.clone())
         } else {
             self.history_db
                 .load(id)
