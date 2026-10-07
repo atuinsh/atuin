@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, History, HistoryId};
-use atuin_client::settings::{Settings, SyncAuth};
+use atuin_client::settings::{DEFAULT_HUB_URL, DEFAULT_SYNC_URL, Settings, SyncAuth};
 use atuin_domain::record::RecordId;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -272,8 +272,15 @@ impl Caller {
     }
 }
 
+/// Where the hub serves Octavo: `api.atuin.sh` for Atuin's hosted hub, or a self-hosted hub's own
+/// address.
 fn octavo_address(settings: &Settings) -> Url {
-    settings.octavo.endpoint.clone().unwrap_or_else(|| settings.hub_endpoint())
+    let hub = settings.hub_endpoint();
+    if hub == *DEFAULT_HUB_URL {
+        DEFAULT_SYNC_URL.clone()
+    } else {
+        hub
+    }
 }
 
 fn connect(address: &Url, connect_timeout: Duration) -> Result<Channel, ConnectError> {
@@ -302,4 +309,32 @@ fn connector() -> Result<HttpsConnector<HttpConnector>, ConnectError> {
         .build()
         .map_err(ConnectError::Tls)?;
     Ok(HttpsConnector::from((http, tls.into())))
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::settings::{Settings, SyncProtocol};
+    use rstest::rstest;
+    use url::Url;
+
+    use super::octavo_address;
+
+    #[rstest]
+    #[case::hosted_api("https://api.atuin.sh", SyncProtocol::Auto, "https://api.atuin.sh")]
+    #[case::hosted_hub("https://hub.atuin.sh", SyncProtocol::Auto, "https://api.atuin.sh")]
+    #[case::legacy_server("https://sync.example.com", SyncProtocol::Auto, "https://api.atuin.sh")]
+    #[case::self_hosted_hub("http://localhost:4000", SyncProtocol::Hub, "http://localhost:4000")]
+    fn resolves_octavo_address(
+        #[case] sync_address: &str,
+        #[case] sync_protocol: SyncProtocol,
+        #[case] expected: &str,
+    ) {
+        let settings = Settings {
+            sync_address: Url::parse(sync_address).unwrap(),
+            sync_protocol,
+            ..Settings::default()
+        };
+
+        assert_eq!(octavo_address(&settings), Url::parse(expected).unwrap());
+    }
 }
