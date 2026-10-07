@@ -330,10 +330,11 @@ go under `[ai.sessions]`:
 
 ```toml
 [ai.sessions]
-## The filter the picker opens in: "workspace" (the default, widening to "global"
-## outside a git repository or when the workspace has no sessions), "global",
-## "host", "directory" or "branch". `--filter-mode` overrides it.
-filter_mode = "workspace"
+## The filter the picker opens in: "global" (the default), "workspace", "host",
+## "directory" or "branch". "workspace" and "branch" open in "global" outside a
+## git repository, and "workspace" does when the workspace has no sessions.
+## `--filter-mode` overrides it.
+filter_mode = "global"
 
 ## Height of the inline picker; 0 for fullscreen. Defaults to the top-level
 ## inline_height. `--inline-height` overrides it.

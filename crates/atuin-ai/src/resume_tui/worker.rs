@@ -21,7 +21,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SourceId};
-use atuin_client::settings::AiSessionFilterMode as FilterMode;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
@@ -35,7 +34,6 @@ use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
 pub enum Request {
     Search {
         generation: u64,
-        mode: FilterMode,
         filter: SessionFilter,
     },
     Preview(HarnessSession),
@@ -73,7 +71,6 @@ pub enum Request {
 pub enum Response {
     Results {
         generation: u64,
-        mode: FilterMode,
         rows: Result<Vec<SessionRow>, String>,
     },
     Preview(HarnessSession, SessionPreview),
@@ -143,20 +140,11 @@ async fn searches(
         while let Ok(next) = requests.try_recv() {
             request = next;
         }
-        let Request::Search {
-            generation,
-            mode,
-            filter,
-        } = request
-        else {
+        let Request::Search { generation, filter } = request else {
             continue;
         };
         let rows = source.search(&filter).await.map_err(|e| format!("{e:#}"));
-        let response = Response::Results {
-            generation,
-            mode,
-            rows,
-        };
+        let response = Response::Results { generation, rows };
         if responses.send(response).is_err() {
             return;
         }
@@ -336,7 +324,6 @@ mod tests {
         let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), Arc::new(FakeResumer::default()));
         tx.send(Request::Search {
             generation: 1,
-            mode: FilterMode::Global,
             filter: roots(),
         });
         let Some(Response::Results {
@@ -422,7 +409,6 @@ mod tests {
         }
         tx.send(Request::Search {
             generation: 7,
-            mode: FilterMode::Global,
             filter: roots(),
         });
         let Some(Response::Results { generation, .. }) = rx.recv().await else {
