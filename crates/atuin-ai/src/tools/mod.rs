@@ -3,7 +3,7 @@ use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use atuin_client::history::AuthorPattern;
+use atuin_client::history::{AuthorPattern, History};
 use atuin_client::settings::FilterMode;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
@@ -1087,6 +1087,19 @@ impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
     }
 }
 
+/// Top `results` up to `size` with `loose` matches for commands not already
+/// in it, keeping their order.
+fn fill_with_loose(results: &mut Vec<History>, loose: Vec<History>, size: usize) {
+    for history in loose {
+        if results.len() >= size {
+            break;
+        }
+        if !results.iter().any(|r| r.command == history.command) {
+            results.push(history);
+        }
+    }
+}
+
 impl PermissibleToolCall for AtuinHistoryToolCall {
     fn target_dir(&self) -> Option<&Path> {
         None
@@ -1132,16 +1145,36 @@ impl AtuinHistoryToolCall {
             ..Default::default()
         };
 
-        let mut results = match db
-            .search(DbSearchMode::Fuzzy, search_mode.into(), &context, &self.query, filter_options)
-            .await
-        {
-            Ok(results) => results,
+        // Each term as a substring first: fuzzy matching alone takes the most
+        // recent commands with the letters anywhere in order, so a short query
+        // like `pscale` is buried under long heredocs that happen to spell it
+        // out. Fuzzy matches only fill what is left of the page.
+        let search =
+            |mode| db.search(mode, search_mode.into(), &context, &self.query, filter_options);
+        // Full-text results come back newest first; rank them as fuzzy ones
+        // are, tightest match first.
+        let mut results = match search(DbSearchMode::FullText).await {
+            Ok(results) => atuin_client::ordering::reorder_fuzzy(
+                DbSearchMode::Fuzzy,
+                &database::ranking_query(&self.query),
+                results,
+            ),
             Err(e) => return ToolOutcome::Error(format!("History search failed: {e}")),
         };
         // The clamp keeps this in 1..=MAX_HISTORY_RESULTS, so the conversion
         // never fails; the fallback only exists to keep it infallible.
         let page_size = usize::try_from(self.limit.clamp(1, MAX_HISTORY_RESULTS)).unwrap_or(1);
+        let exact = results.len();
+        // A page with room, or exactly full (to know whether more exist), is
+        // topped up; a query of operators alone (`^prefix`, `'exact`, regexes)
+        // matches the same either way.
+        if exact <= page_size && database::has_fuzzy_terms(&self.query) {
+            let loose = match search(DbSearchMode::Fuzzy).await {
+                Ok(loose) => loose,
+                Err(e) => return ToolOutcome::Error(format!("History search failed: {e}")),
+            };
+            fill_with_loose(&mut results, loose, page_size + 1);
+        }
         let truncated = results.len() > page_size;
         results.truncate(page_size);
 
@@ -1182,6 +1215,20 @@ impl AtuinHistoryToolCall {
                 crate::history_format::format_history_search_result(i + 1, history, local_offset)
             })
             .collect();
+        if exact < results.len() {
+            let which = if exact == 0 {
+                "No command contains the query as written; these"
+            } else {
+                "The rest"
+            };
+            formatted.insert(
+                exact,
+                format!(
+                    "[{which} only match fuzzily: the query's letters appear in order, not \
+                     necessarily together.]"
+                ),
+            );
+        }
 
         if truncated {
             // The parser clamps `limit` to MAX_HISTORY_RESULTS, so a model
@@ -1240,6 +1287,46 @@ mod tests {
             tool: "Read".to_string(),
             scope: scope.map(String::from),
         }
+    }
+
+    fn history(command: &str) -> History {
+        History::capture()
+            .timestamp(time::OffsetDateTime::UNIX_EPOCH)
+            .command(command)
+            .cwd("/")
+            .build()
+            .into()
+    }
+
+    fn commands(results: &[History]) -> Vec<&str> {
+        results.iter().map(|h| h.command.as_str()).collect()
+    }
+
+    /// Substring matches lead; fuzzy ones fill the rest of the page without
+    /// repeating a command.
+    #[rstest]
+    #[case::fills(3, vec!["pscale connect", "cat <<EOF p s c a l e", "pscale shell"])]
+    #[case::stops_at_size(2, vec!["pscale connect", "cat <<EOF p s c a l e"])]
+    #[case::exact_fills_the_page(1, vec!["pscale connect"])]
+    fn fuzzy_matches_fill_after_substring_ones(#[case] size: usize, #[case] want: Vec<&str>) {
+        let mut results = vec![history("pscale connect")];
+        let loose = ["pscale connect", "cat <<EOF p s c a l e", "pscale shell", "pip scale"];
+        fill_with_loose(&mut results, loose.into_iter().map(history).collect(), size);
+        assert_eq!(commands(&results), want);
+    }
+
+    /// Substring matches rank tightest first, as fuzzy ones did, not newest
+    /// first.
+    #[rstest]
+    fn substring_matches_rank_by_tightness() {
+        use atuin_client::database::{DbSearchMode, ranking_query};
+        let newest_first = ["ffmpeg -i in.mkv out.mkv # convert later to av1", "ffmpeg -c:v av1 x"];
+        let ranked = atuin_client::ordering::reorder_fuzzy(
+            DbSearchMode::Fuzzy,
+            &ranking_query("ffmpeg av1"),
+            newest_first.into_iter().map(history).collect(),
+        );
+        assert_eq!(commands(&ranked), ["ffmpeg -c:v av1 x", newest_first[0]]);
     }
 
     fn write_rule(scope: Option<&str>) -> Rule {

@@ -1,6 +1,7 @@
 //! `atuin_ai_session_read`: page through one captured AI-agent session's transcript.
 
 use std::fmt::Write as _;
+use std::ops::Range;
 
 use atuin_client::ai_session::{HarnessSession, Message, Session};
 use atuin_client::settings::Settings;
@@ -14,6 +15,7 @@ use futures::StreamExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
+use strum::IntoStaticStr;
 
 use super::caller::{Caller, is_own};
 use super::{connect, is_subagent, label, link_lines, parent_line, timestamp};
@@ -38,6 +40,18 @@ const TOOL_RESULT_CHARS: usize = 400;
 /// Text a harness wrote into the conversation (standing context such as AGENTS.md or a sandbox
 /// policy, but also one-off notes like a subagent's report) gets a line, not its bulk, on a page.
 const HARNESS_CHARS: usize = 200;
+/// How much of a message around a query match a filtered page shows, when the abridged message
+/// leaves the match out.
+const SNIPPET_CHARS: usize = 240;
+
+/// The labels a page puts on blocks, so a query match can tell them from what was said.
+const HARNESS_LABEL: &str = "(harness)";
+const THINKING_LABEL: &str = "(thinking)";
+const SUMMARY_LABEL: &str = "(summary of earlier conversation)";
+const MODEL_ERROR_LABEL: &str = "(model error)";
+const TOOL_ERROR_MARK: &str = "← error";
+const LABELS: [&str; 5] =
+    [HARNESS_LABEL, THINKING_LABEL, SUMMARY_LABEL, MODEL_ERROR_LABEL, TOOL_ERROR_MARK];
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -48,7 +62,9 @@ pub struct AtuinAiSessionReadToolCall {
     pub session_id: NonBlankString,
     /// Message number to start from (0-based). Negative values count back from the end over
     /// messages with content, so -10 shows the last ten things said. To see a search hit in
-    /// context, start a few messages before its message number.
+    /// context, start a few messages before its message number. Numbers count every row the
+    /// harness recorded, including ones with nothing to read, so they run past the message count
+    /// atuin_ai_session_list gives; to reach the end, use a negative start.
     #[serde(default)]
     pub start: i64,
     /// Maximum number of messages to show. Long messages and harness-injected context are
@@ -60,9 +76,262 @@ pub struct AtuinAiSessionReadToolCall {
     /// Ignored on multi-message pages.
     #[serde(default)]
     pub offset: usize,
+    /// Only messages containing every one of these words (case-insensitive, anywhere in the
+    /// text, tool input or output), to find where something was said in a long session without
+    /// paging through it. Matches keep their numbers; to see one in context, read again from a
+    /// few messages before it without query.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Only messages from these roles: 'user' (what the person wrote), 'assistant' (the agent's
+    /// replies and tool calls), 'tool' (tool output), 'harness' (context the harness injected).
+    /// ["user"] skims what the person said, often the corrections and decisions that matter
+    /// most. Omit for every role.
+    #[serde(default)]
+    pub roles: Option<Vec<RoleArg>>,
+}
+
+/// Who a message is from, as `roles` filters it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, IntoStaticStr)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum RoleArg {
+    User,
+    Assistant,
+    Tool,
+    Harness,
+}
+
+impl RoleArg {
+    /// Tool output is `tool` whatever the envelope role, as on a page; whatever is neither the
+    /// person, the model nor a tool was written by the harness.
+    fn of(m: &Message) -> Self {
+        if is_tool_output(m) {
+            return Self::Tool;
+        }
+        match m.role {
+            Role::User => Self::User,
+            Role::Assistant => Self::Assistant,
+            Role::Tool => Self::Tool,
+            Role::System | Role::Other(_) => Self::Harness,
+        }
+    }
+}
+
+/// Which messages a read shows: those from `roles` (any, when empty) containing every term.
+struct Filter {
+    terms: Vec<String>,
+    roles: Vec<RoleArg>,
+}
+
+impl Filter {
+    fn new(query: Option<&str>, roles: Option<&[RoleArg]>) -> Self {
+        Self {
+            terms: query.map(|q| q.split_whitespace().map(fold).collect()).unwrap_or_default(),
+            roles: roles.map(<[RoleArg]>::to_vec).unwrap_or_default(),
+        }
+    }
+
+    const fn is_active(&self) -> bool {
+        !self.terms.is_empty() || !self.roles.is_empty()
+    }
+
+    /// Whether the page shows `m`: it has something to read and passes the filter.
+    fn keeps(&self, m: &Message) -> bool {
+        if !has_content(m) || (!self.roles.is_empty() && !self.roles.contains(&RoleArg::of(m))) {
+            return false;
+        }
+        if self.terms.is_empty() {
+            return true;
+        }
+        let text = fold(&searchable(m));
+        self.terms.iter().all(|term| text.contains(term.as_str()))
+    }
+
+    /// The text around a term the abridged `shown` body cut off, so a match deep in a long
+    /// message or tool output is visible on the page. A term only in the page's own markup (a
+    /// role label, a clip marker) does not count as shown.
+    fn snippet(&self, m: &Message, shown: &str) -> Option<String> {
+        let shown = fold(&without_markup(shown));
+        let term = self.terms.iter().find(|term| !shown.contains(term.as_str()))?;
+        let text = searchable(m);
+        // Folding can lengthen a char (`İ` becomes two), so map the match in the folded text
+        // back to the original char it came from.
+        let mut lower = String::with_capacity(text.len());
+        let mut origin = Vec::with_capacity(text.len());
+        for (index, ch) in text.chars().enumerate() {
+            lower.extend(fold_char(ch));
+            origin.resize(lower.len(), index);
+        }
+        let at = origin[lower.find(term.as_str())?];
+        let text: String =
+            text.chars().skip(at.saturating_sub(SNIPPET_CHARS / 2)).take(SNIPPET_CHARS).collect();
+        Some(format!("(match) …{}…\n", one_line(&text, SNIPPET_CHARS)))
+    }
+
+    /// The footer of a filtered page: how many messages matched and where the next match is.
+    /// `kept` flags the messages the filter keeps; on a `complete` transcript the counts are
+    /// exact, on a partial one (read up to the first match past the page) only that more follow.
+    fn footer(
+        &self,
+        out: &mut String,
+        kept: &[bool],
+        complete: bool,
+        page: Range<usize>,
+        n: usize,
+    ) {
+        let describe = self.describe();
+        let Range { start, end } = page;
+        let Some(last) = kept.len().checked_sub(1) else {
+            let _ = writeln!(out, "[The session has no messages.]");
+            return;
+        };
+        let span = format!("the session runs #0–#{last}");
+        if n == 0 {
+            let _ = writeln!(out, "[No messages from #{start} on match {describe}; {span}.]");
+            return;
+        }
+        let messages = plural(n, "message", "messages");
+        if complete {
+            let _ = write!(out, "\n[{n} {messages} matching {describe} from #{start}; {span}.]");
+            let more = kept[end..].iter().filter(|kept| **kept).count();
+            if more > 0 {
+                let matches = plural(more, "match", "matches");
+                let _ = write!(out, " {more} more {matches}: read again with start: {end}.");
+            }
+        } else {
+            let _ = write!(
+                out,
+                "\n[{n} {messages} matching {describe} from #{start}.] More match: read again \
+                 with start: {end}."
+            );
+        }
+        let _ = writeln!(
+            out,
+            " To see one in context, read again without the filter from a few messages before it."
+        );
+    }
+
+    /// `query "a b", roles user` for the footer.
+    fn describe(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.terms.is_empty() {
+            parts.push(format!("query {:?}", self.terms.join(" ")));
+        }
+        if !self.roles.is_empty() {
+            let roles: Vec<&str> = self.roles.iter().map(|r| r.into()).collect();
+            parts.push(format!("roles {}", roles.join(", ")));
+        }
+        parts.join(", ")
+    }
+}
+
+/// `text` with case folded the same way everywhere a query compares it: char by char, so a
+/// match found in the folded text maps back to the original, and with final sigma as plain
+/// sigma, which whole-string lowercasing would otherwise choose by position.
+fn fold(text: &str) -> String {
+    text.chars().flat_map(fold_char).collect()
+}
+
+fn fold_char(ch: char) -> impl Iterator<Item = char> {
+    ch.to_lowercase().map(|c| {
+        if c == 'ς' {
+            'σ'
+        } else {
+            c
+        }
+    })
+}
+
+const fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
+    if n == 1 {
+        one
+    } else {
+        many
+    }
+}
+
+/// What a query searches in a message: what was written, tool names, the values of tool
+/// arguments (not their JSON keys) and tool output. Not the page's markup, so a word like
+/// `error` or `thinking` matches only where it was said.
+fn searchable(m: &Message) -> String {
+    fn values(value: &Value, out: &mut String) {
+        match value {
+            Value::String(s) => {
+                out.push_str(s);
+                out.push('\n');
+            }
+            Value::Array(items) => items.iter().for_each(|v| values(v, out)),
+            Value::Object(map) => map.values().for_each(|v| values(v, out)),
+            Value::Number(n) => {
+                let _ = writeln!(out, "{n}");
+            }
+            Value::Bool(b) => {
+                let _ = writeln!(out, "{b}");
+            }
+            Value::Null => {}
+        }
+    }
+    let mut out = String::new();
+    for block in &m.content {
+        match block {
+            Content::Text(text)
+            | Content::Reasoning(text)
+            | Content::Summary(text)
+            | Content::Error(text) => {
+                out.push_str(text);
+                out.push('\n');
+            }
+            Content::ToolUse(call) => {
+                out.push_str(&call.name);
+                out.push('\n');
+                values(&call.input, &mut out);
+            }
+            Content::ToolResult(result) => {
+                out.push_str(&result.output_text().unwrap_or_default());
+                out.push('\n');
+            }
+            // The files an edit touched and the lines it changed.
+            Content::Patch(patch) => {
+                for file in &patch.files {
+                    out.push_str(&file.path);
+                    out.push('\n');
+                    if let Some(to) = &file.moved_to {
+                        out.push_str(to);
+                        out.push('\n');
+                    }
+                    for line in file.hunks.iter().flat_map(|hunk| &hunk.lines) {
+                        out.push_str(line);
+                        out.push('\n');
+                    }
+                }
+            }
+            Content::ReasoningSummary { .. } | Content::Other(_) => {}
+        }
+    }
+    out
+}
+
+/// A rendered body without the labels and clip markers a page adds to it.
+fn without_markup(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    // Clip markers: `[…N more chars]`.
+    while let Some(at) = rest.find("[…") {
+        out.push_str(&rest[..at]);
+        rest = rest[at..].find(']').map_or("", |close| &rest[at + close + 1..]);
+    }
+    out.push_str(rest);
+    for label in LABELS {
+        out = out.replace(label, "");
+    }
+    out
 }
 
 impl AtuinAiSessionReadToolCall {
+    fn filter(&self) -> Filter {
+        Filter::new(self.query.as_deref(), self.roles.as_deref())
+    }
+
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
         let mut client = match connect(settings).await {
             Ok(client) => client,
@@ -92,12 +361,15 @@ impl AtuinAiSessionReadToolCall {
             Err(e) => return ToolOutcome::Error(e.to_string()),
         };
 
-        // A forward page needs the messages up to it plus one with content beyond (to know more
+        // A forward page needs the messages up to it plus one it would show beyond (to know more
         // follows), not the rest of a possibly huge transcript; a negative start counts back
         // from the end, so it needs them all.
+        let filter = self.filter();
+        let keep = |m: &Message| filter.keeps(m);
         let page = usize::try_from(self.start).ok().map(|start| Page {
             start,
             content: self.limit.get() as usize + 1,
+            keep: &keep,
         });
         let (session, messages, complete) = match read_session(&mut client, handle, page).await {
             Ok(read) => read,
@@ -107,6 +379,7 @@ impl AtuinAiSessionReadToolCall {
             &session,
             &messages,
             complete,
+            &filter,
             time::UtcOffset::local_or_utc(),
         ))
     }
@@ -118,21 +391,25 @@ impl AtuinAiSessionReadToolCall {
         s: &Session,
         messages: &[Message],
         complete: bool,
+        filter: &Filter,
         offset: time::UtcOffset,
     ) -> String {
         let total = messages.len();
         let limit = self.limit.get() as usize;
         let full = self.limit.get() == 1;
+        // Decided once per message: a query searches each one's whole text.
+        let kept: Vec<bool> = messages.iter().map(|m| filter.keeps(m)).collect();
         // Out-of-range starts (either sign) clamp to the ends of the transcript. A negative start
-        // counts back over messages with something to read: sessions often end in metadata-only
-        // rows (Codex), and `-1` landing on one would show an empty page.
+        // counts back over messages with something to read (that the filter keeps): sessions
+        // often end in metadata-only rows (Codex), and `-1` landing on one would show an empty
+        // page.
         let magnitude = usize::try_from(self.start.unsigned_abs()).unwrap_or(usize::MAX);
         let start = if self.start < 0 {
             messages
                 .iter()
                 .enumerate()
                 .rev()
-                .filter(|(_, m)| has_content(m))
+                .filter(|(i, _)| kept[*i])
                 .nth(magnitude.saturating_sub(1))
                 .map_or(0, |(i, _)| i)
         } else {
@@ -176,7 +453,14 @@ impl AtuinAiSessionReadToolCall {
         let mut shown = 0;
         let mut tools = ToolRun::default();
         for (index, message) in messages.iter().enumerate().skip(start) {
-            if has_content(message) {
+            let wanted = kept[index];
+            if filter.is_active() && !wanted {
+                // Not part of the page, so it ends any run of tool calls around it.
+                end = index + 1;
+                shown += tools.flush(&mut out);
+                continue;
+            }
+            if wanted {
                 if counted == limit {
                     break;
                 }
@@ -201,6 +485,9 @@ impl AtuinAiSessionReadToolCall {
                     .unwrap_or_default();
                 let _ = writeln!(out, "#{index} {role}{time}");
                 out.push_str(&body);
+                if !full && let Some(snippet) = filter.snippet(message, &body) {
+                    out.push_str(&snippet);
+                }
                 shown += 1;
             }
             // Stop at a message boundary once the page is big enough, whatever `limit` said:
@@ -210,6 +497,11 @@ impl AtuinAiSessionReadToolCall {
             }
         }
         shown += tools.flush(&mut out);
+
+        if filter.is_active() {
+            filter.footer(&mut out, &kept, complete, start..end, counted);
+            return out;
+        }
 
         // Numbering has gaps where harnesses recorded rows with nothing to read (attachments,
         // mode switches); say so, so a gap is not mistaken for a missing page.
@@ -278,7 +570,7 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
             }
             (Block::UncapturedTool { name: None, error }, _) => {
                 if error {
-                    let _ = writeln!(body, "← error");
+                    let _ = writeln!(body, "{TOOL_ERROR_MARK}");
                 }
             }
             (Block::Readable, Content::Text(text)) => {
@@ -290,20 +582,17 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
                 if full || matches!(m.role, Role::User | Role::Assistant) {
                     let _ = writeln!(body, "{}", clip(text, TEXT_CHARS, full));
                 } else {
-                    let _ = writeln!(body, "(harness) {}", one_line(text, HARNESS_CHARS));
+                    let _ = writeln!(body, "{HARNESS_LABEL} {}", one_line(text, HARNESS_CHARS));
                 }
             }
             (Block::Readable, Content::Reasoning(text)) => {
-                let _ = writeln!(body, "(thinking) {}", clip(text.trim(), THINKING_CHARS, full));
+                let _ =
+                    writeln!(body, "{THINKING_LABEL} {}", clip(text.trim(), THINKING_CHARS, full));
             }
             // A compaction summary stands in for the conversation before it, so it is often the
             // best account of what an earlier stretch of a long session did.
             (Block::Readable, Content::Summary(text)) => {
-                let _ = writeln!(
-                    body,
-                    "(summary of earlier conversation) {}",
-                    clip(text.trim(), TEXT_CHARS, full)
-                );
+                let _ = writeln!(body, "{SUMMARY_LABEL} {}", clip(text.trim(), TEXT_CHARS, full));
             }
             (Block::Readable, Content::Error(text)) => {
                 let text = if full {
@@ -311,7 +600,7 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
                 } else {
                     one_line(text, TOOL_RESULT_CHARS)
                 };
-                let _ = writeln!(body, "(model error) {text}");
+                let _ = writeln!(body, "{MODEL_ERROR_LABEL} {text}");
             }
             (Block::Readable, Content::ToolUse(call)) => {
                 let _ = writeln!(body, "→ {}: {}", call.name, tool_input(&call.input, full));
@@ -320,7 +609,7 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
                 let output = result.output_text().unwrap_or_default();
                 let output = output.trim();
                 let mark = if result.error {
-                    "← error"
+                    TOOL_ERROR_MARK
                 } else {
                     "←"
                 };
@@ -348,15 +637,19 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
         return None;
     }
 
-    // A tool result is labelled `tool` whatever the envelope role: some harnesses model tool
-    // output as a user turn.
-    let role = if m.content.iter().all(|b| matches!(b, Content::ToolResult(_) | Content::Patch(_)))
-    {
+    let role = if is_tool_output(m) {
         "tool".to_owned()
     } else {
         message_role(m)
     };
     Some((role, body))
+}
+
+/// A message of tool results (and the patches they made) alone is tool output whatever the
+/// envelope role: some harnesses model tool output as a user turn.
+fn is_tool_output(m: &Message) -> bool {
+    !m.content.is_empty()
+        && m.content.iter().all(|b| matches!(b, Content::ToolResult(_) | Content::Patch(_)))
 }
 
 /// `text` cut to `budget` chars, saying how much was left out; whole when `full`.
@@ -399,10 +692,11 @@ fn tool_input(input: &Value, full: bool) -> String {
 }
 
 /// How much of a transcript a forward read needs: every message before `start`, then messages
-/// until `content` of them (from `start` on) have something to read.
-pub struct Page {
+/// until `content` of them (from `start` on) are ones the page would `keep`.
+pub struct Page<'a> {
     start: usize,
     content: usize,
+    keep: &'a (dyn Fn(&Message) -> bool + Sync),
 }
 
 /// Fetch a session and its messages, decoded into domain types: all of them, or only as many as
@@ -411,7 +705,7 @@ pub struct Page {
 pub async fn read_session(
     client: &mut AiClient,
     handle: HarnessSession,
-    page: Option<Page>,
+    page: Option<Page<'_>>,
 ) -> eyre::Result<(Session, Vec<Message>, bool)> {
     let mut stream = client.get_session(handle).await?;
     let mut session = None;
@@ -424,7 +718,7 @@ pub async fn read_session(
             Some(Event::Message(m)) => {
                 let m = Message::try_from(m)?;
                 let past_start = page.as_ref().is_some_and(|p| messages.len() >= p.start);
-                if past_start && has_content(&m) {
+                if past_start && page.as_ref().is_some_and(|p| (p.keep)(&m)) {
                     content += 1;
                 }
                 messages.push(m);
@@ -583,7 +877,9 @@ impl ToolRun {
 #[cfg(test)]
 mod tests {
     use atuin_client::ai_session::{AtuinSessionId, HarnessKind, NativeSessionId, SourceId};
-    use atuin_common::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
+    use atuin_common::harnesstools::session::{
+        Change, FilePatch, Hunk, Patch, ToolCallId, ToolResult, ToolUse,
+    };
     use atuin_domain::record::RecordId;
     use rstest::rstest;
     use serde_json::json;
@@ -638,7 +934,12 @@ mod tests {
     }
 
     fn render(args: Value, msgs: &[Message]) -> String {
-        call(args).render(&session(), msgs, true, time::UtcOffset::UTC)
+        render_on(args, &session(), msgs, true)
+    }
+
+    fn render_on(args: Value, s: &Session, msgs: &[Message], complete: bool) -> String {
+        let call = call(args);
+        call.render(s, msgs, complete, &call.filter(), time::UtcOffset::UTC)
     }
 
     #[rstest]
@@ -704,12 +1005,7 @@ mod tests {
         let id = |n: u128| AtuinSessionId::from(uuid::Uuid::from_u128(n));
         let mut s = session();
         s.child_atuin_ids = (0..1_000).map(id).collect();
-        let out = call(json!({"session_id": "abc"})).render(
-            &s,
-            &[text(Role::User, "hi")],
-            true,
-            time::UtcOffset::UTC,
-        );
+        let out = render_on(json!({"session_id": "abc"}), &s, &[text(Role::User, "hi")], true);
         let children = out.lines().find(|l| l.starts_with("children ")).expect(&out);
         assert_eq!(children, format!("children {}, {}, {}, and 997 more", id(0), id(1), id(2)));
         assert!(!out.contains(&id(3).to_string()), "{out}");
@@ -802,12 +1098,7 @@ mod tests {
     #[rstest]
     fn a_partial_transcript_omits_the_total() {
         let msgs = vec![text(Role::User, "a"), text(Role::User, "b"), text(Role::User, "c")];
-        let out = call(json!({"session_id": "abc", "limit": 2})).render(
-            &session(),
-            &msgs,
-            false,
-            time::UtcOffset::UTC,
-        );
+        let out = render_on(json!({"session_id": "abc", "limit": 2}), &session(), &msgs, false);
         assert!(out.contains("[messages 0–1] More follows: read again with start: 2."), "{out}");
     }
 
@@ -849,6 +1140,216 @@ mod tests {
         assert!(!last.contains("Read the rest"), "{last}");
         let past = render(json!({"session_id": "abc", "limit": 1, "offset": 90_000}), &msgs);
         assert!(past.contains("past the end of this message"), "{past}");
+    }
+
+    fn conversation() -> Vec<Message> {
+        vec![
+            text(Role::User, "how big is the store?"),
+            text(Role::Assistant, "Querying the postgres database."),
+            empty(),
+            blocks(Role::User, vec![Content::ToolResult(ToolResult {
+                call: ToolCallId::from("c".to_owned()),
+                output: json!("no tables in postgres"),
+                error: false,
+            })]),
+            text(Role::User, "it's called Records!"),
+            text(Role::Assistant, "Thanks, querying records."),
+            text(Role::User, "and the other one is hub"),
+        ]
+    }
+
+    #[rstest]
+    fn a_query_shows_only_messages_with_every_word() {
+        let out = render(json!({"session_id": "abc", "query": "CALLED records"}), &conversation());
+        assert!(out.contains("#4 user 00:00\nit's called Records!"), "{out}");
+        assert!(!out.contains("#5 ") && !out.contains("#0 "), "{out}");
+        assert!(
+            out.contains(
+                "[1 message matching query \"called records\" from #0; the session runs #0–#6.]"
+            ),
+            "{out}"
+        );
+    }
+
+    #[rstest]
+    fn roles_skim_what_the_person_said() {
+        let out = render(json!({"session_id": "abc", "roles": ["user"]}), &conversation());
+        let numbers: Vec<_> = out.lines().filter(|l| l.starts_with('#')).collect();
+        assert_eq!(numbers, ["#0 user 00:00", "#4 user 00:00", "#6 user 00:00"], "{out}");
+
+        let tool = render(json!({"session_id": "abc", "roles": ["tool"]}), &conversation());
+        assert!(tool.contains("#3 tool"), "tool output is not the user's: {tool}");
+    }
+
+    /// The limit and a negative start count matching messages, and the footer says where the
+    /// next match is.
+    #[rstest]
+    fn a_filtered_page_counts_and_pages_by_matches() {
+        let msgs = conversation();
+        let first = render(json!({"session_id": "abc", "roles": ["user"], "limit": 2}), &msgs);
+        assert!(first.contains("1 more match: read again with start: 6."), "{first}");
+        let next =
+            render(json!({"session_id": "abc", "roles": ["user"], "limit": 2, "start": 6}), &msgs);
+        assert!(next.contains("#6 user") && !next.contains("more match"), "{next}");
+        let last = render(json!({"session_id": "abc", "roles": ["user"], "start": -2}), &msgs);
+        let numbers: Vec<_> = last.lines().filter(|l| l.starts_with('#')).collect();
+        assert_eq!(numbers, ["#4 user 00:00", "#6 user 00:00"], "{last}");
+    }
+
+    #[rstest]
+    fn a_query_matches_tool_output_and_says_when_nothing_does() {
+        let out = render(json!({"session_id": "abc", "query": "tables"}), &conversation());
+        assert!(out.contains("#3 tool 00:00\n← no tables in postgres"), "{out}");
+        let none = render(json!({"session_id": "abc", "query": "planetscale"}), &conversation());
+        assert!(
+            none.contains(
+                "[No messages from #0 on match query \"planetscale\"; the session runs #0–#6.]"
+            ),
+            "{none}"
+        );
+    }
+
+    #[rstest]
+    fn a_match_cut_from_a_long_message_gets_a_snippet() {
+        let long = format!("{} the database is records {}", "x".repeat(3_000), "y".repeat(500));
+        let msgs = vec![text(Role::User, &long)];
+        let out = render(json!({"session_id": "abc", "query": "records"}), &msgs);
+        assert!(out.contains("(match) …"), "{out}");
+        assert!(out.contains("the database is records"), "{out}");
+    }
+
+    /// A query searches what was said and the values of tool arguments, not JSON keys or the
+    /// page's own labels.
+    #[rstest]
+    #[case::json_key("description")]
+    #[case::thinking_label("thinking")]
+    #[case::error_mark("error")]
+    fn a_query_ignores_markup(#[case] query: &str) {
+        let msgs = vec![
+            blocks(Role::Assistant, vec![
+                Content::Reasoning("pondering".to_owned()),
+                Content::ToolUse(ToolUse {
+                    id: ToolCallId::from("c".to_owned()),
+                    name: "Bash".to_owned(),
+                    input: json!({"command": "pscale shell", "description": "open a shell"}),
+                }),
+            ]),
+            blocks(Role::User, vec![Content::ToolResult(ToolResult {
+                call: ToolCallId::from("c".to_owned()),
+                output: json!("denied"),
+                error: true,
+            })]),
+        ];
+        let out = render(json!({"session_id": "abc", "query": query}), &msgs);
+        assert!(out.contains("[No messages from #0 on match"), "{out}");
+        let value = render(json!({"session_id": "abc", "query": "pscale"}), &msgs);
+        assert!(value.contains("#0 assistant"), "argument values are searched: {value}");
+    }
+
+    /// A word that appears on the page only in a clip marker still gets a snippet.
+    #[rstest]
+    fn a_clip_marker_does_not_hide_a_cut_match() {
+        let long = format!("{} and more besides", "x".repeat(3_000));
+        let out = render(json!({"session_id": "abc", "query": "more"}), &[text(Role::User, &long)]);
+        assert!(out.contains("more chars]"), "the message is clipped: {out}");
+        assert!(out.contains("(match) …") && out.contains("and more besides"), "{out}");
+    }
+
+    /// A query finds the files an edit touched and the lines it changed, and the message
+    /// counts as tool output.
+    #[rstest]
+    #[case::path("database.rs")]
+    #[case::changed_line("ranking_query")]
+    fn a_query_finds_what_an_edit_changed(#[case] query: &str) {
+        let patch = Patch {
+            call: ToolCallId::from("c".to_owned()),
+            files: vec![FilePatch {
+                path: "src/database.rs".to_owned(),
+                change: Change::Update,
+                moved_to: None,
+                hunks: vec![Hunk {
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec!["-old".to_owned(), "+pub fn ranking_query()".to_owned()],
+                }],
+            }],
+        };
+        let msgs = vec![blocks(Role::User, vec![Content::Patch(patch)])];
+        let out = render(json!({"session_id": "abc", "query": query, "roles": ["tool"]}), &msgs);
+        assert!(out.contains("#0 tool"), "{out}");
+    }
+
+    /// Lowercasing `İ` doubles it, which must not push the snippet's window past the match.
+    #[rstest]
+    fn a_snippet_finds_the_match_after_chars_that_grow_when_lowercased() {
+        let long = format!("{} the database is records", "İ".repeat(3_000));
+        let out =
+            render(json!({"session_id": "abc", "query": "records"}), &[text(Role::User, &long)]);
+        assert!(out.contains("the database is records…"), "{out}");
+    }
+
+    /// Whole-string lowercasing makes a word-final `Σ` into `ς`; a query and the snippet must
+    /// fold it the same way, whichever sigma was typed.
+    #[rstest]
+    #[case::upper("ΟΣ")]
+    #[case::final_sigma("ος")]
+    #[case::medial_sigma("οσ")]
+    fn a_greek_match_gets_its_snippet(#[case] query: &str) {
+        let long = format!("{} ΛΟΓΟΣ end", "x".repeat(3_000));
+        let out = render(json!({"session_id": "abc", "query": query}), &[text(Role::User, &long)]);
+        assert!(out.contains("#0 user") && out.contains("ΛΟΓΟΣ end…"), "{out}");
+    }
+
+    #[rstest]
+    fn a_query_finds_boolean_tool_arguments() {
+        let msgs = vec![blocks(Role::Assistant, vec![Content::ToolUse(ToolUse {
+            id: ToolCallId::from("c".to_owned()),
+            name: "Configure".to_owned(),
+            input: json!({"enabled": true}),
+        })])];
+        let out = render(json!({"session_id": "abc", "query": "true"}), &msgs);
+        assert!(out.contains("#0 assistant"), "{out}");
+    }
+
+    #[rstest]
+    fn a_filtered_read_of_an_empty_session_says_so() {
+        let out = render(json!({"session_id": "abc", "roles": ["user"]}), &[]);
+        assert!(out.contains("[The session has no messages.]"), "{out}");
+        assert!(!out.contains("#0"), "{out}");
+    }
+
+    /// A forward filtered page reads only up to the first match past it, so it says more
+    /// follow without counting them.
+    #[rstest]
+    fn a_partial_filtered_page_says_more_match() {
+        let out = render_on(
+            json!({"session_id": "abc", "roles": ["user"], "limit": 1}),
+            &session(),
+            &conversation()[..5],
+            false,
+        );
+        assert!(
+            out.contains(
+                "[1 message matching roles user from #0.] More match: read again with start: 4."
+            ),
+            "{out}"
+        );
+    }
+
+    #[rstest]
+    #[case::null(json!({"session_id": "abc", "query": null, "roles": null}))]
+    #[case::blank(json!({"session_id": "abc", "query": "  ", "roles": []}))]
+    fn blank_filters_are_no_filter(#[case] args: Value) {
+        let out = render(args, &conversation());
+        assert!(out.contains("[messages 0–6 of 7; 1 empty omitted]"), "{out}");
+    }
+
+    #[rstest]
+    fn rejects_an_unknown_role() {
+        let args = json!({"session_id": "abc", "roles": ["robot"]});
+        assert!(serde_json::from_value::<AtuinAiSessionReadToolCall>(args).is_err());
     }
 
     #[rstest]

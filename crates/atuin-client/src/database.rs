@@ -885,18 +885,7 @@ impl Sqlite {
             .fetch_all(self.sqlite.pool())
             .await?;
 
-        // Rank against the same characters SQL matched: drop spaces, operators and negated terms.
-        let reorder_query: String = QueryTokenizer::new(orig_query)
-            .filter(|token| !token.is_inverse())
-            .filter_map(|token| match token {
-                QueryToken::Match(term, _)
-                | QueryToken::MatchStart(term, _)
-                | QueryToken::MatchEnd(term, _)
-                | QueryToken::MatchFull(term, _) => Some(term),
-                QueryToken::Or | QueryToken::Regex(_) => None,
-            })
-            .collect();
-        Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
+        Ok(ordering::reorder_fuzzy(search_mode, &ranking_query(orig_query), res))
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -1231,6 +1220,29 @@ impl SqlBuilderExt for SqlBuilder {
             self.and_where(cond)
         }
     }
+}
+
+/// The characters fuzzy results are ranked against: the same ones the SQL matched, without
+/// spaces, operators or negated terms.
+#[must_use]
+pub fn ranking_query(query: &str) -> String {
+    QueryTokenizer::new(query)
+        .filter(|token| !token.is_inverse())
+        .filter_map(|token| match token {
+            QueryToken::Match(term, _)
+            | QueryToken::MatchStart(term, _)
+            | QueryToken::MatchEnd(term, _)
+            | QueryToken::MatchFull(term, _) => Some(term),
+            QueryToken::Or | QueryToken::Regex(_) => None,
+        })
+        .collect()
+}
+
+/// Whether fuzzy and full-text search differ for `query`: only plain terms match differently
+/// (spread out or as a substring); operators such as `^prefix` and `'exact` match the same.
+#[must_use]
+pub fn has_fuzzy_terms(query: &str) -> bool {
+    QueryTokenizer::new(query).any(|token| matches!(token, QueryToken::Match(..)))
 }
 
 pub struct QueryTokenizer<'a> {

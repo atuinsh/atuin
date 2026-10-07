@@ -150,7 +150,8 @@ impl AtuinAiSessionSearchToolCall {
         let _ = write!(
             out,
             "\nRead around a match with atuin_ai_session_read, e.g. start a few messages before \
-             the matched message number."
+             the matched message number. Each session shows only its best match; to find every \
+             mention in one, read it with query."
         );
         Ok(out)
     }
