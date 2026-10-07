@@ -27,11 +27,33 @@ def _atuin_postcommand(cmd: str, rtn: int, out, ts):
     duration = ts[1] - ts[0]
     nanos = max(0, round(duration * 10 ** 9))
 
-    # This causes the entire .xonshrc to be re-executed, which is incredibly slow
-    # This happens when using a subshell and using output redirection at the same time
-    # For more details, see https://github.com/xonsh/xonsh/issues/5224
-    # (atuin history end --hook --exit @(rtn) -- $ATUIN_HISTORY_ID &) > /dev/null 2>&1
-    atuin history end --hook --exit @(rtn) --duration @(nanos) -- $ATUIN_HISTORY_ID > @(os.devnull) 2>&1
+    args = ["history", "end", "--hook", "--exit", str(rtn), "--duration", str(nanos), "--", $ATUIN_HISTORY_ID]
+
+    # Run in the background, so a slow daemon can't hold up the prompt. Not as a `&` job: using a
+    # subshell and output redirection together re-executes the entire .xonshrc, which is incredibly
+    # slow. For more details, see https://github.com/xonsh/xonsh/issues/5224
+    #
+    # An `atuin` alias comes back expanded into its command line, unless it's a function alias.
+    # Only xonsh can run those, so they still run in the foreground: a thread would be killed with
+    # the shell, losing a command the daemon was still waiting to hear the end of.
+    atuin_cmd = aliases.get("atuin", ["atuin"])
+    started = False
+    if all(isinstance(arg, str) for arg in atuin_cmd):
+        try:
+            subprocess.Popen(
+                [*atuin_cmd, *args],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=${...}.detype(),
+                start_new_session=True,
+            )
+            started = True
+        except OSError:
+            pass
+
+    if not started:
+        atuin @(args) > @(os.devnull) 2>&1
     del $ATUIN_HISTORY_ID
 
 

@@ -438,9 +438,19 @@ where
     Ok(resp)
 }
 
+/// How long `history start` waits on the daemon. It runs synchronously before every command, and a
+/// stuck daemon still accepts connections, so without a limit the prompt hangs. On timeout the
+/// command is saved to the local database instead.
+///
+/// `history end` and `cancel` have no limit: the hooks run them in the background (on Nushell, from
+/// 0.104), and giving up would lose a command that only exists in the daemon's memory.
+const START_HISTORY_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub async fn start_history(settings: &Settings, history: History) -> Result<HistoryId> {
-    let resp =
-        try_with_restart(settings, async |client| client.start_history(history).await).await?;
+    let start = try_with_restart(settings, async |client| client.start_history(history).await);
+    let resp = tokio::time::timeout(START_HISTORY_TIMEOUT, start)
+        .await
+        .wrap_err("timed out waiting for the daemon")??;
     let id = resp.id.ok_or_else(|| eyre::eyre!("daemon reply is missing the history id"))?;
     Ok(HistoryId::try_from(id)?)
 }
@@ -741,6 +751,31 @@ mod tests {
         for needle in needles {
             assert!(msg.contains(needle), "got: {msg}");
         }
+    }
+
+    /// A stopped daemon's socket still accepts connections but never answers.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn start_history_times_out_on_a_daemon_that_never_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("stopped.sock");
+        let _listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let mut settings = Settings::default();
+        settings.daemon.socket_path = Some(socket);
+        settings.daemon.pidfile_path = dir.path().join("d.pid").to_str().unwrap().to_owned();
+        settings.daemon.autostart = false;
+        let history = History::import()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("true")
+            .cwd("/")
+            .build();
+
+        let started = std::time::Instant::now();
+        let err = start_history(&settings, history.into()).await.unwrap_err();
+
+        assert!(started.elapsed() < START_HISTORY_TIMEOUT * 2, "{:?}", started.elapsed());
+        assert!(format!("{err:#}").contains("timed out"), "{err:#}");
     }
 
     #[rstest]
