@@ -106,15 +106,44 @@ const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart dae
 enum Probe {
     Ready(HistoryClient),
     NeedsRestart(String),
+    /// A newer daemon we can't talk to. It's left running rather than replaced with ours.
+    Incompatible(String),
     Unreachable(eyre::Report),
 }
 
-fn daemon_matches_expected(version: &str, protocol: u32) -> bool {
-    version == VERSION && protocol == PROTOCOL_VERSION
+#[derive(Debug, PartialEq, Eq)]
+enum Compat {
+    Ready,
+    Outdated,
+    Newer,
+}
+
+fn daemon_compat(version: &str, protocol: u32) -> Compat {
+    if version == VERSION && protocol == PROTOCOL_VERSION {
+        return Compat::Ready;
+    }
+
+    // Only replace an older daemon: with two atuin versions installed, restarting on any mismatch
+    // has each one restart the daemon out from under the other on every command.
+    let newer = matches!(
+        (semver::Version::parse(version), semver::Version::parse(VERSION)),
+        (Ok(daemon), Ok(ours)) if daemon > ours
+    );
+
+    match (newer, protocol == PROTOCOL_VERSION) {
+        (false, _) => Compat::Outdated,
+        (true, true) => Compat::Ready,
+        (true, false) => Compat::Newer,
+    }
 }
 
 fn daemon_mismatch_message(version: &str, protocol: u32) -> String {
-    if protocol == PROTOCOL_VERSION {
+    if daemon_compat(version, protocol) == Compat::Newer {
+        format!(
+            "daemon {version} is newer than this client ({VERSION}) and speaks protocol \
+             {protocol}, expected {PROTOCOL_VERSION}; leaving it running"
+        )
+    } else if protocol == PROTOCOL_VERSION {
         format!("daemon is out of date: expected {VERSION}, got {version}")
     } else {
         format!("daemon protocol mismatch: expected {PROTOCOL_VERSION}, got {protocol}")
@@ -160,10 +189,11 @@ async fn probe(settings: &Settings) -> Probe {
 
     match client.status().await {
         Ok(status) => {
-            if daemon_matches_expected(&status.version, status.protocol) {
-                Probe::Ready(client)
-            } else {
-                Probe::NeedsRestart(daemon_mismatch_message(&status.version, status.protocol))
+            let message = || daemon_mismatch_message(&status.version, status.protocol);
+            match daemon_compat(&status.version, status.protocol) {
+                Compat::Ready => Probe::Ready(client),
+                Compat::Outdated => Probe::NeedsRestart(message()),
+                Compat::Newer => Probe::Incompatible(message()),
             }
         }
         Err(err) => Probe::Unreachable(err),
@@ -260,6 +290,7 @@ async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<Hist
                 match probe(settings).await {
                     Probe::Ready(client) => ControlFlow::Break(Ok(client)),
                     Probe::NeedsRestart(reason) => ControlFlow::Continue(eyre!(reason)),
+                    Probe::Incompatible(reason) => ControlFlow::Break(Err(eyre!(reason))),
                     Probe::Unreachable(err) => {
                         if is_legacy_daemon_error(&err) {
                             ControlFlow::Break(Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE)))
@@ -335,6 +366,7 @@ pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
         Probe::NeedsRestart(_) => {
             request_shutdown(settings).await;
         }
+        Probe::Incompatible(reason) => bail!(reason),
         Probe::Unreachable(err) => {
             if is_legacy_daemon_error(&err) {
                 return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
@@ -361,7 +393,7 @@ async fn restart_daemon(settings: &Settings) -> Result<HistoryClient> {
 }
 
 fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) -> Result<()> {
-    if daemon_matches_expected(version, protocol) {
+    if daemon_compat(version, protocol) == Compat::Ready {
         return Ok(());
     }
 
@@ -382,6 +414,7 @@ fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) ->
 pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
     match probe(settings).await {
         Probe::Ready(client) => return Ok(client),
+        Probe::Incompatible(reason) => bail!(reason),
         Probe::NeedsRestart(reason) if !settings.daemon.autostart => {
             bail!("{reason}. Enable `daemon.autostart = true` or restart the daemon manually");
         }
@@ -417,7 +450,7 @@ where
 {
     let client = match probe(settings).await {
         Probe::Ready(client) => client,
-        Probe::NeedsRestart(reason) => bail!(reason),
+        Probe::NeedsRestart(reason) | Probe::Incompatible(reason) => bail!(reason),
         Probe::Unreachable(err) => return Err(err),
     };
     send_checked(settings, client, send_request).await
@@ -513,6 +546,10 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
             println!("Daemon running (needs restart)");
             println!("  Reason: {reason}");
         }
+        Probe::Incompatible(reason) => {
+            println!("Daemon running (newer than this client)");
+            println!("  Reason: {reason}");
+        }
         Probe::Unreachable(_) => {
             println!("Daemon is not running");
         }
@@ -548,7 +585,7 @@ pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
 pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> Result<()> {
     // Stop if running
     match probe(settings).await {
-        Probe::Ready(_) | Probe::NeedsRestart(_) => {
+        Probe::Ready(_) | Probe::NeedsRestart(_) | Probe::Incompatible(_) => {
             request_shutdown(settings).await;
             println!("Stopping daemon...");
 
@@ -727,21 +764,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::matches(VERSION, PROTOCOL_VERSION, true)]
-    #[case::wrong_version("0.0.0", PROTOCOL_VERSION, false)]
-    #[case::wrong_protocol(VERSION, 999, false)]
-    #[case::wrong_both("0.0.0", 999, false)]
-    fn daemon_matches_expected_cases(
-        #[case] version: &str,
-        #[case] protocol: u32,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(daemon_matches_expected(version, protocol), expected);
+    #[case::matches(VERSION, PROTOCOL_VERSION, Compat::Ready)]
+    #[case::older("0.0.0", PROTOCOL_VERSION, Compat::Outdated)]
+    #[case::older_protocol("0.0.0", 999, Compat::Outdated)]
+    #[case::same_version_other_protocol(VERSION, 999, Compat::Outdated)]
+    #[case::newer("999.0.0", PROTOCOL_VERSION, Compat::Ready)]
+    #[case::newer_protocol("999.0.0", 999, Compat::Newer)]
+    #[case::unparsable("dev", PROTOCOL_VERSION, Compat::Outdated)]
+    fn daemon_compat_cases(#[case] version: &str, #[case] protocol: u32, #[case] expected: Compat) {
+        assert_eq!(daemon_compat(version, protocol), expected);
     }
 
     #[rstest]
     #[case::out_of_date("0.0.0", PROTOCOL_VERSION, vec!["out of date", "0.0.0", VERSION])]
     #[case::protocol_mismatch(VERSION, 999, vec!["protocol mismatch"])]
+    #[case::newer("999.0.0", 999, vec!["newer", "999.0.0", "leaving it running"])]
     fn daemon_mismatch_message_cases(
         #[case] version: &str,
         #[case] protocol: u32,
