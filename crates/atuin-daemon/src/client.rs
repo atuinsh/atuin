@@ -790,6 +790,8 @@ mod tests {
         #[case] expected: &str,
     ) {
         let dir = tempfile::tempdir().unwrap();
+        let _env = env(dir.path(), false);
+
         let pidfile = dir.path().join("atuin-daemon.pid");
 
         let old = settings(&pidfile, &dir.path().join("old.sock"), daemon_systemd_socket);
