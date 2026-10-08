@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
-use crate::utils::home_dir;
+use crate::dirs::home_dir;
 
 pub mod rehydrate;
 pub mod session;

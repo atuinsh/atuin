@@ -353,7 +353,7 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
     let mut active: Option<HarnessSession> = None;
 
     // Color only in the pretty (terminal) view, and never when NO_COLOR is set.
-    let color = matches!(style, Style::Pretty) && std::env::var_os("NO_COLOR").is_none();
+    let color = matches!(style, Style::Pretty) && atuin_common::env::var_os("NO_COLOR").is_none();
 
     while let Some(event) = stream.next().await {
         let Some(event) = event?.event else {

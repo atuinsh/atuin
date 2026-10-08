@@ -58,14 +58,14 @@ async fn captured(env: &FreshEnv, client: &mut HistoryClient) -> Vec<(String, St
 
 /// `bash`, honouring the same override and skip rules as the other shell tests.
 fn bash() -> Option<PathBuf> {
-    let found = match std::env::var_os("ATUIN_E2E_BASH") {
+    let found = match atuin_common::env::var_os("ATUIN_E2E_BASH") {
         Some(path) => Some(PathBuf::from(path)),
-        None => std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        None => std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
             .map(|dir| dir.join("bash"))
             .find(|path| path.is_file()),
     };
     if found.is_none() {
-        assert!(std::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(), "missing bash");
+        assert!(atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(), "missing bash");
         eprintln!("skipping: missing bash");
     }
     found

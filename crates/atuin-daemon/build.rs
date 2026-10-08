@@ -15,8 +15,12 @@ fn main() -> std::io::Result<()> {
 
     let file_descriptors = protox::compile(proto_paths, proto_include_dirs).unwrap();
 
-    let file_descriptor_path = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set"))
-        .join("file_descriptor_set.bin");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "build scripts can't use atuin_common, and Cargo sets OUT_DIR for them"
+    )]
+    let out_dir = env::var_os("OUT_DIR").expect("OUT_DIR not set");
+    let file_descriptor_path = PathBuf::from(out_dir).join("file_descriptor_set.bin");
     fs::write(&file_descriptor_path, file_descriptors.encode_to_vec()).unwrap();
 
     tonic_prost_build::configure()

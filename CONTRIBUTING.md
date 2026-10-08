@@ -22,7 +22,7 @@ One side effect: a bulk `cargo update` bumps `locked-tripwire` past its pinned v
 cargo update -p locked-tripwire --precise 0.1.1
 ```
 
-Before working on anything, we suggest taking a copy of your Atuin data directory (`~/.local/share/atuin` on most \*nix platforms). If anything goes wrong, you can always restore it!
+Before working on anything, we suggest taking a copy of your Atuin data directory (`~/.atuin/data`, or `~/.local/share/atuin` if created by an older version). If anything goes wrong, you can always restore it!
 
 While data directory backups are always a good idea, you can instruct Atuin to use custom path using the following environment variables:
 
@@ -41,11 +41,13 @@ It is also recommended to update your `$PATH` so that the pre-exec scripts would
 export PATH="./target/release:$PATH"
 ```
 
-If you'd like to load a different configuration file, set `ATUIN_CONFIG_DIR` to a folder that contains your `config.toml` file:
+You can also use an entirely separate profile by setting `ATUIN_HOME` to something other than the default `~/.atuin`:
 
 ```shell
-export ATUIN_CONFIG_DIR=/tmp/atuin-config/
+export ATUIN_HOME=/tmp/atuin-home/
 ```
+
+This way, Atuin will read everything from `$ATUIN_HOME`, and won't touch your existing installation. If you do this, make sure you set an explicit `daemon.socket_path` in the new profile's `config.toml`, to avoid connecting to the wrong daemon.
 
 These variable exports can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
 

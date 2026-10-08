@@ -23,7 +23,7 @@ pub async fn build(
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key")?;
 
-    let host_id = Settings::host_id().await?;
+    let host_id = settings.host_id().await?;
 
     let downloaded = downloaded.unwrap_or(&[]);
 

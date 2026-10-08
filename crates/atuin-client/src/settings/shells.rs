@@ -28,7 +28,7 @@ impl Shells {
     /// allocating; see [`ShellFilter::as_filter`].
     #[must_use]
     pub fn to_filter(&self) -> ShellFilter<'_> {
-        self.to_filter_with(|| std::env::var("ATUIN_SHELL").ok())
+        self.to_filter_with(|| atuin_common::env::var("ATUIN_SHELL").ok())
     }
 
     /// Like [`Self::to_filter`], but takes the current shell as a parameter.

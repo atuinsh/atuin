@@ -98,12 +98,7 @@ impl SettingsWatcher {
 
     /// Get the config file path.
     fn config_path() -> PathBuf {
-        let config_dir = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
-            PathBuf::from(p)
-        } else {
-            atuin_common::utils::config_dir()
-        };
-        config_dir.join("config.toml")
+        atuin_common::dirs::config_path("config.toml")
     }
 
     /// Create the file watcher with debouncing.

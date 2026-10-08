@@ -39,7 +39,7 @@ pub fn touch_file(path: &Path) -> std::io::Result<()> {
 pub fn tmp_dir() -> PathBuf {
     // TODO: We should perhaps use `std::env::temp_dir()` instead, but that would be a breaking
     // change and could cause clients to fail to connect to an older running daemon.
-    crate::utils::env_nonempty("TMPDIR").map_or_else(|| "/tmp".into(), Into::into)
+    crate::env::var_nonempty("TMPDIR").map_or_else(|| "/tmp".into(), Into::into)
 }
 
 /// Error returned by [`create_secure_temp_dir`].

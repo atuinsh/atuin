@@ -49,7 +49,7 @@ impl Cmd {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings, &store).await,
-            Self::Logout => account::logout::run().await,
+            Self::Logout => account::logout::run(&settings).await,
             Self::Register(r) => r.run(&settings, &store).await,
             Self::Status => status::run(&settings).await,
             Self::Key { base64 } => {
@@ -72,7 +72,7 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key")?;
 
-    let host_id = Settings::host_id().await?;
+    let host_id = settings.host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
 
     // Build the session once and reuse it for both sync passes below. It owns a clone of the store
@@ -110,7 +110,7 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
 
         // Internally we use the global filter mode, so this context is ignored.
         // don't recurse or loop here.
-        history_store.init_store(db).await?;
+        history_store.init_store(db, settings).await?;
 
         println!("{}", fl!("sync-rerun"));
 

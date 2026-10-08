@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
 use atuin_client::settings::Tmux;
+use atuin_common::env;
 
 use super::StaticInitOptions;
 use crate::shell::BASH;
@@ -15,7 +16,7 @@ fn write_tmux_config<W: Write>(writer: &mut W, tmux: &Tmux) -> io::Result<()> {
 }
 
 fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) -> io::Result<()> {
-    let (bind_ctrl_r, bind_up_arrow, bind_ai_resume) = if std::env::var("ATUIN_NOBIND").is_ok() {
+    let (bind_ctrl_r, bind_up_arrow, bind_ai_resume) = if env::var("ATUIN_NOBIND").is_ok() {
         (false, false, false)
     } else {
         (
@@ -27,7 +28,7 @@ fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) 
 
     writeln!(writer, "{} && {{", BASH.include_guard)?;
 
-    if std::env::var_os("ATUIN_NO_BUILTIN_PREEXEC").is_none_or(|s| s.is_empty()) {
+    if env::var_os("ATUIN_NO_BUILTIN_PREEXEC").is_none_or(|s| s.is_empty()) {
         writeln!(writer, "# Set ATUIN_NO_BUILTIN_PREEXEC=1 to disable loading bash-preexec")?;
         writeln!(writer, "__atuin_load_builtin_preexec() {{")?;
         for line in BASH.preexec.lines() {

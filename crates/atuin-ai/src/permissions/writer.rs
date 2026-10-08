@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use eyre::Result;
 
@@ -74,13 +74,13 @@ pub async fn write_rule(file_path: &Path, rule: &Rule, disposition: RuleDisposit
 
 /// Build the path to the project-level permissions file.
 /// `project_root` is typically a git root or the current working directory.
-pub fn project_permissions_path(project_root: &Path) -> std::path::PathBuf {
-    project_root.join(".atuin").join("permissions.ai.toml")
+pub fn project_permissions_path(project_root: &Path) -> PathBuf {
+    PathBuf::from_iter([project_root, ".atuin".as_ref(), "permissions.ai.toml".as_ref()])
 }
 
 /// Build the path to the global permissions file (sibling of atuin config).
-pub fn global_permissions_path() -> std::path::PathBuf {
-    atuin_common::utils::config_dir().join("permissions.ai.toml")
+pub fn global_permissions_path() -> PathBuf {
+    atuin_common::dirs::config_path("permissions.ai.toml")
 }
 
 #[cfg(test)]
@@ -90,7 +90,7 @@ mod tests {
     use super::*;
 
     #[fixture]
-    fn perm_file() -> (tempfile::TempDir, std::path::PathBuf) {
+    fn perm_file() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("permissions.ai.toml");
         (dir, file)
@@ -113,7 +113,7 @@ mod tests {
     #[case::deny(None, "Shell", RuleDisposition::Deny, &["deny", r#""Shell""#])]
     #[tokio::test]
     async fn writes_expected_content(
-        #[from(perm_file)] (_dir, file): (tempfile::TempDir, std::path::PathBuf),
+        #[from(perm_file)] (_dir, file): (tempfile::TempDir, PathBuf),
         #[case] initial: Option<&str>,
         #[case] tool: &str,
         #[case] disposition: RuleDisposition,
@@ -138,7 +138,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn does_not_duplicate_existing_rule(
-        #[from(perm_file)] (_dir, file): (tempfile::TempDir, std::path::PathBuf),
+        #[from(perm_file)] (_dir, file): (tempfile::TempDir, PathBuf),
     ) {
         let existing = r#"[permissions]
 allow = ["AtuinHistory"]

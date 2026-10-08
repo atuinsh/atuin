@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
-use atuin_common::utils::env_nonempty;
+use atuin_common::env::var_nonempty;
 use clap::{Args, Subcommand};
 use eyre::{Context, Result};
 use secrecy::SecretString;
@@ -46,7 +46,7 @@ impl PasswordArg {
     /// [`Self::Stdin`] reads `stdin` to its end and drops the trailing newline.
     pub fn resolve(arg: Option<&Self>, mut stdin: impl Read) -> Result<Option<SecretString>> {
         let Some(arg) = arg else {
-            return Ok(env_nonempty(PASSWORD_ENV)
+            return Ok(var_nonempty(PASSWORD_ENV)
                 .and_then(|password| password.into_string().ok())
                 .map(SecretString::from));
         };
@@ -95,7 +95,7 @@ impl Cmd {
         match self.command {
             Commands::Login(l) => l.run(&settings, &store).await,
             Commands::Register(r) => r.run(&settings, &store).await,
-            Commands::Logout => logout::run().await,
+            Commands::Logout => logout::run(&settings).await,
             Commands::Delete(d) => d.run(&settings).await,
             Commands::ChangePassword(c) => c.run(&settings).await,
             Commands::Link => link::run(&settings).await,

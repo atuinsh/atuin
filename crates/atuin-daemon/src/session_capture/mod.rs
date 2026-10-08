@@ -3388,22 +3388,18 @@ mod pipeline_tests {
         assert_eq!(row.title.as_deref(), Some("Old work"));
     }
 
-    /// Serializes the tests that point `CODEX_HOME` somewhere: the variable is process-wide, and
-    /// a rehydrate that found it unset would write to the real `~/.codex`.
-    static CODEX_HOME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     /// Write `session` out as Codex would find it, under a temporary `CODEX_HOME`.
     async fn rehydrate_codex(
         session: &atuin_common::harnesstools::rehydrate::RehydrateSession,
         home: &std::path::Path,
     ) -> std::path::PathBuf {
-        let _env = CODEX_HOME.lock().await;
-        // SAFETY: no other thread of these tests reads or writes the environment meanwhile.
-        unsafe { std::env::set_var("CODEX_HOME", home) };
+        // The mock is thread-local. `rehydrate` reads `CODEX_HOME` before it first yields.
+        let env = atuin_common::env::MockEnv::install();
+        env.set("CODEX_HOME", home);
         let written = atuin_common::harnesstools::codex::rehydrate::rehydrate(session).await;
-        // SAFETY: as above.
-        unsafe { std::env::remove_var("CODEX_HOME") };
+        drop(env);
         let path = written.unwrap();
+        // Make sure we wrote to `CODEX_HOME` and not the real `~/.codex`.
         assert!(path.starts_with(home), "{} is outside the test's CODEX_HOME", path.display());
         path
     }

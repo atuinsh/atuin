@@ -65,12 +65,12 @@ impl Setup {
         let config: ShellConfig = toml_edit::de::from_str(&fs::read_to_string(path).unwrap())
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let override_var = format!("ATUIN_E2E_{}", config.shell.to_uppercase());
-        let executable = if let Some(path) = std::env::var_os(&override_var) {
+        let executable = if let Some(path) = atuin_common::env::var_os(&override_var) {
             let path = PathBuf::from(path);
             assert!(path.is_file(), "{override_var} is not a file: {}", path.display());
             Some(path)
         } else {
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
                 .map(|dir| dir.join(&config.shell))
                 .find(|path| path.is_file())
         };
@@ -80,8 +80,8 @@ impl Setup {
         };
         let mut files = BTreeMap::new();
         for (name, default) in &config.required_files {
-            let value = std::env::var(name).unwrap_or_else(|_| {
-                default.replace("$HOME", &std::env::var("HOME").unwrap_or_default())
+            let value = atuin_common::env::var(name).unwrap_or_else(|_| {
+                default.replace("$HOME", &atuin_common::env::var("HOME").unwrap_or_default())
             });
             if !Path::new(&value).is_file() {
                 missing(path, &format!("{name}={value}"));
@@ -130,7 +130,7 @@ impl Setup {
 
 fn missing(config: &Path, dependency: &str) {
     assert!(
-        std::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(),
+        atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(),
         "{}: missing {dependency}",
         config.display()
     );

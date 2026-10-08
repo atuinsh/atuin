@@ -23,7 +23,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
     )?;
 
     let me = client.me().await?;
-    let last_sync = Settings::last_sync().await?;
+    let last_sync = settings.last_sync().await?;
 
     println!("{}\n", fl!("sync-status-version", version = VERSION, sha = SHA));
 

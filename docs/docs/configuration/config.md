@@ -1,31 +1,52 @@
 # Config
 
-Atuin maintains two configuration files in `~/.config/atuin/`, and stores data
-in `~/.local/share/atuin` (unless overridden by XDG\_\*).
+Atuin's files are stored in `~/.atuin` by default. Atuin's main config file is
+`~/.atuin/config.toml`.
 
-The full path to the config file would be `~/.config/atuin/config.toml`
+You can configure Atuin to use a different directory by setting the
+`ATUIN_HOME` environment variable to that directory. The path must be absolute;
+otherwise it will be ignored. Note: if you're using `ATUIN_HOME` to switch
+between multiple profiles, make sure each one sets an explicit
+[`daemon.socket_path`](#socket_path), to avoid connecting to the wrong daemon.
 
-The config location can be overridden with ATUIN_CONFIG_DIR
+Additionally, if set, `ATUIN_CONFIG_DIR` will override the location of
+`config.toml` and [`server.toml`](../self-hosting/server-setup.md): Atuin will
+look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
 
-### `db_path`
+!!! note "Upgrading from older versions"
 
-Default: `~/.local/share/atuin/history.db`
+    Older versions of Atuin stored data in `~/.config/atuin` (or
+    `$XDG_CONFIG_HOME/atuin`) and `~/.local/share/atuin` (or
+    `$XDG_DATA_HOME/atuin`). If `ATUIN_HOME` is unset (the default), Atuin will
+    continue to look for data in the old locations if it doesn't find it in
+    `~/.atuin`, so existing installations will keep working without any
+    modifications.
 
-The path to the Atuin SQLite database.
+    If you want to migrate to the new structure, run these commands in Bash,
+    Zsh, or fish (you'll have to adjust the paths if you have
+    `XDG_CONFIG_HOME` or `XDG_DATA_HOME` set):
 
-```toml
-db_path = "~/.history.db"
-```
+    ```sh
+    # Temporarily stop the daemon and disable autostart
+    atuin config set daemon.autostart false
+    atuin daemon stop
 
-### `key_path`
+    # Make sure ~/.atuin exists
+    mkdir -p ~/.atuin
 
-Default: `~/.local/share/atuin/key`
+    # Move config items. `mv` will likely report some "No such file
+    # or directory" errors; this just means your config directory
+    # didn't contain every possible config item and can be ignored.
+    cd ~/.config/atuin && mv -n config.toml server.toml themes skills \
+        permissions.ai.toml TERMINAL.md ~/.atuin/
 
-The path to the Atuin encryption key.
+    # Move data
+    [ -e ~/.atuin/data ] && echo 'error: destination exists' ||
+        mv -n ~/.local/share/atuin ~/.atuin/data
 
-```toml
-key_path = "~/.atuin-key"
-```
+    # Re-enable daemon autostart (if you had it enabled before)
+    atuin config set daemon.autostart true
+    ```
 
 ### `dialect`
 
@@ -1012,6 +1033,10 @@ Default if [`systemd_socket`] is true: `$XDG_RUNTIME_DIR/atuin.sock` if
 
 Where to bind a Unix socket for client -> daemon communication.
 
+The default doesn't depend on `ATUIN_HOME`. To run daemons for more than one
+`ATUIN_HOME` at the same time, set a different `socket_path` in each one's
+config.
+
 Older versions of Atuin used to listen on `$XDG_RUNTIME_DIR/atuin.sock` if
 `$XDG_RUNTIME_DIR` was set, otherwise `$XDG_DATA_HOME/atuin/atuin.sock` if
 `$XDG_DATA_HOME` was set, otherwise `~/.local/share/atuin/atuin.sock`. If you
@@ -1024,7 +1049,7 @@ running there.
 Default:
 
 ```toml
-pidfile_path = "~/.local/share/atuin/atuin-daemon.pid"
+pidfile_path = "~/.atuin/data/atuin-daemon.pid"
 ```
 
 Path to the daemon `pidfile` used for process coordination.
@@ -1346,9 +1371,7 @@ max_depth = 10
 Default: `"default"`
 
 A theme name that must be present as a built-in (unset or `default` for the default,
-else `autumn` or `marine`), or found in the themes directory, with the suffix `.toml`.
-By default this is `~/.config/atuin/themes/` but can be overridden with the
-`ATUIN_THEME_DIR` environment variable.
+else `autumn` or `marine`), or found in `~/.atuin/themes/`, with the suffix `.toml`.
 
 ```toml
 name = "my-theme"

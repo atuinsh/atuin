@@ -48,7 +48,7 @@ pub struct Cmd {
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(&self, db: &Sqlite, settings: &Settings, theme: &Theme) -> Result<()> {
-        let context = current_context().await?;
+        let context = current_context(settings).await?;
         let words = if self.period.is_empty() {
             String::from("all")
         } else {

@@ -176,7 +176,7 @@ fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
     std::thread::sleep(std::time::Duration::from_secs(3));
     assert_eq!(machine.sessions(), Vec::<serde_json::Value>::new(), "captured while off");
 
-    let config = machine.home().join(".config/atuin/config.toml");
+    let config = machine.env.config_file();
     let on = std::fs::read_to_string(&config)
         .unwrap()
         .replace("capture_sessions = false", "capture_sessions = true");

@@ -27,7 +27,7 @@ See the [advanced usage](advanced-usage.md) page for more options.
 
 For a full set of config values, please see the [config reference page](../configuration/config.md).
 
-The default configuration file is located at `~/.config/atuin/config.toml`.
+The default configuration file is located at `~/.atuin/config.toml`.
 
 ### Keybindings
 

@@ -28,6 +28,7 @@ use std::sync::{Arc, OnceLock};
 
 use atuin_client::history::History;
 use atuin_client::settings::Search as SearchSettings;
+use atuin_common::env;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
@@ -83,13 +84,13 @@ impl fmt::Display for Case {
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
+    env::var(name).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
 }
 
 fn scales() -> &'static Vec<usize> {
     static SCALES: OnceLock<Vec<usize>> = OnceLock::new();
     SCALES.get_or_init(|| {
-        let raw = std::env::var("BENCH_SCALES").unwrap_or_else(|_| "10000,100000,1000000".into());
+        let raw = env::var("BENCH_SCALES").unwrap_or_else(|_| "10000,100000,1000000".into());
         let mut scales = Vec::new();
         for part in raw.split(',') {
             match part.trim().parse::<usize>() {
@@ -127,7 +128,7 @@ fn commands() -> &'static Vec<String> {
     static COMMANDS: OnceLock<Vec<String>> = OnceLock::new();
     COMMANDS.get_or_init(|| {
         let max_scale = *scales().iter().max().expect("validated non-empty");
-        if let Ok(path) = std::env::var("BENCH_DATA") {
+        if let Ok(path) = env::var("BENCH_DATA") {
             let raw = std::fs::read(&path).expect("failed to read BENCH_DATA");
             let mut lines: Vec<String> = raw
                 .split(|&b| b == 0x1E)

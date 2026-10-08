@@ -1,4 +1,3 @@
-use std::env;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -96,7 +95,7 @@ impl Importer for XonshSqlite {
 
     async fn new() -> Result<Self> {
         // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
-        let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
+        let xonsh_data_dir = atuin_common::env::var("XONSH_DATA_DIR").ok();
         let db_path = get_histfile_path(|| xonsh_db_path(xonsh_data_dir))?;
         let connection_str = db_path.to_str().ok_or_else(|| {
             eyre!("Invalid path for SQLite database: {}", db_path.to_string_lossy())

@@ -118,8 +118,8 @@ recording that it's missing.
 ## Storage and retention
 
 Output is stored on disk in the `output-capture` directory of Atuin's data
-directory (`~/.local/share/atuin/output-capture` by default), so it survives
-daemon restarts. Don't edit that directory by hand.
+directory (`~/.atuin/data/output-capture` by default), so it survives daemon
+restarts. Don't edit that directory by hand.
 
 - **Disk budget.** Output may use up to
   [`max_disk_usage`](../configuration/config.md#max_disk_usage), 10% of the

@@ -114,7 +114,7 @@ impl ServerHandler for AtuinMcp {
         // wrong and can retry (MCP SEP-1303); many clients never show protocol errors to it.
         let outcome = match request.name.as_ref() {
             "atuin_history" => match AtuinHistoryToolCall::try_from(&Value::Object(arguments)) {
-                Ok(call) => call.execute(&self.db).await,
+                Ok(call) => call.execute(&self.db, &self.settings).await,
                 Err(e) => invalid_arguments(e),
             },
             "atuin_output" => match AtuinOutputToolCall::try_from(&Value::Object(arguments)) {

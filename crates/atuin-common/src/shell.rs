@@ -68,7 +68,7 @@ impl Shell {
 
     #[must_use]
     pub fn from_env() -> Self {
-        std::env::var("ATUIN_SHELL")
+        crate::env::var("ATUIN_SHELL")
             .map_or(Self::Unknown, |shell| Self::from_string(&shell.trim().to_lowercase()))
     }
 
@@ -100,7 +100,7 @@ impl Shell {
 
         #[cfg(unix)]
         if cfg!(target_os = "macos") {
-            let user = std::env::var_os("USER").ok_or(ShellLookupError::MissingEnv("USER"))?;
+            let user = crate::env::var_os("USER").ok_or(ShellLookupError::MissingEnv("USER"))?;
             let path = PathBuf::from("/Local/Default/Users").join(user);
             return shell_from_command(
                 "dscl".as_ref(),

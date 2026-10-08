@@ -30,7 +30,7 @@ pub static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
     fn requested_language() -> Option<LanguageIdentifier> {
         let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .into_iter()
-            .find_map(|var| std::env::var(var).ok().filter(|locale| !locale.is_empty()))?;
+            .find_map(|var| atuin_common::env::var(var).ok().filter(|locale| !locale.is_empty()))?;
         language_from_locale(&locale)
     }
 

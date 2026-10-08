@@ -195,8 +195,8 @@ Adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide the
 
 ```
 $env.ATUIN_NOBIND = true
-atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin`
-source ~/.local/share/atuin/init.nu
+atuin init nu | save -f ~/.atuin/init.nu  # make sure you created the directory beforehand with `mkdir ~/.atuin`
+source ~/.atuin/init.nu
 
 #bind to ctrl-r in emacs, vi_normal and vi_insert modes, add any other bindings you want here too
 $env.config = (

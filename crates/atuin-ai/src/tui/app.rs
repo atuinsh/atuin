@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atuin_client::settings::Settings;
@@ -141,7 +142,7 @@ pub struct AiApp {
     pushed_turns: usize,
     exiting: bool,
     /// Config snapshot from startup; tip relevance predicates read it.
-    settings: Settings,
+    settings: Arc<Settings>,
     tips: TipRotation,
     /// When the in-flight turn started; survives continuation streams.
     turn_started_at: Option<Instant>,
@@ -169,7 +170,7 @@ impl AiApp {
         usage: Option<UsageSnapshot>,
         initial_prompt: Option<String>,
         usage_stale: bool,
-        settings: Settings,
+        settings: impl Into<Arc<Settings>>,
     ) -> Self {
         Self {
             in_git_project: io.app_ctx.git_root.is_some(),
@@ -177,7 +178,7 @@ impl AiApp {
             usage,
             initial_prompt,
             usage_stale,
-            settings,
+            settings: settings.into(),
             tips: TipRotation::new(),
             ..Self::headless(fsm, resume_notice, slash_registry, skill_names)
         }
@@ -216,7 +217,7 @@ impl AiApp {
             pushed_events: 0,
             pushed_turns: 0,
             exiting: false,
-            settings: Settings::utc(),
+            settings: Settings::utc().into(),
             tips: TipRotation::starting_at(0),
             turn_started_at: None,
             turn_tip: None,
@@ -706,8 +707,9 @@ impl AiApp {
                     return;
                 };
                 let db = io.app_ctx.history_db.clone();
+                let settings = self.settings.clone();
                 ctx.perform(async move {
-                    let outcome = history_call.execute(&db).await;
+                    let outcome = history_call.execute(&db, &settings).await;
                     Msg::Fsm(Event::ToolExecutionDone {
                         tool_id,
                         outcome,
@@ -780,6 +782,7 @@ impl AiApp {
             skill_summaries,
             skill_overflow,
             io.user_context_cache.clone(),
+            self.settings.clone(),
         )));
     }
 
@@ -1692,7 +1695,7 @@ mod tests {
     #[rstest]
     fn tips_disabled_in_settings_suppresses_the_tip_line() {
         let mut app = app_with(AgentFsm::new(vec![], "t".into()));
-        app.settings.ai.tips = Some(false);
+        Arc::make_mut(&mut app.settings).ai.tips = Some(false);
         let mut h = Harness::new(app);
         h.type_str("hello");
         h.press(KeyCode::Enter);

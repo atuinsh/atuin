@@ -1,5 +1,4 @@
 use std::env;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
@@ -107,61 +106,10 @@ pub fn git_checkout_root(path: &str) -> Option<PathBuf> {
     gitdir.parent().is_some().then_some(gitdir)
 }
 
-// TODO: more reliable, more tested
-// I don't want to use ProjectDirs, it puts config in awkward places on
-// mac. Data too. Seems to be more intended for GUI apps.
-
-#[must_use]
-pub fn home_dir() -> PathBuf {
-    dirs::home_dir().expect("could not determine home directory")
-}
-
-/// Read an environment variable that must be nonempty.
-///
-/// This function will never return an empty string: if the environment variable is set but empty,
-/// [`None`] is returned.
-#[must_use]
-pub fn env_nonempty(name: &str) -> Option<OsString> {
-    std::env::var_os(name).filter(|value| !value.is_empty())
-}
-
-/// Read an environment variable that must be an absolute path.
-///
-/// This is usually done in the name of XDG-compliance which requires that paths given through
-/// environment variables are absolute.
-pub fn env_abspath(name: &str) -> Option<PathBuf> {
-    env_nonempty(name).map(PathBuf::from).filter(|s| s.is_absolute())
-}
-
-#[must_use]
-pub fn config_dir() -> PathBuf {
-    let config_dir: PathBuf =
-        env_abspath("XDG_CONFIG_HOME").unwrap_or_else(|| home_dir().join(".config"));
-    config_dir.join("atuin")
-}
-
-#[must_use]
-pub fn data_dir() -> PathBuf {
-    let data_dir: PathBuf =
-        env_abspath("XDG_DATA_HOME").unwrap_or_else(|| home_dir().join(".local").join("share"));
-    data_dir.join("atuin")
-}
-
-#[must_use]
-pub fn logs_dir() -> PathBuf {
-    home_dir().join(".atuin").join("logs")
-}
-
-#[must_use]
-pub fn dotfiles_cache_dir() -> PathBuf {
-    // In most cases, this will be  ~/.local/share/atuin/dotfiles/cache
-    data_dir().join("dotfiles").join("cache")
-}
-
 #[must_use]
 pub fn get_current_dir() -> String {
     // Prefer PWD environment variable over cwd if available to better support symbolic links
-    match env::var("PWD") {
+    match crate::env::var("PWD") {
         Ok(v) => v,
         Err(_) => match env::current_dir() {
             Ok(dir) => dir.display().to_string(),
@@ -229,92 +177,6 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-
-    #[cfg(not(windows))]
-    #[rstest]
-    fn test_dirs() {
-        // these tests need to be run sequentially to prevent race condition
-        test_config_dir_xdg();
-        test_config_dir_xdg_empty();
-        test_config_dir();
-        test_data_dir_xdg();
-        test_data_dir_xdg_empty();
-        test_data_dir();
-    }
-
-    #[cfg(not(windows))]
-    fn test_config_dir_xdg() {
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("HOME") };
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config") };
-        assert_eq!(config_dir(), PathBuf::from("/home/user/custom_config/atuin"));
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("XDG_CONFIG_HOME") };
-    }
-
-    /// An empty `XDG_CONFIG_HOME` has to be treated as unset: the alternative is a relative path.
-    #[cfg(not(windows))]
-    fn test_config_dir_xdg_empty() {
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::set_var("HOME", "/home/user") };
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::set_var("XDG_CONFIG_HOME", "") };
-        assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("XDG_CONFIG_HOME") };
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("HOME") };
-    }
-
-    #[cfg(not(windows))]
-    fn test_config_dir() {
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::set_var("HOME", "/home/user") };
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("XDG_CONFIG_HOME") };
-
-        assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
-
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("HOME") };
-    }
-
-    #[cfg(not(windows))]
-    fn test_data_dir_xdg() {
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("HOME") };
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::set_var("XDG_DATA_HOME", "/home/user/custom_data") };
-        assert_eq!(data_dir(), PathBuf::from("/home/user/custom_data/atuin"));
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("XDG_DATA_HOME") };
-    }
-
-    /// An empty `XDG_DATA_HOME` has to be treated as unset: the alternative is a relative path.
-    #[cfg(not(windows))]
-    fn test_data_dir_xdg_empty() {
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::set_var("HOME", "/home/user") };
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::set_var("XDG_DATA_HOME", "") };
-        assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("XDG_DATA_HOME") };
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("HOME") };
-    }
-
-    #[cfg(not(windows))]
-    fn test_data_dir() {
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::set_var("HOME", "/home/user") };
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("XDG_DATA_HOME") };
-        assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::remove_var("HOME") };
-    }
 
     #[cfg(not(windows))]
     #[rstest]

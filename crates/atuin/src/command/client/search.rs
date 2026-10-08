@@ -157,7 +157,7 @@ impl Cmd {
         theme: &Theme,
     ) -> Result<()> {
         let query = if self.query.is_empty() {
-            std::env::var("ATUIN_QUERY").map_or_else(
+            atuin_common::env::var("ATUIN_QUERY").map_or_else(
                 |_| vec![],
                 |query| query.split(' ').map(std::string::ToString::to_string).collect(),
             )
@@ -215,7 +215,7 @@ impl Cmd {
         let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
             .context("could not load or generate encryption key")?;
 
-        let host_id = Settings::host_id().await?;
+        let host_id = settings.host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
@@ -312,7 +312,7 @@ async fn run_non_interactive(
         filter_options.cwd
     };
 
-    let context = current_context().await?;
+    let context = current_context(settings).await?;
 
     let opt_filter = OptFilters {
         cwd: dir,

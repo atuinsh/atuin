@@ -2,7 +2,7 @@ use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
 use atuin_common::string::NormalizeDiacriticsExt;
-use atuin_daemon::client::{SearchClient, SearchParams};
+use atuin_daemon::client::{FromSettingsError, SearchClient, SearchParams};
 use atuin_daemon::search::truncate_query;
 use easy_cast::Conv;
 use eyre::Result;
@@ -35,7 +35,7 @@ impl LazyClient {
         Ok(self.0.as_mut().unwrap())
     }
 
-    async fn connect(&self, settings: &Settings) -> Result<SearchClient> {
+    async fn connect(&self, settings: &Settings) -> Result<SearchClient, FromSettingsError> {
         SearchClient::from_settings(settings).await
     }
 

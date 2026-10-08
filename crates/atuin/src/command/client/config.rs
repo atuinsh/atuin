@@ -419,7 +419,7 @@ async fn onboard_octavo(settings: &Settings) -> Result<Option<OctavoOnboarding>>
     };
 
     // Opened before the config says Octavo is on, so a queue that can't be opened leaves it off.
-    let queue = UploadQueue::open(Settings::octavo_queue_path())
+    let queue = UploadQueue::open(settings.octavo_queue_path())
         .await
         .wrap_err("failed to open Octavo's upload queue")?;
 

@@ -10,6 +10,8 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
+use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
@@ -24,7 +26,6 @@ use crate::harnesstools::session::{
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
 use crate::sync::BlockingPool;
-use crate::utils::{env_nonempty, home_dir};
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct CodexSessions {
@@ -42,7 +43,7 @@ impl CodexSessions {
 
 /// Codex's live rollouts: `$CODEX_HOME/sessions`, else `~/.codex/sessions`.
 pub(crate) fn default_root() -> PathBuf {
-    env_nonempty("CODEX_HOME")
+    var_nonempty("CODEX_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join(".codex"))
         .join("sessions")

@@ -27,8 +27,8 @@ atuin-server start
 
 ## Configuration
 
-The server's config lives at `~/.config/atuin/server.toml`, separate from the
-client's config.
+The server's config lives at `~/.atuin/server.toml`, separate from the client's
+config.
 
 It looks something like this for PostgreSQL:
 

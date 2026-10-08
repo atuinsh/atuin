@@ -150,7 +150,7 @@ plugins:
           - guide/delete-history.md: Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
           - guide/theming.md: Customize the TUI with color themes.
         Configuration:
-          - configuration/config.md: Complete reference for ~/.config/atuin/config.toml - all settings with defaults and examples.
+          - configuration/config.md: Complete reference for ~/.atuin/config.toml - all settings with defaults and examples.
           - configuration/key-binding.md: Custom up-arrow filter mode, disable up-arrow or ctrl-r, vim mode.
           - configuration/advanced-key-binding.md: Full keymap customization with emacs, vim-normal, vim-insert, and inspector modes.
         Reference:

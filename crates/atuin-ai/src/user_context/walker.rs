@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use atuin_common::path::PathExt as _;
 use eyre::Result;
 use tokio::task::JoinSet;
 
@@ -38,11 +39,13 @@ pub async fn walk(start: &Path, global_path: Option<&Path>) -> Result<Vec<RawCon
     let mut set: JoinSet<Result<Option<FoundFile>>> = JoinSet::new();
 
     for (index, dir) in dirs.into_iter().enumerate() {
-        let dir2 = dir.clone();
-        set.spawn(async move {
-            load_context_file(&dir.join(".atuin").join(CONTEXT_FILENAME), index).await
-        });
-        set.spawn(async move { load_context_file(&dir2.join(CONTEXT_FILENAME), index).await });
+        let dotdir_file =
+            PathBuf::from_iter([dir.as_path(), ".atuin".as_ref(), CONTEXT_FILENAME.as_ref()]);
+        // Avoid loading ~/.atuin/TERMINAL.md twice.
+        if !global_path.is_some_and(|global| dotdir_file.is_same_path(global)) {
+            set.spawn(async move { load_context_file(&dotdir_file, index).await });
+        }
+        set.spawn(async move { load_context_file(&dir.join(CONTEXT_FILENAME), index).await });
     }
 
     if let Some(global) = global_path {
@@ -70,9 +73,9 @@ pub async fn walk(start: &Path, global_path: Option<&Path>) -> Result<Vec<RawCon
     Ok(found.into_iter().map(|f| f.file).collect())
 }
 
-/// The default global context file path (`~/.config/atuin/TERMINAL.md`).
+/// The default global context file path (`~/.atuin/TERMINAL.md`).
 pub fn global_context_path() -> PathBuf {
-    atuin_common::utils::config_dir().join(CONTEXT_FILENAME)
+    atuin_common::dirs::config_path(CONTEXT_FILENAME)
 }
 
 async fn load_context_file(path: &Path, depth: usize) -> Result<Option<FoundFile>> {
@@ -86,5 +89,40 @@ async fn load_context_file(path: &Path, depth: usize) -> Result<Option<FoundFile
         })),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// A `.atuin/TERMINAL.md` above the working directory that is also the global file, as
+    /// `~/.atuin/TERMINAL.md` is by default, is loaded once. Any other is a project's, and is still
+    /// loaded alongside the global one.
+    #[rstest]
+    #[case::global(true, 1)]
+    #[case::project(false, 2)]
+    #[tokio::test]
+    async fn the_global_file_is_not_also_a_project_file(
+        #[case] is_global: bool,
+        #[case] expected: usize,
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let dotfile = home.path().join(".atuin").join(CONTEXT_FILENAME);
+        let elsewhere = home.path().join("elsewhere").join(CONTEXT_FILENAME);
+        for file in [&dotfile, &elsewhere] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "context").unwrap();
+        }
+
+        let global = if is_global {
+            dotfile
+        } else {
+            elsewhere
+        };
+        let files = walk(home.path(), Some(&global)).await.unwrap();
+        assert_eq!(files.len(), expected);
     }
 }

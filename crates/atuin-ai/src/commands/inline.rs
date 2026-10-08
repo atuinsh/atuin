@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use atuin_client::database::Sqlite;
+use atuin_common::dirs;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -98,7 +101,7 @@ pub async fn run(
 }
 
 async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Result<SecretString> {
-    if let Some(token) = atuin_client::hub::get_session_token().await? {
+    if let Some(token) = atuin_client::hub::get_session_token(settings).await? {
         debug!("Found Hub session, using existing token");
         return Ok(token);
     }
@@ -145,13 +148,13 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
         .await?;
 
     info!("Authentication complete, saving session token");
-    atuin_client::hub::save_session(&token).await?;
+    atuin_client::hub::save_session(&token, settings).await?;
 
-    if let Ok(meta) = atuin_client::settings::Settings::meta_store().await
+    if let Ok(meta) = settings.meta_store().await
         && let Ok(Some(cli_token)) = meta.session_token().await
     {
         debug!("CLI session found, attempting to link accounts");
-        if let Err(e) = atuin_client::hub::link_account(&hub_address, &cli_token).await {
+        if let Err(e) = atuin_client::hub::link_account(&hub_address, &cli_token, settings).await {
             debug!("Could not link CLI account to Hub: {}", e);
         } else {
             info!("Successfully linked CLI account to Hub");
@@ -162,6 +165,35 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 }
 
 // ───────────────────────────────────────────────────────────────────
+
+/// The directory where AI snapshots are stored.
+///
+/// Older versions of Atuin stored snapshots in the [legacy data dir] even when [`data_dir`] was set
+/// in config.toml. If the new shapshot dir doesn't exist, this function will check the legacy path
+/// and return it if it exists, unless `ATUIN_HOME` is set.
+///
+/// [legacy data dir]: dirs::legacy_data_dir
+/// [`data_dir`]: field@atuin_client::settings::Settings::data_dir
+fn snapshots_dir(settings: &atuin_client::settings::Settings) -> PathBuf {
+    fn push_snapshots(path: &mut PathBuf) {
+        path.push("ai");
+        path.push("snapshots");
+    }
+
+    let mut path = settings.data_dir.clone();
+    push_snapshots(&mut path);
+
+    if !path.exists() && !dirs::atuin_home_is_set() {
+        // Check the legacy path, but only if `ATUIN_HOME` isn't set.
+        let mut legacy = dirs::legacy_data_dir();
+        push_snapshots(&mut legacy);
+        if legacy.exists() {
+            return legacy;
+        }
+    }
+
+    path
+}
 
 async fn run_inline_tui(
     ctx: AppContext,
@@ -279,8 +311,7 @@ async fn run_inline_tui(
         settings.ai.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
 
     // ─── Snapshot store ─────────────────────────────────────────
-    let snapshot_dir =
-        atuin_common::utils::data_dir().join("ai").join("snapshots").join(session_mgr.session_id());
+    let snapshot_dir = snapshots_dir(settings).join(session_mgr.session_id());
     let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
     // ─── Discover skills ───────────────────────────────────────
