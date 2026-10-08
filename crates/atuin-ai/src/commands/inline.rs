@@ -169,7 +169,7 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 /// The directory where AI snapshots are stored.
 ///
 /// Older versions of Atuin stored snapshots in the [legacy data dir] even when [`data_dir`] was set
-/// in config.toml. If the new shapshot dir doesn't exist, this function will check the legacy path
+/// in config.toml. If the new snapshot dir doesn't exist, this function will check the legacy path
 /// and return it if it exists, unless `ATUIN_HOME` is set.
 ///
 /// [legacy data dir]: dirs::legacy_data_dir
