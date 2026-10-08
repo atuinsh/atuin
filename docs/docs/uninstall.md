@@ -5,7 +5,7 @@ Sorry to see you go!
 If you used the Atuin installer, you can totally delete it by following these
 steps:
 
-1. Delete the `~/.atuin` directory (or `$ATUIN_HOME`, if set)
+1. Delete the `~/.atuin` directory (and `$ATUIN_HOME`, if set).
 2. Delete the `~/.config/atuin` and `~/.local/share/atuin` directories if they
    exist. Older versions of Atuin used to store data there.
 3. Remove the shell integration:
