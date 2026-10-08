@@ -227,6 +227,9 @@ opens a text prompt for the value instead of reading the clipboard. Press `enter
 value, or `esc` to cancel and return to search. The selected command and entered value are sent to
 the configured Atuin AI endpoint.
 
+While either action is waiting for Atuin AI, press `esc` or `ctrl-c` to cancel the request and
+return to search.
+
 `accept-cd` and `return-cd` are bound to `g` and `G` in prefix mode (`ctrl-a g`, `ctrl-a G`); see [Jumping to a command's directory](#jumping-to-a-commands-directory). They act like `accept` and `return-selection`, but return a command changing to the entry's directory:
 
 - The path is quoted for the current shell: `cd -- '<path>'` in bash, zsh and fish, `cd r#'<path>'#` in nushell (with more `#` when the path contains `'#`), `cd @('<path>')` in xonsh, and `Set-Location -LiteralPath '<path>'` in PowerShell.

@@ -1840,6 +1840,19 @@ enum ValuePromptAction {
     Cancel,
 }
 
+fn is_transform_cancel_event(input: &Event) -> bool {
+    let Event::Key(key) = input else {
+        return false;
+    };
+    if key.kind == event::KeyEventKind::Release {
+        return false;
+    }
+
+    key.code == event::KeyCode::Esc
+        || (key.code == event::KeyCode::Char('c')
+            && key.modifiers.contains(event::KeyModifiers::CONTROL))
+}
+
 fn handle_value_prompt_input(
     value: &mut Cursor,
     input: &Event,
@@ -2302,7 +2315,7 @@ pub async fn history(
                                     ApplyValueSource::Clipboard => match get_clipboard() {
                                         Ok(value) => value,
                                         Err(error) => {
-                                            transform_error = Some(error.into());
+                                            transform_error = Some(error);
                                             accept = false;
                                             break 'render InputAction::ReturnOriginal;
                                         }
@@ -2337,27 +2350,61 @@ pub async fn history(
                                     let width = frame_area.width.saturating_sub(2).min(54);
                                     let area = Rect::new(
                                         frame_area.x + frame_area.width.saturating_sub(width) / 2,
-                                        frame_area.y + frame_area.height.saturating_sub(3) / 2,
+                                        frame_area.y + frame_area.height.saturating_sub(4) / 2,
                                         width,
-                                        3.min(frame_area.height),
+                                        4.min(frame_area.height),
                                     );
                                     frame.render_widget(Clear, area);
+                                    let message = Text::from(vec![
+                                        Line::from(source.loading_message()).centered(),
+                                        Line::from("Esc or Ctrl-C to cancel").centered(),
+                                    ]);
                                     frame.render_widget(
-                                        Paragraph::new(source.loading_message())
-                                            .alignment(Alignment::Center)
-                                            .block(Block::bordered()),
+                                        Paragraph::new(message).block(Block::bordered()),
                                         area,
                                     );
                                 })?;
 
                                 #[cfg(feature = "ai")]
-                                match atuin_ai::transform::transform_command(
+                                let transform = atuin_ai::transform::transform_command(
                                     &command,
                                     &value,
                                     settings,
-                                ).await {
+                                );
+                                #[cfg(feature = "ai")]
+                                tokio::pin!(transform);
+                                #[cfg(feature = "ai")]
+                                let transformed = 'transform: loop {
+                                    let event_ready = tokio::task::spawn_blocking(|| {
+                                        event::poll(Duration::from_millis(250))
+                                    });
+                                    tokio::select! {
+                                        result = &mut transform => break 'transform Some(result),
+                                        event_ready = event_ready => {
+                                            if event_ready?? {
+                                                loop {
+                                                    if is_transform_cancel_event(&event::read()?) {
+                                                        break 'transform None;
+                                                    }
+                                                    if !event::poll(Duration::ZERO)? {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                };
+                                #[cfg(feature = "ai")]
+                                let Some(transformed) = transformed else { break; };
+                                #[cfg(feature = "ai")]
+                                match transformed {
                                     Ok(transformed) => {
-                                        app.search.input = Cursor::from(transformed.command);
+                                        let command = with_command_chain(
+                                            transformed.command,
+                                            is_command_chaining
+                                                .then_some(original_query.as_str()),
+                                        );
+                                        app.search.input = Cursor::from(command);
                                         accept = false;
                                         break 'render InputAction::ReturnQuery;
                                     }
@@ -2571,8 +2618,15 @@ fn selection_output(
         entry.command
     };
     match chain {
-        Some(query) => format!("{} {command}", query.trim_end()),
+        Some(_) => with_command_chain(command, chain),
         None if accept => format!("{ACCEPT_PREFIX}{command}"),
+        None => command,
+    }
+}
+
+fn with_command_chain(command: String, chain: Option<&str>) -> String {
+    match chain {
+        Some(query) => format!("{} {command}", query.trim_end()),
         None => command,
     }
 }
@@ -2644,8 +2698,8 @@ fn set_clipboard(s: String) -> Result<(), arboard::Error> {
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
-fn get_clipboard() -> Result<String, arboard::Error> {
-    arboard::Clipboard::new()?.get_text()
+fn get_clipboard() -> Result<String> {
+    Ok(arboard::Clipboard::new()?.get_text()?)
 }
 
 #[cfg(not(all(
@@ -2660,8 +2714,8 @@ fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
-fn get_clipboard() -> Result<String, std::convert::Infallible> {
-    Ok(String::new())
+fn get_clipboard() -> Result<String> {
+    Err(eyre::eyre!("clipboard support is unavailable in this build or on this platform"))
 }
 
 #[cfg(test)]
@@ -3128,6 +3182,14 @@ mod tests {
     }
 
     #[rstest]
+    fn transformed_command_preserves_existing_chain() {
+        assert_eq!(
+            super::with_command_chain("cat new.txt".to_string(), Some("cd /tmp && ")),
+            "cd /tmp && cat new.txt"
+        );
+    }
+
+    #[rstest]
     #[case::sh(Shell::Sh, r#"cd -- '/a b'\''c"d\e$HOME!'"#)]
     #[case::bash(Shell::Bash, r#"cd -- '/a b'\''c"d\e$HOME!'"#)]
     #[case::zsh(Shell::Zsh, r#"cd -- '/a b'\''c"d\e$HOME!'"#)]
@@ -3482,6 +3544,33 @@ mod tests {
             &settings,
         );
         assert_eq!(action, super::ValuePromptAction::Cancel);
+    }
+
+    #[rstest]
+    fn transform_wait_can_be_cancelled_with_escape_or_ctrl_c() {
+        use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+        let escape = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let ctrl_c = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        let plain_c = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+        assert!(super::is_transform_cancel_event(&escape));
+        assert!(super::is_transform_cancel_event(&ctrl_c));
+        assert!(!super::is_transform_cancel_event(&plain_c));
+    }
+
+    #[cfg(not(all(
+        feature = "clipboard",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    )))]
+    #[rstest]
+    fn missing_clipboard_support_is_reported() {
+        let error = super::get_clipboard().unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "clipboard support is unavailable in this build or on this platform"
+        );
     }
 
     #[rstest]
