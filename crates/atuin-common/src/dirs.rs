@@ -94,22 +94,22 @@ const ATUIN_CONFIG_DIR_ITEMS: [&str; 2] = ["config.toml", "server.toml"];
 ///
 /// 1. If `child` is `config.toml` or `server.toml` and `ATUIN_CONFIG_DIR` is set,
 ///    `$ATUIN_CONFIG_DIR/child` is returned.
-/// 2. If the first component of `child` exists in [`atuin_home()`], `atuin_home()/child` is
-///    returned.
-/// 3. If the first component of `child` is `themes` and `ATUIN_THEME_DIR` is set,
+/// 2. If `ATUIN_HOME` is set and valid (an absolute path), `$ATUIN_HOME/child` is returned.
+/// 3. If the first component of `child` exists in `~/.atuin`, `~/.atuin/child` is returned.
+/// 4. If the first component of `child` is `themes` and `ATUIN_THEME_DIR` is set,
 ///    `$ATUIN_THEME_DIR` is returned. This behavior is deprecated and exists only for backward
 ///    compatibility.
-/// 4. If the first component of `child` is `themes` and `ATUIN_CONFIG_DIR` is set,
+/// 5. If the first component of `child` is `themes` and `ATUIN_CONFIG_DIR` is set,
 ///    `$ATUIN_CONFIG_DIR/themes` is returned. This behavior is deprecated and exists only for
 ///    backward compatibility.
-/// 5. If the first component of `child` exists in `legacy_config_dir()`[^1] and `ATUIN_HOME` is not
-///    set, `legacy_config_dir()/child` is returned.
-/// 6. Otherwise, `atuin_home()/child` is returned.
+/// 6. If the first component of `child` exists in `legacy_config_dir()`[^1],
+///    `legacy_config_dir()/child` is returned.
+/// 7. Otherwise, `~/.atuin/child` is returned.
 ///
 /// # Panics
 ///
-/// Panics if `child` is empty or absolute, or if it starts with `.` or `..`. Also panics if it
-/// gets to step 6 and the home directory can't be determined; the earlier steps don't need it.
+/// Panics if `child` is empty or absolute, or if it starts with `.` or `..`. Also panics if step 7
+/// is reached and the user's home directory can't be determined.
 ///
 /// [^1]: `legacy_config_dir()` is `$XDG_CONFIG_HOME/atuin`, or `~/.config/atuin` if unset.
 #[must_use]
@@ -127,23 +127,19 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
         return path;
     }
 
-    // The home directory may be unavailable (e.g. a server running as a user without one), so
-    // only the last resort below, which can't do without it, panics over that.
     let home = try_atuin_home();
     if let Ok(home) = &home {
         let mut path = PathBuf::from(home.clone());
         path.push(top);
-        if path.exists() {
+        if matches!(home, AtuinHome::Set(_)) || path.exists() {
             path.pop(); // pop `top` from the path
             path.push(child);
             return path;
         }
     }
 
-    let atuin_home_is_set = matches!(home, Ok(AtuinHome::Set(_)));
-    // If `top` is "themes", check legacy theme locations, but only if `ATUIN_HOME` isn't set.
-    let check_legacy_themes = !atuin_home_is_set && top == "themes";
-    if check_legacy_themes && let Some(value) = var_nonempty("ATUIN_THEME_DIR") {
+    let is_themes =  top == "themes";
+    if is_themes && let Some(value) = var_nonempty("ATUIN_THEME_DIR") {
         // For backward compatibility, keep respecting the deprecated `ATUIN_THEME_DIR`
         // variable, but only if `$ATUIN_HOME/themes` doesn't exist.
         let mut path = PathBuf::from(value);
@@ -154,19 +150,18 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
     // Potential directories that might contain the config item. The first one that contains the
     // item, if any, is used.
     let potential_dirs = [
-        // Historically, `ATUIN_CONFIG_DIR` affected the location of `config.toml`,
-        // `server.toml`, and `themes`, but not any other config items such as `skills` or
-        // `permissions.ai.toml`. This behavior has been simplified: `ATUIN_CONFIG_DIR` only
-        // affects `config.toml` and `server.toml`; using it to control `themes` is deprecated.
+        // Historically, `ATUIN_CONFIG_DIR` affected the location of `config.toml`, `server.toml`,
+        // and `themes`, but not any other config items such as `skills` or `permissions.ai.toml`.
+        // This behavior has been simplified: `ATUIN_CONFIG_DIR` only affects `config.toml` and
+        // `server.toml`; using it to control `themes` is deprecated.
         //
         // For backward compatibility, read themes from `$ATUIN_CONFIG_DIR/themes`, but only
-        // if `$ATUIN_HOME/themes` doesn't exist.
-        check_legacy_themes.then(|| var_nonempty("ATUIN_CONFIG_DIR")).flatten().map(Into::into),
-        // Atuin used to store config items in `$XDG_CONFIG_HOME/atuin`. For backward
-        // compatibility, continue to read items from there when they don't exist in
-        // `$ATUIN_HOME`, but only if `ATUIN_HOME` is unset -- setting `ATUIN_HOME` should
-        // always give you a fresh profile.
-        (!atuin_home_is_set).then(legacy_config_dir).and_then(Result::ok),
+        // if `ATUIN_HOME` is unset and `~/.atuin/themes` doesn't exist.
+        is_themes.then(|| var_nonempty("ATUIN_CONFIG_DIR")).flatten().map(Into::into),
+        // Atuin used to store config items in `$XDG_CONFIG_HOME/atuin`. For backward compatibility,
+        // if `ATUIN_HOME` is unset, continue to read items from there when they don't exist in
+        // `~/.atuin`,
+        legacy_config_dir().ok(),
     ];
 
     if let Some(mut existing) = potential_dirs
@@ -183,6 +178,7 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
         return existing;
     }
 
+    // At this point, we cannot continue without being able to determine the user's home directory.
     let mut path = PathBuf::from(home.unwrap_or_else(|err| panic!("{err}")));
     path.push(child);
     path
