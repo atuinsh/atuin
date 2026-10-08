@@ -17,7 +17,7 @@ use crate::i18n::fl;
 
 const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
@@ -48,7 +48,7 @@ fn get_input<T: for<'a> From<&'a str>>() -> Result<Option<T>> {
 
 impl Cmd {
     pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        match settings.resolve_sync_auth().await {
+        let had_cli_session = match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
                 println!("{}", fl!("account-hub-authenticated"));
                 println!("{}", fl!("account-run-logout"));
@@ -61,17 +61,48 @@ impl Cmd {
             }
             SyncAuth::HubViaCli { .. } => {
                 println!("{}", fl!("login-upgrading-legacy"));
+                true
             }
-            SyncAuth::NotLoggedIn { .. } => {}
-        }
+            SyncAuth::NotLoggedIn { .. } => false,
+        };
 
-        if settings.is_hub_sync() {
-            self.run_hub_login(settings, store).await?;
+        // A key given for a browser login is checked against the account's data before it's stored,
+        // so a wrong one can't re-encrypt this machine's history on its way to being rejected.
+        let candidate = match self.scripted_key() {
+            Some(key) if settings.is_hub_sync() && self.username.is_none() => {
+                Some(paseto_v4::Key::try_from_mnemonic(key.expose_secret())?)
+            }
+            _ => None,
+        };
+
+        let given_key = candidate.is_some();
+
+        let machine_key = if settings.is_hub_sync() {
+            self.run_hub_login(settings, store).await?
         } else {
             self.run_legacy_login(settings, store).await?;
+            None
+        };
+
+        if let Err(err) =
+            verify_key_against_remote(settings, store, self.interactive(), candidate).await
+        {
+            // Undo only what this login added, so a CLI session from before an upgrade keeps
+            // syncing.
+            forget_login(had_cli_session).await;
+            return Err(err);
         }
 
-        verify_key_against_remote(settings, store, self.interactive()).await
+        // The account settled on this machine's own key, maybe made moments ago, rather than one
+        // the person supplied; nothing says they hold a copy of it anywhere else.
+        if let Some(key) = machine_key
+            && !given_key
+            && paseto_v4::Key::try_load_from_path(&settings.key_path).is_ok_and(|kept| kept == key)
+        {
+            println!("\n{}", fl!("login-new-key-backup"));
+        }
+
+        Ok(())
     }
 
     /// Whether a rejected key can be corrected by asking for another one.
@@ -86,10 +117,16 @@ impl Cmd {
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
-    async fn run_hub_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    ///
+    /// Returns the key the browser flow starts from: this machine's own, made now if it had none.
+    async fn run_hub_login(
+        &self,
+        settings: &Settings,
+        store: &SqliteStore,
+    ) -> Result<Option<paseto_v4::Key>> {
         let endpoint = settings.hub_endpoint();
 
-        if let Some(username) = &self.username {
+        let machine_key = if let Some(username) = &self.username {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
@@ -125,17 +162,19 @@ impl Cmd {
                 println!("\n{}", fl!("account-not-migrated-note"));
                 println!("{}", fl!("account-not-migrated-hint"));
             }
+
+            None
         } else {
-            // Interactive login via browser OAuth flow.
-            if self.from_registration {
-                paseto_v4::Key::try_load_or_generate(&settings.key_path)
-                    .context(fl!("login-key-generate-failed"))?;
-            } else {
-                self.prompt_and_store_key(settings, store).await?;
-            }
+            // Interactive login via browser OAuth flow. Whether the account needs a particular key
+            // only shows once we can see its data, so start from this machine's key (or a fresh
+            // one) and let `verify_key_against_remote` swap in a given key, or ask for one, if
+            // its data needs it.
+            let key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .context(fl!("login-key-generate-failed"))?;
 
             self.ensure_hub_session(settings, &endpoint).await?;
-        }
+            Some(key)
+        };
 
         // Silently attempt to link CLI account to Hub if one exists
         if let Ok(cli_token) = settings.session_token().await
@@ -145,7 +184,7 @@ impl Cmd {
         }
 
         println!("{}", fl!("login-success"));
-        Ok(())
+        Ok(machine_key)
     }
 
     /// Legacy login: always prompt for username/password interactively
@@ -290,9 +329,13 @@ async fn verify_key_against_remote(
     settings: &Settings,
     store: &SqliteStore,
     interactive: bool,
+    candidate: Option<paseto_v4::Key>,
 ) -> Result<()> {
-    let mut key = paseto_v4::Key::try_load_from_path(&settings.key_path)
-        .context(fl!("login-key-load-failed"))?;
+    let mut key = match candidate {
+        Some(key) => key,
+        None => paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context(fl!("login-key-load-failed"))?,
+    };
 
     // Build the session once (this hits the network). The key can change between retries below, so
     // each iteration re-keys the shared session rather than reconnecting.
@@ -337,10 +380,19 @@ async fn verify_key_against_remote(
                 }
             }
             Some(e) => {
+                tracing::warn!("could not verify encryption key against remote: {e}");
+
+                // Only a key the account's data has accepted may replace this machine's own, so
+                // a given or typed-in key that can't be checked fails the login rather than risk
+                // re-encrypting local history with a wrong key.
+                let machine_key = paseto_v4::Key::try_load_from_path(&settings.key_path).ok();
+                if machine_key.as_ref() != Some(&key) {
+                    bail!(fl!("login-key-unverified", error = e.to_string()));
+                }
+
                 // Non-key error (e.g. transient network issue). Don't fail the
                 // login — the user is authenticated and can sync later when the
                 // network recovers.
-                tracing::warn!("could not verify encryption key against remote: {e}");
                 return Ok(());
             }
         }
@@ -350,12 +402,19 @@ async fn verify_key_against_remote(
 /// Roll back the saved session so the user is not left in a half-authenticated
 /// state with a key that can't read the data, then exit.
 async fn logout_wrong_key() -> ! {
-    if let Ok(meta) = Settings::meta_store().await {
-        let _ = meta.delete_session().await;
-        let _ = meta.delete_hub_session().await;
-    }
+    forget_login(false).await;
     crate::print_error::print_error(&fl!("login-wrong-key-title"), &fl!("login-wrong-key-body"));
     std::process::exit(1);
+}
+
+/// Delete the sessions a login saves; `keep_cli_session` spares one that was there before it.
+async fn forget_login(keep_cli_session: bool) {
+    if let Ok(meta) = Settings::meta_store().await {
+        if !keep_cli_session {
+            let _ = meta.delete_session().await;
+        }
+        let _ = meta.delete_hub_session().await;
+    }
 }
 
 #[must_use]

@@ -7,7 +7,7 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordTag;
 use clap::Subcommand;
 use easy_cast::Conv;
-use eyre::{Result, WrapErr};
+use eyre::{Result, WrapErr, bail};
 use tracing::instrument;
 
 mod status;
@@ -22,6 +22,14 @@ pub enum Cmd {
     Sync {
         #[arg(long, short, help = fl!("arg-sync-force"))]
         force: bool,
+    },
+
+    #[command(about = fl!("cmd-auth"))]
+    Auth {
+        /// Only exit successfully if `auth` would work here, for the installer to decide whether
+        /// to offer it.
+        #[arg(long, hide = true)]
+        check: bool,
     },
 
     #[command(about = fl!("cmd-login"))]
@@ -48,6 +56,19 @@ impl Cmd {
     pub async fn run(self, settings: Settings, db: &Sqlite, store: SqliteStore) -> Result<()> {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
+            // Logging in and signing up are the same browser flow on the Hub, so `auth` doesn't
+            // ask which; the key is only asked for if the account's data needs it.
+            Self::Auth { check } => {
+                if !settings.is_hub_sync() {
+                    bail!(fl!("auth-hub-only"));
+                }
+
+                if check {
+                    return Ok(());
+                }
+
+                account::login::Cmd::default().run(&settings, &store).await
+            }
             Self::Login(l) => l.run(&settings, &store).await,
             Self::Logout => account::logout::run().await,
             Self::Register(r) => r.run(&settings, &store).await,
