@@ -138,10 +138,10 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
         }
     }
 
-    let is_themes =  top == "themes";
+    let is_themes = top == "themes";
     if is_themes && let Some(value) = var_nonempty("ATUIN_THEME_DIR") {
-        // For backward compatibility, keep respecting the deprecated `ATUIN_THEME_DIR`
-        // variable, but only if `$ATUIN_HOME/themes` doesn't exist.
+        // For backward compatibility, keep respecting the deprecated `ATUIN_THEME_DIR` variable,
+        // but only if `ATUIN_HOME` is unset and `~/.atuin/themes` doesn't exist.
         let mut path = PathBuf::from(value);
         path.extend(child.components().skip(1));
         return path;
@@ -155,12 +155,12 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
         // This behavior has been simplified: `ATUIN_CONFIG_DIR` only affects `config.toml` and
         // `server.toml`; using it to control `themes` is deprecated.
         //
-        // For backward compatibility, read themes from `$ATUIN_CONFIG_DIR/themes`, but only
-        // if `ATUIN_HOME` is unset and `~/.atuin/themes` doesn't exist.
+        // For backward compatibility, read themes from `$ATUIN_CONFIG_DIR/themes`, but only if
+        // `ATUIN_HOME` is unset and `~/.atuin/themes` doesn't exist.
         is_themes.then(|| var_nonempty("ATUIN_CONFIG_DIR")).flatten().map(Into::into),
         // Atuin used to store config items in `$XDG_CONFIG_HOME/atuin`. For backward compatibility,
         // if `ATUIN_HOME` is unset, continue to read items from there when they don't exist in
-        // `~/.atuin`,
+        // `~/.atuin`.
         legacy_config_dir().ok(),
     ];
 
@@ -550,13 +550,15 @@ mod tests {
             }
         }
 
+        // A set `ATUIN_HOME` is used whether or not the item exists there; the fallbacks only
+        // apply to the default `~/.atuin`.
         let base = if config_dir_set && relocated {
             config_dir.clone()
-        } else if in_home {
+        } else if atuin_home_set || in_home {
             home
         } else if theme && config_dir_set && in_config_dir {
             config_dir.clone()
-        } else if in_legacy && !atuin_home_set {
+        } else if in_legacy {
             homes.legacy_config()
         } else {
             home
@@ -565,12 +567,20 @@ mod tests {
         assert_eq!(homes.config_path(child, config_dir), base.join(child));
     }
 
+    /// `ATUIN_THEME_DIR` is only a fallback for the default `~/.atuin`, when it has no themes; a
+    /// set `ATUIN_HOME` is used for themes whether or not it has any.
     #[rstest]
-    fn atuin_theme_dir_is_used_unless_atuin_home_has_themes(
+    fn atuin_theme_dir_is_used_only_without_atuin_home_or_its_themes(
         homes: Homes,
         #[values(("themes", ""), ("themes/dark.toml", "dark.toml"))] (child, within): (&str, &str),
+        #[values(false, true)] atuin_home_set: bool,
         #[values(false, true)] in_home: bool,
     ) {
+        let home = if atuin_home_set {
+            homes.set_atuin_home()
+        } else {
+            homes.new_home()
+        };
         // The themes exist in `$ATUIN_CONFIG_DIR` and the legacy dir, but not in
         // `$ATUIN_THEME_DIR`.
         let config_dir = homes.tmp.path().join("config-dir");
@@ -578,13 +588,13 @@ mod tests {
             create(&dir.join("themes"));
         }
         if in_home {
-            create(&homes.new_home().join("themes"));
+            create(&home.join("themes"));
         }
         let theme_dir = homes.tmp.path().join("theme-dir");
         homes.set_theme_dir(&theme_dir);
 
-        let expected = if in_home {
-            homes.new_home().join(child)
+        let expected = if atuin_home_set || in_home {
+            home.join(child)
         } else {
             theme_dir.join(within)
         };
