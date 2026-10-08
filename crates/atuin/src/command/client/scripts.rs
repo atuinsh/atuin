@@ -7,7 +7,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_scripts::execution::{
-    build_executable_script, execute_script_interactive, template_script, template_variables,
+    build_executable_script, execute_script, template_script, template_variables,
 };
 use atuin_scripts::store::ScriptStore;
 use atuin_scripts::store::script::Script;
@@ -149,62 +149,10 @@ impl Cmd {
         Ok(content)
     }
 
-    // Helper function to execute a script and manage stdin/stdout/stderr
+    // Helper function to execute a script attached to the terminal
     async fn execute_script(script_content: String, shebang: String) -> Result<i32> {
-        let mut session = execute_script_interactive(script_content, shebang)
-            .await
-            .expect("failed to execute script");
+        let code = execute_script(script_content, shebang).await.expect("failed to execute script");
 
-        // Create a channel to signal when the process exits
-        let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
-
-        // Set up a task to read from stdin and forward to the script
-        let sender = session.stdin_tx.clone();
-        let stdin_task = tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            use tokio::select;
-
-            let stdin = tokio::io::stdin();
-            let mut reader = tokio::io::BufReader::new(stdin);
-            let mut buffer = vec![0u8; 1024]; // Read in chunks for efficiency
-
-            loop {
-                // Use select to either read from stdin or detect when the process exits
-                select! {
-                    // Check if the script process has exited
-                    _ = &mut exit_rx => {
-                        break;
-                    }
-                    // Try to read from stdin
-                    read_result = reader.read(&mut buffer) => {
-                        match read_result {
-                            Ok(0) => break, // EOF
-                            Ok(n) => {
-                                // Convert the bytes to a string and forward to script
-                                let input = String::from_utf8_lossy(&buffer[0..n]).to_string();
-                                if let Err(e) = sender.send(input).await {
-                                    eprintln!("Error sending input to script: {e}");
-                                    break;
-                                }
-                            },
-                            Err(e) => {
-                                eprintln!("Error reading from stdin: {e}");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        // Wait for the script to complete
-        let exit_code = session.wait_for_exit().await;
-
-        // Signal the stdin task to stop
-        let _ = exit_tx.send(());
-        let _ = stdin_task.await;
-
-        let code = exit_code.unwrap_or(-1);
         if code != 0 {
             eprintln!("Script exited with code {code}");
         }
