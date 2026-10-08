@@ -215,6 +215,14 @@ fn spawn_daemon_process() -> Result<()> {
     #[cfg(unix)]
     cmd.arg("--daemonize");
 
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
+        cmd.creation_flags(DETACHED_PROCESS);
+        cmd.inherit_handles(false);
+    }
+
     cmd.spawn().wrap_err("failed to spawn daemon process")?;
 
     Ok(())

@@ -1,5 +1,6 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 #![allow(clippy::use_self, clippy::missing_const_for_fn)] // not 100% reliable
+#![feature(windows_process_extensions_inherit_handles)]
 
 use clap::Parser;
 use clap::builder::Styles;
