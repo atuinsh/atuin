@@ -140,8 +140,10 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
         }
     }
 
-    let is_themes = top == "themes";
-    if is_themes && let Some(value) = var_nonempty("ATUIN_THEME_DIR") {
+    let atuin_home_is_set = matches!(home, Ok(AtuinHome::Set(_)));
+    // If `top` is "themes", check legacy theme locations, but only if `ATUIN_HOME` isn't set.
+    let check_legacy_themes = !atuin_home_is_set && top == "themes";
+    if check_legacy_themes && let Some(value) = var_nonempty("ATUIN_THEME_DIR") {
         // For backward compatibility, keep respecting the deprecated `ATUIN_THEME_DIR`
         // variable, but only if `$ATUIN_HOME/themes` doesn't exist.
         let mut path = PathBuf::from(value);
@@ -151,7 +153,6 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
 
     // Potential directories that might contain the config item. The first one that contains the
     // item, if any, is used.
-    let atuin_home_is_set = matches!(home, Ok(AtuinHome::Set(_)));
     let potential_dirs = [
         // Historically, `ATUIN_CONFIG_DIR` affected the location of `config.toml`,
         // `server.toml`, and `themes`, but not any other config items such as `skills` or
@@ -160,7 +161,7 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
         //
         // For backward compatibility, read themes from `$ATUIN_CONFIG_DIR/themes`, but only
         // if `$ATUIN_HOME/themes` doesn't exist.
-        is_themes.then(|| var_nonempty("ATUIN_CONFIG_DIR")).flatten().map(Into::into),
+        check_legacy_themes.then(|| var_nonempty("ATUIN_CONFIG_DIR")).flatten().map(Into::into),
         // Atuin used to store config items in `$XDG_CONFIG_HOME/atuin`. For backward
         // compatibility, continue to read items from there when they don't exist in
         // `$ATUIN_HOME`, but only if `ATUIN_HOME` is unset -- setting `ATUIN_HOME` should
