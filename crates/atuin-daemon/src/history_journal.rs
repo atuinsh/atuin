@@ -277,6 +277,13 @@ pub enum CmdRebuildError {
     HistoryStoreFailed(eyre::Report),
 }
 
+/// Errors returned by [`HistoryJournal::import`].
+#[derive(Debug, thiserror::Error)]
+pub enum CmdImportError {
+    #[error("importing into history db and store failed: {0}")]
+    ImportFailed(eyre::Report),
+}
+
 /// Errors returned by [`HistoryJournal::cancel`].
 #[derive(Debug, thiserror::Error)]
 pub enum CmdCancelError {
@@ -611,6 +618,35 @@ impl HistoryJournal {
         self.reload_search_index(search_settings).await;
 
         Ok(())
+    }
+
+    /// Import finished history (e.g. from a shell's history file) into the history db, the store
+    /// and the search index, returning how many entries were new.
+    ///
+    /// Unlike commands that [`Self::finish`] records, imports aren't announced to
+    /// [`Self::subscribe`]rs: they're old history, not commands that just ran.
+    pub async fn import(&self, histories: Vec<History>) -> Result<usize, CmdImportError> {
+        let imported = self
+            .history_store
+            .import(&self.history_db, histories)
+            .await
+            .map_err(CmdImportError::ImportFailed)?;
+
+        // Index before packing, which can wait on the sync server.
+        self.search_index.read().await.add_histories(&imported);
+
+        // As `finish` does, so imported records are folded into packfiles like any others.
+        if let Err(e) = packfile::try_pack(
+            &self.history_store.store,
+            &RecordSeriesKey::new(self.history_store.host_id, RecordTag::History),
+            self.caps.get_server::<PackfileCap>().await.ok().flatten(),
+        )
+        .await
+        {
+            tracing::warn!("packing failed: {e}");
+        }
+
+        Ok(imported.len())
     }
 
     /// Reload the search index from the history database.

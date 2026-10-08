@@ -474,6 +474,7 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
+ "xxhash-rust",
  "zstd",
 ]
 
