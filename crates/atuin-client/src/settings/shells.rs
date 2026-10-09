@@ -147,7 +147,7 @@ mod tests {
         assert_eq!(result.as_ref().ok(), expected.as_ref(), "{result:?}");
     }
 
-    #[test]
+    #[rstest]
     fn all_and_the_empty_array_are_the_same_value() {
         assert_eq!(parse(r#""all""#).unwrap(), parse("[]").unwrap());
         assert_eq!(parse(r#""all""#).unwrap(), Shells::all());

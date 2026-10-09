@@ -155,13 +155,14 @@ impl Importer for Xonsh {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
+    #[rstest]
     fn test_hist_dir_xonsh() {
         let hist_dir = xonsh_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
         assert_eq!(hist_dir, PathBuf::from("/home/user/xonsh_data/history_json"));

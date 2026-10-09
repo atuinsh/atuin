@@ -137,19 +137,20 @@ impl Importer for XonshSqlite {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
+    #[rstest]
     fn test_db_path_xonsh() {
         let db_path = xonsh_db_path(Some("/home/user/xonsh_data".to_string())).unwrap();
         assert_eq!(db_path, PathBuf::from("/home/user/xonsh_data/xonsh-history.sqlite"));
     }
 
-    #[test]
+    #[rstest]
     fn out_of_range_timestamp_falls_back_to_epoch() {
         let entry = HistDbEntry {
             inp: "echo hello".to_string(),

@@ -588,7 +588,7 @@ mod theme_tests {
         assert_eq!(title_theme.as_style(Meaning::Title).foreground_color, Some(Color::White));
     }
 
-    #[test]
+    #[rstest]
     fn test_no_fallbacks_are_circular() {
         let mytheme = Theme::new("mytheme".to_string(), None, HashMap::from([]));
         MEANING_FALLBACKS

@@ -154,7 +154,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn invoke_expression() {
         assert_eq!(
             secure_command("echo 'foo'"),
