@@ -278,6 +278,8 @@ impl SearchEngine for Search {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     /// Regression test: the daemon truncates queries before frizbee sees
