@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 pub const TIMEOUT: Duration = Duration::from_secs(30);
+pub const LOCAL_TIMEOUT: Duration = Duration::from_secs(15);
 pub const SESSION: &str = "b9c063b7b7204f81a50e3e0d51031f01";
 
 /// A temporary home with the built binary on PATH and isolated Atuin data.
@@ -52,6 +53,7 @@ impl FreshEnv {
             ("TERM".into(), "xterm-256color".into()),
             ("ATUIN_UPDATE_CHECK".into(), "false".into()),
             ("ATUIN_AUTO_SYNC".into(), "false".into()),
+            ("ATUIN_LOCAL_TIMEOUT".into(), LOCAL_TIMEOUT.as_secs().to_string()),
             ("ATUIN_DAEMON__SOCKET_PATH".into(), self.socket().display().to_string()),
             // ble.sh requires a user name.
             ("USER".into(), std::env::var("USER").unwrap_or_else(|_| "e2e".into())),

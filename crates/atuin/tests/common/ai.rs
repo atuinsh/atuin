@@ -150,8 +150,8 @@ impl Machine {
             None => (false, String::new(), ""),
         };
         env.write_config(&format!(
-            "local_timeout = 15\nauto_sync = {auto_sync}\n{address}{top}[daemon]\nenabled = \
-             true\nautostart = false\n{frequency}[ai]\n{ai}"
+            "auto_sync = {auto_sync}\n{address}{top}[daemon]\nenabled = true\nautostart = \
+             false\n{frequency}[ai]\n{ai}"
         ));
         // Finish migrations before the daemon and the commands race for the databases.
         env.run(&["store", "status"]);

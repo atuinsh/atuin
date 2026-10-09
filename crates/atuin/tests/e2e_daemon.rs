@@ -39,9 +39,7 @@ async fn fresh_daemon_serves_history(
     #[case] autostart: bool,
     #[values(1, 4)] writers: usize,
 ) {
-    daemon.env.write_config(&format!(
-        "local_timeout = 15\n[daemon]\nenabled = true\nautostart = {autostart}\n"
-    ));
+    daemon.env.write_config(&format!("[daemon]\nenabled = true\nautostart = {autostart}\n"));
     assert!(!daemon.env.data_dir().join("key").exists());
     assert!(!daemon.env.data_dir().join("history.db").exists());
     assert!(!daemon.env.socket().exists());
@@ -136,9 +134,7 @@ async fn fresh_daemon_serves_history(
 #[case::cancel(1)]
 #[tokio::test]
 async fn history_end_does_not_autostart_daemon(daemon: Daemon, #[case] exit: i64) {
-    daemon.env.write_config(
-        "local_timeout = 15\nstore_failed = false\n[daemon]\nenabled = true\nautostart = true\n",
-    );
+    daemon.env.write_config("store_failed = false\n[daemon]\nenabled = true\nautostart = true\n");
 
     let mut start = daemon.env.atuin(&["history", "start", "--", &format!("echo {}", marker())]);
     start.env("ATUIN_SESSION", SESSION);
@@ -163,7 +159,7 @@ async fn history_falls_back_to_local_when_daemon_not_running(
     daemon: Daemon,
     #[values(false, true)] hook: bool,
 ) {
-    daemon.env.write_config("local_timeout = 15\n[daemon]\nenabled = true\nautostart = false\n");
+    daemon.env.write_config("[daemon]\nenabled = true\nautostart = false\n");
     let command = format!("echo {}", marker());
     let hook_arg: &[&str] = if hook {
         &["--hook"]
@@ -235,7 +231,7 @@ async fn indexed_sessions(path: &Path) -> usize {
 #[rstest]
 #[tokio::test]
 async fn ai_session_rebuild_goes_through_the_daemon(daemon: Daemon) {
-    daemon.env.write_config("local_timeout = 15\n[daemon]\nenabled = true\nautostart = true\n");
+    daemon.env.write_config("[daemon]\nenabled = true\nautostart = true\n");
     let index = stale_ai_session_index(&daemon.env).await;
 
     let out = daemon.env.run(&["store", "rebuild", "ai-session"]);
@@ -259,9 +255,7 @@ async fn ai_session_rebuild_without_the_daemon_fails_and_touches_nothing(
     #[values(false, true)] enabled: bool,
     #[values(false, true)] purge: bool,
 ) {
-    daemon.env.write_config(&format!(
-        "local_timeout = 15\n[daemon]\nenabled = {enabled}\nautostart = false\n"
-    ));
+    daemon.env.write_config(&format!("[daemon]\nenabled = {enabled}\nautostart = false\n"));
     let index = stale_ai_session_index(&daemon.env).await;
     atuin_common::encryption::paseto_v4::Key::generate()
         .try_write_path(&daemon.env.data_dir().join("key"))

@@ -123,7 +123,7 @@ impl Setup {
         fs::create_dir_all(rc.parent().unwrap()).unwrap();
         fs::write(rc, &config.script).unwrap();
         let pty = PtyShell::spawn(&executable, &config.args, env, &vars);
-        pty.wait_for_prompt();
+        pty.wait_for_line_editor();
         (pty, config)
     }
 }
