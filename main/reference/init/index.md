@@ -16,7 +16,7 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See [Suppo
 
 - **Hooks** that record each command, its exit code, and its duration. See [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md).
 - **Key bindings** for `Ctrl`+`R` and the `Up` arrow, and `?` for [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md).
-- **Widgets** for `atuin ai resume` (zsh, bash and fish), unbound unless you ask for them: see [Binding `atuin ai resume`](#binding-atuin-ai-resume).
+- **Widgets** for `atuin resume` (zsh, bash and fish), unbound unless you ask for them: see [Binding `atuin resume`](#binding-atuin-resume).
 
 ## Flags
 
@@ -25,7 +25,7 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See [Suppo
 | `--disable-up-arrow` | Don't bind the `Up` arrow key                                                |
 | `--disable-ctrl-r`   | Don't bind `Ctrl`+`R`                                                        |
 | `--disable-ai`       | Don't bind `?` to [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) |
-| `--bind-ai-resume`   | Bind `Ctrl`+`]` to `atuin ai resume` (zsh, bash and fish; off by default)    |
+| `--bind-ai-resume`   | Bind `Ctrl`+`]` to `atuin resume` (zsh, bash and fish; off by default)       |
 
 For example, to keep `Ctrl`+`R` but leave the up arrow alone:
 
@@ -33,9 +33,9 @@ For example, to keep `Ctrl`+`R` but leave the up arrow alone:
 eval "$(atuin init zsh --disable-up-arrow)"
 ```
 
-## Binding `atuin ai resume`
+## Binding `atuin resume`
 
-`atuin init` defines widgets that open the [`atuin ai resume`](https://docs.atuin.sh/ai/sessions/index.md) picker at the prompt and put the command it picks into your shell, but binds no key to them by default. To bind `Ctrl`+`]` in the emacs, vi-insert and vi-command keymaps, pass `--bind-ai-resume`:
+`atuin init` defines widgets that open the [`atuin resume`](https://docs.atuin.sh/ai/sessions/index.md) picker at the prompt and put the command it picks into your shell, but binds no key to them by default. To bind `Ctrl`+`]` in the emacs, vi-insert and vi-command keymaps, pass `--bind-ai-resume`:
 
 ```
 eval "$(atuin init zsh --bind-ai-resume)"
