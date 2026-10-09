@@ -587,9 +587,15 @@ mod tests {
         env: MockEnv,
         #[values("permissions.ai.toml", "TERMINAL.md", "skills/foo/SKILL.md")] child: &str,
     ) {
-        env.set("XDG_CONFIG_HOME", "/xdg-config");
+        let config: PathBuf = if cfg!(windows) {
+            "c:\\xdg-config"
+        } else {
+            "/xdg-config"
+        }
+        .into();
+        env.set("XDG_CONFIG_HOME", &config);
         assert_eq!(try_home_dir(), Err(HomeError));
-        assert_eq!(config_path(child), Path::new("/xdg-config/atuin").join(child));
+        assert_eq!(config_path(child), config.join("atuin").join(child));
     }
 
     /// Which Atuin home an installation uses.
