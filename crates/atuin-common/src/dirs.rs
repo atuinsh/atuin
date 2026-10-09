@@ -88,6 +88,16 @@ pub fn atuin_home_is_set() -> bool {
 /// Top-level config items affected by the `ATUIN_CONFIG_DIR` environment variable.
 const ATUIN_CONFIG_DIR_ITEMS: [&str; 2] = ["config.toml", "server.toml"];
 
+/// Top-level config items that Atuin AI stores in both project-level `.atuin` directories as well
+/// as the global `~/.atuin`.
+///
+/// Before the switch to [`atuin_home`], a file like `~/.atuin/permissions.ai.toml` was scoped to
+/// `$HOME`, like any other project directory. Now, `~/.atuin/permissions.ai.toml` is the new
+/// location for the *global* permissions file. [`config_path`] implements logic to avoid
+/// reinterpreting old `$HOME`-scoped files as global ones; this array contains all the affected
+/// items.
+const AI_ITEMS: [&str; 3] = ["permissions.ai.toml", "skills", "TERMINAL.md"];
+
 /// Get the path of a config item.
 ///
 /// `child` is relative to the config directory. The final path is determined as follows:
@@ -95,21 +105,28 @@ const ATUIN_CONFIG_DIR_ITEMS: [&str; 2] = ["config.toml", "server.toml"];
 /// 1. If `child` is `config.toml` or `server.toml` and `ATUIN_CONFIG_DIR` is set,
 ///    `$ATUIN_CONFIG_DIR/child` is returned.
 /// 2. If `ATUIN_HOME` is set and valid (an absolute path), `$ATUIN_HOME/child` is returned.
-/// 3. If the first component of `child` exists in `~/.atuin`, `~/.atuin/child` is returned.
-/// 4. If the first component of `child` is `themes` and `ATUIN_THEME_DIR` is set,
-///    `$ATUIN_THEME_DIR` is returned. This behavior is deprecated and exists only for backward
-///    compatibility.
-/// 5. If the first component of `child` is `themes` and `ATUIN_CONFIG_DIR` is set,
+/// 3. If the first component of `child` is `permissions.ai.toml`, `skills`, or `TERMINAL.md`, and
+///    `~/.atuin/config.toml` doesn't exist, `legacy_config_dir()/child`[^1] is returned.
+/// 4. If the first component of `child` exists in `~/.atuin`, `~/.atuin/child` is returned.
+/// 5. If the first component of `child` is `themes` and `ATUIN_THEME_DIR` is set,
+///    `$ATUIN_THEME_DIR/child_tail` is returned, where `child_tail` is all of `child` except the
+///    first component. This behavior is deprecated and exists only for backward compatibility.
+/// 6. If the first component of `child` is `themes` and `ATUIN_CONFIG_DIR` is set,
 ///    `$ATUIN_CONFIG_DIR/themes` is returned. This behavior is deprecated and exists only for
 ///    backward compatibility.
-/// 6. If the first component of `child` exists in `legacy_config_dir()`[^1],
+/// 7. If the first component of `child` exists in `legacy_config_dir()`[^1],
 ///    `legacy_config_dir()/child` is returned.
-/// 7. Otherwise, `~/.atuin/child` is returned.
+/// 8. Otherwise, `~/.atuin/child` is returned.
+///
+/// When these steps refer to checking the existence of a path that depends on the user's home
+/// directory, like `~/.atuin/config.toml`, an inability to determine the user's home directory is
+/// treated the same as the path not existing.
 ///
 /// # Panics
 ///
-/// Panics if `child` is empty or absolute, or if it starts with `.` or `..`. Also panics if step 7
-/// is reached and the user's home directory can't be determined.
+/// Panics if `child` is empty or absolute, or if it starts with `.` or `..`. Also panics if the
+/// user's home directory can't be determined and the path can't be calculated without it, which can
+/// happen if step 8 is reached, or if the condition in step 3 is true.
 ///
 /// [^1]: `legacy_config_dir()` is `$XDG_CONFIG_HOME/atuin`, or `~/.config/atuin` if unset.
 #[must_use]
@@ -127,16 +144,40 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
         return path;
     }
 
-    let home = try_atuin_home();
-    if let Ok(home) = &home {
-        let mut path = PathBuf::from(home.clone());
-        path.push(top);
-        if matches!(home, AtuinHome::Set(_)) || path.exists() {
-            path.pop(); // pop `top` from the path
+    let home = match try_atuin_home() {
+        Ok(AtuinHome::Set(mut path)) => {
             path.push(child);
             return path;
         }
+        Ok(AtuinHome::Default(path)) => Ok(path),
+        Err(e) => Err(e),
+    };
+
+    // The existence of `~/.atuin/config.toml` distinguishes new installations from old ones. With
+    // `ATUIN_HOME` unset, if `~/.atuin/config.toml` is missing (indicating an old installation),
+    // continue to use the legacy config dir for AI-related items, to avoid interpreting an existing
+    // `~/.atuin/permissions.ai.toml`, which was previously scoped to `$HOME`, as the global file.
+    if AI_ITEMS.iter().any(|name| *name == top)
+        && !matches!(&home, Ok(home) if home.join("config.toml").exists())
+    {
+        let mut path = legacy_config_dir().unwrap_or_else(|err| panic!("{err}"));
+        path.push(child);
+        return path;
     }
+
+    let home = match home {
+        Ok(mut path) => {
+            path.push(top);
+            if path.exists() {
+                path.pop(); // pop `top` from the path
+                path.push(child);
+                return path;
+            }
+            path.pop(); // pop `top` from the path
+            Ok(path)
+        }
+        Err(e) => Err(e),
+    };
 
     let is_themes = top == "themes";
     if is_themes && let Some(value) = var_nonempty("ATUIN_THEME_DIR") {
@@ -179,7 +220,7 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
     }
 
     // At this point, we cannot continue without being able to determine the user's home directory.
-    let mut path = PathBuf::from(home.unwrap_or_else(|err| panic!("{err}")));
+    let mut path = home.unwrap_or_else(|err| panic!("{err}"));
     path.push(child);
     path
 }
@@ -187,18 +228,13 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
 /// Get the legacy config directory, used before the switch to [`atuin_home`].
 ///
 /// This is `$XDG_CONFIG_HOME/atuin`, or `~/.config/atuin` if unset.
-///
-/// # Errors
-///
-/// If `XDG_CONFIG_HOME` is unset and the home directory can't be determined.
 fn legacy_config_dir() -> Result<PathBuf, HomeError> {
-    let mut path = match var_abspath("XDG_CONFIG_HOME") {
-        Some(path) => path,
-        None => {
-            let mut path = try_home_dir()?;
-            path.push(".config");
-            path
-        }
+    let mut path = if let Some(path) = var_abspath("XDG_CONFIG_HOME") {
+        path
+    } else {
+        let mut path = try_home_dir()?;
+        path.push(".config");
+        path
     };
     path.push("atuin");
     Ok(path)
@@ -407,6 +443,12 @@ mod tests {
             self.tmp.path().join("xdg-config").join("atuin")
         }
 
+        /// Create `~/.atuin/config.toml`, which marks an installation that uses `~/.atuin` (a new
+        /// one, or one that has moved there) rather than the legacy config dir.
+        fn migrate(&self) {
+            create(&self.new_home().join("config.toml"));
+        }
+
         fn legacy_data(&self) -> PathBuf {
             self.tmp.path().join("xdg-data").join("atuin")
         }
@@ -482,6 +524,7 @@ mod tests {
         item: &str,
         #[values(false, true)] in_legacy: bool,
         #[values(false, true)] in_new: bool,
+        #[values(false, true)] migrated: bool,
     ) {
         // A sibling item living in the legacy dir mustn't drag this one along with it, nor the
         // other way round.
@@ -493,8 +536,13 @@ mod tests {
         if in_new {
             create(&homes.new_home().join(item));
         }
+        if migrated {
+            homes.migrate();
+        }
+        let in_new = in_new || (migrated && item == "config.toml");
 
-        let base = if in_legacy && !in_new {
+        // Until the installation uses `~/.atuin`, Atuin AI's items stay in the legacy dir.
+        let base = if (AI_ITEMS.contains(&item) && !migrated) || (in_legacy && !in_new) {
             homes.legacy_config()
         } else {
             homes.new_home()
@@ -504,6 +552,7 @@ mod tests {
 
     #[rstest]
     fn nested_config_paths_are_resolved_by_their_top_level_item(homes: Homes) {
+        homes.migrate();
         create(&homes.legacy_config().join("themes"));
         assert_eq!(
             homes.config_path("themes/dark.toml", None),
@@ -515,25 +564,68 @@ mod tests {
         );
     }
 
+    /// Before the switch to `~/.atuin`, `~/.atuin/permissions.ai.toml` held approvals for the home
+    /// directory only. Until the installation uses `~/.atuin`, it must not become the global file,
+    /// even when there's no legacy global file: that would make its approvals apply everywhere.
+    #[rstest]
+    fn an_old_home_scoped_ai_file_is_not_the_global_one(
+        homes: Homes,
+        #[values("permissions.ai.toml", "TERMINAL.md", "skills")] item: &str,
+    ) {
+        create(&homes.new_home().join(item));
+        assert_eq!(homes.config_path(item, None), homes.legacy_config().join(item));
+
+        // Once the installation uses `~/.atuin`, that's where they are.
+        homes.migrate();
+        assert_eq!(homes.config_path(item, None), homes.new_home().join(item));
+    }
+
+    /// Atuin AI's items stay in the legacy dir without a home directory, which works when
+    /// `XDG_CONFIG_HOME` says where that is.
+    #[rstest]
+    fn ai_items_do_without_a_home_dir_given_xdg_config_home(
+        env: MockEnv,
+        #[values("permissions.ai.toml", "TERMINAL.md", "skills/foo/SKILL.md")] child: &str,
+    ) {
+        env.set("XDG_CONFIG_HOME", "/xdg-config");
+        assert_eq!(try_home_dir(), Err(HomeError));
+        assert_eq!(config_path(child), Path::new("/xdg-config/atuin").join(child));
+    }
+
+    /// Which Atuin home an installation uses.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Install {
+        /// `ATUIN_HOME` is set.
+        AtuinHomeSet,
+        /// The default `~/.atuin`, on an installation from before it, which hasn't moved there.
+        Legacy,
+        /// The default `~/.atuin`, on a new installation or one that has moved there.
+        Migrated,
+    }
+
     #[rstest]
     fn config_items_are_looked_up_in_priority_order(
         homes: Homes,
-        // Whether each item is one `$ATUIN_CONFIG_DIR` relocates, and whether it is a theme, which
-        // is still read from there for backward compatibility.
+        // Whether each item is one `$ATUIN_CONFIG_DIR` relocates, whether it is a theme, which is
+        // still read from there for backward compatibility, and whether it is one of Atuin AI's,
+        // which stay in the legacy dir until the installation uses `~/.atuin`.
         #[values(
-            ("config.toml", true, false),
-            ("server.toml", true, false),
-            ("themes/dark.toml", false, true),
-            ("TERMINAL.md", false, false),
-            ("skills/foo/SKILL.md", false, false)
+            ("config.toml", true, false, false),
+            ("server.toml", true, false, false),
+            ("themes/dark.toml", false, true, false),
+            ("permissions.ai.toml", false, false, true),
+            ("TERMINAL.md", false, false, true),
+            ("skills/foo/SKILL.md", false, false, true)
         )]
-        (child, relocated, theme): (&str, bool, bool),
+        (child, relocated, theme, ai): (&str, bool, bool, bool),
         #[values(false, true)] config_dir_set: bool,
         #[values(false, true)] in_config_dir: bool,
-        #[values(false, true)] atuin_home_set: bool,
+        #[values(Install::AtuinHomeSet, Install::Legacy, Install::Migrated)] install: Install,
         #[values(false, true)] in_home: bool,
         #[values(false, true)] in_legacy: bool,
     ) {
+        let atuin_home_set = install == Install::AtuinHomeSet;
+        let migrated = install == Install::Migrated;
         let home = if atuin_home_set {
             homes.set_atuin_home()
         } else {
@@ -549,12 +641,20 @@ mod tests {
                 create(&dir.join(child));
             }
         }
+        if migrated {
+            homes.migrate();
+        }
+        let in_home = in_home || (migrated && !atuin_home_set && child == "config.toml");
 
         // A set `ATUIN_HOME` is used whether or not the item exists there; the fallbacks only
         // apply to the default `~/.atuin`.
         let base = if config_dir_set && relocated {
             config_dir.clone()
-        } else if atuin_home_set || in_home {
+        } else if atuin_home_set {
+            home
+        } else if ai && !migrated {
+            homes.legacy_config()
+        } else if in_home {
             home
         } else if theme && config_dir_set && in_config_dir {
             config_dir.clone()
@@ -607,6 +707,7 @@ mod tests {
         homes: Homes,
         #[values("config.toml", "TERMINAL.md", "skills/foo/SKILL.md")] child: &str,
     ) {
+        homes.migrate();
         homes.set_theme_dir(&homes.tmp.path().join("theme-dir"));
         assert_eq!(homes.config_path(child, None), homes.new_home().join(child));
     }

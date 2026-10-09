@@ -83,6 +83,7 @@ arboard = { workspace = true, optional = true }
 arboard = { workspace = true, optional = true, features = ["wayland-data-control"] }
 
 [dev-dependencies]
+atuin-common = { workspace = true, features = ["test-utils"] }
 eye_declare_engine = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }

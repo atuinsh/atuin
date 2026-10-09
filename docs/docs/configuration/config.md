@@ -13,7 +13,7 @@ Additionally, if set, `ATUIN_CONFIG_DIR` will override the location of
 `config.toml` and [`server.toml`](../self-hosting/server-setup.md): Atuin will
 look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
 
-!!! note "Upgrading from older versions"
+??? note "Upgrading from older versions"
 
     Older versions of Atuin stored data in `~/.config/atuin` (or
     `$XDG_CONFIG_HOME/atuin`) and `~/.local/share/atuin` (or
@@ -22,29 +22,78 @@ look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
     `~/.atuin`, so existing installations will keep working without any
     modifications.
 
-    If you want to migrate to the new structure, run these commands in Bash,
-    Zsh, or fish (you'll have to adjust the paths if you have
-    `XDG_CONFIG_HOME` or `XDG_DATA_HOME` set):
+    If you want to migrate to the new layout, run these commands in Bash, Zsh,
+    or fish (you'll have to adjust the paths if you have `XDG_CONFIG_HOME` or
+    `XDG_DATA_HOME` set).
+
+    Temporarily stop the daemon and disable autostart:
 
     ```sh
-    # Temporarily stop the daemon and disable autostart
     atuin config set daemon.autostart false
     atuin daemon stop
+    ```
 
-    # Make sure ~/.atuin exists
+    Make sure `~/.atuin` exists:
+
+    ```sh
     mkdir -p ~/.atuin
+    ```
 
-    # Move config items. `mv` will likely report some "No such file
-    # or directory" errors; this just means your config directory
-    # didn't contain every possible config item and can be ignored.
-    cd ~/.config/atuin && mv -n config.toml server.toml themes skills \
-        permissions.ai.toml TERMINAL.md ~/.atuin/
+    Check whether you have any AI-related files in `~/.atuin`:
 
-    # Move data
-    [ -e ~/.atuin/data ] && echo 'error: destination exists' ||
+    ```sh
+    ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills -e TERMINAL.md
+    ```
+
+    If you do, please expand and follow this section:
+
+    ??? note "Migrating home-scoped AI config"
+
+        In older installations, `permissions.ai.toml`, `skills`, or
+        `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas
+        in newer installations, they are applied *globally*. The existence of
+        `~/.atuin/config.toml` is what determines whether the new or old
+        behavior is used; if `~/.atuin/config.toml` exists, these items are
+        interpreted as global.
+
+        Before you move your `config.toml` to `~/.atuin`, review the existing
+        AI files in `~/.atuin`, especially `permissions.ai.toml`. Anything
+        you're ok with being made global can be left as-is (global is likely
+        not too different from applying to your entire home directory anyway);
+        anything else should be deleted or moved to subdirectories (meaning
+        moving it into `~/subdir/.atuin/` for each subdirectory).
+
+        After you've confirmed that the AI items in `~/.atuin` can be
+        interpreted as global, check whether any AI items appear in both
+        `~/.atuin` and `~/.config/atuin`:
+
+        ```sh
+        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills \
+            -e TERMINAL.md | sort | uniq -d
+        ```
+
+        If there are any such items, you must merge the items in
+        `~/.config/atuin` into the configuration at `~/.atuin` if you still
+        want them to take effect; otherwise, the items in `~/.config/atuin`
+        will be shadowed by those in `~/.atuin`.
+
+    Next, move your config items:
+
+    ```sh
+    cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
+        -e themes -e skills -e permissions.ai.toml -e TERMINAL.md) ~/.atuin/
+    ```
+
+    Then, move your data:
+
+    ```sh
+    [ -e ~/.atuin/data ] && echo 'error: destination exists' || \
         mv -n ~/.local/share/atuin ~/.atuin/data
+    ```
 
-    # Re-enable daemon autostart (if you had it enabled before)
+    Finally, re-enable daemon autostart, if you had it enabled before:
+
+    ```sh
     atuin config set daemon.autostart true
     ```
 
@@ -1246,7 +1295,8 @@ The built-in files are:
 - `~/.gnupg/private-keys-v1.d` and `~/.password-store`
 - the AI agents' own logins: `~/.claude/.credentials.json`,
   `~/.codex/auth.json`, opencode's and Pi's `auth.json`
-- Atuin's encryption key ([`key_path`](#key_path))
+- Atuin's encryption key (typically `~/.atuin/data/key`, or
+  `~/.local/share/atuin/key` in older installs)
 
 ## logs
 

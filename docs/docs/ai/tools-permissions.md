@@ -8,7 +8,9 @@ By default, Atuin AI asks your permission before using any client-side tool. You
 
 ### Permission Files
 
-Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in your Atuin home directory (`~/.atuin/permissions.ai.toml` by default).
+Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in your Atuin home directory (`~/.atuin/permissions.ai.toml`[^1] by default).
+
+[^1]: Because `~/.atuin/permissions.ai.toml` is the global permissions file, "Always allow in this directory" is unavailable when your current directory is `$HOME`. (Similarly, if your `$HOME` is a Git repository, "Always allow in this workspace" is unavailable when your workspace is that repository.) If a global rule is acceptable, select "Always allow" instead.
 
 A permission file is a TOML file with the following format:
 
