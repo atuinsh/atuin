@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
@@ -1540,6 +1540,19 @@ impl Settings {
     fn builder_with_data_dir(
         data_dir: &std::path::Path,
     ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
+        // Environment is applied before the config file. `build_config` adds the file
+        // afterwards; keep that order.
+        Ok(Self::defaults_builder(data_dir)?
+            .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
+    }
+
+    /// Defaults only, with no environment source.
+    ///
+    /// [`Self::builder_with_data_dir`] layers the process environment on top. Tests pass an
+    /// explicit environment into this builder instead of mutating process variables.
+    fn defaults_builder(
+        data_dir: &std::path::Path,
+    ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
         let db_path = data_dir.join("history.db");
         let record_store_path = data_dir.join("records.db");
         let kv_path = data_dir.join("kv.db");
@@ -1553,7 +1566,7 @@ impl Settings {
 
         let output = OutputCaptureConfig::default();
 
-        Ok(Config::builder()
+        Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
@@ -1667,8 +1680,7 @@ impl Settings {
             .set_default("pty_proxy.enabled", false)?
             .set_default("octavo.enabled", false)?
             .set_default("octavo.endpoint", None::<String>)?
-            .set_default("octavo.upload_output", false)?
-            .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
+            .set_default("octavo.upload_output", false)
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
@@ -1868,9 +1880,20 @@ impl Settings {
     }
 
     pub fn new() -> Result<Self> {
+        let config_file = Self::get_config_path()?;
+        // `build_config` writes the example file when none exists, but does not load it.
+        // Only keys from a file that was already present can be unknown config.
+        let had_config_file = config_file.exists();
         let config = Self::build_config()?;
-        let settings: Self =
-            config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))?;
+        let file_tree = if had_config_file {
+            Some(Self::read_config_file_value(&config_file)?)
+        } else {
+            None
+        };
+        let (settings, unknown) = Self::deserialize_config(config, file_tree.as_ref())?;
+        if let Some(warning) = Self::unknown_config_warning(&config_file, &unknown) {
+            eprintln!("{warning}");
+        }
 
         // Validate UI settings
         settings.ui.validate()?;
@@ -1879,6 +1902,134 @@ impl Settings {
         META_CONFIG.set((settings.meta.db_path.clone(), settings.local_timeout.as_secs_f64())).ok();
 
         Ok(settings)
+    }
+
+    /// Deserialize merged `config`, recording ignored paths that are present in `file`.
+    ///
+    /// `file` is the untyped config file, without defaults or environment entries. `None`
+    /// means no config file contributed keys. Operational variables such as `ATUIN_SESSION`
+    /// and `ATUIN_CONFIG_DIR` are therefore not reported. Unknown file keys do not fail
+    /// deserialization; type errors still do.
+    fn deserialize_config(
+        config: Config,
+        file: Option<&config::Value>,
+    ) -> Result<(Self, Vec<String>)> {
+        let mut config = config;
+        if let Some(file) = file {
+            // Defaults insert the canonical name (`enabled`). Serde then rejects the alias
+            // (`enable`) as a duplicate of that field. Keep the file's alias and drop the
+            // default when the file does not also set the canonical key.
+            Self::keep_file_aliases(&mut config, file);
+        }
+
+        let mut unknown = BTreeSet::new();
+        let settings = serde_ignored::deserialize(config, |path| {
+            let Some(file) = file else {
+                return;
+            };
+            let path = path.to_string();
+            if Self::file_contains_path(file, &path) {
+                unknown.insert(path);
+            }
+        })
+        .map_err(|e| eyre!("failed to deserialize: {}", e))?;
+
+        Ok((settings, unknown.into_iter().collect()))
+    }
+
+    /// Read the config file as an untyped tree, for comparison with ignored serde paths.
+    fn read_config_file_value(path: &Path) -> Result<config::Value> {
+        let config_file_str =
+            path.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
+        let config = Config::builder()
+            .add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
+            .build()?;
+        Ok(config.cache)
+    }
+
+    /// Whether dotted `path` (sequence indexes are their own segments) exists in `file`.
+    fn file_contains_path(file: &config::Value, path: &str) -> bool {
+        let mut current = file.clone();
+        for segment in path.split('.') {
+            if segment.is_empty() {
+                return false;
+            }
+            let Some(next) = Self::next_config_segment(&current, segment) else {
+                return false;
+            };
+            current = next;
+        }
+        true
+    }
+
+    fn next_config_segment(value: &config::Value, segment: &str) -> Option<config::Value> {
+        if let Ok(table) = value.clone().into_table() {
+            return table.get(segment).cloned();
+        }
+        let index = segment.parse::<usize>().ok()?;
+        value.clone().into_array().ok()?.into_iter().nth(index)
+    }
+
+    /// `(table path, alias, canonical name)` for fields whose defaults use the canonical name.
+    const SERDE_ALIASES: &[(&[&str], &str, &str)] =
+        &[(&["pty_proxy"], "enable", "enabled"), (&["daemon"], "enable", "enabled")];
+
+    fn keep_file_aliases(config: &mut Config, file: &config::Value) {
+        for (table, alias, canonical) in Self::SERDE_ALIASES {
+            let file_has_alias = Self::table_key(file, table, alias).is_some();
+            let file_has_canonical = Self::table_key(file, table, canonical).is_some();
+            if file_has_alias && !file_has_canonical {
+                Self::remove_table_key(&mut config.cache, table, canonical);
+            }
+        }
+    }
+
+    fn table_key<'a>(
+        value: &'a config::Value,
+        table: &[&str],
+        key: &str,
+    ) -> Option<&'a config::Value> {
+        let mut current = value;
+        for segment in table {
+            let config::ValueKind::Table(map) = &current.kind else {
+                return None;
+            };
+            current = map.get(*segment)?;
+        }
+        let config::ValueKind::Table(map) = &current.kind else {
+            return None;
+        };
+        map.get(key)
+    }
+
+    fn remove_table_key(value: &mut config::Value, table: &[&str], key: &str) {
+        let mut current = value;
+        for segment in table {
+            let config::ValueKind::Table(map) = &mut current.kind else {
+                return;
+            };
+            let Some(next) = map.get_mut(*segment) else {
+                return;
+            };
+            current = next;
+        }
+        if let config::ValueKind::Table(map) = &mut current.kind {
+            map.remove(key);
+        }
+    }
+
+    /// Warning text for `keys`, or `None` when there is nothing to report.
+    ///
+    /// Names `config_file` and the dotted key or table paths. Values are not included.
+    fn unknown_config_warning(config_file: &Path, keys: &[String]) -> Option<String> {
+        if keys.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "warning: ignoring unknown configuration in {}: {}",
+            config_file.display(),
+            keys.join(", ")
+        ))
     }
 
     fn expand_path(path: &str) -> Result<String> {
@@ -2355,5 +2506,228 @@ mod tests {
     ) {
         assert_eq!(requested.effective_mode(), expected);
         assert_eq!(SearchMode::from(requested), expected);
+    }
+
+    /// Load `toml` through [`Settings::deserialize_config`], with an explicit environment source.
+    ///
+    /// An empty `env` still replaces the process environment, so parallel tests do not observe
+    /// `ATUIN_*` variables from the runner.
+    fn load_with_env(toml: &str, env: &[(&str, &str)]) -> Result<(Settings, Vec<String>)> {
+        use std::collections::HashMap;
+        use std::path::Path;
+
+        use config::{Config, Environment};
+
+        let mut source = HashMap::new();
+        for (key, value) in env {
+            source.insert((*key).to_owned(), (*value).to_owned());
+        }
+
+        let config = Settings::defaults_builder(Path::new("/tmp/atuin-unknown-config"))?
+            .add_source(
+                Environment::with_prefix("atuin")
+                    .prefix_separator("_")
+                    .separator("__")
+                    .source(Some(source)),
+            )
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()?;
+        let file =
+            Config::builder().add_source(ConfigFile::from_str(toml, FileFormat::Toml)).build()?;
+
+        Settings::deserialize_config(config, Some(&file.cache))
+    }
+
+    #[rstest]
+    #[case::unknown_sync_url("sync_url = \"https://typo.example\"\n", &["sync_url"][..], None)]
+    #[case::known_sync_address(
+        "sync_address = \"https://sync.example.test\"\n",
+        &[][..],
+        Some("https://sync.example.test")
+    )]
+    fn sync_address_typos_warn_and_valid_values_load(
+        #[case] toml: &str,
+        #[case] paths: &[&str],
+        #[case] sync_address: Option<&str>,
+    ) {
+        let (settings, unknown) = load_with_env(toml, &[]).expect("config should load");
+        assert_eq!(unknown, paths);
+        let expected = sync_address
+            .map(|url| Url::parse(url).expect("case url should parse"))
+            .unwrap_or_else(|| super::DEFAULT_SYNC_URL.clone());
+        assert_eq!(settings.sync_address, expected);
+    }
+
+    #[rstest]
+    fn unknown_config_paths_are_sorted_and_omit_values() {
+        let secret = "SENTINEL_SECRET_VALUE";
+        let toml = format!(
+            "\
+scroll_exits = false
+not_a_table = {{ token = \"{secret}\" }}
+
+[empty_table]
+
+[keys]
+scroll_exists = true
+
+[preview]
+strategy = \"fixed\"
+stratagy = \"auto\"
+
+[daemon]
+enabeld = true
+
+[ui]
+columns = [{{ type = \"command\", not_a_column_field = true }}]
+"
+        );
+        let (settings, unknown) = load_with_env(&toml, &[]).expect("typos should still load");
+        assert_eq!(unknown, vec![
+            "daemon.enabeld",
+            "empty_table",
+            "keys.scroll_exists",
+            "not_a_table",
+            "preview.stratagy",
+            "scroll_exits",
+            "ui.columns.0.not_a_column_field",
+        ]);
+        // The root key is ignored, so the real `[keys]` setting keeps its default.
+        assert!(settings.keys.scroll_exits);
+        assert_eq!(settings.preview.strategy, super::PreviewStrategy::Fixed);
+        assert!(!settings.daemon.enabled);
+
+        let warning = Settings::unknown_config_warning(
+            std::path::Path::new("/tmp/atuin/config.toml"),
+            &unknown,
+        )
+        .expect("unknown keys should warn");
+        assert_eq!(
+            warning,
+            "warning: ignoring unknown configuration in /tmp/atuin/config.toml: daemon.enabeld, \
+             empty_table, keys.scroll_exists, not_a_table, preview.stratagy, scroll_exits, \
+             ui.columns.0.not_a_column_field"
+        );
+        assert!(!warning.contains(secret));
+        assert!(
+            Settings::unknown_config_warning(std::path::Path::new("config.toml"), &[]).is_none()
+        );
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::example(Settings::example_config())]
+    #[case::shells("search.shells = \"auto\"\n")]
+    fn known_settings_produce_no_unknown_paths(#[case] toml: &str) {
+        let (_settings, unknown) = load_with_env(toml, &[]).expect("known config should load");
+        assert!(unknown.is_empty(), "{unknown:?}");
+    }
+
+    #[rstest]
+    fn known_nested_and_optional_settings_are_honored() {
+        let (settings, unknown) = load_with_env(
+            "filter_mode = \"directory\"\ntheme.debug = true\n[keys]\nscroll_exits = false\n",
+            &[],
+        )
+        .expect("known config should load");
+        assert!(unknown.is_empty(), "{unknown:?}");
+        assert!(!settings.keys.scroll_exits);
+        assert_eq!(settings.filter_mode, Some(FilterMode::Directory));
+        assert_eq!(settings.theme.debug, Some(true));
+    }
+
+    #[rstest]
+    fn aliases_headers_and_keybindings_are_not_unknown() {
+        let secret = "SENTINEL_SECRET_VALUE";
+        let toml = format!(
+            "\
+extra_headers = {{ \"X-User-Header\" = \"{secret}\" }}
+
+[pty_proxy]
+enable = true
+
+[daemon]
+enable = true
+
+[keymap.emacs]
+\"ctrl-x\" = \"exit\"
+left = [{{ when = \"cursor-at-start\", action = \"exit\" }}, {{ action = \"cursor-left\" }}]
+"
+        );
+        let (settings, unknown) = load_with_env(&toml, &[]).expect("accepted forms should load");
+        assert!(unknown.is_empty(), "{unknown:?}");
+        assert!(settings.pty_proxy.enabled);
+        assert!(settings.daemon.enabled);
+        assert!(settings.extra_headers.contains_key("X-User-Header"));
+        assert!(matches!(
+            settings.keymap.emacs.get("ctrl-x"),
+            Some(super::KeyBindingConfig::Simple(action)) if action == "exit"
+        ));
+        assert!(matches!(
+            settings.keymap.emacs.get("left"),
+            Some(super::KeyBindingConfig::Rules(rules)) if rules.len() == 2
+        ));
+        assert!(
+            Settings::unknown_config_warning(std::path::Path::new("config.toml"), &unknown)
+                .is_none()
+        );
+    }
+
+    #[rstest]
+    fn environment_only_keys_do_not_warn_and_file_typos_still_do() {
+        let (settings, unknown) = load_with_env("sync_url = \"https://typo.example\"\n", &[
+            ("ATUIN_SESSION", "session-id"),
+            ("ATUIN_CONFIG_DIR", "/tmp/atuin-config-dir"),
+            ("ATUIN_SYNC_ADDRESS", "https://from-env.example"),
+        ])
+        .expect("file typo should still load");
+
+        assert_eq!(unknown, vec!["sync_url".to_string()]);
+        assert_eq!(settings.sync_address, Url::parse("https://from-env.example").unwrap());
+    }
+
+    #[rstest]
+    fn defaults_and_environment_without_a_file_typo_do_not_warn() {
+        let (settings, unknown) = load_with_env("", &[
+            ("ATUIN_SESSION", "session-id"),
+            ("ATUIN_CONFIG_DIR", "/tmp/atuin-config-dir"),
+        ])
+        .expect("defaults should load");
+
+        assert!(unknown.is_empty(), "{unknown:?}");
+        assert_eq!(settings.sync_address, super::DEFAULT_SYNC_URL.clone());
+    }
+
+    #[rstest]
+    #[case::malformed_toml("=")]
+    #[case::wrong_type("auto_sync = \"banana\"\nsecret_token = \"SENTINEL_SECRET_VALUE\"\n")]
+    #[case::alias_and_canonical_together("[pty_proxy]\nenable = true\nenabled = false\n")]
+    fn malformed_or_mistyped_config_still_fails(#[case] toml: &str) {
+        let err = load_with_env(toml, &[]).expect_err("config should fail").to_string();
+        assert!(!err.contains("SENTINEL_SECRET_VALUE"), "{err}");
+    }
+
+    #[rstest]
+    fn invalid_ui_still_fails() {
+        let toml = "\
+[ui]
+columns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = true }]
+secret_token = \"SENTINEL_SECRET_VALUE\"
+";
+        let (settings, unknown) = load_with_env(toml, &[]).expect("ui shape should deserialize");
+        assert_eq!(unknown, vec!["ui.secret_token".to_string()]);
+        let err =
+            settings.ui.validate().expect_err("two expanding columns should fail").to_string();
+        assert!(err.contains("expand"), "{err}");
+        let warning =
+            Settings::unknown_config_warning(std::path::Path::new("config.toml"), &unknown)
+                .expect("unknown key should warn");
+        assert!(!warning.contains("SENTINEL_SECRET_VALUE"));
+    }
+
+    #[rstest]
+    fn validate_str_still_accepts_unknown_keys() {
+        Settings::validate_str("sync_url = \"https://typo.example\"\n")
+            .expect("unknown keys stay valid");
     }
 }
