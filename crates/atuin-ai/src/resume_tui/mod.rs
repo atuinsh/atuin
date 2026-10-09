@@ -600,7 +600,7 @@ fn start_fork(
     if action == Pending::Copy {
         let id = resumer::quote(row.handle.session.as_ref());
         let pick = branch.map(|b| format!(" --branch {}", resumer::quote(&b.selector)));
-        copy(state, &format!("atuin ai resume {id} --fork{}", pick.unwrap_or_default()));
+        copy(state, &format!("atuin resume {id} --fork{}", pick.unwrap_or_default()));
         return;
     }
     let status = match &branch {
@@ -656,7 +656,7 @@ fn start_switch(
     if action == Pending::Copy {
         let id = resumer::quote(row.handle.session.as_ref());
         let pick = resumer::quote(&branch.selector);
-        copy(state, &format!("atuin ai resume {id} --switch --branch {pick}"));
+        copy(state, &format!("atuin resume {id} --switch --branch {pick}"));
         return;
     }
     let status = format!("switching to {}'s…", branch.host);
@@ -724,7 +724,7 @@ fn start_continuation(
     if action == Pending::Copy {
         let id = resumer::quote(row.handle.session.as_ref());
         let into = source::harness_arg(target).unwrap_or_default();
-        copy(state, &format!("atuin ai resume {id} --in {into}"));
+        copy(state, &format!("atuin resume {id} --in {into}"));
         return;
     }
     let flattened = state.flattened.get(&row.handle).and_then(|f| f.as_ref().ok());
@@ -774,13 +774,13 @@ fn finish_continuation(
 
 /// What ctrl-y copies to resume `row`, planned as `resume`, in its own harness. Copying writes
 /// nothing, so when running the harness's own command wouldn't do (the session has to be
-/// restored from sync, or caught up with it, first), it is `atuin ai resume <id>`, which does
+/// restored from sync, or caught up with it, first), it is `atuin resume <id>`, which does
 /// that when run.
 fn resume_line(row: &SessionRow, resume: &Resume) -> String {
     if resume.restore.is_none() && !resume.catch_up {
         return resumer::shell_line(&resume.plan);
     }
-    format!("atuin ai resume {}", resumer::quote(row.handle.session.as_ref()))
+    format!("atuin resume {}", resumer::quote(row.handle.session.as_ref()))
 }
 
 /// Put `line` on the clipboard, saying so in the status row.

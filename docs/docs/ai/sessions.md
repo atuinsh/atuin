@@ -77,7 +77,7 @@ atuin ai session search "flaky test"
 
 - Each word of the query matches a whole word: `atuin ai session search
   "migration"` finds sessions mentioning migration, but `"migr"` doesn't.
-  The `atuin ai resume` picker searches as you type, so there the last word
+  The `atuin resume` picker searches as you type, so there the last word
   also matches as a prefix once it's at least two characters long.
 - An empty query (`atuin ai session search ""`) lists the newest sessions
   first, rather than returning nothing.
@@ -85,10 +85,11 @@ atuin ai session search "flaky test"
 
 ## Resuming
 
-`atuin ai resume` (or a key you bind to it, see
-[Binding `atuin ai resume`](../reference/init.md#binding-atuin-ai-resume)) opens a picker over
+`atuin resume` (or a key you bind to it, see
+[Binding `atuin resume`](../reference/init.md#binding-atuin-resume)) opens a picker over
 your sessions. It works like the history search: type to search, ++ctrl+o++
-inspects the selected session, and ++esc++ leaves.
+inspects the selected session, and ++esc++ leaves. `atuin ai resume` is the
+same command, under its longer name.
 
 No key opens it by default. To open it with ++ctrl+bracket-right++ (which
 replaces the shell's own character search on that key), pass `--bind-ai-resume`
@@ -174,7 +175,7 @@ mouse = false
 
 - Subagents aren't listed at all, as they can't be resumed. A search that
   matches something a subagent said still finds the session it worked for, and
-  `atuin ai resume <subagent-id>` resumes that session. Atuin records whether a
+  `atuin resume <subagent-id>` resumes that session. Atuin records whether a
   child session is a subagent, a fork or a continuation as it captures it.
   Sessions captured by older versions don't say, and for Codex and opencode
   nearly all such children are subagents, so the picker treats them as such
@@ -302,10 +303,10 @@ resume_chooser = false
 
 The chooser still opens for a session its own agent can't resume.
 
-From the command line, `atuin ai resume <id>` resumes a session in its own
+From the command line, `atuin resume <id>` resumes a session in its own
 agent directly (an id prefix works too), writing it out from sync first when it
-isn't on this machine, and `atuin ai resume <id> --in codex` continues it in
-another (`claude`, `codex`, `opencode` or `pi`). `atuin ai resume <id> --fork`
+isn't on this machine, and `atuin resume <id> --in codex` continues it in
+another (`claude`, `codex`, `opencode` or `pi`). `atuin resume <id> --fork`
 forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,
 `--switch` switches it to another branch, and `--fork` forks it from its newest
@@ -376,12 +377,12 @@ atuin store rebuild ai-session
 
 The daemon deletes the index and replays every session record into it in the
 background (`atuin ai session` waits for it meanwhile), so this needs the daemon
-enabled. `atuin ai resume` doesn't wait: it stays usable, and its status row says
+enabled. `atuin resume` doesn't wait: it stays usable, and its status row says
 how far the rebuild has got, as its results may be incomplete until it finishes. `atuin store purge` and `atuin store pull --force` do the same after
 deleting records, and commands that re-encrypt the records (`atuin store rekey`,
 `atuin login`) have the daemon replay them the next time it starts.
 
-If `atuin ai resume` reports that the session database is at an older schema
+If `atuin resume` reports that the session database is at an older schema
 version, the running daemon is an older Atuin than the command: restart it
 (`atuin daemon restart`) so it upgrades the database.
 If it reports that the session database was made by another build of Atuin (a

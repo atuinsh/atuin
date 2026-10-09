@@ -878,7 +878,7 @@ async fn the_chooser_opens_when_there_is_a_choice() {
 }
 
 /// A session recorded on another machine is restored from sync (by the worker) only once it is
-/// chosen, and then resumed from where it was written; ctrl-y copies `atuin ai resume <id>`,
+/// chosen, and then resumed from where it was written; ctrl-y copies `atuin resume <id>`,
 /// which restores it when run, and writes nothing.
 #[rstest]
 #[tokio::test]
@@ -900,7 +900,7 @@ async fn a_session_from_another_machine_is_restored_first() {
     let resume = state.plans[&row.handle].clone().unwrap();
     assert!(resume.restore.is_some());
     let id = row.handle.session.to_string();
-    assert_eq!(resume_line(&row, &resume), format!("atuin ai resume {id}"));
+    assert_eq!(resume_line(&row, &resume), format!("atuin resume {id}"));
 
     let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
     assert_eq!(outcome, None, "waits for the restore");

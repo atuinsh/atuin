@@ -8,6 +8,8 @@ pub(crate) mod inline;
 pub(crate) mod resume;
 pub(crate) mod session;
 
+pub use resume::Cmd as ResumeCmd;
+
 #[derive(Args, Debug)]
 pub struct AiArgs {
     /// Enable verbose logging
