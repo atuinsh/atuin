@@ -93,6 +93,7 @@ pub fn example_config() -> &'static str {
 mod tests {
     use atuin_common::units::ByteSize;
     use config::{Config, File as ConfigFile, FileFormat};
+    use rstest::rstest;
 
     use super::Settings;
 
@@ -111,13 +112,13 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
+    #[rstest]
     fn max_record_size_accepts_a_human_string() {
         let settings = settings_with_max_record_size("\"500MB\"");
         assert_eq!(settings.max_record_size, ByteSize::mb(500));
     }
 
-    #[test]
+    #[rstest]
     fn max_record_size_accepts_a_bare_integer() {
         let settings = settings_with_max_record_size("1048576");
         assert_eq!(settings.max_record_size, ByteSize::mib(1));

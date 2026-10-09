@@ -739,7 +739,7 @@ mod tests {
         assert_eq!(set(input, key, value), expected);
     }
 
-    #[test]
+    #[rstest]
     fn setting_the_same_key_twice_keeps_its_comment() {
         let once = set(
             "[sync]\n# how often to sync\nfrequency = \"5m\" # unit is flexible\n",
