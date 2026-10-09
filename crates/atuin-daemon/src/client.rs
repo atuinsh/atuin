@@ -114,9 +114,6 @@ impl SocketPathError {
 /// [2]: atuin_client::settings::Daemon::systemd_socket
 #[cfg(unix)]
 pub fn socket_path(settings: &Settings) -> Result<PathBuf, SocketPathError> {
-    use std::io::ErrorKind;
-    use std::os::unix::net::UnixStream;
-
     use crate::pidfile::{self, PidfileInfo};
 
     let existing_socket_path = || settings.daemon.existing_socket_path().into_owned();
@@ -146,11 +143,11 @@ pub fn socket_path(settings: &Settings) -> Result<PathBuf, SocketPathError> {
     // of `ATUIN_HOME`, which is conceptually a separate profile that we should not connect to.
     let path = settings.daemon.preferred_socket_path().into_owned();
 
-    // Avoid connecting to an existing socket except if we get `ConnectionRefused`, which indicates
-    // it's no longer in use.
-    if path.exists()
-        && !UnixStream::connect(&path).is_err_and(|e| e.kind() == ErrorKind::ConnectionRefused)
-    {
+    // Avoid connecting to an existing, in-use socket. We match on `Ok(true)` rather than
+    // `Ok(true) | Err(_)` because an error doesn't necessarily mean the socket is in use (e.g.,
+    // `EACCES`), and many such errors will be encountered again later in the pipeline and handled
+    // better there.
+    if path.exists() && matches!(atuin_common::os::unix::socket_in_use(&path), Ok(true)) {
         return Err(SocketPathError::InUse {
             path,
             user_defined: settings.daemon.socket_path.is_some(),

@@ -1,8 +1,6 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::ops::ControlFlow;
-#[cfg(unix)]
-use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -282,11 +280,7 @@ fn remove_sockets(
 #[cfg(unix)]
 fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
     remove_sockets(settings, |socket_path| {
-        // A refused connection means the socket is left over from a daemon that is gone.
-        matches!(
-            StdUnixStream::connect(socket_path),
-            Err(e) if e.kind() == ErrorKind::ConnectionRefused
-        )
+        matches!(atuin_common::os::unix::socket_in_use(socket_path), Ok(false))
     })
 }
 

@@ -1,13 +1,16 @@
 //! Unix-specific utilities.
 
+use std::path::{Path, PathBuf};
+
+use rustix::fs;
+
 pub mod disk;
 pub mod io;
 pub mod process;
 pub mod tty;
 
-use std::path::{Path, PathBuf};
-
-use rustix::fs;
+mod socket;
+pub use socket::socket_in_use;
 
 /// Get the current UID.
 #[must_use]
