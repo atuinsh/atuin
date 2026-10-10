@@ -59,7 +59,8 @@ impl Cmd {
         // OR several, but stats only ever scopes to one at a time.
         let filter = self.filter_mode.map(|f| vec![f]).unwrap_or_default();
 
-        let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
+        let now_instant = OffsetDateTime::now_utc();
+        let now = now_instant.to_offset(settings.timezone.offset_at(now_instant));
         let last_night = now.replace_time(Time::MIDNIGHT);
 
         let range = if words.as_str() == "all" {
