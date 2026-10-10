@@ -6,6 +6,7 @@ use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::RecordTag;
 use clap::Subcommand;
+use clap_couture::Couture;
 use easy_cast::Conv;
 use eyre::{Result, WrapErr};
 use tracing::instrument;
@@ -15,31 +16,38 @@ mod status;
 use crate::command::client::account;
 use crate::i18n::fl;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Couture)]
 #[command(infer_subcommands = true)]
+#[couture(inherit = ["sync", "advanced"])]
 pub enum Cmd {
     #[command(about = fl!("cmd-sync"))]
+    #[category("sync")]
     Sync {
         #[arg(long, short, help = fl!("arg-sync-force"))]
         force: bool,
     },
 
     #[command(about = fl!("cmd-login"))]
+    #[category("sync")]
     Login(account::login::Cmd),
 
     #[command(about = fl!("cmd-logout"))]
+    #[category("sync")]
     Logout,
 
     #[command(about = fl!("cmd-register"))]
+    #[category("sync")]
     Register(account::register::Cmd),
 
     #[command(about = fl!("cmd-key"))]
+    #[category("advanced")]
     Key {
         #[arg(long, help = fl!("arg-key-base64"))]
         base64: bool,
     },
 
     #[command(about = fl!("cmd-status"))]
+    #[category("sync")]
     Status,
 }
 

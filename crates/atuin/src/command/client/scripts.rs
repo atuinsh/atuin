@@ -12,14 +12,17 @@ use atuin_scripts::execution::{
 use atuin_scripts::store::ScriptStore;
 use atuin_scripts::store::script::Script;
 use clap::{Parser, Subcommand};
+use clap_couture::Couture;
 use eyre::{Context as _, OptionExt, Result, bail};
 use tempfile::NamedTempFile;
 use tracing::{debug, instrument};
 
 use crate::i18n::fl;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Couture)]
 pub struct NewScript {
+    #[arg(help = fl!("arg-scripts-name"))]
+    #[couture(prompt)]
     pub name: String,
 
     #[arg(short, long)]
@@ -44,8 +47,10 @@ pub struct NewScript {
     pub no_edit: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Couture)]
 pub struct Run {
+    #[arg(help = fl!("arg-scripts-name"))]
+    #[couture(prompt)]
     pub name: String,
 
     #[arg(
@@ -69,8 +74,10 @@ pub struct Get {
     pub script: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Couture)]
 pub struct Edit {
+    #[arg(help = fl!("arg-scripts-name"))]
+    #[couture(prompt)]
     pub name: String,
 
     #[arg(short, long)]
@@ -96,15 +103,17 @@ pub struct Edit {
     pub no_edit: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Couture)]
 pub struct Delete {
+    #[arg(help = fl!("arg-scripts-name"))]
+    #[couture(prompt)]
     pub name: String,
 
     #[arg(short, long)]
     pub force: bool,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Couture)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     New(NewScript),

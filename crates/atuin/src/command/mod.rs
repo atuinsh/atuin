@@ -1,5 +1,6 @@
 use atuin_common::logs::LogConfig;
 use clap::Subcommand;
+use clap_couture::Couture;
 use eyre::Result;
 #[cfg(not(windows))]
 use rustix::{fs::Mode, process::umask};
@@ -15,8 +16,24 @@ mod gen_completions;
 
 mod external;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Couture)]
 #[command(infer_subcommands = true)]
+#[couture(categories = {
+    "ai" = { title = fl!("cli-category-ai") },
+    "sync" = {
+        title = fl!("cli-category-sync"),
+        description = fl!("cli-category-sync-description"),
+    },
+    "data" = {
+        title = fl!("cli-category-data"),
+        description = fl!("cli-category-data-description"),
+    },
+    "setup" = {
+        title = fl!("cli-category-setup"),
+        description = fl!("cli-category-setup-description"),
+    },
+    "advanced" = { title = fl!("cli-category-advanced") },
+})]
 #[allow(clippy::large_enum_variant)]
 pub enum AtuinCmd {
     #[cfg(feature = "client")]
@@ -25,6 +42,7 @@ pub enum AtuinCmd {
 
     #[cfg(feature = "pty-proxy")]
     #[command(alias = "hex", about = fl!("cmd-pty-proxy"))]
+    #[category("advanced")]
     PtyProxy(atuin_pty_proxy::PtyProxy),
 
     // Plumbing: every shell init calls `atuin uuid` to seed ATUIN_SESSION; not for interactive use.
@@ -32,9 +50,11 @@ pub enum AtuinCmd {
     Uuid,
 
     #[command(about = fl!("cmd-contributors"))]
+    #[category("advanced")]
     Contributors,
 
     #[command(about = fl!("cmd-gen-completions"))]
+    #[category("setup")]
     GenCompletions(gen_completions::Cmd),
 
     #[command(external_subcommand)]

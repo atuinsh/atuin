@@ -42,6 +42,8 @@ bytesize = { version = "2", features = ["serde"] }
 chrono = "0.4"
 chrono-humanize = "0.2"
 clap = { version = "4", features = ["derive"] }
+# Unreleased; local checkout.
+clap-couture = { path = "../clap-couture/crates/clap-couture", features = ["interactive-cliclack", "markdown"] }
 clap_complete = "4"
 clap_complete_nushell = "4"
 colored = "3"
