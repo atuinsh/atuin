@@ -122,10 +122,25 @@ to `atuin init`; or bind the widget to a key of your choice after the
 Through the widget, the command it picks lands in your shell, as with the
 history search.
 
-Each row shows when the session was last active, its agent, its title and its
-message count (when there's room). ++ctrl+r++ cycles which sessions are listed:
-those in the current repository (where the picker opens), all of them, this
-machine's, the current directory's, and the current branch's.
+Each session is two lines: its title (`untitled` when it has none), then, dimmed,
+when it was last active, its agent (`CC`, `CX`, `OC` or `PI`), where it ran (its
+repository, branch and, for a session recorded on another machine, that machine, by
+the end of its host id), and how many messages it has. Newest first, the sessions are
+grouped under a heading for each day, the top one staying in sight as you scroll;
+with search text they're ranked by relevance instead.
+
+```
+Today ──────────────────────────────────────────────
+  Add an interactive resume picker to atuin ai
+  ● now · CC · atuin · ai-resume · 142 msgs
+```
+
+The scopes are listed beside the query, the one shown highlighted: `all` sessions
+(where the picker opens), the current `repo`'s, its `branch`'s, the current `dir`'s,
+and this machine's (`host`). ++ctrl+r++ moves to the next. `repo` and `branch` are
+left out outside a git repository, and `branch` on a detached `HEAD`.
+
+The help line says what the keys do to the selected session.
 
 Words in the query of the form `filter:value` narrow the search further, and show
 as chips in the input:
@@ -138,12 +153,10 @@ as chips in the input:
 
 Put a `\` before a word to search for it as text instead (`\b:main`).
 
-The preview under the list starts with where the session ran, its repository,
-branch and, for a session recorded on another machine, that machine (by the end
-of its host id), and how many forks it has:
+The preview under the list starts with how many forks the session has, if any:
 
 ```
-       atuin · feat/ai-sessions · @3f9a12bc · 2 forks
+       2 forks
 first  …
 last   …
 ```
@@ -153,8 +166,13 @@ last reply. Scroll it to read them in full, one after another: with the mouse
 wheel over it, or with ++shift+down++ and ++shift+up++ (a line) and
 ++shift+page-down++ and ++shift+page-up++ (a page). ++alt++ works in place of
 ++shift++, for terminals that keep shift and the arrows for themselves. Scroll
-back to the top for the overview again. On a wide terminal the same goes for the
-pane beside the list, and in Inspect for the conversation. The wheel over the
+back to the top for the overview again.
+
+On a wide terminal (120 columns or more) the pane beside the list, and Inspect,
+show the whole conversation instead: your prompts and the agent's replies under
+their headings, with each run of tool calls folded into a line (`⚙ Read ×3 · Edit`).
+With search text it opens at the message that matched, the query's words
+highlighted; otherwise at the start. It scrolls with the same keys. The wheel over the
 list moves the selection, as in the history search, and a scrollbar shows when
 there's more than fits.
 
@@ -182,17 +200,24 @@ mouse = false
   (they still resume by id).
 
 Once you choose a session, with ++enter++ (or ++tab++ to edit the command
-first), Atuin asks where to resume it:
+first), Atuin asks where to resume it, under the session in the list, the two
+in a border:
 
 ```
-╭ Resume in ──────────────────────────────────────────────────────────────────╮
-│ > 1 CC Claude Code  original                                                │
-│   2 CC Claude Code  fork: new session, same history                         │
-│   3 CX Codex        continue, 42 tool calls become notes, reasoning dropped │
-│   4 OC opencode     continue, 42 tool calls become notes, reasoning dropped │
-│ <enter>: resume  <tab>: edit  <esc>: back                                   │
-╰─────────────────────────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│  Add an interactive resume picker to atuin ai           │
+│  ● now · CC · atuin · ai-resume · 142 msgs              │
+│  > 1 Claude Code  resume                                │
+│    2 Claude Code  fork: new session, same history       │
+│  Continue in ──────────────────────────────────         │
+│    3 Codex                                              │
+│    4 opencode                                           │
+╰─────────────────────────────────────────────────────────╯
 ```
+
+The help line says what the keys do there: ++enter++ resumes (or
+edits, opened with ++tab++), ++tab++ edits the command first, and ++esc++ goes
+back.
 
 - The session's own agent comes first and is already selected, so
   ++enter++ ++enter++ resumes it. If the session was recorded on another
@@ -217,7 +242,7 @@ first), Atuin asks where to resume it:
   search), and stays the tool it was otherwise: the agent reads it, it just
   can't call it again. Calls captured without their input, calls that never
   got a result, and web searches the model's provider ran itself become notes
-  in the text, and reasoning is dropped. The line says how much. The new session
+  in the text, and reasoning is dropped. The new session
   opens with a note to the agent naming the session it continues, by its own
   agent's id and its Atuin id (in Pi, the note opens the first prompt, so you
   see it too). Agents that aren't installed aren't listed, and with nothing
@@ -331,10 +356,12 @@ go under `[ai.sessions]`:
 
 ```toml
 [ai.sessions]
-## The filter the picker opens in: "workspace" (the default, widening to "global"
-## outside a git repository or when the workspace has no sessions), "global",
-## "host", "directory" or "branch". `--filter-mode` overrides it.
-filter_mode = "workspace"
+## The filter the picker opens in: "global" (the default), "workspace", "host",
+## "directory" or "branch". "workspace" and "branch" open in "global" outside a
+## git repository, "branch" opens in "workspace" on a detached HEAD, and
+## "workspace" opens in "global" when the workspace has no sessions at all.
+## `--filter-mode` overrides it.
+filter_mode = "global"
 
 ## Height of the inline picker; 0 for fullscreen. Defaults to the top-level
 ## inline_height. `--inline-height` overrides it.

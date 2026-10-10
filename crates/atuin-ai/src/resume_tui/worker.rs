@@ -21,7 +21,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SourceId};
-use atuin_client::settings::AiSessionFilterMode as FilterMode;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
@@ -29,16 +28,17 @@ use super::catchup::{self, CatchUp};
 use super::resumer::{
     Continued, Forked, NotResumable, Restore, Resume, ResumePlan, Resumer, Switched,
 };
-use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
+use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource, Transcript};
 
 #[derive(Debug)]
 pub enum Request {
     Search {
         generation: u64,
-        mode: FilterMode,
         filter: SessionFilter,
     },
     Preview(HarnessSession),
+    /// The whole conversation, for the reader. On a lane of its own (see [`transcripts`]).
+    Transcript(HarnessSession),
     /// The forks grouped under a root.
     Children(HarnessSession),
     /// Plan resuming a session (may walk the harness's session directories).
@@ -73,10 +73,11 @@ pub enum Request {
 pub enum Response {
     Results {
         generation: u64,
-        mode: FilterMode,
         rows: Result<Vec<SessionRow>, String>,
     },
     Preview(HarnessSession, SessionPreview),
+    /// A transcript read, or why it couldn't be.
+    Transcript(HarnessSession, Result<Transcript, String>),
     Children(HarnessSession, Vec<SessionRow>),
     Plan(HarnessSession, Result<Resume, NotResumable>),
     /// The session is restored (or couldn't be): the plan that resumes it.
@@ -101,6 +102,7 @@ pub enum Response {
 pub struct Requests {
     searches: mpsc::UnboundedSender<Request>,
     details: mpsc::UnboundedSender<Request>,
+    transcripts: mpsc::UnboundedSender<Request>,
 }
 
 impl Requests {
@@ -108,6 +110,7 @@ impl Requests {
     pub fn send(&self, request: Request) {
         let lane = match request {
             Request::Search { .. } => &self.searches,
+            Request::Transcript(_) => &self.transcripts,
             _ => &self.details,
         };
         let _ = lane.send(request);
@@ -121,16 +124,60 @@ pub fn spawn(
 ) -> (Requests, mpsc::UnboundedReceiver<Response>) {
     let (search_tx, search_rx) = mpsc::unbounded_channel();
     let (detail_tx, detail_rx) = mpsc::unbounded_channel();
+    let (transcript_tx, transcript_rx) = mpsc::unbounded_channel();
     let (resp_tx, resp_rx) = mpsc::unbounded_channel();
     tokio::spawn(searches(source.clone(), search_rx, resp_tx.clone()));
+    tokio::spawn(transcripts(source.clone(), transcript_rx, resp_tx.clone()));
     tokio::spawn(details(source, resumer, detail_rx, resp_tx));
     (
         Requests {
             searches: search_tx,
             details: detail_tx,
+            transcripts: transcript_tx,
         },
         resp_rx,
     )
+}
+
+/// Reads transcripts, on a lane of their own: a long one never holds up a preview, a plan or an
+/// enter. Only the newest asked for is read, and asking for another drops the read under way.
+async fn transcripts(
+    source: Arc<dyn SessionSource>,
+    mut requests: mpsc::UnboundedReceiver<Request>,
+    responses: mpsc::UnboundedSender<Response>,
+) {
+    let mut next = None;
+    loop {
+        let mut request = match next.take() {
+            Some(request) => request,
+            None => match requests.recv().await {
+                Some(request) => request,
+                None => return,
+            },
+        };
+        while let Ok(newer) = requests.try_recv() {
+            request = newer;
+        }
+        let Request::Transcript(session) = request else {
+            continue;
+        };
+        tokio::select! {
+            transcript = source.transcript(&session) => {
+                let transcript = transcript.map_err(|e| {
+                    tracing::warn!("failed to load the transcript for {session:?}: {e:#}");
+                    format!("{e:#}")
+                });
+                if responses.send(Response::Transcript(session, transcript)).is_err() {
+                    return;
+                }
+            }
+            newer = requests.recv() => match newer {
+                // The read under way is dropped: another session's is wanted now.
+                Some(newer) => next = Some(newer),
+                None => return,
+            },
+        }
+    }
 }
 
 async fn searches(
@@ -143,20 +190,11 @@ async fn searches(
         while let Ok(next) = requests.try_recv() {
             request = next;
         }
-        let Request::Search {
-            generation,
-            mode,
-            filter,
-        } = request
-        else {
+        let Request::Search { generation, filter } = request else {
             continue;
         };
         let rows = source.search(&filter).await.map_err(|e| format!("{e:#}"));
-        let response = Response::Results {
-            generation,
-            mode,
-            rows,
-        };
+        let response = Response::Results { generation, rows };
         if responses.send(response).is_err() {
             return;
         }
@@ -195,7 +233,8 @@ impl Latest {
                 self.continuation = None;
                 return None;
             }
-            Request::Search { .. } => return None,
+            // On lanes of their own.
+            Request::Search { .. } | Request::Transcript(_) => return None,
         };
         let dropped = slot.replace(request)?;
         match (dropped, &*slot) {
@@ -209,7 +248,7 @@ impl Latest {
 
     /// The next to answer: a continuation, the restore, then the plan an enter is waiting on (an
     /// enter waits on any of them), then the selection's plan (one may soon be), then what the
-    /// chooser shows, then children, then the preview.
+    /// chooser shows, then children, then the preview. (Transcripts have their own lane.)
     fn take(&mut self) -> Option<Request> {
         self.continuation
             .take()
@@ -302,7 +341,7 @@ async fn details(
             Request::Switch(row, id, head) => {
                 Response::Switched(id, resumer.switch(source.as_ref(), &row, Some(&head)).await)
             }
-            Request::Search { .. } | Request::CancelContinue => continue,
+            Request::Search { .. } | Request::Transcript(_) | Request::CancelContinue => continue,
         };
         if responses.send(response).is_err() {
             return;
@@ -336,7 +375,6 @@ mod tests {
         let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), Arc::new(FakeResumer::default()));
         tx.send(Request::Search {
             generation: 1,
-            mode: FilterMode::Global,
             filter: roots(),
         });
         let Some(Response::Results {
@@ -422,7 +460,6 @@ mod tests {
         }
         tx.send(Request::Search {
             generation: 7,
-            mode: FilterMode::Global,
             filter: roots(),
         });
         let Some(Response::Results { generation, .. }) = rx.recv().await else {

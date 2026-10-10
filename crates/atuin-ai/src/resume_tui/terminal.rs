@@ -57,6 +57,11 @@ impl Events {
         Self { rx, stop }
     }
 
+    /// Whether more input is waiting: the picker catches up with it before drawing again.
+    pub fn behind(&self) -> bool {
+        !self.rx.is_empty()
+    }
+
     /// The next event; `None` once reading has failed.
     pub async fn next(&mut self) -> Option<io::Result<Event>> {
         self.rx.recv().await

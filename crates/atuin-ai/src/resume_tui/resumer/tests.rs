@@ -598,10 +598,7 @@ async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
     assert_eq!(continued.plan.program, "pi");
     assert_eq!(continued.plan.args, ["--session", path.as_str()]);
     assert_eq!(continued.plan.cwd.as_deref(), Some(dirs.elsewhere.as_path()));
-    assert_eq!(
-        continued.status(),
-        "continuing in Pi: 1 tool call becomes a note, reasoning dropped"
-    );
+    assert_eq!(continued.status(), "continuing in Pi: 1 tool call becomes a note");
 }
 
 /// A session with no messages isn't continued anywhere, and nothing is written: there is

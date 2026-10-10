@@ -43,7 +43,8 @@ fn two_sessions(machine: &mut Machine, project: &Path) -> (Transcript, Turn) {
 }
 
 /// Search the open picker for `turn`'s session by a word of its prompt, wait until it is the
-/// one shown, and accept it: the chooser opens on where to resume it.
+/// one shown, and accept it: the chooser opens under it on where to resume it, its keys in the
+/// header.
 fn pick(pty: &PtyShell, turn: &Turn) {
     let word = turn.prompt.split(' ').next_back().unwrap();
     pty.wait_for("2 sessions");
@@ -52,16 +53,20 @@ fn pick(pty: &PtyShell, turn: &Turn) {
         s.contains(" 1 session") && s.contains(word)
     });
     pty.send_enter();
-    pty.wait_for("Resume in");
+    pty.wait_for("esc back");
 }
 
-/// The digit of the chooser's line for continuing in `agent`, once it is drawn.
+/// The digit of the chooser's line for continuing in `agent` (under its `Continue in` rule), once
+/// it is drawn.
 fn line_for(pty: &PtyShell, agent: Agent) -> char {
-    let is_line = |l: &str| l.contains(agent.label()) && l.contains("continue");
-    let screen =
-        pty.wait_for_screen(&format!("the line for {agent:?}"), |s| s.lines().any(is_line));
-    let line = screen.lines().find(|l| is_line(l)).unwrap();
-    line.chars().find(char::is_ascii_digit).unwrap()
+    let line = |s: &str| {
+        s.lines()
+            .skip_while(|l| !l.contains("Continue in"))
+            .find(|l| l.contains(agent.label()))
+            .map(str::to_owned)
+    };
+    let screen = pty.wait_for_screen(&format!("the line for {agent:?}"), |s| line(s).is_some());
+    line(&screen).unwrap().chars().find(char::is_ascii_digit).unwrap()
 }
 
 /// With `enter_accept`, the picker runs the agent in place of itself: on the session chosen, in
@@ -121,7 +126,7 @@ fn the_shell_widget_resumes_the_session_chosen(
     let command = format!("claude --resume {}", session.id);
     if !enter_accept {
         pty.wait_for_screen("the command on the command line", |s| {
-            !s.contains("Resume in")
+            !s.contains("esc back")
                 && s.lines().any(|l| l.contains(shell::PROMPT) && l.contains(&command))
         });
         assert!(!pty.screen().contains("AGENT-RAN"), "it ran before it was accepted");

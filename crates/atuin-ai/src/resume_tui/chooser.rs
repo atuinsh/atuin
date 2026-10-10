@@ -8,8 +8,9 @@
 //! [`atuin_common::harnesstools::fork`]); `f` selects it, and it is preselected when the original
 //! can't resume here or an agent here has it open. It is dimmed, and can't be picked, once
 //! the session turns out to hold no conversation to fork. Then every other harness installed
-//! here, to continue the session in: it is written out as a new session there, its tool calls
-//! flattened into notes, and that is resumed. Harnesses
+//! here, under a `Continue in` rule, to continue the session in: it is written out as a new
+//! session there, its tool calls carried over as that agent's own (the few that can't be, as
+//! notes), and that is resumed. Harnesses
 //! that aren't installed aren't listed: there is nothing to do with them. The session's own
 //! harness is always listed, dimmed with the reason when it can't resume it here (a Copilot
 //! session, a directory that's gone, a harness that isn't installed), and the first line that
@@ -26,25 +27,24 @@
 //! `enter_accept`), opened with tab it edits, and tab in it always edits.
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
-use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
 use atuin_client::tui::key::{KeyCodeValue, SingleKey};
 use atuin_common::harnesstools::continuation::NothingToContinue;
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{EllipsizeExt as _, Measure};
 use atuin_common::time::OffsetDateTimeExt as _;
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::{Frame, symbols};
 use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
 use super::catchup::{Branch, Held, Why};
-use super::render::{harness_style, style};
+use super::render::style;
 use super::resumer::{NotResumable, ResumePlan};
-use super::source::{SessionRow, harness_badge, harness_label};
+use super::source::{SessionRow, harness_label};
 use super::state::{InputAction, LIVE_SECS, Pending, Picked, State};
 
 /// The chooser, while it's open.
@@ -143,7 +143,8 @@ impl Chooser {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Choice {
     pub harness: HarnessKind,
-    /// `original`, `continue, 42 tool calls become notes`, …
+    /// `resume`, `fork: new session, same history`, …; empty for another agent to continue in,
+    /// under the rule titled so.
     pub detail: String,
     /// Why it can't be picked, if it can't.
     pub unavailable: Option<String>,
@@ -298,31 +299,33 @@ impl State {
         let original = match self.plans.get(session) {
             Some(Err(why)) => Choice {
                 harness: session.harness,
-                detail: "original".to_owned(),
+                detail: "resume".to_owned(),
                 unavailable: Some(short_reason(why)),
             },
             Some(Ok(resume)) if resume.restore.is_some() => Choice {
                 harness: session.harness,
                 detail: if live {
-                    "original, from sync · still running — this resumes a copy".to_owned()
+                    "resume, from sync · still running — this resumes a copy".to_owned()
                 } else {
-                    "original, from sync".to_owned()
+                    "resume, from sync".to_owned()
                 },
+                unavailable: None,
+            },
+            // An agent here has it open: why the fork is selected instead.
+            Some(Ok(resume)) if resume.live => Choice {
+                harness: session.harness,
+                detail: format!("resume · already open here — {}", concurrent(session.harness)),
                 unavailable: None,
             },
             _ => Choice {
                 harness: session.harness,
                 detail: if live {
-                    format!("original · running elsewhere — {}", concurrent(session.harness))
+                    format!("resume · running elsewhere — {}", concurrent(session.harness))
                 } else {
-                    "original".to_owned()
+                    "resume".to_owned()
                 },
                 unavailable: None,
             },
-        };
-        let flattened = match self.flattened.get(session) {
-            Some(Ok(flattened)) => flattened.summary(),
-            _ => String::new(),
         };
         let fork = chooser.fork.then(|| {
             if self.nothing_to_fork(session) {
@@ -339,13 +342,11 @@ impl State {
                 }
             }
         });
+        // Under a titled rule. (Their calls carry over as the agent's own; the few that can't
+        // become notes, not worth a line here.)
         let continued = chooser.targets.iter().map(|target| Choice {
             harness: *target,
-            detail: if flattened.is_empty() {
-                "continue".to_owned()
-            } else {
-                format!("continue, {flattened}")
-            },
+            detail: String::new(),
             unavailable: None,
         });
         std::iter::once(original).chain(fork).chain(continued).collect()
@@ -368,7 +369,7 @@ impl State {
         let forks = held.branches.iter().take(chooser.forks()).map(|b| line(b.line(now)));
         let continued = chooser.targets.iter().map(|target| Choice {
             harness: *target,
-            detail: "continue".to_owned(),
+            detail: String::new(),
             unavailable: None,
         });
         std::iter::once(line(detail.to_owned()))
@@ -452,26 +453,34 @@ impl State {
         }))
     }
 
-    /// The chooser, over the list against the selected row (above it, or below it when
-    /// inverted), its badges under the list's. Centred when the list isn't showing.
-    pub fn draw_chooser(&self, f: &mut Frame, settings: &Settings, theme: &Theme) {
-        let Some(chooser) = &self.chooser else {
-            return;
-        };
-        let area = f.area();
-        let anchor = self.list_anchor;
-        // Inside the list, less the popup's borders and padding.
-        let room = anchor.map_or(area.width, |a| a.list.width);
-        let budget = usize::from(room.saturating_sub(4));
+    /// The chooser's lines, at most `budget` columns wide: a line per choice (the selected one
+    /// marked), the other agents after a rule titled `Continue in`, as the list's days are.
+    /// Also which line is the selected choice's.
+    pub fn chooser_lines(
+        &self,
+        budget: usize,
+        theme: &Theme,
+    ) -> Option<(Vec<Line<'static>>, usize)> {
+        let chooser = self.chooser.as_ref()?;
         let muted = style(theme, Meaning::Annotation);
         let bold = Style::default().add_modifier(Modifier::BOLD);
         let choices = self.choices();
         let label_width = choices.iter().map(|c| harness_label(c.harness).width()).max();
         let label_width = label_width.unwrap_or(0);
 
+        let first_other = chooser.len() - chooser.targets.len();
+        let mut rule_at = None;
         let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut selected_line = 0;
         for (n, choice) in choices.iter().enumerate() {
+            if n == first_other {
+                rule_at = Some(lines.len());
+                lines.push(Line::default());
+            }
             let selected = n == chooser.selected;
+            if selected {
+                selected_line = lines.len();
+            }
             let label = harness_label(choice.harness);
             let pad = " ".repeat(label_width - label.width());
             let mut spans = vec![
@@ -485,13 +494,9 @@ impl State {
                 ),
                 Span::styled(format!("{} ", n + 1), muted),
                 Span::styled(
-                    format!("{:<3}", harness_badge(choice.harness)),
-                    harness_style(theme, choice.harness),
-                ),
-                Span::styled(
                     format!("{label}{pad}  "),
                     if selected {
-                        style(theme, Meaning::AlertError).add_modifier(Modifier::BOLD)
+                        style(theme, Meaning::Guidance).add_modifier(Modifier::BOLD)
                     } else {
                         style(theme, Meaning::Base)
                     },
@@ -517,43 +522,43 @@ impl State {
             }
             lines.push(Line::from(spans));
         }
-        let enter = match chooser.action {
-            Pending::Resume => ": resume  ",
-            Pending::Edit | Pending::Copy => ": edit  ",
+        // (Its keys are in the header, as the list's are.)
+        if let Some(at) = rule_at {
+            let widest = lines.iter().map(Line::width).max().unwrap_or(0).min(budget);
+            let title = "Continue in ";
+            let across = widest.saturating_sub(title.width());
+            lines[at] = Line::from(vec![
+                Span::styled(title, muted.add_modifier(Modifier::BOLD)),
+                Span::styled(symbols::line::HORIZONTAL.repeat(across), muted),
+            ]);
+        }
+        Some((lines, selected_line))
+    }
+
+    /// The chooser as a popup, centred: where the list didn't open it under its row (in Inspect,
+    /// or a list with no room for it).
+    pub fn draw_chooser(&self, f: &mut Frame, theme: &Theme) {
+        let area = f.area();
+        let budget = usize::from(area.width.saturating_sub(4));
+        let muted = style(theme, Meaning::Annotation);
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let Some((mut lines, selected)) = self.chooser_lines(budget, theme) else {
+            return;
         };
-        let mut keys = vec![Span::styled("<enter>", bold), Span::styled(enter, muted)];
-        if chooser.action == Pending::Resume {
-            keys.extend([Span::styled("<tab>", bold), Span::styled(": edit  ", muted)]);
-        }
-        keys.extend([Span::styled("<esc>", bold), Span::styled(": back", muted)]);
-        lines.push(Line::from(keys));
-
         let widest = lines.iter().map(Line::width).max().unwrap_or(0);
-        let width = u16::try_from(widest + 4).unwrap_or(u16::MAX).min(room);
-        // Too short for every line (a low `inline_height`): the choices before the keys, scrolled
-        // to keep the selected one in sight.
-        let inner = usize::from(area.height.saturating_sub(2));
-        if lines.len() > inner {
-            lines.truncate(choices.len());
-            let shown = inner.min(lines.len());
-            let offset = (chooser.selected + 1).saturating_sub(shown).min(lines.len() - shown);
-            lines = lines.drain(offset..offset + shown).collect();
-        }
+        let width = u16::try_from(widest + 4).unwrap_or(u16::MAX).min(area.width);
+        // Too short for every line (a low `inline_height`): scrolled to keep the selected one in
+        // sight.
+        let shown = usize::from(area.height.saturating_sub(2)).min(lines.len()).max(1);
+        let offset = (selected + 1).saturating_sub(shown).min(lines.len() - shown);
+        lines = lines.drain(offset..offset + shown).collect();
         let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX).min(area.height);
-        let popup = place(area, anchor, width, height, settings.invert);
-
-        // Blank the rows it covers across the list (the whole width, past it), so no cut-off
-        // text shows beside it.
-        if let Some(list) = anchor.map(|a| a.list) {
-            for y in popup.top()..popup.bottom() {
-                let across = if (list.top()..list.bottom()).contains(&y) {
-                    list
-                } else {
-                    area
-                };
-                f.render_widget(Clear, Rect::new(across.x, y, across.width, 1));
-            }
-        }
+        let popup = Rect {
+            x: area.x + (area.width - width) / 2,
+            y: area.y + (area.height - height) / 2,
+            width,
+            height,
+        };
         let title = Line::from(vec![Span::styled(" Resume in ", bold)]);
         let block = Block::default()
             .borders(Borders::ALL)
@@ -563,104 +568,5 @@ impl State {
             .title(title);
         f.render_widget(Clear, popup);
         f.render_widget(Paragraph::new(Text::from(lines)).block(block), popup);
-    }
-}
-
-/// Where the chooser goes in `area`: against the selected row, on the side away from the input
-/// (above it, or below it when inverted), flipping sides when it doesn't fit, its harness badges
-/// under the list's; centred without a list to anchor to, or room beside the row.
-fn place(area: Rect, anchor: Option<ListAnchor>, width: u16, height: u16, invert: bool) -> Rect {
-    let centred = Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
-        width,
-        height,
-    };
-    let Some(anchor) = anchor else {
-        return centred;
-    };
-    let list = anchor.list;
-    // The badges line up with the list's: after the border, padding, marker and digit.
-    let x = anchor.badge_x.saturating_sub(6).min(list.right().saturating_sub(width)).max(list.x);
-    // Over the list, or past it (over the header, or the preview) when the list is too short.
-    let above = anchor.row.checked_sub(height).filter(|y| *y >= area.y);
-    let below = Some(anchor.row + 1).filter(|y| y + height <= area.bottom());
-    let y = if invert {
-        below.or(above)
-    } else {
-        above.or(below)
-    };
-    y.map_or(centred, |y| Rect {
-        x,
-        y,
-        width,
-        height,
-    })
-}
-
-/// Where the selected row was last drawn, for the chooser to open against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ListAnchor {
-    /// The list.
-    pub list: Rect,
-    /// The selected row's line.
-    pub row: u16,
-    /// The column the rows' harness badges are in.
-    pub badge_x: u16,
-}
-
-#[cfg(test)]
-mod tests {
-    use rstest::rstest;
-
-    use super::*;
-
-    #[rstest]
-    #[case::above(false, 20, 12)]
-    #[case::below_when_inverted(true, 20, 21)]
-    #[case::below_when_no_room_above(false, 6, 7)]
-    #[case::above_when_no_room_below(true, 27, 19)]
-    fn the_chooser_opens_against_the_selected_row(
-        #[case] invert: bool,
-        #[case] row: u16,
-        #[case] y: u16,
-    ) {
-        let area = Rect::new(0, 0, 100, 30);
-        let list = Rect::new(2, 3, 96, 26);
-        let anchor = ListAnchor {
-            list,
-            row,
-            badge_x: 24,
-        };
-        let popup = place(area, Some(anchor), 40, 8, invert);
-        assert_eq!((popup.x, popup.y, popup.width, popup.height), (18, y, 40, 8));
-    }
-
-    #[rstest]
-    fn without_a_list_the_chooser_is_centred_and_never_overflows() {
-        let area = Rect::new(0, 0, 100, 30);
-        assert_eq!(place(area, None, 40, 8, false), Rect::new(30, 11, 40, 8));
-        let list = Rect::new(2, 3, 96, 26);
-        let anchor = ListAnchor {
-            list,
-            row: 12,
-            badge_x: 93,
-        };
-        assert_eq!(place(area, Some(anchor), 40, 8, false).right(), list.right());
-        // A list too short for it: it covers what's above the row.
-        let short = ListAnchor {
-            list: Rect::new(2, 3, 96, 5),
-            row: 7,
-            badge_x: 20,
-        };
-        assert_eq!(place(area, Some(short), 40, 6, false), Rect::new(14, 1, 40, 6));
-        // No room on either side of the row: centred.
-        let tiny = Rect::new(0, 0, 100, 8);
-        let short = ListAnchor {
-            list: Rect::new(2, 2, 96, 3),
-            row: 4,
-            badge_x: 20,
-        };
-        assert_eq!(place(tiny, Some(short), 40, 6, false), Rect::new(30, 1, 40, 6));
     }
 }

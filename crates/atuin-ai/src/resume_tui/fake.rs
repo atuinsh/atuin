@@ -29,7 +29,10 @@ use super::resumer::{
     Continued, ForkFrom, Forked, NotResumable, Restore, Resume, ResumeError, ResumePlan,
     ResumeTarget, Resumer, Switched,
 };
-use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
+use super::source::{
+    Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet, Transcript,
+    TranscriptBuilder,
+};
 
 pub const THIS_HOST_ID: &str = "01900000000070008000000000000001";
 pub const REPO: &str = "/home/ellie/src/atuin";
@@ -72,6 +75,7 @@ pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
         usage: Usage::default(),
         children: 0,
         matched: None,
+        matched_at: None,
     }
 }
 
@@ -244,6 +248,7 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
             },
             children: 0,
             matched: None,
+            matched_at: None,
         },
         parent: parent.map(|p| p.handle.clone()),
         root: None,
@@ -900,6 +905,12 @@ impl SessionSource for FakeSource {
                     .iter()
                     .flat_map(|g| g.messages.iter().map(|(_, t)| *t))
                     .find_map(|t| snippet(t, &terms));
+                // As the database does: only a match in the session's own messages has a place.
+                row.matched_at = s
+                    .messages
+                    .iter()
+                    .position(|(_, t)| snippet(t, &terms).is_some())
+                    .and_then(|i| u64::try_from(i).ok());
             }
             rows.push((score, row));
         }
@@ -940,6 +951,21 @@ impl SessionSource for FakeSource {
                 .find(|(r, _)| *r == Role::Assistant)
                 .map(|(_, t)| (*t).to_owned()),
         })
+    }
+
+    async fn transcript(&self, session: &HarnessSession) -> eyre::Result<Transcript> {
+        let mut transcript = TranscriptBuilder::default();
+        if let Some(s) = self.sessions.iter().find(|s| &s.row.handle == session) {
+            transcript.counted(s.row.messages);
+            for (index, (role, text)) in (0u64..).zip(&s.messages) {
+                transcript.at(index);
+                match role {
+                    Role::User => transcript.prompt(text),
+                    Role::Assistant => transcript.reply(text),
+                }
+            }
+        }
+        Ok(transcript.finish())
     }
 
     async fn children(&self, session: &HarnessSession) -> eyre::Result<Vec<SessionRow>> {
@@ -1123,7 +1149,6 @@ impl Resumer for FakeResumer {
             flattened: Flattened {
                 tool_calls: 42,
                 tool_results: 42,
-                reasoning: 7,
             },
             note: None,
         })

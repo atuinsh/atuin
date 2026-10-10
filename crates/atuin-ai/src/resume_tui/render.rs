@@ -1,17 +1,19 @@
-//! Drawing the picker. The layout, header, tabs, input box and borders follow the history search
-//! (`atuin search -i`) exactly, so the two feel like one tool.
+//! Drawing the picker. Its borders, input box and styles follow the history search (`atuin search
+//! -i`), so the two feel like one tool; its list (two lines a session, grouped by day), its
+//! scopes, its reader and its header of keys are its own.
 
 use std::borrow::Cow;
 use std::ops::Range;
 use std::path::Path;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
-use atuin_client::settings::{KeymapMode, PreviewStrategy, Settings, Style as UiStyle};
+use atuin_client::settings::{
+    AiSessionFilterMode as FilterMode, KeymapMode, PreviewStrategy, Settings, Style as UiStyle,
+};
 use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{Alignment as Align, EllipsizeExt as _, Measure};
 use atuin_common::time::OffsetDateTimeExt as _;
-use ratatui::Frame;
 use ratatui::backend::FromCrossterm;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -19,17 +21,18 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    StatefulWidget, Tabs, Widget,
+    StatefulWidget, Widget,
 };
+use ratatui::{Frame, symbols};
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
-use super::chooser::ListAnchor;
+use super::chooser::Destination;
 use super::panel::{self, SPLIT_MIN_WIDTH};
 use super::query::{TokenKind, TokenState};
 use super::resumer::shell_line;
-use super::source::{SessionRow, Snippet, harness_badge, harness_label};
-use super::state::{LIVE_SECS, ListState, Pane, SEARCH_LIMIT, State, TAB_TITLES};
+use super::source::{SessionRow, Snippet, harness_badge, harness_label, is_untitled, shown_title};
+use super::state::{LIVE_SECS, ListState, Pane, Pending, SEARCH_LIMIT, SPIN, State};
 use super::{clock, markdown};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -143,6 +146,34 @@ fn highlighted_line(
     spans_from(chars, &map, highlights, base, hl)
 }
 
+/// The search's match, over a conversation whose text doesn't hold it: a heading and two
+/// lines of the snippet, then a blank line.
+fn snippet_lines(
+    text: &str,
+    highlights: &[Range<usize>],
+    width: usize,
+    indent: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let pad = " ".repeat(indent);
+    let heading = style(theme, Meaning::Annotation).add_modifier(Modifier::BOLD);
+    let opts = markdown::Opts {
+        width: width.saturating_sub(indent).max(1),
+        max_lines: 2,
+        spacing: false,
+        urls: false,
+    };
+    let styles = markdown::Styles::new(theme, style(theme, Meaning::Base));
+    let mut lines = vec![Line::from(Span::styled(format!("{pad}Match"), heading))];
+    for line in markdown::render(text, highlights, opts, &styles) {
+        let mut spans = vec![Span::raw(pad.clone())];
+        spans.extend(line.spans);
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::default());
+    lines
+}
+
 /// The repository (or directory) name for the repo column.
 pub(super) fn repo_name(row: &SessionRow) -> String {
     row.git_root
@@ -171,15 +202,26 @@ fn message_count(n: u64) -> String {
     }
 }
 
+/// A labelled message count, for a row's second line: `1 msg`, `142 msgs`, `12k msgs`.
+fn messages_label(n: u64) -> String {
+    if n == 1 {
+        "1 msg".to_owned()
+    } else {
+        format!("{} msgs", message_count(n))
+    }
+}
+
 // --- the row layout --------------------------------------------------------------------------
 
-/// A column in the session rows, left to right after the selection indicator.
+/// A column in the session rows' first line, left to right after the selection indicator.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Column {
     /// When the session was last updated: `12m` or `3h` while recent, then a clock time
-    /// (`14:02`, `yest 09:40`, `Mon 09:40`, `Sep 27`, `2025-09-27`).
+    /// (`14:02`, `yest 09:40`, `Mon 09:40`, `Sep 27`, `2025-09-27`). One-line rows only: a
+    /// two-line row says it under its title, where it reads after the title.
     Time,
-    /// The harness badge: CC, CX, OC or PI.
+    /// The harness badge: CC, CX, OC or PI. One-line rows only: two-line rows name the agent on
+    /// their second line.
     Harness,
     /// The session title. Expands to fill the row.
     Title,
@@ -191,7 +233,7 @@ impl Column {
     /// Width in cells. The title expands instead.
     fn width(self) -> u16 {
         match self {
-            Self::Time => 10,
+            Self::Time => u16::try_from(clock::WIDTH).unwrap_or(u16::MAX),
             Self::Harness => 2,
             Self::Title => 0,
             Self::Messages => 4,
@@ -199,8 +241,46 @@ impl Column {
     }
 }
 
-/// The row's columns. (The repository, branch and host are in the preview.)
-const COLUMNS: [Column; 4] = [Column::Time, Column::Harness, Column::Title, Column::Messages];
+/// How the list lays its rows out.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RowShape {
+    /// Two lines a row: the title, then when, the agent and where the session ran. One line
+    /// (with time and harness badge columns) when the picker is ultracompact.
+    pub two_line: bool,
+    /// Grouped under a heading for each day (the list is newest first, with no query text to
+    /// rank by), so a row's time says only the time of day.
+    pub by_day: bool,
+}
+
+impl RowShape {
+    /// The lines a row takes.
+    pub fn height(self) -> usize {
+        if self.two_line {
+            2
+        } else {
+            1
+        }
+    }
+
+    fn columns(self) -> &'static [Column] {
+        if self.two_line {
+            // The message count is on the second line, labelled.
+            &[Column::Title]
+        } else {
+            &[Column::Time, Column::Harness, Column::Title, Column::Messages]
+        }
+    }
+
+    /// Where the title starts, past the indicator and the columns before it.
+    pub fn title_x(self) -> u16 {
+        3 + self
+            .columns()
+            .iter()
+            .take_while(|c| **c != Column::Title)
+            .map(|c| c.width() + 1)
+            .sum::<u16>()
+    }
+}
 
 /// The title keeps at least this many columns while the message count can give them up.
 pub const TITLE_MIN: u16 = 30;
@@ -208,8 +288,8 @@ pub const TITLE_MIN: u16 = 30;
 /// The columns of rows `width` columns wide (the selection indicator included), each with its
 /// width. The title takes what's left, and the message count goes when that would leave the
 /// title under [`TITLE_MIN`].
-pub fn row_layout(width: u16) -> Vec<(Column, u16)> {
-    let mut cells = COLUMNS.to_vec();
+pub fn row_layout(width: u16, shape: RowShape) -> Vec<(Column, u16)> {
+    let mut cells = shape.columns().to_vec();
     // Past the indicator, and a space between cells.
     let title_width = |cells: &[Column]| {
         let others: u16 = cells.iter().map(|c| c.width()).sum();
@@ -248,6 +328,78 @@ pub(super) fn harness_style(theme: &Theme, harness: HarnessKind) -> Style {
 
 // --- the session list ------------------------------------------------------------------------
 
+/// A line of the list, in order from the input outward (down from it when inverted, up from it
+/// otherwise).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListLine {
+    /// The heading over a day's sessions: the day of the row at this index.
+    Heading(usize),
+    /// A row's first line: its time, title and message count.
+    Title(usize),
+    /// A two-line row's second line: the agent, and where the session ran.
+    Place(usize),
+    /// A line of the chooser, open under the row it's choosing for: the row, and which line.
+    Choice(usize, usize),
+    /// The top (`true`) or bottom edge of the border around a row with the chooser open.
+    Edge(usize, bool),
+}
+
+/// The list's lines from the input outward, and where each row's first line is among them.
+/// `chooser` is the row the chooser is open under, and how many lines it has.
+///
+/// Read top to bottom on screen, a day's heading is over its sessions, and a row's title over
+/// its place and then the chooser (the three in a border), whichever way up the list is: so
+/// outward from an input under the list, the border's bottom edge and the chooser come first
+/// (last line first), then the row's place, then its title, and a day's heading after its
+/// sessions.
+pub fn list_lines(
+    rows: &[SessionRow],
+    shape: RowShape,
+    inverted: bool,
+    chooser: Option<(usize, usize)>,
+    day_of: impl Fn(&SessionRow) -> time::Date,
+) -> (Vec<ListLine>, Vec<usize>) {
+    let mut lines = Vec::with_capacity(rows.len() * (shape.height() + 1));
+    let mut starts = Vec::with_capacity(rows.len());
+    let mut i = 0;
+    while i < rows.len() {
+        // The rows of one day (all of them, when not grouped).
+        let end = if shape.by_day {
+            let day = day_of(&rows[i]);
+            i + rows[i..].iter().take_while(|r| day_of(r) == day).count()
+        } else {
+            rows.len()
+        };
+        if shape.by_day && inverted {
+            lines.push(ListLine::Heading(i));
+        }
+        for row in i..end {
+            starts.push(lines.len());
+            // Top to bottom on screen.
+            let mut row_lines = vec![ListLine::Title(row)];
+            if shape.two_line {
+                row_lines.push(ListLine::Place(row));
+            }
+            if let Some((at, n)) = chooser
+                && at == row
+            {
+                row_lines.insert(0, ListLine::Edge(row, true));
+                row_lines.extend((0..n).map(|k| ListLine::Choice(row, k)));
+                row_lines.push(ListLine::Edge(row, false));
+            }
+            if !inverted {
+                row_lines.reverse();
+            }
+            lines.extend(row_lines);
+        }
+        if shape.by_day && !inverted {
+            lines.push(ListLine::Heading(i));
+        }
+        i = end;
+    }
+    (lines, starts)
+}
+
 pub struct SessionList<'a> {
     rows: &'a [SessionRow],
     block: Option<Block<'a>>,
@@ -258,20 +410,49 @@ pub struct SessionList<'a> {
     indicator: &'a str,
     theme: &'a Theme,
     cells: &'a [(Column, u16)],
+    shape: RowShape,
+    /// This host's id, left out of the rows' places.
+    here: &'a str,
+    /// The chooser's lines, when it's open under the selected row, and which of them is
+    /// selected.
+    chooser: Option<(&'a [Line<'static>], usize)>,
+    /// The columns of the row the chooser is open under, inside its border.
+    boxed_cells: &'a [(Column, u16)],
 }
 
 impl SessionList<'_> {
-    fn get_items_bounds(&self, selected: usize, offset: usize, height: usize) -> (usize, usize) {
-        let offset = offset.min(self.rows.len().saturating_sub(1));
-        let max_scroll_space = height.min(10).min(self.rows.len() - selected);
-        if offset + height < selected + max_scroll_space {
-            let end = selected + max_scroll_space;
-            (end - height, end)
-        } else if selected < offset {
-            (selected, selected + height)
+    /// The first line to show of `total`, `height` at a time, so that the selected row (spanning
+    /// `lo..hi`, its day's heading included when that is beside it) shows with some of the rows
+    /// around it, moving from `offset` only as far as that takes.
+    fn scroll_to(
+        offset: usize,
+        lo: usize,
+        hi: usize,
+        height: usize,
+        total: usize,
+        chooser: bool,
+    ) -> usize {
+        // No rows kept in sight around an open chooser: it's what's being looked at. And the
+        // list may leave room past its far end then, so the row's title can stay where it was.
+        let max_margin = if chooser {
+            0
         } else {
-            (offset, offset + height)
+            4
+        };
+        let last = if chooser {
+            total.saturating_sub(1)
+        } else {
+            total.saturating_sub(height)
+        };
+        let margin = (height.saturating_sub(hi - lo) / 2).min(max_margin);
+        let mut offset = offset;
+        if hi + margin > offset + height {
+            offset = (hi + margin).saturating_sub(height);
         }
+        if lo < offset + margin {
+            offset = lo.saturating_sub(margin);
+        }
+        offset.min(last).min(lo)
     }
 }
 
@@ -284,29 +465,172 @@ impl StatefulWidget for SessionList<'_> {
             b.render(area, buf);
             inner
         });
+        let height = usize::from(list_area.height);
+        state.chooser_drawn = false;
         if list_area.width < 1 || list_area.height < 1 || self.rows.is_empty() {
-            state.max_entries = usize::from(list_area.height);
+            state.max_entries = (height / self.shape.height()).max(1);
+            state.lines = 0;
             return;
         }
         state.selected = state.selected.min(self.rows.len() - 1);
-        let height = usize::from(list_area.height);
-        let (start, end) = self.get_items_bounds(state.selected, state.offset, height);
-        state.offset = start;
-        state.max_entries = end - start;
+        let (now, tz) = (self.now, self.tz);
+        let chooser = self.chooser.map(|(c, _)| (state.selected, c.len()));
+        let (lines, starts) = list_lines(self.rows, self.shape, self.inverted, chooser, |r| {
+            clock::list_day(now, r.updated_at, tz)
+        });
 
-        for (y, row) in self.rows.iter().enumerate().skip(start).take(end - start) {
-            let screen_y = u16::try_from(y - start).unwrap_or(u16::MAX);
-            let cy = if self.inverted {
+        // The selected row (the chooser and its border included), with its own day's heading when
+        // that is beside it: over it on screen, so before it from the input when inverted, after
+        // it otherwise.
+        let start = starts[state.selected];
+        let end = start + self.shape.height() + chooser.map_or(0, |(_, n)| n + 2);
+        let heading = |at: Option<&ListLine>| matches!(at, Some(ListLine::Heading(_)));
+        let (mut lo, mut hi) = if self.inverted {
+            (start - usize::from(start > 0 && heading(lines.get(start - 1))), end)
+        } else {
+            (start, end + usize::from(heading(lines.get(end))))
+        };
+        // Too tall to show whole: the row without its heading; then just its title, or the
+        // chooser's selected line when it's open.
+        if hi - lo > height {
+            (lo, hi) = (start, end);
+        }
+        if hi - lo > height {
+            let focus = match self.chooser {
+                Some((_, k)) => ListLine::Choice(state.selected, k),
+                None => ListLine::Title(state.selected),
+            };
+            if let Some(at) = lines.iter().position(|l| *l == focus) {
+                (lo, hi) = (at, at + 1);
+            }
+        }
+        let total = lines.len();
+        // The chooser opening (or closing) under the selected row keeps its title where it was:
+        // the box grows away from it, down the screen, unless it has to come up to fit.
+        let title =
+            |lines: &[ListLine]| lines.iter().position(|l| *l == ListLine::Title(state.selected));
+        match (chooser.is_some(), state.chooser_shift) {
+            (true, None) => {
+                let (plain, _) = list_lines(self.rows, self.shape, self.inverted, None, |r| {
+                    clock::list_day(now, r.updated_at, tz)
+                });
+                let shift = title(&lines)
+                    .zip(title(&plain))
+                    .map_or(0, |(open, closed)| open.saturating_sub(closed));
+                state.offset += shift;
+                state.chooser_shift = Some(shift);
+            }
+            (false, Some(shift)) => {
+                state.offset = state.offset.saturating_sub(shift);
+                state.chooser_shift = None;
+            }
+            _ => {}
+        }
+        let mut offset =
+            SessionList::scroll_to(state.offset, lo, hi, height, total, chooser.is_some());
+
+        // Scrolled, the day of the sessions at the top stays in sight, on the top line. That line
+        // has to be a row's second line (its title out of sight above), so a title there takes
+        // the window a line on to bring it about, or, with nowhere to go, the heading takes that
+        // title's place and its second line is left blank. When the next day's heading follows
+        // right under it, the line is left blank instead.
+        let top = |offset: usize| {
+            if self.inverted {
+                offset
+            } else {
+                offset + height - 1
+            }
+        };
+        // The line under `at` on screen.
+        let under = |at: usize| {
+            if self.inverted {
+                at + 1
+            } else {
+                at.wrapping_sub(1)
+            }
+        };
+        let mut sticky = None;
+        let mut blank = None;
+        if self.shape.by_day && total > height && height >= 4 {
+            let fits = |o: usize| lo >= o && hi <= o + height && o + height <= total;
+            // With the chooser open, the window may run past the list's far end.
+            if let Some(&ListLine::Title(row)) = lines.get(top(offset))
+                && row != state.selected
+            {
+                let shifted = if self.inverted {
+                    Some(offset + 1)
+                } else {
+                    offset.checked_sub(1)
+                };
+                // Not with the chooser open, whose row's title stays where it was.
+                match shifted.filter(|o| chooser.is_none() && fits(*o)) {
+                    Some(shifted) => offset = shifted,
+                    // Not when the next day's heading follows its second line: the heading would
+                    // name a day with nothing showing under it.
+                    None if !heading(lines.get(under(under(top(offset))))) => {
+                        let at = top(offset);
+                        sticky = Some((at, Some(row)));
+                        blank = Some(under(at));
+                    }
+                    None => {}
+                }
+            }
+            let at = top(offset);
+            if sticky.is_none()
+                && let Some(
+                    &(ListLine::Place(row) | ListLine::Choice(row, _) | ListLine::Edge(row, _)),
+                ) = lines.get(at)
+                && row != state.selected
+            {
+                let day = (!heading(lines.get(under(at)))).then_some(row);
+                sticky = Some((at, day));
+            }
+        }
+        state.offset = offset;
+        state.lines = total;
+
+        state.max_entries = 0;
+        state.chooser_drawn = false;
+        for (k, line) in lines.iter().enumerate().skip(state.offset).take(height) {
+            let screen_y = u16::try_from(k - state.offset).unwrap_or(u16::MAX);
+            let y = if self.inverted {
                 list_area.top() + screen_y
             } else {
                 list_area.bottom() - screen_y - 1
             };
-            let selected = y == state.selected;
-            let mut line = RowWriter {
-                buf,
+            if blank == Some(k) {
+                continue;
+            }
+            if let Some((at, day_of)) = sticky
+                && at == k
+            {
+                if let Some(row) = day_of {
+                    let mut w = RowWriter {
+                        buf: &mut *buf,
+                        x: list_area.left(),
+                        right: list_area.right(),
+                        y,
+                        row_modifier: Modifier::empty(),
+                    };
+                    let day = clock::list_day(now, self.rows[row].updated_at, tz);
+                    self.render_heading(&mut w, &clock::day_heading(now, day, tz));
+                }
+                continue;
+            }
+            let (ListLine::Heading(row)
+            | ListLine::Title(row)
+            | ListLine::Place(row)
+            | ListLine::Choice(row, _)
+            | ListLine::Edge(row, _)) = *line;
+            let selected = row == state.selected && !matches!(line, ListLine::Heading(_));
+            // The row the chooser is open under, in a border: that says it's the one chosen.
+            let boxed = selected && self.chooser.is_some();
+            let border = style(self.theme, Meaning::Base);
+            let mut w = RowWriter {
+                buf: &mut *buf,
                 x: list_area.left(),
                 right: list_area.right(),
-                y: cy,
+                y,
                 // Another host's session looks like any other: it resumes by being restored
                 // from sync, behind the scenes.
                 row_modifier: if self.alternate_highlight && selected {
@@ -315,8 +639,50 @@ impl StatefulWidget for SessionList<'_> {
                     Modifier::empty()
                 },
             };
-            self.render_row(&mut line, row, selected);
+            if boxed {
+                // Inside the border, with a space before its right edge.
+                w.right = list_area.right().saturating_sub(2);
+                w.row_modifier = Modifier::empty();
+            }
+            match line {
+                ListLine::Edge(_, top) => {
+                    w.right = list_area.right();
+                    let (l, r) = if *top {
+                        ("╭", "╮")
+                    } else {
+                        ("╰", "╯")
+                    };
+                    let across = usize::from(list_area.width.saturating_sub(2));
+                    w.put(&format!("{l}{}{r}", symbols::line::HORIZONTAL.repeat(across)), border);
+                }
+                ListLine::Heading(_) => {
+                    let day = clock::list_day(now, self.rows[row].updated_at, tz);
+                    self.render_heading(&mut w, &clock::day_heading(now, day, tz));
+                }
+                ListLine::Title(_) => {
+                    state.max_entries += 1;
+                    self.render_row(&mut w, &self.rows[row], selected, boxed);
+                }
+                ListLine::Place(_) => self.render_place(&mut w, &self.rows[row]),
+                ListLine::Choice(_, k) => {
+                    state.chooser_drawn = true;
+                    // Under the title, and clear of the selection's highlight.
+                    w.row_modifier = Modifier::empty();
+                    w.pad_to(w.x + self.shape.title_x());
+                    if let Some(line) = self.chooser.and_then(|(c, _)| c.get(*k)) {
+                        w.put_spans(&line.spans);
+                    }
+                }
+            }
+            if boxed && !matches!(line, ListLine::Edge(..)) {
+                let right = list_area.right().saturating_sub(1);
+                buf[(list_area.left(), y)].set_symbol("│").set_style(border);
+                buf[(right, y)].set_symbol("│").set_style(border);
+            }
         }
+
+        // A page is the rows that showed.
+        state.max_entries = state.max_entries.max(1);
     }
 }
 
@@ -354,22 +720,73 @@ impl RowWriter<'_> {
 }
 
 impl SessionList<'_> {
-    fn render_row(&self, w: &mut RowWriter<'_>, row: &SessionRow, selected: bool) {
+    /// A day's heading: its name, then a rule to the edge.
+    fn render_heading(&self, w: &mut RowWriter<'_>, day: &str) {
+        let muted = style(self.theme, Meaning::Annotation);
+        w.put(" ", Style::default());
+        w.put(day, style(self.theme, Meaning::Important).add_modifier(Modifier::BOLD));
+        w.put(" ", Style::default());
+        let rule = "─".repeat(usize::from(w.right.saturating_sub(w.x)));
+        w.put(&rule, muted);
+    }
+
+    /// A two-line row's second line, under its title, dimmed: when (a live session's dot in its
+    /// colour), the agent's badge, where the session ran, and how many messages it has (`14:02 ·
+    /// CC · atuin · main · @3f9a12bc · 142 msgs`).
+    fn render_place(&self, w: &mut RowWriter<'_>, row: &SessionRow) {
+        // Dimmed, the agent too, so the eye goes to the titles; only a live session's dot stands
+        // out.
+        let muted = style(self.theme, Meaning::Annotation).add_modifier(Modifier::DIM);
+        w.pad_to(w.x + self.shape.title_x());
+        if is_live(self.now, row) {
+            w.put("● ", style(self.theme, Meaning::AlertInfo));
+        }
+        w.put(&self.when(row), muted);
+        w.put(" · ", muted);
+        w.put(harness_badge(row.handle.harness), muted);
+        for part in panel::place(row, self.here) {
+            w.put(" · ", muted);
+            w.put(&part, muted);
+        }
+        w.put(" · ", muted);
+        w.put(&messages_label(row.messages), muted);
+        // The selection's highlight (vim's normal mode) runs the whole width, as the title's does.
+        w.pad_to(w.right);
+    }
+
+    /// When `row` was last active: the time of day under a day's heading, else `12m`, `14:02`,
+    /// `yest 09:40`, … (see [`clock::When::short`]).
+    fn when(&self, row: &SessionRow) -> String {
+        if self.shape.by_day {
+            clock::time_in_day(self.now, row.updated_at, self.tz)
+        } else {
+            clock::When::of(self.now, row.updated_at, self.tz).short().to_owned()
+        }
+    }
+
+    /// A row's first line. `boxed`, it's the row the chooser is open under, which its border
+    /// marks in place of the indicator and the selected title's colour.
+    fn render_row(&self, w: &mut RowWriter<'_>, row: &SessionRow, selected: bool, boxed: bool) {
         let theme = self.theme;
         w.put(
-            if selected {
+            if selected && !boxed {
                 self.indicator
             } else {
                 "   "
             },
             Style::default(),
         );
+        let cells = if boxed {
+            self.boxed_cells
+        } else {
+            self.cells
+        };
 
         let pad = |text: &str, cw: usize, align: Align| {
             text.pad_ellipsize(Measure::Columns(cw), Pos::End, Indicator::UNICODE, align)
                 .into_owned()
         };
-        for (idx, &(cell, col_width)) in self.cells.iter().enumerate() {
+        for (idx, &(cell, col_width)) in cells.iter().enumerate() {
             if idx != 0 {
                 w.put(" ", Style::default());
             }
@@ -377,11 +794,11 @@ impl SessionList<'_> {
             let cw = usize::from(col_width);
             match cell {
                 Column::Time => {
-                    let when = clock::When::of(self.now, row.updated_at, self.tz);
+                    let when = self.when(row);
                     let (text, meaning) = if is_live(self.now, row) {
-                        (format!("● {}", when.short()), Meaning::AlertInfo)
+                        (format!("● {when}"), Meaning::AlertInfo)
                     } else {
-                        (when.short().to_owned(), Meaning::Guidance)
+                        (when, Meaning::Annotation)
                     };
                     w.put(&pad(&text, cw, Align::End), style(theme, meaning));
                 }
@@ -392,16 +809,25 @@ impl SessionList<'_> {
                     );
                 }
                 Column::Title => {
-                    let (base, hl) = if selected && !self.alternate_highlight {
-                        let base = style(theme, Meaning::AlertError).add_modifier(Modifier::BOLD);
+                    let (base, hl) = if boxed {
+                        let base = style(theme, Meaning::Base).add_modifier(Modifier::BOLD);
+                        (base, style(theme, Meaning::AlertWarn).add_modifier(Modifier::BOLD))
+                    } else if selected && !self.alternate_highlight {
+                        let base = style(theme, Meaning::Guidance).add_modifier(Modifier::BOLD);
                         (base, style(theme, Meaning::AlertWarn).add_modifier(Modifier::BOLD))
                     } else {
                         let base = style(theme, Meaning::Base);
                         (base, base.add_modifier(Modifier::BOLD))
                     };
-                    let spans =
-                        highlighted_line(&row.title.text, &row.title.highlights, cw, base, hl);
-                    w.put_spans(&spans);
+                    if is_untitled(row) {
+                        let untitled =
+                            style(theme, Meaning::Annotation).add_modifier(Modifier::ITALIC);
+                        w.put(&pad("untitled", cw, Align::Start), untitled);
+                    } else {
+                        let spans =
+                            highlighted_line(&row.title.text, &row.title.highlights, cw, base, hl);
+                        w.put_spans(&spans);
+                    }
                 }
                 Column::Messages => {
                     w.put(
@@ -602,27 +1028,19 @@ impl State {
         sources.iter().map(|s| markdown::render(&s.text, &s.highlights, opts, &s.styles)).collect()
     }
 
-    /// The preview's line saying where the session previewed ran and what forked off it, in the
-    /// text column: `atuin · feat/ai-sessions · @3f9a12bc · 2 forks`. `None` when there is
-    /// nothing to say, or no room beside the text (`height` under 2).
+    /// The preview's line saying what forked off the session previewed, in the text column:
+    /// `2 forks`. (Where it ran is under its title in the list.) `None` when nothing did, or
+    /// there's no room beside the text (`height` under 2).
     fn preview_meta(&self, height: usize, theme: &Theme) -> Option<Line<'static>> {
         if height < 2 {
             return None;
         }
         let row = self.preview_row()?;
-        let muted = style(theme, Meaning::Annotation);
-        let mut spans = panel::place(row, &self.context.host_id, theme);
-        if let Some(forks) = panel::forks(self.children.get(&row.handle).map(Vec::as_slice)) {
-            if !spans.is_empty() {
-                spans.push(Span::styled(" · ", muted));
-            }
-            spans.push(Span::styled(forks, muted));
-        }
-        if spans.is_empty() {
-            return None;
-        }
-        spans.insert(0, Span::raw(" ".repeat(PREVIEW_LABEL_WIDTH)));
-        Some(Line::from(spans))
+        let forks = panel::forks(self.children.get(&row.handle).map(Vec::as_slice))?;
+        Some(Line::from(vec![
+            Span::raw(" ".repeat(PREVIEW_LABEL_WIDTH)),
+            Span::styled(forks, style(theme, Meaning::Annotation)),
+        ]))
     }
 
     /// The strip's overview of the parts, in `height` lines of `width` columns: they share the
@@ -782,41 +1200,19 @@ impl State {
         }
     }
 
-    /// Where the selected row of the list in `area` is, for the chooser to open against.
-    fn anchor(&self, area: Rect, cells: &[(Column, u16)], invert: bool) -> Option<ListAnchor> {
-        if self.results.is_empty() || area.height == 0 {
-            return None;
-        }
-        let from_top = u16::try_from(self.list.selected.checked_sub(self.list.offset)?).ok()?;
-        let row = if invert {
-            area.top() + from_top
-        } else {
-            area.bottom().checked_sub(from_top + 1)?
-        };
-        // Past the indicator, and the columns before the badge.
-        let before: u16 = cells
-            .iter()
-            .take_while(|(c, _)| !matches!(c, Column::Harness | Column::Title))
-            .map(|(_, w)| w + 1)
-            .sum();
-        Some(ListAnchor {
-            list: area,
-            row,
-            badge_x: area.x + 3 + before,
-        })
-    }
-
     pub fn draw(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
+        self.spinning = false;
         self.draw_main(f, settings, theme);
-        if self.chooser.is_some() {
-            self.draw_chooser(f, settings, theme);
+        // A popup only where the list didn't draw it under its row.
+        if self.chooser.is_some() && !(self.tab_index == 0 && self.list.chooser_drawn) {
+            self.draw_chooser(f, theme);
         }
     }
 
     #[allow(clippy::too_many_lines)]
     fn draw_main(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
         let area = f.area();
-        self.list_anchor = None;
+        self.list.chooser_drawn = false;
         for scroll in &mut self.scrolls {
             scroll.area = None;
         }
@@ -829,6 +1225,8 @@ impl State {
             && settings.show_preview
             && compactness != Compactness::Ultracompact
             && area.width >= SPLIT_MIN_WIDTH;
+        // Transcripts are only read while something shows them.
+        self.reader_visible = split || self.tab_index == 1;
         let preview_height = if split {
             border_size
         } else {
@@ -850,25 +1248,22 @@ impl State {
         };
 
         let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
-        let show_tabs = settings.show_tabs && compactness != Compactness::Ultracompact;
+        // No tab row: the header names Inspect while it shows, and lists ctrl-o.
         let status = self.status_line();
         let status_height = u16::from(status.is_some());
         let help_h = u16::from(show_help);
-        let tabs_h = u16::from(show_tabs);
 
-        let constraints: [Constraint; 6] = if invert {
+        let constraints: [Constraint; 5] = if invert {
             [
                 Constraint::Length(1 + border_size),
                 Constraint::Min(1),
                 Constraint::Length(preview_height),
-                Constraint::Length(tabs_h),
                 Constraint::Length(help_h),
                 Constraint::Length(status_height),
             ]
         } else if compactness == Compactness::Ultracompact {
             [
                 Constraint::Length(help_h),
-                Constraint::Length(0),
                 Constraint::Min(1),
                 Constraint::Length(0),
                 Constraint::Length(0),
@@ -877,7 +1272,6 @@ impl State {
         } else {
             [
                 Constraint::Length(help_h),
-                Constraint::Length(tabs_h),
                 Constraint::Min(1),
                 Constraint::Length(1 + border_size),
                 Constraint::Length(preview_height),
@@ -891,22 +1285,12 @@ impl State {
             .constraints(constraints)
             .split(area);
 
-        let (input_chunk, list_chunk, preview_chunk, tabs_chunk, header_chunk) = if invert {
-            (chunks[0], chunks[1], chunks[2], chunks[3], chunks[4])
+        let (input_chunk, list_chunk, preview_chunk, header_chunk) = if invert {
+            (chunks[0], chunks[1], chunks[2], chunks[3])
         } else {
-            (chunks[3], chunks[2], chunks[4], chunks[1], chunks[0])
+            (chunks[2], chunks[1], chunks[3], chunks[0])
         };
-        let status_chunk = chunks[5];
-
-        if show_tabs {
-            let titles: Vec<Line> = TAB_TITLES.iter().copied().map(Line::from).collect();
-            let tabs = Tabs::new(titles)
-                .block(Block::default().borders(Borders::NONE))
-                .select(self.tab_index)
-                .style(Style::default())
-                .highlight_style(style(theme, Meaning::Important));
-            f.render_widget(tabs, tabs_chunk);
-        }
+        let status_chunk = chunks[4];
 
         let st = StyleState {
             compactness,
@@ -918,14 +1302,20 @@ impl State {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(16), Constraint::Min(0), Constraint::Length(16)])
             .split(header_chunk);
+        let title = if self.tab_index == 1 {
+            "Atuin · Inspect".to_owned()
+        } else {
+            format!("Atuin v{VERSION}")
+        };
         f.render_widget(
             Paragraph::new(Span::styled(
-                format!("Atuin v{VERSION}"),
+                title,
                 style(theme, Meaning::Base).add_modifier(Modifier::BOLD),
             )),
             header_chunks[0],
         );
-        f.render_widget(self.build_help(settings, theme), header_chunks[1]);
+        let help = self.build_help(settings, header_chunks[1].width.into(), theme);
+        f.render_widget(help, header_chunks[1]);
         f.render_widget(self.build_stats(theme), header_chunks[2]);
 
         if let Some((message, meaning)) = &status {
@@ -938,43 +1328,28 @@ impl State {
             );
         }
 
+        // Two lines a row, and grouped by day while the results on screen are newest first (not
+        // ranked by a query); one line a row with its full date in the ultracompact picker, which
+        // has no room for headings.
+        let two_line = compactness != Compactness::Ultracompact;
+        let shape = RowShape {
+            two_line,
+            by_day: two_line && self.applied_query.is_empty(),
+        };
+
         let indicator = match compactness {
             Compactness::Ultracompact => {
-                format!("{}> ", self.mode_label().chars().next().unwrap_or(' '))
+                // The scope's initial, as the scope list names it (`A` for all, `R` for repo).
+                let initial = scope_label(self.mode).chars().next().unwrap_or(' ');
+                format!("{}> ", initial.to_ascii_uppercase())
             }
             _ => " > ".to_owned(),
         };
 
         if self.tab_index == 1 {
             self.draw_inspect(f, list_chunk, st, settings, theme);
-            let bold = Style::default().add_modifier(Modifier::BOLD);
-            let guide = if self.expanded_children().is_some() {
-                Line::from(vec![
-                    Span::styled("<↑/↓>", bold),
-                    Span::raw(": move  "),
-                    Span::styled("<c>", bold),
-                    Span::raw("/"),
-                    Span::styled("<esc>", bold),
-                    Span::raw(": collapse"),
-                ])
-            } else {
-                Line::from(vec![
-                    Span::styled("<esc>", bold),
-                    Span::raw(": back  "),
-                    Span::styled("<enter>", bold),
-                    Span::raw(if settings.enter_accept {
-                        ": resume  "
-                    } else {
-                        ": edit  "
-                    }),
-                    Span::styled("<tab>", bold),
-                    Span::raw(": edit  "),
-                    Span::styled("<ctrl-y>", bold),
-                    Span::raw(": copy"),
-                ])
-            };
-            let guide = Paragraph::new(guide).style(style(theme, Meaning::Annotation));
-            f.render_widget(input_block(guide, st), input_chunk);
+            // Its keys are in the header, as the list's are; the input's box stays closed.
+            f.render_widget(input_block(Paragraph::new(""), st), input_chunk);
             return;
         }
 
@@ -1008,7 +1383,24 @@ impl State {
             (inner, None, None)
         };
 
-        let cells = row_layout(list_area.width);
+        let cells = row_layout(list_area.width, shape);
+        // Inside the border around the row the chooser is open under.
+        let boxed_cells = row_layout(list_area.width.saturating_sub(2), shape);
+        // The chooser opens under the row it's for, while that's the one selected, and the whole
+        // of it (with the row, in its border) fits the list without cutting a line short; else
+        // it's a popup.
+        let chooser_lines = self
+            .chooser
+            .as_ref()
+            .filter(|c| self.selected().is_some_and(|r| r.handle == c.row.handle))
+            .and_then(|_| {
+                let budget = usize::from(list_area.width.saturating_sub(shape.title_x() + 2));
+                let (lines, at) = self.chooser_lines(budget, theme)?;
+                let tall = shape.height() + lines.len() + 2;
+                let wide = self.chooser_lines(usize::MAX, theme)?.0.iter().map(Line::width).max();
+                (tall <= usize::from(list_area.height) && wide.unwrap_or(0) <= budget)
+                    .then_some((lines, at))
+            });
         let list = SessionList {
             rows: &self.results,
             block: None,
@@ -1019,9 +1411,21 @@ impl State {
             indicator: &indicator,
             theme,
             cells: &cells,
+            shape,
+            here: &self.context.host_id,
+            chooser: chooser_lines.as_ref().map(|(lines, at)| (lines.as_slice(), *at)),
+            boxed_cells: &boxed_cells,
         };
         f.render_stateful_widget(list, list_area, &mut self.list);
-        self.list_anchor = self.anchor(list_area, &cells, invert);
+        if self.results.is_empty() && self.applied != 0 {
+            // In the middle of the list.
+            let middle = Rect {
+                y: list_area.y + list_area.height.saturating_sub(2) / 2,
+                height: list_area.height.min(2),
+                ..list_area
+            };
+            f.render_widget(self.no_results(theme), middle);
+        }
 
         // A scrollbar on the right border (or the divider) once the list overflows.
         let visible = usize::from(list_area.height);
@@ -1037,13 +1441,14 @@ impl State {
                 f.buffer_mut()[(divider.x, y)].set_symbol("│").set_style(line);
             }
         }
-        if self.results.len() > visible && (divider.is_some() || compactness == Compactness::Full) {
+        let lines = self.list.lines;
+        if lines > visible && (divider.is_some() || compactness == Compactness::Full) {
             let top = if invert {
                 self.list.offset
             } else {
-                self.results.len().saturating_sub(self.list.offset + visible)
+                lines.saturating_sub(self.list.offset + visible)
             };
-            let mut state = ScrollbarState::new(self.results.len().saturating_sub(visible))
+            let mut state = ScrollbarState::new(lines.saturating_sub(visible))
                 .position(top)
                 .viewport_content_length(visible);
             let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -1063,14 +1468,10 @@ impl State {
             return;
         }
 
-        // Line the query up with the title column, as the history search lines it up with the
-        // command, while the widest mode and count fit.
-        let prefix_width =
-            COLUMNS.iter().take_while(|c| **c != Column::Title).map(|c| c.width() + 1).sum::<u16>()
-                + 3;
-        let prefix_width =
-            prefix_width.max(u16::try_from("[ WORKSPACE 500+ ] ".len()).unwrap_or(19));
-        f.render_widget(self.build_input(st, prefix_width, theme), input_chunk);
+        // Line the query up with the titles, as the history search lines it up with the command.
+        let prefix_width = shape.title_x();
+        let (input, cut) = self.build_input(st, prefix_width, theme);
+        f.render_widget(input, input_chunk);
 
         // The text, and a column for the scrollbar: the right border, or one kept for it.
         let strip = Rect {
@@ -1130,40 +1531,124 @@ impl State {
             }
         }
 
-        let before_cursor = self.input.substring().width();
+        let before_cursor = usize::from(prefix_width) + self.input.substring().width();
+        let before_cursor = cut.map_or(before_cursor, |cut| before_cursor.min(cut));
         let cursor_offset = border_size;
         f.set_cursor_position((
             input_chunk
                 .x
                 .saturating_add(u16::try_from(before_cursor).unwrap_or(u16::MAX))
-                .saturating_add(prefix_width)
                 .saturating_add(cursor_offset),
             input_chunk.y.saturating_add(cursor_offset),
         ));
     }
 
-    fn build_help(&self, settings: &Settings, theme: &Theme) -> Paragraph<'static> {
+    /// What the keys do to the selected session, as many as fit in `width` columns: `enter
+    /// resume… · ctrl-o inspect · tab edit command · ctrl-y copy · esc exit`, the least needed
+    /// left out first. (Forking is in the chooser enter opens.) While the chooser is open, what
+    /// they do there: `enter fork · tab edit command · esc back`; in Inspect, its keys.
+    fn build_help(&self, settings: &Settings, width: usize, theme: &Theme) -> Paragraph<'static> {
         let bold = Style::default().add_modifier(Modifier::BOLD);
-        let line = if self.tab_index == 0 {
-            Line::from(vec![
-                Span::styled("<esc>", bold),
-                Span::raw(": exit, "),
-                Span::styled("<tab>", bold),
-                Span::raw(": edit, "),
-                Span::styled("<enter>", bold),
-                Span::raw(if settings.enter_accept {
-                    ": resume"
-                } else {
-                    ": edit"
-                }),
-                Span::raw(", "),
-                Span::styled("<ctrl-o>", bold),
-                Span::raw(": inspect"),
-            ])
-        } else {
-            Line::default()
+        // Each action, with how much it's needed: 0 always shows, higher ones go first.
+        let mut actions: Vec<(&str, String, u8)> = Vec::new();
+        let edit = |actions: &mut Vec<(&str, String, u8)>| {
+            actions.push(("tab", "edit command".to_owned(), 2));
         };
-        Paragraph::new(line).style(style(theme, Meaning::Annotation)).alignment(Alignment::Center)
+        if let Some(chooser) = &self.chooser {
+            // What enter does to the line selected.
+            let line = match chooser.line(chooser.selected) {
+                Destination::Fork(_) => "fork".to_owned(),
+                Destination::Continue(target) => format!("continue in {}", harness_label(target)),
+                Destination::Original | Destination::AsIs(_) | Destination::Switch(_) => {
+                    "resume".to_owned()
+                }
+            };
+            if chooser.action == Pending::Resume {
+                actions.push(("enter", line, 0));
+                edit(&mut actions);
+            } else {
+                actions.push(("enter", "edit command".to_owned(), 0));
+            }
+            actions.push(("esc", "back".to_owned(), 0));
+        } else if self.tab_index == 1 {
+            if self.expanded_children().is_some() {
+                // esc collapses the list first.
+                actions.push(("↑/↓", "move".to_owned(), 0));
+                actions.push(("c/esc", "collapse".to_owned(), 0));
+            } else {
+                if settings.enter_accept {
+                    actions.push(("enter", "resume".to_owned(), 0));
+                    edit(&mut actions);
+                } else {
+                    actions.push(("enter", "edit command".to_owned(), 0));
+                }
+                actions.push(("ctrl-y", "copy".to_owned(), 3));
+                let forks = self.target().and_then(|r| self.children.get(&r.handle));
+                if forks.is_some_and(|f| !f.is_empty()) {
+                    actions.push(("c", "forks".to_owned(), 1));
+                }
+                actions.push(("esc", "back".to_owned(), 0));
+            }
+        } else if self.tab_index == 0
+            && let Some(row) = self.selected()
+        {
+            let agent = harness_label(row.handle.harness);
+            let enter = if !settings.enter_accept {
+                "edit command".to_owned()
+            } else if row.handle.harness.harness().is_none() {
+                // Nothing atuin can resume or continue it in (a Copilot session).
+                "can't resume here".to_owned()
+            } else if settings.ai.sessions.resume_chooser {
+                // Enter asks where.
+                "resume…".to_owned()
+            } else {
+                match self.plans.get(&row.handle) {
+                    Some(Err(_)) => "choose where to resume…".to_owned(),
+                    Some(Ok(resume)) if resume.restore.is_some() => {
+                        format!("restore and resume in {agent}")
+                    }
+                    _ => format!("resume in {agent}"),
+                }
+            };
+            actions.push(("enter", enter, 0));
+            if settings.enter_accept {
+                edit(&mut actions);
+            }
+            actions.push(("ctrl-y", "copy".to_owned(), 3));
+            // The only way into Inspect: kept longest.
+            actions.push(("ctrl-o", "inspect".to_owned(), 1));
+            actions.push(("esc", "exit".to_owned(), 0));
+        } else {
+            actions.push(("esc", "exit".to_owned(), 0));
+        }
+
+        // Leave out the least needed until the rest fit.
+        let len = |a: &[(&str, String, u8)]| {
+            a.iter().map(|(k, l, _)| k.width() + 1 + l.width()).sum::<usize>()
+                + 3 * a.len().saturating_sub(1)
+        };
+        while len(&actions) > width
+            && let Some(at) = actions
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, _, need))| *need > 0)
+                .max_by_key(|(i, (_, _, need))| (*need, *i))
+                .map(|(i, _)| i)
+        {
+            actions.remove(at);
+        }
+        let actions: Vec<(&str, String)> = actions.into_iter().map(|(k, l, _)| (k, l)).collect();
+        let mut spans = Vec::new();
+        for (i, (key, label)) in actions.into_iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(" · "));
+            }
+            spans.push(Span::styled(key.to_owned(), bold));
+            spans.push(Span::raw(format!(" {label}")));
+        }
+        Paragraph::new(Line::from(spans))
+            .style(style(theme, Meaning::Annotation))
+            .alignment(Alignment::Center)
     }
 
     fn build_stats(&self, theme: &Theme) -> Paragraph<'static> {
@@ -1175,7 +1660,7 @@ impl State {
         Paragraph::new(text).style(style(theme, Meaning::Annotation)).alignment(Alignment::Right)
     }
 
-    /// What the list holds, for the header and the mode prefix: `105`, or `500+` when the search
+    /// What the list holds, for the header: `105`, or `500+` when the search
     /// stopped at its limit. `None` before the first results.
     fn result_count(&self) -> Option<String> {
         let n = self.results.len();
@@ -1188,14 +1673,18 @@ impl State {
         })
     }
 
-    fn build_input(&self, st: StyleState, prefix_width: u16, theme: &Theme) -> Paragraph<'static> {
-        let mode = match self.result_count() {
-            Some(n) => format!("{} {n}", self.mode_label()),
-            None => self.mode_label().to_owned(),
-        };
-        // 3: the surrounding "[" and "] ".
-        let mode_width = usize::from(prefix_width).saturating_sub(3);
-        let mut spans = vec![Span::raw(format!("[{mode:^mode_width$}] "))];
+    /// The input line, and, when the query is cut short to keep the scope in sight, the column
+    /// the cursor goes no further than.
+    fn build_input(
+        &self,
+        st: StyleState,
+        prefix_width: u16,
+        theme: &Theme,
+    ) -> (Paragraph<'static>, Option<usize>) {
+        let muted = style(theme, Meaning::Annotation);
+        // The prompt ends where the titles start.
+        let width = usize::from(prefix_width);
+        let mut spans = vec![Span::styled(format!("{:>width$}", "› "), muted)];
 
         // Filter tokens render as chips; the rest is plain text.
         let input = self.input.as_str();
@@ -1225,24 +1714,117 @@ impl State {
         if at < input.len() {
             spans.push(Span::raw(input[at..].to_owned()));
         }
-
-        // Where ctrl-r goes next, at the right while the query leaves room.
-        if let Some(next) = self.next_mode() {
-            let hint = format!("ctrl-r: {}", next.as_str().to_lowercase());
-            let borders = if st.compactness == Compactness::Full {
-                2
+        // The scopes at the right: all of them while the query leaves room, else just the one
+        // listed, which always shows (over the placeholder, if it must).
+        let borders = if st.compactness == Compactness::Full {
+            2
+        } else {
+            0
+        };
+        let room = st.inner_width.saturating_sub(borders);
+        let width = |spans: &[Span<'_>]| spans.iter().map(|s| s.content.width()).sum::<usize>();
+        let placeholder = "search sessions…";
+        let typed = usize::from(prefix_width) + input.width();
+        let with_placeholder = typed
+            + if input.is_empty() {
+                placeholder.width()
             } else {
                 0
             };
-            let room = st.inner_width.saturating_sub(borders);
-            let used = usize::from(prefix_width) + input.width();
-            if let Some(gap) = room.checked_sub(used + hint.width()).filter(|g| *g >= 2) {
-                spans.push(Span::raw(" ".repeat(gap)));
-                spans.push(Span::styled(hint, style(theme, Meaning::Annotation)));
-            }
+        let gap = |used: usize, scopes: &[Span<'_>]| {
+            room.checked_sub(used + width(scopes)).filter(|g| *g >= 2)
+        };
+        let (all, current) = (self.scope_spans(theme, false), self.scope_spans(theme, true));
+        // Last of all, just its name, without the key.
+        let bare = current.last().cloned().into_iter().collect::<Vec<_>>();
+        let fit = gap(with_placeholder, &all)
+            .map(|g| (g, all, true))
+            .or_else(|| gap(with_placeholder, &current).map(|g| (g, current.clone(), true)))
+            .or_else(|| gap(typed, &current).map(|g| (g, current, false)))
+            .or_else(|| {
+                let g = room.checked_sub(typed + width(&bare)).filter(|g| *g >= 1)?;
+                Some((g, bare.clone(), false))
+            });
+        // A query too long for even that is cut short, so the scope still shows.
+        let (fit, cut) = match fit {
+            Some(fit) => (Some(fit), None),
+            None => match room.checked_sub(width(&bare) + 1).filter(|w| *w > width(&spans[..1])) {
+                Some(w) => {
+                    spans = markdown::truncate(&spans, w, muted);
+                    (Some((room - w - width(&bare), bare, false)), Some(w - 1))
+                }
+                None => (None, None),
+            },
+        };
+        let show_placeholder = input.is_empty() && fit.as_ref().is_none_or(|(_, _, p)| *p);
+        if show_placeholder {
+            spans.push(Span::styled(placeholder, muted.add_modifier(Modifier::DIM)));
+        }
+        if let Some((gap, scopes, _)) = fit {
+            spans.push(Span::raw(" ".repeat(gap)));
+            spans.extend(scopes);
         }
 
-        input_block(Paragraph::new(Line::from(spans)), st)
+        (input_block(Paragraph::new(Line::from(spans)), st), cut)
+    }
+
+    /// What the list says with nothing to show, in its middle: `No sessions match "flaky" in
+    /// this repo`, and what to do about it.
+    fn no_results(&self, theme: &Theme) -> Paragraph<'static> {
+        let muted = style(theme, Meaning::Annotation);
+        let query = self.applied_query.as_str();
+        let narrowed = !query.is_empty() || self.applied_chips;
+        let place = match self.mode {
+            FilterMode::Global => "",
+            FilterMode::Workspace => " in this repo",
+            FilterMode::Branch => " on this branch",
+            FilterMode::Directory => " in this directory",
+            FilterMode::Host => " on this machine",
+        };
+        let what = match (query.is_empty(), self.applied_chips) {
+            (true, false) => format!("No sessions{place}"),
+            (true, true) => format!("No sessions match the filters{place}"),
+            (false, false) => format!("No sessions match \"{query}\"{place}"),
+            (false, true) => format!("No sessions match \"{query}\" and the filters{place}"),
+        };
+        let mut hints = Vec::new();
+        // ctrl-r goes through the scopes in turn (some narrower), so it changes the scope rather
+        // than widening it.
+        if self.mode != FilterMode::Global {
+            hints.push("ctrl-r to change the scope");
+        }
+        if narrowed {
+            hints.push(if self.keymap_mode == KeymapMode::VimNormal {
+                "dd to clear the search"
+            } else {
+                "ctrl-u to clear the search"
+            });
+        }
+        Paragraph::new(vec![
+            Line::from(Span::styled(what, style(theme, Meaning::Base))),
+            Line::from(Span::styled(hints.join(" · "), muted)),
+        ])
+        .alignment(Alignment::Center)
+    }
+
+    /// The scopes the list can show, in the order ctrl-r goes through them: `ctrl-r  all  repo
+    /// branch  dir  host`, the one listed highlighted. Those that can't apply here (a repository
+    /// or branch outside one) are left out.
+    fn scope_spans(&self, theme: &Theme, only_current: bool) -> Vec<Span<'static>> {
+        let muted = style(theme, Meaning::Annotation);
+        let current =
+            style(theme, Meaning::Important).add_modifier(Modifier::REVERSED | Modifier::BOLD);
+        let mut spans = vec![Span::styled("ctrl-r ", muted)];
+        let modes = FilterMode::CYCLE.into_iter().filter(|m| self.mode_available(*m));
+        for mode in modes.filter(|m| !only_current || *m == self.mode) {
+            let label = format!(" {} ", scope_label(mode));
+            spans.push(if mode == self.mode {
+                Span::styled(label, current)
+            } else {
+                Span::styled(label, muted)
+            });
+        }
+        spans
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1298,7 +1880,7 @@ impl State {
                 ),
             ]),
             field("Atuin id", text(row.atuin_id.to_string())),
-            field("Title", highlighted_line(&row.title.text, &[], width, base, base)),
+            field("Title", highlighted_line(shown_title(&row), &[], width, base, base)),
             field("Host", vec![
                 Span::styled(row.host_id.clone(), base),
                 Span::styled(
@@ -1358,19 +1940,14 @@ impl State {
             lines.extend(self.children_lines(&row, &forks, left, inner.width, tz, theme));
         }
 
-        // The conversation, in whatever room is left, scrolling. Its scrollbar goes on the right
-        // border, or in a column kept for it.
+        // The conversation, in whatever room is left, scrolling, a line under the fields. Its
+        // scrollbar goes on the right border, or in a column kept for it.
+        lines.push(Line::default());
         let top = u16::try_from(lines.len()).unwrap_or(u16::MAX).min(inner.height);
         let left = usize::from(inner.height.saturating_sub(top));
         let border = u16::from(st.compactness == Compactness::Full);
         let width = usize::from((inner.width + border).saturating_sub(1));
-        let want = self.scrolls[Pane::Inspect as usize].offset_for(&row.handle);
-        let body = scroll_body(
-            want,
-            left,
-            || self.conversation(&row, width, left, 1, theme),
-            |limit| self.conversation_document(&row, width, 1, limit, theme),
-        );
+        let body = self.pane_body(Pane::Inspect, &row, width, 1, left, theme);
         lines.extend(body.lines.iter().cloned());
         f.render_widget(Paragraph::new(Text::from(lines)), inner);
 
@@ -1388,32 +1965,94 @@ impl State {
         self.drawn(Pane::Inspect, row.handle.clone(), area, left, &body);
     }
 
-    /// The detail pane beside the list, in `pane`: the session previewed (see
-    /// [`State::preview_row`]), its conversation scrolling under what it is, with a scrollbar in
-    /// the pane's right margin.
+    /// What `pane` (beside the list, or Inspect's) shows of `row`'s conversation: the reader, or,
+    /// until its transcript is read, the preview's parts.
+    fn pane_body(
+        &mut self,
+        pane: Pane,
+        row: &SessionRow,
+        width: usize,
+        indent: usize,
+        height: usize,
+        theme: &Theme,
+    ) -> Body {
+        if self.reading(row) {
+            self.spinning = true;
+            // The reader opens at the match again once the conversation shows.
+            self.scrolls[pane as usize].reading = None;
+            return self.spinner(indent, theme);
+        }
+        let snippet = match &row.matched {
+            Some(m) if height > 4 && self.match_elsewhere(row) => {
+                snippet_lines(&m.text, &m.highlights, width, indent, theme)
+            }
+            _ => Vec::new(),
+        };
+        let room = height - snippet.len();
+        if let Some(mut body) = self.reader_body(pane, row, width, indent, room, theme) {
+            if !snippet.is_empty() {
+                body.lines.splice(0..0, snippet);
+            }
+            return body;
+        }
+        scroll_body(
+            self.scrolls[pane as usize].offset_for(&row.handle),
+            height,
+            || self.conversation(row, width, height, indent, theme),
+            |limit| self.conversation_document(row, width, indent, limit, theme),
+        )
+    }
+
+    /// A conversation's place in a pane while it's on its way (see [`State::reading`]).
+    fn spinner(&self, indent: usize, theme: &Theme) -> Body {
+        const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let frame = self.spin_from.map_or('…', |from| {
+            let turns = from.elapsed().as_millis() / SPIN.as_millis();
+            FRAMES[usize::try_from(turns).unwrap_or(0) % FRAMES.len()]
+        });
+        let line = Line::from(vec![
+            Span::raw(" ".repeat(indent)),
+            Span::styled(format!("{frame} reading…"), style(theme, Meaning::Annotation)),
+        ]);
+        Body {
+            lines: vec![line],
+            offset: 0,
+            len: 1,
+            more: false,
+        }
+    }
+
+    /// The detail pane beside the list, in `pane`: the selected session, its conversation
+    /// scrolling under what it is, with a scrollbar in the pane's right margin.
     fn draw_side(&mut self, f: &mut Frame, pane: Rect, tz: UtcOffset, theme: &Theme) {
         let text = pane.inner(ratatui::layout::Margin::new(1, 0));
-        let Some(row) = self.preview_row().cloned() else {
+        let Some(row) = self.selected().cloned() else {
+            // Nothing listed (the list says why): nothing to read either.
+            if self.applied != 0 {
+                let middle = Rect {
+                    y: text.y + text.height.saturating_sub(1) / 2,
+                    height: text.height.min(1),
+                    ..text
+                };
+                let note = Span::styled("Nothing to read", style(theme, Meaning::Annotation));
+                f.render_widget(Paragraph::new(note).alignment(Alignment::Center), middle);
+            }
             return;
         };
         let width = usize::from(text.width);
         let mut lines = self.detail_header(&row, width, tz, theme);
+        lines.push(Line::default());
         let top = u16::try_from(lines.len()).unwrap_or(u16::MAX).min(text.height);
         let left = usize::from(text.height.saturating_sub(top));
-        if !self.previews.contains_key(&row.handle) {
+        // Without its transcript, the conversation is the preview's parts, once read.
+        if !self.reading(&row) && !self.previews.contains_key(&row.handle) {
             lines.push(Line::default());
             lines.push(Line::from(Span::styled("…", style(theme, Meaning::Annotation))));
             // Already wrapped (markdown keeps its indents, which the paragraph's wrap would trim).
             f.render_widget(Paragraph::new(Text::from(lines)), text);
             return;
         }
-        let want = self.scrolls[Pane::Side as usize].offset_for(&row.handle);
-        let body = scroll_body(
-            want,
-            left,
-            || self.conversation(&row, width, left, 0, theme),
-            |limit| self.conversation_document(&row, width, 0, limit, theme),
-        );
+        let body = self.pane_body(Pane::Side, &row, width, 0, left, theme);
         lines.extend(body.lines.iter().cloned());
         f.render_widget(Paragraph::new(Text::from(lines)), text);
 
@@ -1513,6 +2152,17 @@ const CHILDREN_COLLAPSED: usize = 3;
 /// The lines Inspect keeps for the conversation while the children list is expanded.
 const INSPECT_CONVERSATION_MIN: usize = 4;
 
+/// A scope's name in the input's list of them.
+fn scope_label(mode: FilterMode) -> &'static str {
+    match mode {
+        FilterMode::Global => "all",
+        FilterMode::Workspace => "repo",
+        FilterMode::Branch => "branch",
+        FilterMode::Directory => "dir",
+        FilterMode::Host => "host",
+    }
+}
+
 /// A full date and time, with what it doesn't already say beside it: `(12m ago)`,
 /// `(yesterday)`, `(Monday)`.
 fn format_when(ts: OffsetDateTime, now: OffsetDateTime, tz: UtcOffset) -> String {
@@ -1548,22 +2198,45 @@ mod tests {
 
     use super::*;
 
+    const ONE_LINE: RowShape = RowShape {
+        two_line: false,
+        by_day: false,
+    };
+    const TWO_LINE: RowShape = RowShape {
+        two_line: true,
+        by_day: false,
+    };
+    const BY_DAY: RowShape = RowShape {
+        two_line: true,
+        by_day: true,
+    };
+
     /// The title takes the rest of the row, whatever the width: 80 columns is 76 inside the box,
-    /// and a split 120 leaves the list 69.
+    /// and a split 120 leaves the list 69. Two-line rows give the whole line to the title.
     #[rstest]
     #[case::wide(196, 174)]
     #[case::full_80(76, 54)]
     #[case::split_120(69, 47)]
     fn the_title_takes_the_rest(#[case] width: u16, #[case] title: u16) {
-        assert_eq!(row_layout(width), [(Time, 10), (Harness, 2), (Title, title), (Messages, 4)]);
+        assert_eq!(row_layout(width, ONE_LINE), [
+            (Time, 10),
+            (Harness, 2),
+            (Title, title),
+            (Messages, 4)
+        ]);
+        // Two-line rows say when and how many messages on their second line.
+        assert_eq!(row_layout(width, TWO_LINE), [(Title, title + 19)]);
+        assert_eq!(row_layout(width, BY_DAY), [(Title, title + 19)]);
     }
 
     /// At every width the row fills it exactly, and the message count goes only when the title
     /// would otherwise be under [`TITLE_MIN`].
     #[rstest]
-    fn every_width_fills_the_row_title_first() {
+    fn every_width_fills_the_row_title_first(
+        #[values(ONE_LINE, TWO_LINE, BY_DAY)] shape: RowShape,
+    ) {
         for width in 30..=200u16 {
-            let layout = row_layout(width);
+            let layout = row_layout(width, shape);
             let used: u16 = layout.iter().map(|(_, w)| w).sum::<u16>()
                 + u16::try_from(layout.len() - 1).unwrap()
                 + 3;
@@ -1573,12 +2246,43 @@ mod tests {
             }
             let counted = layout.iter().any(|(c, _)| *c == Messages);
             let gain = Messages.width() + 1;
-            if counted {
+            if shape.two_line {
+                assert!(!counted, "{width}: {layout:?}");
+            } else if counted {
                 assert!(title >= TITLE_MIN, "{width}: {layout:?}");
             } else {
                 assert!(title < TITLE_MIN + gain, "{width}: {layout:?}");
             }
         }
+    }
+
+    /// A day's heading reads over its sessions, and a row's title over its place, whichever way
+    /// up the list is.
+    #[rstest]
+    fn headings_and_titles_read_top_down_either_way_up() {
+        use ListLine::{Heading, Place, Title as T};
+        let rows: Vec<SessionRow> = (0..3)
+            .map(|i| super::super::fake::row(HarnessKind::ClaudeCode, &format!("s{i}"), "t"))
+            .collect();
+        // The first two on one day, the third on another.
+        let day = |r: &SessionRow| {
+            let d = time::macros::date!(2026 - 10 - 08);
+            if r.handle.session.as_ref() == "s2" {
+                d.previous_day().unwrap()
+            } else {
+                d
+            }
+        };
+        let (down, starts) = list_lines(&rows, BY_DAY, true, None, day);
+        assert_eq!(down, [Heading(0), T(0), Place(0), T(1), Place(1), Heading(2), T(2), Place(2)]);
+        assert_eq!(starts, [1, 3, 6]);
+        // From an input under the list, outward is up the screen.
+        let (up, starts) = list_lines(&rows, BY_DAY, false, None, day);
+        assert_eq!(up, [Place(0), T(0), Place(1), T(1), Heading(0), Place(2), T(2), Heading(2)]);
+        assert_eq!(starts, [0, 2, 5]);
+        // Ungrouped, one line a row.
+        let (lines, _) = list_lines(&rows, ONE_LINE, false, None, day);
+        assert_eq!(lines, [T(0), T(1), T(2)]);
     }
 
     #[rstest]

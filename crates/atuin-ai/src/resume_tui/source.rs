@@ -106,6 +106,24 @@ pub struct SessionRow {
     pub children: u32,
     /// The best-matching message text, when there is a query. The match may be in a child.
     pub matched: Option<Snippet>,
+    /// Where that message is in the session's own messages, in transcript order, when it is the
+    /// session's own (not a child's): what the reader opens at.
+    pub matched_at: Option<u64>,
+}
+
+/// The title a session shows: its own, or `untitled` when it has none (and no prompt to take one
+/// from).
+pub fn shown_title(row: &SessionRow) -> &str {
+    if is_untitled(row) {
+        "untitled"
+    } else {
+        row.title.text.trim()
+    }
+}
+
+/// Whether `row` has no title to show (see [`shown_title`]).
+pub fn is_untitled(row: &SessionRow) -> bool {
+    row.title.text.trim().is_empty()
 }
 
 /// The preview for one session: its opening prompt and where it left off. Tool calls and
@@ -114,6 +132,98 @@ pub struct SessionRow {
 pub struct SessionPreview {
     pub first_prompt: Option<String>,
     pub last_assistant: Option<String>,
+}
+
+/// One piece of a session's conversation, as the reader shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TranscriptEntry {
+    /// What the user asked.
+    Prompt(String),
+    /// What the agent answered.
+    Reply(String),
+    /// A model-written summary standing in for earlier conversation.
+    Summary(String),
+    /// The tools the agent called between two pieces of text: each name, and how many times in a
+    /// row.
+    Tools(Vec<(String, usize)>),
+}
+
+/// A session's conversation, for the reader: its entries, and the message each came from (its
+/// place in the session's messages, in the order a search's match is counted).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Transcript {
+    pub entries: Vec<TranscriptEntry>,
+    pub messages: Vec<u64>,
+    /// How many messages the session had when it was read, as [`SessionRow::messages`] counts
+    /// them: a session found with more is read again.
+    pub message_count: u64,
+}
+
+impl Transcript {
+    /// The entry message `index` is in: the last to start at it or before (a run of tool calls
+    /// takes in the calls of the messages after its first).
+    pub fn entry_at(&self, index: u64) -> Option<usize> {
+        self.messages.iter().rposition(|m| *m <= index)
+    }
+}
+
+/// Builds a session's [`Transcript`] from its messages in order (each started with [`Self::at`]),
+/// folding each run of tool calls into one entry.
+#[derive(Default)]
+pub struct TranscriptBuilder {
+    transcript: Transcript,
+    at: u64,
+}
+
+impl TranscriptBuilder {
+    /// What follows comes from the message at `index`.
+    pub fn at(&mut self, index: u64) {
+        self.at = index;
+    }
+
+    /// The session had `n` messages when read (see [`Transcript::message_count`]).
+    pub fn counted(&mut self, n: u64) {
+        self.transcript.message_count = n;
+    }
+
+    fn push(&mut self, entry: TranscriptEntry) {
+        self.transcript.entries.push(entry);
+        self.transcript.messages.push(self.at);
+    }
+
+    /// `text` as an entry of the kind `entry` makes, unless it's blank.
+    fn text(&mut self, text: &str, entry: fn(String) -> TranscriptEntry) {
+        if !text.trim().is_empty() {
+            self.push(entry(text.to_owned()));
+        }
+    }
+
+    pub fn prompt(&mut self, text: &str) {
+        self.text(text, TranscriptEntry::Prompt);
+    }
+
+    pub fn reply(&mut self, text: &str) {
+        self.text(text, TranscriptEntry::Reply);
+    }
+
+    pub fn summary(&mut self, text: &str) {
+        self.text(text, TranscriptEntry::Summary);
+    }
+
+    pub fn tool(&mut self, name: &str) {
+        if let Some(TranscriptEntry::Tools(tools)) = self.transcript.entries.last_mut() {
+            match tools.last_mut() {
+                Some((last, n)) if last == name => *n += 1,
+                _ => tools.push((name.to_owned(), 1)),
+            }
+        } else {
+            self.push(TranscriptEntry::Tools(vec![(name.to_owned(), 1)]));
+        }
+    }
+
+    pub fn finish(self) -> Transcript {
+        self.transcript
+    }
 }
 
 /// Where the picker's sessions come from.
@@ -134,6 +244,12 @@ pub trait SessionSource: Send + Sync {
     /// The forks grouped under a root, newest first: the [listed](Relation::is_listed) sessions
     /// among its children, never its subagents.
     async fn children(&self, session: &HarnessSession) -> eyre::Result<Vec<SessionRow>>;
+
+    /// The session's whole conversation, oldest first, for the reader. Reasoning and tool
+    /// results never appear; tool calls are folded into [`TranscriptEntry::Tools`].
+    async fn transcript(&self, _session: &HarnessSession) -> eyre::Result<Transcript> {
+        Ok(Transcript::default())
+    }
 
     /// Session `session` with every message it holds, as its harness can write it back out to be
     /// resumed in `cwd` (see [`super::resumer::Resumer::restore`]).
