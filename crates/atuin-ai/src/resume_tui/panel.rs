@@ -506,7 +506,11 @@ mod tests {
         #[case] host_id: &str,
         #[case] want: &str,
     ) {
-        let mut themes = atuin_client::theme::ThemeManager::new(None, None);
+        let mut themes = atuin_client::theme::ThemeManagerOptions {
+            debug: false,
+            builtin_only: true,
+        }
+        .build();
         let theme = themes.load_theme("default", None);
         let mut row = row();
         row.git_root = Some("/src/atuin".into());

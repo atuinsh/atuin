@@ -20,6 +20,7 @@ use tracing_futures::Instrument;
 use super::{History, HistoryId, Version};
 use crate::database::{Sqlite, current_context};
 use crate::record::sqlite_store::SqliteStore;
+use crate::settings::Settings;
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
@@ -493,7 +494,7 @@ impl HistoryStore {
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
-    pub async fn init_store(&self, db: &Sqlite) -> Result<()> {
+    pub async fn init_store(&self, db: &Sqlite, settings: &Settings) -> Result<()> {
         let pb = ProgressBar::new_spinner();
         pb.set_style(
             ProgressStyle::with_template("{spinner:.blue} {msg}")
@@ -507,7 +508,7 @@ impl HistoryStore {
 
         pb.set_message("Fetching history from old database");
 
-        let context = current_context().await?;
+        let context = current_context(settings).await?;
         let history = db.list([], &context, None, false, true, None).await?;
 
         pb.set_message("Fetching history already in store");

@@ -30,7 +30,7 @@ os = ["dep:rustix", "dep:windows-sys"]
 proto = ["dep:prost"]
 # Enables `atuin_common::db::sqlite`.
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
-# Enables `atuin_common::test_utils`, for use in tests.
+# Enables `atuin_common::test_utils` and `atuin_common::env::MockEnv`, for use in tests.
 test-utils = ["dep:tracing-subscriber"]
 # Enables various items in `atuin_common::string` that require Unicode data.
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]

@@ -228,7 +228,7 @@ impl Machine {
         assert!(self.daemon.is_none(), "the daemon is already running");
         let mut daemon = self.atuin(&["daemon", "start", "--show-logs"]);
         // `ATUIN_E2E_LOG` sets what the daemons log, as `ATUIN_LOG` does, for a failure to show.
-        if let Some(filter) = std::env::var_os("ATUIN_E2E_LOG") {
+        if let Some(filter) = atuin_common::env::var_os("ATUIN_E2E_LOG") {
             daemon.env("ATUIN_LOG", filter);
         }
         let daemon = Process::spawn(daemon);

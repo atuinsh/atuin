@@ -28,6 +28,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
+use crate::env::var_nonempty;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::pi::{Pi, agent_dir, expand_tilde};
 use crate::harnesstools::session::model::{
@@ -41,7 +42,6 @@ use crate::harnesstools::session::{
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
 use crate::sync::BlockingPool;
-use crate::utils::env_nonempty;
 
 /// How far into a file the header line is looked for, like pi's own bounded header scan
 /// (session-manager.ts `MAX_SESSION_HEADER_SCAN_BYTES`).
@@ -66,7 +66,7 @@ impl PiSessions {
 
 /// Where pi keeps sessions by default (see [`session_root`]).
 pub(crate) fn default_root() -> PathBuf {
-    session_root(&agent_dir(), env_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
+    session_root(&agent_dir(), var_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
 }
 
 /// The file of session `id` under `root`. Pi names it `<timestamp>_<id>.jsonl`, so a file so
@@ -105,7 +105,7 @@ fn custom_session_dir(agent_dir: &Path, env: Option<&std::ffi::OsStr>) -> Option
 /// `session-manager.ts` `getDefaultSessionDirPath`).
 pub(crate) fn new_session_dir(cwd: &Path) -> PathBuf {
     let agent_dir = agent_dir();
-    let env = env_nonempty("PI_CODING_AGENT_SESSION_DIR");
+    let env = var_nonempty("PI_CODING_AGENT_SESSION_DIR");
     custom_session_dir(&agent_dir, env.as_deref()).unwrap_or_else(|| {
         let cwd = cwd.to_string_lossy();
         let cwd = cwd.strip_prefix(['/', '\\']).unwrap_or(&cwd).replace(['/', '\\', ':'], "-");
@@ -1151,7 +1151,7 @@ mod tests {
         let expected = expected
             .replace("<abs>", abs)
             .replace("<agent>", &agent.path().to_string_lossy())
-            .replace("<home>", &crate::utils::home_dir().to_string_lossy());
+            .replace("<home>", &crate::dirs::home_dir().to_string_lossy());
         assert_eq!(
             session_root(agent.path(), env.map(std::ffi::OsStr::new)),
             PathBuf::from(expected)

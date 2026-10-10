@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use atuin_common::path::PathExt as _;
+
 const SKILL_FILENAME: &str = "SKILL.md";
 
 /// A skill file found on disk, before body interpolation.
@@ -32,8 +34,11 @@ pub async fn discover(
 ) -> Vec<RawSkillFile> {
     let mut files = Vec::new();
 
-    // Project skills first (higher priority)
-    if let Some(dir) = project_skills_dir.filter(|d| d.is_dir()) {
+    // Project skills first (higher priority). Filter out `global_skills_dir` so we don't load it
+    // twice (in case it's ~/.atuin).
+    if let Some(dir) =
+        project_skills_dir.filter(|d| d.is_dir() && !d.is_same_path(global_skills_dir))
+    {
         scan_dir(dir, true, &mut files).await;
     }
 
@@ -45,14 +50,14 @@ pub async fn discover(
     files
 }
 
-/// The default global skills directory (`~/.config/atuin/skills/`).
+/// The default global skills directory (`~/.atuin/skills/`).
 pub fn global_skills_dir() -> PathBuf {
-    atuin_common::utils::config_dir().join("skills")
+    atuin_common::dirs::config_path("skills")
 }
 
 /// Given a project working directory, return the project skills directory.
 pub fn project_skills_dir(project_root: &Path) -> PathBuf {
-    project_root.join(".atuin").join("skills")
+    PathBuf::from_iter([project_root, ".atuin".as_ref(), "skills".as_ref()])
 }
 
 /// Recursively scan a directory for `SKILL.md` files.
@@ -104,6 +109,8 @@ async fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     fn setup_skill(dir: &Path, rel_path: &str, content: &str) {
@@ -112,6 +119,7 @@ mod tests {
         std::fs::write(skill_dir.join(SKILL_FILENAME), content).unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
     async fn discovers_project_skills() {
         let dir = tempfile::tempdir().unwrap();
@@ -124,6 +132,7 @@ mod tests {
         assert!(files[0].is_project);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn discovers_global_skills() {
         let dir = tempfile::tempdir().unwrap();
@@ -136,6 +145,7 @@ mod tests {
         assert!(!files[0].is_project);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn discovers_nested_skills() {
         let dir = tempfile::tempdir().unwrap();
@@ -147,6 +157,7 @@ mod tests {
         assert_eq!(files.len(), 2);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn project_comes_before_global() {
         let project = tempfile::tempdir().unwrap();
@@ -163,9 +174,38 @@ mod tests {
         assert!(!files[1].is_project);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn missing_directories_handled() {
         let files = discover(Some(Path::new("/does/not/exist")), Path::new("/also/missing")).await;
         assert!(files.is_empty());
+    }
+
+    /// A project skills directory that is also the global one, as `~/.atuin/skills` is by
+    /// default, is scanned once, as the global one.
+    #[rstest]
+    #[case::global(true, 1, false)]
+    #[case::project(false, 2, true)]
+    #[tokio::test]
+    async fn the_global_dir_is_not_also_a_project_dir(
+        #[case] is_global: bool,
+        #[case] expected: usize,
+        #[case] first_is_project: bool,
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join(".atuin").join("skills");
+        let elsewhere = home.path().join("elsewhere").join("skills");
+        for dir in [&project, &elsewhere] {
+            setup_skill(dir, "deploy", "---\nname: deploy\n---\nDeploy.");
+        }
+
+        let global = if is_global {
+            &project
+        } else {
+            &elsewhere
+        };
+        let files = discover(Some(&project), global).await;
+        assert_eq!(files.len(), expected);
+        assert_eq!(files[0].is_project, first_is_project);
     }
 }

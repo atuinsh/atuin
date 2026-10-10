@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::env;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;
 
@@ -18,7 +19,7 @@ pub struct Fish {
 
 /// see <https://fishshell.com/docs/current/interactive.html#searchable-command-history>
 fn default_histpath() -> Result<PathBuf> {
-    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).ok_or(()).or_else(|_| {
+    let data = env::var_os("XDG_DATA_HOME").map(PathBuf::from).ok_or(()).or_else(|_| {
         let Some(home) = dirs::home_dir() else {
             eyre::bail!("could not determine home directory");
         };
@@ -27,7 +28,7 @@ fn default_histpath() -> Result<PathBuf> {
 
     // fish supports multiple history sessions
     // If `fish_history` var is missing, or set to `default`, use `fish` as the session
-    let session = std::env::var("fish_history").unwrap_or_else(|_| String::from("fish"));
+    let session = env::var("fish_history").unwrap_or_else(|_| String::from("fish"));
     let session = if session == "default" {
         String::from("fish")
     } else {

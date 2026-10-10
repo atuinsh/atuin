@@ -118,7 +118,7 @@ impl Worker {
         ai_session_db: Option<AiSessionDatabase>,
         ai_session_recovery: Recovery,
     ) -> Result<Self, StartError> {
-        let host_id = Settings::host_id().await.map_err(StartError::HostId)?;
+        let host_id = handle.settings().await.host_id().await.map_err(StartError::HostId)?;
 
         let encryption_key = handle.encryption_key();
         // TODO(markovejnovic): We should definitely not be creating new stores, but this is pending
@@ -230,7 +230,7 @@ impl Worker {
         self.index_downloaded_records(&downloaded_records).await;
 
         // Store sync time
-        if let Err(e) = Settings::save_sync_time().await {
+        if let Err(e) = settings.save_sync_time().await {
             tracing::error!("failed to save sync time: {e}");
         }
 

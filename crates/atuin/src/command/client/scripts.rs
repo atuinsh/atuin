@@ -131,7 +131,7 @@ impl Cmd {
         }
 
         // Open the file in the user's preferred editor
-        let editor_str = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+        let editor_str = atuin_common::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
 
         // Use shlex to safely split the string into shell-like parts.
         let parts = shlex::split(&editor_str).ok_or_eyre("Failed to parse editor command")?;
@@ -223,7 +223,7 @@ impl Cmd {
         let script_content = if let Some(count_opt) = new_script.last {
             // Get the last N commands from history, plus 1 to exclude the command that runs this script
             let count = count_opt.unwrap_or(1) + 1; // Add 1 to the count to exclude the current command
-            let context = atuin_client::database::current_context().await?;
+            let context = atuin_client::database::current_context(settings).await?;
 
             // Get the last N+1 commands, filtering by the default mode
             let filters = [settings.default_filter_mode(context.git_root.is_some())];
@@ -552,7 +552,7 @@ impl Cmd {
         store: SqliteStore,
         history_db: &Sqlite,
     ) -> Result<()> {
-        let host_id = Settings::host_id().await?;
+        let host_id = settings.host_id().await?;
         let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
             .context("could not load or generate encryption key")?;
 

@@ -76,6 +76,9 @@ impl Daemon {
     ///
     /// This is the first path in [`Self::potential_socket_paths`] that exists, or if none exist,
     /// the first path.
+    ///
+    /// Note: you should almost always use `atuin_daemon::client::socket_path` instead of this
+    /// method, as it implements additional logic like checking the pidfile.
     #[must_use]
     pub fn existing_socket_path(&self) -> Cow<'_, Path> {
         self.existing_socket_path_ctx(DefaultSocketCtx)
@@ -88,13 +91,27 @@ impl Daemon {
     ///
     /// 1. If `systemd_socket` is true and `$XDG_RUNTIME_DIR` is non-empty,
     ///    `$XDG_RUNTIME_DIR/atuin.sock`.
-    /// 2. `/tmp/atuin-$UID/atuin.sock`.
+    /// 2. `$TMPDIR/atuin-$UID/atuin.sock` (substituting `/tmp` for `$TMPDIR` if unset).
     /// 3. If `$XDG_RUNTIME_DIR` is non-empty, `$XDG_RUNTIME_DIR/atuin.sock` (legacy path), unless
     ///    step #1 already yielded that path.
     /// 4. If `$XDG_DATA_HOME` is non-empty, `$XDG_DATA_HOME/atuin/atuin.sock` (legacy path).
     /// 5. If `$XDG_DATA_HOME` is unset or empty, `~/.local/share/atuin/atuin.sock` (legacy path).
+    /// 6. If `$TMPDIR` is set, `/tmp/atuin-$UID/atuin.sock` (ignoring `$TMPDIR`).
+    ///
+    /// Note: you should almost always use `atuin_daemon::client::potential_socket_paths` instead of
+    /// this method, as it implements additional logic.
     pub fn potential_socket_paths(&self) -> impl Iterator<Item = Cow<'_, Path>> + use<'_> {
         self.potential_socket_paths_ctx(DefaultSocketCtx)
+    }
+
+    /// The socket path that should be used when there is no existing socket.
+    ///
+    /// This is the first element of [`Self::potential_socket_paths`].
+    #[must_use]
+    pub fn preferred_socket_path(&self) -> Cow<'_, Path> {
+        self.potential_socket_paths()
+            .next()
+            .expect("there is always at least one potential socket path")
     }
 
     fn socket_path_ctx(&self, ctx: impl SocketCtx) -> SocketPath<'_> {
@@ -128,13 +145,11 @@ impl Daemon {
         &self,
         ctx: impl SocketCtx,
     ) -> impl Iterator<Item = Cow<'_, Path>> {
-        let is_user_defined = self.socket_path.is_some();
-        let defaults = (!is_user_defined)
-            .then(|| self.default_socket_paths(ctx))
-            .into_iter()
-            .flatten()
-            .map(Cow::Owned);
-        self.socket_path.as_deref().map(Cow::Borrowed).into_iter().chain(defaults)
+        if let Some(path) = self.socket_path.as_deref() {
+            itertools::Either::Left(std::iter::once(Cow::Borrowed(path)))
+        } else {
+            itertools::Either::Right(self.default_socket_paths(ctx).map(Cow::Owned))
+        }
     }
 
     fn default_socket_paths(&self, ctx: impl SocketCtx) -> impl Iterator<Item = PathBuf> {
@@ -169,11 +184,11 @@ trait SocketCtx: Copy + Sized {
     }
 
     fn runtime_dir(&self) -> Option<PathBuf> {
-        atuin_common::utils::env_abspath("XDG_RUNTIME_DIR")
+        atuin_common::env::var_abspath("XDG_RUNTIME_DIR")
     }
 
-    fn data_dir(&self) -> PathBuf {
-        atuin_common::utils::data_dir()
+    fn legacy_data_dir(&self) -> PathBuf {
+        atuin_common::dirs::legacy_data_dir()
     }
 
     fn uid(&self) -> std::ffi::c_uint {
@@ -182,7 +197,11 @@ trait SocketCtx: Copy + Sized {
 
     fn default_socket_path(&self) -> EnvDependentPathBuf {
         let subdir_name = format!("atuin-{}", self.uid());
-        let make_socket_path = |tmp: PathBuf| tmp.join(&subdir_name).join(SOCKET_NAME);
+        let make_socket_path = |mut tmp: PathBuf| {
+            tmp.push(&subdir_name);
+            tmp.push(SOCKET_NAME);
+            tmp
+        };
 
         let tmp = self.tmp_dir();
         let envless_tmp = self.envless_tmp_dir();
@@ -195,11 +214,18 @@ trait SocketCtx: Copy + Sized {
     }
 
     fn runtime_socket_path(&self) -> Option<PathBuf> {
-        self.runtime_dir().map(|dir| dir.join(SOCKET_NAME))
+        self.runtime_dir().map(|mut dir| {
+            dir.push(SOCKET_NAME);
+            dir
+        })
     }
 
     fn legacy_socket_path(&self) -> PathBuf {
-        self.runtime_socket_path().unwrap_or_else(|| self.data_dir().join(SOCKET_NAME))
+        self.runtime_socket_path().unwrap_or_else(|| {
+            let mut path = self.legacy_data_dir();
+            path.push(SOCKET_NAME);
+            path
+        })
     }
 }
 
@@ -354,7 +380,7 @@ mod unix_tests {
             self.runtime_dir.map(Into::into)
         }
 
-        fn data_dir(&self) -> PathBuf {
+        fn legacy_data_dir(&self) -> PathBuf {
             "/home/user/.local/share/atuin".into()
         }
 

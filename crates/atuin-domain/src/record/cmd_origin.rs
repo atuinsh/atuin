@@ -22,7 +22,7 @@ impl<T: Into<String>> CmdHost<T> {
 
 impl CmdHost<String> {
     pub fn probe_current() -> Self {
-        std::env::var("ATUIN_HOST_NAME")
+        atuin_common::env::var("ATUIN_HOST_NAME")
             .ok()
             .or_else(|| whoami::hostname().ok())
             .map(Self)
@@ -60,7 +60,7 @@ impl<T: Into<String>> CmdUser<T> {
 
 impl CmdUser<String> {
     pub fn probe_current() -> Self {
-        std::env::var("ATUIN_HOST_USER")
+        atuin_common::env::var("ATUIN_HOST_USER")
             .ok()
             .or_else(|| whoami::username().ok())
             .map(Self)

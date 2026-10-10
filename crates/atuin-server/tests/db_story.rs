@@ -1,4 +1,4 @@
-use std::env::{self, temp_dir};
+use std::env::temp_dir;
 
 use atuin_common::db::DbUrl;
 use atuin_common::utils::{crypto_random_string, uuid_v7};
@@ -33,7 +33,7 @@ fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
 }
 
 async fn create_test_db() -> eyre::Result<DbSettings> {
-    let var = env::var("ATUIN_TEST_DB_URI").ok();
+    let var = atuin_common::env::var("ATUIN_TEST_DB_URI").ok();
     let settings = get_settings(var)?;
 
     match &settings.db_uri {

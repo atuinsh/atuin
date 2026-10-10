@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
-use crate::utils::{env_nonempty, home_dir};
+use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 
 pub mod rehydrate;
 pub mod session;
@@ -11,7 +12,7 @@ pub mod session;
 /// Pi's config directory: `PI_CODING_AGENT_DIR`, else `~/.pi/agent` (pi-mono
 /// `packages/coding-agent/src/config.ts` `getAgentDir`).
 fn agent_dir() -> PathBuf {
-    env_nonempty("PI_CODING_AGENT_DIR")
+    var_nonempty("PI_CODING_AGENT_DIR")
         .map_or_else(|| home_dir().join(".pi").join("agent"), |dir| expand_tilde(&dir))
 }
 

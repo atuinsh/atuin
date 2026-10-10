@@ -1,5 +1,6 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use atuin_common::path::PathExt as _;
 use eyre::Result;
 
 use crate::permissions::rule::Rule;
@@ -72,25 +73,126 @@ pub async fn write_rule(file_path: &Path, rule: &Rule, disposition: RuleDisposit
     Ok(())
 }
 
+/// Controls the scope of "always allow" for a given directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectScope {
+    /// The Git repository the directory is in.
+    Workspace,
+    /// The directory itself.
+    Directory,
+    /// The directory is `$HOME`, so project-level scope is unavailable, as it would conflict with
+    /// `~/.atuin` being used for global permissions.
+    Home,
+}
+
+impl ProjectScope {
+    /// The scope for the current directory.
+    ///
+    /// `git_root` is the root of the Git repository the current directory is in, if any.
+    pub fn detect(git_root: Option<&Path>) -> Self {
+        Self::detect_with(git_root, || std::env::current_dir().ok())
+    }
+
+    fn detect_with(git_root: Option<&Path>, get_cwd: impl FnOnce() -> Option<PathBuf>) -> Self {
+        let cwd;
+        let root = if let Some(root) = git_root {
+            Some(root)
+        } else {
+            cwd = get_cwd();
+            cwd.as_deref()
+        };
+
+        if let Some(root) = root
+            && atuin_common::dirs::try_home_dir().is_ok_and(|home| root.is_same_path(home))
+        {
+            return Self::Home;
+        }
+
+        if git_root.is_some() {
+            Self::Workspace
+        } else {
+            Self::Directory
+        }
+    }
+}
+
 /// Build the path to the project-level permissions file.
 /// `project_root` is typically a git root or the current working directory.
-pub fn project_permissions_path(project_root: &Path) -> std::path::PathBuf {
-    project_root.join(".atuin").join("permissions.ai.toml")
+pub fn project_permissions_path(project_root: &Path) -> PathBuf {
+    PathBuf::from_iter([project_root, ".atuin".as_ref(), "permissions.ai.toml".as_ref()])
 }
 
 /// Build the path to the global permissions file (sibling of atuin config).
-pub fn global_permissions_path() -> std::path::PathBuf {
-    atuin_common::utils::config_dir().join("permissions.ai.toml")
+pub fn global_permissions_path() -> PathBuf {
+    atuin_common::dirs::config_path("permissions.ai.toml")
 }
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::env::MockEnv;
     use rstest::*;
 
     use super::*;
 
+    /// A mock environment, in which every variable (including `HOME`) starts out unset.
     #[fixture]
-    fn perm_file() -> (tempfile::TempDir, std::path::PathBuf) {
+    fn env() -> MockEnv {
+        MockEnv::install()
+    }
+
+    #[rstest]
+    #[case::git_repository(
+        Some("/home/me/src/atuin"),
+        "/home/me/src/atuin/crates",
+        ProjectScope::Workspace
+    )]
+    #[case::plain_directory(None, "/home/me/notes", ProjectScope::Directory)]
+    #[case::outside_home(None, "/tmp", ProjectScope::Directory)]
+    #[case::home(None, "/home/me", ProjectScope::Home)]
+    // Dotfiles kept in a git repository rooted at the home directory.
+    #[case::home_as_git_repository(Some("/home/me"), "/home/me/.config", ProjectScope::Home)]
+    #[case::subdirectory_of_home(None, "/home/me/.config", ProjectScope::Directory)]
+    fn project_scope_is_never_the_home_directory(
+        env: MockEnv,
+        #[case] git_root: Option<&str>,
+        #[case] cwd: &str,
+        #[case] expected: ProjectScope,
+    ) {
+        env.set("HOME", "/home/me");
+        let scope = ProjectScope::detect_with(git_root.map(Path::new), || {
+            assert!(git_root.is_none(), "the working directory isn't needed in a git repository");
+            Some(PathBuf::from(cwd))
+        });
+        assert_eq!(scope, expected);
+    }
+
+    /// Without a home directory or a working directory to compare, the project is just a
+    /// directory.
+    #[rstest]
+    fn project_scope_without_a_known_home_or_cwd(env: MockEnv) {
+        assert_eq!(
+            ProjectScope::detect_with(None, || Some(PathBuf::from("/home/me"))),
+            ProjectScope::Directory
+        );
+        env.set("HOME", "/home/me");
+        assert_eq!(ProjectScope::detect_with(None, || None), ProjectScope::Directory);
+    }
+
+    /// A home directory reached through a symlink is still the home directory.
+    #[cfg(unix)]
+    #[rstest]
+    fn project_scope_sees_through_symlinks(env: MockEnv) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let link = dir.path().join("link");
+        std::fs::create_dir(&home).unwrap();
+        std::os::unix::fs::symlink(&home, &link).unwrap();
+        env.set("HOME", &home);
+        assert_eq!(ProjectScope::detect_with(None, || Some(link)), ProjectScope::Home);
+    }
+
+    #[fixture]
+    fn perm_file() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("permissions.ai.toml");
         (dir, file)
@@ -113,7 +215,7 @@ mod tests {
     #[case::deny(None, "Shell", RuleDisposition::Deny, &["deny", r#""Shell""#])]
     #[tokio::test]
     async fn writes_expected_content(
-        #[from(perm_file)] (_dir, file): (tempfile::TempDir, std::path::PathBuf),
+        #[from(perm_file)] (_dir, file): (tempfile::TempDir, PathBuf),
         #[case] initial: Option<&str>,
         #[case] tool: &str,
         #[case] disposition: RuleDisposition,
@@ -138,7 +240,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn does_not_duplicate_existing_rule(
-        #[from(perm_file)] (_dir, file): (tempfile::TempDir, std::path::PathBuf),
+        #[from(perm_file)] (_dir, file): (tempfile::TempDir, PathBuf),
     ) {
         let existing = r#"[permissions]
 allow = ["AtuinHistory"]

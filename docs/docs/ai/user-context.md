@@ -9,7 +9,7 @@ Atuin AI looks for additional context in the current directory and its parent di
 - `.atuin/TERMINAL.md` — scoped inside the `.atuin` dotdir
 - `TERMINAL.md` — at the directory root (for example, project root)
 
-It also checks `TERMINAL.md` in your Atuin config directory (`~/.config/atuin/TERMINAL.md` by default).
+It also checks `TERMINAL.md` in your Atuin home directory (`~/.atuin/TERMINAL.md` by default).
 
 If it finds any of these files, it sends their contents as additional context to the LLM. Atuin AI will send at maximum 10 additional context files, prioritizing files found globally first and then other files in order of filesystem depth, shallowest to deepest, and each file is limited to 10,000 characters.
 

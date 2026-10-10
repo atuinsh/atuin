@@ -1,4 +1,3 @@
-use std::env;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
@@ -109,7 +108,7 @@ impl Importer for Xonsh {
 
     async fn new() -> Result<Self> {
         // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
-        let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
+        let xonsh_data_dir = atuin_common::env::var("XONSH_DATA_DIR").ok();
         let hist_dir = get_histdir_path(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
         let cmd_origin = CmdOrigin::probe_current();
@@ -156,13 +155,14 @@ impl Importer for Xonsh {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
+    #[rstest]
     fn test_hist_dir_xonsh() {
         let hist_dir = xonsh_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
         assert_eq!(hist_dir, PathBuf::from("/home/user/xonsh_data/history_json"));

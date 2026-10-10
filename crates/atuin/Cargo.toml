@@ -166,6 +166,7 @@ tree-sitter-powershell = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+atuin-common = { workspace = true, features = ["test-utils"] }
 # An in-process sync server for the AI session e2e tests (tests/e2e_ai_sessions.rs).
 atuin-server = { workspace = true }
 divan = { workspace = true }

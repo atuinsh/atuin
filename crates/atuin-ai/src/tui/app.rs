@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atuin_client::settings::Settings;
@@ -20,6 +21,7 @@ use crate::fsm::effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
 use crate::fsm::events::{Event, PermissionChoice, PermissionResponse};
 use crate::fsm::tools::ToolPreviewData;
 use crate::fsm::{AgentFsm, AgentState, StreamPhase};
+use crate::permissions::writer::ProjectScope;
 use crate::tools::{ClientToolCall, PermissibleToolCall};
 use crate::tui::events::PermissionResult;
 use crate::tui::persist::PersistJob;
@@ -113,7 +115,8 @@ pub struct AiApp {
     permission_prompt_for: Option<String>,
     /// Cursor for the /model picker, reset whenever the picker closes.
     model_select: SelectState,
-    in_git_project: bool,
+    /// Controls the scope of "always allow" (e.g., git root vs current directory).
+    project_scope: ProjectScope,
     /// Submitted by `init` as if typed (the `atuin ai "question"` path).
     initial_prompt: Option<String>,
     /// Whether `init` should refresh usage in the background.
@@ -141,7 +144,7 @@ pub struct AiApp {
     pushed_turns: usize,
     exiting: bool,
     /// Config snapshot from startup; tip relevance predicates read it.
-    settings: Settings,
+    settings: Arc<Settings>,
     tips: TipRotation,
     /// When the in-flight turn started; survives continuation streams.
     turn_started_at: Option<Instant>,
@@ -169,15 +172,15 @@ impl AiApp {
         usage: Option<UsageSnapshot>,
         initial_prompt: Option<String>,
         usage_stale: bool,
-        settings: Settings,
+        settings: impl Into<Arc<Settings>>,
     ) -> Self {
         Self {
-            in_git_project: io.app_ctx.git_root.is_some(),
+            project_scope: ProjectScope::detect(io.app_ctx.git_root.as_deref()),
             io: Some(io),
             usage,
             initial_prompt,
             usage_stale,
-            settings,
+            settings: settings.into(),
             tips: TipRotation::new(),
             ..Self::headless(fsm, resume_notice, slash_registry, skill_names)
         }
@@ -202,7 +205,7 @@ impl AiApp {
             permission_select: SelectState::default(),
             permission_prompt_for: None,
             model_select: SelectState::default(),
-            in_git_project: false,
+            project_scope: ProjectScope::Directory,
             initial_prompt: None,
             usage_stale: false,
             usage: None,
@@ -216,7 +219,7 @@ impl AiApp {
             pushed_events: 0,
             pushed_turns: 0,
             exiting: false,
-            settings: Settings::utc(),
+            settings: Settings::utc().into(),
             tips: TipRotation::starting_at(0),
             turn_started_at: None,
             turn_tip: None,
@@ -706,8 +709,9 @@ impl AiApp {
                     return;
                 };
                 let db = io.app_ctx.history_db.clone();
+                let settings = self.settings.clone();
                 ctx.perform(async move {
-                    let outcome = history_call.execute(&db).await;
+                    let outcome = history_call.execute(&db, &settings).await;
                     Msg::Fsm(Event::ToolExecutionDone {
                         tool_id,
                         outcome,
@@ -780,6 +784,7 @@ impl AiApp {
             skill_summaries,
             skill_overflow,
             io.user_context_cache.clone(),
+            self.settings.clone(),
         )));
     }
 
@@ -1042,7 +1047,7 @@ impl App for AiApp {
                     .ctx
                     .tools
                     .awaiting_permission()
-                    .map(|t| view::permission_options(&t.tool, self.in_git_project).len())
+                    .map(|t| view::permission_options(&t.tool, self.project_scope).len())
                     .unwrap_or(0);
                 self.permission_select.handle(sel, len);
             }
@@ -1051,7 +1056,7 @@ impl App for AiApp {
                     return;
                 };
                 let tool_id = tool.id.clone();
-                let options = view::permission_options(&tool.tool, self.in_git_project);
+                let options = view::permission_options(&tool.tool, self.project_scope);
                 let Some((_, result)) = options.get(self.permission_select.cursor) else {
                     return;
                 };
@@ -1179,7 +1184,7 @@ impl App for AiApp {
             .when_some(asking, |c, tool| {
                 c.child(view::permission_prompt_view(
                     tool,
-                    self.in_git_project,
+                    self.project_scope,
                     self.permission_select.cursor,
                 ))
             })
@@ -1692,7 +1697,7 @@ mod tests {
     #[rstest]
     fn tips_disabled_in_settings_suppresses_the_tip_line() {
         let mut app = app_with(AgentFsm::new(vec![], "t".into()));
-        app.settings.ai.tips = Some(false);
+        Arc::make_mut(&mut app.settings).ai.tips = Some(false);
         let mut h = Harness::new(app);
         h.type_str("hello");
         h.press(KeyCode::Enter);

@@ -247,8 +247,7 @@ fn context(dirs: &Dirs) -> ResumeContext {
 }
 
 fn resumer(dirs: &Dirs, machine: &FakeMachine) -> HarnessResumer {
-    HarnessResumer::on(context(dirs), AiSessionResume::default(), machine.clone())
-        .keeping_switched_in(&dirs.switched)
+    HarnessResumer::on(context(dirs), AiSessionResume::default(), machine.clone(), &dirs.switched)
 }
 
 fn row(harness: HarnessKind, id: &str, cwd: &Path, remote: bool) -> SessionRow {
@@ -374,7 +373,7 @@ async fn a_path_template_plans_a_restore_and_resumes_the_restored_transcript(dir
         pi: Some("my-pi --session {path}".to_owned()),
         ..AiSessionResume::default()
     };
-    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone());
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone(), &dirs.switched);
     let remote = row(HarnessKind::Pi, "abc-123", Path::new("/gone/proj"), true);
 
     let resume = resumer.plan(&remote).await.unwrap();
@@ -650,7 +649,7 @@ async fn a_path_template_target_is_offered_and_resumes_the_written_session(dirs:
         pi: Some("pi --session {path}".to_owned()),
         ..AiSessionResume::default()
     };
-    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone());
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone(), &dirs.switched);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
     assert!(resumer.continue_targets(&session).contains(&HarnessKind::Pi));
 
@@ -706,6 +705,8 @@ fn finds_programs_on_path_and_by_path_on_unix() {
 #[cfg(windows)]
 #[rstest]
 fn finds_programs_on_path_and_by_path_on_windows() {
+    use atuin_common::env;
+
     // `cmd` is found as `cmd.exe` through PATHEXT, on PATH or by its path.
     assert!(on_path("cmd"));
     assert!(on_path("cmd.exe"));
@@ -713,7 +714,7 @@ fn finds_programs_on_path_and_by_path_on_windows() {
     // resolve to were it a `.cmd` or `.bat` script.
     let found = find_program("cmd").unwrap();
     assert!(found.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe")), "{found:?}");
-    let system32 = std::path::Path::new(&std::env::var("SystemRoot").unwrap()).join("System32");
+    let system32 = std::path::Path::new(&env::var("SystemRoot").unwrap()).join("System32");
     assert!(on_path(system32.join("cmd").to_str().unwrap()));
     assert!(on_path(system32.join("cmd.exe").to_str().unwrap()));
     assert!(!on_path(r"C:\nonexistent\cmd"));
@@ -753,7 +754,7 @@ async fn a_relative_template_program_is_found_from_the_sessions_directory(dirs: 
         claude: Some("./bin/wrapper --resume {id}".to_owned()),
         ..AiSessionResume::default()
     };
-    let resumer = HarnessResumer::on(context(&dirs), templates, machine);
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine, &dirs.switched);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
 
     // Not in the session's directory: not installed, whatever the picker's own directory has.
@@ -827,7 +828,8 @@ async fn a_fork_is_a_new_session_of_its_own_harness(dirs: Dirs) {
         missing_programs: vec!["claude"],
         ..FakeMachine::default()
     };
-    let without = HarnessResumer::on(context(&dirs), AiSessionResume::default(), missing);
+    let without =
+        HarnessResumer::on(context(&dirs), AiSessionResume::default(), missing, &dirs.switched);
     assert!(!without.can_fork(&session));
 }
 

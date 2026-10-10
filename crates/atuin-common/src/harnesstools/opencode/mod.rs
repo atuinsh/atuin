@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
-use crate::utils::{env_nonempty, home_dir};
+use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 
 pub mod rehydrate;
 pub mod session;
@@ -30,7 +31,7 @@ impl Harness for Opencode {
 
         // Opencode is XDG-compliant: plugins live under $XDG_CONFIG_HOME/opencode,
         // falling back to ~/.config/opencode.
-        let plugins_dir = env_nonempty("XDG_CONFIG_HOME")
+        let plugins_dir = var_nonempty("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home_dir().join(".config"))
             .join("opencode")

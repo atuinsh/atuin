@@ -612,6 +612,7 @@ enum Pass {
 mod tests {
     use std::ops::Range;
 
+    use atuin_common::env;
     use atuin_common::harnesstools::session::{Content, Role};
     use atuin_domain::record::HostId;
     use futures::TryStreamExt;
@@ -1556,8 +1557,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "benchmark"]
     async fn reproject_timing() {
-        let records: i64 =
-            std::env::var("REPROJECT_RECORDS").map_or(20_000, |n| n.parse().unwrap());
+        let records: i64 = env::var("REPROJECT_RECORDS").map_or(20_000, |n| n.parse().unwrap());
         let dir = tempfile::tempdir().unwrap();
         let store =
             SqliteStore::new(dir.path().join("records.db"), test_local_timeout()).await.unwrap();

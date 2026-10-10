@@ -31,10 +31,10 @@ Current branch: !`git branch --show-current`
 
 ## Skill Locations
 
-| Scope   | Path                                     |
-| ------- | ---------------------------------------- |
-| Project | `.atuin/skills/<name>/SKILL.md`          |
-| Global  | `~/.config/atuin/skills/<name>/SKILL.md` |
+| Scope   | Path                              |
+| ------- | --------------------------------- |
+| Project | `.atuin/skills/<name>/SKILL.md`   |
+| Global  | `~/.atuin/skills/<name>/SKILL.md` |
 
 Project skills override global skills when names collide. Nested directories are supported for organization (for example, `.atuin/skills/ops/deploy/SKILL.md`).
 

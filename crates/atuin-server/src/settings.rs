@@ -1,5 +1,4 @@
 use std::io::prelude::*;
-use std::path::PathBuf;
 
 use atuin_common::units::ByteSize;
 use config::{Config, Environment, File as ConfigFile, FileFormat};
@@ -53,16 +52,7 @@ pub struct Settings {
 
 impl Settings {
     pub fn new() -> Result<Self> {
-        let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
-            PathBuf::from(p)
-        } else {
-            let mut config_file = PathBuf::new();
-            let config_dir = atuin_common::utils::config_dir();
-            config_file.push(config_dir);
-            config_file
-        };
-
-        config_file.push("server.toml");
+        let config_file = atuin_common::dirs::config_path("server.toml");
 
         // create the config file if it does not exist
         let mut config_builder = Config::builder()
@@ -103,6 +93,7 @@ pub fn example_config() -> &'static str {
 mod tests {
     use atuin_common::units::ByteSize;
     use config::{Config, File as ConfigFile, FileFormat};
+    use rstest::rstest;
 
     use super::Settings;
 
@@ -121,13 +112,13 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
+    #[rstest]
     fn max_record_size_accepts_a_human_string() {
         let settings = settings_with_max_record_size("\"500MB\"");
         assert_eq!(settings.max_record_size, ByteSize::mb(500));
     }
 
-    #[test]
+    #[rstest]
     fn max_record_size_accepts_a_bare_integer() {
         let settings = settings_with_max_record_size("1048576");
         assert_eq!(settings.max_record_size, ByteSize::mib(1));

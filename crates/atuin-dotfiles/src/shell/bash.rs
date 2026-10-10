@@ -41,7 +41,7 @@ async fn cached_vars(path: PathBuf, store: &VarStore) -> String {
 #[must_use]
 pub async fn alias_config(store: &AliasStore) -> String {
     // First try to read the cached config
-    let aliases = atuin_common::utils::dotfiles_cache_dir().join("aliases.bash");
+    let aliases = atuin_common::dirs::dotfiles_cache_dir().join("aliases.bash");
 
     if aliases.exists() {
         return cached_aliases(aliases, store).await;
@@ -57,7 +57,7 @@ pub async fn alias_config(store: &AliasStore) -> String {
 #[must_use]
 pub async fn var_config(store: &VarStore) -> String {
     // First try to read the cached config
-    let vars = atuin_common::utils::dotfiles_cache_dir().join("vars.bash");
+    let vars = atuin_common::dirs::dotfiles_cache_dir().join("vars.bash");
 
     if vars.exists() {
         return cached_vars(vars, store).await;

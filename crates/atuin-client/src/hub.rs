@@ -159,7 +159,7 @@ impl HubAuthSession {
     /// Linux) or the launcher failed to start, so callers should always print the URL as well.
     #[must_use]
     pub fn open_in_browser(&self) -> bool {
-        let Some(program) = browser_launcher(|var| std::env::var_os(var).is_some()) else {
+        let Some(program) = browser_launcher(|var| atuin_common::env::var_os(var).is_some()) else {
             return false;
         };
 
@@ -250,33 +250,29 @@ fn browser_launcher(is_set: impl Fn(&str) -> bool) -> Option<&'static str> {
 ///
 /// This saves the token to the meta store so it can be used for subsequent Hub API calls.
 /// Note: This is separate from the sync session token.
-pub async fn save_session(token: &SecretString) -> Result<()> {
-    Settings::meta_store()
-        .await?
-        .save_hub_session(token)
-        .await
-        .context("Failed to save hub session")
+pub async fn save_session(token: &SecretString, settings: &Settings) -> Result<()> {
+    settings.meta_store().await?.save_hub_session(token).await.context("Failed to save hub session")
 }
 
 /// Delete the hub session token (logout from Hub)
-pub async fn delete_session() -> Result<()> {
-    Settings::meta_store().await?.delete_hub_session().await.context("Failed to delete hub session")
+pub async fn delete_session(settings: &Settings) -> Result<()> {
+    settings.meta_store().await?.delete_hub_session().await.context("Failed to delete hub session")
 }
 
 /// Check if the user is logged in with Hub authentication
 ///
 /// Returns true if the user has a valid Hub session token.
 /// This is independent of whether they have a sync session.
-pub async fn is_logged_in() -> Result<bool> {
-    Settings::meta_store().await?.hub_logged_in().await
+pub async fn is_logged_in(settings: &Settings) -> Result<bool> {
+    settings.meta_store().await?.hub_logged_in().await
 }
 
 /// Get the hub session token if available
 ///
 /// Returns the Hub session token if the user is logged in with Hub auth,
 /// or None if not logged in.
-pub async fn get_session_token() -> Result<Option<SecretString>> {
-    Settings::meta_store().await?.hub_session_token().await
+pub async fn get_session_token(settings: &Settings) -> Result<Option<SecretString>> {
+    settings.meta_store().await?.hub_session_token().await
 }
 
 /// Link an existing CLI sync account to the current Hub user.
@@ -294,8 +290,12 @@ pub async fn get_session_token() -> Result<Option<SecretString>> {
 /// - Not logged in to Hub
 /// - CLI token is invalid
 /// - CLI account is already linked to a different Hub account
-pub async fn link_account(hub_address: &Url, cli_token: &SecretString) -> Result<()> {
-    let hub_token = get_session_token()
+pub async fn link_account(
+    hub_address: &Url,
+    cli_token: &SecretString,
+    settings: &Settings,
+) -> Result<()> {
+    let hub_token = get_session_token(settings)
         .await?
         .ok_or_else(|| eyre::eyre!("Not logged in to Hub - cannot link account"))?;
 

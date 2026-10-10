@@ -69,11 +69,11 @@ pub struct OptFilters<'a> {
 /// `ATUIN_SESSION` is unset; the session is left empty so session-scoped
 /// filters simply match nothing.
 #[instrument(level = "trace", skip_all, err)]
-pub async fn query_context() -> eyre::Result<Context> {
-    let session = env::var("ATUIN_SESSION").unwrap_or_default();
+pub async fn query_context(settings: &Settings) -> eyre::Result<Context> {
+    let session = atuin_common::env::var("ATUIN_SESSION").unwrap_or_default();
     let cmd_origin = CmdOrigin::probe_current();
     let cwd = utils::get_current_dir();
-    let host_id = Settings::host_id().await?;
+    let host_id = settings.host_id().await?;
     let git_root = utils::in_git_repo(cwd.as_str());
 
     Ok(Context {
@@ -86,15 +86,15 @@ pub async fn query_context() -> eyre::Result<Context> {
 }
 
 #[instrument(level = "trace", skip_all, err)]
-pub async fn current_context() -> eyre::Result<Context> {
-    if env::var("ATUIN_SESSION").is_err() {
+pub async fn current_context(settings: &Settings) -> eyre::Result<Context> {
+    if atuin_common::env::var("ATUIN_SESSION").is_err() {
         return Err(eyre::eyre!(
             "Failed to find $ATUIN_SESSION in the environment. Check that you have correctly set \
              up your shell."
         ));
     }
 
-    query_context().await
+    query_context(settings).await
 }
 
 impl Context {

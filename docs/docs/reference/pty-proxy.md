@@ -47,7 +47,7 @@ for setup, retention limits, and privacy.
 
 ## Initialization
 
-The simplest way to enable pty-proxy is via your Atuin config (`~/.config/atuin/config.toml`) — no extra shell config needed:
+The simplest way to enable pty-proxy is via your Atuin config (`~/.atuin/config.toml`) — no extra shell config needed:
 
 ```toml
 [pty_proxy]
@@ -92,14 +92,14 @@ Alternatively, you can initialize pty-proxy explicitly in your shell config. Pla
     Run in *Nushell*:
 
     ```shell
-    mkdir ~/.local/share/atuin/
-    atuin pty-proxy init nu | save -f ~/.local/share/atuin/pty-proxy-init.nu
+    mkdir ~/.atuin/
+    atuin pty-proxy init nu | save -f ~/.atuin/pty-proxy-init.nu
     ```
 
     Add to `config.nu`, **before** the regular `atuin init`:
 
     ```shell
-    source ~/.local/share/atuin/pty-proxy-init.nu
+    source ~/.atuin/pty-proxy-init.nu
     ```
     Nushell's `source` command requires a static file path, so you must
     pre-generate the file.

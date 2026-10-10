@@ -33,7 +33,7 @@ fn get_history_path() -> Result<PathBuf> {
             .join("PowerShell")
             .join("PSReadLine")
     } else {
-        std::env::var_os("XDG_DATA_HOME")
+        atuin_common::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .ok_or(())
             .or_else(|_| {

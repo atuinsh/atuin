@@ -39,7 +39,7 @@ pub struct Push {
 
 impl Push {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let host_id = Settings::host_id().await?;
+        let host_id = settings.host_id().await?;
 
         if self.force {
             println!("Forcing remote store overwrite!");

@@ -236,7 +236,7 @@ impl Cmd {
     #[allow(clippy::future_not_send)]
     async fn run_async(self, mut settings: Settings) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
-        let mut theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
+        let mut theme_manager = theme::ThemeManager::from_settings(&settings.theme);
 
         // Skip initializing any databases for history
         // This is a pretty hot path, as it runs before and after every single command the user

@@ -127,7 +127,7 @@ runtime-format = "0.1"
 # bundled SQLite), with unlock_notify as sqlx has it, for shared-cache in-memory databases.
 rusqlite = { version = "0.32", features = ["unlock_notify"] }
 rust-embed = "8"
-rustix = { version = "1", features = ["process", "fs", "pty", "termios", "stdio", "event"] }
+rustix = { version = "1", features = ["event", "fs", "net", "process", "pty", "stdio", "termios"] }
 schemars = "1"
 secrecy = { version = "0.10", features = ["serde"] }
 rusty_paserk = { version = "0.5", default-features = false, features = ["v4", "serde"] }

@@ -1,5 +1,3 @@
-use std::env;
-
 use async_trait::async_trait;
 use atuin_client::database::Sqlite;
 use atuin_client::history::History;
@@ -15,6 +13,7 @@ use atuin_client::import::xonsh_sqlite::XonshSqlite;
 use atuin_client::import::zsh::Zsh;
 use atuin_client::import::zsh_histdb::ZshHistDb;
 use atuin_client::import::{Importer, Loader};
+use atuin_common::env;
 use clap::Parser;
 use easy_cast::Conv;
 use eyre::Result;

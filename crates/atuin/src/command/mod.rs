@@ -183,7 +183,7 @@ fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
 #[inline]
 fn is_truthy_env(name: &str) -> bool {
-    std::env::var(name)
+    atuin_common::env::var(name)
         .ok()
         .as_ref()
         .is_some_and(|value| !value.trim().is_empty() && value.trim() != "false")

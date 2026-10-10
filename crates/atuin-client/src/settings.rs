@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, OnceLock};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use atuin_common::logs::LogLevel;
@@ -30,15 +30,11 @@ use url::Url;
 
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
-static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
-static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
-static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
-
 pub mod ai_sessions;
 pub mod daemon;
 pub mod disk_usage_limit;
 mod kv;
-pub(crate) mod meta;
+pub mod meta;
 pub mod output;
 mod scripts;
 pub mod security;
@@ -1056,7 +1052,7 @@ impl Default for Ui {
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
-    pub data_dir: Option<String>,
+    pub data_dir: PathBuf,
     pub dialect: Dialect,
     pub timezone: UtcOffsetSpec,
     pub style: Style,
@@ -1229,95 +1225,89 @@ impl Settings {
             .unwrap_or_else(|| self.search_mode())
     }
 
-    /// The resolved data directory: a custom `data_dir` / `ATUIN_DATA_DIR` if one was configured
-    /// when settings were last built this process, otherwise [`atuin_common::utils::data_dir`].
-    #[must_use]
-    pub fn effective_data_dir() -> PathBuf {
-        DATA_DIR.get().cloned().unwrap_or_else(atuin_common::utils::data_dir)
-    }
-
-    /// Directory of the durable command-output capture store, under the [effective data
-    /// dir](Self::effective_data_dir). Unlike the sqlite stores this is a fjall database
-    /// directory, not a single file.
+    /// Directory of the durable command-output capture store, under the [data dir](Self::data_dir).
+    /// Unlike the sqlite stores this is a fjall database directory, not a single file.
     ///
     /// The user should not mess with this directory. Bad things can happen.
     #[must_use]
-    pub fn command_capture_dir() -> PathBuf {
-        Self::effective_data_dir().join("output-capture")
+    pub fn command_capture_dir(&self) -> PathBuf {
+        self.data_dir.join("output-capture")
     }
 
-    /// The AI harness session sidecar database, under the [effective data
-    /// dir](Self::effective_data_dir). The daemon owns and writes it; other readers open it
-    /// read-only (`AiSessionDatabase::open_read_only`).
+    /// The AI harness session sidecar database, under the [data dir](Self::data_dir). The daemon
+    /// owns and writes it; other readers open it read-only (`AiSessionDatabase::open_read_only`).
     #[must_use]
-    pub fn ai_session_sidecar_path() -> PathBuf {
-        Self::effective_data_dir().join("ai_session_sidecar.db")
+    pub fn ai_session_sidecar_path(&self) -> PathBuf {
+        self.data_dir.join("ai_session_sidecar.db")
     }
 
     #[must_use]
-    pub fn octavo_queue_path() -> PathBuf {
-        Self::effective_data_dir().join("octavo.db")
+    pub fn octavo_queue_path(&self) -> PathBuf {
+        self.data_dir.join("octavo.db")
     }
 
     // -- Meta store: lazily initialized on first access --
 
-    pub async fn meta_store() -> Result<&'static crate::meta::MetaStore> {
+    /// Load the meta store.
+    ///
+    /// Note: there is one meta store per process. The first time this method is called, the meta
+    /// store will be initialized from the parameters in that [`Settings`] instance (most notably
+    /// [`meta.db_path`](meta::Settings::db_path)). All future calls to this method will return the
+    /// same [`MetaStore`](crate::meta::MetaStore), even if called on a different [`Settings`]
+    /// instance. This matches existing behavior.
+    pub async fn meta_store(&self) -> Result<&'static crate::meta::MetaStore> {
+        static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
+
         META_STORE
             .get_or_try_init(|| async {
-                let (db_path, timeout) = META_CONFIG.get().ok_or_else(|| {
-                    eyre!("meta store config not set — Settings::new() has not been called")
-                })?;
-                crate::meta::MetaStore::new(
-                    db_path,
-                    std::time::Duration::try_from_secs_f64(*timeout)?,
-                )
-                .await
+                crate::meta::MetaStore::new(&self.meta.db_path, &self.data_dir, self.local_timeout)
+                    .await
             })
             .await
     }
 
-    pub async fn host_id() -> Result<HostId> {
-        Self::meta_store().await?.host_id().await
+    pub async fn host_id(&self) -> Result<HostId> {
+        self.meta_store().await?.host_id().await
     }
 
-    pub async fn last_sync() -> Result<OffsetDateTime> {
-        Self::meta_store().await?.last_sync().await
+    pub async fn last_sync(&self) -> Result<OffsetDateTime> {
+        self.meta_store().await?.last_sync().await
     }
 
-    pub async fn save_sync_time() -> Result<()> {
-        Self::meta_store().await?.save_sync_time().await
+    pub async fn save_sync_time(&self) -> Result<()> {
+        self.meta_store().await?.save_sync_time().await
     }
 
-    pub async fn last_version_check() -> Result<OffsetDateTime> {
-        Self::meta_store().await?.last_version_check().await
+    pub async fn last_version_check(&self) -> Result<OffsetDateTime> {
+        self.meta_store().await?.last_version_check().await
     }
 
-    pub async fn save_version_check_time() -> Result<()> {
-        Self::meta_store().await?.save_version_check_time().await
+    pub async fn save_version_check_time(&self) -> Result<()> {
+        self.meta_store().await?.save_version_check_time().await
     }
 
     pub async fn should_sync(&self) -> Result<bool> {
-        if !self.auto_sync || !Self::meta_store().await?.logged_in().await? {
+        if !self.auto_sync || !self.meta_store().await?.logged_in().await? {
             return Ok(false);
         }
 
-        Ok(OffsetDateTime::now_utc() - Self::last_sync().await?
+        Ok(OffsetDateTime::now_utc() - self.last_sync().await?
             >= time::Duration::try_from(self.sync_frequency)?)
     }
 
     pub async fn logged_in(&self) -> Result<bool> {
-        Self::meta_store().await?.logged_in().await
+        self.meta_store().await?.logged_in().await
     }
 
     pub async fn session_token(&self) -> Result<SecretString> {
-        match Self::meta_store().await?.session_token().await? {
+        match self.meta_store().await?.session_token().await? {
             Some(token) => Ok(token),
             None => Err(eyre!("Tried to load session; not logged in")),
         }
     }
 
     pub async fn hub_session_token(&self) -> Result<SecretString> {
-        match Self::meta_store().await?.hub_session_token().await? {
+        match self.meta_store().await?.hub_session_token().await? {
             Some(token) => Ok(token),
             None => Err(eyre!("Tried to load hub session; not logged in")),
         }
@@ -1379,7 +1369,7 @@ impl Settings {
     #[cfg(feature = "sync")]
     #[must_use]
     pub async fn resolve_sync_auth(&self) -> SyncAuth {
-        let meta = match Self::meta_store().await {
+        let meta = match self.meta_store().await {
             Ok(m) => m,
             Err(e) => {
                 return SyncAuth::NotLoggedIn {
@@ -1444,7 +1434,7 @@ impl Settings {
 
     #[cfg(feature = "check-update")]
     async fn needs_update_check(&self) -> Result<bool> {
-        let last_check = Self::last_version_check().await?;
+        let last_check = self.last_version_check().await?;
         let diff = OffsetDateTime::now_utc() - last_check;
 
         // Check a max of once per hour
@@ -1459,7 +1449,7 @@ impl Settings {
             Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(Version::new(100_000, 0, 0));
 
         if !self.needs_update_check().await? {
-            let meta = Self::meta_store().await?;
+            let meta = self.meta_store().await?;
             let version = match meta.latest_version().await? {
                 Some(v) => Version::parse(&v).unwrap_or(current),
                 None => current,
@@ -1474,8 +1464,8 @@ impl Settings {
         #[cfg(not(feature = "sync"))]
         let latest = current;
 
-        let meta = Self::meta_store().await?;
-        Self::save_version_check_time().await?;
+        let meta = self.meta_store().await?;
+        self.save_version_check_time().await?;
         meta.save_latest_version(&latest.to_string()).await?;
 
         Ok(latest)
@@ -1534,7 +1524,7 @@ impl Settings {
     }
 
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
-        Ok(Self::builder_with_data_dir(&atuin_common::utils::data_dir())?)
+        Ok(Self::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())?)
     }
 
     fn builder_with_data_dir(
@@ -1546,7 +1536,7 @@ impl Settings {
         let scripts_path = data_dir.join("scripts.db");
         let ai_sessions_path = data_dir.join("ai_sessions.db");
         let pidfile_path = data_dir.join("atuin-daemon.pid");
-        let logs_dir = atuin_common::utils::logs_dir();
+        let logs_dir = atuin_common::dirs::logs_dir();
 
         let key_path = data_dir.join("key");
         let meta_path = data_dir.join("meta.db");
@@ -1555,6 +1545,7 @@ impl Settings {
 
         Ok(Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
+            .set_default("data_dir", data_dir.to_str())?
             .set_default("db_path", db_path.to_str())?
             .set_default("record_store_path", record_store_path.to_str())?
             .set_default("key_path", key_path.to_str())?
@@ -1658,10 +1649,7 @@ impl Settings {
             .set_default("tmux.height", "60%")?
             .set_default(
                 "prefers_reduced_motion",
-                std::env::var("NO_MOTION")
-                    .ok()
-                    .map(|_| config::Value::new(None, config::ValueKind::Boolean(true)))
-                    .unwrap_or_else(|| config::Value::new(None, config::ValueKind::Boolean(false))),
+                atuin_common::env::var_os("NO_MOTION").is_some(),
             )?
             .set_default("no_mouse", false)?
             .set_default("pty_proxy.enabled", false)?
@@ -1672,20 +1660,12 @@ impl Settings {
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
-        let config_dir = atuin_common::utils::config_dir();
+        let config_file = atuin_common::dirs::config_path("config.toml");
 
-        create_dir_all(&config_dir)
-            .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
-
-        let mut config_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
-            PathBuf::from(p)
-        } else {
-            let mut config_file = PathBuf::new();
-            config_file.push(config_dir);
-            config_file
-        };
-
-        config_file.push("config.toml");
+        if let Some(config_dir) = config_file.parent() {
+            create_dir_all(config_dir)
+                .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+        }
 
         Ok(config_file)
     }
@@ -1724,20 +1704,18 @@ impl Settings {
                         .map_err(|e| eyre!("failed to expand data_dir path: {}", e))?;
                     PathBuf::from(expanded.as_ref())
                 }
-                None => atuin_common::utils::data_dir(),
+                None => atuin_common::dirs::unconfigured_data_dir(),
             }
         } else {
-            atuin_common::utils::data_dir()
+            atuin_common::dirs::unconfigured_data_dir()
         };
-
-        DATA_DIR.set(effective_data_dir.clone()).ok();
 
         create_dir_all(&effective_data_dir)
             .wrap_err_with(|| format!("could not create dir {effective_data_dir:?}"))?;
 
-        let mut config_builder = Self::builder_with_data_dir(&effective_data_dir)?;
+        let config_builder = Self::builder_with_data_dir(&effective_data_dir)?;
 
-        config_builder = if config_file.exists() {
+        let config_builder = if config_file.exists() {
             let config_file_str =
                 config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
             config_builder.add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
@@ -1749,10 +1727,15 @@ impl Settings {
             config_builder
         };
 
+        // Explicitly set `data_dir` here to ensure it matches the `effective_data_dir` we just
+        // calculated.
+        let config_builder =
+            config_builder.set_override("data_dir", effective_data_dir.to_str())?;
+
         // all paths should be expanded
         let built = config_builder.build_cloned()?;
 
-        config_builder = [
+        let config_builder = [
             "db_path",
             "record_store_path",
             "key_path",
@@ -1761,6 +1744,7 @@ impl Settings {
             "logs.dir",
             "logs.search.file",
             "logs.daemon.file",
+            "logs.ai.file",
         ]
         .iter()
         .map(|key| (key, built.get_string(key).unwrap_or_default()))
@@ -1875,9 +1859,6 @@ impl Settings {
         // Validate UI settings
         settings.ui.validate()?;
 
-        // Register meta store config for lazy initialization on first access
-        META_CONFIG.set((settings.meta.db_path.clone(), settings.local_timeout.as_secs_f64())).ok();
-
         Ok(settings)
     }
 
@@ -1905,12 +1886,12 @@ impl Settings {
 
     /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
     pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
-        let config = Self::builder_with_data_dir(&atuin_common::utils::data_dir())?
+        let config = Self::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())?
             .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
             .build()?;
 
         let settings: Self = config.try_deserialize()?;
-        if let Some(dir) = &settings.data_dir {
+        if let Some(dir) = settings.data_dir.to_str() {
             shellexpand::full(dir).map_err(ValidationError::DataDir)?;
         }
 
@@ -1945,23 +1926,9 @@ pub enum ValidationError {
     DataDir(shellexpand::LookupError<std::env::VarError>),
 }
 
-/// Initialize the meta store configuration for testing.
-///
-/// This should only be used in tests. It allows tests to bypass the normal
-/// Settings::new() flow while still being able to use Settings::host_id()
-/// and other meta store dependent functions.
-///
-/// # Safety
-/// This function is not thread-safe with concurrent calls to Settings::new()
-/// or other meta store initialization. Only call from tests.
-#[doc(hidden)]
-pub fn init_meta_config_for_testing(meta_db_path: impl Into<String>, local_timeout: f64) {
-    META_CONFIG.set((meta_db_path.into(), local_timeout)).ok();
-}
-
 #[cfg(test)]
 pub(crate) fn test_local_timeout() -> Duration {
-    let secs = std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
+    let secs = atuin_common::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
         .ok()
         .and_then(|x| x.parse::<f64>().ok())
         // this hardcoded value should be replaced by a simple way to get the
@@ -1972,6 +1939,7 @@ pub(crate) fn test_local_timeout() -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::str::FromStr;
 
     use eyre::Result;
@@ -2075,6 +2043,7 @@ mod tests {
         let builder = super::Settings::builder_with_data_dir(&custom_dir)?;
         let config = builder.build()?;
 
+        let data_dir: String = config.get("data_dir")?;
         let db_path: String = config.get("db_path")?;
         let key_path: String = config.get("key_path")?;
         let record_store_path: String = config.get("record_store_path")?;
@@ -2085,6 +2054,7 @@ mod tests {
         let daemon_pidfile_path: String = config.get("daemon.pidfile_path")?;
         let daemon_autostart: bool = config.get("daemon.autostart")?;
 
+        assert_eq!(data_dir, custom_dir.to_str().unwrap());
         assert_eq!(db_path, custom_dir.join("history.db").to_str().unwrap());
         assert_eq!(key_path, custom_dir.join("key").to_str().unwrap());
         assert_eq!(record_store_path, custom_dir.join("records.db").to_str().unwrap());
@@ -2127,12 +2097,17 @@ mod tests {
     }
 
     #[rstest]
-    fn effective_data_dir_returns_default_when_not_set() {
-        let effective = super::Settings::effective_data_dir();
-        let default = atuin_common::utils::data_dir();
-
-        assert!(effective.to_str().is_some());
-        assert!(effective.ends_with("atuin") || effective == default);
+    #[case::configured("data_dir = \"/custom/data\"\n", "/custom/data")]
+    #[case::unset("", "/default/data")]
+    fn data_dir_prefers_the_configured_one(#[case] toml: &str, #[case] expected: &str) {
+        let settings: Settings = Settings::builder_with_data_dir(Path::new("/default/data"))
+            .unwrap()
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(settings.data_dir, Path::new(expected));
     }
 
     #[rstest]
@@ -2199,7 +2174,7 @@ mod tests {
 
     /// Deserialize a TOML string into a [`Settings`] object.
     fn parse_settings(toml: &str) -> Settings {
-        Settings::builder_with_data_dir(&atuin_common::utils::data_dir())
+        Settings::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())
             .expect("could not build settings builder")
             .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
             .build()

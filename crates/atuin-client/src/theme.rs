@@ -1,14 +1,11 @@
 use std::collections::HashMap;
 use std::error;
 use std::io::{Error, ErrorKind};
-use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use config::{Config, File as ConfigFile, FileFormat};
 use palette::named;
 use serde::{Deserialize, Serialize};
-use serde_json;
-use strum_macros;
 
 static DEFAULT_MAX_DEPTH: u8 = 10;
 
@@ -356,56 +353,65 @@ static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(||
     .collect()
 });
 
+/// Options for building a [`ThemeManager`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ThemeManagerOptions {
+    /// Show more detail about issues in theme files.
+    pub debug: bool,
+    /// Only load built-in themes, rather than reading the user's theme directory.
+    pub builtin_only: bool,
+}
+
+impl ThemeManagerOptions {
+    #[must_use]
+    pub fn from_settings(settings: &crate::settings::Theme) -> Self {
+        Self {
+            debug: settings.debug.unwrap_or(false),
+            builtin_only: false,
+        }
+    }
+
+    #[must_use]
+    pub fn build(self) -> ThemeManager {
+        ThemeManager {
+            loaded_themes: HashMap::new(),
+            debug: self.debug,
+            builtin_only: self.builtin_only,
+        }
+    }
+}
+
 // To avoid themes being repeatedly loaded, we store them in a theme manager
 pub struct ThemeManager {
     loaded_themes: HashMap<String, Theme>,
     debug: bool,
-    override_theme_dir: Option<String>,
+    builtin_only: bool,
 }
 
 // Theme-loading logic
 impl ThemeManager {
     #[must_use]
-    pub fn new(debug: Option<bool>, theme_dir: Option<String>) -> Self {
-        Self {
-            loaded_themes: HashMap::new(),
-            debug: debug.unwrap_or(false),
-            override_theme_dir: match theme_dir {
-                Some(theme_dir) => Some(theme_dir),
-                None => std::env::var("ATUIN_THEME_DIR").ok(),
-            },
-        }
+    pub fn from_settings(settings: &crate::settings::Theme) -> Self {
+        ThemeManagerOptions::from_settings(settings).build()
     }
 
-    // Try to load a theme from a `{name}.toml` file in the theme directory. If an override is set
-    // for the theme dir (via ATUIN_THEME_DIR env) we should load the theme from there
-    pub fn load_theme_from_file(
+    // Try to load a theme from a `{name}.toml` file in the themes directory (unless
+    // `Self::builtin_only` is true)
+    fn load_theme_from_file(
         &mut self,
         name: &str,
         max_depth: u8,
     ) -> Result<&Theme, Box<dyn error::Error>> {
-        let mut theme_file = if let Some(p) = &self.override_theme_dir {
-            if p.is_empty() {
-                return Err(Box::new(Error::new(
-                    ErrorKind::NotFound,
-                    "Empty theme directory override and could not find theme elsewhere",
-                )));
-            }
-            PathBuf::from(p)
-        } else {
-            let config_dir = atuin_common::utils::config_dir();
-            let mut theme_file = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
-                PathBuf::from(p)
-            } else {
-                let mut theme_file = PathBuf::new();
-                theme_file.push(config_dir);
-                theme_file
-            };
-            theme_file.push("themes");
-            theme_file
-        };
+        if self.builtin_only {
+            return Err(Box::new(Error::new(
+                ErrorKind::NotFound,
+                "cannot load theme file: only built-in themes are enabled",
+            )));
+        }
 
-        let theme_toml = format!["{name}.toml"];
+        let mut theme_file = atuin_common::dirs::config_path("themes");
+
+        let theme_toml = format!("{name}.toml");
         theme_file.push(theme_toml);
 
         let mut config_builder = Config::builder();
@@ -499,7 +505,11 @@ mod theme_tests {
 
     #[fixture]
     fn manager(#[default(false)] debug: bool) -> ThemeManager {
-        ThemeManager::new(Some(debug), Some("".to_string()))
+        ThemeManagerOptions {
+            debug,
+            builtin_only: true,
+        }
+        .build()
     }
 
     fn theme_config(toml: &str) -> Config {
@@ -578,7 +588,7 @@ mod theme_tests {
         assert_eq!(title_theme.as_style(Meaning::Title).foreground_color, Some(Color::White));
     }
 
-    #[test]
+    #[rstest]
     fn test_no_fallbacks_are_circular() {
         let mytheme = Theme::new("mytheme".to_string(), None, HashMap::from([]));
         MEANING_FALLBACKS
@@ -670,8 +680,8 @@ mod theme_tests {
         assert_eq!(captured_logs.len(), 1);
         assert_eq!(
             captured_logs[0].message,
-            "Could not load theme nonsolarized: Empty theme directory override and could not find \
-             theme elsewhere"
+            "Could not load theme nonsolarized: cannot load theme file: only built-in themes are \
+             enabled"
         );
         assert_eq!(captured_logs[0].level, tracing::Level::WARN);
     }
@@ -680,7 +690,11 @@ mod theme_tests {
     fn debug_theme_logs(#[values(true, false)] debug: bool) {
         let logs = capture_logs();
 
-        let mut manager = ThemeManager::new(Some(debug), Some("".to_string()));
+        let mut manager = ThemeManagerOptions {
+            debug,
+            builtin_only: true,
+        }
+        .build();
         let config = theme_config(
             "
         [theme]

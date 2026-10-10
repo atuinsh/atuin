@@ -45,7 +45,7 @@ impl Cmd {
         }
 
         // Clean up sessions from meta store
-        let meta = Settings::meta_store().await?;
+        let meta = settings.meta_store().await?;
         meta.delete_session().await?;
         meta.delete_hub_session().await?;
 

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use atuin_common::path::PathExt as _;
 use eyre::Result;
 use tokio::task::JoinSet;
 
@@ -13,7 +14,7 @@ struct FoundRuleFile {
 
 pub struct PermissionWalker {
     start: PathBuf,
-    /// Direct path to the global permissions file (e.g. `~/.config/atuin/permissions.ai.toml`).
+    /// Direct path to the global permissions file (e.g. `~/.atuin/permissions.ai.toml`).
     global_permissions_file: Option<PathBuf>,
     rules: Vec<RuleFile>,
 }
@@ -40,8 +41,17 @@ impl PermissionWalker {
         let mut set: JoinSet<Result<Option<FoundRuleFile>>> = JoinSet::new();
 
         for (index, path) in dirs_to_check.into_iter().enumerate() {
+            let permissions = super::writer::project_permissions_path(&path);
+
+            if let Some(global) = &self.global_permissions_file
+                && permissions.is_same_path(global)
+            {
+                // Avoid loading ~/.atuin/permissions.ai.toml twice.
+                continue;
+            }
+
             set.spawn(async move {
-                match check_dir_for_permissions(&path).await {
+                match load_permissions_file(&permissions).await {
                     Ok(Some(rule_file)) => Ok(Some(FoundRuleFile {
                         depth: index,
                         file: rule_file,
@@ -93,12 +103,6 @@ impl PermissionWalker {
     }
 }
 
-/// Checks a directory for `.atuin/permissions.ai.toml` and returns the RuleFile if found.
-async fn check_dir_for_permissions(path: &Path) -> Result<Option<RuleFile>> {
-    let file_path = path.join(".atuin").join("permissions.ai.toml");
-    load_permissions_file(&file_path).await
-}
-
 /// Load a permissions file from an exact path. Returns None if the file doesn't exist.
 async fn load_permissions_file(file_path: &Path) -> Result<Option<RuleFile>> {
     if !tokio::fs::try_exists(file_path).await? {
@@ -112,4 +116,40 @@ async fn load_permissions_file(file_path: &Path) -> Result<Option<RuleFile>> {
     let path = file_path.parent().map(Path::to_path_buf).unwrap_or_else(|| file_path.to_path_buf());
 
     Ok(Some(RuleFile { path, content }))
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// A `.atuin/permissions.ai.toml` above the working directory that is also the global file,
+    /// as `~/.atuin/permissions.ai.toml` is by default, is loaded once. Any other is a project's,
+    /// and is still loaded alongside the global one.
+    #[rstest]
+    #[case::global(true, 1)]
+    #[case::project(false, 2)]
+    #[tokio::test]
+    async fn the_global_file_is_not_also_a_project_file(
+        #[case] is_global: bool,
+        #[case] expected: usize,
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let dotfile = home.path().join(".atuin").join("permissions.ai.toml");
+        let elsewhere = home.path().join("elsewhere").join("permissions.ai.toml");
+        for file in [&dotfile, &elsewhere] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "[permissions]\nallow = []\n").unwrap();
+        }
+
+        let global = if is_global {
+            dotfile
+        } else {
+            elsewhere
+        };
+        let mut walker = PermissionWalker::new(home.path().to_path_buf(), Some(global));
+        walker.walk().await.unwrap();
+        assert_eq!(walker.rules().len(), expected);
+    }
 }

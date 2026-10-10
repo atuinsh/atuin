@@ -74,8 +74,8 @@ pub struct ResumeContext {
 
 impl ResumeContext {
     /// The current directory, repository, branch and host.
-    pub async fn current() -> Result<Self> {
-        let ctx = atuin_client::database::query_context().await?;
+    pub async fn current(settings: &Settings) -> Result<Self> {
+        let ctx = atuin_client::database::query_context(settings).await?;
         // `$PWD` as it is set, which may end in a separator: rebuilt from its components, so a
         // session restored or continued here isn't written with `…/dir/` as its directory.
         let cwd: PathBuf = Path::new(&ctx.cwd).components().collect();

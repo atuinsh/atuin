@@ -28,7 +28,7 @@ impl Shells {
     /// allocating; see [`ShellFilter::as_filter`].
     #[must_use]
     pub fn to_filter(&self) -> ShellFilter<'_> {
-        self.to_filter_with(|| std::env::var("ATUIN_SHELL").ok())
+        self.to_filter_with(|| atuin_common::env::var("ATUIN_SHELL").ok())
     }
 
     /// Like [`Self::to_filter`], but takes the current shell as a parameter.
@@ -147,7 +147,7 @@ mod tests {
         assert_eq!(result.as_ref().ok(), expected.as_ref(), "{result:?}");
     }
 
-    #[test]
+    #[rstest]
     fn all_and_the_empty_array_are_the_same_value() {
         assert_eq!(parse(r#""all""#).unwrap(), parse("[]").unwrap());
         assert_eq!(parse(r#""all""#).unwrap(), Shells::all());

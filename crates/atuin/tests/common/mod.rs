@@ -37,7 +37,7 @@ impl FreshEnv {
     }
 
     pub fn path_var(&self) -> String {
-        let inherited = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());
+        let inherited = atuin_common::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());
         format!("{}:{inherited}", self.home.path().join("bin").display())
     }
 
@@ -56,11 +56,11 @@ impl FreshEnv {
             ("ATUIN_LOCAL_TIMEOUT".into(), LOCAL_TIMEOUT.as_secs().to_string()),
             ("ATUIN_DAEMON__SOCKET_PATH".into(), self.socket().display().to_string()),
             // ble.sh requires a user name.
-            ("USER".into(), std::env::var("USER").unwrap_or_else(|_| "e2e".into())),
-            ("LOGNAME".into(), std::env::var("LOGNAME").unwrap_or_else(|_| "e2e".into())),
+            ("USER".into(), atuin_common::env::var("USER").unwrap_or_else(|_| "e2e".into())),
+            ("LOGNAME".into(), atuin_common::env::var("LOGNAME").unwrap_or_else(|_| "e2e".into())),
         ];
         for lang in ["LANG", "LC_ALL"] {
-            if let Ok(v) = std::env::var(lang) {
+            if let Ok(v) = atuin_common::env::var(lang) {
                 vars.push((lang.into(), v));
             }
         }
@@ -91,14 +91,21 @@ impl FreshEnv {
         self.run(&["history", "end", "--exit", "0", id.trim()]);
     }
 
+    pub fn atuin_home(&self) -> PathBuf {
+        self.home.path().join(".atuin")
+    }
+
     pub fn data_dir(&self) -> PathBuf {
-        self.home.path().join(".local/share/atuin")
+        self.atuin_home().join("data")
+    }
+
+    pub fn config_file(&self) -> PathBuf {
+        self.atuin_home().join("config.toml")
     }
 
     pub fn write_config(&self, contents: &str) {
-        let dir = self.home.path().join(".config/atuin");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("config.toml"), contents).unwrap();
+        fs::create_dir_all(self.atuin_home()).unwrap();
+        fs::write(self.config_file(), contents).unwrap();
     }
 }
 

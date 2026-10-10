@@ -20,8 +20,8 @@ ln -sf "$USER_HOME/.atuin/bin/atuin" /usr/local/bin/atuin
 
 # sandbox-safe config: fixed daemon socket, since pods have no logind
 # session and therefore no XDG_RUNTIME_DIR.
-mkdir -p "$USER_HOME/.config/atuin"
-cat >"$USER_HOME/.config/atuin/config.toml" <<TOML
+mkdir -p "$USER_HOME/.atuin"
+cat >"$USER_HOME/.atuin/config.toml" <<TOML
 $([ -n "${SYNCADDRESS}" ] && echo "sync_address = \"${SYNCADDRESS}\"")
 
 [daemon]

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId, Session};
+use atuin_common::env;
 use atuin_daemon::AiClient;
 use time::OffsetDateTime;
 
@@ -82,7 +83,7 @@ impl Caller<'_> {
 
     fn env_session(&self) -> Option<HarnessSession> {
         let harness = self.harness().filter(|h| *h == HarnessKind::ClaudeCode)?;
-        let id = std::env::var("CLAUDE_CODE_SESSION_ID").ok().filter(|id| !id.is_empty())?;
+        let id = env::var("CLAUDE_CODE_SESSION_ID").ok().filter(|id| !id.is_empty())?;
         Some(HarnessSession {
             harness,
             session: NativeSessionId::from(id),

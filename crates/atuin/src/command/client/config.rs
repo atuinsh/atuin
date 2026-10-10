@@ -419,7 +419,7 @@ async fn onboard_octavo(settings: &Settings) -> Result<Option<OctavoOnboarding>>
     };
 
     // Opened before the config says Octavo is on, so a queue that can't be opened leaves it off.
-    let queue = UploadQueue::open(Settings::octavo_queue_path())
+    let queue = UploadQueue::open(settings.octavo_queue_path())
         .await
         .wrap_err("failed to open Octavo's upload queue")?;
 
@@ -739,7 +739,7 @@ mod tests {
         assert_eq!(set(input, key, value), expected);
     }
 
-    #[test]
+    #[rstest]
     fn setting_the_same_key_twice_keeps_its_comment() {
         let once = set(
             "[sync]\n# how often to sync\nfrequency = \"5m\" # unit is flexible\n",
