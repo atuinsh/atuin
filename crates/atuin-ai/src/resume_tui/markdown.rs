@@ -1018,7 +1018,7 @@ fn cut(spans: &[Span<'static>], width: usize) -> Vec<Span<'static>> {
 }
 
 /// `spans` cut to `width` columns, ending in `…` when anything was cut.
-fn truncate(spans: &[Span<'static>], width: usize, muted: Style) -> Vec<Span<'static>> {
+pub fn truncate(spans: &[Span<'static>], width: usize, muted: Style) -> Vec<Span<'static>> {
     if spans_width(spans) <= width {
         return spans.to_vec();
     }

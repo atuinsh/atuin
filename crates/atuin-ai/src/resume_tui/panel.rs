@@ -13,8 +13,8 @@ use ratatui::text::{Line, Span};
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
-use super::render::{harness_style, is_live, repo_name, shown_branch, style};
-use super::source::{SessionRow, harness_label, host_label};
+use super::render::{is_live, repo_name, shown_branch, style};
+use super::source::{SessionRow, harness_label, host_label, shown_title};
 use super::state::State;
 use super::{clock, markdown};
 
@@ -35,37 +35,6 @@ pub fn human(n: u64) -> String {
     } else {
         n.to_string()
     }
-}
-
-/// The share of `usage`'s input read from the cache, in whole percent: rounded, but never 100
-/// while some wasn't, nor 0 while some was. `None` when none was.
-fn cached_percent(usage: &Usage) -> Option<u64> {
-    let read = usage.cache_read.filter(|n| *n > 0)?;
-    let total = usage.total_input()?;
-    let percent = (read.saturating_mul(100) + total / 2) / total;
-    Some(if read < total {
-        percent.clamp(1, 99)
-    } else {
-        100
-    })
-}
-
-/// A session's tokens at a glance: `in 56.0M (96% cached) · out 184k`, or `None` when nothing
-/// was reported. `in` is all the input the model processed ([`Usage::total_input`]), and the
-/// share cached is what was read from the prompt cache: in a long session nearly all of it is,
-/// and only the uncached input alone would make the session look far smaller than it was.
-pub fn tokens(usage: &Usage) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(input) = usage.total_input().filter(|n| *n > 0) {
-        parts.push(match cached_percent(usage) {
-            Some(percent) => format!("in {} ({percent}% cached)", human(input)),
-            None => format!("in {}", human(input)),
-        });
-    }
-    if let Some(output) = usage.output.filter(|n| *n > 0) {
-        parts.push(format!("out {}", human(output)));
-    }
-    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 /// Inspect's breakdown of a session's tokens: `in 56.0M (544 uncached · 53.6M cache read ·
@@ -108,25 +77,17 @@ pub fn forks(children: Option<&[SessionRow]>) -> Option<String> {
     }
 }
 
-/// Where a session ran, muted: `atuin · feat/ai-sessions · @3f9a12bc`. The branch is left out
-/// when detached, and the host when it is this one (`here`; see [`host_label`]).
-pub fn place(row: &SessionRow, here: &str, theme: &Theme) -> Vec<Span<'static>> {
-    let muted = style(theme, Meaning::Annotation);
-    let mut parts = vec![Span::styled(repo_name(row), muted)];
-    if let Some(branch) = shown_branch(row) {
-        parts.push(Span::styled(branch.to_owned(), style(theme, Meaning::Guidance)));
-    }
+/// Where a session ran, for its callers to join and style: its repository (or directory), its
+/// branch, and its host (`atuin`, `feat/ai-sessions`, `@3f9a12bc`). The branch is left out when
+/// detached, and the host when it is this one (`here`; see [`host_label`]).
+pub fn place(row: &SessionRow, here: &str) -> Vec<String> {
+    let mut parts = vec![repo_name(row)];
+    parts.extend(shown_branch(row).map(str::to_owned));
     if row.host_id != here {
-        parts.push(Span::styled(host_label(&row.host_id, here), muted));
+        parts.push(host_label(&row.host_id, here));
     }
-    let mut spans = Vec::new();
-    for part in parts.into_iter().filter(|p| !p.content.is_empty()) {
-        if !spans.is_empty() {
-            spans.push(Span::styled(" · ", muted));
-        }
-        spans.push(part);
-    }
-    spans
+    parts.retain(|p| !p.is_empty());
+    parts
 }
 
 impl State {
@@ -145,7 +106,7 @@ impl State {
         let sep = || Span::styled(" · ", muted);
 
         let mut lines = markdown::wrap_plain(
-            &[Span::styled(row.title.text.clone(), base.add_modifier(Modifier::BOLD))],
+            &[Span::styled(shown_title(row).to_owned(), base.add_modifier(Modifier::BOLD))],
             width,
             2,
             muted,
@@ -153,18 +114,15 @@ impl State {
         // Everything else here is one short line; wrap them all the same (the pane doesn't).
         let mut meta = Vec::new();
 
-        let mut who = vec![Span::styled(
-            harness_label(row.handle.harness),
-            harness_style(theme, row.handle.harness),
-        )];
+        let mut who = vec![Span::styled(harness_label(row.handle.harness), muted)];
         if let Some(model) = &row.model {
             who.extend([sep(), Span::styled(model.clone(), muted)]);
         }
         meta.push(Line::from(who));
 
-        let place = place(row, &self.context.host_id, theme);
+        let place = place(row, &self.context.host_id);
         if !place.is_empty() {
-            meta.push(Line::from(place));
+            meta.push(Line::from(Span::styled(place.join(" · "), muted)));
         }
 
         let mut when = Vec::new();
@@ -179,9 +137,6 @@ impl State {
         when.extend([sep(), Span::styled(format!("started {started}"), muted)]);
         meta.push(Line::from(when));
 
-        if let Some(t) = tokens(&row.usage) {
-            meta.push(Line::from(Span::styled(format!("{t} tokens"), muted)));
-        }
         for line in meta {
             lines.extend(markdown::wrap_plain(&line.spans, width, 0, muted));
         }
@@ -428,35 +383,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::cached(cached_session(), "in 56.0M (96% cached) · out 184k")]
-    #[case::uncached(
-        Usage { input: Some(1_200), output: Some(300), ..Usage::default() },
-        "in 1.2k · out 300"
-    )]
-    // Written to the cache, never read: nothing was cached yet.
-    #[case::only_writes(
-        Usage { input: Some(10), cache_write: Some(990), output: Some(5), ..Usage::default() },
-        "in 1.0k · out 5"
-    )]
-    #[case::nearly_all(
-        Usage { input: Some(1), cache_read: Some(10_000), ..Usage::default() },
-        "in 10k (99% cached)"
-    )]
-    #[case::nearly_none(
-        Usage { input: Some(10_000), cache_read: Some(1), ..Usage::default() },
-        "in 10k (1% cached)"
-    )]
-    #[case::only_cache(
-        Usage { cache_read: Some(10), ..Usage::default() },
-        "in 10 (100% cached)"
-    )]
-    fn tokens_count_all_the_input(#[case] usage: Usage, #[case] want: &str) {
-        assert_eq!(tokens(&usage).unwrap(), want);
-    }
-
-    #[rstest]
     fn tokens_skip_what_was_not_reported() {
-        assert_eq!(tokens(&Usage::default()), None);
         assert_eq!(token_breakdown(&Usage::default()), None);
         let zeros = Usage {
             input: Some(0),
@@ -465,7 +392,6 @@ mod tests {
             cache_write: Some(0),
             reasoning: Some(0),
         };
-        assert_eq!(tokens(&zeros), None);
         assert_eq!(token_breakdown(&zeros), None);
     }
 
@@ -506,14 +432,10 @@ mod tests {
         #[case] host_id: &str,
         #[case] want: &str,
     ) {
-        let mut themes = atuin_client::theme::ThemeManager::new(None, None);
-        let theme = themes.load_theme("default", None);
         let mut row = row();
         row.git_root = Some("/src/atuin".into());
         row.branch = branch.map(str::to_owned);
         row.host_id = host_id.to_owned();
-        let spans = place(&row, "here", theme);
-        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, want);
+        assert_eq!(place(&row, "here").join(" · "), want);
     }
 }

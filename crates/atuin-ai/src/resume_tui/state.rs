@@ -4,6 +4,7 @@
 //! parts that only make sense for history (search modes, contexts, deletion).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
@@ -18,15 +19,14 @@ use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind
 use ratatui::layout::{Position, Rect};
 use time::OffsetDateTime;
 
-use super::chooser::{Chooser, Destination, ListAnchor};
+use super::chooser::{Chooser, Destination};
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
+use super::reader::Rendered;
 use super::rebuild::Rebuilding;
 use super::resumer::{NotResumable, Resume};
-use super::source::{SessionFilter, SessionPreview, SessionRow};
+use super::source::{SessionFilter, SessionPreview, SessionRow, Transcript};
 use super::{ResumeContext, panel};
-
-pub const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
 /// Sessions updated this recently are live: a dot in the row, and refreshed while open.
 pub const LIVE_SECS: u64 = 120;
@@ -38,6 +38,14 @@ pub const PLAN: u8 = 2;
 /// Restoring the session's transcript from sync, or catching its copy here up with sync, once an
 /// action is waiting on it.
 pub const RESTORE: u8 = 3;
+pub const TRANSCRIPT: u8 = 4;
+
+/// The status while an empty workspace falls back to every session.
+const FELL_BACK: &str = "no sessions in this repo yet: showing all of them";
+
+/// How many sessions' transcripts are kept read: the reader shows one at a time, and a long
+/// session's is large.
+const TRANSCRIPTS_KEPT: usize = 16;
 
 /// How many rows a search asks for.
 pub const SEARCH_LIMIT: usize = 500;
@@ -46,6 +54,9 @@ pub const SEARCH_LIMIT: usize = 500;
 /// whose preview isn't read yet: long enough to cover the read (and a held arrow key), so the
 /// preview never blanks between two sessions, but short enough never to pass for the new one's.
 pub const HOLD: Duration = Duration::from_millis(300);
+
+/// How often the reader's spinner turns.
+pub const SPIN: Duration = Duration::from_millis(80);
 
 /// How many lines a turn of the mouse wheel scrolls a preview.
 pub const WHEEL_LINES: usize = 3;
@@ -81,6 +92,9 @@ pub struct PaneScroll {
     pub len: usize,
     /// More lines than `len`, not rendered yet (they are as it scrolls down).
     pub more: bool,
+    /// The session the reader showed here last, and for which query (see [`super::reader`]): the
+    /// reader opens at the search's match when either changes.
+    pub reading: Option<(HarnessSession, String)>,
 }
 
 impl PaneScroll {
@@ -168,15 +182,6 @@ pub enum Pending {
     Copy,
 }
 
-/// Why the filter shows more than the configured mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Widened {
-    /// Not in a git repository, so workspace can't apply.
-    NoRepo,
-    /// The workspace had no sessions (matching the query).
-    NoMatches,
-}
-
 /// Inspect's list of the forks grouped under the session inspected, once expanded (`c`): it has
 /// the arrow keys, with a cursor, and scrolls.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,12 +195,34 @@ pub struct ChildrenView {
     pub height: usize,
 }
 
+/// A session's transcript, read for the reader.
+#[derive(Debug, Clone)]
+pub struct Read {
+    pub transcript: Arc<Transcript>,
+    /// How many messages the session had when it was read: a refresh finding more reads it again.
+    pub messages: u64,
+    /// When it was read, among the others (for keeping the last few).
+    pub order: u64,
+    /// For the query last asked of it: whether no text in it holds the query (the match is in a
+    /// session grouped under it, or a tool call's input).
+    pub elsewhere: Option<(String, bool)>,
+}
+
 /// The selection and scroll position of the session list.
 #[derive(Debug, Default)]
 pub struct ListState {
+    /// The first line shown, counted from the input outward (see [`super::render::list_lines`]).
     pub offset: usize,
     pub selected: usize,
+    /// How many rows fit at once: what a page moves.
     pub max_entries: usize,
+    /// The lines the list has, headings included.
+    pub lines: usize,
+    /// Whether the list drew the chooser under its row last frame: if not, it's a popup.
+    pub chooser_drawn: bool,
+    /// How far the list moved to keep the row's title in place when the chooser opened under it:
+    /// moved back when it closes. `None` while it isn't open in the list.
+    pub chooser_shift: Option<usize>,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -210,16 +237,18 @@ pub struct State {
 
     pub context: ResumeContext,
     pub mode: FilterMode,
-    pub widened: Option<Widened>,
-    /// Widen workspace to global when it has no matches. Only for the default filter, and only
-    /// until the user picks a mode with ctrl-r.
-    auto_widen: bool,
+    /// Open on every session instead when the workspace has none: only for the first results,
+    /// and only until the user picks a mode with ctrl-r.
+    workspace_fallback: bool,
 
     /// The generation of the newest search sent to the worker.
     pub issued: u64,
     /// The generation whose results are on screen.
     pub applied: u64,
     last_filter: Option<SessionFilter>,
+    /// Whether the query of the last search sent had chips in it (the scope's own filters, such
+    /// as the branch mode's branch, aren't chips: clearing the search doesn't lift them).
+    last_chips: bool,
     /// The generation of a refresh in flight, whose results keep the selection.
     refreshing: Option<u64>,
 
@@ -227,6 +256,31 @@ pub struct State {
     /// Previews read again on a refresh (their sessions are live): shown as they are until the
     /// new ones come.
     pub stale: HashSet<HarnessSession>,
+    /// The reader's conversations, read (see [`Read`]).
+    pub transcripts: HashMap<HarnessSession, Read>,
+    /// Transcripts read again because their sessions grew, shown as they are meanwhile.
+    pub stale_transcripts: HashSet<HarnessSession>,
+    /// Sessions whose transcripts couldn't be read: their panes show the preview instead.
+    pub unreadable: HashSet<HarnessSession>,
+    /// Whether the selection is moving faster than [`super::SETTLE`] (a held arrow key): details
+    /// wait for it, and the reader shows a spinner.
+    pub settling: bool,
+    /// Whether the last frame drew the reader's spinner, which then needs drawing again.
+    pub spinning: bool,
+    /// When the picker opened: the spinner turns from then, unless motion is reduced (`None`).
+    pub spin_from: Option<Instant>,
+    /// How many transcripts have been read, for [`Read::order`].
+    transcripts_read: u64,
+    /// Whether the last frame drew a reader (the pane beside the list, or Inspect): transcripts
+    /// are only read for one.
+    pub reader_visible: bool,
+    /// Each pane's reader's rendered lines, kept between frames, by [`Pane`].
+    pub readers: [Option<Rendered>; 3],
+    /// The query text of the results on screen (not the input, which may have moved on): what
+    /// the list groups by and the reader opens at.
+    pub applied_query: String,
+    /// Whether the results on screen are narrowed by chips (`b:`, `m:`, `h:`) as well.
+    pub applied_chips: bool,
     /// The session whose preview was shown last, and when a frame was first drawn with another
     /// selected: the preview keeps showing it for [`HOLD`] after the selection moves to one not
     /// read yet.
@@ -258,8 +312,6 @@ pub struct State {
     pub pending: Option<(SessionRow, Pending)>,
     /// The "Resume in" chooser, while it's open.
     pub chooser: Option<Chooser>,
-    /// Where the selected row was last drawn, for the chooser to open against.
-    pub list_anchor: Option<ListAnchor>,
     /// What continuing each session elsewhere would flatten, once read (see
     /// [`Request::Flatten`](super::worker::Request::Flatten)); `Err` when it can't be read.
     pub flattened: HashMap<HarnessSession, Result<Flattened, String>>,
@@ -299,14 +351,25 @@ impl State {
             results: Vec::new(),
             context,
             mode: FilterMode::Global,
-            widened: None,
-            auto_widen: false,
+            workspace_fallback: false,
             issued: 0,
             applied: 0,
             last_filter: None,
+            last_chips: false,
             refreshing: None,
             previews: HashMap::new(),
             stale: HashSet::new(),
+            transcripts: HashMap::new(),
+            stale_transcripts: HashSet::new(),
+            unreadable: HashSet::new(),
+            settling: false,
+            spinning: false,
+            spin_from: (!settings.prefers_reduced_motion).then(Instant::now),
+            transcripts_read: 0,
+            reader_visible: false,
+            readers: Default::default(),
+            applied_query: String::new(),
+            applied_chips: false,
             shown: None,
             strip_height: 0,
             scrolls: Default::default(),
@@ -317,7 +380,6 @@ impl State {
             plans: HashMap::new(),
             pending: None,
             chooser: None,
-            list_anchor: None,
             flattened: HashMap::new(),
             flattening: None,
             continuing: None,
@@ -336,22 +398,20 @@ impl State {
         state
     }
 
-    /// Pick the opening filter: the configured one if it can apply here, else workspace, widening
-    /// to global outside a repository.
+    /// Pick the opening filter: the configured one if it can apply here; else, for branch on a
+    /// detached `HEAD`, the repository's; else every session's.
     fn set_initial_mode(&mut self, configured: Option<FilterMode>) {
-        if let Some(mode) = configured.filter(|m| self.mode_available(*m)) {
-            self.mode = mode;
-            return;
-        }
-        if self.mode_available(FilterMode::Workspace) {
-            self.mode = FilterMode::Workspace;
-            self.auto_widen = configured.is_none();
+        let fallback = if self.mode_available(FilterMode::Workspace) {
+            FilterMode::Workspace
         } else {
-            self.mode = FilterMode::Global;
-            if configured.is_none() || configured == Some(FilterMode::Workspace) {
-                self.widened = Some(Widened::NoRepo);
-            }
-        }
+            FilterMode::Global
+        };
+        self.mode = match configured {
+            Some(mode) if self.mode_available(mode) => mode,
+            Some(_) => fallback,
+            None => FilterMode::Global,
+        };
+        self.workspace_fallback = self.mode == FilterMode::Workspace;
     }
 
     pub fn mode_available(&self, mode: FilterMode) -> bool {
@@ -378,8 +438,11 @@ impl State {
         if let Some(mode) = self.next_mode() {
             self.mode = mode;
         }
-        self.widened = None;
-        self.auto_widen = false;
+        self.workspace_fallback = false;
+        // What the fallback said no longer holds once the scope moves.
+        if self.status.as_ref().is_some_and(|(s, _)| s == FELL_BACK) {
+            self.status = None;
+        }
     }
 
     pub fn parsed_query(&self) -> ParsedQuery {
@@ -424,25 +487,22 @@ impl State {
 
     /// The next search to run, if the filter changed since the last one sent. Bumps the
     /// generation, so results for anything older are dropped when they arrive.
-    pub fn next_search(&mut self) -> Option<(u64, FilterMode, SessionFilter)> {
+    pub fn next_search(&mut self) -> Option<(u64, SessionFilter)> {
         let filter = self.filter();
         if self.last_filter.as_ref() == Some(&filter) {
             return None;
         }
         self.last_filter = Some(filter.clone());
+        let q = self.parsed_query();
+        self.last_chips = q.harness.is_some() || q.model.is_some() || q.branch.is_some();
         self.issued += 1;
-        Some((self.issued, self.mode, filter))
+        Some((self.issued, filter))
     }
 
     /// Apply a search's results. Stale generations are dropped (the list on screen stays until
-    /// the newest search answers). An empty workspace widens to global once, returning `true` so
-    /// the caller searches again.
-    pub fn apply_results(
-        &mut self,
-        generation: u64,
-        mode: FilterMode,
-        mut rows: Vec<SessionRow>,
-    ) -> bool {
+    /// the newest search answers). `true` when they were applied, or when an empty workspace fell
+    /// back to every session (to be searched next).
+    pub fn apply_results(&mut self, generation: u64, mut rows: Vec<SessionRow>) -> bool {
         if generation != self.issued {
             return false;
         }
@@ -455,15 +515,26 @@ impl State {
                 self.status = None;
             }
         }
-        if rows.is_empty() && self.auto_widen && mode == FilterMode::Workspace {
-            self.auto_widen = false;
+        // These results are for the newest filter sent.
+        let text = self.last_filter.as_ref().map(|f| f.text.trim().to_owned()).unwrap_or_default();
+        // Only the opening results say whether the workspace has sessions at all, and only with
+        // nothing in the query (text, or a chip) to narrow them.
+        let chips = self.last_chips;
+        let unnarrowed = self.last_filter.is_some() && text.is_empty() && !chips;
+        if std::mem::take(&mut self.workspace_fallback) && rows.is_empty() && unnarrowed {
             self.mode = FilterMode::Global;
-            self.widened = Some(Widened::NoMatches);
+            self.status = Some((FELL_BACK.to_owned(), Meaning::Annotation));
             return true;
+        }
+        let refreshed = self.refreshing == Some(generation);
+        if refreshed {
+            self.stale_grown(&rows);
         }
         let selected = self.selected().map(|r| r.handle.clone());
         self.results = rows;
         self.applied = generation;
+        self.applied_query = text;
+        self.applied_chips = chips;
         // A refresh keeps the selection on the same session; a new query starts at the best
         // match, as the history search does.
         let keep = self.refreshing.take() == Some(generation);
@@ -477,7 +548,7 @@ impl State {
 
     /// Search again with the same filter, so live sessions move and their previews catch up.
     /// Skipped while a search is still out.
-    pub fn refresh(&mut self) -> Option<(u64, FilterMode, SessionFilter)> {
+    pub fn refresh(&mut self) -> Option<(u64, SessionFilter)> {
         if self.issued != self.applied {
             return None;
         }
@@ -511,6 +582,72 @@ impl State {
     pub fn apply_preview(&mut self, session: HarnessSession, preview: SessionPreview) {
         self.stale.remove(&session);
         self.previews.insert(session, preview);
+    }
+
+    /// Whether `session`'s transcript is to be read: a reader is showing, and it isn't read yet,
+    /// or it has grown since.
+    /// Whether `row`'s conversation is on its way to the reader: the selection is still moving,
+    /// or its transcript is being read.
+    pub fn reading(&self, row: &SessionRow) -> bool {
+        self.settling
+            || !(self.transcripts.contains_key(&row.handle)
+                || self.unreadable.contains(&row.handle))
+    }
+
+    pub fn wants_transcript(&self, session: &HarnessSession) -> bool {
+        self.reader_visible
+            && (!self.transcripts.contains_key(session) || self.stale_transcripts.contains(session))
+    }
+
+    /// Mark for reading again the transcripts of sessions a refresh found with more messages
+    /// than they were read with: a live session that went quiet isn't read over and over.
+    fn stale_grown(&mut self, rows: &[SessionRow]) {
+        for row in rows {
+            if self.transcripts.get(&row.handle).is_some_and(|t| t.messages != row.messages) {
+                self.requested.remove(&(row.handle.clone(), TRANSCRIPT));
+                self.stale_transcripts.insert(row.handle.clone());
+            }
+        }
+    }
+
+    /// A transcript read, or why it couldn't be. A failed read keeps what was read before, if
+    /// anything (the session's preview stands in otherwise); it isn't asked for again until the
+    /// selection comes back to it. At most [`TRANSCRIPTS_KEPT`] are kept: the one read longest
+    /// ago (never the selected session's) gives way. Read again unchanged, it keeps what the
+    /// reader rendered of it, and the count it was read at moves on.
+    pub fn apply_transcript(&mut self, session: HarnessSession, read: Result<Transcript, String>) {
+        self.stale_transcripts.remove(&session);
+        let Ok(transcript) = read else {
+            // Unless one was read before, shown as it is.
+            self.unreadable.insert(session);
+            return;
+        };
+        self.unreadable.remove(&session);
+        if let Some(t) = self.transcripts.get_mut(&session)
+            && t.transcript.entries == transcript.entries
+        {
+            t.messages = transcript.message_count;
+            return;
+        }
+        if !self.transcripts.contains_key(&session) && self.transcripts.len() >= TRANSCRIPTS_KEPT {
+            let selected = self.selected().map(|r| r.handle.clone());
+            let oldest = self
+                .transcripts
+                .iter()
+                .filter(|(s, _)| Some(*s) != selected.as_ref())
+                .min_by_key(|(_, t)| t.order)
+                .map(|(s, _)| s.clone());
+            if let Some(oldest) = oldest {
+                self.transcripts.remove(&oldest);
+            }
+        }
+        self.transcripts_read += 1;
+        self.transcripts.insert(session, Read {
+            elsewhere: None,
+            messages: transcript.message_count,
+            transcript: Arc::new(transcript),
+            order: self.transcripts_read,
+        });
     }
 
     /// The session the preview shows at `now`: the selected one once its preview is read. Until
@@ -634,14 +771,6 @@ impl State {
         self.status.clone().or_else(|| self.rebuilding.map(|r| (r.status(), Meaning::AlertWarn)))
     }
 
-    /// The label in the input's `[ MODE ]` prefix.
-    pub fn mode_label(&self) -> &'static str {
-        match self.widened {
-            Some(Widened::NoMatches | Widened::NoRepo) => "WS→GLOBAL",
-            None => self.mode.as_str(),
-        }
-    }
-
     // --- input ---------------------------------------------------------------------------------
 
     #[must_use]
@@ -650,7 +779,8 @@ impl State {
             Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(settings, *m),
             Event::Paste(text) => {
-                if self.tab_index == 0 {
+                // Not into the query while the chooser is open: as with keys, it's the chooser's.
+                if self.tab_index == 0 && self.chooser.is_none() {
                     for c in text.chars().filter(|c| !c.is_control()) {
                         self.input.insert(c);
                     }
@@ -926,7 +1056,8 @@ impl State {
                 self.input.end();
             }
             Action::ToggleTab => {
-                self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
+                // Search and Inspect.
+                self.tab_index = 1 - self.tab_index;
                 self.children_view = None;
             }
             Action::ToggleChildren => self.toggle_children(),
@@ -986,60 +1117,85 @@ mod tests {
         (0..n).map(|i| fake::row(HarnessKind::ClaudeCode, &format!("s{i}"), "t")).collect()
     }
 
-    #[rstest]
-    fn default_mode_is_workspace_in_a_repo() {
-        let state = state_in(fake::context());
-        assert_eq!(state.mode, FilterMode::Workspace);
-        assert_eq!(state.widened, None);
-        assert_eq!(state.filter().db.workspace, Some(PathBuf::from(fake::REPO)));
-    }
-
-    #[rstest]
-    fn default_mode_widens_outside_a_repo() {
+    /// A picker opened with `filter_mode` as `configured`, in a repository on a branch, on a
+    /// detached `HEAD`, or outside one.
+    fn opened(configured: Option<FilterMode>, repo: bool, branch: bool) -> State {
+        let mut settings = settings();
+        settings.ai.sessions.filter_mode = configured;
         let mut ctx = fake::context();
-        ctx.git_root = None;
-        ctx.branch = None;
-        let state = state_in(ctx);
-        assert_eq!(state.mode, FilterMode::Global);
-        assert_eq!(state.widened, Some(Widened::NoRepo));
-        assert_eq!(state.mode_label(), "WS→GLOBAL");
-        assert_eq!(state.filter().db.workspace, None);
+        if !repo {
+            ctx.git_root = None;
+        }
+        if !branch {
+            ctx.branch = None;
+        }
+        State::new(&settings, ctx, "")
+    }
+
+    /// The configured scope, when it can apply here; else, for a branch on a detached `HEAD`, the
+    /// repository's; else every session's.
+    #[rstest]
+    #[case::unset(None, true, true, FilterMode::Global)]
+    #[case::workspace(Some(FilterMode::Workspace), true, true, FilterMode::Workspace)]
+    #[case::workspace_outside_a_repo(Some(FilterMode::Workspace), false, false, FilterMode::Global)]
+    #[case::branch_on_a_detached_head(Some(FilterMode::Branch), true, false, FilterMode::Workspace)]
+    #[case::branch_outside_a_repo(Some(FilterMode::Branch), false, false, FilterMode::Global)]
+    fn the_picker_opens_on(
+        #[case] configured: Option<FilterMode>,
+        #[case] repo: bool,
+        #[case] branch: bool,
+        #[case] want: FilterMode,
+    ) {
+        assert_eq!(opened(configured, repo, branch).mode, want);
     }
 
     #[rstest]
-    fn empty_workspace_widens_to_global_once() {
-        let mut state = state_in(fake::context());
-        let (generation, mode, _) = state.next_search().unwrap();
-        assert!(state.apply_results(generation, mode, Vec::new()), "should re-search");
+    fn an_empty_workspace_opens_on_every_session_once() {
+        let mut state = opened(Some(FilterMode::Workspace), true, true);
+        assert_eq!(state.filter().db.workspace, Some(PathBuf::from(fake::REPO)));
+        let (generation, _) = state.next_search().unwrap();
+        state.apply_results(generation, Vec::new());
         assert_eq!(state.mode, FilterMode::Global);
-        assert_eq!(state.widened, Some(Widened::NoMatches));
+        assert!(state.status_line().is_some_and(|(s, _)| s == FELL_BACK));
 
-        let (generation, mode, filter) = state.next_search().unwrap();
+        let (generation, filter) = state.next_search().unwrap();
         assert_eq!(filter.db.workspace, None);
-        state.apply_results(generation, mode, rows(2));
+        state.apply_results(generation, rows(2));
         assert_eq!(state.results.len(), 2);
 
-        // Once widened, an empty global result is just empty.
-        state.input = Cursor::from("nothing matches this".to_owned());
-        let (generation, mode, _) = state.next_search().unwrap();
-        state.apply_results(generation, mode, Vec::new());
-        assert_eq!(state.mode, FilterMode::Global);
-        assert!(state.results.is_empty());
+        // ctrl-r moves the scope: what the fallback said no longer holds.
+        state.cycle_filter_mode();
+        assert_eq!(state.status_line(), None);
     }
 
+    /// Only an opening with nothing to narrow it (no text, no chip) says whether the workspace
+    /// has sessions; a later query matching nothing stays put.
     #[rstest]
-    fn a_configured_mode_never_widens() {
+    #[case::text("flaky")]
+    #[case::a_chip("b:no-such-branch")]
+    #[case::an_agent("a:pi")]
+    fn a_narrowed_workspace_stays_workspace(#[case] query: &str) {
         let mut settings = settings();
         settings.ai.sessions.filter_mode = Some(FilterMode::Workspace);
-        let mut state = State::new(&settings, fake::context(), "");
-        let (generation, mode, _) = state.next_search().unwrap();
-        assert!(state.apply_results(generation, mode, Vec::new()));
+        let mut state = State::new(&settings, fake::context(), query);
+        let (generation, _) = state.next_search().unwrap();
+        state.apply_results(generation, Vec::new());
         assert_eq!(state.mode, FilterMode::Workspace);
-        assert_eq!(state.widened, None);
+        assert_eq!(state.status_line(), None);
     }
 
     #[rstest]
-    fn ctrl_r_cycles_available_modes_and_clears_widening() {
+    fn workspace_picked_with_ctrl_r_never_falls_back() {
+        let mut state = opened(Some(FilterMode::Workspace), true, true);
+        state.cycle_filter_mode();
+        state.mode = FilterMode::Workspace;
+        let (generation, _) = state.next_search().unwrap();
+        state.apply_results(generation, Vec::new());
+        assert_eq!(state.mode, FilterMode::Workspace);
+    }
+
+    #[rstest]
+    fn ctrl_r_cycles_available_modes() {
         let mut state = state_in(fake::context());
         let s = settings();
         let seen: Vec<_> = (0..5)
@@ -1048,24 +1204,20 @@ mod tests {
                 state.mode
             })
             .collect();
-        // From the workspace straight to every session.
+        // From every session narrowing to the workspace, its branch and the directory.
         assert_eq!(seen, vec![
-            FilterMode::Global,
-            FilterMode::Host,
-            FilterMode::Directory,
-            FilterMode::Branch,
             FilterMode::Workspace,
+            FilterMode::Branch,
+            FilterMode::Directory,
+            FilterMode::Host,
+            FilterMode::Global,
         ]);
 
-        let mut ctx = fake::context();
-        ctx.git_root = None;
-        ctx.branch = None;
-        let mut state = state_in(ctx);
-        assert_eq!(state.widened, Some(Widened::NoRepo));
+        let mut state = opened(Some(FilterMode::Workspace), false, false);
+        state.cycle_filter_mode();
+        assert_eq!(state.mode, FilterMode::Directory);
         state.cycle_filter_mode();
         assert_eq!(state.mode, FilterMode::Host);
-        assert_eq!(state.widened, None);
-        state.cycle_filter_mode();
         state.cycle_filter_mode();
         // Workspace and branch are skipped without a repository.
         assert_eq!(state.mode, FilterMode::Global);
@@ -1093,18 +1245,18 @@ mod tests {
     #[rstest]
     fn stale_generations_are_dropped_and_the_old_list_kept() {
         let mut state = state_in(fake::context());
-        let (g1, mode, _) = state.next_search().unwrap();
-        state.apply_results(g1, mode, rows(3));
+        let (g1, _) = state.next_search().unwrap();
+        state.apply_results(g1, rows(3));
         state.input = Cursor::from("a".to_owned());
-        let (g2, _, _) = state.next_search().unwrap();
+        let (g2, _) = state.next_search().unwrap();
         state.input = Cursor::from("ab".to_owned());
-        let (g3, _, _) = state.next_search().unwrap();
+        let (g3, _) = state.next_search().unwrap();
         assert!(g1 < g2 && g2 < g3);
 
-        assert!(!state.apply_results(g2, mode, rows(1)));
+        assert!(!state.apply_results(g2, rows(1)));
         assert_eq!(state.results.len(), 3, "old list stays until the newest answers");
         assert_eq!(state.applied, g1);
-        assert!(state.apply_results(g3, mode, rows(2)));
+        assert!(state.apply_results(g3, rows(2)));
         assert_eq!(state.results.len(), 2);
         assert_eq!(state.applied, g3);
     }
@@ -1113,16 +1265,16 @@ mod tests {
     fn refresh_keeps_the_selection_and_reloads_live_previews() {
         let mut state = state_in(fake::context());
         state.now = Box::new(fake::now);
-        let (g, mode, _) = state.next_search().unwrap();
+        let (g, _) = state.next_search().unwrap();
         let mut rs = rows(3);
         rs[2].updated_at = fake::now();
-        state.apply_results(g, mode, rs.clone());
+        state.apply_results(g, rs.clone());
         state.list.selected = 1;
         for r in &rs {
             state.previews.insert(r.handle.clone(), SessionPreview::default());
         }
 
-        let (g, mode, _) = state.refresh().unwrap();
+        let (g, _) = state.refresh().unwrap();
         assert!(state.refresh().is_none(), "one refresh at a time");
         // The live preview is read again, and shown as it was meanwhile.
         assert!(state.wants_preview(&rs[2].handle), "the live preview reloads");
@@ -1137,15 +1289,15 @@ mod tests {
         assert_eq!(state.previews[&rs[2].handle], fresh);
         // The list reorders; the selection follows its session.
         rs.swap(0, 1);
-        state.apply_results(g, mode, rs.clone());
+        state.apply_results(g, rs.clone());
         assert_eq!(state.list.selected, 0);
         assert_eq!(state.selected().unwrap().handle, rs[0].handle);
 
         // A new query starts at the top again.
         state.list.selected = 2;
         state.input = Cursor::from("x".to_owned());
-        let (g, mode, _) = state.next_search().unwrap();
-        state.apply_results(g, mode, rs);
+        let (g, _) = state.next_search().unwrap();
+        state.apply_results(g, rs);
         assert_eq!(state.list.selected, 0);
     }
 
@@ -1157,19 +1309,18 @@ mod tests {
         assert_eq!(state.selected(), Some(&pinned));
         assert!(state.status.as_ref().is_some_and(|(s, _)| s.contains("isn't installed here")));
 
-        // The id matches no text, so the workspace would widen; the pinned row keeps it.
-        let (generation, mode, _) = state.next_search().unwrap();
-        state.apply_results(generation, mode, Vec::new());
+        // The id matches no text; the pinned row stays.
+        let (generation, _) = state.next_search().unwrap();
+        state.apply_results(generation, Vec::new());
         assert_eq!(state.results, vec![pinned.clone()]);
-        assert_eq!(state.widened, None);
         // A refresh that finds it too still shows it once, first.
-        state.apply_results(generation, mode, vec![rows(2)[1].clone(), pinned.clone()]);
+        state.apply_results(generation, vec![rows(2)[1].clone(), pinned.clone()]);
         assert_eq!(state.results[0], pinned);
         assert_eq!(state.results.len(), 2);
 
         state.input = Cursor::from("other".to_owned());
-        let (generation, mode, _) = state.next_search().unwrap();
-        state.apply_results(generation, mode, rows(2));
+        let (generation, _) = state.next_search().unwrap();
+        state.apply_results(generation, rows(2));
         assert!(!state.results.contains(&pinned));
         assert_eq!(state.status, None);
     }
@@ -1190,15 +1341,14 @@ mod tests {
         // Nothing is planned for them up front: either may be resumable.
         assert!(state.plans.is_empty());
 
-        let (generation, mode, _) = state.next_search().unwrap();
+        let (generation, _) = state.next_search().unwrap();
         let other = rows(2).remove(1);
-        state.apply_results(generation, mode, vec![pi.clone(), other.clone()]);
+        state.apply_results(generation, vec![pi.clone(), other.clone()]);
         assert_eq!(state.results, vec![claude.clone(), pi, other]);
-        assert_eq!(state.widened, None);
 
         state.input = Cursor::from("other".to_owned());
-        let (generation, mode, _) = state.next_search().unwrap();
-        state.apply_results(generation, mode, rows(2));
+        let (generation, _) = state.next_search().unwrap();
+        state.apply_results(generation, rows(2));
         assert!(!state.results.contains(&claude));
         assert_eq!(state.status, None);
     }

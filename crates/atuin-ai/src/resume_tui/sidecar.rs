@@ -7,14 +7,17 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use atuin_client::ai_session::{AiSessionDatabase, Analysis, HarnessSession, SearchTerms, Session};
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
-use atuin_common::harnesstools::session::{Content, ParentKind};
+use atuin_common::harnesstools::session::{Content, ParentKind, Role};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_common::utils::in_git_repo;
 use eyre::{Result, WrapErr};
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 
-use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
+use super::source::{
+    Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet, Transcript,
+    TranscriptBuilder,
+};
 use super::{ResumeContext, title};
 
 pub struct SidecarSource {
@@ -84,6 +87,7 @@ impl SidecarSource {
             usage: s.usage,
             children: u32::try_from(s.child_count).unwrap_or(u32::MAX),
             matched: None,
+            matched_at: None,
         }
     }
 }
@@ -144,6 +148,9 @@ impl SessionSource for SidecarSource {
                 }
                 let preview = snippet(&m.preview);
                 row.matched = (!preview.text.is_empty()).then_some(preview);
+                // Where the reader opens: only a match in the session's own messages has a place
+                // in its transcript.
+                row.matched_at = m.matched.is_none().then_some(m.message_index);
             }
             rows.push(row);
         }
@@ -161,6 +168,25 @@ impl SessionSource for SidecarSource {
             first_prompt: parts.first_user.as_deref().and_then(text_of),
             last_assistant: parts.last_assistant.as_deref().and_then(text_of),
         })
+    }
+
+    async fn transcript(&self, session: &HarnessSession) -> Result<Transcript> {
+        let mut transcript = TranscriptBuilder::default();
+        let conversation = self.db.conversation(session).await?;
+        transcript.counted(conversation.message_count);
+        for (index, role, content) in conversation.messages {
+            transcript.at(index);
+            for c in &content {
+                match (&role, c) {
+                    (_, Content::Summary(t)) => transcript.summary(t),
+                    (Role::User, Content::Text(t)) => transcript.prompt(t),
+                    (Role::Assistant, Content::Text(t)) => transcript.reply(t),
+                    (Role::Assistant, Content::ToolUse(call)) => transcript.tool(&call.name),
+                    _ => {}
+                }
+            }
+        }
+        Ok(transcript.finish())
     }
 
     async fn children(&self, session: &HarnessSession) -> Result<Vec<SessionRow>> {

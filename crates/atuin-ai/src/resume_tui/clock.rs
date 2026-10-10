@@ -91,6 +91,47 @@ pub fn beside_date(now: OffsetDateTime, ts: OffsetDateTime, tz: UtcOffset) -> Op
     }
 }
 
+/// The local day `ts` falls on, in `tz`.
+pub fn day(ts: OffsetDateTime, tz: UtcOffset) -> Date {
+    ts.to_offset(tz).date()
+}
+
+/// The day the list groups a session last active at `ts` under: its local day, but never past
+/// today (another host's clock may be ahead), so those join today's.
+pub fn list_day(now: OffsetDateTime, ts: OffsetDateTime, tz: UtcOffset) -> Date {
+    day(ts, tz).min(day(now, tz))
+}
+
+/// A heading for the sessions of `day`: `Today`, `Yesterday`, a weekday within the week
+/// (`Monday`), `Sep 27` within the year, and `2025-09-27` before that.
+pub fn day_heading(now: OffsetDateTime, day: Date, tz: UtcOffset) -> String {
+    let today = now.to_offset(tz).date();
+    if day >= today {
+        "Today".to_owned()
+    } else if Some(day) == today.previous_day() {
+        "Yesterday".to_owned()
+    } else if within_week(day, today) {
+        day.weekday().to_string()
+    } else if day.year() == today.year() {
+        format!("{} {}", short(day.month()), day.day())
+    } else {
+        format!("{}-{:02}-{:02}", day.year(), u8::from(day.month()), day.day())
+    }
+}
+
+/// When `ts` happened within its day, under that day's heading: `now`, `12m` or `3h` while
+/// recent, else the clock time, `14:02`.
+pub fn time_in_day(now: OffsetDateTime, ts: OffsetDateTime, tz: UtcOffset) -> String {
+    match When::of(now, ts, tz) {
+        When::Now => "now".to_owned(),
+        When::Ago(s) => s,
+        When::At(_) => {
+            let ts = ts.to_offset(tz);
+            format!("{:02}:{:02}", ts.hour(), ts.minute())
+        }
+    }
+}
+
 /// `day` is one of the six days before `today`, so its weekday names it unambiguously.
 fn within_week(day: Date, today: Date) -> bool {
     day < today && (today - day) < Duration::days(7)
@@ -110,6 +151,24 @@ mod tests {
 
     /// A Monday afternoon.
     const NOW: OffsetDateTime = datetime!(2026-09-28 15:30:00 UTC);
+
+    #[rstest]
+    #[case::today(datetime!(2026-09-28 01:00:00 UTC), "Today")]
+    #[case::yesterday(datetime!(2026-09-27 23:00:00 UTC), "Yesterday")]
+    #[case::this_week(datetime!(2026-09-23 12:00:00 UTC), "Wednesday")]
+    #[case::this_year(datetime!(2026-09-21 12:00:00 UTC), "Sep 21")]
+    #[case::last_year(datetime!(2025-09-27 12:00:00 UTC), "2025-09-27")]
+    fn day_headings(#[case] ts: OffsetDateTime, #[case] want: &str) {
+        assert_eq!(day_heading(NOW, day(ts, UtcOffset::UTC), UtcOffset::UTC), want);
+    }
+
+    #[rstest]
+    #[case::recent(datetime!(2026-09-28 15:18:00 UTC), "12m")]
+    #[case::earlier_today(datetime!(2026-09-28 08:05:00 UTC), "08:05")]
+    #[case::another_day(datetime!(2026-09-21 23:59:00 UTC), "23:59")]
+    fn times_within_a_day(#[case] ts: OffsetDateTime, #[case] want: &str) {
+        assert_eq!(time_in_day(NOW, ts, UtcOffset::UTC), want);
+    }
 
     #[rstest]
     #[case::just_now(datetime!(2026-09-28 15:29:31 UTC), "now")]

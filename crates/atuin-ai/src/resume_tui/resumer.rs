@@ -117,7 +117,7 @@ pub struct Continued {
 }
 
 impl Continued {
-    /// The status line: `continuing in Codex: 42 tool calls become notes, reasoning dropped`.
+    /// The status line: `continuing in Codex: 42 tool calls become notes`.
     pub fn status(&self) -> String {
         continuing(self.target, Some(&self.flattened))
     }

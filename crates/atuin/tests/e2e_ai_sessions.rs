@@ -462,8 +462,8 @@ fn forking_a_session_leaves_it_and_links_the_fork(
 
 /// Continuing a session in another agent writes it out as a new session of that agent, which
 /// carries the conversation on, each shell command now that agent's own shell tool with what it
-/// printed, and only the reasoning left out, as the status line says. It is linked to the
-/// original as its continuation, and resumed.
+/// printed, and only the reasoning left out. With nothing turned into notes, the status line just
+/// says where it continues. It is linked to the original as its continuation, and resumed.
 #[rstest]
 #[case::claude_to_codex(Agent::Claude, Agent::Codex)]
 #[case::claude_to_pi(Agent::Claude, Agent::Pi)]
@@ -486,7 +486,7 @@ fn continuing_in_another_agent_carries_the_conversation(
     let (stdout, stderr) = succeeded(
         &machine.resume(&[&original.id, "--in", to.program(), "--print"], machine.home()),
     );
-    assert_eq!(stderr.trim(), format!("atuin: continuing in {}: reasoning dropped", to.label()));
+    assert_eq!(stderr.trim(), format!("atuin: continuing in {}", to.label()));
     let continued = machine.wait_for_child(to, &original.id);
     assert_eq!(continued["parent_kind"], "continuation");
     assert_eq!(continued["parent"]["harness"], from.harness());

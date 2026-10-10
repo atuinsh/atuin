@@ -345,10 +345,12 @@ enter_accept = true
 ## It follows the history search's style, invert, show_preview, max_preview_height,
 ## enter_accept, keymap_mode and theme settings.
 
-## The filter the picker opens in. Unset: "workspace", widening to "global" when
-## not in a git repository or when the workspace has no sessions. ctrl-r cycles
-## through workspace, global, host, directory and branch.
-# filter_mode = "workspace"
+## The filter the picker opens in. Unset: "global". "workspace" and "branch" open
+## in "global" outside a git repository, "branch" opens in "workspace" on a
+## detached HEAD, and "workspace" opens in "global" when the workspace has no
+## sessions at all. ctrl-r cycles through global, workspace, branch, directory and
+## host.
+# filter_mode = "global"
 
 ## Height of the inline picker. Defaults to the top-level inline_height.
 # inline_height = 40

@@ -76,6 +76,15 @@ macro_rules! session_columns {
     };
 }
 
+/// A session's conversation, as [`AiSessionDatabase::conversation`] reads it.
+#[derive(Debug, Clone, Default)]
+pub struct Conversation {
+    /// Each message read: its place among the session's messages, its role and its content.
+    pub messages: Vec<(u64, Role, Vec<Content>)>,
+    /// How many messages the session had, as [`Session::message_count`] counts them.
+    pub message_count: u64,
+}
+
 /// The `messages` columns [`MessageRow`] reads, from a table aliased `m`. A row's parent kind is
 /// its session's: rows do not store one.
 macro_rules! message_columns {
@@ -930,6 +939,45 @@ impl AiSessionDatabase {
     fn path_repr(path: &Path) -> String {
         let path = path.to_string_lossy();
         path.trim_end_matches(['/', '\\']).to_owned()
+    }
+
+    /// A session's conversation for reading: each message's role and content, oldest first (in
+    /// the order [`SessionMatch::message_index`] counts), with its place in that order, and how
+    /// many messages it was as [`Session::message_count`] counts them. Only what reading needs is
+    /// read. A message that can't be decoded (written by a newer atuin, or damaged) is left out
+    /// with a warning rather than failing the rest; its place still counts.
+    pub async fn conversation(&self, session: &HarnessSession) -> Result<Conversation, DbError> {
+        let rows: Vec<(Option<String>, String, Option<Vec<u8>>)> = db::query_as(
+            "SELECT (SELECT value FROM interned WHERE id = m.role), m.content, m.content_z FROM \
+             messages m WHERE m.session = (SELECT id FROM sessions WHERE harness = ? AND \
+             session_id = ?) ORDER BY m.timestamp, m.id",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_all(self.db.pool())
+        .await?;
+        let mut out = Conversation {
+            messages: Vec::with_capacity(rows.len()),
+            message_count: 0,
+        };
+        for (index, (role, content, content_z)) in (0u64..).zip(rows) {
+            let role = role.as_deref().map(serde_json::from_str::<Role>);
+            let content = Self::read_content(content, content_z);
+            // A message with nothing in it (a structural row) isn't counted, as on write; one
+            // that can't be read had something.
+            out.message_count += u64::from(!content.as_ref().is_ok_and(Vec::is_empty));
+            match (role, content) {
+                (Some(Ok(role)), Ok(content)) => out.messages.push((index, role, content)),
+                (role, content) => warn!(
+                    ?session,
+                    index,
+                    role_ok = matches!(role, Some(Ok(_))),
+                    content_ok = content.is_ok(),
+                    "failed to decode ai-session message; leaving it out of the conversation"
+                ),
+            }
+        }
+        Ok(out)
     }
 
     pub fn messages(
@@ -4371,6 +4419,32 @@ mod tests {
         .execute(db.db.pool())
         .await
         .unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_conversation_leaves_out_a_message_it_cant_decode_and_keeps_the_rest_in_place() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        let messages = [
+            message_with(&s, 0, Role::User, vec![text("first prompt")]),
+            message_with(&s, 1, Role::Assistant, vec![text("a reply")]),
+            message_with(&s, 2, Role::User, vec![text("second prompt")]),
+        ];
+        for m in &messages {
+            db.append(m).await.unwrap();
+        }
+        corrupt(&db, &s, 1).await;
+        let conversation = db.conversation(&s).await.unwrap();
+        let read: Vec<(u64, Role)> =
+            conversation.messages.iter().map(|(i, r, _)| (*i, r.clone())).collect();
+        // The broken reply is left out; the prompt after it keeps its place, as the search counts.
+        assert_eq!(read, [(0, Role::User), (2, Role::User)]);
+        assert_eq!(conversation.messages[1].2, vec![text("second prompt")]);
+        // Counted as the session counts its messages: the broken one had something in it.
+        assert_eq!(conversation.message_count, 3);
+        let session = db.get_session(&s).await.unwrap().unwrap();
+        assert_eq!(conversation.message_count, session.message_count);
     }
 
     #[rstest]
