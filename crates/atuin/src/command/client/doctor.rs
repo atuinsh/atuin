@@ -243,6 +243,27 @@ impl SystemInfo {
     }
 }
 
+/// The auth state doctor reports.
+///
+/// Decided by where the client is CONFIGURED to sync, not by whichever tokens happen to be in the
+/// meta store: an `atapi_` Hub token left over from a past `sync_address` typo must not label a
+/// self-hosted client as "Hub", which is exactly when this line is read.
+fn sync_auth_state(is_hub_sync: bool, has_hub_token: bool, has_cli_token: bool) -> &'static str {
+    if is_hub_sync {
+        if has_hub_token {
+            "Hub (authenticated)"
+        } else if has_cli_token {
+            "Hub (legacy token \u{2014} run 'atuin login' to upgrade)"
+        } else {
+            "Not authenticated"
+        }
+    } else if has_cli_token {
+        "Self-hosted (authenticated)"
+    } else {
+        "Not authenticated"
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct SyncInfo {
     pub auth_state: String,
@@ -271,15 +292,8 @@ impl SyncInfo {
             None => false,
         };
 
-        let auth_state = if has_hub_token {
-            "Hub (authenticated)".into()
-        } else if settings.is_hub_sync() && has_cli_token {
-            "Hub (legacy token \u{2014} run 'atuin login' to upgrade)".into()
-        } else if !settings.is_hub_sync() && has_cli_token {
-            "Self-hosted (authenticated)".into()
-        } else {
-            "Not authenticated".into()
-        };
+        let auth_state =
+            sync_auth_state(settings.is_hub_sync(), has_hub_token, has_cli_token).to_string();
 
         Self {
             auth_state,
@@ -446,4 +460,29 @@ pub async fn run(settings: &Settings) -> Result<()> {
     println!("{dump}");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sync_auth_state;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(true, true, false, "Hub (authenticated)")]
+    #[case(true, false, true, "Hub (legacy token \u{2014} run 'atuin login' to upgrade)")]
+    #[case(true, false, false, "Not authenticated")]
+    // A leftover `atapi_` token from a past config typo must not label a client whose syncs
+    // run against its own server.
+    #[case(false, true, true, "Self-hosted (authenticated)")]
+    #[case(false, false, true, "Self-hosted (authenticated)")]
+    #[case(false, true, false, "Not authenticated")]
+    #[case(false, false, false, "Not authenticated")]
+    fn reports_the_sync_target_the_client_is_configured_for(
+        #[case] is_hub_sync: bool,
+        #[case] has_hub_token: bool,
+        #[case] has_cli_token: bool,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(sync_auth_state(is_hub_sync, has_hub_token, has_cli_token), expected);
+    }
 }
