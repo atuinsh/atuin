@@ -83,7 +83,7 @@ impl From<HistoryStats> for Stats {
             ("Avg runtime", Duration::from_nanos(stats.average_duration).display().to_string()),
         ];
 
-        let exit_width = if stats.exits.iter().any(|(exit, _)| *exit < 0) {
+        let mut exit_width = if stats.exits.iter().any(|(exit, _)| *exit < 0) {
             7
         } else {
             4
@@ -93,13 +93,16 @@ impl From<HistoryStats> for Stats {
             .exits
             .iter()
             .map(|(exit, count)| {
+                let count = u64::try_from(*count).unwrap_or(0);
+                // Ratatui needs a spare column to show values on bars shorter than one cell.
+                exit_width = exit_width.max(u16::try_from(count.to_string().len()).unwrap() + 1);
                 Bar::default()
                     .label(if *exit < 0 {
                         "Unknown".into()
                     } else {
                         exit.to_string()
                     })
-                    .value(u64::try_from(*count).unwrap_or(0))
+                    .value(count)
             })
             .collect();
 
@@ -262,6 +265,9 @@ fn draw_charts(f: &mut Frame<'_>, area: Rect, stats: &Stats, styles: Styles) {
 
 #[cfg(test)]
 mod tests {
+    use atuin_client::theme::ThemeManager;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use rstest::{fixture, rstest};
 
     use super::*;
@@ -299,5 +305,83 @@ mod tests {
         let months = monthly_durations(&stats.duration_over_time);
         assert!(months[0].0 < months[1].0);
         assert_eq!(months[0].1, 1_000_000_000);
+    }
+
+    #[rstest]
+    #[case(0, 759, 200)]
+    #[case(0, 7590, 2000)]
+    #[case(-1, 7_590_000, 2_000_000)]
+    #[case(0, 9_999_999_999, 1)]
+    fn exit_counts_are_visible_on_short_bars(
+        mut stats: HistoryStats,
+        #[case] exit: i64,
+        #[case] large: i64,
+        #[case] small: i64,
+        #[values(4, 6, 8)] height: u16,
+    ) {
+        stats.exits = vec![(exit, large), (2, small)];
+        let stats = Stats::from(stats);
+        let mut terminal = Terminal::new(TestBackend::new(50, height)).unwrap();
+        let styles = Styles {
+            base: Style::default(),
+            muted: Style::default(),
+            important: Style::default(),
+        };
+        terminal
+            .draw(|f| {
+                chart(f, f.area(), " Exit codes ".into(), &stats.exits, stats.exit_width, styles);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for (start, count) in [(1, large), (stats.exit_width + 2, small)] {
+            let expected = count.to_string();
+            let len = u16::try_from(expected.len()).unwrap();
+            let x = start + (stats.exit_width.saturating_sub(len) / 2);
+            let rendered: String = (x..x + len).map(|x| buffer[(x, height - 3)].symbol()).collect();
+            assert_eq!(rendered, expected);
+        }
+    }
+
+    #[rstest]
+    #[case(vec![], 4)]
+    #[case(vec![(0, 0), (1, -1)], 4)]
+    #[case(vec![(0, 759), (2, 200)], 4)]
+    #[case(vec![(-1, 7), (0, 759)], 7)]
+    #[case(vec![(0, i64::MAX)], 20)]
+    fn exit_width_preserves_label_space(
+        mut stats: HistoryStats,
+        #[case] exits: Vec<(i64, i64)>,
+        #[case] expected: u16,
+    ) {
+        stats.exits = exits;
+        assert_eq!(Stats::from(stats).exit_width, expected);
+    }
+
+    #[rstest]
+    #[case(50, 16, "Exit codes · 3/5 shown")]
+    #[case(80, 24, "Exit codes")]
+    #[case(49, 16, "Known exits only")]
+    #[case(80, 15, "Known exits only")]
+    fn exit_chart_fits_viewport(
+        mut stats: HistoryStats,
+        #[case] width: u16,
+        #[case] height: u16,
+        #[case] expected: &str,
+    ) {
+        stats.exits = vec![(137, 2), (130, 1), (2, 1000), (1, 2000), (0, 7590)];
+        let stats = Stats::from(stats);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut themes = ThemeManager::new(Some(true), Some(String::new()));
+        let theme = themes.load_theme("(none)", None);
+        terminal.draw(|f| draw(f, f.area(), &stats, theme)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer.content.iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert!(text.contains(expected), "{text}");
+        if width >= 50 && height >= 16 {
+            assert!(text.contains("7590"));
+            assert!(text.contains("2000"));
+        } else {
+            assert!(!text.contains("Exit codes"));
+        }
     }
 }
