@@ -1101,6 +1101,10 @@ pub struct Settings {
     pub keymap_mode: KeymapMode,
     pub keymap_mode_shell: KeymapMode,
     pub keymap_cursor: HashMap<String, CursorStyle>,
+    /// Milliseconds to wait for the next key of a multi-key sequence in emacs
+    /// and vim-insert mode before handling the held key on its own; 0 waits
+    /// indefinitely. Vim-normal mode always waits.
+    pub keymap_sequence_timeout_ms: u64,
     pub word_jump_mode: WordJumpMode,
     pub word_chars: String,
     pub scroll_context_lines: usize,
@@ -1608,6 +1612,7 @@ impl Settings {
             .set_default("keymap_mode", "emacs")?
             .set_default("keymap_mode_shell", "auto")?
             .set_default("keymap_cursor", HashMap::<String, String>::new())?
+            .set_default("keymap_sequence_timeout_ms", 100)?
             .set_default("smart_sort", false)?
             .set_default("command_chaining", false)?
             .set_default("store_failed", true)?
