@@ -858,6 +858,22 @@ async fn a_match_outside_the_conversation_shows_over_it() {
     let out = text(&render(&mut state, &s, 140, 30));
     assert!(out.contains("Match"), "{out}");
     assert!(out.contains("a fork asked about the zebra crossing"), "{out}");
+
+    // It doesn't scroll, and leaves the conversation the rest: its end is still in reach. Short,
+    // so it scrolls at all.
+    for _ in 0..20 {
+        state.scroll_pane(Pane::Side, 1000);
+        let _ = render(&mut state, &s, 140, 20);
+    }
+    let scroll = &state.scrolls[Pane::Side as usize];
+    assert!(!scroll.more && scroll.len > scroll.height, "{scroll:?}");
+    assert_eq!(scroll.offset + scroll.height, scroll.len, "{scroll:?}");
+    let reader = state.readers[Pane::Side as usize].as_ref().unwrap();
+    let last = reader.last_text().trim().to_owned();
+    assert!(!last.is_empty());
+    let out = text(&render(&mut state, &s, 140, 20));
+    assert!(out.contains("zebra crossing"), "{out}");
+    assert!(out.contains(&last), "{last:?} in {out}");
 }
 
 /// The reader shows a spinner while its transcript is read, and while the selection is still

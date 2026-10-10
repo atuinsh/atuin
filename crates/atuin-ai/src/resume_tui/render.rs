@@ -896,6 +896,8 @@ pub(super) struct Body {
     pub len: usize,
     /// More lines than `len`, not rendered yet.
     pub more: bool,
+    /// Lines over the text that don't scroll with it (a match the conversation doesn't hold).
+    pub fixed: usize,
 }
 
 impl Body {
@@ -927,12 +929,21 @@ pub(super) fn scroll_body(
         offset,
         len,
         more,
+        fixed: 0,
     }
 }
 
 /// A scrollbar in `track` (a border, or a column kept for it) for `body` shown `height` lines at
 /// a time, once it has more than fits.
 fn draw_scrollbar(f: &mut Frame, track: Rect, body: &Body, height: usize, theme: &Theme) {
+    // Beside the text that scrolls, under any lines fixed over it.
+    let fixed = u16::try_from(body.fixed).unwrap_or(u16::MAX).min(track.height);
+    let track = Rect {
+        y: track.y + fixed,
+        height: track.height - fixed,
+        ..track
+    };
+    let height = height.saturating_sub(body.fixed);
     if !body.overflows(height) || track.height == 0 {
         return;
     }
@@ -1162,7 +1173,7 @@ impl State {
         scroll.session = Some(session);
         scroll.offset = body.offset;
         scroll.area = Some(area);
-        scroll.height = height;
+        scroll.height = height.saturating_sub(body.fixed);
         scroll.len = body.len;
         scroll.more = body.more;
     }
@@ -1990,9 +2001,8 @@ impl State {
         };
         let room = height - snippet.len();
         if let Some(mut body) = self.reader_body(pane, row, width, indent, room, theme) {
-            if !snippet.is_empty() {
-                body.lines.splice(0..0, snippet);
-            }
+            body.fixed = snippet.len();
+            body.lines.splice(0..0, snippet);
             return body;
         }
         scroll_body(
@@ -2019,6 +2029,7 @@ impl State {
             offset: 0,
             len: 1,
             more: false,
+            fixed: 0,
         }
     }
 

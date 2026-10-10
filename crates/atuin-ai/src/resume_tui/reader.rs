@@ -370,6 +370,7 @@ impl State {
             offset,
             len,
             more,
+            fixed: 0,
         })
     }
 }
@@ -379,6 +380,15 @@ impl Rendered {
     /// How many lines are rendered.
     pub fn len(&self) -> usize {
         self.lines.len()
+    }
+
+    /// The last line rendered with text in it.
+    pub fn last_text(&self) -> String {
+        self.lines
+            .iter()
+            .map(ToString::to_string)
+            .rfind(|l| !l.trim().is_empty())
+            .unwrap_or_default()
     }
 }
 
