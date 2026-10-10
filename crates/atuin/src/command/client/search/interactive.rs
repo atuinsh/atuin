@@ -57,6 +57,7 @@ pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
     Copy(usize),
+    ApplyValue(usize, ApplyValueSource),
     Delete(usize),
     DeleteInspecting,
     DeleteAllMatching(usize),
@@ -65,6 +66,29 @@ pub enum InputAction {
     Continue,
     Redraw,
     SwitchContext(Option<usize>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyValueSource {
+    Clipboard,
+    Prompt,
+}
+
+impl ApplyValueSource {
+    #[cfg(not(feature = "ai"))]
+    fn action_name(self) -> &'static str {
+        match self {
+            Self::Clipboard => "apply-clipboard",
+            Self::Prompt => "apply-input",
+        }
+    }
+
+    fn loading_message(self) -> &'static str {
+        match self {
+            Self::Clipboard => "Applying clipboard with Atuin AI…",
+            Self::Prompt => "Applying value with Atuin AI…",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -755,6 +779,12 @@ impl State {
                 self.accept_selection()
             }
             Action::Copy => InputAction::Copy(self.results_state.selected()),
+            Action::ApplyClipboard => {
+                InputAction::ApplyValue(self.results_state.selected(), ApplyValueSource::Clipboard)
+            }
+            Action::ApplyInput => {
+                InputAction::ApplyValue(self.results_state.selected(), ApplyValueSource::Prompt)
+            }
             Action::Delete if self.tab_index == 1 => InputAction::DeleteInspecting,
             Action::Delete => InputAction::Delete(self.results_state.selected()),
             Action::DeleteAll => InputAction::DeleteAllMatching(self.results_state.selected()),
@@ -1803,6 +1833,171 @@ fn compute_popup_placement(
     (Rect::new(0, popup_y, popup_w, popup_h), scroll)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValuePromptAction {
+    Continue,
+    Submit,
+    Cancel,
+}
+
+fn is_transform_cancel_event(input: &Event) -> bool {
+    let Event::Key(key) = input else {
+        return false;
+    };
+    if key.kind == event::KeyEventKind::Release {
+        return false;
+    }
+
+    key.code == event::KeyCode::Esc
+        || (key.code == event::KeyCode::Char('c')
+            && key.modifiers.contains(event::KeyModifiers::CONTROL))
+}
+
+fn handle_value_prompt_input(
+    value: &mut Cursor,
+    input: &Event,
+    settings: &Settings,
+) -> ValuePromptAction {
+    match input {
+        Event::Paste(text) => {
+            for c in text.trim_end_matches(['\r', '\n']).chars() {
+                if !matches!(c, '\r' | '\n') {
+                    value.insert(c);
+                }
+            }
+        }
+        Event::Key(key) if key.kind != event::KeyEventKind::Release => {
+            use event::{KeyCode, KeyModifiers};
+
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return ValuePromptAction::Cancel;
+            }
+
+            match key.code {
+                KeyCode::Enter if !value.as_str().is_empty() => return ValuePromptAction::Submit,
+                KeyCode::Esc => return ValuePromptAction::Cancel,
+                KeyCode::Left => {
+                    value.left();
+                }
+                KeyCode::Right => value.right(),
+                KeyCode::Home => value.start(),
+                KeyCode::End => value.end(),
+                KeyCode::Backspace => {
+                    value.back();
+                }
+                KeyCode::Delete => {
+                    value.remove();
+                }
+                KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    value.remove_prev_word(&settings.word_chars, settings.word_jump_mode);
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    value.clear();
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && !c.is_control() =>
+                {
+                    value.insert(c);
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+
+    ValuePromptAction::Continue
+}
+
+fn value_prompt_window(value: &Cursor, max_width: usize) -> (&str, usize) {
+    let before_width = UnicodeWidthStr::width(value.substring());
+    let scroll_width = before_width.saturating_sub(max_width.saturating_sub(1));
+    let mut start_byte = 0;
+    let mut skipped_width = 0;
+
+    for (index, c) in value.as_str().char_indices() {
+        let char_width = UnicodeWidthChar::width(c).unwrap_or(0);
+        if skipped_width + char_width > scroll_width {
+            start_byte = index;
+            break;
+        }
+        skipped_width += char_width;
+        start_byte = index + c.len_utf8();
+    }
+
+    (&value.as_str()[start_byte..], before_width.saturating_sub(skipped_width))
+}
+
+fn draw_value_prompt(frame: &mut Frame, value: &Cursor) {
+    const LABEL: &str = "Value: ";
+
+    let frame_area = frame.area();
+    if frame_area.width == 0 || frame_area.height == 0 {
+        return;
+    }
+
+    let width = frame_area.width.saturating_sub(2).clamp(1, 72);
+    let height = frame_area.height.min(5);
+    let area = Rect::new(
+        frame_area.x + frame_area.width.saturating_sub(width) / 2,
+        frame_area.y + frame_area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    let block =
+        Block::bordered().title(" Apply value with Atuin AI ").title_alignment(Alignment::Center);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let value_width = usize::from(inner.width).saturating_sub(LABEL.len()).max(1);
+    let (visible, cursor_column) = value_prompt_window(value, value_width);
+    let content = Text::from(vec![
+        Line::from(vec![Span::raw(LABEL), Span::raw(visible)]),
+        Line::from("Enter to apply · Esc to cancel").centered(),
+    ]);
+    frame.render_widget(Paragraph::new(content), inner);
+    frame.set_cursor_position((
+        inner.x
+            + u16::try_from(LABEL.len() + cursor_column)
+                .unwrap_or(u16::MAX)
+                .min(inner.width.saturating_sub(1)),
+        inner.y,
+    ));
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prompt_for_value(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut State,
+    results: &[History],
+    stats: Option<&InspectorStats>,
+    inspecting: Option<&History>,
+    settings: &Settings,
+    theme: &Theme,
+    popup_mode: bool,
+) -> Result<Option<String>> {
+    let mut value = Cursor::from(String::new());
+
+    loop {
+        terminal.draw(|frame| {
+            app.draw(frame, results, stats, inspecting, settings, theme, popup_mode);
+            draw_value_prompt(frame, &value);
+        })?;
+
+        let input = tokio::task::spawn_blocking(event::read).await??;
+        match handle_value_prompt_input(&mut value, &input, settings) {
+            ValuePromptAction::Continue => {}
+            ValuePromptAction::Submit => return Ok(Some(value.into_inner())),
+            ValuePromptAction::Cancel => return Ok(None),
+        }
+    }
+}
+
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
@@ -2007,6 +2202,7 @@ pub async fn history(
     let mut stats_for: Option<String> = None;
     let mut inspecting: Option<History> = None;
     let accept;
+    let mut transform_error = None;
     let result = 'render: loop {
         if app.tab_index == 1 {
             let context = app.eval_context();
@@ -2106,6 +2302,128 @@ pub async fn history(
                                 app.results_state = ListState::default();
                                 app.inspecting_state.reset();
                                 app.tab_index = 0;
+                            },
+                            InputAction::ApplyValue(index, source) => {
+                                let command = if app.tab_index == 1 {
+                                    inspecting.as_ref().map(|entry| entry.command.clone())
+                                } else {
+                                    results.get(index).map(|entry| entry.command.clone())
+                                };
+                                let Some(command) = command else { break; };
+
+                                let value = match source {
+                                    ApplyValueSource::Clipboard => match get_clipboard() {
+                                        Ok(value) => value,
+                                        Err(error) => {
+                                            transform_error = Some(error);
+                                            accept = false;
+                                            break 'render InputAction::ReturnOriginal;
+                                        }
+                                    },
+                                    ApplyValueSource::Prompt => {
+                                        let value = prompt_for_value(
+                                            &mut terminal,
+                                            &mut app,
+                                            &results,
+                                            stats.as_ref(),
+                                            inspecting.as_ref(),
+                                            settings,
+                                            theme,
+                                            popup_mode,
+                                        ).await?;
+                                        let Some(value) = value else { break; };
+                                        value
+                                    }
+                                };
+
+                                terminal.draw(|frame| {
+                                    app.draw(
+                                        frame,
+                                        &results,
+                                        stats.as_ref(),
+                                        inspecting.as_ref(),
+                                        settings,
+                                        theme,
+                                        popup_mode,
+                                    );
+                                    let frame_area = frame.area();
+                                    let width = frame_area.width.saturating_sub(2).min(54);
+                                    let area = Rect::new(
+                                        frame_area.x + frame_area.width.saturating_sub(width) / 2,
+                                        frame_area.y + frame_area.height.saturating_sub(4) / 2,
+                                        width,
+                                        4.min(frame_area.height),
+                                    );
+                                    frame.render_widget(Clear, area);
+                                    let message = Text::from(vec![
+                                        Line::from(source.loading_message()).centered(),
+                                        Line::from("Esc or Ctrl-C to cancel").centered(),
+                                    ]);
+                                    frame.render_widget(
+                                        Paragraph::new(message).block(Block::bordered()),
+                                        area,
+                                    );
+                                })?;
+
+                                #[cfg(feature = "ai")]
+                                let transform = atuin_ai::transform::transform_command(
+                                    &command,
+                                    &value,
+                                    settings,
+                                );
+                                #[cfg(feature = "ai")]
+                                tokio::pin!(transform);
+                                #[cfg(feature = "ai")]
+                                let transformed = 'transform: loop {
+                                    let event_ready = tokio::task::spawn_blocking(|| {
+                                        event::poll(Duration::from_millis(250))
+                                    });
+                                    tokio::select! {
+                                        result = &mut transform => break 'transform Some(result),
+                                        event_ready = event_ready => {
+                                            if event_ready?? {
+                                                loop {
+                                                    if is_transform_cancel_event(&event::read()?) {
+                                                        break 'transform None;
+                                                    }
+                                                    if !event::poll(Duration::ZERO)? {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                };
+                                #[cfg(feature = "ai")]
+                                let Some(transformed) = transformed else { break; };
+                                #[cfg(feature = "ai")]
+                                match transformed {
+                                    Ok(transformed) => {
+                                        let command = with_command_chain(
+                                            transformed.command,
+                                            is_command_chaining
+                                                .then_some(original_query.as_str()),
+                                        );
+                                        app.search.input = Cursor::from(command);
+                                        accept = false;
+                                        break 'render InputAction::ReturnQuery;
+                                    }
+                                    Err(error) => {
+                                        transform_error = Some(error);
+                                        accept = false;
+                                        break 'render InputAction::ReturnOriginal;
+                                    }
+                                }
+                                #[cfg(not(feature = "ai"))]
+                                {
+                                    let _ = (command, value);
+                                    transform_error = Some(eyre::eyre!(
+                                        "{} requires Atuin's `ai` feature",
+                                        source.action_name(),
+                                    ));
+                                    accept = false;
+                                    break 'render InputAction::ReturnOriginal;
+                                }
                             },
                             InputAction::SwitchContext(index) => {
                                 let entry = index.and_then(|index| {
@@ -2242,6 +2560,10 @@ pub async fn history(
 
     let chain = is_command_chaining.then_some(original_query.as_str());
 
+    if let Some(error) = transform_error {
+        return Err(error);
+    }
+
     match result {
         InputAction::AcceptInspecting => Ok(inspecting
             .map(|entry| selection_output(entry, app.cd, accept, None, &shell))
@@ -2269,6 +2591,7 @@ pub async fn history(
         }
         InputAction::Continue
         | InputAction::Redraw
+        | InputAction::ApplyValue(_, _)
         | InputAction::Delete(_)
         | InputAction::DeleteInspecting
         | InputAction::DeleteAllMatching(_)
@@ -2295,8 +2618,15 @@ fn selection_output(
         entry.command
     };
     match chain {
-        Some(query) => format!("{} {command}", query.trim_end()),
+        Some(_) => with_command_chain(command, chain),
         None if accept => format!("{ACCEPT_PREFIX}{command}"),
+        None => command,
+    }
+}
+
+fn with_command_chain(command: String, chain: Option<&str>) -> String {
+    match chain {
+        Some(query) => format!("{} {command}", query.trim_end()),
         None => command,
     }
 }
@@ -2364,12 +2694,28 @@ fn set_clipboard(s: String) -> Result<(), arboard::Error> {
     Ok(())
 }
 
+#[cfg(all(
+    feature = "clipboard",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+fn get_clipboard() -> Result<String> {
+    Ok(arboard::Clipboard::new()?.get_text()?)
+}
+
 #[cfg(not(all(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
 fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
     Ok(())
+}
+
+#[cfg(not(all(
+    feature = "clipboard",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+)))]
+fn get_clipboard() -> Result<String> {
+    Err(eyre::eyre!("clipboard support is unavailable in this build or on this platform"))
 }
 
 #[cfg(test)]
@@ -2836,6 +3182,14 @@ mod tests {
     }
 
     #[rstest]
+    fn transformed_command_preserves_existing_chain() {
+        assert_eq!(
+            super::with_command_chain("cat new.txt".to_string(), Some("cd /tmp && ")),
+            "cd /tmp && cat new.txt"
+        );
+    }
+
+    #[rstest]
     #[case::sh(Shell::Sh, r#"cd -- '/a b'\''c"d\e$HOME!'"#)]
     #[case::bash(Shell::Bash, r#"cd -- '/a b'\''c"d\e$HOME!'"#)]
     #[case::zsh(Shell::Zsh, r#"cd -- '/a b'\''c"d\e$HOME!'"#)]
@@ -3113,6 +3467,110 @@ mod tests {
 
         let result = state.execute_action(&Action::Copy, &settings);
         assert!(matches!(result, super::InputAction::Copy(7)));
+    }
+
+    #[rstest]
+    fn execute_apply_clipboard(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Settings,
+    ) {
+        use crate::command::client::search::keybindings::Action;
+
+        let result = state.execute_action(&Action::ApplyClipboard, &settings);
+        assert!(matches!(
+            result,
+            super::InputAction::ApplyValue(7, super::ApplyValueSource::Clipboard)
+        ));
+    }
+
+    #[rstest]
+    fn execute_apply_input(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Settings,
+    ) {
+        use crate::command::client::search::keybindings::Action;
+
+        let result = state.execute_action(&Action::ApplyInput, &settings);
+        assert!(matches!(
+            result,
+            super::InputAction::ApplyValue(7, super::ApplyValueSource::Prompt)
+        ));
+    }
+
+    #[rstest]
+    fn value_prompt_edits_and_submits_without_changing_search(
+        #[with(KeymapMode::Emacs, 100, 7, FilterMode::Global, "search query")] state: State,
+        settings: Settings,
+    ) {
+        use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+        let mut value = super::Cursor::from(String::new());
+        for c in "production".chars() {
+            let action = super::handle_value_prompt_input(
+                &mut value,
+                &Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)),
+                &settings,
+            );
+            assert_eq!(action, super::ValuePromptAction::Continue);
+        }
+
+        let action = super::handle_value_prompt_input(
+            &mut value,
+            &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            &settings,
+        );
+        assert_eq!(action, super::ValuePromptAction::Submit);
+        assert_eq!(value.as_str(), "production");
+        assert_eq!(state.search.input.as_str(), "search query");
+        assert_eq!(state.results_state.selected(), 7);
+    }
+
+    #[rstest]
+    fn value_prompt_cancels_and_strips_pasted_line_endings(settings: Settings) {
+        use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+        let mut value = super::Cursor::from(String::new());
+        let action = super::handle_value_prompt_input(
+            &mut value,
+            &Event::Paste("production\r\n".to_string()),
+            &settings,
+        );
+        assert_eq!(action, super::ValuePromptAction::Continue);
+        assert_eq!(value.as_str(), "production");
+
+        let action = super::handle_value_prompt_input(
+            &mut value,
+            &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            &settings,
+        );
+        assert_eq!(action, super::ValuePromptAction::Cancel);
+    }
+
+    #[rstest]
+    fn transform_wait_can_be_cancelled_with_escape_or_ctrl_c() {
+        use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+        let escape = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let ctrl_c = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        let plain_c = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+        assert!(super::is_transform_cancel_event(&escape));
+        assert!(super::is_transform_cancel_event(&ctrl_c));
+        assert!(!super::is_transform_cancel_event(&plain_c));
+    }
+
+    #[cfg(not(all(
+        feature = "clipboard",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    )))]
+    #[rstest]
+    fn missing_clipboard_support_is_reported() {
+        let error = super::get_clipboard().unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "clipboard support is unavailable in this build or on this platform"
+        );
     }
 
     #[rstest]

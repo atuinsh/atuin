@@ -26,3 +26,21 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
     );
     println!("{}", crate::shell::XONSH);
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    #[rstest]
+    fn failed_search_preserves_the_xonsh_buffer() {
+        let script = crate::shell::XONSH;
+        let status_check = script.find("if p.returncode != 0:").unwrap();
+        let buffer_reset = script.find("buffer.reset()").unwrap();
+
+        assert!(status_check < buffer_reset);
+        assert!(script.contains(
+            "if p.returncode != 0:\n        if result:\n            print(result, \
+             file=sys.stderr)\n        return"
+        ));
+    }
+}

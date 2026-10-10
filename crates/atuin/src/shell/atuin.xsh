@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 from prompt_toolkit.application.current import get_app
 from prompt_toolkit.filters import Condition
@@ -69,6 +70,11 @@ def _search(event, extra_args: list[str]):
     result = p.stderr.rstrip("\n")
     # redraw prompt - necessary if atuin is configured to run inline, rather than fullscreen
     event.cli.renderer.erase()
+
+    if p.returncode != 0:
+        if result:
+            print(result, file=sys.stderr)
+        return
 
     if not result:
         return

@@ -390,6 +390,8 @@ pub fn default_prefix_keymap() -> Keymap {
     km.bind(key("d"), Action::Delete);
     km.bind(key("D"), Action::DeleteAll);
     km.bind(key("a"), Action::CursorStart);
+    km.bind(key("v"), Action::ApplyClipboard);
+    km.bind(key("i"), Action::ApplyInput);
     km.bind(key("g"), Action::AcceptCd);
     km.bind(key("G"), Action::ReturnCd);
     km.bind_conditional(key("c"), vec![
@@ -690,6 +692,8 @@ mod tests {
     #[rstest]
     #[case::d_deletes("d", 0, 0, 0, 10, Some(Action::Delete))]
     #[case::a_cursor_start("a", 0, 0, 0, 10, Some(Action::CursorStart))]
+    #[case::v_apply_clipboard("v", 0, 0, 0, 10, Some(Action::ApplyClipboard))]
+    #[case::i_apply_input("i", 0, 0, 0, 10, Some(Action::ApplyInput))]
     #[case::g_accept_cd("g", 0, 0, 0, 10, Some(Action::AcceptCd))]
     #[case::shift_g_return_cd("G", 0, 0, 0, 10, Some(Action::ReturnCd))]
     #[case::unknown_key_returns_none("x", 0, 0, 0, 10, None)]

@@ -202,6 +202,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `return-original` | Close the TUI and return the original command line text |
 | `return-query` | Close the TUI and return the current search query |
 | `copy` | Copy the selected entry to the clipboard |
+| `apply-clipboard` | Use Atuin AI to apply clipboard text to the most likely semantic entity in the selected command, then return the result for editing |
+| `apply-input` | Prompt for a value, use Atuin AI to apply it to the most likely semantic entity in the selected command, then return the result for editing |
 | `delete` | Delete the selected entry from history |
 | `delete-all` | Delete **all** history entries matching the selected command text |
 | `exit` | Exit the TUI (behavior depends on the `exit_mode` setting) |
@@ -213,6 +215,20 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `clear-context` | Return to the initial [context](../guide/advanced-usage.md#context-switch) |
 
 The difference between `accept` and `return-selection`: `accept` runs the command immediately when the TUI closes, while `return-selection` places it on your command line for further editing before you press enter. The `enter_accept` setting controls which of these the default `enter` key uses.
+
+`apply-clipboard` is bound to `v` in prefix mode (`ctrl-a v`). It sends the selected command and
+clipboard text to the configured Atuin AI endpoint. It may update multiple related command
+fragments when needed to keep the command internally consistent, then puts the result on the
+command line without executing it. It fails without changing the command line when the model can't
+identify one coherent semantic change.
+
+`apply-input` is bound to `i` in prefix mode (`ctrl-a i`). It behaves like `apply-clipboard`, but
+opens a text prompt for the value instead of reading the clipboard. Press `enter` to apply the
+value, or `esc` to cancel and return to search. The selected command and entered value are sent to
+the configured Atuin AI endpoint.
+
+While either action is waiting for Atuin AI, press `esc` or `ctrl-c` to cancel the request and
+return to search.
 
 `accept-cd` and `return-cd` are bound to `g` and `G` in prefix mode (`ctrl-a g`, `ctrl-a G`); see [Jumping to a command's directory](#jumping-to-a-commands-directory). They act like `accept` and `return-selection`, but return a command changing to the entry's directory:
 
