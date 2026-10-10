@@ -436,3 +436,7 @@ enter_accept = true
 ## Syntax highlight commands in the search results, using the theme's colors.
 ## Not available on all platforms (e.g. Windows).
 # syntax_highlight = true
+
+## Optional background color for the selected history row. This works with any keymap
+## and keeps the row's foreground colors unchanged. Accepts the same color formats as themes.
+# selected_row_background = "#3c3836"

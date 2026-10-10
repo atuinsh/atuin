@@ -181,7 +181,7 @@ impl Theme {
 }
 
 // Use palette to get a color from a string name, if possible
-fn from_string(name: &str) -> Result<Color, String> {
+pub(crate) fn from_string(name: &str) -> Result<Color, String> {
     if name.is_empty() {
         return Err("Empty string".into());
     }

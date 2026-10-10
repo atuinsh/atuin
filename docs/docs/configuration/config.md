@@ -1435,6 +1435,18 @@ columns = ["exit", "duration", "command"]
 columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
 ```
 
+### `selected_row_background`
+
+Default: unset
+
+Paint this background across the selected history row, regardless of the active keymap. The row keeps its normal text and syntax colors. Setting this also replaces Vim Normal mode's reverse-video highlight for the selected row.
+
+Use the same color formats as [theme colors](../guide/theming.md), including named colors and `#RRGGBB` values.
+
+```toml
+selected_row_background = "#3c3836"
+```
+
 ### `syntax_highlight`
 
 Default: `true`
@@ -1442,7 +1454,8 @@ Default: `true`
 Syntax highlight commands in the search results, parsed with the grammar for
 the shell that ran them: bash/zsh/sh use the bash grammar, fish uses the fish
 grammar, and shells without a grammar (nu, xonsh, PowerShell) are shown
-unhighlighted. The selected row keeps its usual single highlight color.
+unhighlighted. When `selected_row_background` is set, the selected row keeps
+these foreground and syntax colors over the configured background.
 
 The default colors are ANSI palette colors, so they automatically match your
 terminal's color scheme. They can also be customized via the `Syntax*` keys in
