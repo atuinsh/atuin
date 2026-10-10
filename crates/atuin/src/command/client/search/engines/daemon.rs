@@ -110,13 +110,54 @@ impl Search {
                 state.input.as_str(),
                 OptFilters {
                     limit: Some(200),
-                    authors: all_user_author_filter(),
+                    authors: state.authors.as_slice_filter(),
                     shells: shells.as_filter(),
                     ..Default::default()
                 },
             )
             .await?
             .into_iter()
+            .collect())
+    }
+
+    async fn author_filtered_fuzzy_search(
+        &self,
+        state: &SearchState,
+        db: &Sqlite,
+    ) -> Result<Vec<History>> {
+        let mut patterns = frizbee::Pattern::parse_query(truncate_query(state.input.as_str()));
+        for pattern in &mut patterns {
+            pattern.needle = pattern.needle.normalize_diacritics().into_owned();
+        }
+        if patterns.is_empty() {
+            return self.fallback_to_db_search(state, db).await;
+        }
+        let shells = state.shells.to_filter();
+        // SQL fuzzy matching neither normalizes accents nor ranks before its limit. Load the
+        // filtered unique commands, then use the daemon's matcher before selecting 200 hits.
+        let histories: Vec<_> = db
+            .search(DbSearchMode::FullText, state.filter_mode, &state.context, "", OptFilters {
+                limit: None,
+                authors: state.authors.as_slice_filter(),
+                shells: shells.as_filter(),
+                ..Default::default()
+            })
+            .await?
+            .into_iter()
+            .collect();
+        let normalized: Vec<_> =
+            histories.iter().map(|history| history.command.normalize_diacritics()).collect();
+        let config = frizbee::Config::default()
+            .casing(frizbee::CaseMatching::Smart)
+            .sort(frizbee::SortStrategy::IndexAsc);
+        let mut matcher = frizbee::Matcher::from_patterns(&patterns, &config);
+        let mut scored_hits = matcher.match_list(&normalized);
+        // The database returns newest first, so equal fuzzy scores retain recency order.
+        scored_hits.sort_unstable_by_key(|m| (std::cmp::Reverse(m.score), m.index));
+        Ok(scored_hits
+            .into_iter()
+            .take(200)
+            .map(|m| histories[usize::conv(m.index)].clone())
             .collect())
     }
 
@@ -147,10 +188,14 @@ impl SearchEngine for Search {
     async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
         let query = state.input.as_str().to_string();
 
-        // Fall back to database for regex queries (Nucleo doesn't support regex)
         if Self::contains_regex_pattern(&query) {
             debug!(query = %query, "[daemon-client] regex detected, falling back to db");
             return self.fallback_to_db_search(state, db).await;
+        }
+        // The daemon index deliberately excludes agent-authored commands. Other author filters
+        // must match the database's filtered records locally, without dropping fuzzy matches.
+        if state.authors != all_user_author_filter() {
+            return self.author_filtered_fuzzy_search(state, db).await;
         }
 
         let query_id = self.next_query_id();
@@ -278,12 +323,119 @@ impl SearchEngine for Search {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use atuin_client::database::Context;
+    use atuin_client::history::AuthorPattern;
+    use atuin_client::settings::{FilterMode, Shells};
+    use atuin_common::filter::OrFilter;
+    use atuin_domain::record::CmdOrigin;
+    use rstest::rstest;
+    use time::OffsetDateTime;
+
     use super::*;
+
+    #[rstest::fixture]
+    fn author_filtered_state() -> SearchState {
+        SearchState {
+            input: String::new().into(),
+            filter_mode: FilterMode::Global,
+            context: Context {
+                session: "session".into(),
+                cwd: "/tmp".into(),
+                cmd_origin: CmdOrigin::default(),
+                host_id: "host".into(),
+                git_root: None,
+            },
+            custom_context: None,
+            authors: OrFilter::from_list(vec![AuthorPattern::Name("codex".to_owned())]).unwrap(),
+            shells: Shells::Fixed(OrFilter::from_list(vec!["zsh".to_owned()]).unwrap()),
+        }
+    }
+
+    #[rstest]
+    #[case::fuzzy("gts", &["git status"])]
+    #[case::regex("r/^git s/", &["git status"])]
+    #[case::empty("", &["echo déjà", "echo noop", "git status"])]
+    #[case::accented("deja", &["echo déjà"])]
+    #[case::inverse_accented("!deja", &["echo noop", "git status"])]
+    #[case::whitespace(" ", &["echo déjà", "echo noop", "git status"])]
+    #[tokio::test]
+    async fn author_filtered_daemon_queries_preserve_matching(
+        #[case] query: &str,
+        #[case] expected: &[&str],
+        mut author_filtered_state: SearchState,
+    ) {
+        let mut db = Sqlite::in_memory(Duration::from_secs(2)).await.unwrap();
+        for (command, author, shell) in [
+            ("git status", "codex", "zsh"),
+            ("git status bash", "codex", "bash"),
+            ("git status user", "alice", "zsh"),
+            ("git status claude", "claude", "zsh"),
+            ("echo noop", "codex", "zsh"),
+            ("echo déjà", "codex", "zsh"),
+        ] {
+            let history: History = History::capture()
+                .timestamp(OffsetDateTime::now_utc())
+                .command(command)
+                .cwd("/tmp")
+                .author(author)
+                .shell(shell)
+                .build()
+                .into();
+            db.save(&history).await.unwrap();
+        }
+
+        author_filtered_state.input = query.to_owned().into();
+        let mut settings = Settings::utc();
+        settings.daemon.autostart = false;
+        let mut engine = Search::new(&settings);
+        let mut commands: Vec<_> = engine
+            .query(&author_filtered_state, &mut db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|history| history.command)
+            .collect();
+        commands.sort();
+        assert_eq!(commands, expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn author_filtered_daemon_ranks_before_limit(mut author_filtered_state: SearchState) {
+        let mut db = Sqlite::in_memory(Duration::from_secs(2)).await.unwrap();
+        for index in 0..=201 {
+            let command = if index == 0 {
+                "gts".to_owned()
+            } else {
+                format!("git status {index}")
+            };
+            let history: History = History::capture()
+                .timestamp(OffsetDateTime::from_unix_timestamp(index).unwrap())
+                .command(command)
+                .cwd("/tmp")
+                .author("codex")
+                .shell("zsh")
+                .build()
+                .into();
+            db.save(&history).await.unwrap();
+        }
+
+        author_filtered_state.input = "gts".to_owned().into();
+        let mut settings = Settings::utc();
+        settings.daemon.autostart = false;
+        let mut engine = Search::new(&settings);
+        let results = engine.query(&author_filtered_state, &mut db).await.unwrap();
+
+        assert_eq!(results.len(), 200);
+        assert_eq!(results[0].command, "gts");
+    }
 
     /// Regression test: the daemon truncates queries before frizbee sees
     /// them, but highlighting used the raw input — a pasted query with an
     /// atom past frizbee's needle limit panicked in `Matcher::from_query`.
-    #[test]
+    #[rstest]
     fn long_query_does_not_panic_highlighting() {
         let engine = Search::new(&Settings::default());
         let long_query = "a".repeat(5000);
@@ -295,7 +447,7 @@ mod tests {
     /// and returns byte offsets into the original command — the renderer
     /// tests each display char's source byte against these ("echo déjà" is
     /// e0 c1 h2 o3 ␣4 d5 é6 j8 à9; é and à are two bytes each).
-    #[test]
+    #[rstest]
     fn accented_command_highlights_unaccented_query() {
         let engine = Search::new(&Settings::default());
         let indices = engine.get_highlight_indices("echo déjà", "deja");
@@ -305,7 +457,7 @@ mod tests {
     /// A multibyte char before the match must not shift the highlight:
     /// frizbee's offsets are into the normalized text ("emacs test"), which
     /// is one byte shorter than the command wherever é shrank to e.
-    #[test]
+    #[rstest]
     fn multibyte_char_before_match_does_not_shift_highlight() {
         let engine = Search::new(&Settings::default());
         let indices = engine.get_highlight_indices("émacs test", "test");
@@ -315,7 +467,7 @@ mod tests {
     /// Non-Latin text doesn't normalize, so matchable and command share a
     /// byte layout; offsets still land on the match ("日本 git" is 日0 本3
     /// ␣6 g7 i8 t9).
-    #[test]
+    #[rstest]
     fn cjk_prefix_highlights_at_correct_bytes() {
         let engine = Search::new(&Settings::default());
         let indices = engine.get_highlight_indices("日本 git", "git");
