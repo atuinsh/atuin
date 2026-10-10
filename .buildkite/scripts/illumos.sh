@@ -22,7 +22,12 @@ section ":package: Fetch anyvm ${ANYVM_VERSION}" \
   fetch_verified "https://dl.tty0.dev/anyvm-org/anyvm/releases/download/v${ANYVM_VERSION}/anyvm.py" \
   "$ANYVM_SHA256" /tmp/anyvm.py
 
-# Run inside the VM: the same steps as the old job's prepare + run.
+profile=dev
+if [ "${BUILDKITE_SOURCE:-}" = schedule ]; then
+  profile=release
+fi
+
+# Run inside the VM.
 guest_script="
 set -e
 cd /work
@@ -32,10 +37,9 @@ pkg install pkg-config openssl || [ \$? -eq 4 ]
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
   sh -s -- -y --profile minimal --default-toolchain ${RUST_VERSION}
 . \"\$HOME/.cargo/env\"
-echo '--- :hammer: cargo build -p atuin-client --release'
-cargo build -p atuin-client --locked --release
-echo '--- :hammer: cargo build -p atuin-server --release'
-cargo build -p atuin-server --locked --release
+export CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
+echo '--- :hammer: cargo build (${profile})'
+cargo build --locked --profile ${profile} -p atuin-client -p atuin-server
 "
 
 # The downloaded image lives in the `anyvm` cache; --snapshot runs from it

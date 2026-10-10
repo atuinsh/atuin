@@ -51,7 +51,7 @@ caches:
   # to download. Per step, since steps pin different toolchains (MSRV) and
   # components (clippy). Linux only: macOS images ship several toolchains,
   # so there the entry is 1.7 GB and slower to restore than installing. Not
-  # used for the nightly rustfmt step, which should pick up new nightlies.
+  # used for the rustfmt step, whose pinned nightly isn't part of the key.
   - name: rustup
     cache_key:
       - rustup

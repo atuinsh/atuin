@@ -24,7 +24,7 @@ verify_sha256() { # <sha256> <file>
 }
 
 fetch_verified() { # <url> <sha256> <file>
-  curl -fsSL -o "$3" "$1"
+  curl -fsSL --retry 3 --retry-all-errors -o "$3" "$1"
   verify_sha256 "$2" "$3"
 }
 
