@@ -377,8 +377,8 @@ impl ReadToolCall {
 
                 if numbered.len() > 100_000 {
                     ToolOutcome::Error(format!(
-                        "Error: file is too large to read ({} bytes in {} lines); use view_range \
-                         to read a subset of the file",
+                        "Error: file is too large to read ({} bytes in {} lines); use read_file \
+                         with offset and a smaller limit to read a subset of the file",
                         numbered.len(),
                         lines.len()
                     ))
