@@ -4,6 +4,7 @@
 use clap::Parser;
 use clap::builder::Styles;
 use clap::builder::styling::{AnsiColor, Effects};
+use clap_couture::{Couture, CoutureParser};
 use command::AtuinCmd;
 use eyre::Result;
 
@@ -25,28 +26,17 @@ const SHA: &str = env!("GIT_HASH");
 
 const LONG_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")");
 
-static HELP_TEMPLATE: &str = "\
-{before-help}{name} {version}
-{author}
-{about}
-
-{usage-heading}
-  {usage}
-
-{all-args}{after-help}";
-
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Yellow.on_default().effects(Effects::BOLD))
     .usage(AnsiColor::Green.on_default().effects(Effects::BOLD))
     .literal(AnsiColor::Green.on_default().effects(Effects::BOLD))
     .placeholder(AnsiColor::Green.on_default());
 
-#[derive(Parser)]
+#[derive(Parser, Couture)]
 #[command(
     author = "Ellie Huxtable <ellie@atuin.sh>",
     version = VERSION,
     long_version = LONG_VERSION,
-    help_template(HELP_TEMPLATE),
     styles = STYLES,
     about = fl!("cmd-atuin"),
 )]
@@ -62,5 +52,5 @@ impl Atuin {
 }
 
 fn main() -> Result<()> {
-    Atuin::parse().run()
+    Atuin::couture_parse().run()
 }

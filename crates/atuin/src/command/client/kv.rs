@@ -5,20 +5,23 @@ use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_kv::store::KvStore;
 use clap::Subcommand;
+use clap_couture::Couture;
 use eyre::{Context, Result, eyre};
 use tracing::instrument;
 
 use crate::i18n::fl;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Couture)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
     #[command(about = fl!("cmd-kv-set"))]
     Set {
         #[arg(long, short, help = fl!("arg-kv-set-key"))]
+        #[couture(prompt)]
         key: String,
 
         #[arg(help = fl!("arg-kv-set-value"))]
+        #[couture(prompt = fl!("prompt-kv-set-value"))]
         value: Option<String>,
 
         #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]
@@ -37,6 +40,7 @@ pub enum Cmd {
     #[command(about = fl!("cmd-kv-get"))]
     Get {
         #[arg(help = fl!("arg-kv-get-key"))]
+        #[couture(prompt)]
         key: String,
 
         #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]

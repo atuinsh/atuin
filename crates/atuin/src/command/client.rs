@@ -5,6 +5,7 @@ use atuin_client::settings::Settings;
 use atuin_client::theme;
 use atuin_common::logs::{self, LogConfig};
 use clap::Subcommand;
+use clap_couture::Couture;
 use eyre::{Result, WrapErr};
 
 use crate::i18n::fl;
@@ -41,8 +42,9 @@ mod store;
 mod update;
 mod wrapped;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Couture)]
 #[command(infer_subcommands = true)]
+#[couture(inherit = ["ai", "sync", "data", "setup", "advanced"])]
 pub enum Cmd {
     // Variant order sets the `--help` command list order, so keep the commands users reach for
     // most (search, sync, stats) at the top and the plumbing/config commands lower down.
@@ -63,6 +65,7 @@ pub enum Cmd {
 
     #[command(about = fl!("cmd-account"))]
     #[cfg(feature = "sync")]
+    #[category("sync")]
     Account(account::Cmd),
 
     /// Manipulate shell history
@@ -70,52 +73,65 @@ pub enum Cmd {
     History(history::Cmd),
 
     #[command(about = fl!("cmd-setup"))]
+    #[category("setup")]
     Setup,
 
     #[command(about = fl!("cmd-init"))]
+    #[category("setup")]
     Init(init::Cmd),
 
     /// Import shell history from file
     #[command(subcommand)]
+    #[category("setup")]
     Import(import::Cmd),
 
     #[command(about = fl!("cmd-doctor"))]
+    #[category("setup")]
     Doctor,
 
     #[cfg(feature = "self-update")]
     #[command(about = fl!("cmd-update"))]
+    #[category("setup")]
     Update(update::Cmd),
 
     /// Get or set small key-value pairs
     #[command(subcommand)]
+    #[category("data")]
     Kv(kv::Cmd),
 
     /// Manage the atuin data store
     #[command(subcommand)]
+    #[category("data")]
     Store(store::Cmd),
 
     /// List legacy synced dotfiles data
     #[command(subcommand)]
+    #[category("data")]
     Dotfiles(dotfiles::Cmd),
 
     /// Manage your scripts with Atuin
     #[command(subcommand)]
+    #[category("data")]
     Scripts(scripts::Cmd),
 
     #[command(about = fl!("cmd-hook"))]
+    #[category("advanced")]
     Hook(hook::Cmd),
 
     /// Run the AI assistant
     #[cfg(feature = "ai")]
     #[command(subcommand)]
+    #[category("ai")]
     Ai(atuin_ai::commands::Command),
 
     /// Pick a captured AI coding-agent session and resume it (short for `atuin ai resume`)
     #[cfg(feature = "ai")]
+    #[category("ai")]
     Resume(atuin_ai::commands::ResumeCmd),
 
     #[cfg(feature = "ai")]
     #[command(about = fl!("cmd-mcp"))]
+    #[category("ai")]
     Mcp,
 
     #[command(about = fl!("cmd-wrapped"))]
@@ -125,17 +141,21 @@ pub enum Cmd {
     },
 
     #[command(about = fl!("cmd-default-config"))]
+    #[category("advanced")]
     DefaultConfig,
 
     /// Get, set, or print values in your atuin config file
     #[command(subcommand)]
+    #[category("setup")]
     Config(config::Cmd),
 
     #[command(about = fl!("cmd-info"))]
+    #[category("advanced")]
     Info,
 
     #[cfg(feature = "daemon")]
     #[command(about = fl!("cmd-daemon"))]
+    #[category("advanced")]
     Daemon(daemon::Cmd),
 
     /// Internal subcommands, not for direct use by users.
