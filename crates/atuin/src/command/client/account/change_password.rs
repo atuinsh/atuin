@@ -1,11 +1,11 @@
 use atuin_client::auth::{self, AuthClient, MutateResponse};
 use atuin_client::settings::Settings;
 use clap::Parser;
-use clap_couture::Couture;
+use clap_couture::{Couture, CoutureParser as _};
 use eyre::{Result, bail};
 use secrecy::{ExposeSecret, SecretString};
 
-use super::prompter;
+use crate::Atuin;
 use crate::i18n::fl;
 
 #[derive(Parser, Debug, Couture)]
@@ -52,7 +52,7 @@ impl Cmd {
             match response {
                 MutateResponse::Success => break,
                 MutateResponse::TwoFactorRequired => {
-                    let code = prompter("--totp-code")?.text(&fl!("prompt-two-factor-code"))?;
+                    let code = Atuin::prompter_unwrap().text(&fl!("prompt-two-factor-code"))?;
                     totp_code = Some(code.into());
                 }
             }

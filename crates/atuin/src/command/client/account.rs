@@ -1,12 +1,10 @@
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use clap::{Args, Subcommand};
-use clap_couture::interactive::Prompter;
-use clap_couture::{Couture, CoutureParser as _};
-use eyre::{Result, eyre};
+use clap_couture::Couture;
+use eyre::Result;
 use tracing::instrument;
 
-use crate::Atuin;
 use crate::i18n::fl;
 
 pub mod change_password;
@@ -15,10 +13,6 @@ pub mod link;
 pub mod login;
 pub mod logout;
 pub mod register;
-
-pub(super) fn prompter(flag: &str) -> Result<Prompter> {
-    Atuin::prompter().ok_or_else(|| eyre!(fl!("account-no-terminal", flag = flag)))
-}
 
 #[derive(Args, Debug, Couture)]
 pub struct Cmd {

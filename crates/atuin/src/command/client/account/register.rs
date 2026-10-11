@@ -3,11 +3,11 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use clap::Parser;
-use clap_couture::Couture;
+use clap_couture::{Couture, CoutureParser as _};
 use eyre::{Result, bail};
 use secrecy::{ExposeSecret, SecretString};
 
-use super::prompter;
+use crate::Atuin;
 use crate::i18n::fl;
 
 #[derive(Parser, Debug, Couture)]
@@ -103,15 +103,15 @@ impl Cmd {
 
             let username = match self.username.clone() {
                 Some(username) => username,
-                None => prompter("--username")?.text(&fl!("prompt-username"))?,
+                None => Atuin::prompter_unwrap().text(&fl!("prompt-username"))?,
             };
             let email = match self.email.clone() {
                 Some(email) => email,
-                None => prompter("--email")?.text(&fl!("prompt-email"))?,
+                None => Atuin::prompter_unwrap().text(&fl!("prompt-email"))?,
             };
             let password: SecretString = match self.password.clone() {
                 Some(password) => password,
-                None => prompter("--password")?.secret(&fl!("prompt-password"))?,
+                None => Atuin::prompter_unwrap().secret(&fl!("prompt-password"))?,
             };
 
             if password.expose_secret().is_empty() {

@@ -9,7 +9,6 @@ use clap_couture::{Couture, CoutureParser as _};
 use eyre::{Context, Result, bail};
 use secrecy::{ExposeSecret, SecretString};
 
-use super::prompter;
 use crate::Atuin;
 use crate::i18n::fl;
 
@@ -81,7 +80,7 @@ impl Cmd {
 
             let password = match self.password.clone() {
                 Some(password) => password,
-                None => prompter("--password")?.secret(&fl!("prompt-password"))?,
+                None => Atuin::prompter_unwrap().secret(&fl!("prompt-password"))?,
             };
 
             self.prompt_and_store_key(settings, store).await?;
@@ -94,7 +93,7 @@ impl Cmd {
                 match response {
                     AuthResponse::Success { session, auth_type } => break (session, auth_type),
                     AuthResponse::TwoFactorRequired => {
-                        let code = prompter("--totp-code")?.text(&fl!("prompt-two-factor-code"))?;
+                        let code = Atuin::prompter_unwrap().text(&fl!("prompt-two-factor-code"))?;
                         totp_code = Some(code.into());
                     }
                 }
@@ -139,11 +138,11 @@ impl Cmd {
     async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let username = match self.username.clone() {
             Some(username) => username,
-            None => prompter("--username")?.text(&fl!("prompt-username"))?,
+            None => Atuin::prompter_unwrap().text(&fl!("prompt-username"))?,
         };
         let password = match self.password.clone() {
             Some(password) => password,
-            None => prompter("--password")?.secret(&fl!("prompt-password"))?,
+            None => Atuin::prompter_unwrap().secret(&fl!("prompt-password"))?,
         };
 
         self.prompt_and_store_key(settings, store).await?;
@@ -216,9 +215,7 @@ impl Cmd {
             let key = match flag_key.take() {
                 Some(key) => key,
                 None => {
-                    let Some(prompter) = Atuin::prompter() else {
-                        bail!(fl!("login-no-key-provided"));
-                    };
+                    let prompter = Atuin::prompter_unwrap();
                     if key_path.exists() && prompter.confirm(&fl!("prompt-use-existing-key"), true)? {
                         SecretString::from("")
                     } else {
@@ -315,10 +312,7 @@ async fn verify_key_against_remote(
                 println!("\n{}", fl!("login-key-mismatch"));
                 println!("{}", fl!("login-key-find-correct"));
 
-                let Some(prompter) = Atuin::prompter() else {
-                    logout_wrong_key().await
-                };
-                match prompter.secret(&fl!("prompt-key-or-logout")) {
+                match Atuin::prompter_unwrap().secret(&fl!("prompt-key-or-logout")) {
                     Ok(input) => match paseto_v4::Key::try_from_mnemonic(input.expose_secret()) {
                         Ok(candidate) => key = candidate,
                         Err(err) => {

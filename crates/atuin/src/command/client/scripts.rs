@@ -133,10 +133,7 @@ pub enum Cmd {
 
 impl Cmd {
     fn open_editor(initial_content: &str) -> Result<String> {
-        let Some(prompter) = Atuin::prompter() else {
-            bail!("no terminal to open an editor on; pass --script or --no-edit");
-        };
-        Ok(prompter.editor("Script", "sh", Some(initial_content))?)
+        Ok(Atuin::prompter_unwrap().editor("Script", "sh", Some(initial_content))?)
     }
 
     // Helper function to execute a script and manage stdin/stdout/stderr
@@ -298,13 +295,7 @@ impl Cmd {
                 variables.into_iter().filter(|var| !variable_values.contains_key(var)).collect();
 
             if !remaining_vars.is_empty() {
-                let Some(prompter) = Atuin::prompter() else {
-                    let names: Vec<_> = remaining_vars.into_iter().collect();
-                    bail!(
-                        "missing values for template variables: {}; pass them with --var KEY=VALUE",
-                        names.join(", ")
-                    );
-                };
+                let prompter = Atuin::prompter_unwrap();
 
                 for var in remaining_vars {
                     let value = prompter.text(&format!("Value for '{var}'"))?;
