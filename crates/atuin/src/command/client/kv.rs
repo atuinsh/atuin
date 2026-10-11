@@ -19,7 +19,7 @@ pub enum Cmd {
         key: String,
 
         #[arg(help = fl!("arg-kv-set-value"))]
-        #[couture(prompt = fl!("prompt-kv-set-value"), accept_stdin)]
+        #[couture(prompt = fl!("prompt-kv-set-value"), stdin)]
         value: String,
 
         #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]

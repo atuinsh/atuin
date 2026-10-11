@@ -1215,6 +1215,7 @@ dependencies = [
 [[package]]
 name = "clap-couture"
 version = "0.1.0"
+source = "git+https://github.com/markovejnovic/clap-couture?branch=main#c9ab0706ded2e019fe3adf90ac3eb8c60185d479"
 dependencies = [
  "anstream",
  "clap",
@@ -1237,6 +1238,7 @@ dependencies = [
 [[package]]
 name = "clap-couture-derive"
 version = "0.1.0"
+source = "git+https://github.com/markovejnovic/clap-couture?branch=main#c9ab0706ded2e019fe3adf90ac3eb8c60185d479"
 dependencies = [
  "darling 0.24.1",
  "heck",
