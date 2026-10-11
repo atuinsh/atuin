@@ -161,6 +161,30 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Which of `ids` are already in the store.
+    #[instrument(level = "trace", skip_all, fields(count = ids.len()), err)]
+    pub async fn existing(&self, ids: &[RecordId]) -> Result<std::collections::HashSet<RecordId>> {
+        let rows_per_query = self.sqlite.info().await.variable_number_limit().max(1);
+        let mut found = std::collections::HashSet::new();
+
+        for chunk in ids.chunks(rows_per_query) {
+            let mut builder = sqlx::QueryBuilder::new("select id from store where id in (");
+            let mut list = builder.separated(", ");
+            for id in chunk {
+                list.push_bind(id.0.as_hyphenated().to_string());
+            }
+            list.push_unseparated(")");
+
+            let rows: Vec<String> =
+                builder.build_query_scalar().fetch_all(self.sqlite.pool()).await?;
+            for id in rows {
+                found.insert(RecordId(Uuid::from_str(&id)?));
+            }
+        }
+
+        Ok(found)
+    }
+
     #[instrument(level = "trace", skip_all, err)]
     async fn load_all(&self) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
         let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(

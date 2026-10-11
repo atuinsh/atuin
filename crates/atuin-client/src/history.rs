@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror;
 use time::OffsetDateTime;
 use uuid::Uuid;
+use xxhash_rust::xxh3::Xxh3;
 
 use crate::settings::Settings;
 
@@ -293,6 +294,27 @@ impl HistoryId {
     #[must_use]
     pub fn to_string(&self) -> String {
         self.0.as_simple().to_string()
+    }
+
+    /// The id of an entry imported from a shell's history file.
+    ///
+    /// Derived from what identifies the entry in the history db -- its time, directory and
+    /// command -- so every import of it, retried or on another machine, gets the same id. Shaped
+    /// like a v7 UUID carrying the entry's time, so ids stay time-ordered.
+    #[must_use]
+    pub fn for_import(timestamp: OffsetDateTime, cwd: &str, command: &str) -> Self {
+        let nanos = timestamp.unix_timestamp_nanos();
+        let mut hasher = Xxh3::new();
+        hasher.update(&nanos.to_le_bytes());
+        // Length-prefixed, so no other (cwd, command) split runs together into the same bytes.
+        hasher.update(&u64::conv(cwd.len()).to_le_bytes());
+        hasher.update(cwd.as_bytes());
+        hasher.update(command.as_bytes());
+        let hash = hasher.digest128().to_le_bytes();
+
+        let millis = u64::try_from(nanos / 1_000_000).unwrap_or(0);
+        let random: [u8; 10] = hash[..10].try_into().expect("a 128-bit hash has 10 bytes");
+        Self(uuid::Builder::from_unix_timestamp_millis(millis, &random).into_uuid())
     }
 }
 
@@ -1083,6 +1105,56 @@ mod tests {
             assert_eq!(got.unwrap(), expected, "{decode_as}");
         } else {
             assert!(got.is_err(), "unexpected success deserializing as {decode_as}");
+        }
+    }
+
+    /// Every import of an entry, here or on another machine, gets the same id; anything that
+    /// tells entries apart in the history db tells their ids apart too.
+    #[rstest]
+    #[case::timestamp(datetime!(2024-01-01 00:00:00.000000001 UTC), "/home", "ls")]
+    #[case::cwd(datetime!(2024-01-01 00:00 UTC), "/tmp", "ls")]
+    #[case::command(datetime!(2024-01-01 00:00 UTC), "/home", "ls -la")]
+    #[case::cwd_command_split(datetime!(2024-01-01 00:00 UTC), "/homels", "")]
+    fn import_ids_are_stable_and_distinct(
+        #[case] timestamp: time::OffsetDateTime,
+        #[case] cwd: &str,
+        #[case] command: &str,
+    ) {
+        let base = || super::HistoryId::for_import(datetime!(2024-01-01 00:00 UTC), "/home", "ls");
+        assert_eq!(base(), base());
+        assert_ne!(super::HistoryId::for_import(timestamp, cwd, command), base());
+    }
+
+    /// Imported entries get their id from what they are, not a fresh random one.
+    #[rstest]
+    fn imported_history_gets_its_import_id() {
+        let imported = || -> History {
+            History::import()
+                .timestamp(datetime!(2024-01-01 00:00 UTC))
+                .command("ls")
+                .cwd("/home")
+                .build()
+                .into()
+        };
+        assert_eq!(imported().id, imported().id);
+        assert_eq!(
+            imported().id,
+            super::HistoryId::for_import(datetime!(2024-01-01 00:00 UTC), "/home", "ls")
+        );
+    }
+
+    proptest::proptest! {
+        /// Ids carry the entry's time, so later entries sort after earlier ones (to the millisecond).
+        #[test]
+        fn import_ids_are_time_ordered(a in 0i64..4_000_000_000_000, b in 0i64..4_000_000_000_000) {
+            let id = |ms: i64| super::HistoryId::for_import(
+                time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).unwrap(),
+                "/",
+                "cmd",
+            );
+            if a < b {
+                proptest::prop_assert!(id(a) < id(b));
+            }
         }
     }
 }

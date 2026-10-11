@@ -39,7 +39,7 @@ impl HistoryImported {
 
 impl From<HistoryImported> for History {
     fn from(imported: HistoryImported) -> Self {
-        Self::new(
+        let history = Self::new(
             imported.timestamp,
             imported.command,
             imported.cwd,
@@ -52,7 +52,12 @@ impl From<HistoryImported> for History {
             None,
             imported.shell,
             imported.author_kind,
-        )
+        );
+
+        Self {
+            id: HistoryId::for_import(history.timestamp, &history.cwd, &history.command),
+            ..history
+        }
     }
 }
 
