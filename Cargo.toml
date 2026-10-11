@@ -43,7 +43,7 @@ chrono = "0.4"
 chrono-humanize = "0.2"
 clap = { version = "4", features = ["derive", "env"] }
 # Unreleased; local checkout.
-clap-couture = { path = "../clap-couture/crates/clap-couture", features = ["interactive-inquire", "interactive-editor", "markdown"] }
+clap-couture = { path = "../clap-couture/crates/clap-couture", features = ["interactive-cliclack", "interactive-editor", "markdown"] }
 clap_complete = "4"
 clap_complete_nushell = "4"
 colored = "3"

@@ -1223,7 +1223,6 @@ dependencies = [
  "codepage",
  "console",
  "encoding_rs",
- "inquire",
  "libc",
  "pulldown-cmark",
  "secrecy",
@@ -3108,19 +3107,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
-]
-
-[[package]]
-name = "inquire"
-version = "0.9.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6654738b8024300cf062d04a1c13c10c8e2cea598ec1c47dc9b6641159429756"
-dependencies = [
- "bitflags 2.13.0",
- "crossterm",
- "dyn-clone",
- "unicode-segmentation",
- "unicode-width 0.2.2",
 ]
 
 [[package]]
