@@ -1005,6 +1005,8 @@ pub struct FakeResumer {
     pub forks: Arc<Mutex<Vec<ForkFrom>>>,
     /// The head each switch went to.
     pub switches: Arc<Mutex<Vec<SourceId>>>,
+    /// The head each continuation followed, if one was named.
+    pub continues: Arc<Mutex<Vec<Option<SourceId>>>>,
 }
 
 impl Default for FakeResumer {
@@ -1014,6 +1016,7 @@ impl Default for FakeResumer {
             catch_up: None,
             forks: Arc::default(),
             switches: Arc::default(),
+            continues: Arc::default(),
         }
     }
 }
@@ -1110,7 +1113,9 @@ impl Resumer for FakeResumer {
         _source: &dyn SessionSource,
         session: &SessionRow,
         target: HarnessKind,
+        head: Option<&SourceId>,
     ) -> Result<Continued, NotResumable> {
+        self.continues.lock().push(head.cloned());
         let mut row = session.clone();
         row.handle = HarnessSession {
             harness: target,
@@ -1125,6 +1130,7 @@ impl Resumer for FakeResumer {
                 tool_results: 42,
                 reasoning: 7,
             },
+            along: None,
             note: None,
         })
     }

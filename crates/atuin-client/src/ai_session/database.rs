@@ -7,6 +7,7 @@ use atuin_common::db::sqlite::fts::{
 };
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
+use atuin_common::harnesstools::continuation;
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{
     Checkpoint, Content, ParentKind, Role, TitleChange, TitleSource, Usage,
@@ -50,6 +51,14 @@ const TITLE_WEIGHT: f64 = 5.0;
 const RECENCY_DAYS: f64 = 30.0;
 
 const DAY_MILLIS: f64 = 86_400_000.0;
+
+/// The most a row stores of each usage count: far past any model call, and small enough that a
+/// session's totals, adding up millions of calls, never overflow.
+const MAX_ROW_TOKENS: u64 = 1 << 40;
+
+/// [`Message::EARLIEST`] and [`Message::LATEST`] in milliseconds: the range of a stored timestamp.
+const EARLIEST_MILLIS: i64 = Message::EARLIEST.unix_timestamp() * 1000;
+const LATEST_MILLIS: i64 = Message::LATEST.unix_timestamp() * 1000;
 
 /// The shortest last term that matches as a prefix. A one-character prefix matches most of the
 /// index (every row with a word starting `e`), which costs hundreds of milliseconds to rank for
@@ -195,8 +204,6 @@ pub enum DbError {
     Json(#[from] serde_json::Error),
     #[error("failed to compress ai-session message content: {0}")]
     Compress(std::io::Error),
-    #[error("stored ai-session timestamp is out of range: {0}")]
-    Time(#[from] time::error::ComponentRange),
     #[error("unknown ai-session harness discriminant {0}")]
     UnknownHarness(i64),
     #[error("failed to decompress ai-session message content: {0}")]
@@ -479,6 +486,12 @@ impl AiSessionDatabase {
     /// until one gave up with the sidecar short of the store.
     pub async fn lock_reprojection(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.reprojection.clone().lock_owned().await
+    }
+
+    /// [`Self::lock_reprojection`], unless a reprojection holds it.
+    #[must_use]
+    pub fn try_lock_reprojection(&self) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.reprojection.clone().try_lock_owned().ok()
     }
 
     /// Whether the sidecar is at exactly the schema this build reads, by the newest migration
@@ -1291,7 +1304,9 @@ impl AiSessionDatabase {
             return None;
         }
 
-        msg.content.iter().find_map(|content| match content {
+        // pi's continuation marker opens the prompt it rides on: the prompt is what was said.
+        let marker = usize::from(continuation::opens_with_marker(&msg.content));
+        msg.content[marker..].iter().find_map(|content| match content {
             Content::Text(text) => Some(Self::clip_summary(text)),
             _ => None,
         })
@@ -1395,7 +1410,12 @@ impl AiSessionDatabase {
         };
 
         [usage.input, usage.output, usage.cache_read, usage.cache_write, usage.reasoning]
-            .map(|n| i64::try_from(n.unwrap_or(0)).unwrap_or(i64::MAX))
+            .map(|n| Self::row_tokens(n.unwrap_or(0)))
+    }
+
+    /// A count of a row's usage as stored: at most [`MAX_ROW_TOKENS`].
+    fn row_tokens(n: u64) -> i64 {
+        i64::try_from(n.min(MAX_ROW_TOKENS)).expect("MAX_ROW_TOKENS fits in i64")
     }
 
     /// Delete every session holding a row `host` captured, whole, for a reprojection that replays
@@ -1445,12 +1465,18 @@ impl AiSessionDatabase {
         host.and_then(|h| uuid::Uuid::parse_str(&h).ok()).map(HostId)
     }
 
+    /// `ts` in milliseconds, held to [`Message::EARLIEST`] and [`Message::LATEST`].
     fn millis(ts: OffsetDateTime) -> i64 {
-        i64::try_from(ts.unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX)
+        i64::try_from(ts.unix_timestamp_nanos() / 1_000_000)
+            .expect("every OffsetDateTime fits in i64 milliseconds")
+            .clamp(EARLIEST_MILLIS, LATEST_MILLIS)
     }
 
-    fn time_from_millis(ms: i64) -> Result<OffsetDateTime, DbError> {
-        Ok(OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000)?)
+    /// The inverse of [`Self::millis`], held to the same range, so it never fails.
+    fn time_from_millis(ms: i64) -> OffsetDateTime {
+        let ms = ms.clamp(EARLIEST_MILLIS, LATEST_MILLIS);
+        OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000)
+            .expect("the range is representable")
     }
 
     fn harness_from_repr(n: i64) -> Result<HarnessKind, DbError> {
@@ -1511,7 +1537,7 @@ impl AiSessionDatabase {
             .parent(parent)
             .parent_kind(parent_kind)
             .parent_source_id(row.parent_source_id.map(SourceId::from))
-            .timestamp(Self::time_from_millis(row.timestamp)?)
+            .timestamp(Self::time_from_millis(row.timestamp))
             .role(role)
             .content(content)
             .cwd(row.cwd.map(PathBuf::from))
@@ -1574,7 +1600,7 @@ impl AiSessionDatabase {
         let parent = Self::optional_session(row.parent_harness, row.parent_session_id)?;
         let root = Self::optional_session(row.root_harness, row.root_session_id)?
             .filter(|root| root.harness != harness || root.session.as_ref() != row.session_id);
-        let group_updated_at = row.group_updated_at.map(Self::time_from_millis).transpose()?;
+        let group_updated_at = row.group_updated_at.map(Self::time_from_millis);
         let copy_of = row.copy_of_session_id.map(|session| HarnessSession {
             harness,
             session: NativeSessionId::from(session),
@@ -1583,7 +1609,7 @@ impl AiSessionDatabase {
             harness,
             session: NativeSessionId::from(row.session_id),
         };
-        let started_at = Self::time_from_millis(row.started_at)?;
+        let started_at = Self::time_from_millis(row.started_at);
         let atuin_id = Uuid::from_slice(&row.atuin_id).map_err(|_| DbError::InvalidAtuinId)?.into();
         // A link whose session is not stored yet (or has no stored id) resolves to nothing.
         let linked = |bytes: Option<&[u8]>| {
@@ -1605,7 +1631,7 @@ impl AiSessionDatabase {
             .git_branch(row.git_branch)
             .model(row.model)
             .started_at(started_at)
-            .updated_at(Self::time_from_millis(row.updated_at)?)
+            .updated_at(Self::time_from_millis(row.updated_at))
             .message_count(u64::try_from(row.message_count).unwrap_or(0))
             .usage(Usage {
                 input: Some(u64::try_from(row.usage_input).unwrap_or(0)),
@@ -5089,5 +5115,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sessions, 1);
+    }
+
+    /// A timestamp past the years a date can name, appended or stored, is held to the range
+    /// rather than failing every read that meets it.
+    #[rstest]
+    #[case::appended(time::macros::datetime!(9999-12-31 23:59:59 -23:59), None)]
+    #[case::stored_late(OffsetDateTime::UNIX_EPOCH, Some(i64::MAX))]
+    #[case::stored_early(OffsetDateTime::UNIX_EPOCH, Some(i64::MIN))]
+    #[tokio::test]
+    async fn an_out_of_range_timestamp_reads_as_the_nearest_in_range(
+        #[case] timestamp: OffsetDateTime,
+        #[case] stored: Option<i64>,
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut odd = message_in(&sample_handle(), 0, "odd");
+        odd.timestamp = timestamp;
+        db.append(&odd).await.unwrap();
+        db.append(&three_sessions_oldest_first()[0]).await.unwrap();
+        if let Some(stored) = stored {
+            db::query("UPDATE messages SET timestamp = ?1 WHERE source_id = 'source-0'")
+                .bind(stored)
+                .execute(db.db.pool())
+                .await
+                .unwrap();
+            db::query("UPDATE sessions SET started_at = ?1, updated_at = ?1")
+                .bind(stored)
+                .execute(db.db.pool())
+                .await
+                .unwrap();
+        }
+
+        let sessions = db.list_sessions(&SessionFilter::default()).await.unwrap();
+        assert_eq!(sessions.len(), 2);
+        let messages: Vec<_> = db.messages(&sample_handle()).try_collect().await.unwrap();
+        let read = messages[0].timestamp;
+        assert!((Message::EARLIEST..=Message::LATEST).contains(&read), "{read}");
+        let found: Vec<_> = db
+            .search("odd", SearchTerms::All, &SessionFilter::default(), 0)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1);
+    }
+
+    /// Usage counts past any model call's are stored held to a bound, so a session's totals never
+    /// overflow.
+    #[rstest]
+    #[tokio::test]
+    async fn huge_usage_never_breaks_a_sessions_totals() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        for i in 0..3 {
+            let mut m = message_in(&s, i, "reply");
+            m.turn_id = Some(format!("msg_{i}"));
+            m.usage = Some(Usage {
+                input: Some(u64::MAX),
+                output: Some(u64::MAX),
+                cache_read: Some(u64::MAX),
+                cache_write: Some(u64::MAX),
+                reasoning: Some(u64::MAX),
+            });
+            db.append(&m).await.unwrap();
+        }
+        let session = db.get_session(&s).await.unwrap().unwrap();
+        assert_eq!(session.usage.input, Some(3 << 40));
+        assert_eq!(db.list_sessions(&SessionFilter::default()).await.unwrap().len(), 1);
     }
 }

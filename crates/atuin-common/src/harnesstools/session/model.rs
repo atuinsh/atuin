@@ -48,6 +48,12 @@ pub enum Content {
     Patch(Patch),
 }
 
+/// The [`Content::Summary`] of a compaction whose summary can't be read (Codex's, compacted by
+/// the API, which keeps it encrypted): the conversation before it is no longer what the model
+/// sees, and no summary says what it was.
+pub const UNREADABLE_SUMMARY: &str =
+    "[the conversation before this was compacted; its summary can't be read]";
+
 /// Human-readable breadcrumb shared by the transcript and `atuin ai session` rendering.
 #[must_use]
 pub fn reasoning_label(tokens: Option<u64>) -> String {
@@ -93,13 +99,26 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
-    /// The output as display text: a JSON string's contents verbatim, any other JSON as encoded,
-    /// or `None` when capture did not keep it.
+    /// The output as display text: a JSON string's contents verbatim, a list of content blocks
+    /// as their text (Claude Code's and pi's `text`, Codex's `input_text`; a block without text
+    /// as encoded), any other JSON as encoded, or `None` when capture did not keep it.
     #[must_use]
     pub fn output_text(&self) -> Option<Cow<'_, str>> {
         match &self.output {
             serde_json::Value::Null => None,
             serde_json::Value::String(text) => Some(Cow::Borrowed(text)),
+            serde_json::Value::Array(blocks) => Some(Cow::Owned(
+                blocks
+                    .iter()
+                    .map(|block| match block {
+                        serde_json::Value::String(text) => text.clone(),
+                        _ => {
+                            block["text"].as_str().map_or_else(|| block.to_string(), str::to_owned)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )),
             json => Some(Cow::Owned(json.to_string())),
         }
     }
@@ -266,6 +285,14 @@ mod tests {
     #[rstest]
     #[case::string(serde_json::json!("line1\nline2"), Some("line1\nline2"))]
     #[case::structured(serde_json::json!({"exit": 0}), Some(r#"{"exit":0}"#))]
+    #[case::blocks(
+        serde_json::json!([{"type": "text", "text": "a"}, {"type": "input_text", "text": "b"}]),
+        Some("a\nb")
+    )]
+    #[case::blocks_without_text(
+        serde_json::json!([{"type": "text", "text": "a"}, {"type": "image"}]),
+        Some("a\n{\"type\":\"image\"}")
+    )]
     #[case::uncaptured(serde_json::Value::Null, None)]
     fn tool_result_output_text_unwraps_json_strings(
         #[case] output: serde_json::Value,

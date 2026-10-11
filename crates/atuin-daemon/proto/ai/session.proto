@@ -142,6 +142,10 @@ message RebuildSessionsRequest {}
 
 message RebuildSessionsReply {}
 
+message ProjectSyncedRequest {}
+
+message ProjectSyncedReply {}
+
 message ImportSessionsEvent {
   oneof event {
     ImportSessionsProgress progress = 1;
@@ -177,4 +181,10 @@ service AiSession {
   // the daemon starts). FAILED_PRECONDITION when the store failed to open or
   // recover at startup.
   rpc RebuildSessions(RebuildSessionsRequest) returns (RebuildSessionsReply);
+
+  // Project the records another process synced into the record store (`atuin
+  // sync`), as the daemon does those it syncs itself, once startup recovery is
+  // over. Returns once the projection is over; it runs to the end even if the
+  // caller stops waiting, and a failure is left in the daemon's log.
+  rpc ProjectSynced(ProjectSyncedRequest) returns (ProjectSyncedReply);
 }

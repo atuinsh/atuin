@@ -432,7 +432,7 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
                     out.push((Role::Assistant, format!("{} {}({input})", call.id, call.name)));
                 }
                 Content::ToolResult(result) => {
-                    let output = tools::output_text(&result.output);
+                    let output = tools::output_text(result);
                     out.push((Role::Tool, format!("{} -> {output}", result.call)));
                 }
                 other => panic!("only text and calls are written: {other:?}"),
@@ -586,6 +586,81 @@ fn calls_become_notes_and_turns_merge() {
     assert!(!everything.contains("environment_context"), "nor the source's own context");
 }
 
+/// The continuation's turns past its marker, each one text.
+fn texts(c: &Continuation) -> Vec<(Role, String)> {
+    c.session.messages[1..]
+        .iter()
+        .map(|m| match m.content.as_slice() {
+            [Content::Text(t)] => (m.role.clone(), t.clone()),
+            other => panic!("{other:?}"),
+        })
+        .collect()
+}
+
+/// A compaction whose summary couldn't be read (Codex's, compacted by the API) left the model
+/// only what came after it: the continuation starts there, saying so, with the prompts before
+/// it, as Codex goes on. An empty summary of another kind (opencode's, of a compaction that
+/// stopped) is no such cut.
+#[rstest]
+fn an_unreadable_compaction_starts_the_conversation() {
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text("first, a long task")], 1),
+        msg(Role::Assistant, vec![call("exec_command", Value::Null)], 2),
+        msg(Role::System, vec![Content::Summary(UNREADABLE_SUMMARY.to_owned())], 3),
+        msg(Role::User, vec![text("then this")], 4),
+        msg(Role::System, vec![Content::Summary(UNREADABLE_SUMMARY.to_owned())], 5),
+        msg(Role::User, vec![text("and now this")], 6),
+        msg(Role::System, vec![Content::Summary(String::new())], 7),
+        msg(Role::Assistant, vec![text("Done.")], 8),
+    ]);
+    let c = continue_at(CODEX, &original, None, CLAUDE, OffsetDateTime::UNIX_EPOCH).unwrap();
+    assert_eq!(c.flattened, Flattened::default());
+    pretty_assertions::assert_eq!(texts(&c), vec![
+        (Role::User, format!("{COMPACTED}\n\nfirst, a long task\n\nthen this\n\nand now this")),
+        (Role::Assistant, "Done.".to_owned()),
+    ]);
+}
+
+/// The prompts carried over a cut leave out an earlier pi continuation's marker too.
+#[rstest]
+fn the_prompts_before_a_cut_leave_out_a_marker() {
+    let old = marker_text(CLAUDE, "4bd6b5bd-7d34-4a39-a2d6-2e6f6a6c0b1d", Some(ATUIN_ID));
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text(&old), text("first, a long task")], 1),
+        msg(Role::System, vec![Content::Summary(UNREADABLE_SUMMARY.to_owned())], 2),
+        msg(Role::User, vec![text("and now this")], 3),
+        msg(Role::Assistant, vec![text("Done.")], 4),
+    ]);
+    let c = continue_at(PI, &original, None, CLAUDE, OffsetDateTime::UNIX_EPOCH).unwrap();
+    pretty_assertions::assert_eq!(texts(&c), vec![
+        (Role::User, format!("{COMPACTED}\n\nfirst, a long task\n\nand now this")),
+        (Role::Assistant, "Done.".to_owned()),
+    ]);
+}
+
+/// A conversation longer than a continuation carries (one captured before Codex's compactions
+/// were kept) starts at the prompt its last part does, saying so, with the latest prompts
+/// before it.
+#[rstest]
+fn a_long_conversation_starts_where_it_fits() {
+    let big = "x".repeat(CARRIED / 3);
+    let mut rows = Vec::new();
+    for n in 0..6 {
+        rows.push(msg(Role::User, vec![text(&format!("prompt {n}"))], 2 * n));
+        rows.push(msg(Role::Assistant, vec![text(&big)], 2 * n + 1));
+    }
+    let original = session_of("orig", rows);
+    let c = continue_at(CODEX, &original, None, CLAUDE, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let turns = texts(&c);
+    // The last two turns fit; the third from last would not.
+    assert_eq!(turns.len(), 4, "{turns:.200?}");
+    assert_eq!(
+        turns[0].1,
+        format!("{TOO_LONG}\n\nprompt 0\n\nprompt 1\n\nprompt 2\n\nprompt 3\n\nprompt 4")
+    );
+    assert_eq!(turns[2].1, "prompt 5");
+}
+
 /// Calls captured without their input (all of them, now) say only what they did, and the same
 /// note in a row is written once, counted.
 #[rstest]
@@ -674,6 +749,38 @@ fn a_pasted_marker_is_no_link(#[case] paste: fn(&str) -> String) {
     assert_eq!(continued_from_row(&pasted), None);
     let written = msg(Role::User, vec![text(&marker), image], 1);
     assert!(continued_from_row(&written).is_some());
+}
+
+/// Continuing a pi continuation again carries its conversation but not its marker, which named
+/// the session it continued: the new session names only the one it continues. A prompt that
+/// merely quotes a marker keeps it.
+#[rstest]
+fn a_continuations_marker_is_not_carried_on(
+    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+) {
+    let old = marker_text(CLAUDE, "4bd6b5bd-7d34-4a39-a2d6-2e6f6a6c0b1d", Some(ATUIN_ID));
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text(&old), text("fix it")], 1),
+        msg(Role::Assistant, vec![text("fixed")], 2),
+        msg(Role::User, vec![text(&old)], 3),
+        msg(Role::Assistant, vec![text("that's a marker")], 4),
+    ]);
+    let c = continue_in(PI, &original, None, target).unwrap();
+    let said: Vec<&str> = c
+        .session
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|c| match c {
+            Content::Text(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(said[0], marker_text(PI, "orig", None), "{said:#?}");
+    assert!(said.iter().any(|t| t.starts_with("fix it")), "{said:#?}");
+    // Only the quoted one is left.
+    let old = said.iter().filter(|t| t.contains("4bd6b5bd")).count();
+    assert_eq!(old, 1, "{said:#?}");
 }
 
 /// A session with nothing of the conversation in it can't be continued, in any harness: there

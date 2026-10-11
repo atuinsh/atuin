@@ -213,7 +213,8 @@ async fn their_branch(cut: usize) -> (Vec<RehydrateMessage>, String) {
 /// content), drops what it went on with here, and appends the branch's lines past it, numbered on
 /// from the line kept last; Codex resumes from the branch's head, and capture reads back nothing
 /// the branch doesn't hold. In place, under the thread's writer lock where Codex keeps them, with
-/// the rollout as it was kept whole outside Codex's sessions.
+/// the rollout as it was kept whole outside Codex's sessions. Codex's history of the thread,
+/// projected from the lines the switch cut, is forgotten.
 #[rstest]
 #[case::without_locks(false)]
 #[case::under_the_writer_lock(true)]
@@ -229,6 +230,7 @@ async fn a_switch_writes_the_rollout_out_along_the_branch_in_place(
     let (thread, path, base, _) = behind(dir.path(), 45).await;
     let before = std::fs::read_to_string(&path).unwrap();
     let (rows, head) = their_branch(30).await;
+    let history = state_db::tests::history(dir.path(), &[&thread]).await;
 
     let outcome =
         replace_in(dir.path(), &thread, &base, &rows, None, backups.path()).await.unwrap();
@@ -255,6 +257,8 @@ async fn a_switch_writes_the_rollout_out_along_the_branch_in_place(
     if locks {
         assert!(!dir.path().join(LOCKS).join(format!("{thread}.lock")).exists(), "let go");
     }
+    let projected = state_db::tests::projected(&history, &thread).await;
+    assert_eq!(projected, 0, "Codex projects its history again, from the branch");
 }
 
 /// Nothing is written to a thread kept in several rollouts (reverted, or named by a segment of

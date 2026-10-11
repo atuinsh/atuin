@@ -581,7 +581,7 @@ async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
-    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi).await.unwrap();
+    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi, None).await.unwrap();
 
     let written = machine.written.lock().clone();
     let [new] = written.as_slice() else {
@@ -615,7 +615,7 @@ async fn an_empty_session_is_not_continued(
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
-    let err = resumer.continue_in(&Synced, &session, target).await.unwrap_err();
+    let err = resumer.continue_in(&Synced, &session, target, None).await.unwrap_err();
     assert_eq!(err, NotResumable::Empty(continuation::NothingToContinue));
     assert_eq!(err.to_string(), "nothing to continue: the session has no messages");
     assert!(machine.written.lock().is_empty());
@@ -654,7 +654,7 @@ async fn a_path_template_target_is_offered_and_resumes_the_written_session(dirs:
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
     assert!(resumer.continue_targets(&session).contains(&HarnessKind::Pi));
 
-    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi).await.unwrap();
+    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi, None).await.unwrap();
     let written = machine.written.lock().clone();
     let path = format!("/restored/{}.jsonl", written[0].id);
     assert_eq!(continued.plan.args, ["--session", path.as_str()]);
@@ -673,9 +673,11 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
     assert_eq!(resumer.continue_targets(&session), [HarnessKind::Codex, HarnessKind::Pi]);
 
-    let err = resumer.continue_in(&Worked, &session, HarnessKind::Opencode).await.unwrap_err();
+    let err =
+        resumer.continue_in(&Worked, &session, HarnessKind::Opencode, None).await.unwrap_err();
     assert_eq!(err, NotResumable::NotInstalled("opencode".to_owned()));
-    let err = resumer.continue_in(&Worked, &session, HarnessKind::ClaudeCode).await.unwrap_err();
+    let err =
+        resumer.continue_in(&Worked, &session, HarnessKind::ClaudeCode, None).await.unwrap_err();
     assert!(matches!(err, NotResumable::Continue("Claude Code", _)), "{err}");
     assert!(machine.written.lock().is_empty());
 
@@ -924,7 +926,7 @@ async fn catch_up_in(
 /// it isn't here, resumed as it is when it is at the head, the rows it lacks appended when it is
 /// behind; anything else is a choice, with nothing written.
 #[rstest]
-#[case::not_here(None, None, false, "/restored/s.jsonl", &[])]
+#[case::not_here(None, None, false, "/restored/s.jsonl restored the session from sync", &[])]
 #[case::at_the_head(Some((&["a", "b", "c", "d"][..], "d")), None, false, "/t/s.jsonl", &[])]
 #[case::behind(
     Some((&["a", "b"][..], "b")),
@@ -1153,6 +1155,52 @@ async fn a_session_not_here_is_restored_along_one_branch(
     assert_eq!(ids, want);
 }
 
+/// A session continued in another harness carries one branch, as a restore does: the head named,
+/// else, when it diverged, the newest (as the picker continues it), saying whose; never every
+/// branch's messages at once.
+#[rstest]
+#[case::one_way(false, None, &["a", "b", "c", "d"], None)]
+#[case::diverged(true, None, &["a", "b", "x", "y"], Some("this machine"))]
+#[case::diverged_named(true, Some("d"), &["a", "b", "c", "d"], Some("@00000002"))]
+#[tokio::test]
+async fn a_session_is_continued_along_one_branch(
+    dirs: Dirs,
+    #[case] diverged: bool,
+    #[case] head: Option<&str>,
+    #[case] want: &[&str],
+    #[case] along: Option<&str>,
+) {
+    use atuin_common::harnesstools::session::Content;
+
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let mut session = row(HarnessKind::ClaudeCode, "s", &dirs.elsewhere, true);
+    session.handle = fake::synced_handle();
+    let source = fake::FakeSource::from_rows(vec![session.clone()])
+        .with_synced(&session.handle, fake::synced_rows(diverged));
+    let head = head.map(|h| SourceId::from(h.to_owned()));
+    let continued = resumer.continue_in(&source, &session, HarnessKind::Codex, head.as_ref());
+    let status = continued.await.unwrap().status();
+    // Which branch it carries, when it carries one of several, the picker says.
+    let says = along.map(|host| format!("; along {host}'s branch")).unwrap_or_default();
+    assert_eq!(status, format!("continuing in Codex{says}"));
+
+    let written = machine.written.lock().clone();
+    let [continued] = written.as_slice() else {
+        panic!("one session written: {written:?}");
+    };
+    let said: Vec<String> = continued
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|c| match c {
+            Content::Text(text) => text.strip_prefix("message ").map(str::to_owned),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(said, want);
+}
+
 /// The plan, the catch-up and the append all look for an agent where this machine's copy
 /// records working, when it records a directory that is there: not where the session row says
 /// (another host's newer directory, maybe). Else where the session works here; else anywhere.
@@ -1229,7 +1277,7 @@ async fn a_copy_gone_since_it_was_located_is_restored(dirs: Dirs) {
     machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
     let written = machine.written.clone();
     let caught = catch_up(&dirs, machine, false).await;
-    assert_eq!(caught, ("/restored/s.jsonl".to_owned(), vec![]));
+    assert_eq!(caught, ("/restored/s.jsonl restored the session from sync".to_owned(), vec![]));
     assert_eq!(written.lock().len(), 1);
 }
 

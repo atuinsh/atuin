@@ -80,8 +80,8 @@ use sqlx::{Connection, Row, Sqlite};
 use xxhash_rust::xxh3::xxh3_64;
 
 use super::{
-    Body, MessageInfo, Next, OpencodeMessage, POLL, Reads, epoch_millis, file_identity, json, text,
-    tokens, usage_of,
+    Body, MessageInfo, Next, OpencodeMessage, POLL, Reads, SOURCE, epoch_millis, exited_non_zero,
+    file_identity, json, text, tokens, tool_patch, usage_of,
 };
 use crate::db::sqlite::TransientResultCode;
 use crate::db::sqlite::observe::{ObserveError, ReplayBehavior};
@@ -89,7 +89,7 @@ use crate::db::{query_as, query_scalar};
 use crate::harnesstools::session::model::{
     Content, Role, StopReason, ToolCallId, ToolResult, ToolUse,
 };
-use crate::harnesstools::session::{Checkpoint, MessageError};
+use crate::harnesstools::session::{Checkpoint, Message as _, MessageError};
 use crate::os::fs::FdIdentity;
 
 /// The first line of the prompt a subagent session starts with (`tool/plugin/subagent.ts`,
@@ -245,7 +245,7 @@ impl Reader {
             self.delivered.insert(seq);
         } else {
             self.mark = Some(Mark::of(seq, id));
-            self.delivered = self.delivered.split_off(&(seq + 1));
+            self.delivered.retain(|&delivered| delivered > seq);
         }
     }
 }
@@ -303,7 +303,13 @@ impl Pass<'_> {
                     self.state = state;
                     self.stage = Stage::Rows;
                     if reader.info.as_ref().is_none_or(|said| !said.says(&info)) {
-                        let message = info.message();
+                        // A title read with the session from its start is the one it has; one
+                        // read past rows delivered before may be a rename since.
+                        let renamed = match &reader.info {
+                            Some(said) => said.title != info.title,
+                            None => reader.mark.is_some(),
+                        };
+                        let message = info.message(renamed);
                         reader.info = Some(info);
                         return Some((reader.mark, Ok(message)));
                     }
@@ -458,8 +464,9 @@ impl SessionInfo {
 
     /// The session info as the message a 1.x `session.updated.1` row would be: its title, its
     /// directory, and the session it came from -- a subagent's parent, or the session a fork
-    /// copied.
-    fn message(&self) -> OpencodeMessage {
+    /// copied. Stamped when the session was last updated if it was `renamed` since it was last
+    /// read, else when it was created (see `OpencodeMessage::session`).
+    fn message(&self, renamed: bool) -> OpencodeMessage {
         let mut info = serde_json::json!({
             "id": self.id,
             "title": self.title,
@@ -473,7 +480,7 @@ impl SessionInfo {
         } else if let Some(fork) = &self.fork {
             info["forkedFrom"] = Value::from(fork.as_str());
         }
-        OpencodeMessage::session(serde_json::json!({ "info": info }))
+        OpencodeMessage::session(serde_json::json!({ "info": info }), renamed)
             .expect("the info is an object")
     }
 }
@@ -587,6 +594,7 @@ impl Full {
                 return Some(Err(MessageError::from(err)));
             }
         };
+        let session = info.id.as_str();
         let time = epoch_millis(&data["time"]["created"]).or(self.created);
         let said = |role: Role, content: Vec<Content>| Next {
             role,
@@ -596,7 +604,7 @@ impl Full {
             stop: None,
         };
         let text = |key: &str| data[key].as_str().unwrap_or_default().to_owned();
-        let (next, info) = match self.kind.as_str() {
+        let (mut next, info) = match self.kind.as_str() {
             "user" => {
                 let prompt = text("text");
                 let role = if prompt.starts_with(SUBAGENT_PROMPT) {
@@ -648,6 +656,10 @@ impl Full {
                 }));
             }
         };
+        // a message atuin wrote from rows of its own is read back as the first of them
+        if let Some(source) = written_from(&data, session)["source"].as_str() {
+            source.clone_into(&mut next.id);
+        }
         Some(Ok(OpencodeMessage {
             role: next.role.clone(),
             body: Body::Next(next),
@@ -687,11 +699,15 @@ impl Full {
                         input: state["input"].clone(),
                     }));
                     match state["status"].as_str() {
-                        Some("completed") => content.push(Content::ToolResult(ToolResult {
-                            call,
-                            output: state["content"].clone(),
-                            error: false,
-                        })),
+                        Some("completed") => {
+                            let patch = tool_patch(&call, &state["metadata"]);
+                            content.push(Content::ToolResult(ToolResult {
+                                call,
+                                output: state["content"].clone(),
+                                error: exited_non_zero(&state["metadata"]),
+                            }));
+                            content.extend(patch.map(Content::Patch));
+                        }
                         Some("error") => content.push(Content::ToolResult(ToolResult {
                             call,
                             output: Value::from(error_text(&state["error"])),
@@ -742,6 +758,18 @@ impl Full {
     }
 }
 
+/// What a message atuin wrote of session `session` says it was written from (see [`SOURCE`]),
+/// `Null` for any other: opencode's own fork copies a message whole, `metadata` and all, into
+/// another session, where it is a row of that session's own.
+fn written_from<'a>(data: &'a Value, session: &str) -> &'a Value {
+    let written = &data["metadata"][SOURCE];
+    if written["session"] == session {
+        written
+    } else {
+        &Value::Null
+    }
+}
+
 /// The tables a read of the 2.0 layout looks for.
 async fn tables(conn: &mut SqliteConnection) -> Result<Vec<String>, sqlx::Error> {
     query_scalar::<Sqlite, String>(
@@ -750,6 +778,136 @@ async fn tables(conn: &mut SqliteConnection) -> Result<Vec<String>, sqlx::Error>
     )
     .fetch_all(conn)
     .await
+}
+
+/// A 2.0 session as opencode holds it now, for sync (see `projection`).
+#[derive(Debug)]
+pub(super) struct Held {
+    pub(super) directory: Option<String>,
+    pub(super) created: Option<i64>,
+    /// When opencode last updated the session or any of its rows.
+    pub(super) updated: Option<i64>,
+    /// A revert is pending.
+    pub(super) reverting: bool,
+    /// Its rows, in `seq` order.
+    pub(super) rows: Vec<HeldRow>,
+}
+
+/// A row of a [`Held`] session.
+#[derive(Debug)]
+pub(super) struct HeldRow {
+    pub(super) id: String,
+    pub(super) kind: String,
+    pub(super) created: Option<i64>,
+    pub(super) data: Option<String>,
+    /// opencode is done writing it (see [`Reads::rows`]).
+    pub(super) settled: bool,
+    /// The id capture delivers the row under; `None` for a row it delivers nothing of: one with
+    /// no message, one not settled yet, or a copy of a 1.x message.
+    pub(super) delivered: Option<String>,
+    /// The other rows atuin wrote the message from, which it holds without a row of their own
+    /// (see [`SOURCE`]).
+    pub(super) merged: Vec<String>,
+}
+
+/// Session `id` as `conn`'s `session_v2` and `session_message` tables hold it; `None` when they
+/// hold no such session, or aren't there.
+pub(super) async fn held(
+    conn: &mut SqliteConnection,
+    id: &str,
+) -> Result<Option<Held>, sqlx::Error> {
+    const PLAIN: &str = "SELECT id, seq, type, time_created, data, 0 AS migrated FROM \
+                         session_message WHERE session_id = ?1 ORDER BY seq";
+    // as `Reads::row` tells a copy of a 1.x message
+    const LEGACY: &str = "SELECT m.id, m.seq, m.type, m.time_created, m.data, EXISTS (SELECT 1 \
+                          FROM message l WHERE l.session_id = m.session_id AND (l.id = m.id OR \
+                          (m.type = 'synthetic' AND substr(l.id, 1, 16) = substr(m.id, 1, 16)))) \
+                          AS migrated FROM session_message m WHERE m.session_id = ?1 ORDER BY \
+                          m.seq";
+    let tables = tables(&mut *conn).await?;
+    let has = |name: &str| tables.iter().any(|table| table == name);
+    if !has("session_v2") || !has("session_message") {
+        return Ok(None);
+    }
+    let Some(info) = query_as::<Sqlite, SessionInfo>(
+        "SELECT id, title, parent_id, fork_session_id, directory, time_created, time_updated FROM \
+         session_v2 WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let revert =
+        query_scalar::<Sqlite, Option<String>>("SELECT revert FROM session_v2 WHERE id = ?1")
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await?;
+    let updated = query_scalar::<Sqlite, Option<i64>>(
+        "SELECT MAX(t) FROM (SELECT time_updated AS t FROM session_v2 WHERE id = ?1 UNION ALL \
+         SELECT time_updated FROM session_message WHERE session_id = ?1)",
+    )
+    .bind(id)
+    .fetch_one(&mut *conn)
+    .await?;
+    let legacy = has("message");
+    let rows = query_as::<Sqlite, Full>(if legacy {
+        LEGACY
+    } else {
+        PLAIN
+    })
+    .bind(id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let state = State {
+        info: Some(info.clone()),
+        legacy,
+        ..State::default()
+    };
+    let rows = rows
+        .into_iter()
+        .map(|full| {
+            let parsed = full.data.as_deref().and_then(|data| json(data).ok()).unwrap_or_default();
+            let settled = match full.kind.as_str() {
+                "assistant" => !parsed["time"]["completed"].is_null(),
+                "compaction" => parsed["status"] != "running",
+                _ => true,
+            };
+            let (id, kind, created, data) =
+                (full.id.clone(), full.kind.clone(), full.created, full.data.clone());
+            let merged = written_from(&parsed, &info.id)["merged"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect();
+            let delivered = if settled && !full.migrated {
+                match full.message(&info, &state) {
+                    Some(Ok(message)) => message.id().map(String::from),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            HeldRow {
+                id,
+                kind,
+                created,
+                data,
+                settled,
+                delivered,
+                merged,
+            }
+        })
+        .collect();
+    Ok(Some(Held {
+        directory: info.directory,
+        created: info.created,
+        updated,
+        reverting: revert.is_some_and(|r| !r.trim().is_empty() && r != "null"),
+        rows,
+    }))
 }
 
 impl Reads {

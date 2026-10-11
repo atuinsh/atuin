@@ -30,6 +30,9 @@ const KEY_FILES_MIGRATED: &str = "files_migrated";
 
 const HUB_TOKEN_PREFIX: &str = "atapi_";
 
+/// The longest to wait for another process's commit to the store before failing.
+const LOCK_WAIT: Duration = Duration::from_mins(1);
+
 /// Whether `token` is a Hub API token rather than a legacy CLI session token.
 #[must_use]
 pub fn is_hub_token(token: &SecretString) -> bool {
@@ -63,8 +66,15 @@ impl MetaStore {
     }
 
     async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        // A rollback journal, as every atuin before has forced it: one that opened it in WAL mode
+        // would lock an older one out for as long as it ran. So a commit holds out readers
+        // while it syncs, which on a busy disk can take many seconds (the daemon commits on every
+        // sync): wait that out rather than fail. The wait outlasts the user's `local_timeout`, and
+        // holds up interactive paths too (Ctrl-R's host id, nushell's `history end` without the
+        // daemon): a hang on a stalled disk, rather than an error.
         let sqlite = builder
-            .timeout(timeout)
+            .timeout(timeout.max(LOCK_WAIT))
+            .busy_timeout(LOCK_WAIT)
             .journal(Some(Journaling::Delete))
             .foreign_keys(false)
             .restrict_permissions()
@@ -441,5 +451,35 @@ mod tests {
         let store = MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap();
 
         assert_eq!(store.get(KEY_FILES_MIGRATED).await.unwrap(), None);
+    }
+
+    /// A commit by another process held up past sqlite's usual 5s wait (the daemon saving its
+    /// last sync on a busy disk) is waited out: a command opening and reading the store meanwhile
+    /// gets there, and sees the store as committed.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn waits_out_another_process_committing_slowly() {
+        use sqlx::{ConnectOptions as _, Connection as _};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meta.db");
+        MetaStore::new(&path, Duration::from_secs(2)).await.unwrap().set("k", "v").await.unwrap();
+
+        let mut writer =
+            sqlx::sqlite::SqliteConnectOptions::new().filename(&path).connect().await.unwrap();
+        db::query("BEGIN EXCLUSIVE").execute(&mut writer).await.unwrap();
+        db::query("UPDATE meta SET value = 'w' WHERE key = 'k'")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+        let commit = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(6)).await;
+            db::query("COMMIT").execute(&mut writer).await.unwrap();
+            writer.close().await.unwrap();
+        });
+
+        let store = MetaStore::new(&path, Duration::from_secs(2)).await.unwrap();
+        assert_eq!(store.get("k").await.unwrap().as_deref(), Some("w"));
+        commit.await.unwrap();
     }
 }

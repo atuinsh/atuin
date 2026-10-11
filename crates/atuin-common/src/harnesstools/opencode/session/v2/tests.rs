@@ -11,7 +11,7 @@ use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::super::{OpencodeSession, OpencodeSessions};
+use super::super::{OpencodeSession, OpencodeSessions, title_id};
 use super::*;
 use crate::db::query;
 use crate::db::sqlite::Sqlite;
@@ -383,7 +383,14 @@ fn line(message: &OpencodeMessage) -> String {
         })
         .collect::<Vec<_>>()
         .join(" | ");
-    let id = message.id().map(String::from).unwrap_or_default();
+    let mut id = message.id().map(String::from).unwrap_or_default();
+    // a title's row is keyed on a digest of it, shown here as the title it digests
+    if let Some(title) = message.title().and_then(|title| title.text)
+        && let Some((session, _)) = id.split_once(":title:")
+    {
+        assert_eq!(id, title_id(session, &title));
+        id = format!("{session}:title:{title}");
+    }
     format!("{:?} {id}: {content}", message.role())
 }
 
@@ -583,6 +590,55 @@ fn a_call_s_content_is_its_text_reasoning_and_tools() {
     ));
 }
 
+/// A shell call opencode 2.0.24 completed whose command failed: `completed`, its exit code only
+/// in the metadata, or, killed for running too long, `timeout` and no exit code.
+#[rstest]
+#[case::succeeded(json!({"status": "completed", "truncated": false, "exit": 0}), false)]
+#[case::failed(json!({"status": "completed", "truncated": false, "exit": 2}), true)]
+#[case::timed_out(
+    json!({"status": "completed", "truncated": false, "timeout": true, "signal": "SIGTERM"}),
+    true
+)]
+fn a_shell_call_that_exited_non_zero_is_an_error(#[case] metadata: Value, #[case] error: bool) {
+    let mut data = assistant("", true);
+    data["content"] = json!([{"type": "tool", "id": "call_1", "name": "shell", "state": {
+        "status": "completed", "input": {"command": "ls /nonexistent"},
+        "content": [{"type": "text", "text": "ls: cannot access"}],
+        "metadata": metadata}}]);
+    let message = normalised("assistant", &data).unwrap();
+    assert!(matches!(
+        message.content().as_slice(),
+        [Content::ToolUse(_), Content::ToolResult(result)] if result.error == error
+    ));
+}
+
+/// An edit opencode 2.0.24 made keeps its diff in the call's metadata (`files[]`:
+/// `{file, patch, status}`), which is the call's patch.
+#[rstest]
+fn an_edit_s_diff_is_its_patch() {
+    let mut data = assistant("", true);
+    data["content"] = json!([{"type": "tool", "id": "call_1", "name": "edit", "state": {
+        "status": "completed",
+        "input": {"path": "greet.py", "oldString": "\"hello \"", "newString": "\"hi \""},
+        "content": [{"type": "text", "text": "Edited greet.py (1 replacement)"}],
+        "metadata": {"files": [{"file": "greet.py", "patch": "Index: greet.py\n===\n--- \
+            greet.py\n+++ greet.py\n@@ -1,2 +1,2 @@\n def greet(name):\n-    return \"hello \" + \
+            name\n+    return \"hi \" + name\n", "status": "modified", "additions": 1,
+            "deletions": 1}], "truncated": false}}}]);
+    let message = normalised("assistant", &data).unwrap();
+    let content = message.content();
+    let [Content::ToolUse(_), Content::ToolResult(result), Content::Patch(patch)] =
+        content.as_slice()
+    else {
+        panic!("no patch: {content:?}");
+    };
+    assert!(!result.error);
+    assert_eq!(patch.call.as_ref(), "call_1");
+    assert_eq!(patch.files.len(), 1);
+    assert_eq!(patch.files[0].path, "greet.py");
+    assert_eq!((patch.files[0].additions(), patch.files[0].deletions()), (1, 1));
+}
+
 /// opencode 2.0's `input` leaves out the cached tokens and its `output` the reasoning ones
 /// (`SessionUsage.tokens`: `nonCachedInputTokens`, `visibleOutputTokens`); reasoning is billed as
 /// output (`calculateCost`), so it is added back.
@@ -647,18 +703,59 @@ fn a_row_was_written_where_the_session_was_then(#[case] seq: i64, #[case] cwd: &
 #[rstest]
 fn a_session_s_info_names_its_title_and_where_it_came_from() {
     let mut info = state().info.unwrap();
-    let untitled = info.message();
+    let untitled = info.message(false);
     assert_eq!(untitled.id().map(String::from).as_deref(), Some("ses_1:session"));
     assert_eq!(untitled.title(), None);
     assert_eq!(untitled.parent_session(), None);
     info.title = Some("Fix it".to_owned());
     info.fork = Some("ses_0".to_owned());
-    let titled = info.message();
-    assert_eq!(titled.id().map(String::from).as_deref(), Some("ses_1:title:Fix it"));
+    let titled = info.message(false);
+    // keyed on the title, which an id never says: ids are synced as they are, unredacted
+    let id = titled.id().map(String::from).unwrap();
+    assert_eq!(id, title_id("ses_1", "Fix it"));
+    assert!(!id.contains("Fix it"), "{id}");
     assert_eq!(titled.title().and_then(|title| title.text).as_deref(), Some("Fix it"));
     assert_eq!(titled.parent_session().map(String::from).as_deref(), Some("ses_0"));
     assert_eq!(titled.parent_kind(), Some(ParentKind::Fork));
     assert_eq!(titled.cwd(), Some(PathBuf::from("/work/proj")));
+}
+
+/// The session's info, read as it stands, is stamped when the session was created, not when
+/// opencode last touched it (which every prompt bumps), so it sits at the session's start however
+/// late it is read. A rename is stamped when opencode last touched the session, which the rename
+/// did, so that it outranks the rows before it.
+#[rstest]
+#[case::as_it_stands(false, 1_000)]
+#[case::renamed(true, 9_000)]
+fn a_session_s_info_is_stamped_when_its_title_changed(#[case] renamed: bool, #[case] stamp: i128) {
+    let mut info = state().info.unwrap();
+    info.title = Some("Fix it".to_owned());
+    info.created = Some(1_000);
+    info.updated = Some(9_000);
+    let stamped = info.message(renamed).timestamp().unwrap();
+    assert_eq!(stamped.unix_timestamp_nanos(), stamp * 1_000_000);
+}
+
+/// A renamed session read from scratch says its title as of its start, however much later it is
+/// read and whatever has happened in it since: two reads say the same.
+#[rstest]
+#[tokio::test]
+async fn a_renamed_session_read_from_scratch_is_titled_at_its_start(#[future] db: Db) {
+    let db = db.await;
+    db.session("ses_1", Some("Old"), None).await;
+    db.append("ses_1", "msg_u", "user", user("hi")).await;
+    db.execute("UPDATE session_v2 SET title = 'Named', time_updated = 3000").await;
+    let first = read_all(&db.path).await;
+    db.append("ses_1", "msg_u2", "user", user("again")).await;
+    db.execute("UPDATE session_v2 SET time_updated = 5000").await;
+    let second = read_all(&db.path).await;
+
+    let title = |messages: &[(String, OpencodeMessage)]| {
+        let (_, title) = &messages[0];
+        (title.id().map(String::from), title.timestamp().unwrap().unix_timestamp_nanos())
+    };
+    assert_eq!(title(&first), (Some(title_id("ses_1", "Named")), 1_000_000_000));
+    assert_eq!(title(&second), title(&first));
 }
 
 proptest! {
@@ -880,7 +977,8 @@ async fn replay_from_now_skips_preexisting_rows(#[future] db: Db) {
     ]);
 }
 
-/// A session opencode 2.0 renames is delivered its new title.
+/// A session opencode 2.0 renames is delivered its new title, stamped when it was renamed: after
+/// the rows before it, so that it is the session's title from then on.
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_rename_is_delivered(#[future] db: Db) {
@@ -893,10 +991,12 @@ async fn a_rename_is_delivered(#[future] db: Db) {
     db.execute("UPDATE session_v2 SET time_updated = 2000").await;
     db.bump("ses_1").await;
     quiet(&mut stream).await;
-    db.execute("UPDATE session_v2 SET title = 'Named'").await;
+    // as `session.renamed` projects: the title, and `time_updated` to when it was renamed
+    db.execute("UPDATE session_v2 SET title = 'Named', time_updated = 3000").await;
     db.bump("ses_1").await;
     let renamed = next_n(&mut stream, &stored, 1).await;
     assert_eq!(renamed[0].1.title().and_then(|title| title.text).as_deref(), Some("Named"));
+    assert_eq!(renamed[0].1.timestamp().unwrap().unix_timestamp_nanos(), 3_000_000_000);
 }
 
 /// A database only opencode 2.0 ever wrote: no 1.x tables at all.
@@ -909,6 +1009,27 @@ async fn a_2_0_only_database_is_read_whole(#[future] db: Db) {
     db.append("ses_1", "msg_a", "assistant", assistant("", false)).await;
     // an import delivers the settled rows, and leaves the call still running to capture
     assert_eq!(lines(&read_all(&db.path).await), ["System ses_1:title:T: ", "User msg_u: hi"]);
+}
+
+/// A 2.0 database without the `event` table 1.x tailed (a later opencode that drops it) is read,
+/// listed and watched all the same.
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_database_without_an_event_log_is_captured(#[future] db: Db) {
+    let db = db.await;
+    db.execute("DROP TABLE event").await;
+    db.session("ses_1", Some("T"), None).await;
+    db.append("ses_1", "msg_u", "user", user("hi")).await;
+    assert_eq!(lines(&read_all(&db.path).await), ["System ses_1:title:T: ", "User msg_u: hi"]);
+
+    let stored = Stored::default();
+    let mut stream = events(&db.path, ReplayBehavior::All, &stored);
+    // the missing log is reported, once, and its sessions captured all the same
+    assert!(matches!(stream.next().await, Some(Err(CaptureError::Watch(_)))));
+    let got = next_n(&mut stream, &stored, 2).await;
+    assert_eq!(lines(&got), ["System ses_1:title:T: ", "User msg_u: hi"]);
+    db.append("ses_1", "msg_v", "user", user("again")).await;
+    assert_eq!(lines(&next_n(&mut stream, &stored, 1).await), ["User msg_v: again"]);
 }
 
 /// The whole live path against a database being written: two sessions, each prompting and
@@ -1224,4 +1345,49 @@ async fn a_session_in_both_layouts_is_one_session(#[future] mixed: Db) {
         "User prt_2: one point x again",
     ]);
     quiet(&mut stream).await;
+}
+
+/// Sync reads a session 2.0 copied from 1.x and went on with as capture does: every row capture
+/// delivers of it, its 1.x parts and its 2.0 messages, and none of 2.0's copies; the tip is the
+/// last 2.0 message.
+#[rstest]
+#[tokio::test]
+async fn a_migrated_session_s_tip_is_its_last_2_0_row(#[future] mixed: Db) {
+    let db = mixed.await;
+    db.load(&fixture_json()["final"]).await;
+    let delivered: Vec<String> = read_all(&db.path)
+        .await
+        .into_iter()
+        .filter(|(session, _)| session == MIGRATED)
+        .filter_map(|(_, m)| m.id().map(String::from))
+        .filter(|id| !id.starts_with(&format!("{MIGRATED}:")))
+        .collect();
+    let held = super::super::projection::projected(&db.path, MIGRATED).await.unwrap().unwrap();
+    assert!(held.next);
+    let set = |ids: &[String]| ids.iter().cloned().collect::<HashSet<_>>();
+    assert_eq!(set(&held.rows), set(&delivered));
+    assert_eq!(held.rows.len(), delivered.len());
+    let last_2_0 = delivered.iter().rev().find(|id| id.starts_with("msg_"));
+    assert_eq!(held.rows.last(), last_2_0);
+}
+
+/// A row at the very end of the sequence is read like any other, without the sequence after it
+/// overflowing.
+#[rstest]
+#[tokio::test]
+async fn a_row_at_the_last_seq_is_read(#[future] db: Db) {
+    let db = db.await;
+    db.session("ses_1", Some("T"), None).await;
+    db.append("ses_1", "msg_u", "user", user("hi")).await;
+    db.execute(
+        "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, \
+         data) VALUES ('msg_max', 'ses_1', 'user', 9223372036854775807, 1000, 1000, \
+         '{\"time\":{\"created\":1000},\"text\":\"last\",\"files\":[]}')",
+    )
+    .await;
+    assert_eq!(lines(&read_all(&db.path).await), [
+        "System ses_1:title:T: ",
+        "User msg_u: hi",
+        "User msg_max: last",
+    ]);
 }

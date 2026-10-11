@@ -630,8 +630,9 @@ pub(super) fn replace_to(
 /// all but those that went on from `from` here. Those are the lines descending from it (by
 /// `parentUuid`, or across a compaction boundary `logicalParentUuid`), and the lines that name
 /// one of them (a `last-prompt`'s or a summary's `leafUuid`, a file history snapshot's
-/// `messageId`); and any other line after the first of them, but for title lines
-/// ([`TITLE_LINES`]), kept wherever they are.
+/// `messageId`); a `queue-operation`, which copies the prompt it queued, going with the next line
+/// that has an id (usually that prompt's); and any other line after the first of them, but for
+/// title lines ([`TITLE_LINES`]), kept wherever they are.
 fn shared_lines(bytes: &[u8], from: &str) -> Vec<u8> {
     let parsed: Vec<Option<Value>> = jsonl_lines(bytes).map(parse).collect();
     let mut parents: HashMap<&str, &str> = HashMap::new();
@@ -643,18 +644,34 @@ fn shared_lines(bytes: &[u8], from: &str) -> Vec<u8> {
     }
     let mut memo = HashMap::new();
     let uuids: HashSet<&str> = parsed.iter().flatten().filter_map(|l| l["uuid"].as_str()).collect();
-    let mut lines = parsed.iter();
-    kept_lines(bytes, |_| {
-        let line = lines.next().and_then(Option::as_ref)?;
-        if TITLE_LINES.contains(&line["type"].as_str().unwrap_or_default()) {
-            return Some(true);
+    let mut keep: Vec<Option<bool>> = parsed
+        .iter()
+        .map(|line| {
+            let line = line.as_ref()?;
+            if TITLE_LINES.contains(&line["type"].as_str().unwrap_or_default()) {
+                return Some(true);
+            }
+            if let Some(uuid) = line["uuid"].as_str() {
+                return Some(!descends(&parents, &mut memo, uuid, from));
+            }
+            let named = line["leafUuid"].as_str().or_else(|| line["messageId"].as_str())?;
+            uuids.contains(named).then(|| !descends(&parents, &mut memo, named, from))
+        })
+        .collect();
+    // From the end, so each queue operation knows the next line with an id.
+    let mut next = None;
+    for (line, keep) in parsed.iter().zip(&mut keep).rev() {
+        let Some(line) = line else {
+            continue;
+        };
+        if line["uuid"].is_string() {
+            next = *keep;
+        } else if line["type"] == "queue-operation" && keep.is_none() {
+            *keep = next;
         }
-        if let Some(uuid) = line["uuid"].as_str() {
-            return Some(!descends(&parents, &mut memo, uuid, from));
-        }
-        let named = line["leafUuid"].as_str().or_else(|| line["messageId"].as_str())?;
-        uuids.contains(named).then(|| !descends(&parents, &mut memo, named, from))
-    })
+    }
+    let mut keep = keep.into_iter();
+    kept_lines(bytes, |_| keep.next().flatten())
 }
 
 /// The directory the transcript last worked in.

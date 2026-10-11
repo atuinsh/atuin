@@ -819,7 +819,7 @@ async fn a_picked_fork_is_written_then_resumed() {
     assert_eq!(pick(&mut state, picked, resumer.as_ref(), &requests), None, "waits");
     let id = state.continued;
     assert!(state.continuing.as_ref().is_some_and(|c| c.kind == super::state::Writing::Fork));
-    let continued = resumer.continue_in(&source, &row, HarnessKind::Codex).await;
+    let continued = resumer.continue_in(&source, &row, HarnessKind::Codex, None).await;
     assert!(finish_continuation(&mut state, id, continued).is_none(), "not a continuation");
 
     let forked = resumer.fork(&source, &row, ForkFrom::default()).await;
@@ -1091,7 +1091,7 @@ async fn changing_the_search_drops_a_continuation() {
     assert!(state.continuing.is_none());
     assert_eq!(state.status, None);
 
-    let continued = resumer.continue_in(&FakeSource::new(), &row, HarnessKind::Codex).await;
+    let continued = resumer.continue_in(&FakeSource::new(), &row, HarnessKind::Codex, None).await;
     assert_eq!(finish_continuation(&mut state, id, continued), None, "ignored");
 }
 
@@ -1311,7 +1311,7 @@ async fn a_written_continuation_resumes_or_edits_its_new_session() {
     for (action, run) in [(Pending::Resume, true), (Pending::Edit, false)] {
         start_continuation(&mut state, row.clone(), HarnessKind::Codex, action, &requests);
         let id = state.continued;
-        let continued = resumer.continue_in(&source, &row, HarnessKind::Codex).await;
+        let continued = resumer.continue_in(&source, &row, HarnessKind::Codex, None).await;
         let (outcome, status) = finish_continuation(&mut state, id, continued).unwrap();
         assert_eq!(status, "continuing in Codex: 42 tool calls become notes, reasoning dropped");
         let plan = match (outcome, run) {
@@ -1362,11 +1362,11 @@ async fn a_superseded_continuation_is_not_taken_for_the_newer_one() {
     let second = state.continued;
     assert_ne!(first, second);
 
-    let codex = resumer.continue_in(&source, &row, HarnessKind::Codex).await;
+    let codex = resumer.continue_in(&source, &row, HarnessKind::Codex, None).await;
     assert!(finish_continuation(&mut state, first, codex).is_none(), "the first answer");
     assert!(state.continuing.is_some(), "still waiting on the newer pick");
 
-    let pi = resumer.continue_in(&source, &row, HarnessKind::Pi).await;
+    let pi = resumer.continue_in(&source, &row, HarnessKind::Pi, None).await;
     let (outcome, _) = finish_continuation(&mut state, second, pi).unwrap();
     let Outcome::Edit(plan) = outcome else {
         panic!("{outcome:?}");
@@ -1419,7 +1419,7 @@ async fn a_continuation_picked_supersedes_a_waiting_original(#[values(false, tru
         let forked = resumer.fork(&source, &row, ForkFrom::default()).await;
         finish_fork(&mut state, id, forked).unwrap()
     } else {
-        let continued = resumer.continue_in(&source, &row, HarnessKind::Codex).await;
+        let continued = resumer.continue_in(&source, &row, HarnessKind::Codex, None).await;
         finish_continuation(&mut state, id, continued).unwrap()
     };
     let Outcome::Resume(plan) = outcome else {
@@ -1485,7 +1485,7 @@ async fn an_original_chosen_supersedes_a_continuation(
         let forked = resumer.fork(&source, &row, ForkFrom::default()).await;
         assert_eq!(finish_fork(&mut state, id, forked), None, "ignored");
     } else {
-        let continued = resumer.continue_in(&source, &row, HarnessKind::Codex).await;
+        let continued = resumer.continue_in(&source, &row, HarnessKind::Codex, None).await;
         assert_eq!(finish_continuation(&mut state, id, continued), None, "ignored");
     }
     let outcome =

@@ -81,14 +81,18 @@ enum LineBatchEnd {
 
 impl LineBatch {
     /// Pull lines from `reader` until they reach [`LINE_BATCH_BYTES`], the file ends, or a read fails;
-    /// a truncated or replaced file is read on from its start.
+    /// a file truncated, replaced or rewritten is read on from its start.
     fn read(reader: &mut impl ReadLines) -> Self {
-        // A reader reports each truncation or replacement once, so this goes round again only
-        // for a file replaced again between two opens.
+        // A reader reports each truncation, replacement or rewrite once, so this goes round
+        // again only for a file replaced again between two opens.
         let lines = loop {
             match reader.lines() {
                 Ok(lines) => break lines,
-                Err(error @ (ReadLinesError::Truncated | ReadLinesError::Replaced)) => {
+                Err(
+                    error @ (ReadLinesError::Truncated
+                    | ReadLinesError::Replaced
+                    | ReadLinesError::Rewritten),
+                ) => {
                     tracing::debug!(%error, "reading from the start");
                 }
                 Err(ReadLinesError::Io(err)) => {
@@ -190,7 +194,8 @@ mod tests {
 
     #[rstest]
     fn a_restart_is_read_through_in_the_same_batch(
-        #[values(ReadLinesError::Truncated, ReadLinesError::Replaced)] restart: ReadLinesError,
+        #[values(ReadLinesError::Truncated, ReadLinesError::Replaced, ReadLinesError::Rewritten)]
+        restart: ReadLinesError,
     ) {
         let mut reader = Scripted([Err(restart), Ok(vec![Ok(line("a"))])].into());
         let batch = LineBatch::read(&mut reader);

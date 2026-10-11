@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 # Enables `atuin_common::harnesstools`.
-ai = ["fs-watcher", "jsonl", "dep:xxhash-rust", "sqlite"]
+ai = ["fs-watcher", "jsonl", "dep:sha2", "dep:toml_edit", "dep:xxhash-rust", "sqlite"]
 # Enables `atuin_common::ansi`.
 ansi = ["dep:atuin-vt100"]
 # Enables `atuin_common::db` (but not `db::sqlite`).
@@ -71,6 +71,8 @@ semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
+# Codex keys the hooks it trusts on their SHA-256.
+sha2 = { workspace = true, optional = true }
 shlex = { workspace = true }
 sqlx = { workspace = true, optional = true }
 strum = { workspace = true }
@@ -82,6 +84,7 @@ time = { workspace = true, features = ["formatting", "parsing"] }
 tiny-bip39 = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
+toml_edit = { workspace = true, optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }
 typed-builder = { workspace = true }

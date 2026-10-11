@@ -12,7 +12,9 @@
 //!   shell widget, so the command the widget puts on the command line works as it stands.
 //! - `--in <harness>` continues the session the id names in another harness instead: it is
 //!   written out there as a new session (its tool calls flattened into notes; see
-//!   [`atuin_common::harnesstools::continuation`]) and that is resumed, the same way. In the
+//!   [`atuin_common::harnesstools::continuation`]) and that is resumed, the same way. A session
+//!   that went on separately on several machines is continued along one branch, which `--branch`
+//!   must name: without it, it fails listing them (the picker takes the newest, saying so). In the
 //!   picker, accepting a session asks where to resume it: its own harness first, then the others
 //!   installed here (see [`crate::resume_tui::chooser`]; `[ai.sessions] resume_chooser = false`
 //!   skips that).
@@ -29,8 +31,9 @@
 //!   same history, linked to it as a fork (see [`atuin_common::harnesstools::fork`]), and that is
 //!   resumed. The original is left as it is. A session that went on separately on several
 //!   machines forks from its newest branch.
-//! - `--branch` picks the branch to catch up to, to switch to, or to fork from: `this`,
-//!   `@<host id>`, or the start of its head's id.
+//! - `--branch` picks the branch to catch up to, to switch to, to fork from, or to continue in
+//!   another harness: `this`, `@<host id>`, or the start of its head's id. `--switch` with several
+//!   branches to switch to, and `--in` with several branches, need it.
 //! - `--as-is`, `--switch` and `--branch` need an id naming a single session that can resume here:
 //!   anything else is an error (listing the sessions an id names), never the picker, which would
 //!   drop them.
@@ -45,7 +48,7 @@
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 
-use atuin_client::ai_session::{Analysis, AtuinSessionId, HarnessKind, SourceId};
+use atuin_client::ai_session::{Analysis, AtuinSessionId, HarnessKind, HarnessSession, SourceId};
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
@@ -87,7 +90,8 @@ pub struct Cmd {
     print: bool,
 
     /// Continue the session QUERY names (by id, or a unique id prefix) in another agent: it is
-    /// written out as a new session there, tool calls flattened into notes, and resumed.
+    /// written out as a new session there, tool calls flattened into notes, and resumed. One that
+    /// went on separately on several machines needs `--branch`.
     #[arg(long = "in", value_enum, value_name = "HARNESS")]
     continue_in: Option<ContinueIn>,
 
@@ -103,7 +107,7 @@ pub struct Cmd {
     as_is: bool,
 
     /// Switch this machine's copy of the session QUERY names to another branch (the one
-    /// `--branch` names, else the newest it can be switched to), in place, and resume it: the
+    /// `--branch` names, else the only one it can be switched to), in place, and resume it: the
     /// history it shares with that branch is kept as it is, and the branch's messages since are
     /// appended from sync. The branch it was on stays in atuin, for `--fork` to bring back, and
     /// the copy as it was is kept as a backup. Only when sync holds all of it and no agent here
@@ -111,10 +115,11 @@ pub struct Cmd {
     #[arg(long, conflicts_with_all = ["fork", "continue_in", "as_is"])]
     switch: bool,
 
-    /// The branch of the session QUERY names to catch up to, to switch to with `--switch`, or to
-    /// fork from with `--fork`: `this`, `@<host id>`, or the start of its head's id. The newest
-    /// by default.
-    #[arg(long, value_name = "BRANCH", conflicts_with_all = ["continue_in", "as_is"])]
+    /// The branch of the session QUERY names to catch up to, to switch to with `--switch`, to
+    /// fork from with `--fork`, or to continue with `--in`: `this`, `@<host id>`, or the start of
+    /// its head's id. The newest by default; `--in`, and `--switch` with several branches to
+    /// switch to, need it named.
+    #[arg(long, value_name = "BRANCH", conflicts_with = "as_is")]
     branch: Option<String>,
 
     /// The filter the picker opens in (default: workspace, widening to global).
@@ -219,11 +224,21 @@ async fn direct_match(source: &dyn SessionSource, query: &str) -> Result<Option<
     if let [exact] = exact.as_slice() {
         return Ok(Some(found.swap_remove(*exact)));
     }
+    let mut found = resumable_first(found);
     Ok(if found.len() == 1 {
         found.pop()
     } else {
         None
     })
+}
+
+/// The sessions an id names, `found`, but for subagents named beside the session they work for:
+/// one stands for that session (see [`direct_target`]), so it is not another to pick.
+fn resumable_first(mut found: Vec<SessionRow>) -> Vec<SessionRow> {
+    let named: Vec<HarnessSession> = found.iter().map(|r| r.handle.clone()).collect();
+    found
+        .retain(|r| r.relation.is_listed() || r.parent.as_ref().is_none_or(|p| !named.contains(p)));
+    found
 }
 
 /// Whether the picker has a terminal to run on: stdout, or `/dev/tty` when stdout is captured.
@@ -282,17 +297,27 @@ fn be_more_specific(
 
 /// The session named, `row`, can't be resumed here, for `why`: the picker opens on it instead, so
 /// the reason shows (and another can be picked). With `flag` (`--switch`, `--branch`, `--as-is`)
-/// given, which the picker would drop, an error saying why.
+/// given, which the picker would drop, or without a `terminal` to open it on, an error saying
+/// why.
 fn picker_on(
     row: SessionRow,
     why: NotResumable,
     flag: Option<&str>,
+    terminal: bool,
 ) -> Result<(SessionRow, NotResumable)> {
-    if let Some(flag) = flag {
-        let message = format!("can't resume {} with `{flag}`: {why}", row.handle.session);
-        bail!("{}", message.escape_non_printable());
+    let with = flag.map(|flag| format!(" with `{flag}`")).unwrap_or_default();
+    if flag.is_some() || !terminal {
+        bail!("{}", escaped(&format!("can't resume {}{with}: {why}", row.handle.session)));
     }
     Ok((row, why))
+}
+
+/// `message` without the control characters an agent-supplied part of it (an id, an agent's
+/// stderr) may carry, line by line: its lines stay lines.
+fn escaped(message: &str) -> String {
+    let lines: Vec<String> =
+        message.lines().map(|line| line.escape_non_printable().to_string()).collect();
+    lines.join("\n")
 }
 
 /// With `flag` (`--switch`, `--branch`, `--as-is`) given and `query` naming no single session, the
@@ -306,7 +331,7 @@ async fn no_single_session_for(
         return Ok(());
     };
     let found = if looks_like_id(query) {
-        source.find_by_id(query).await?
+        resumable_first(source.find_by_id(query).await?)
     } else {
         Vec::new()
     };
@@ -325,7 +350,7 @@ async fn ambiguous_matches(
     if !looks_like_id(query) {
         return Ok(Vec::new());
     }
-    let found = source.find_by_id(query).await?;
+    let found = resumable_first(source.find_by_id(query).await?);
     if found.len() < 2 {
         return Ok(Vec::new());
     }
@@ -396,12 +421,10 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
 
     if cmd.fork || cmd.continue_in.is_some() {
         let (source, resumer, query) = (source.as_ref(), resumer.as_ref(), query.trim());
+        let (branch, here) = (cmd.branch.as_deref(), context.host_id.as_str());
         let (plan, status) = match cmd.continue_in {
-            Some(into) => continue_plan(source, resumer, query, into).await?,
-            None => {
-                let branch = cmd.branch.as_deref();
-                fork_plan(source, resumer, query, branch, &context.host_id).await?
-            }
+            Some(into) => continue_plan(source, resumer, query, into, branch, here).await?,
+            None => fork_plan(source, resumer, query, branch, here).await?,
         };
         // The widget reads stderr for the command: nothing else may go there.
         if output != Output::Widget {
@@ -450,7 +473,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
                 }
                 return finish(direct_outcome(plan, output, settings.enter_accept), output);
             }
-            Err(why) => preselect = Some(picker_on(row, why, flag)?),
+            Err(why) => preselect = Some(picker_on(row, why, flag, picker_has_a_terminal())?),
         }
     }
 
@@ -542,9 +565,7 @@ async fn pick_head(
         Ok(head) => Ok(head.source_id.clone()),
         Err(why) => {
             // Line by line: the listing of branches keeps its lines.
-            let lines: Vec<String> =
-                why.lines().map(|l| l.escape_non_printable().to_string()).collect();
-            bail!("--branch: {}", lines.join("\n"))
+            bail!("--branch: {}", escaped(&why))
         }
     }
 }
@@ -568,9 +589,12 @@ fn choice_note(row: &SessionRow, held: &Held, here: &str) -> String {
             branch.host
         ));
     }
-    // Without `--branch`, `--switch` goes to the newest branch it can.
-    if let Some((n, branch)) = held.branches.iter().enumerate().find(|(_, b)| b.switch) {
-        let pick = if n == 0 {
+    // The branch `--branch` named, when the copy can be switched to it; else the first it can.
+    // Without `--branch`, `--switch` goes to the only branch it can, and refuses to choose
+    // between several.
+    let named = held.branches.get(held.chosen).filter(|b| b.switch && held.chosen != 0);
+    if let Some(branch) = named.or_else(|| held.switches().next()) {
+        let pick = if named.is_none() && held.switches().count() == 1 {
             String::new()
         } else {
             format!(" --branch {}", quote(&branch.selector).escape_non_printable())
@@ -592,19 +616,55 @@ fn choice_note(row: &SessionRow, held: &Held, here: &str) -> String {
 }
 
 /// `atuin ai resume <id> --in <harness>`: write the session `query` names out as a new session
-/// of `into`, and the plan that resumes it, with the status line saying what was flattened.
+/// of `into`, along the branch `branch` names, and the plan that resumes it, with the status line
+/// saying what was flattened. A session that went on separately on several machines needs one
+/// named: it is an error listing them. A session of `into` already is resumed, as without
+/// `--in`, saying so.
 async fn continue_plan(
     source: &dyn SessionSource,
     resumer: &dyn Resumer,
     query: &str,
     into: ContinueIn,
+    branch: Option<&str>,
+    here: &str,
 ) -> Result<(ResumePlan, String)> {
     let Some((row, redirected)) = direct_target(source, query).await? else {
         bail!("`--in` continues the session an id names: no single session has the id {query:?}");
     };
-    let continued = resumer.continue_in(source, &row, into.kind()).await.map_err(|why| {
-        let message = format!("can't continue {}: {why}", row.handle.session);
-        eyre::eyre!("{}", message.escape_non_printable())
+    let kind = row.handle.harness;
+    if into.kind() == kind {
+        let resumed = direct_plan(source, resumer, &row, Direct::CatchUp, branch, here).await?;
+        let (plan, said) = resumed.map_err(|why| {
+            eyre::eyre!("{}", escaped(&format!("can't resume {}: {why}", row.handle.session)))
+        })?;
+        let mut status = format!("it's a {} session already: resuming it", harness_label(kind));
+        for said in redirected.into_iter().chain(said) {
+            status.push_str(&format!("; {said}"));
+        }
+        return Ok((plan, status));
+    }
+    let head = match branch {
+        Some(selector) => Some(pick_head(source, &row, selector, here).await?),
+        None => {
+            // Which of several branches to carry on is the user's to say, as for `--switch`.
+            let analysis = source.analyse(&row.handle).await?;
+            if let Some(analysis) = analysis.filter(Analysis::diverged) {
+                let (heads, now) = (analysis.heads(), time::OffsetDateTime::now_utc());
+                let message = format!(
+                    "can't continue {}: it went {} ways: name the branch to continue with \
+                     `--branch`:{}",
+                    row.handle.session,
+                    heads.len(),
+                    catchup::listing(heads, heads, now, here)
+                );
+                bail!("{}", escaped(&message));
+            }
+            None
+        }
+    };
+    let continued = resumer.continue_in(source, &row, into.kind(), head.as_ref()).await;
+    let continued = continued.map_err(|why| {
+        eyre::eyre!("{}", escaped(&format!("can't continue {}: {why}", row.handle.session)))
     })?;
     let mut status = continued.status();
     if let Some(redirected) = redirected {
@@ -635,8 +695,7 @@ async fn fork_plan(
     let from = catchup::fork_from(source, &row.handle, head.as_ref()).await;
     let forked = async { resumer.fork(source, &row, from?).await };
     let forked = forked.await.map_err(|why| {
-        let message = format!("can't fork {}: {why}", row.handle.session);
-        eyre::eyre!("{}", message.escape_non_printable())
+        eyre::eyre!("{}", escaped(&format!("can't fork {}: {why}", row.handle.session)))
     })?;
     let mut status = forked.status();
     if let Some(redirected) = redirected {
@@ -815,6 +874,43 @@ mod tests {
         );
     }
 
+    /// A subagent an id names beside the session it works for is not counted apart from it;
+    /// named alone, it stands for that session.
+    #[rstest]
+    #[tokio::test]
+    async fn a_subagent_named_beside_sessions_is_left_out() {
+        use atuin_client::ai_session::HarnessKind;
+
+        use crate::resume_tui::source::Relation;
+
+        let root = fake::row(HarnessKind::Pi, "01a11e4a-24bd", "the work");
+        let other = fake::row(HarnessKind::Pi, "01a11e47-485a", "other work");
+        let mut subagent = fake::row(HarnessKind::Pi, "01a11e4e-af40", "a part of it");
+        subagent.relation = Relation::Subagent;
+        subagent.parent = Some(root.handle.clone());
+        let source = FakeSource::from_rows(vec![root.clone(), other, subagent.clone()]);
+
+        let err = ambiguous_matches(&source, "01a11e4", false).await.unwrap_err().to_string();
+        assert!(err.starts_with("01a11e4 names 2 sessions"), "{err}");
+        assert!(!err.contains("01a11e4e"), "{err}");
+        let err = no_single_session_for(&source, "01a11e4", Some("--as-is")).await.unwrap_err();
+        assert!(!err.to_string().contains("01a11e4e"), "{err}");
+
+        let source = FakeSource::from_rows(vec![root.clone(), subagent.clone()]);
+        let named = direct_match(&source, "01a11e4").await.unwrap().unwrap();
+        assert_eq!(named.handle, root.handle);
+        let source = FakeSource::from_rows(vec![subagent.clone()]);
+        let named = direct_match(&source, "01a11e4").await.unwrap().unwrap();
+        assert_eq!(named.handle, subagent.handle);
+
+        // Its parent not named, the subagent is another session the id names, never dropped
+        // for an unrelated one.
+        let unrelated = fake::row(HarnessKind::Pi, "01a11e4f-0000", "unrelated");
+        let source = FakeSource::from_rows(vec![unrelated, subagent]);
+        assert_eq!(direct_match(&source, "01a11e4").await.unwrap(), None);
+        assert_eq!(ambiguous_matches(&source, "01a11e4", true).await.unwrap().len(), 2);
+    }
+
     /// `--branch` and `--as-is` only resume the session an id names: with an id naming several,
     /// or none, it is an error listing them, never the picker, which would drop the flag.
     #[rstest]
@@ -857,20 +953,28 @@ mod tests {
     }
 
     /// A session named that can't be resumed opens the picker on it, but not with `--branch` or
-    /// `--as-is`, which the picker would drop: an error saying why.
+    /// `--as-is`, which the picker would drop, nor without a terminal to open it on: an error
+    /// saying why.
     #[rstest]
-    #[case::plain(None, None)]
-    #[case::branch(Some("--branch"), Some("can't resume s with `--branch`: catching it up"))]
-    #[case::as_is(Some("--as-is"), Some("can't resume s with `--as-is`: catching it up"))]
+    #[case::plain(None, true, None)]
+    #[case::branch(Some("--branch"), true, Some("can't resume s with `--branch`: catching it up"))]
+    #[case::as_is(Some("--as-is"), true, Some("can't resume s with `--as-is`: catching it up"))]
+    #[case::no_terminal(None, false, Some("can't resume s: catching it up"))]
+    #[case::no_terminal_with_a_flag(
+        Some("--as-is"),
+        false,
+        Some("can't resume s with `--as-is`: catching it up")
+    )]
     fn a_session_that_cant_resume_keeps_its_flags(
         #[case] flag: Option<&str>,
+        #[case] terminal: bool,
         #[case] err: Option<&str>,
     ) {
         use atuin_client::ai_session::HarnessKind;
 
         let row = fake::row(HarnessKind::ClaudeCode, "s", "t");
         let why = NotResumable::CatchUp("no longer a head".to_owned());
-        match (picker_on(row, why, flag), err) {
+        match (picker_on(row, why, flag, terminal), err) {
             (Ok((row, _)), None) => assert_eq!(row.handle.session.as_ref(), "s"),
             (Err(e), Some(want)) => assert!(e.to_string().starts_with(want), "{e}"),
             (got, _) => panic!("{got:?}"),
@@ -925,7 +1029,9 @@ mod tests {
 
         let resumer = FakeResumer::default();
         let (plan, status) =
-            continue_plan(&source, &resumer, query, ContinueIn::Codex).await.unwrap();
+            continue_plan(&source, &resumer, query, ContinueIn::Codex, None, fake::THIS_HOST_ID)
+                .await
+                .unwrap();
         assert_eq!(plan.args[1], format!("continued-{target}"));
         assert_eq!(status.contains("is a subagent"), redirected, "{status}");
     }
@@ -1012,18 +1118,93 @@ mod tests {
     async fn continuing_by_id_plans_the_new_session() {
         let source = FakeSource::new();
         let resumer = FakeResumer::default();
-        let (plan, status) =
-            continue_plan(&source, &resumer, "7f3c9a12", ContinueIn::Codex).await.unwrap();
+        let (plan, status) = continue_plan(
+            &source,
+            &resumer,
+            "7f3c9a12",
+            ContinueIn::Codex,
+            None,
+            fake::THIS_HOST_ID,
+        )
+        .await
+        .unwrap();
         assert_eq!(plan.program, "codex");
         assert_eq!(plan.args, ["resume", "continued-7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10"]);
         assert_eq!(status, "continuing in Codex: 42 tool calls become notes, reasoning dropped");
 
-        let err = continue_plan(&source, &resumer, "fix flaky", ContinueIn::Pi).await.unwrap_err();
+        let err =
+            continue_plan(&source, &resumer, "fix flaky", ContinueIn::Pi, None, fake::THIS_HOST_ID)
+                .await
+                .unwrap_err();
         assert!(err.to_string().contains("no single session has the id"), "{err}");
 
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "opencode"]).unwrap();
         assert_eq!(cli.cmd.continue_in, Some(ContinueIn::Opencode));
         assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "cursor"]).is_err());
+    }
+
+    /// An agent's error keeps its lines, each without control characters.
+    #[rstest]
+    fn errors_keep_their_lines() {
+        let row = fake::row(HarnessKind::Opencode, "ses_1", "t");
+        let why =
+            NotResumable::Restore("opencode failed: ERROR\n  Unrecognized \x1b[2Jflag".into());
+        let err = picker_on(row, why, None, false).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "can't resume ses_1: restoring it from sync failed: opencode failed: ERROR\n  \
+             Unrecognized ^[[2Jflag"
+        );
+    }
+
+    /// `--in` continues a session that went on separately on several machines along the branch
+    /// `--branch` names; without one, it continues nothing, listing the branches to name.
+    #[rstest]
+    #[case::by_host(Some("@00000002"), Ok("d"))]
+    #[case::by_head(Some("y"), Ok("y"))]
+    #[case::none_named(None, Err("it went 2 ways: name the branch to continue with `--branch`:"))]
+    #[tokio::test]
+    async fn continuing_by_id_follows_a_branch(
+        #[case] branch: Option<&str>,
+        #[case] want: Result<&str, &str>,
+    ) {
+        let (source, _) = branched().await;
+        let resumer = FakeResumer::default();
+        let here = fake::THIS_HOST_ID;
+        let continued =
+            continue_plan(&source, &resumer, "7f3c9a12", ContinueIn::Pi, branch, here).await;
+        match want {
+            Ok(head) => {
+                continued.unwrap();
+                assert_eq!(*resumer.continues.lock(), [Some(SourceId::from(head.to_owned()))]);
+            }
+            Err(why) => {
+                let err = continued.unwrap_err().to_string();
+                assert!(err.contains(why), "{err}");
+                assert!(err.contains("\n  y  this machine · ") && err.contains("\n  d  @00000002"));
+                assert!(resumer.continues.lock().is_empty());
+            }
+        }
+
+        let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "pi", "--branch", "d"]);
+        assert_eq!(cli.unwrap().cmd.branch.as_deref(), Some("d"));
+    }
+
+    /// `--in` the session's own agent resumes it, as without `--in`, saying so.
+    #[rstest]
+    #[tokio::test]
+    async fn continuing_in_its_own_agent_resumes_it() {
+        let source = FakeSource::new();
+        let resumer = FakeResumer::default();
+        let here = fake::THIS_HOST_ID;
+        let (plan, status) =
+            continue_plan(&source, &resumer, "7f3c9a12", ContinueIn::Claude, None, here)
+                .await
+                .unwrap();
+        let row = direct_match(&source, "7f3c9a12").await.unwrap().unwrap();
+        assert_eq!(plan, resumer.plan(&row).await.unwrap().plan);
+        assert_eq!(status, "it's a Claude Code session already: resuming it");
+        assert!(resumer.continues.lock().is_empty());
     }
 
     /// `atuin ai resume <id> --fork` forks the session the id names and plans resuming the fork,
@@ -1143,7 +1324,7 @@ mod tests {
     #[case::fork_from_a_branch(&["--fork", "--branch", "d", "--print"], true)]
     #[case::as_is_and_fork(&["--as-is", "--fork"], false)]
     #[case::as_is_and_branch(&["--as-is", "--branch", "d"], false)]
-    #[case::branch_and_in(&["--branch", "d", "--in", "pi"], false)]
+    #[case::branch_and_in(&["--branch", "d", "--in", "pi"], true)]
     fn catch_up_flags(#[case] flags: &[&str], #[case] ok: bool) {
         let args = ["resume", "7f3c9a12"].iter().chain(flags);
         let cli = Cli::try_parse_from(args);
@@ -1157,7 +1338,7 @@ mod tests {
     }
 
     /// `--switch` switches the copy here of the session an id names to the branch `--branch`
-    /// names (else the newest it can), saying so; one that can't be switched is an error saying
+    /// names (else the only one it can), saying so; one that can't be switched is an error saying
     /// why. A choice catching up needs names `--switch` (with the branch it would take) where
     /// the copy can be switched.
     #[rstest]
@@ -1183,7 +1364,7 @@ mod tests {
         let refused = direct_plan(&source, &fresh, &row, Direct::Switch, None, here);
         let why = refused.await.unwrap().unwrap_err();
         assert_eq!(why, NotResumable::Switch("no head named".to_owned()));
-        let err = picker_on(row.clone(), why, Some("--switch")).unwrap_err().to_string();
+        let err = picker_on(row.clone(), why, Some("--switch"), true).unwrap_err().to_string();
         assert!(err.starts_with("can't resume 7f3c9a12"), "{err}");
         assert!(err.contains("with `--switch`: switching it to another branch failed"), "{err}");
 
@@ -1191,7 +1372,7 @@ mod tests {
         let copy = fake::local_tip(&["a", "b", "x", "y"], Some("y"));
         let mut branches = branches(&analysis, Some(&copy), here);
         branches[1].switch = true;
-        let held = Held {
+        let mut held = Held {
             why: Why::Diverged,
             harness: HarnessKind::ClaudeCode,
             plan: FakeResumer::default().plan(&row).await.unwrap().plan,
@@ -1200,10 +1381,20 @@ mod tests {
         };
         let note = choice_note(&row, &held, here);
         let id = row.handle.session.as_ref();
-        let want = format!(
-            ", `atuin ai resume {id} --switch --branch d` switches this copy to @00000002's branch"
-        );
+        let want =
+            format!(", `atuin ai resume {id} --switch` switches this copy to @00000002's branch");
         assert!(note.contains(&want), "{note}");
+        // Of several, `--switch` takes none: the newest is named.
+        held.branches[0].switch = true;
+        let note = choice_note(&row, &held, here);
+        let want = format!(", `atuin ai resume {id} --switch --branch y` switches this copy to");
+        assert!(note.contains(&want), "{note}");
+        // With a branch named (`--branch`), the switch it offers is to that one, as the fork.
+        held.chosen = 1;
+        let note = choice_note(&row, &held, here);
+        let want = format!(", `atuin ai resume {id} --switch --branch d` switches this copy to");
+        assert!(note.contains(&want), "{note}");
+        assert!(note.contains(&format!("`atuin ai resume {id} --fork --branch d`")), "{note}");
     }
 
     #[rstest]

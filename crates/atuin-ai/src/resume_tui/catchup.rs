@@ -222,12 +222,16 @@ const OPENCODE_SWITCH: &str = "opencode keeps its sessions in a database, which 
 const UNSYNCED_SWITCH: &str = "this copy has messages sync hasn't got: switching would lose them";
 
 /// The head of `analysis` to switch the copy of a session of `harness` read as `tip` to: `named`,
-/// else the newest it can be switched to ([`can_switch`]); or why it can't be.
+/// else the only one it can be switched to ([`can_switch`]); or why it can't be. With several to
+/// choose from and none named, which to take is the user's to say: an error listing them, as
+/// `now` and on host `here` ([`describe`]).
 pub fn switch_to<'a>(
     analysis: &'a Analysis,
     harness: HarnessKind,
     named: Option<&SourceId>,
     tip: &LocalTip,
+    now: OffsetDateTime,
+    here: &str,
 ) -> Result<&'a Head, String> {
     if harness == HarnessKind::Opencode {
         return Err(OPENCODE_SWITCH.to_owned());
@@ -244,10 +248,24 @@ pub fn switch_to<'a>(
             .iter()
             .find(|h| h.source_id == *named)
             .ok_or_else(|| format!("{named} is no longer one of its branches' heads"))?,
-        None => heads
-            .iter()
-            .find(|h| can_switch(analysis, harness, &h.source_id, tip))
-            .ok_or("this copy is on the session's only line: resuming it catches it up")?,
+        None => {
+            let can: Vec<&Head> =
+                heads.iter().filter(|h| can_switch(analysis, harness, &h.source_id, tip)).collect();
+            match can.as_slice() {
+                [] => {
+                    let why = "this copy is on the session's only line: resuming it catches it up";
+                    return Err(why.to_owned());
+                }
+                [head] => *head,
+                several => {
+                    return Err(format!(
+                        "it went {} other ways: name the branch to switch to with `--branch`:{}",
+                        several.len(),
+                        listing(heads, several.iter().copied(), now, here)
+                    ));
+                }
+            }
+        }
     };
     match classify(analysis, harness, &head.source_id, tip) {
         Step::Choice(Why::Diverged) => Ok(head),
@@ -391,26 +409,37 @@ pub fn pick_branch<'a>(
     } else {
         heads.iter().filter(|h| h.source_id.as_ref().starts_with(selector)).collect()
     };
-    let listing = || {
-        let lines = heads.iter().enumerate().map(|(n, h)| {
-            let latest = if n == 0 {
-                " (latest)"
-            } else {
-                ""
-            };
-            format!("\n  {}  {}{latest}", branch_selector(heads, h), describe(h, now, here))
-        });
-        lines.collect::<String>()
-    };
     match found.as_slice() {
         [head] => Ok(head),
-        [] => Err(format!("no branch is {selector:?}; its branches:{}", listing())),
+        [] => Err(format!(
+            "no branch is {selector:?}; its branches:{}",
+            listing(heads, heads, now, here)
+        )),
         several => Err(format!(
             "{selector:?} names {} branches; name one by id:{}",
             several.len(),
-            listing()
+            listing(heads, heads, now, here)
         )),
     }
+}
+
+/// `shown`, some of `heads`, a line each: what `--branch` names it by, and [`describe`]'s line,
+/// the newest of `heads` marked so.
+pub fn listing<'a>(
+    heads: &[Head],
+    shown: impl IntoIterator<Item = &'a Head>,
+    now: OffsetDateTime,
+    here: &str,
+) -> String {
+    let lines = shown.into_iter().map(|h| {
+        let latest = if heads.first() == Some(h) {
+            " (latest)"
+        } else {
+            ""
+        };
+        format!("\n  {}  {}{latest}", branch_selector(heads, h), describe(h, now, here))
+    });
+    lines.collect()
 }
 
 /// What forking `session` from `head` starts from: the rows of that head's branch
@@ -424,7 +453,10 @@ pub async fn fork_from(
     let rows = branch_rows(source, session, head)
         .await
         .map_err(|e| NotResumable::Fork(format!("{e:#}")))?;
-    Ok(ForkFrom { rows, tip: None })
+    Ok(ForkFrom {
+        rows: rows.map(|(rows, _)| rows),
+        tip: None,
+    })
 }
 
 /// The rows a transcript of `session` written out along `head` holds (see
@@ -432,12 +464,12 @@ pub async fn fork_from(
 /// one, a session that went on separately on several machines follows its newest head, so no
 /// branch's messages land in another's. `None` for any other session (or one whose branches
 /// aren't known): it is written out from every row synced of it, as it always was, rows off every
-/// branch included.
+/// branch included. With the rows, the head followed, when it is one of the session's.
 pub async fn branch_rows(
     source: &dyn SessionSource,
     session: &HarnessSession,
     head: Option<&SourceId>,
-) -> eyre::Result<Option<Vec<RehydrateMessage>>> {
+) -> eyre::Result<Option<(Vec<RehydrateMessage>, Option<Head>)>> {
     let Some(analysis) = source.analyse(session).await? else {
         return Ok(None);
     };
@@ -445,7 +477,8 @@ pub async fn branch_rows(
     let Some(head) = head.or(newest.map(|h| &h.source_id)) else {
         return Ok(None);
     };
-    Ok(Some(analysis.rows_for(head).into_iter().map(|m| m.clone().into()).collect()))
+    let rows = analysis.rows_for(head).into_iter().map(|m| m.clone().into()).collect();
+    Ok(Some((rows, analysis.heads().iter().find(|h| h.source_id == *head).cloned())))
 }
 
 #[cfg(test)]

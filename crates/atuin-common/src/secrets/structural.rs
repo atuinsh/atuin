@@ -14,10 +14,21 @@ use super::REDACTED;
 #[cfg(test)]
 use super::tests::Test;
 
+/// Where a word starts: at a word boundary, or just past an escaped newline or tab (`\n` in JSON
+/// text), where there is none.
+macro_rules! word_start {
+    () => {
+        r"(?:(?-u:\b)|\\[nrt])"
+    };
+}
+
 /// The words a name ends with when it holds a credential, as an environment variable spells them.
 macro_rules! env_secret_name {
     () => {
-        r"(?-u:\b)[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|_PWD|API_?KEY|APIKEY|PRIVATE_KEY|ACCESS_KEY|SECRET_KEY|CREDENTIALS?|AUTH)S?(?-u:\b)"
+        concat!(
+            word_start!(),
+            r"[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|_PWD|API_?KEY|APIKEY|PRIVATE_KEY|ACCESS_KEY|SECRET_KEY|CREDENTIALS?|AUTH)S?(?-u:\b)"
+        )
     };
 }
 
@@ -74,7 +85,10 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
     // gitleaks jwt
     Pattern {
         name: "JSON web token",
-        regex: r"(?-u:\b)(?<secret>eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})",
+        regex: concat!(
+            word_start!(),
+            r"(?<secret>eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
+        ),
         prefilter: None,
         #[cfg(test)]
         tests: &[Test {
@@ -87,7 +101,7 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "Bearer token",
-        regex: r"(?i-u:\bbearer)[ \t]+(?<secret>[A-Za-z0-9._~+/-]{16,}=*)",
+        regex: concat!(word_start!(), r"(?i-u:bearer)[ \t]+(?<secret>[A-Za-z0-9._~+/-]{16,}=*)"),
         prefilter: None,
         #[cfg(test)]
         tests: &[Test {
@@ -140,7 +154,7 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
     // A connection string's `password=` (keyword DSNs, JDBC and ODBC strings, query strings).
     Pattern {
         name: "Connection string password",
-        regex: r#"(?:^|[?&;\s])(?i-u:password|pwd)=(?<secret>"[^"\n]*"|'[^'\n]*'|[^&;\s"']+)"#,
+        regex: r#"(?:^|[?&;\s-])(?i-u:password|pwd)=(?<secret>"[^"\n]*"|'[^'\n]*'|[^&;\s"'`]*[^&;\s"'`,])"#,
         prefilter: None,
         #[cfg(test)]
         tests: &[
@@ -152,13 +166,30 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
                 input: "Server=db;User Id=sa;Password=Hunter2!;",
                 redacted: "Server=db;User Id=sa;Password=****;",
             },
+            Test {
+                input: "mysql -u root --password=hunter db",
+                redacted: "mysql -u root --password=**** db",
+            },
         ],
+    },
+    // AWS's own files and commands spell the name in lowercase (`aws configure set
+    // aws_secret_access_key ...`); the value is a key's 40 characters, so a space can separate them.
+    Pattern {
+        name: "AWS secret access key setting",
+        regex: r#"(?i-u:aws_secret_access_key)["']?(?:[ \t]*[:=][ \t]*|[ \t]+)["']?(?<secret>[A-Za-z0-9/+]{40,})"#,
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[Test {
+            input: "aws configure set aws_secret_access_key \
+                    wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            redacted: "aws configure set aws_secret_access_key ****",
+        }],
     },
     // gitleaks twilio-api-key: only redacted, as `SK` and 32 hex digits is too plain a shape to
     // keep a command out of history.
     Pattern {
         name: "Twilio API key",
-        regex: r"(?-u:\b)(?<secret>SK[0-9a-fA-F]{32})(?-u:\b)",
+        regex: concat!(word_start!(), r"(?<secret>SK[0-9a-fA-F]{32})(?-u:\b)"),
         prefilter: None,
         #[cfg(test)]
         tests: &[Test {
@@ -238,11 +269,37 @@ pub(super) static NAMED_PATTERNS: &[Pattern] = &[
             },
         ],
     },
-    // YAML, `.env`, INI and `.properties` lines: an unquoted value to the end of the line.
+    // A password given on the command line apart from its flag (`docker login --password ...`):
+    // quoted, or holding more than letters, as prose (`the --password flag`) and a help's
+    // placeholder (`--password TEXT`, `--password string`) don't. `--password=...` is redacted as
+    // a connection string's `password=`.
+    Pattern {
+        name: "Password flag",
+        regex: concat!(
+            r#"(?:^|[ \t])--passw(?:or)?d[ \t]+(?<secret>"(?:[^"\\\n]|\\.)*"|'[^'\n]*'"#,
+            r#"|\\"(?:[^"\\\n]|\\[^"])*\\""#,
+            r#"|(?:[^\s"'\\<>\[{()|&;`-][^\s"'\\|&;<>()`]*?)?"#,
+            r#"[^A-Za-z\s"'\\.,:;()\[\]{}<>|&`-][^\s"'\\|&;<>()`]*)(?:[\s"';&|)\\]|\z)"#
+        ),
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "docker login -u me --password hunter2xyz r.io",
+                redacted: "docker login -u me --password **** r.io",
+            },
+            Test {
+                input: "docker login -u me --password 'hunter 2' r.io",
+                redacted: "docker login -u me --password **** r.io",
+            },
+        ],
+    },
+    // YAML, `.env`, INI and `.properties` lines: an unquoted value to the end of the line. Also
+    // such a line in a patch (`+`; a `-` is part of the name).
     Pattern {
         name: "Credential setting",
         regex: concat!(
-            r#"(?m)^[ \t]*(?:-[ \t]+)?["']?"#,
+            r#"(?m)^\+?[ \t]*(?:-[ \t]+)?["']?"#,
             code_secret_name!(),
             r#"["']?[ \t]*[:=][ \t]*(?<secret>[^\s"'#|>&*!{}\[\],=][^\n#="]*?)[ \t]*$"#
         ),
@@ -266,6 +323,37 @@ pub(super) static NAMED_PATTERNS: &[Pattern] = &[
                 input: "\npassword: violetmeadow\n",
                 redacted: "\npassword: ****\n",
             },
+            Test {
+                input: "\n+  password: hunter2xyz\n",
+                redacted: "\n+  password: ****\n",
+            },
+        ],
+    },
+    // Such a line in JSON text: just past an escaped newline, and ending at the next one, the
+    // string's end, or, clipped, the line's.
+    Pattern {
+        name: "Credential setting in JSON text",
+        regex: concat!(
+            r#"(?m)\\n\+?(?:[ \t]|\\t)*(?:-[ \t]+)?["']?"#,
+            code_secret_name!(),
+            r#"["']?[ \t]*[:=][ \t]*(?<secret>[^\s"'#|>&*!{}\[\],=\\](?:[^\n#="\\]|\\(?:[^rn]|\z))*?)"#,
+            r#"[ \t]*(?:\\[rn]|"|$)"#
+        ),
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: r#""a:\n  password: hunter2xyz\n""#,
+                redacted: r#""a:\n  password: ****\n""#,
+            },
+            Test {
+                input: r#""a\npassword: ab\"cd\"""#,
+                redacted: r#""a\npassword: ****""#,
+            },
+            Test {
+                input: r#""a:\n\tpassword: hunter2xyz""#,
+                redacted: r#""a:\n\tpassword: ****""#,
+            },
         ],
     },
 ];
@@ -274,7 +362,7 @@ pub(super) static NAMED_PATTERNS: &[Pattern] = &[
 /// (`$TOKEN`, `${{ secrets.X }}`, `os.environ[...]`), documentation's stand-ins (`<password>`,
 /// `changeme`, `xxxx`), the marker itself, and numbers.
 pub(super) fn is_placeholder(value: &str) -> bool {
-    let value = value.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+    let value = value.trim().trim_matches(|c| c == '"' || c == '\'' || c == '\\').trim();
     if value.is_empty() {
         return true;
     }

@@ -431,6 +431,11 @@ fn went_its_own_way() -> Vec<Value> {
         a1,
         r1,
         json!({"type": "custom-title", "customTitle": "mine", "sessionId": SESSION}),
+        // Claude Code's queue bookkeeping for the prompt that follows, which it copies.
+        json!({"type": "queue-operation", "operation": "enqueue", "sessionId": SESSION,
+            "timestamp": "2026-09-18T10:00:04Z", "content": "queued here alone"}),
+        json!({"type": "queue-operation", "operation": "dequeue", "sessionId": SESSION,
+            "timestamp": "2026-09-18T10:00:04Z"}),
         json!({"type": "file-history-snapshot", "messageId": "u2", "snapshot": {"files": {}}}),
         user("u2", Some("r1"), 4),
         assistant("a2", "u2", 5),
@@ -483,7 +488,7 @@ fn a_switch_keeps_the_shared_history_as_it_is_and_backs_the_copy_up(dir: TempDir
     let written: Vec<Value> = lines[4..].iter().filter_map(|l| parse(l)).collect();
     assert_eq!(written[0]["parentUuid"], "r1", "the branch hangs from where it left the copy");
     assert!(written.iter().all(|l| l["sessionId"] == SESSION));
-    for gone in ["u2", "a2", "last-prompt", "file-history-snapshot"] {
+    for gone in ["u2", "a2", "last-prompt", "file-history-snapshot", "queue-operation"] {
         let found = lines.iter().any(|l| memchr::memmem::find(l, gone.as_bytes()).is_some());
         assert!(!found, "{gone} went on from where the branch left the copy");
     }

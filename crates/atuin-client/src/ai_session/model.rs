@@ -196,6 +196,15 @@ pub struct Message {
     pub host: Option<HostId>,
 }
 
+impl Message {
+    /// The earliest and latest [`Self::timestamp`] stored: a day inside the years
+    /// [`OffsetDateTime`] can name, so either is still a date in any offset. A harness line can
+    /// name an instant past them (Claude Code's `9999-12-31T23:59:59-23:59` is in year 10000 in
+    /// UTC), which capture and the sidecar hold to these.
+    pub const EARLIEST: OffsetDateTime = time::macros::datetime!(-9999-01-02 0:00 UTC);
+    pub const LATEST: OffsetDateTime = time::macros::datetime!(9999-12-30 0:00 UTC);
+}
+
 /// [`Message::parent_kind`] as a record holds it: `None` for a kind this build does not know,
 /// so a newer build can add kinds without its records failing to decode here.
 fn known_parent_kind<'de, D>(deserializer: D) -> Result<Option<ParentKind>, D::Error>

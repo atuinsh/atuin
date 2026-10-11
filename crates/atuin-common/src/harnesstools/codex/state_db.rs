@@ -42,17 +42,68 @@ pub enum StateDbError {
 
 /// The current thread index under Codex home `home`: the highest-numbered `state_<n>.sqlite`.
 pub fn index_path(home: &Path) -> Option<PathBuf> {
+    newest(home, "state_")
+}
+
+/// The highest-numbered `<prefix><n>.sqlite` under Codex home `home`.
+fn newest(home: &Path, prefix: &str) -> Option<PathBuf> {
     std::fs::read_dir(home)
         .ok()?
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name();
             let version: u32 =
-                name.to_str()?.strip_prefix("state_")?.strip_suffix(".sqlite")?.parse().ok()?;
+                name.to_str()?.strip_prefix(prefix)?.strip_suffix(".sqlite")?.parse().ok()?;
             Some((version, entry.path()))
         })
         .max()
         .map(|(_, path)| path)
+}
+
+async fn connect(db: &Path) -> Result<SqliteConnection, sqlx::Error> {
+    let opts = SqliteConnectOptions::new()
+        .filename(db)
+        .create_if_missing(false)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(5));
+    SqliteConnection::connect_with(&opts).await
+}
+
+async fn has_table(conn: &mut SqliteConnection, table: &str) -> Result<bool, sqlx::Error> {
+    let found = query_scalar::<Sqlite, i64>(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+    )
+    .bind(table)
+    .fetch_one(conn)
+    .await?;
+    Ok(found > 0)
+}
+
+/// Forget what Codex projected of thread `thread`'s history from its rollout
+/// (`thread_history_<n>.sqlite`: the thread's turns and items, which it shows the thread from,
+/// and the byte offset into the rollout it goes on projecting from), which Codex projects again
+/// from the whole rollout when it next loads the thread. A rollout written anew (switched to
+/// another branch, or restored) no longer holds the lines it was projected from: Codex would go
+/// on showing those, reading on from an offset into lines that are gone.
+pub async fn forget_history(home: &Path, thread: &str) -> Result<(), StateDbError> {
+    let Some(db) = newest(home, "thread_history_") else {
+        return Ok(());
+    };
+    let mut conn = connect(&db).await?;
+    if !has_table(&mut conn, "thread_history_projection_state").await? {
+        return Ok(());
+    }
+    let mut tx = conn.begin().await?;
+    for delete in [
+        "DELETE FROM thread_history_projection_state WHERE thread_id = ?1",
+        "DELETE FROM thread_items WHERE thread_id = ?1",
+        "DELETE FROM thread_turns WHERE thread_id = ?1",
+    ] {
+        query::<Sqlite>(delete).bind(thread).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    conn.close().await?;
+    Ok(())
 }
 
 /// Make the index row of thread `thread` (if there is one) name `rollout`, where it names
@@ -68,18 +119,8 @@ pub async fn point_at(
     let Some(db) = index_path(home) else {
         return Ok(Pointed::Unindexed);
     };
-    let opts = SqliteConnectOptions::new()
-        .filename(&db)
-        .create_if_missing(false)
-        .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(Duration::from_secs(5));
-    let mut conn = SqliteConnection::connect_with(&opts).await?;
-    let has_threads = query_scalar::<Sqlite, i64>(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'threads'",
-    )
-    .fetch_one(&mut conn)
-    .await?;
-    if has_threads == 0 {
+    let mut conn = connect(&db).await?;
+    if !has_table(&mut conn, "threads").await? {
         return Ok(Pointed::Unindexed);
     }
     let stored = query_scalar::<Sqlite, String>("SELECT rollout_path FROM threads WHERE id = ?1")
@@ -145,6 +186,65 @@ pub mod tests {
                 .unwrap();
         }
         db
+    }
+
+    /// Codex's history of threads as it projects it (codex 0.160.1's `thread_history_1.sqlite`,
+    /// its columns cut down), holding some of each of `threads`.
+    pub async fn history(home: &Path, threads: &[&str]) -> PathBuf {
+        let db = home.join("thread_history_1.sqlite");
+        let opts = SqliteConnectOptions::new().filename(&db).create_if_missing(true);
+        let mut conn = SqliteConnection::connect_with(&opts).await.unwrap();
+        for sql in [
+            "CREATE TABLE thread_turns (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, \
+             rollout_ordinal INTEGER NOT NULL, PRIMARY KEY (thread_id, turn_id))",
+            "CREATE TABLE thread_items (thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, item_id \
+             TEXT NOT NULL, rollout_ordinal INTEGER NOT NULL, PRIMARY KEY (thread_id, turn_id, \
+             item_id))",
+            "CREATE TABLE thread_history_projection_state (thread_id TEXT PRIMARY KEY, \
+             next_rollout_byte_offset INTEGER NOT NULL, next_rollout_ordinal INTEGER NOT NULL)",
+        ] {
+            query::<Sqlite>(sql).execute(&mut conn).await.unwrap();
+        }
+        for thread in threads {
+            for sql in [
+                "INSERT INTO thread_turns VALUES (?1, 't1', 1)",
+                "INSERT INTO thread_items VALUES (?1, 't1', 'i1', 2)",
+                "INSERT INTO thread_history_projection_state VALUES (?1, 83674, 36)",
+            ] {
+                query::<Sqlite>(sql).bind(*thread).execute(&mut conn).await.unwrap();
+            }
+        }
+        db
+    }
+
+    /// How many rows of its history Codex holds of `thread`.
+    pub async fn projected(db: &Path, thread: &str) -> i64 {
+        let mut conn = SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(db))
+            .await
+            .unwrap();
+        query_scalar::<Sqlite, i64>(
+            "SELECT (SELECT count(*) FROM thread_turns WHERE thread_id = ?1) + (SELECT count(*) \
+             FROM thread_items WHERE thread_id = ?1) + (SELECT count(*) FROM \
+             thread_history_projection_state WHERE thread_id = ?1)",
+        )
+        .bind(thread)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap()
+    }
+
+    /// The thread's history goes, to be projected again from its rollout; another thread's
+    /// stays. With no history at all there is nothing to forget.
+    #[rstest]
+    #[tokio::test]
+    async fn a_threads_history_is_forgotten() {
+        let home = tempfile::tempdir().unwrap();
+        forget_history(home.path(), THREAD).await.unwrap();
+        let other = "01a0ea6e-0000-7000-8000-000000000000";
+        let db = history(home.path(), &[THREAD, other]).await;
+        forget_history(home.path(), THREAD).await.unwrap();
+        assert_eq!(projected(&db, THREAD).await, 0);
+        assert_eq!(projected(&db, other).await, 3);
     }
 
     async fn stored(db: &Path) -> String {

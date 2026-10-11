@@ -1,6 +1,10 @@
 //! An opencode session written back out from captured messages (see [`rehydrate`]), through
 //! opencode's own `opencode import`.
 //!
+//! opencode 2 dropped `opencode import` for `opencode session import`, which takes a format of its
+//! own (see `v2`); which one the installed opencode takes is told by its version. What follows
+//! is opencode 1.x's.
+//!
 //! opencode keeps its sessions in one SQLite database, whose schema is its own business; `opencode
 //! import <file>` takes the JSON `opencode export` writes and inserts it the way opencode itself
 //! does (`cli/cmd/import.ts`): the session under its own id, each message and part under theirs.
@@ -58,6 +62,7 @@
 //!   as new rows. Their calls and results, rows apart, are joined into one tool part.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -78,6 +83,8 @@ use crate::harnesstools::session::{
 };
 use crate::harnesstools::{AnyHarness, continuation};
 
+mod v2;
+
 /// How long `opencode import` may take before it is given up on.
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -93,22 +100,25 @@ const QUIET_ENV: &[(&str, &str)] = &[
     ("OPENCODE_PURE", "1"),
 ];
 
-/// Import `session` into opencode's database with `opencode import`, run from the session's
-/// directory ([`RehydrateSession::cwd`], which becomes the session's directory and project), and
-/// hand back the database: the path `locate` finds the session in.
+/// Import `session` into opencode's database with `opencode import` (opencode 2: `opencode
+/// session import`), into the session's directory ([`RehydrateSession::cwd`], which becomes the
+/// session's directory and project), and hand back the database: the path `locate` finds the
+/// session in.
 ///
 /// The database is the one opencode resolves from this process's environment (`OPENCODE_DB`,
-/// `XDG_DATA_HOME`, its channel databases; see `session::default_db`), and `opencode import` is
-/// pointed at it explicitly (`OPENCODE_DB`), so the two cannot disagree. opencode must be on
-/// `PATH`. It is never asked to call a model: import only writes the database.
+/// `XDG_DATA_HOME`, its channel databases; see `session::default_db`), and opencode is pointed at
+/// it explicitly (`OPENCODE_DB`), so the two cannot disagree: opencode 2 imports through a server
+/// of its own (`--standalone`), not its background one, which keeps the environment it started
+/// with. opencode must be on `PATH`. It is never asked to call a model: import only writes the
+/// database.
 ///
 /// Fails with [`RehydrateError::AlreadyExists`] when opencode already holds the session whole.
-/// The export goes to opencode in one file, but opencode inserts it a row at a time (the session
-/// first), so an import that fails part-way leaves the session partly written, where
-/// [`locate`](crate::harnesstools::Harness::locate) finds it. Such a session is imported again:
-/// import inserts each message and part only if its id is new, so what is there stays as it is
-/// and what is missing is added. A session that has been worked on since (see `Held`) is left
-/// alone, so that a message a revert deleted never comes back.
+/// opencode 1.x inserts an import a row at a time (the session first), so one that fails part-way
+/// leaves the session partly written, where [`locate`](crate::harnesstools::Harness::locate)
+/// finds it. Such a session is imported again: import inserts each message and part only if its
+/// id is new, so what is there stays as it is and what is missing is added. A session that has
+/// been worked on since (see `Held`) is left alone, so that a message a revert deleted never comes
+/// back. opencode 2 imports a session whole or not at all.
 pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
     let db = session::default_db().ok_or(RehydrateError::NoDataDir)?;
     import(Path::new("opencode"), &db, session).await
@@ -127,6 +137,7 @@ pub(crate) async fn import(
         )));
     }
     let exported = export(session);
+    // a session opencode 2 holds is in none of the tables `held` reads: held whole
     if session::locate(db, &session.id).await.is_some()
         && held(db, &session.id, &exported).await != Held::Partly
     {
@@ -138,10 +149,44 @@ pub(crate) async fn import(
             session.cwd.display()
         )));
     }
-    let stdout = run_import(program, db, &session.cwd, &exported).await?;
+    let stdout = if major_version(program).await? >= 2 {
+        let args = [
+            OsStr::new("session"),
+            OsStr::new("import"),
+            OsStr::new("--standalone"),
+            OsStr::new("--directory"),
+            session.cwd.as_os_str(),
+        ];
+        run(program, &args, db, &session.cwd, &v2::export(session)).await?
+    } else {
+        run_import(program, db, &session.cwd, &exported).await?
+    };
     session::locate(db, &session.id).await.ok_or_else(|| {
         RehydrateError::Other(format!("opencode import did not write the session: {stdout}"))
     })
+}
+
+/// The major version of the `opencode` executable `program`, as `opencode --version` prints it
+/// (`1.18.32`; opencode 2: `opencode v2.0.24`).
+pub(crate) async fn major_version(program: &Path) -> Result<u64, RehydrateError> {
+    let mut command = tokio::process::Command::new(program);
+    command
+        .arg("--version")
+        .envs(QUIET_ENV.iter().copied())
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(IMPORT_TIMEOUT, command.output())
+        .await
+        .map_err(|_| RehydrateError::Other("opencode --version timed out".to_owned()))??;
+    let printed = String::from_utf8_lossy(&output.stdout);
+    printed
+        .split_whitespace()
+        .last()
+        .and_then(|version| version.trim_start_matches('v').split('.').next()?.parse().ok())
+        .ok_or_else(|| {
+            RehydrateError::Other(format!("can't tell opencode's version from {printed:?}"))
+        })
 }
 
 /// Run `opencode import` (the executable `program`) of `export` into `db`, from `cwd` (which
@@ -152,11 +197,22 @@ pub(crate) async fn run_import(
     cwd: &Path,
     export: &Value,
 ) -> Result<String, RehydrateError> {
+    run(program, &[OsStr::new("import"), OsStr::new("--pure")], db, cwd, export).await
+}
+
+/// Run `opencode <args> <file>` (the executable `program`), `file` holding `export`, against `db`
+/// from `cwd`, handing back what it printed.
+async fn run(
+    program: &Path,
+    args: &[&OsStr],
+    db: &Path,
+    cwd: &Path,
+    export: &Value,
+) -> Result<String, RehydrateError> {
     let file = export_file(export)?;
     let mut command = tokio::process::Command::new(program);
     command
-        .arg("import")
-        .arg("--pure")
+        .args(args)
         .arg(&*file)
         .current_dir(cwd)
         .env("OPENCODE_DB", db)
@@ -420,7 +476,7 @@ fn is_failure(row: &RehydrateMessage) -> bool {
         && matches!(row.content.as_slice(), [Content::Error(_)])
 }
 
-/// The row for the session itself (`<session>:title:<title>`, `<session>:session`), which the
+/// The row for the session itself (`<session>:title:<digest>`, `<session>:session`), which the
 /// session's own info stands for; for a fork, the original's too.
 fn is_session_row(session: &RehydrateSession, row: &RehydrateMessage) -> bool {
     let of = |id: &str| row.source_id.strip_prefix(id).is_some_and(|rest| rest.starts_with(':'));
@@ -1329,7 +1385,7 @@ pub(crate) mod tests {
         row
     }
 
-    const SES: &str = "ses_0d148d4b0001WQdGo06CVdqA3u";
+    pub const SES: &str = "ses_0d148d4b0001WQdGo06CVdqA3u";
     const U1: &str = "msg_0d148d4b9001WQdGo06CVdqA3u";
     const U2: &str = "msg_0d149b05a001c4o2UTJB1vX46n";
     const A2: &str = "msg_0d149b2d5001gkfmc9bUMDXLJ5";
@@ -1337,7 +1393,7 @@ pub(crate) mod tests {
     const TURN2: &str = "1790217663189:openai/gpt-x";
 
     /// A session with every kind of row capture makes of opencode's parts.
-    fn every_kind() -> Vec<RehydrateMessage> {
+    pub fn every_kind() -> Vec<RehydrateMessage> {
         let mut finish = answer(
             "prt_0d148db35001Zcq9788cC4lx83",
             1_790_217_608,
@@ -1357,7 +1413,7 @@ pub(crate) mod tests {
             answer(A2, 1_790_217_663, U2, TURN2, vec![Content::Error("mock bad request".into())]);
         failure.stop_reason = Some(StopReason::Error);
         vec![
-            row(&format!("{SES}:title:Fix the build"), 1_790_217_606, Role::System, vec![]),
+            row(&session::title_id(SES, "Fix the build"), 1_790_217_606, Role::System, vec![]),
             row("prt_0d148d4bf001JaxA9TwaMgU5vE", 1_790_217_606, Role::User, vec![Content::Text(
                 "fix the build".into(),
             )]),
@@ -1578,9 +1634,10 @@ pub(crate) mod tests {
         std::fs::write(
             &path,
             format!(
-                "#!/bin/sh\necho \"$@\" > {log}/args\npwd > {log}/cwd\necho \"$OPENCODE_DB \
-                 $OPENCODE_DISABLE_MODELS_FETCH $OPENCODE_PURE\" > {log}/env\ncp \"$3\" \
-                 {log}/export.json\necho boom >&2\nexit 3\n",
+                "#!/bin/sh\n[ \"$1\" = --version ] && echo 1.18.32 && exit 0\necho \"$@\" > \
+                 {log}/args\npwd > {log}/cwd\necho \"$OPENCODE_DB $OPENCODE_DISABLE_MODELS_FETCH \
+                 $OPENCODE_PURE\" > {log}/env\ncp \"$3\" {log}/export.json\necho boom >&2\nexit \
+                 3\n",
                 log = dir.display()
             ),
         )
@@ -1699,6 +1756,7 @@ pub(crate) mod tests {
             &path,
             format!(
                 "#!/bin/sh
+[ \"$1\" = --version ] && echo 1.18.32 && exit 0
 touch {}/ran
 ",
                 dir.display()

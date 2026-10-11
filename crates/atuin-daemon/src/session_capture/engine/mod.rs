@@ -1,4 +1,6 @@
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,11 +8,12 @@ use atuin_client::ai_session::{
     Appended, DbError, HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
 use atuin_common::harnesstools::AnyHarness;
+use atuin_common::harnesstools::session::any::AnySessions;
 use atuin_common::harnesstools::session::{
     AnyMessage, CaptureError, Checkpoint, RuntimeError, SessionEvent, SessionId, TitleChange,
 };
 use atuin_common::sync::BlockingPool;
-use futures::{Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt};
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -27,7 +30,17 @@ const LISTENER_RETRY_MAX: Duration = Duration::from_secs(60);
 /// How long a live session with rows waiting for a timestamp may stay quiet before they are
 /// stored with capture time: a transcript of untimed lines alone (Claude Code title lines)
 /// would otherwise hold them until the daemon stops, and never checkpoint past them.
+///
+/// Quiet means the harness's capture as a whole, not just the session: while it is busy (a
+/// backlog of transcripts read in), the session's next, timed, line may be waiting its turn, and
+/// would give the rows their time, so they wait. Lines read go first, so through a backlog that
+/// always has the next line ready they wait until it drains; through lines that come now and
+/// then (other sessions written live), up to [`UNTIMED_GRACE_BUSY`] times as long.
 const UNTIMED_GRACE: Duration = Duration::from_secs(5);
+
+/// How many times [`UNTIMED_GRACE`] rows wait for a timestamp at most while lines of other
+/// sessions keep coming, when none is waiting to be handled (see [`UNTIMED_GRACE`]).
+const UNTIMED_GRACE_BUSY: u32 = 12;
 
 pub struct SessionCaptureEngine {
     listeners: Vec<JoinHandle<()>>,
@@ -43,54 +56,95 @@ impl SessionCaptureEngine {
             };
             let kind = HarnessKind::from(harness);
             let sink = sink.clone();
-
-            listeners.push(tokio::spawn(async move {
-                // A harness whose session directory does not exist yet (not installed, or never
-                // run) must not be dropped for the life of the daemon: retry with capped backoff
-                // until it appears, so capture starts without a restart.
-                let mut delay = LISTENER_RETRY_START;
-                let listener = loop {
-                    match sessions.listener() {
-                        Ok(listener) => break listener,
-                        Err(RuntimeError::NotFound(_)) => {
-                            tokio::time::sleep(delay).await;
-                            delay = (delay * 2).min(LISTENER_RETRY_MAX);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                ?e,
-                                ?kind,
-                                "ai-session listener failed; capture disabled for this harness"
-                            );
-                            return;
-                        }
-                    }
-                };
-
-                // Sessions `events()` has just (re)opened, with the checkpoint each was handed:
-                // set before the new read yields anything, so its first event finds it here.
-                let opened: Opened = Arc::default();
-                let checkpoint = {
-                    let (sink, opened) = (sink.clone(), opened.clone());
-                    move |id: &SessionId| {
-                        let (sink, opened, id) = (sink.clone(), opened.clone(), id.clone());
-                        async move {
-                            let from = checkpoint_of(&sink, kind, &id).await;
-                            opened.lock().insert(id, from);
-                            from
-                        }
-                    }
-                };
-                capture(kind, &sink, listener.events(checkpoint), &opened, UNTIMED_GRACE).await;
-            }));
+            let listen = move || listen(kind, sink.clone(), sessions.clone());
+            listeners.push(tokio::spawn(supervise(kind, listen, LISTENER_RETRY_START)));
         }
 
         Self { listeners }
     }
 }
 
+/// Keep one harness's capture running for the life of the engine: `listen` again, after a backoff
+/// growing from `retry` (capped at [`LISTENER_RETRY_MAX`]), whenever it ends, fails or panics.
+///
+/// A harness whose session directory does not exist yet (not installed, or never run) is
+/// listened to once it appears, so capture starts without a restart. One whose listener ended
+/// (its source gone, or no longer readable) or panicked would otherwise stop capturing until the
+/// daemon restarts, and nothing would say so but a log line.
+async fn supervise<F, L>(kind: HarnessKind, mut listen: F, retry: Duration)
+where
+    F: FnMut() -> L,
+    L: Future<Output = Result<(), RuntimeError>>,
+{
+    let mut delay = retry;
+    loop {
+        let started = Instant::now();
+        match AssertUnwindSafe(listen()).catch_unwind().await {
+            Ok(Err(RuntimeError::NotFound(_))) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(?e, ?kind, ?delay, "ai-session listener failed; retrying");
+            }
+            Ok(Ok(())) => {
+                tracing::warn!(?kind, ?delay, "ai-session listener ended; restarting it");
+            }
+            Err(panic) => {
+                tracing::error!(
+                    panic = panic_message(&*panic),
+                    ?kind,
+                    ?delay,
+                    "ai-session capture panicked; restarting it"
+                );
+            }
+        }
+        // One that ran a good while before it stopped is not failing over and over.
+        if started.elapsed() > LISTENER_RETRY_MAX {
+            delay = retry;
+        }
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(LISTENER_RETRY_MAX);
+    }
+}
+
+/// Capture what one harness's `sessions` write until its listener ends.
+async fn listen(
+    kind: HarnessKind,
+    sink: Arc<Sink>,
+    sessions: AnySessions,
+) -> Result<(), RuntimeError> {
+    let listener = sessions.listener()?;
+    // Sessions `events()` has just (re)opened, with the checkpoint each was handed: set before
+    // the new read yields anything, so its first event finds it here.
+    let opened: Opened = Arc::default();
+    let checkpoint = {
+        let (sink, opened) = (sink.clone(), opened.clone());
+        move |id: &SessionId| {
+            let (sink, opened, id) = (sink.clone(), opened.clone(), id.clone());
+            async move {
+                let from = checkpoint_of(&sink, kind, &id).await;
+                opened.lock().insert(id, from);
+                from
+            }
+        }
+    };
+    capture(kind, &sink, listener.events(checkpoint), &opened, UNTIMED_GRACE).await;
+    Ok(())
+}
+
+/// What a panic said, when it said it as text.
+fn panic_message(panic: &(dyn Any + Send)) -> &str {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("(not text)")
+}
+
 /// Capture every event of one harness's listener until it ends. Rows waiting for a timestamp
 /// are stored once their session has been quiet for `grace` (see [`UNTIMED_GRACE`]).
+///
+/// A line whose capture panics is passed over, as a malformed one is: the rows of the session's
+/// next lines are stored, and checkpointed past it, so a restart doesn't panic on it again (but
+/// for the last line of a session, read again each restart, and passed over again).
 async fn capture(
     kind: HarnessKind,
     sink: &Sink,
@@ -106,9 +160,11 @@ async fn capture(
     // Rows of a transcript's content before it was replaced whose append failed: no read can
     // bring them back, so they are kept, and retried, and the checkpoint held, until stored.
     let mut held: Held = HashMap::new();
-    // Sessions holding rows that wait for a timestamp: when they may be flushed, and the
-    // checkpoint past the last line seen.
+    // Sessions holding rows that wait for a timestamp: when their last line was seen, and the
+    // checkpoint past it.
     let mut untimed: HashMap<SessionId, (Instant, Checkpoint)> = HashMap::new();
+    // When the listener last yielded anything (see [`UNTIMED_GRACE`]).
+    let mut last_event = Instant::now();
     // Which read of its transcript each session's stream is in ([`Checkpoint::generation`]):
     // one that changes under the same stream started over from the beginning of a transcript
     // replaced or cut short under it, which the line reader says, as positions can't (the new
@@ -117,10 +173,17 @@ async fn capture(
     let mut reads: HashMap<SessionId, u32> = HashMap::new();
 
     loop {
-        let due = untimed.values().map(|(at, _)| *at).min();
+        // When a session's rows waiting for a timestamp may be stored with capture time.
+        let quiet_from = last_event;
+        let due_of =
+            move |seen: Instant| (quiet_from + grace).min(seen + grace * UNTIMED_GRACE_BUSY);
+        let due = untimed.values().map(|(seen, _)| due_of(*seen)).min();
         tokio::select! {
+            // A line already read goes first, as it may give them their timestamp.
+            biased;
             ev = events.next() => {
                 let Some(ev) = ev else { break };
+                last_event = Instant::now();
                 let SessionEvent { session, checkpoint, message } = match ev {
                     Ok(ev) => ev,
                     Err(e) => {
@@ -128,32 +191,55 @@ async fn capture(
                         continue;
                     }
                 };
-                let opened = opened.lock().remove(&session);
-                let read = reads.insert(session.clone(), checkpoint.generation);
-                if let Some(from) = opened {
-                    let start = Start::of(from, checkpoint);
-                    // A new read retries whatever a failed append lost.
-                    stuck.remove(&session);
-                    untimed.remove(&session);
-                    warm(sink, &mut enricher, &session, start).await;
-                } else if read.is_some_and(|read| read != checkpoint.generation) {
-                    restarted(sink, &mut enricher, &mut stuck, &mut held, &mut untimed, &session)
-                        .await;
-                }
-                let rows = enricher.capture(&session, &message);
-                if rows.is_empty() {
-                    if enricher.has_untimed(&session) {
-                        untimed.insert(session, (Instant::now() + grace, checkpoint));
+                let line = async {
+                    let opened = opened.lock().remove(&session);
+                    #[cfg(test)]
+                    if sink.hook(super::hooks::Point::Capturing).await == super::hooks::Fault::Panic
+                    {
+                        std::panic::panic_any(super::hooks::INJECTED_PANIC);
                     }
-                    continue;
+                    let read = reads.insert(session.clone(), checkpoint.generation);
+                    if let Some(from) = opened {
+                        let start = Start::of(from, checkpoint);
+                        // A new read retries whatever a failed append lost.
+                        stuck.remove(&session);
+                        untimed.remove(&session);
+                        warm(sink, &mut enricher, &session, start).await;
+                    } else if read.is_some_and(|read| read != checkpoint.generation) {
+                        restarted(sink, &mut enricher, &mut stuck, &mut held, &mut untimed, &session)
+                            .await;
+                    }
+                    let rows = enricher.capture(&session, &message);
+                    if rows.is_empty() {
+                        if enricher.has_untimed(&session) {
+                            untimed.insert(session.clone(), (Instant::now(), checkpoint));
+                        }
+                        return;
+                    }
+                    untimed.remove(&session);
+                    store(sink, &enricher, &mut stuck, &mut held, &session, rows, checkpoint).await;
+                };
+                if let Err(panic) = AssertUnwindSafe(line).catch_unwind().await {
+                    tracing::error!(
+                        panic = panic_message(&*panic),
+                        ?kind,
+                        %session,
+                        "capturing an ai-session line panicked; passing over it"
+                    );
+                    // Its bookkeeping may be half set up (not warmed yet, or half captured): set
+                    // up again from what the sidecar holds of the session, whichever read of its
+                    // transcript this is, as the lines after this one follow what is stored. Rows
+                    // waiting for a timestamp are stored first, as on a restart.
+                    untimed.remove(&session);
+                    let rows = enricher.finish(&session);
+                    hold(sink, &mut held, &session, rows).await;
+                    warm(sink, &mut enricher, &session, Start::Resumed).await;
                 }
-                untimed.remove(&session);
-                store(sink, &enricher, &mut stuck, &mut held, &session, rows, checkpoint).await;
             }
             () = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                 let now = Instant::now();
                 let quiet: Vec<SessionId> =
-                    untimed.iter().filter(|(_, (at, _))| *at <= now).map(|(s, _)| s.clone()).collect();
+                    untimed.iter().filter(|(_, (seen, _))| due_of(*seen) <= now).map(|(s, _)| s.clone()).collect();
                 for session in quiet {
                     let Some((_, checkpoint)) = untimed.remove(&session) else { continue };
                     let rows = enricher.finish(&session);
@@ -468,6 +554,8 @@ impl Drop for SessionCaptureEngine {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use rstest::rstest;
 
     use super::*;
@@ -552,18 +640,201 @@ mod tests {
         }))
         .unwrap();
 
+        let sent = Instant::now();
+
         let opened = Opened::default();
         let run = capture(HarnessKind::ClaudeCode, &sink, rx, &opened, GRACE);
         let check = async {
-            tokio::time::sleep(GRACE / 10).await;
-            assert!(sink.sidecar.get_session(&handle).await.unwrap().is_none(), "flushed early");
-            tokio::time::sleep(GRACE * 2).await;
-            let row = sink.sidecar.get_session(&handle).await.unwrap().expect("never stored");
+            let row = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    if let Some(row) = sink.sidecar.get_session(&handle).await.unwrap() {
+                        return row;
+                    }
+                    tokio::time::sleep(GRACE / 10).await;
+                }
+            })
+            .await
+            .expect("never stored");
+            assert!(sent.elapsed() >= GRACE, "flushed early");
             assert_eq!(row.title.as_deref(), Some("Draft"));
-            assert_eq!(sink.sidecar.checkpoint(&handle).await.unwrap(), Some(at(40)));
             drop(tx);
         };
         tokio::join!(run, check);
+        // Checkpointed once the row is stored, by the time capture ends.
+        assert_eq!(sink.sidecar.checkpoint(&handle).await.unwrap(), Some(at(40)));
+    }
+
+    /// Rows waiting for a timestamp wait while the harness's capture is busy with other
+    /// sessions, however long a backlog takes past the grace period: the session's next line,
+    /// once it comes, gives them its time, rather than capture time.
+    #[rstest]
+    #[tokio::test]
+    async fn untimed_rows_wait_out_a_busy_capture_for_a_timestamp() {
+        const GRACE: Duration = Duration::from_millis(200);
+        let sink = sink().await;
+        let line = |raw: &str| AnyMessage::Ccode(serde_json::from_str(raw).unwrap());
+        let event = |session: &str, end, raw: &str| {
+            Ok(SessionEvent {
+                session: SessionId::from(session.to_owned()),
+                checkpoint: at(end),
+                message: line(raw),
+            })
+        };
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        tx.unbounded_send(event("s1", 40, &title("mine"))).unwrap();
+
+        let opened = Opened::default();
+        let run = capture(HarnessKind::ClaudeCode, &sink, rx, &opened, GRACE);
+        let feed = async {
+            // Another session's lines, well past the grace period.
+            for n in 0..8 {
+                tokio::time::sleep(GRACE / 2).await;
+                tx.unbounded_send(event("s2", 100 * (n + 1), &turn(&format!("o{n}"), None, 1)))
+                    .unwrap();
+            }
+            tx.unbounded_send(event("s1", 200, &turn("u1", None, 7))).unwrap();
+            drop(tx);
+        };
+        tokio::join!(run, feed);
+
+        let handle = handle_of(HarnessKind::ClaudeCode, &SessionId::from("s1".to_owned()));
+        let rows: Vec<Message> =
+            futures::TryStreamExt::try_collect(sink.sidecar.messages(&handle)).await.unwrap();
+        let u1 = rows.iter().find(|row| row.source_id.as_ref() == "u1").expect("u1 stored");
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.timestamp == u1.timestamp), "{rows:?}");
+    }
+
+    /// Panics the handling of the first line capture handles.
+    #[derive(Debug, Default)]
+    struct PanicOnce(std::sync::atomic::AtomicBool);
+
+    impl super::super::hooks::Hooks for PanicOnce {
+        fn at(
+            &self,
+            point: super::super::hooks::Point,
+        ) -> futures::future::BoxFuture<'_, super::super::hooks::Fault> {
+            use super::super::hooks::{Fault, Point};
+
+            let panic = point == Point::Capturing && !self.0.swap(true, Ordering::SeqCst);
+            Box::pin(async move {
+                if panic {
+                    Fault::Panic
+                } else {
+                    Fault::None
+                }
+            })
+        }
+    }
+
+    /// A line whose capture panics is passed over: the harness's capture goes on, and stores
+    /// and checkpoints past it.
+    #[rstest]
+    #[tokio::test]
+    async fn a_line_whose_capture_panics_is_passed_over() {
+        let mut sink = sink().await;
+        sink.hooks = Some(Arc::new(PanicOnce::default()));
+        let session = SessionId::from("s1".to_owned());
+        let handle = handle_of(HarnessKind::ClaudeCode, &session);
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        for (end, raw) in [(100, turn("u1", None, 1)), (200, turn("u2", Some("u1"), 2))] {
+            tx.unbounded_send(Ok(SessionEvent {
+                session: session.clone(),
+                checkpoint: at(end),
+                message: AnyMessage::Ccode(serde_json::from_str(&raw).unwrap()),
+            }))
+            .unwrap();
+        }
+        drop(tx);
+
+        capture(HarnessKind::ClaudeCode, &sink, rx, &Opened::default(), UNTIMED_GRACE).await;
+        assert_eq!(stored(&sink).await, ["u2"]);
+        assert_eq!(sink.sidecar.checkpoint(&handle).await.unwrap(), Some(at(200)));
+    }
+
+    /// A line whose capture panics before its resumed session is warmed up leaves the session to
+    /// be warmed up by the next: an id-less line identical to one stored before the restart is
+    /// stored under the next ordinal, not taken for that one and dropped.
+    #[rstest]
+    #[tokio::test]
+    async fn a_session_whose_line_panicked_before_warming_up_is_warmed_up_by_the_next(
+        #[values(0, 1)] generation: u32,
+    ) {
+        let mut sink = sink().await;
+        let session = SessionId::from("s1".to_owned());
+        let handle = handle_of(HarnessKind::ClaudeCode, &session);
+        let line = |raw: &str| AnyMessage::Ccode(serde_json::from_str(raw).unwrap());
+        // Captured before the restart: a turn, then a title line.
+        let mut before = MessageEnricher::new(HarnessKind::ClaudeCode);
+        for raw in [turn("u1", None, 1), title("mine")] {
+            for row in
+                before.capture(&session, &line(&raw)).into_iter().chain(before.finish(&session))
+            {
+                sink.append(row).await.unwrap();
+            }
+        }
+        sink.sidecar.set_checkpoint(&handle, at(100)).await.unwrap();
+        sink.hooks = Some(Arc::new(PanicOnce::default()));
+
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        for (end, raw) in
+            [(150, title("mine")), (200, title("mine")), (300, turn("u2", Some("u1"), 2))]
+        {
+            tx.unbounded_send(Ok(SessionEvent {
+                session: session.clone(),
+                // In a read started over (the transcript replaced under it), or not.
+                checkpoint: Checkpoint {
+                    generation,
+                    ..at(end)
+                },
+                message: line(&raw),
+            }))
+            .unwrap();
+        }
+        drop(tx);
+        let opened = Opened::default();
+        opened.lock().insert(session.clone(), Some(at(100)));
+        capture(HarnessKind::ClaudeCode, &sink, rx, &opened, UNTIMED_GRACE).await;
+
+        let ids = stored(&sink).await;
+        let titles = ids.iter().filter(|id| id.starts_with(SYNTHETIC)).count();
+        assert_eq!(titles, 2, "the title line after the panic is a new row: {ids:?}");
+    }
+
+    /// A harness's listener is started again, after a backoff, however it stopped: panicked,
+    /// failed (its sessions not there yet) or ended.
+    #[rstest]
+    #[tokio::test]
+    async fn a_listener_is_started_again_however_it_stops() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let listen = {
+            let runs = runs.clone();
+            move || {
+                let run = runs.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    match run {
+                        0 => panic!("listener panicked"),
+                        1 => Err(RuntimeError::NotFound("/nowhere".into())),
+                        2 => Ok(()),
+                        _ => futures::future::pending().await,
+                    }
+                }
+            }
+        };
+        let supervised = supervise(HarnessKind::ClaudeCode, listen, Duration::from_millis(1));
+        let started = async {
+            while runs.load(Ordering::SeqCst) < 4 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::select! {
+                () = supervised => unreachable!("supervision never ends"),
+                () = started => {}
+            }
+        })
+        .await
+        .expect("the listener was not started again");
     }
 
     /// Byte offsets and row seqs alike: only a first event strictly past the checkpoint handed
@@ -723,6 +994,9 @@ mod tests {
     #[case::renamed_over(false, false)]
     #[case::truncated_in_place(true, false)]
     #[case::renamed_over_with_a_first_line_past_what_was_read(false, true)]
+    // Written over in place to longer than what was read (pi migrating a transcript on resume):
+    // neither the file's identity nor its length tells.
+    #[case::rewritten_in_place_past_what_was_read(true, true)]
     #[tokio::test]
     async fn a_followed_transcript_replaced_in_place_is_captured_once(
         #[case] in_place: bool,

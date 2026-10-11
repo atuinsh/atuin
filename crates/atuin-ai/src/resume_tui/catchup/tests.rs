@@ -114,7 +114,14 @@ async fn a_copy_switches_to_a_head_on_another_line(
     let analysis = analysis(rows(true)).await;
     let named = named.map(|n| SourceId::from(n.to_owned()));
     let copy = tip(known, Some(at));
-    let to = switch_to(&analysis, HarnessKind::ClaudeCode, named.as_ref(), &copy);
+    let to = switch_to(
+        &analysis,
+        HarnessKind::ClaudeCode,
+        named.as_ref(),
+        &copy,
+        fake::now(),
+        fake::THIS_HOST_ID,
+    );
     match want {
         Ok(head) => assert_eq!(to.unwrap().source_id.as_ref(), head),
         Err(why) => assert!(to.unwrap_err().contains(why)),
@@ -138,6 +145,37 @@ async fn a_copy_switches_to_a_head_on_another_line(
         "switched to @00000002's branch: 12 messages (your copy is at \
          /data/ai/switched/claude-code/s-1.jsonl)"
     );
+}
+
+/// With several heads on other lines than the copy's and none named, the copy switches to none
+/// of them: which is the user's to say, and they are listed to say it by. A third machine's
+/// branch, `p`-`q`, goes on from `b` too.
+#[rstest]
+#[case::none_named(None, Err(()))]
+#[case::named(Some("d"), Ok("d"))]
+#[tokio::test]
+async fn a_copy_switches_to_no_head_of_several_unless_named(
+    #[case] named: Option<&str>,
+    #[case] want: Result<&str, ()>,
+) {
+    let mut rows = rows(true);
+    rows.extend(
+        [("p", Some("b"), 3, 6, false), ("q", Some("p"), 3, 7, true)]
+            .map(|spec| synced_row(&handle(), spec)),
+    );
+    let analysis = analysis(rows).await;
+    let named = named.map(|n| SourceId::from(n.to_owned()));
+    let copy = tip(&["a", "b", "x", "y"], Some("y"));
+    let (now, here) = (fake::now(), fake::THIS_HOST_ID);
+    let to = switch_to(&analysis, HarnessKind::ClaudeCode, named.as_ref(), &copy, now, here);
+    match want {
+        Ok(head) => assert_eq!(to.unwrap().source_id.as_ref(), head),
+        Err(()) => assert_eq!(
+            to.unwrap_err(),
+            "it went 2 other ways: name the branch to switch to with `--branch`:\n  q  @00000003 \
+             · 53m · 4 msgs (latest)\n  d  @00000002 · 57m · 4 msgs"
+        ),
+    }
 }
 
 #[rstest]

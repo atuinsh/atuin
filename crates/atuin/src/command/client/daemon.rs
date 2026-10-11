@@ -274,12 +274,16 @@ fn remove_sockets(
 /// Remove any socket left behind by a daemon that is no longer listening.
 #[cfg(unix)]
 fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
+    use std::os::unix::fs::FileTypeExt;
+
     remove_sockets(settings, |socket_path| {
-        // A refused connection means the socket is left over from a daemon that is gone.
-        matches!(
-            StdUnixStream::connect(socket_path),
-            Err(e) if e.kind() == ErrorKind::ConnectionRefused
-        )
+        // A refused connection means the socket is left over from a daemon that is gone. Only a
+        // socket, though: connecting to any other file is refused too.
+        fs::symlink_metadata(socket_path).is_ok_and(|meta| meta.file_type().is_socket())
+            && matches!(
+                StdUnixStream::connect(socket_path),
+                Err(e) if e.kind() == ErrorKind::ConnectionRefused
+            )
     })
 }
 
@@ -523,6 +527,34 @@ pub async fn rebuild_ai_sessions(settings: &Settings) -> Result<()> {
     client.rebuild_sessions().await
 }
 
+/// How long to look for a running daemon to project synced AI sessions: a stopped daemon's socket
+/// still accepts connections but never answers.
+const PROJECT_SYNCED_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long a sync waits for the daemon to project the AI sessions it downloaded. A large store
+/// takes longer; the daemon carries on regardless.
+const PROJECT_SYNCED_WAIT: Duration = Duration::from_secs(10);
+
+/// Have a running daemon project the AI session records this process synced into the record
+/// store, returning once they are listed or, after [`PROJECT_SYNCED_WAIT`], leaving the daemon to
+/// finish on its own. Never starts or replaces one: a daemon started later, or replacing one too
+/// old to be asked, projects them as it starts.
+pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
+    let probe = tokio::time::timeout(PROJECT_SYNCED_PROBE_TIMEOUT, probe(settings)).await;
+    let Ok(Probe::Ready(_)) = probe else {
+        return Ok(());
+    };
+    let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
+    match tokio::time::timeout(PROJECT_SYNCED_WAIT, client.project_synced()).await {
+        Ok(Err(err)) if is_legacy_daemon_error(&err) => Ok(()),
+        Ok(projected) => projected,
+        Err(_) => {
+            eprintln!("Indexing AI sessions in the background");
+            Ok(())
+        }
+    }
+}
+
 pub async fn compact_store(settings: &Settings) -> Result<u64> {
     let reply = try_with_restart(settings, async |client| client.compact_store().await).await?;
     Ok(reply.rewritten)
@@ -680,6 +712,10 @@ async fn run(
 
     let _pidfile_guard = PidfileGuard::acquire(&settings.daemon)?;
 
+    // A daemon that crashed left its socket behind, which would keep this one from listening.
+    #[cfg(unix)]
+    remove_stale_socket_if_present(&settings)?;
+
     atuin_daemon::boot(settings, store, history_db).await?;
 
     Ok(())
@@ -731,6 +767,33 @@ mod tests {
             err.to_string(),
             "failed to remove daemon socket /run/atuin.sock: permission denied"
         );
+    }
+
+    /// A socket nothing listens on is removed; one a daemon listens on, and a file that is no
+    /// socket (a `socket_path` set wrong), are not.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::stale(false, true, false)]
+    #[case::listening(true, true, true)]
+    #[case::not_a_socket(false, false, true)]
+    fn only_a_stale_socket_is_removed(
+        #[case] listening: bool,
+        #[case] socket: bool,
+        #[case] kept: bool,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atuin.sock");
+        let listener = socket.then(|| std::os::unix::net::UnixListener::bind(&path).unwrap());
+        if !socket {
+            fs::write(&path, "not a socket").unwrap();
+        }
+        if !listening {
+            drop(listener);
+        }
+        let mut settings = Settings::default();
+        settings.daemon.socket_path = Some(path.clone());
+        remove_stale_socket_if_present(&settings).unwrap();
+        assert_eq!(path.exists(), kept);
     }
 
     #[cfg(unix)]

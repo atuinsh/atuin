@@ -15,9 +15,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::ai_session::{
-    AiSessionDatabase, AiSessionStore, Appended, AtuinSessionId, BuildError, DbError, HarnessKind,
-    HarnessSession, Message, PushError, ReprojectProgress, SearchTerms, Session, SessionFilter,
-    SessionMatch,
+    AiSessionDatabase, AiSessionStore, Appended, AtuinSessionId, BuildError, CaptureMark, DbError,
+    HarnessKind, HarnessSession, Message, PushError, ReprojectProgress, SearchTerms, Session,
+    SessionFilter, SessionMatch,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
@@ -101,6 +101,8 @@ pub(crate) struct Sink {
     /// Calls seen running a command whose output may carry a credential, and not answered yet:
     /// their results' output is never kept (see [`Self::withhold_unsafe_output`]).
     unsafe_calls: Arc<parking_lot::Mutex<UnsafeCalls>>,
+    /// Where capture last moved this host's watermark (see [`AiSessionStore::advance_past_capture`]).
+    capture_mark: Arc<parking_lot::Mutex<Option<CaptureMark>>>,
     #[cfg(test)]
     hooks: Option<Arc<dyn hooks::Hooks>>,
 }
@@ -127,6 +129,7 @@ impl Sink {
             tools,
             policy: Arc::default(),
             unsafe_calls: Arc::default(),
+            capture_mark: Arc::default(),
             #[cfg(test)]
             hooks: None,
         }
@@ -155,6 +158,12 @@ impl Sink {
         BroadcastStream::new(self.tail.subscribe())
     }
 
+    /// Whether capture keeps the patches of calls (see
+    /// [`MessageEnricher::keeping_patches`](message_enricher::MessageEnricher::keeping_patches)).
+    pub(crate) fn keeps_patches(&self) -> bool {
+        self.tools != ToolCapture::Names
+    }
+
     /// Persist and project `msg`, unless its logical message is already projected.
     ///
     /// Only while the store is [`StoreState::Ready`]: this waits out a rebuild, and refuses with
@@ -162,24 +171,14 @@ impl Sink {
     /// sidecar the dedup gate trusts may then be missing persisted messages.
     ///
     /// Cancel-safe: dropped while it waits for the store or its locks, it has written nothing;
-    /// once it has them, its dedup check, push and projection run to the end in a task of their
-    /// own, which dropping this does not stop. (Stopped between its push and its projection, the
-    /// record would be in the record store but neither projected nor pending, so the next
-    /// capture of the line would find it missing from the sidecar and push it again.)
-    /// Whether capture keeps the patches of calls (see [`MessageEnricher::keeping_patches`](message_enricher::MessageEnricher::keeping_patches)).
-    pub(crate) fn keeps_patches(&self) -> bool {
-        self.tools != ToolCapture::Names
-    }
-
-    pub(crate) async fn append(&self, mut msg: Message) -> Result<Appended, AppendError> {
-        // Apply capture policy before either persistence path or the live tail. Keep structural
-        // rows (even with no content) so parent links and usage accounting remain intact.
+    /// once it has them, the rest (capture policy, dedup check, push and projection) runs to the
+    /// end in a task of its own, which dropping this does not stop. (Stopped between its push and
+    /// its projection, the record would be in the record store but neither projected nor
+    /// pending, so the next capture of the line would find it missing from the sidecar and push
+    /// it again; stopped once policy forgot a credential command waiting for its output, the
+    /// output appended again would be kept.)
+    pub(crate) async fn append(&self, msg: Message) -> Result<Appended, AppendError> {
         let locks = self.lock_ready().await?;
-        // Under the locks, the sidecar holds every local row (see `withhold_unsafe_output`).
-        self.withhold_unsafe_output(&mut msg).await?;
-        sanitize(&mut msg, self.tools, &self.policy);
-        // Captured here, so on this host; a reproject reads the same from the record envelope.
-        msg.host = Some(self.records.host_id());
         let sink = self.clone();
         // The locks go with the task: released when it ends, however it ends (a panic unwinding
         // included, which leaves a tokio mutex usable).
@@ -205,8 +204,8 @@ impl Sink {
     /// is answered: a session's lines come here in order, live and imported. One made before the
     /// daemon (re)started is found among the session's stored rows, the first time the session
     /// comes in, which capture's locks (held) make trustworthy; so is where the session runs. A stored call whose input
-    /// wasn't captured (made while `ai.capture_tools` was off, or dropped) can't be checked, so
-    /// its output is withheld too.
+    /// wasn't captured (made while `ai.capture_tools` was off, or dropped), or whose written
+    /// content was withheld, can't be checked, so its output is withheld too.
     async fn withhold_unsafe_output(&self, msg: &mut Message) -> Result<(), AppendError> {
         if self.tools == ToolCapture::Names {
             return Ok(());
@@ -223,6 +222,7 @@ impl Sink {
                     match block {
                         Content::ToolUse(call)
                             if call.input.is_null()
+                                || tools::is_withheld(&call.input)
                                 || ignored
                                 || self.policy.judge(&call, cwd.as_deref()) != Verdict::Keep =>
                         {
@@ -309,6 +309,31 @@ impl Sink {
         (mut pending, local): CaptureLocks,
         mut msg: Message,
     ) -> Result<Appended, AppendError> {
+        // Apply capture policy before either persistence path or the live tail. Keep structural
+        // rows (even with no content) so parent links and usage accounting remain intact.
+        // Under the locks, the sidecar holds every local row (see `withhold_unsafe_output`).
+        self.withhold_unsafe_output(&mut msg).await?;
+        let (tools, policy) = (self.tools, self.policy.clone());
+        let mut msg = if bulky(&msg) {
+            // Off the runtime's thread, which the daemon's every other request shares: shaping
+            // a large tool call can take a while.
+            tokio::task::spawn_blocking(move || {
+                sanitize(&mut msg, tools, &policy);
+                msg
+            })
+            .await
+            .map_err(|err| {
+                tracing::error!(?err, "sanitizing an ai-session message stopped unexpectedly");
+                AppendError::Aborted
+            })?
+        } else {
+            sanitize(&mut msg, tools, &policy);
+            msg
+        };
+        // Captured here, so on this host; a reproject reads the same from the record envelope.
+        msg.host = Some(self.records.host_id());
+        // As the sidecar would store it, so the record synced never names an instant past it.
+        msg.timestamp = msg.timestamp.clamp(Message::EARLIEST, Message::LATEST);
         self.repair(&mut pending).await?;
         // Dedup gate: if this logical message is already projected it is already in the record
         // store too, so there is nothing to do. Stable source ids (see MessageEnricher::source_id)
@@ -327,6 +352,13 @@ impl Sink {
         // it if so (see `repair`). Nothing else stops this task between its push and its
         // projection.
         *pending = Some(msg.clone());
+        // Where the last capture moved the watermark, or else the generation, read before the
+        // push: an invalidation after it keeps the watermark from moving past it.
+        let last = *self.capture_mark.lock();
+        let known = match last {
+            Some(known) => known,
+            None => CaptureMark::Unknown(self.sidecar.projection_generation().await?),
+        };
         // Write the record store first: it is the synced source of truth and the sidecar is a
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
         // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
@@ -335,13 +367,20 @@ impl Sink {
         if self.hook(hooks::Point::CapturePushing).await == hooks::Fault::Panic {
             std::panic::panic_any(hooks::INJECTED_PANIC);
         }
-        self.records.push(&msg).await?;
+        let pushed = self.records.push(&msg).await?;
         #[cfg(test)]
         if self.hook(hooks::Point::CapturePushed).await == hooks::Fault::Panic {
             std::panic::panic_any(hooks::INJECTED_PANIC);
         }
         let appended = self.project_and_broadcast(&msg).await?;
         *pending = None;
+        // So a restart doesn't replay what capture projected since the last; one that doesn't
+        // move (a reprojection running, say) leaves it to the next.
+        let moved = self.records.advance_past_capture(&self.sidecar, known, pushed).await;
+        *self.capture_mark.lock() = moved.unwrap_or_else(|err| {
+            tracing::warn!(?err, "failed to move the ai-session watermark past a capture");
+            None
+        });
         drop(local);
         drop(pending);
         Ok(appended)
@@ -433,6 +472,49 @@ struct UnsafeCalls {
     /// Where each session runs, as its last row to say did.
     cwds: HashMap<HarnessSession, PathBuf>,
 }
+
+/// Whether `msg` holds enough text that [`sanitize`] may take a while: past [`BULKY`] bytes of it.
+/// Most rows hold far less, and handing each to a blocking thread costs more than sanitizing it:
+/// the thread's own allocator arena holds on to memory, tens of megabytes across a busy ingest.
+fn bulky(msg: &Message) -> bool {
+    fn size(value: &serde_json::Value, left: &mut usize) {
+        match value {
+            serde_json::Value::String(text) => *left = left.saturating_sub(text.len()),
+            serde_json::Value::Array(items) => items.iter().for_each(|item| size(item, left)),
+            serde_json::Value::Object(object) => {
+                object.iter().for_each(|(key, item)| {
+                    *left = left.saturating_sub(key.len());
+                    size(item, left);
+                });
+            }
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                *left = left.saturating_sub(8);
+            }
+        }
+    }
+    let mut left = BULKY;
+    for block in &msg.content {
+        match block {
+            Content::Text(text) | Content::Summary(text) | Content::Error(text) => {
+                left = left.saturating_sub(text.len());
+            }
+            Content::ToolUse(tool) => size(&tool.input, &mut left),
+            Content::ToolResult(result) => size(&result.output, &mut left),
+            Content::Patch(patch) => {
+                let lines = patch.files.iter().flat_map(|f| &f.hunks).flat_map(|h| &h.lines);
+                left = left.saturating_sub(lines.map(String::len).sum());
+            }
+            Content::Reasoning(_) | Content::ReasoningSummary { .. } | Content::Other(_) => {}
+        }
+        if left == 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// See [`bulky`].
+const BULKY: usize = 256 * 1024;
 
 /// Retain conversation text, and of tool calls what `tools` keeps: their inputs and outputs,
 /// unless `ai.capture_tools` is off, `policy` withholds them, or they are over the size limit
@@ -749,6 +831,28 @@ impl AiHarnessSessionCapture {
             return Err(RebuildError::Aborted);
         }
         answer.await.unwrap_or(Err(RebuildError::Aborted))
+    }
+
+    /// Project records another process synced into the record store (`atuin sync`), as the sync
+    /// worker does those it downloads ([`Recovery::project_synced`]), once startup recovery is
+    /// over. A nop facade has nothing to project.
+    ///
+    /// Runs to the end once asked for, even if the caller stops waiting (a client disconnecting):
+    /// what it downloaded is not downloaded again, so nothing would ask a second time. A failure
+    /// is logged, not returned: the next projection retries what this one left out.
+    pub async fn project_synced(&self) {
+        if self.coordinator.is_none() {
+            return;
+        }
+        let recovery = self.recovery();
+        let sink = self.sink.clone();
+        let projecting = tokio::spawn(async move {
+            recovery.finished().await;
+            recovery.project_synced(&sink.records, &sink.sidecar).await;
+        });
+        if let Err(err) = projecting.await {
+            tracing::error!(?err, "projecting synced ai-session records failed");
+        }
     }
 
     /// A handle for waiting out startup recovery.
@@ -1221,6 +1325,72 @@ mod tests {
         );
         enabled.append(row(7, Role::User, vec![result("off")])).await.unwrap();
         assert_last_output_withheld(&sink.sidecar, &rows[0].session).await;
+
+        // And a Codex script that wrote a credential file, stored without what it wrote (which
+        // leaves no call to judge again).
+        let script = Content::ToolUse(ToolUse {
+            id: ToolCallId::from("script".to_owned()),
+            name: "exec".to_owned(),
+            input: serde_json::json!(
+                "await tools.apply_patch(\"*** Begin Patch\\n*** Add File: .env\\n+A=1\\n*** End \
+                 Patch\");"
+            ),
+        });
+        enabled.append(row(8, Role::Assistant, vec![script])).await.unwrap();
+        let again = Sink::with_state(
+            sink.records.clone(),
+            sink.sidecar.clone(),
+            ToolCapture::Payloads,
+            watch::channel(StoreState::Ready).1,
+        );
+        again.append(row(9, Role::User, vec![result("script")])).await.unwrap();
+        assert_last_output_withheld(&sink.sidecar, &rows[0].session).await;
+    }
+
+    /// An append dropped once policy has forgotten the credential command waiting for its output
+    /// still stores the row, its output withheld: appended again, the output is not kept.
+    #[rstest]
+    #[tokio::test]
+    async fn an_append_dropped_once_its_output_is_withheld_still_withholds_it() {
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.tools = ToolCapture::Payloads;
+        let row = |n: u32, role, content| {
+            let mut msg = sample_message();
+            msg.id = RecordId(atuin_common::utils::uuid_v7());
+            msg.source_id = SourceId::from(format!("line-{n}"));
+            msg.role = role;
+            msg.content = vec![content];
+            msg
+        };
+        let call = row(
+            1,
+            Role::Assistant,
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("key".to_owned()),
+                name: "Bash".to_owned(),
+                input: serde_json::json!({ "command": "atuin key" }),
+            }),
+        );
+        let answer = row(
+            2,
+            Role::User,
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("key".to_owned()),
+                output: serde_json::json!("abandon ability able about above absent"),
+                error: false,
+            }),
+        );
+        sink.append(call).await.unwrap();
+
+        let mut append = Box::pin(sink.append(answer.clone()));
+        while futures::poll!(&mut append).is_pending()
+            && !sink.unsafe_calls.lock().pending.is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+        drop(append);
+        sink.append(answer.clone()).await.unwrap();
+        assert_last_output_withheld(&sink.sidecar, &answer.session).await;
     }
 
     async fn assert_last_output_withheld(sidecar: &AiSessionDatabase, session: &HarnessSession) {
@@ -1641,6 +1811,36 @@ mod tests {
         assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
     }
 
+    /// Records another process synced in are projected once asked for, even if the asker stops
+    /// waiting at once: they are not downloaded again, so nothing would ask a second time.
+    #[rstest]
+    #[tokio::test]
+    async fn synced_records_are_projected_though_the_asker_stops_waiting() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records.clone(),
+            sidecar.clone(),
+            false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        let msg = sample_message();
+        records.push(&msg).await.unwrap();
+
+        // Polled once, then dropped, as a client disconnecting does to its handler.
+        let _ = tokio::time::timeout(Duration::ZERO, capture.project_synced()).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the projection stopped with its asker");
+    }
+
     /// A message of session `session`, from line `source`.
     fn message_of(session: &str, source: &str) -> Message {
         let mut msg = sample_message();
@@ -1648,6 +1848,36 @@ mod tests {
         msg.session.session = NativeSessionId::from(session.to_owned());
         msg.source_id = source.to_owned().into();
         msg
+    }
+
+    /// Capture moves the watermark past each record it projects, so a restart replays none of
+    /// them; a capture while a reprojection runs leaves it to the reprojection.
+    #[rstest]
+    #[tokio::test]
+    async fn capture_moves_the_watermark_past_what_it_projects() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        // Startup recovery, before capture starts.
+        records.reproject(&sidecar).await.unwrap();
+        let sink = Sink::new(records.clone(), sidecar.clone());
+        for source in ["a", "b"] {
+            sink.append(message_of("s1", source)).await.unwrap();
+        }
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 0);
+
+        let replaying = sidecar.lock_reprojection().await;
+        sink.append(message_of("s1", "c")).await.unwrap();
+        drop(replaying);
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 1);
+        sink.append(message_of("s1", "d")).await.unwrap();
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 0);
+
+        // An invalidation (watermarks cleared) after capture last moved it: not moved past it.
+        sidecar.clear_reproject_watermarks().await.unwrap();
+        sink.append(message_of("s1", "e")).await.unwrap();
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 5);
+        sink.append(message_of("s1", "f")).await.unwrap();
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 0);
     }
 
     /// A rebuild (after a purge deleted records) takes out what the deleted records projected and
@@ -2501,6 +2731,29 @@ mod tests {
 
         assert_eq!(sink.append(msg.clone()).await.unwrap(), Appended::New);
         assert_eq!(sink.append(msg).await.unwrap(), Appended::Duplicate);
+    }
+
+    /// A line naming an instant past the years a date can name is captured at the nearest one
+    /// stored, so the record synced never carries it.
+    #[rstest]
+    #[case::late(time::macros::datetime!(9999-12-31 23:59:59 -23:59), Message::LATEST)]
+    #[case::early(time::macros::datetime!(-9999-01-01 0:00 +23:59), Message::EARLIEST)]
+    #[tokio::test]
+    async fn capture_holds_a_timestamp_to_the_range_stored(
+        #[case] timestamp: OffsetDateTime,
+        #[case] want: OffsetDateTime,
+    ) {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sub = sink.subscribe();
+        let mut msg = sample_message();
+        msg.timestamp = timestamp;
+        sink.append(msg).await.unwrap();
+
+        let _started = sub.next().await.unwrap().unwrap();
+        let SessionTailEvent::Message(pushed) = sub.next().await.unwrap().unwrap() else {
+            panic!("expected message");
+        };
+        assert_eq!(pushed.timestamp, want);
     }
 
     /// A restored transcript writes a call captured without its input back as a note in its

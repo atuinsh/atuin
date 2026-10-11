@@ -4,6 +4,8 @@
 //! an event we care about. If we don't know how to deserialize it/don't care for it, we need to
 //! drop that on the floor. The [`HookEvent`] type represents agent events we know/care about.
 
+use std::path::PathBuf;
+
 use atuin_common::string::NonNulStr;
 use serde_json::error::Category;
 
@@ -41,7 +43,10 @@ pub enum HookEvent {
     /// A Bash command finished; close the matching history entry.
     End {
         tool_use_id: String,
-        exit: i64,
+        /// Its exit code, when the event says it.
+        exit: Option<i64>,
+        /// The session's transcript, where Codex records the exit code its event doesn't say.
+        transcript: Option<PathBuf>,
     },
 }
 
@@ -80,20 +85,25 @@ impl From<WireHookEvent> for Option<HookEvent> {
                     tool_use_id,
                 })
             }
-            HookEventName::PostToolUse => {
-                // TODO(markovejnovic): Is it safe to assume that no exit code
-                //                      means "success"?
-                let exit =
-                    wire.tool_response.and_then(|response| response.exit_code()).unwrap_or(0);
-                Some(HookEvent::End { tool_use_id, exit })
-            }
+            HookEventName::PostToolUse => Some(HookEvent::End {
+                tool_use_id,
+                exit: wire.tool_response.and_then(|response| response.exit_code()),
+                transcript: wire.transcript_path,
+            }),
+            // Failed: with the exit code its error starts with (`Exit code 2`), else 1.
             HookEventName::PostToolUseFailure => Some(HookEvent::End {
                 tool_use_id,
-                exit: 1,
+                exit: Some(wire.error.as_deref().and_then(failure_exit_code).unwrap_or(1)),
+                transcript: wire.transcript_path,
             }),
             HookEventName::Other => None,
         }
     }
+}
+
+/// The exit code a Claude Code failure's `error` starts with (`Exit code <n>`), if it does.
+fn failure_exit_code(error: &str) -> Option<i64> {
+    error.lines().next()?.strip_prefix("Exit code ")?.trim().parse().ok()
 }
 
 impl HookEvent {
@@ -163,28 +173,28 @@ mod tests {
             "tool_response": {"exitCode": 3, "stdout": "hello\n"},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 3 })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(3), transcript: None })
     )]
-    #[case::post_tool_use_without_exit_code_defaults_zero(
+    #[case::post_tool_use_without_exit_code_says_none(
         json!({
             "hook_event_name": "PostToolUse",
             "tool_name": "Bash",
             "tool_response": {},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 0 })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: None, transcript: None })
     )]
-    // A null exitCode also defaults to 0.
-    #[case::null_exit_code_defaults_zero(
+    // Nor does a null exitCode.
+    #[case::null_exit_code_says_none(
         json!({
             "hook_event_name": "PostToolUse",
             "tool_name": "Bash",
             "tool_response": {"exitCode": null},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 0 })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: None, transcript: None })
     )]
-    // PostToolUseFailure forces exit 1 and ignores tool_response entirely.
+    // PostToolUseFailure without an exit code in its error is exit 1, whatever tool_response says.
     #[case::failure_forces_exit_one_ignoring_response(
         json!({
             "hook_event_name": "PostToolUseFailure",
@@ -193,7 +203,41 @@ mod tests {
             "tool_response": {"exitCode": 0},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: 1 })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(1), transcript: None })
+    )]
+    // Claude Code's failure says a shell command's exit code first in its error (Claude Code
+    // 2.1.291, `PostToolUseFailure`'s `error`).
+    #[case::failure_with_its_exit_code(
+        json!({
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls /nope"},
+            "tool_use_id": "toolu_abc123",
+            "error": "Exit code 2\nls: cannot access '/nope': No such file or directory",
+            "is_interrupt": false
+        }),
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(2), transcript: None })
+    )]
+    // Codex 0.160 says only the output, and where its transcript is (a real payload's fields).
+    #[case::codex_post_tool_use(
+        json!({
+            "session_id": "01a11e4d-75d7-70f2-8c71-7f1cc87cbe85",
+            "turn_id": "01a11e4d-761f-7073-955e-e96a0a319fc3",
+            "transcript_path": "/w/.codex/sessions/2026/10/09/rollout-x.jsonl",
+            "cwd": "/w",
+            "hook_event_name": "PostToolUse",
+            "model": "gpt-6-luna",
+            "permission_mode": "bypassPermissions",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls /nonexistent_juliettea"},
+            "tool_response": "ls: cannot access '/nonexistent_juliettea': No such file or directory\n",
+            "tool_use_id": "exec-55bd0a92-7032-4356-b380-ac1cc1ea66f4"
+        }),
+        Some(HookEvent::End {
+            tool_use_id: "exec-55bd0a92-7032-4356-b380-ac1cc1ea66f4".into(),
+            exit: None,
+            transcript: Some("/w/.codex/sessions/2026/10/09/rollout-x.jsonl".into()),
+        })
     )]
     // Non-Bash tools are never recorded.
     #[case::non_bash_tool_skipped(
@@ -304,7 +348,7 @@ mod tests {
     #[rstest]
     #[case::string_tool_response(
         r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"example-call","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"printf probe"},"tool_response":"probe"}"#,
-        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: 0 })
+        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: None, transcript: None })
     )]
     fn completion_accepts_string_tool_response(
         #[case] input: &str,
@@ -388,14 +432,14 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string()).unwrap(),
-                Some(HookEvent::End { tool_use_id, exit })
+                Some(HookEvent::End { tool_use_id, exit: Some(exit), transcript: None })
             );
         }
 
-        /// `PostToolUseFailure` always records exit 1, whatever the response
-        /// claims.
+        /// `PostToolUseFailure` records exit 1, whatever the response claims,
+        /// unless its error says the exit code.
         #[test]
-        fn failure_event_always_exits_one(
+        fn failure_without_an_exit_code_in_its_error_exits_one(
             reported_exit in any::<i64>(),
             tool_use_id in r"[^\p{Cc}]+",
         ) {
@@ -408,7 +452,7 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string()).unwrap(),
-                Some(HookEvent::End { tool_use_id, exit: 1 })
+                Some(HookEvent::End { tool_use_id, exit: Some(1), transcript: None })
             );
         }
 

@@ -164,6 +164,27 @@ fn capture_follows_a_transcript_exactly_once_across_restarts(
     machine.wait_until_said(&transcript.id, &said(&turns));
 }
 
+/// An opencode session renamed after its conversation is listed, and found, under its new title
+/// at once, not only once another message carries it.
+#[rstest]
+fn a_renamed_session_is_listed_under_its_new_title(machine: Machine, project: TempDir) {
+    let turns = [Turn::new()];
+    let transcript = Transcript::create(machine.home(), Agent::Opencode, project.path(), &turns);
+    machine.wait_until_said(&transcript.id, &said(&turns));
+
+    let title = format!("renamed {}", word());
+    transcript.rename(&title);
+    ai::wait_for("the session to be listed under its new title", || {
+        let listed = machine.session(&transcript.id).unwrap()["title"].clone();
+        if listed == title.as_str() {
+            Ok(())
+        } else {
+            Err(format!("it is listed as {listed}"))
+        }
+    });
+    assert!(finds(&machine, last_word(&title), &transcript.id), "the new title didn't find it");
+}
+
 /// Turning capture on in the config takes effect in the running daemon, which then captures what
 /// the agents wrote while it was off.
 #[rstest]
@@ -282,6 +303,9 @@ fn restored(agent: Agent) -> Restored {
     let restored = Transcript::find(here.home(), agent, &original.id)
         .unwrap_or_else(|| panic!("nothing restored: {stdout} {stderr}"));
     assert_eq!(stdout.trim(), resume_line(&restored, project.path()), "{stderr}");
+    // Where it ran is here too, and the status says what was written all the same.
+    assert!(stderr.contains("atuin: restored the session from sync\n"), "{stderr}");
+    assert!(!stderr.lines().any(|line| line.contains("locked")), "{stderr}");
     Restored {
         _server: server,
         project,
@@ -328,6 +352,27 @@ fn a_session_from_another_machine_restores_as_the_same_session(
     let all = [said, agents::said(&more)].concat();
     here.wait_until_said(&original.id, &all);
     there.wait_until_said(&original.id, &all);
+}
+
+/// A session `atuin sync` brings down is listed as soon as it returns, though the daemon running
+/// beside it never syncs itself.
+#[rstest]
+fn a_session_synced_by_hand_is_listed_at_once(project: TempDir) {
+    let server = SyncServer::start();
+    let (there, here) = Machine::pair_syncing(&server, 0);
+    let turns = [Turn::new()];
+    let original = Transcript::create(there.home(), Agent::Claude, project.path(), &turns);
+    there.wait_until_said(&original.id, &said(&turns));
+
+    let downloaded = Regex::new(r"\d+/(\d+) up/down").unwrap();
+    ai::wait_for("a sync to download the session", || {
+        let synced = here.run(&["sync"]);
+        match downloaded.captures(&synced) {
+            Some(counts) if &counts[1] != "0" => Ok(()),
+            _ => Err(synced),
+        }
+    });
+    assert!(here.session(&original.id).is_some(), "not listed once synced");
 }
 
 /// A copy behind the session's other machine catches up with it as it resumes, saying so, and
@@ -435,6 +480,53 @@ fn a_diverged_copy_resumes_only_as_chosen(
     assert!(!text.contains(&ours.reply), "our branch is still in it:\n{text}");
 }
 
+/// Continuing a session that went different ways on two machines in another agent carries the
+/// branch `--branch` names, never both interleaved; without one named, it continues nothing,
+/// listing the branches to name.
+#[rstest]
+#[case::claude_to_codex(Agent::Claude, Agent::Codex)]
+#[case::codex_to_claude(Agent::Codex, Agent::Claude)]
+#[case::pi_to_codex(Agent::Pi, Agent::Codex)]
+fn continuing_a_diverged_session_carries_one_branch(#[case] from: Agent, #[case] to: Agent) {
+    let Restored {
+        _server,
+        project,
+        here,
+        there,
+        turns,
+        original,
+        restored,
+    } = restored(from);
+    // Theirs is the newest.
+    let (ours, theirs) = (Turn::new(), Turn::new());
+    restored.append(project.path(), std::slice::from_ref(&ours));
+    original.append(project.path(), std::slice::from_ref(&theirs));
+    ai::wait("both branches", || {
+        let show = here.show(&original.id).to_string();
+        show.contains(&theirs.reply) && show.contains(&ours.reply)
+    });
+
+    let args = [original.id.as_str(), "--in", to.program(), "--print"];
+    let stderr = ai::failed(&here.resume(&args, here.home()));
+    assert!(
+        stderr.contains("it went 2 ways: name the branch to continue with `--branch`:"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&there.short_host()) && stderr.contains("this machine"), "{stderr}");
+
+    let theirs_by = there.short_host();
+    for (branch, kept, dropped) in [(&*theirs_by, &theirs, &ours), ("this", &ours, &theirs)] {
+        let args = [&args[..], &["--branch", branch]].concat();
+        let (stdout, stderr) = succeeded(&here.resume(&args, here.home()));
+        let continued = Transcript::find(here.home(), to, last_word(stdout.trim()))
+            .unwrap_or_else(|| panic!("nothing continued: {stdout} {stderr}"));
+        let text = continued.read();
+        let want = [said(&turns), said(std::slice::from_ref(kept))].concat();
+        assert!(ai::holds_in_order(&text, &want), "{branch:?}: not carried over:\n{text}");
+        assert!(!text.contains(&dropped.reply), "{branch:?}: the other branch came too:\n{text}");
+    }
+}
+
 /// Forking writes the session out as a new one of its agent, with the whole conversation, linked
 /// to it as a fork, and resumes that; the original is left as it was.
 #[rstest]
@@ -533,4 +625,14 @@ fn rebuilding_the_index_reproduces_it(machine: Machine, project: TempDir) {
     assert!(out.contains("rebuilding"), "{out}");
     // `ai session` commands wait for the rebuild.
     assert_eq!(index(&machine), before);
+}
+
+/// A message bigger than gRPC takes by default (4 MiB: a pasted log, a huge file) reads back
+/// whole.
+#[rstest]
+fn a_huge_message_reads_back(machine: Machine, project: TempDir) {
+    let mut turns = [Turn::new()];
+    turns[0].prompt = format!("{} {}", "x".repeat(9 << 19), turns[0].prompt);
+    let transcript = Transcript::create(machine.home(), Agent::Claude, project.path(), &turns);
+    machine.wait_until_said(&transcript.id, &said(&turns));
 }

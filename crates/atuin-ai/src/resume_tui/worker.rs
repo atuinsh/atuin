@@ -287,9 +287,10 @@ async fn details(
                     );
                 Response::Flattened(session, flattened)
             }
-            Request::Continue(row, target, id) => {
-                Response::Continued(id, resumer.continue_in(source.as_ref(), &row, target).await)
-            }
+            Request::Continue(row, target, id) => Response::Continued(
+                id,
+                resumer.continue_in(source.as_ref(), &row, target, None).await,
+            ),
             Request::Fork(row, id, head) => {
                 let source = source.as_ref();
                 let from = catchup::fork_from(source, &row.handle, head.as_ref()).await;
@@ -478,10 +479,11 @@ mod tests {
             source: &dyn SessionSource,
             session: &SessionRow,
             target: HarnessKind,
+            head: Option<&SourceId>,
         ) -> Result<Continued, NotResumable> {
             self.started.lock().push(session.handle.session.to_string());
             self.gate.acquire().await.unwrap().forget();
-            self.inner.continue_in(source, session, target).await
+            self.inner.continue_in(source, session, target, head).await
         }
 
         async fn fork(

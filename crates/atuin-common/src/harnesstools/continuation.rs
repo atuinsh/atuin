@@ -21,7 +21,10 @@
 //!   call captured without its input (`ai.capture_tools` off, or a policy withheld it), one with no
 //!   result (interrupted, or a Codex web search), and one the model's provider ran itself (a
 //!   Claude Code web search), whose result only that provider reads.
-//! - Summaries (compactions, abandoned branches), as text of the user's turn.
+//! - Summaries (compactions, abandoned branches), as text of the user's turn. A compaction
+//!   whose summary couldn't be read is where the conversation carried over starts, and so is
+//!   the prompt the last ~100k tokens of a longer conversation start at: with a note, and the
+//!   prompts before it, as Codex goes on after a compaction.
 //! - Failed model calls, as a short note of the error in the assistant's turn.
 //!
 //! Dropped: reasoning (only the model that wrote it can read it back), text the source harness
@@ -60,6 +63,7 @@ use super::resume::is_plain_name;
 use super::{AnyHarness, Harness as _, opencode};
 use crate::harnesstools::session::{
     Content, Message, ParentKind, Role, StopReason, ToolCallId, ToolResult, ToolUse,
+    UNREADABLE_SUMMARY,
 };
 
 mod tools;
@@ -227,21 +231,38 @@ pub fn linked_from_message<M: Message + ?Sized>(m: &M) -> Option<(AnyHarness, St
     let content = m.content();
     let marker = match (m.role(), content.as_slice()) {
         (Role::Assistant | Role::Tool, _) => return None,
-        (Role::User, [Content::Text(first), _, ..]) => {
-            let (kind, harness, id, atuin_id) = marker_parts(first)?;
-            let exact = match kind {
-                ParentKind::Fork => fork_marker_text(harness, id, atuin_id),
-                _ => marker_text(harness, id, atuin_id),
-            };
-            return (*first == exact).then(|| (harness, id.to_owned(), kind));
+        (Role::User, content) => {
+            return prompt_marker(content)
+                .map(|(kind, harness, id)| (harness, id.to_owned(), kind));
         }
-        (Role::User, _) => return None,
         (_, content) => content.iter().find_map(|c| match c {
             Content::Text(text) if marker_parts(text).is_some() => Some(text),
             _ => None,
         })?,
     };
     marker_parts(marker).map(|(kind, harness, id, _)| (harness, id.to_owned(), kind))
+}
+
+/// The link a prompt's first block makes when it is pi's [marker](marker_text): the whole marker,
+/// exactly as atuin writes it, with more after it.
+fn prompt_marker(content: &[Content]) -> Option<(ParentKind, AnyHarness, &str)> {
+    let [Content::Text(first), _, ..] = content else {
+        return None;
+    };
+    let (kind, harness, id, atuin_id) = marker_parts(first)?;
+    let exact = match kind {
+        ParentKind::Fork => fork_marker_text(harness, id, atuin_id),
+        _ => marker_text(harness, id, atuin_id),
+    };
+    (*first == exact).then_some((kind, harness, id))
+}
+
+/// Whether a prompt of `content` opens with pi's [marker](marker_text): its first block, which
+/// is no part of what the user said, so neither what a session is shown by nor carried on when
+/// it is continued again.
+#[must_use]
+pub fn opens_with_marker(content: &[Content]) -> bool {
+    prompt_marker(content).is_some()
 }
 
 /// That `messages` hold something of the conversation, so a continuation or fork of them isn't
@@ -547,9 +568,83 @@ impl<'m> Turn<'m> {
     }
 }
 
+/// How much of a conversation's rows (their content, as JSON) a continuation carries, about
+/// 100k tokens: more is past what a model takes, with room to go on.
+const CARRIED: usize = 400 * 1024;
+
+/// How much of the prompts before where a continuation starts it carries, as Codex does after a
+/// compaction (codex-rs `compact.rs`, 20k tokens of them).
+const PROMPTS: usize = 80 * 1024;
+
+/// Where a continuation of `messages` starts, and why there, when not at the start: after the
+/// last compaction whose summary couldn't be read ([`UNREADABLE_SUMMARY`]), the model saw only
+/// what came after it; and a conversation longer than [`CARRIED`] (one captured before such
+/// compactions were) starts at the prompt it fits from.
+fn start(messages: &[RehydrateMessage]) -> (usize, Option<&'static str>) {
+    let compacted = messages.iter().rposition(|m| {
+        m.content.iter().any(|c| matches!(c, Content::Summary(s) if s == UNREADABLE_SUMMARY))
+    });
+    let (from, why) = match compacted {
+        Some(at) => (at, Some(COMPACTED)),
+        None => (0, None),
+    };
+    let mut size = 0;
+    let mut fits = None;
+    for (at, m) in messages.iter().enumerate().skip(from).rev() {
+        size += serde_json::to_string(&m.content).map_or(0, |json| json.len());
+        // The last prompt, at least, whatever its turn holds.
+        if m.role == Role::User && said(m) && (size <= CARRIED || fits.is_none()) {
+            fits = Some(at);
+        }
+        if size > CARRIED && fits.is_some() {
+            break;
+        }
+    }
+    match fits {
+        Some(at) if size > CARRIED && at > from => (at, Some(TOO_LONG)),
+        _ => (from, why),
+    }
+}
+
+/// Whether `m` says something in text.
+fn said(m: &RehydrateMessage) -> bool {
+    m.content.iter().any(|c| matches!(c, Content::Text(t) if !t.trim().is_empty()))
+}
+
+const COMPACTED: &str = "[the conversation before this was compacted, and its summary can't be \
+                         read: only the prompts of it are carried over]";
+const TOO_LONG: &str =
+    "[the conversation before this is too long to carry over: only the prompts of it are]";
+
 /// The conversation of `messages` as alternating turns, user first and assistant last, and
-/// what was left out of it.
+/// what was left out of it: from where [`start`] says, after a note saying why and the prompts
+/// before it (the latest [`PROMPTS`] of them).
 fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
+    let (from, why) = start(messages);
+    let mut opening = Vec::new();
+    if let Some(why) = why {
+        let mut budget = PROMPTS;
+        let mut prompts: Vec<Part> = messages[..from]
+            .iter()
+            .rev()
+            .filter(|m| m.role == Role::User)
+            // without an earlier continuation's marker, as in the turns after
+            .flat_map(|m| m.content[usize::from(opens_with_marker(&m.content))..].iter().rev())
+            .filter_map(|c| match c {
+                Content::Text(text) if !text.trim().is_empty() => Some(text),
+                _ => None,
+            })
+            .take_while(|text| {
+                budget = budget.saturating_sub(text.len());
+                budget > 0
+            })
+            .map(|text| Part::Text(text.clone()))
+            .collect();
+        prompts.reverse();
+        opening.push(Part::Note(why.to_owned()));
+        opening.extend(prompts);
+    }
+    let messages = &messages[from..];
     // A call is carried over with its result. One of a tool the model's provider ran itself,
     // answered in the assistant's own row (opencode keeps every result there), is only for that
     // provider to read: its results are opaque, encrypted.
@@ -571,6 +666,9 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
     let mut flattened = Flattened::default();
     let mut carried: HashSet<&ToolCallId> = HashSet::new();
     let mut turns: Vec<Turn> = Vec::new();
+    if let Some(first) = messages.first().filter(|_| !opening.is_empty()) {
+        turns.push(Turn::parts(Kind::User, first.timestamp, opening));
+    }
     // Results came back since the model's last row, or its row is of another model call (its
     // turn id up to a step's usage key: Claude Code's message id, opencode's call): its next is
     // another call of the model. (opencode answers calls in the assistant's own rows.)
@@ -580,9 +678,13 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
         let mut user = Vec::new();
         let mut assistant = Vec::new();
         let mut reasoned = false;
-        for content in &m.content {
+        // A continuation's own marker: the new one names this session instead.
+        let marker = usize::from(m.role == Role::User && opens_with_marker(&m.content));
+        for content in &m.content[marker..] {
             match content {
                 Content::Reasoning(_) | Content::ReasoningSummary { .. } => reasoned = true,
+                // Said by the note the continuation opens with.
+                Content::Summary(summary) if summary == UNREADABLE_SUMMARY => {}
                 Content::Summary(summary) if !summary.trim().is_empty() => user.push(Part::Text(
                     format!("[Summary of the earlier conversation]\n{}", summary.trim()),
                 )),

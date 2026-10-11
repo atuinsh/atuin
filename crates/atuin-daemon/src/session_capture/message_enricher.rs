@@ -72,9 +72,12 @@ impl MessageEnricher {
     ) {
         let mut occurrences = HashMap::new();
         for id in synthetic {
-            if let Some((hash, ordinal)) = parse_synthetic(id) {
+            // The last ordinal there is can't be counted past: no read made it, so it is malformed.
+            if let Some((hash, ordinal)) = parse_synthetic(id)
+                && let Some(after) = ordinal.checked_add(1)
+            {
                 let next = occurrences.entry(hash).or_insert(0);
-                *next = (*next).max(ordinal + 1);
+                *next = (*next).max(after);
             }
         }
         let mut replayed = BTreeMap::new();
@@ -119,7 +122,11 @@ impl MessageEnricher {
                 // A line keyed on its content: the reader cannot know which of identical lines it
                 // is, and names the first; the newest row of that content captured is the one
                 // (none: the line made no row, and there is nothing to follow).
-                Some((hash, _)) => state.occurrences.get(&hash).map(|&n| synthetic_id(hash, n - 1)),
+                Some((hash, _)) => state
+                    .occurrences
+                    .get(&hash)
+                    .and_then(|n| n.checked_sub(1))
+                    .map(|n| synthetic_id(hash, n)),
                 None => Some(follows),
             };
         }
@@ -241,7 +248,7 @@ fn build(
             let hash = content_hash(session, m);
             let ordinal = state.occurrences.entry(hash).or_insert(0);
             let id = synthetic_id(hash, *ordinal);
-            *ordinal += 1;
+            *ordinal = ordinal.saturating_add(1);
             id
         }
     };
@@ -745,6 +752,21 @@ mod tests {
         let again = rows(&mut n, &session(), &[untimed]);
         assert_eq!(again[0].source_id, synthetic_id(hash, 0));
         assert_eq!(again[0].parent, None);
+    }
+
+    /// A stored id that reads as content-keyed at the last ordinal there is (a native id made to
+    /// look like one: Claude Code takes any `uuid`) can't be counted past: it is passed over as
+    /// malformed, and capture goes on.
+    #[rstest]
+    fn a_stored_synthetic_id_at_the_last_ordinal_is_passed_over() {
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        let untimed = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Renamed"}));
+        let (hash, _) = parse_synthetic(&MessageEnricher::source_id(&session(), &untimed)).unwrap();
+        n.resume(&session(), None, &[], None, &[synthetic_id(hash, u32::MAX)]);
+
+        let rows = rows(&mut n, &session(), &[untimed.clone(), untimed]);
+        let ids: Vec<_> = rows.into_iter().map(|m| m.source_id).collect();
+        assert_eq!(ids, [synthetic_id(hash, 0), synthetic_id(hash, 1)]);
     }
 
     /// Codex lines name no parent: each row names the row captured before it, a content-keyed

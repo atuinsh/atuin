@@ -24,6 +24,32 @@ fn daemon() -> Daemon {
     }
 }
 
+impl Daemon {
+    /// Start the daemon in the foreground, and wait until it is healthy.
+    async fn start_foreground(&mut self) {
+        self.foreground = Some(Process::spawn(self.env.atuin(&["daemon", "start", "--show-logs"])));
+        tokio::time::timeout(TIMEOUT, async {
+            loop {
+                let process = self.foreground.as_mut().unwrap();
+                assert!(
+                    process.child.try_wait().unwrap().is_none(),
+                    "daemon exited during startup: {}",
+                    process.logs()
+                );
+                if let Ok(mut client) = HistoryClient::new(self.env.socket()).await
+                    && let Ok(status) = client.status().await
+                    && status.healthy
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("daemon never became healthy");
+    }
+}
+
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = Process::spawn(self.env.atuin(&["daemon", "stop"])).try_wait();
@@ -47,27 +73,7 @@ async fn fresh_daemon_serves_history(
     // Check socket and startup-lock reuse after shutdown.
     for _ in 0..2 {
         if !autostart {
-            daemon.foreground =
-                Some(Process::spawn(daemon.env.atuin(&["daemon", "start", "--show-logs"])));
-            tokio::time::timeout(TIMEOUT, async {
-                loop {
-                    let process = daemon.foreground.as_mut().unwrap();
-                    assert!(
-                        process.child.try_wait().unwrap().is_none(),
-                        "daemon exited during startup: {}",
-                        process.logs()
-                    );
-                    if let Ok(mut client) = HistoryClient::new(daemon.env.socket()).await
-                        && let Ok(status) = client.status().await
-                        && status.healthy
-                    {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            })
-            .await
-            .expect("daemon never became healthy");
+            daemon.start_foreground().await;
         }
 
         // Spawn all writers first to exercise concurrent autostart.
@@ -149,6 +155,19 @@ async fn history_end_does_not_autostart_daemon(daemon: Daemon, #[case] exit: i64
 
     assert!(!daemon.env.socket().exists(), "history end autostarted the daemon");
     assert!(daemon.env.run(&["daemon", "status"]).contains("Daemon is not running"));
+}
+
+/// A daemon started in the foreground listens on the socket a crashed one left behind, which
+/// nothing answers on.
+#[rstest]
+#[tokio::test]
+async fn foreground_daemon_replaces_a_stale_socket(mut daemon: Daemon) {
+    daemon.env.write_config("local_timeout = 15\n[daemon]\nenabled = true\nautostart = false\n");
+    // Bound and closed without being removed, as a crash leaves it.
+    drop(std::os::unix::net::UnixListener::bind(daemon.env.socket()).unwrap());
+    assert!(daemon.env.socket().exists());
+
+    daemon.start_foreground().await;
 }
 
 /// With the daemon enabled but not running (and not allowed to start), history is saved locally

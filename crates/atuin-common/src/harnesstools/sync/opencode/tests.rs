@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use sqlx::Connection;
@@ -217,6 +219,8 @@ fn ending_in_msg_b() -> Projected {
         messages: vec![message("msg_a", 1000), message("msg_b", 1000)],
         content: 0,
         updated: None,
+        next: false,
+        merged: HashMap::new(),
     }
 }
 
@@ -263,6 +267,8 @@ fn replies_to_msg_u(replies: &[&str]) -> Projected {
             .collect(),
         content: 0,
         updated: None,
+        next: false,
+        merged: HashMap::new(),
     }
 }
 
@@ -419,4 +425,70 @@ async fn an_opencode_elsewhere_counts_when_named_or_writing(
     }]);
     assert_eq!(liveness(&procs, &appending(&base, &id, Some(&proj))), expected);
     assert_eq!(liveness_in(Some(&db), &id, procs, Some(&proj)).await, expected);
+}
+
+const V2: &str = "ses_ee1b7b1dfffe46nQL0NuU68GcR";
+const V2_REPLY: &str = "msg_11e48562d001LoisbfgKtTjN6N";
+
+/// A database only opencode 2.0.24 wrote (no 1.x tables), holding one session working in `dir`:
+/// a prompt, its reply, and the idle row a turn that succeeded ends with, as 2.0.24 stores them.
+async fn v2_session_in(dir: &Path) -> PathBuf {
+    let db = dir.join("opencode.db");
+    let options = SqliteConnectOptions::new().filename(&db).create_if_missing(true);
+    SqliteConnection::connect_with(&options).await.unwrap().close().await.unwrap();
+    let user = r#"{"time":{"created":1791509417569},"text":"say OCALPHA","files":[]}"#;
+    let reply = r#"{"time":{"created":1791509419595,"completed":1791509421045},"agent":"build","model":{"id":"big-pickle","providerID":"opencode"},"content":[{"type":"text","text":"OCALPHA"}],"finish":"stop","tokens":{"input":208,"output":43,"reasoning":0,"cache":{"read":7424,"write":0}}}"#;
+    let idle = r#"{"time":{"created":1791509421052},"outcome":"succeeded"}"#;
+    execute(
+        &db,
+        &format!(
+            "CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, parent_id \
+             text, fork_session_id text, slug text NOT NULL, directory text NOT NULL, title text, \
+             version text NOT NULL, revert text, time_created integer NOT NULL, time_updated \
+             integer NOT NULL);
+             CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type \
+             text NOT NULL, seq integer NOT NULL, time_created integer NOT NULL, time_updated \
+             integer NOT NULL, data text NOT NULL);
+             CREATE TABLE event_sequence (aggregate_id text PRIMARY KEY, seq integer NOT NULL, \
+             owner_id text);
+             INSERT INTO session_v2 VALUES ('{V2}', 'global', NULL, NULL, 'slug', '{dir}', \
+             'octest', '2.0.24', NULL, 1791509417520, 1791509421052);
+             INSERT INTO session_message VALUES
+               ('msg_11e484e44001y9aBZ5Ki93Ka5M', '{V2}', 'user', 1, 1791509417569, 1791509417569, \
+             '{user}'),
+               ('{V2_REPLY}', '{V2}', 'assistant', 2, 1791509419595, 1791509421045, '{reply}'),
+               ('msg_11e485bfc001J3OIfsfEAZTPqW', '{V2}', 'idle', 3, 1791509421052, 1791509421052, \
+             '{idle}');
+             INSERT INTO event_sequence VALUES ('{V2}', 3, NULL);",
+            dir = dir.display(),
+        ),
+    )
+    .await;
+    db
+}
+
+/// A session opencode 2.0 holds has a tip, read as capture reads it: resuming it with nothing to
+/// catch up is no error, and catching it up is refused (opencode 2's import only writes a
+/// session it doesn't hold).
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_2_0_session_s_tip_is_the_last_row_capture_delivers(dir: TempDir) {
+    let db = v2_session_in(dir.path()).await;
+    let tip = local_tip_in(&db, V2).await.unwrap().unwrap();
+    let rows = synced(&db, V2).await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        tip.known_source_ids,
+        rows.iter().map(|r| r.source_id.clone()).collect::<HashSet<_>>()
+    );
+    // the idle row after the reply is no row of capture's
+    assert_eq!(tip.tip_source_id.as_deref(), Some(V2_REPLY));
+    assert_eq!(tip.cwd.as_deref(), Some(dir.path()));
+    assert!(local_tip_in(&db, "ses_none").await.unwrap().is_none());
+
+    let caught_up = append(V2, &tip, &[]).await.unwrap();
+    assert!(caught_up.appended.is_empty());
+    assert_eq!(caught_up.tip_source_id.as_deref(), Some(V2_REPLY));
+    let err = append(V2, &tip, &[prompt(NEW, 1_791_600_000)]).await.unwrap_err();
+    assert!(matches!(err, SyncError::Unsupported(_)), "{err:?}");
 }

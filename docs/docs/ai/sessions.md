@@ -52,6 +52,11 @@ to your agents' tool calls too:
   [`sensitive_files`](../configuration/config.md#sensitive_files)) is never
   captured: a call that reads one, or a command naming one, is kept without its
   output, and a call that writes to one without what it wrote.
+- Codex runs its tools through a script, and each command and patch in the
+  script is judged as above. A script Atuin can't read in full (one that builds
+  a command or a file name as it runs) is kept as the name of its tool only. The
+  commands it runs still reach your history, filtered, through
+  [Codex's hooks](../guide/agent-hooks.md#codex).
 
 Text that can't be redacted quickly isn't kept. To keep more out, see
 [Keeping Secrets Out of Atuin](../guide/excluding-commands.md).
@@ -310,8 +315,11 @@ another (`claude`, `codex`, `opencode` or `pi`). `atuin resume <id> --fork`
 forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,
 `--switch` switches it to another branch, and `--fork` forks it from its newest
-branch. `--branch` picks the branch to catch up to, to switch to, or to fork
-from: `this`, `@<host id>`, or the start of the id the error lists. `--as-is`,
+branch. `--branch` picks the branch to catch up to, to switch to, to fork from,
+or to continue with `--in`: `this`, `@<host id>`, or the start of the id the
+error lists. A session that went different ways on several machines needs
+`--branch` with `--in`, and with `--switch` when more than one branch could be
+switched to; without it, Atuin lists the branches to choose from. `--as-is`,
 `--switch` and `--branch` need an id that names a single session:
 when it names several, Atuin lists them and asks you to be more specific.
 `--print` prints the command instead of running it.

@@ -48,7 +48,7 @@ use super::{
     capture_key, check_segment, continuing_from, jsonl_lines, merged_in, modified, past,
     replace_jsonl, require_idle, resumes_from, switched_to,
 };
-use crate::harnesstools::codex::session::{CodexSession, default_root, resume_id, session_id_of};
+use crate::harnesstools::codex::session::{CodexSession, resume_id, session_id_of};
 use crate::harnesstools::codex::{Codex, rehydrate, state_db};
 use crate::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use crate::harnesstools::resume::is_plain_name;
@@ -57,11 +57,12 @@ use crate::sync::BlockingPool;
 
 impl SessionSync for Codex {
     async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
-        local_tip_in(&codex_home(), id).await
+        local_tip_in(&crate::harnesstools::codex::home(), id).await
     }
 
     async fn is_live(&self, id: &str, cwd: Option<&Path>) -> Liveness {
-        let (home, id, cwd) = (codex_home(), id.to_owned(), cwd.map(Path::to_path_buf));
+        let (home, id, cwd) =
+            (crate::harnesstools::codex::home(), id.to_owned(), cwd.map(Path::to_path_buf));
         blocking_liveness(move || {
             let thread = resume_id(&id);
             let newest = is_plain_name(thread)
@@ -84,7 +85,7 @@ impl SessionSync for Codex {
         lines: &[RehydrateMessage],
         options: &AppendOptions<'_>,
     ) -> Result<AppendOutcome, SyncError> {
-        let (home, thread) = (codex_home(), resume_id(id).to_owned());
+        let (home, thread) = (crate::harnesstools::codex::home(), resume_id(id).to_owned());
         let seen = appending(base, &thread, options.cwd);
         let (at, of) = (home.clone(), id.to_owned());
         require_idle(
@@ -102,7 +103,7 @@ impl SessionSync for Codex {
         options: &AppendOptions<'_>,
         backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError> {
-        let (home, thread) = (codex_home(), resume_id(id).to_owned());
+        let (home, thread) = (crate::harnesstools::codex::home(), resume_id(id).to_owned());
         let seen = appending(base, &thread, options.cwd);
         let (at, of) = (home.clone(), id.to_owned());
         require_idle(
@@ -110,12 +111,6 @@ impl SessionSync for Codex {
         )?;
         replace_in(&home, id, base, branch, options.taken_ids, backups).await
     }
-}
-
-/// `$CODEX_HOME`, else `~/.codex`: where `sessions/` is.
-fn codex_home() -> PathBuf {
-    let root = default_root();
-    root.parent().map_or_else(|| root.clone(), Path::to_path_buf)
 }
 
 /// Where Codex keeps its writer locks (codex-rs `WRITER_LOCK_DIR`).
@@ -499,8 +494,18 @@ pub(super) async fn replace_in(
         taken: taken.cloned(),
         backups: backups.to_path_buf(),
     };
-    let home = home.to_path_buf();
-    blocking(move || replace_rollout(&home, &switch, &rollout.rows)).await
+    let thread = switch.thread.clone();
+    let (rewritten, lock) = {
+        let home = home.to_path_buf();
+        blocking(move || replace_rollout(&home, &switch, &rollout.rows)).await?
+    };
+    // Projected from the lines the switch cut, Codex's history would show the branch left: it is
+    // forgotten before any Codex can load the thread again.
+    if let Err(err) = state_db::forget_history(home, &thread).await {
+        tracing::warn!(%err, thread, "Codex may go on showing the branch switched from");
+    }
+    drop(lock);
+    Ok(rewritten)
 }
 
 /// Why the rollout holding `bytes` can't be written out again along another branch, whatever the
@@ -545,12 +550,12 @@ pub(super) struct Switch {
 /// what follows that line is what went on from it here), its `session_meta` and every line
 /// before as they are; then the branch's rows past it, numbered on from the line kept last, as
 /// [`append_in`] writes them. Codex continues from the last line, so the branch's head must be
-/// the last row written, or merged into it.
+/// the last row written, or merged into it. Hands back the thread's writer lock, still held.
 pub(super) fn replace_rollout(
     home: &Path,
     switch: &Switch,
     rows: &[(u64, String)],
-) -> Result<ReplaceOutcome, SyncError> {
+) -> Result<(ReplaceOutcome, Option<WriterLock>), SyncError> {
     let Switch {
         thread,
         base,
@@ -608,14 +613,14 @@ pub(super) fn replace_rollout(
     let merged = merged_in(&out, &tip.iter().cloned().collect());
     resumes_from(tip.as_deref(), &merged, &end)?;
     let (backup, warning) = replace_jsonl(path, base.stamp, &bytes, &out, backups)?;
-    drop(lock);
-    Ok(ReplaceOutcome {
+    let outcome = ReplaceOutcome {
         native_path: path.clone(),
         appended,
         tip_source_id: tip,
         backup,
         warning,
-    })
+    };
+    Ok((outcome, lock))
 }
 
 /// The rollout `bytes`, up to the end of the line ending at `end` (and never short of its first

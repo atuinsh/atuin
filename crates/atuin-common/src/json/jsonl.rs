@@ -36,7 +36,9 @@ pub trait JsonlExt: Stream<Item = io::Result<Line>> + Sized {
         self.json_with(|bytes| crate::json::js::from_slice(bytes))
     }
 
-    /// Each non-blank line decoded by `parse`, yielded with the line it came from.
+    /// Each non-blank line decoded by `parse`, yielded with the line it came from. A line whose
+    /// decoding panics is malformed, as one that fails to decode is, rather than the end of the
+    /// stream (and of whatever reads it, which reads it again).
     fn json_with<T>(
         self,
         parse: impl Fn(&[u8]) -> serde_json::Result<T>,
@@ -44,7 +46,7 @@ pub trait JsonlExt: Stream<Item = io::Result<Line>> + Sized {
         self.filter_map(move |line| {
             let item = match line {
                 Ok(line) if line.bytes.trim_ascii().is_empty() => None,
-                Ok(line) => Some(match parse(&line.bytes) {
+                Ok(line) => Some(match decode(&parse, &line.bytes) {
                     Ok(value) => Ok((line, value)),
                     Err(source) => Err(JsonlError::Parse {
                         source,
@@ -59,6 +61,15 @@ pub trait JsonlExt: Stream<Item = io::Result<Line>> + Sized {
 }
 
 impl<S: Stream<Item = io::Result<Line>>> JsonlExt for S {}
+
+/// `bytes` decoded by `parse`, a panic in it an error.
+fn decode<T>(
+    parse: impl Fn(&[u8]) -> serde_json::Result<T>,
+    bytes: &[u8],
+) -> serde_json::Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse(bytes)))
+        .unwrap_or_else(|_| Err(serde::de::Error::custom("decoding the line panicked")))
+}
 
 #[cfg(test)]
 mod tests {
@@ -139,6 +150,26 @@ mod tests {
             .collect()
             .await;
         assert_eq!(got, expected);
+    }
+
+    /// A line whose decoding panics is malformed, and the lines after it are read on.
+    #[rstest]
+    #[tokio::test]
+    async fn a_line_whose_decoding_panics_is_malformed() {
+        let lines = vec![Ok(line(2, "!")), Ok(line(4, "1"))];
+        let got: Vec<Item> = stream::iter(lines)
+            .json_with(|bytes| {
+                assert_ne!(bytes, b"!", "a decoder bug");
+                serde_json::from_slice::<i64>(bytes)
+            })
+            .map(|item| match item {
+                Ok((line, value)) => Item::Value(line.end, value),
+                Err(JsonlError::Parse { end, .. }) => Item::Malformed(end),
+                Err(JsonlError::Io(_)) => Item::Unreadable,
+            })
+            .collect()
+            .await;
+        assert_eq!(got, [Item::Malformed(2), Item::Value(4, 1)]);
     }
 
     proptest! {

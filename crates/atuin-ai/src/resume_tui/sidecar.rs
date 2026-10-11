@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{AiSessionDatabase, Analysis, HarnessSession, SearchTerms, Session};
+use atuin_common::harnesstools::continuation;
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{Content, ParentKind};
 use atuin_common::string::highlighted::HighlightedString;
@@ -108,9 +109,11 @@ fn conversation_text(c: &Content) -> Option<&str> {
     }
 }
 
-/// The conversation text of a message: text and summaries, never tool calls or reasoning.
+/// The conversation text of a message: text and summaries, never tool calls or reasoning, nor
+/// the marker opening a pi continuation's first prompt.
 fn text_of(content: &[Content]) -> Option<String> {
-    let text: Vec<&str> = content.iter().filter_map(conversation_text).collect();
+    let marker = usize::from(continuation::opens_with_marker(content));
+    let text: Vec<&str> = content[marker..].iter().filter_map(conversation_text).collect();
     (!text.is_empty()).then(|| text.join("\n"))
 }
 
@@ -358,6 +361,28 @@ mod tests {
                 "rewrite"
             }]);
         }
+    }
+
+    /// A pi continuation's first prompt opens with its marker: it is titled and previewed by
+    /// what the user said, never by the marker.
+    #[rstest]
+    #[tokio::test]
+    async fn a_continuation_is_shown_by_its_prompt_not_its_marker(#[future] source: SidecarSource) {
+        use atuin_common::harnesstools::AnyHarness;
+        use atuin_common::harnesstools::ccode::Ccode;
+        use atuin_common::harnesstools::continuation::marker_text;
+
+        let source = source.await;
+        let marker = marker_text(AnyHarness::ClaudeCode(Ccode), "root", None);
+        let mut prompt = message("continued", None, Role::User, "fix the flaky clock", 4);
+        prompt.content.insert(0, Content::Text(marker));
+        source.db.append(&prompt).await.unwrap();
+
+        let rows = source.search(&roots("")).await.unwrap();
+        let row = rows.iter().find(|r| r.handle == handle("continued")).unwrap();
+        assert_eq!(row.title.text, "fix the flaky clock");
+        let preview = source.preview(&handle("continued")).await.unwrap();
+        assert_eq!(preview.first_prompt.as_deref(), Some("fix the flaky clock"));
     }
 
     #[rstest]

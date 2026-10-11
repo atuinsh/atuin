@@ -267,8 +267,7 @@ impl AiSessionDatabase {
             Self::fold_usage(msg.usage.as_ref());
         // Unlike the others, a row's reasoning stays NULL when unreported: most harnesses never
         // break it out, and zero would claim the call did not reason.
-        let usage_reasoning =
-            msg.usage.and_then(|u| u.reasoning).map(|n| i64::try_from(n).unwrap_or(i64::MAX));
+        let usage_reasoning = msg.usage.and_then(|u| u.reasoning).map(Self::row_tokens);
         let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
         let host = msg.host.map(Self::host_repr);
 

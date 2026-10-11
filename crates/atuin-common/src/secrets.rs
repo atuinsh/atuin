@@ -1043,6 +1043,81 @@ mod tests {
     )]
     // Five stars is not the marker; it is a value, and comes out as the marker.
     #[case::five_stars_are_a_value("AWS_SECRET_ACCESS_KEY=*****", "AWS_SECRET_ACCESS_KEY=****")]
+    // A patch's lines (Codex `apply_patch`, opencode `patchText`, a unified diff) start with
+    // `+`, `-` or ` `: what is set on one is redacted as it would be on its own.
+    #[case::added_to_a_patch(
+        "*** Add File: config/database.yml\n+production:\n+  password: hunter2xyz\n+  host: db",
+        "*** Add File: config/database.yml\n+production:\n+  password: ****\n+  host: db"
+    )]
+    #[case::changed_in_a_patch(
+        "@@\n-spring.datasource.password=old\n+spring.datasource.password=hunter2xyz",
+        "@@\n-spring.datasource.password=****\n+spring.datasource.password=****"
+    )]
+    #[case::added_aws_credentials(
+        "+[default]\n+aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "+[default]\n+aws_secret_access_key = ****"
+    )]
+    #[case::added_env_var("+API_KEY=abcdef1234567\n", "+API_KEY=****\n")]
+    #[case::added_list_item("+  - password: hunter2xyz", "+  - password: ****")]
+    // JSON text, its lines escaped (`\n`): a line it holds is still a line.
+    #[case::patch_in_json_text(
+        r#"{"patchText":"*** Begin Patch\n+password: hunter2xyz\n*** End Patch"}"#,
+        r#"{"patchText":"*** Begin Patch\n+password: ****\n*** End Patch"}"#
+    )]
+    #[case::setting_in_json_text(
+        r#"log: "first\npassword=hunter2xyz""#,
+        r#"log: "first\npassword=****""#
+    )]
+    #[case::env_var_in_json_text(r#""x\nAPI_KEY=abcdef123456""#, r#""x\nAPI_KEY=****""#)]
+    #[case::bearer_in_json_text(
+        r#""result\nBearer abcdefghijklmnopqrstuvwxyz""#,
+        r#""result\nBearer ****""#
+    )]
+    // JSON text clipped mid-string: its last line ends with the text.
+    #[case::clipped_json_text(r#""a\npassword: hunter2"#, r#""a\npassword: ****"#)]
+    #[case::command_in_json_text(
+        r#"{"cmd": "PGPASSWORD=hunter2xyz psql -h db -c select1"}"#,
+        r#"{"cmd": "PGPASSWORD=**** psql -h db -c select1"}"#
+    )]
+    #[case::password_flag_in_a_script(
+        "bash -lc 'docker login --password s3cret'",
+        "bash -lc 'docker login --password ****'"
+    )]
+    #[case::password_flag_in_json_text(
+        r#"{"cmd":"docker login --password s3cret\ndocker push x"}"#,
+        r#"{"cmd":"docker login --password ****\ndocker push x"}"#
+    )]
+    #[case::password_flag_then_command(
+        "docker login --password s3cret; docker push x",
+        "docker login --password ****; docker push x"
+    )]
+    #[case::password_flag_in_a_subshell(
+        "(docker login --password s3cret)&& echo",
+        "(docker login --password ****)&& echo"
+    )]
+    #[case::password_flag_then_and(
+        "docker login --password s3cret&& echo",
+        "docker login --password ****&& echo"
+    )]
+    #[case::clipped_json_line_in_output(
+        "\"a\\naws_secret_access_key = CXAT00ju\nmore output",
+        "\"a\\naws_secret_access_key = ****\nmore output"
+    )]
+    #[case::password_flag_quoted_in_prose("`--password=hunter2xyz`, or", "`--password=****`, or")]
+    #[case::jwt_in_json_text(
+        r#"{"data":"x\teyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"}"#,
+        r#"{"data":"x\t****"}"#
+    )]
+    // A password given on the command line.
+    #[case::password_flag_apart(
+        "docker login -u me --password hunter2xyz r.io",
+        "docker login -u me --password **** r.io"
+    )]
+    // AWS's own files and commands spell the name in lowercase.
+    #[case::lowercase_aws_assignment(
+        "export aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "export aws_secret_access_key=****"
+    )]
     fn redacts(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(&*redact(input), expected);
     }
@@ -1627,6 +1702,29 @@ mod tests {
     #[case::usage(r#"{"max_tokens": 4096, "input_tokens": 123456789}"#)]
     #[case::count("tokens: 1500")]
     #[case::prose("Set the token in your settings.")]
+    #[case::password_flag_reference("docker login --password \"$REGISTRY_PASSWORD\" r.io")]
+    #[case::password_from_stdin("docker login --password-stdin r.io")]
+    #[case::password_flag_then_flag("mysql --password --host db")]
+    #[case::password_flag_in_help("  -p, --password string   Password")]
+    #[case::password_flag_in_click_help("  --password TEXT  The password")]
+    #[case::password_flag_in_urfave_help("   --password value  the password")]
+    #[case::passwd_flag_in_help("  --passwd FILE")]
+    #[case::password_flag_in_prose("use the --password flag, or see the --password option.")]
+    #[case::password_flag_listed("--password and --user")]
+    #[case::password_flag_in_a_subject("fix(secrets): redact --password flags and more")]
+    #[case::password_flag_reference_in_json_text(
+        r#"{"cmd":"docker login --password \"$REGISTRY_PASSWORD\" r.io"}"#
+    )]
+    #[case::setting_concatenated(r#"password = prompt + "x""#)]
+    #[case::setting_joined(r#"token = base + "/v1""#)]
+    #[case::setting_in_prose(r#"secret: see "docs""#)]
+    #[case::command_in_a_string(r#""VAULT_TOKEN=x vault status""#)]
+    #[case::password_flag_then_or("mysql --password || true")]
+    #[case::password_flag_then_redirect("mysql --password 2>&1 | tee log")]
+    #[case::password_flag_substituted("docker login --password `cat pw` r.io")]
+    #[case::password_flag_in_a_subshell("(mysql --password)")]
+    #[case::added_field("+    token: String,")]
+    #[case::short_lowercase_aws("aws configure get aws_secret_access_key --profile prod")]
     fn stand_ins_are_kept(#[case] input: &str) {
         assert_eq!(redact(input), input);
     }

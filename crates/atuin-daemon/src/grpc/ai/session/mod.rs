@@ -15,9 +15,9 @@ use crate::grpc::ai::session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, HarnessFilterRequest, ImportSessionsEvent,
     ImportSessionsProgress, ImportSessionsRequest, ImportSessionsSummary, ListSessionsRequest,
-    RebuildSessionsReply, RebuildSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
-    SessionRefRequest, TailSessionsEvent, TailSessionsRequest, get_session_event,
-    import_sessions_event, tail_sessions_event,
+    ProjectSyncedReply, ProjectSyncedRequest, RebuildSessionsReply, RebuildSessionsRequest,
+    SearchSessionsMatch, SearchSessionsRequest, SessionRefRequest, TailSessionsEvent,
+    TailSessionsRequest, get_session_event, import_sessions_event, tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
@@ -229,6 +229,14 @@ impl GrpcService for Service {
                 Err(Status::internal(err.to_string()))
             }
         }
+    }
+
+    async fn project_synced(
+        &self,
+        _request: Request<ProjectSyncedRequest>,
+    ) -> Result<Response<ProjectSyncedReply>, Status> {
+        self.capture.project_synced().await;
+        Ok(Response::new(ProjectSyncedReply {}))
     }
 
     async fn import_sessions(

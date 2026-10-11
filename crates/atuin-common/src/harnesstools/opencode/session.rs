@@ -103,7 +103,8 @@ use tokio::sync::{Mutex, MutexGuard, watch};
 use typed_builder::TypedBuilder;
 
 use crate::db::sqlite::observe::{
-    ObserveConfig, ReplayBehavior, RowAppendedEvent, SqliteObserver, TableSchema, Tailable,
+    ObserveConfig, ReplayBehavior, RowAppendedEvent, SqliteObserver, SqliteTableObserver,
+    TableSchema, Tailable,
 };
 use crate::db::{query_as, query_scalar};
 use crate::harnesstools::opencode::Opencode;
@@ -121,6 +122,11 @@ use crate::utils::{env_nonempty, home_dir};
 
 pub(crate) mod projection;
 mod v2;
+
+/// The key of an opencode 2 message's `metadata` under which atuin keeps, in a message it wrote
+/// (a restore), the source ids of the rows it was written from: `{source, merged}`, the first and
+/// the rest. Capture reads the message back as the first, so it pushes nothing new.
+pub(crate) const SOURCE: &str = "atuin";
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct OpencodeSessions {
@@ -350,39 +356,56 @@ impl Listener for OpencodeListener {
     /// loses nothing: the session is offered again, under the same id, with its aggregate's next
     /// row, and resumes at the row it had reached.
     ///
-    /// A failure of the tail is reported and then carried on from. Only a database that cannot
-    /// be observed at all ends this stream, and with it every session it has offered.
+    /// A failure of the tail is reported and then carried on from, and so is a database with no
+    /// event log to tail yet: it is reported once and probed again on every poll. The stream
+    /// ends only with the tail, and with it every session it has offered.
     fn watch(self) -> impl Stream<Item = Result<OpencodeSession, WatchError>> + Send + 'static {
         let db = self.db;
         let replay = self.replay;
         async_stream::stream! {
             let reads = Arc::new(Reads::new(db.clone()));
             let observe = |source| WatchError::Observe { db: db.clone(), source };
-            // opencode 1.x's sessions are tailed from its event log; opencode 2.0 creates the
-            // table too and never writes to it, so its sessions are polled for (see
-            // `v2::changes`)
-            if let Err(err) = reads.require_event_table().await {
-                yield Err(err);
-                return;
-            }
-            let mut events = match SqliteObserver::new(&db)
-                .append::<EventRow>(
-                    ObserveConfig::builder().replay(replay).poll_interval(POLL).build(),
-                )
-                .await
-            {
-                Ok(events) => events,
-                Err(err) => {
-                    yield Err(observe(err));
-                    return;
-                }
-            };
+            // opencode 1.x's sessions are tailed from its event log, once there is one: a
+            // database opencode has not created its tables in yet, or is migrating, has none.
+            // opencode 2.0 creates the table too and never writes to it, so its sessions are
+            // polled for meanwhile all the same (see `v2::changes`).
+            let mut events: Option<SqliteTableObserver<RowAppendedEvent<EventRow>>> = None;
+            let mut probe = tokio::time::interval(POLL);
+            let mut waited = false;
             let changes = v2::changes(db.clone(), replay);
             futures::pin_mut!(changes);
             let mut sessions: HashMap<Aggregate, Live> = HashMap::new();
             loop {
                 tokio::select! {
-                    next = events.next() => {
+                    _ = probe.tick(), if events.is_none() => {
+                        let tail = match reads.require_event_table().await {
+                            // a log that appeared while it was waited for is new, rows and all
+                            Ok(()) => SqliteObserver::new(&db)
+                                .append::<EventRow>(
+                                    ObserveConfig::builder()
+                                        .replay(if waited { ReplayBehavior::All } else { replay })
+                                        .poll_interval(POLL)
+                                        .build(),
+                                )
+                                .await
+                                .map_err(observe),
+                            Err(err) => Err(err),
+                        };
+                        match tail {
+                            Ok(tail) => events = Some(tail),
+                            Err(err) if !waited => {
+                                waited = true;
+                                yield Err(err);
+                            }
+                            Err(err) => tracing::debug!(%err, "opencode's event log still cannot be tailed"),
+                        }
+                    }
+                    next = async {
+                        match events.as_mut() {
+                            Some(events) => events.next().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
                         let row = match next {
                             Some(Ok(RowAppendedEvent(row))) => row,
                             // The tail takes the table up again by itself and the rows it could
@@ -729,7 +752,7 @@ impl Reader {
                 Err(err) => Some(Err(MessageError::from(err))),
             },
             EventKind::Session => {
-                let message = OpencodeMessage::session(data)?;
+                let message = OpencodeMessage::session(data, true)?;
                 let title = message.title();
                 if title.is_some() && title == self.title {
                     return None;
@@ -1245,19 +1268,11 @@ impl Reads {
     /// log, or a database caught mid-migration); the consumer decides when to retry.
     async fn require_event_table(self: &Arc<Self>) -> Result<(), WatchError> {
         let probe = self
-            .read("event table probe", |conn| {
-                Box::pin(async move {
-                    query_scalar::<Sqlite, i64>(
-                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'event'",
-                    )
-                    .fetch_optional(conn)
-                    .await
-                })
-            })
+            .read("event table probe", |conn| Box::pin(async move { logged(conn).await }))
             .await;
         // a probe that could not run is inconclusive: whatever is wrong with the database, the
         // observer's own connection will report it
-        if probe.is_none_or(|found| found.is_some()) {
+        if probe.is_none_or(|found| found) {
             return Ok(());
         }
         Err(WatchError::Io(io::Error::new(
@@ -1274,6 +1289,9 @@ impl Reads {
     ///
     /// opencode indexes `(aggregate_id, seq)` uniquely, so this is a seek rather than a scan: the
     /// cast that rebuilds a text id sits on the bound value, which leaves the index usable.
+    ///
+    /// A database with no event log holds no rows of it (opencode 2.0's sessions are read from
+    /// elsewhere; see `v2`).
     async fn page(self: &Arc<Self>, aggregate: &Aggregate, from: i64) -> Option<Vec<PageRow>> {
         const TEXT: &str = "SELECT id, seq, type, data FROM event WHERE aggregate_id = CAST(?1 AS \
                             TEXT) AND seq >= ?2 ORDER BY seq ASC LIMIT ?3";
@@ -1285,12 +1303,16 @@ impl Reads {
         };
         self.read("session page read", move |conn| {
             Box::pin(async move {
-                query_as::<Sqlite, PageRow>(sql)
+                let page = query_as::<Sqlite, PageRow>(sql)
                     .bind(bytes)
                     .bind(from)
                     .bind(i64::try_from(PAGE).expect("PAGE fits an i64"))
-                    .fetch_all(conn)
-                    .await
+                    .fetch_all(&mut *conn)
+                    .await;
+                match page {
+                    Err(_) if !logged(conn).await? => Ok(Vec::new()),
+                    page => page,
+                }
             })
         })
         .await
@@ -1298,7 +1320,7 @@ impl Reads {
 
     /// Every aggregate the event log holds a row this module reads for, in the order the rows
     /// were written. The kinds mirror [`EventRow::classify`]: an aggregate whose every row is
-    /// one this module ignores is no session to a consumer.
+    /// one this module ignores is no session to a consumer. None without an event log.
     async fn aggregates(self: &Arc<Self>) -> Option<Vec<Aggregate>> {
         const SQL: &str = "SELECT aggregate_id, min(rowid) AS first FROM event WHERE type LIKE \
                            'message.updated.%' OR type LIKE 'message.part.updated.%' OR type LIKE \
@@ -1306,7 +1328,12 @@ impl Reads {
                            'session.next.%' GROUP BY aggregate_id ORDER BY first ASC";
         let rows: Vec<AggregateRow> = self
             .read("aggregate scan", |conn| {
-                Box::pin(async move { query_as::<Sqlite, AggregateRow>(SQL).fetch_all(conn).await })
+                Box::pin(async move {
+                    if !logged(conn).await? {
+                        return Ok(Vec::new());
+                    }
+                    query_as::<Sqlite, AggregateRow>(SQL).fetch_all(conn).await
+                })
             })
             .await?;
         Some(rows.into_iter().filter_map(|row| row.aggregate).collect())
@@ -1513,7 +1540,7 @@ impl Session for OpencodeSession {
             match reads.backlog(&aggregate).await {
                 Some(backlog) => {
                     if let Some(message) = backlog.session.and_then(|info| {
-                        OpencodeMessage::session(serde_json::json!({"info": info}))
+                        OpencodeMessage::session(serde_json::json!({"info": info}), false)
                     }) {
                         yield Ok(message);
                     }
@@ -1613,6 +1640,17 @@ impl Session for OpencodeSession {
             }
         }
     }
+}
+
+/// Whether the database has an `event` table: not before opencode creates its tables, nor
+/// mid-migration.
+async fn logged(conn: &mut SqliteConnection) -> Result<bool, sqlx::Error> {
+    query_scalar::<Sqlite, i64>(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'event'",
+    )
+    .fetch_optional(conn)
+    .await
+    .map(|found| found.is_some())
 }
 
 /// Whether every one of `tables` is there to read. opencode has kept its `session`, `message` and
@@ -2081,6 +2119,18 @@ pub(crate) fn tool_patch(call: &ToolCallId, metadata: &Value) -> Option<Patch> {
     })
 }
 
+/// The id of session `session`'s info row while its title is `title`.
+pub(crate) fn title_id(session: &str, title: &str) -> String {
+    format!("{session}:title:{:016x}", xxhash_rust::xxh3::xxh3_64(title.as_bytes()))
+}
+
+/// Whether a completed tool call ran a command that failed: opencode's shell tool completes
+/// whatever the command's exit code, which it keeps in the call's metadata (`exit`), and marks
+/// one it killed for running too long (`timeout`).
+fn exited_non_zero(metadata: &Value) -> bool {
+    metadata["exit"].as_i64().is_some_and(|exit| exit != 0) || metadata["timeout"] == true
+}
+
 /// A model call's usage from its token counts (a `step-finish` part's or a
 /// `session.next.step.ended` row's `tokens`), `None` when there are none.
 ///
@@ -2155,12 +2205,22 @@ impl OpencodeMessage {
 
     /// A session's `session.created.1` or `session.updated.1` payload, as a row carrying its
     /// title and the session it was spawned from. `None` for a payload with no info.
-    fn session(mut data: Value) -> Option<Self> {
+    ///
+    /// Stamped when it `changed`, its `time.updated` -- a `session.updated.1` row's own time, or
+    /// a rename seen while following the session -- so that a new title outranks the rows before
+    /// it. Otherwise, the session read as it stands, when the session was created: when it was
+    /// last updated moves with every prompt, and would place the row wherever it was last read.
+    fn session(mut data: Value, changed: bool) -> Option<Self> {
         let info = data.get_mut("info").filter(|info| info.is_object()).map(Value::take)?;
-        let time = &info["time"];
+        let (created, updated) =
+            (epoch_millis(&info["time"]["created"]), epoch_millis(&info["time"]["updated"]));
         Some(Self {
             role: Role::System,
-            time: epoch_millis(&time["updated"]).or_else(|| epoch_millis(&time["created"])),
+            time: if changed {
+                updated.or(created)
+            } else {
+                created.or(updated)
+            },
             body: Body::Session(info),
             info: None,
         })
@@ -2253,7 +2313,7 @@ impl OpencodeMessage {
                         content.push(Content::ToolResult(ToolResult {
                             call,
                             output: state["output"].clone(),
-                            error: false,
+                            error: exited_non_zero(&state["metadata"]),
                         }));
                         content.extend(patch.map(Content::Patch));
                     }
@@ -2333,15 +2393,16 @@ impl OpencodeMessage {
 }
 
 impl Message for OpencodeMessage {
-    /// A part's id; a failed message's id; for a session's info, its id and title, so that a
-    /// title is delivered once however many rows repeat it -- and one of opencode 2.0's sessions
-    /// has none until one is generated.
+    /// A part's id; a failed message's id; for a session's info, its id and a digest of its
+    /// title, so that a title is delivered once however many rows repeat it -- and one of
+    /// opencode 2.0's sessions has none until one is generated. A digest, not the title: an id is
+    /// never redacted, and a title says what the session was about.
     fn id(&self) -> Option<MessageId> {
         let id = match &self.body {
             Body::Part(value) | Body::Raw(value) => value["id"].as_str()?.to_owned(),
             Body::Failure { id, .. } | Body::Next(Next { id, .. }) => id.clone(),
             Body::Session(info) => match info["title"].as_str() {
-                Some(title) => format!("{}:title:{title}", info["id"].as_str()?),
+                Some(title) => title_id(info["id"].as_str()?, title),
                 None => format!("{}:session", info["id"].as_str()?),
             },
         };
@@ -2531,6 +2592,28 @@ mod tests {
             m.content().as_slice(),
             [Content::ToolUse(_), Content::ToolResult(r)]
                 if r.output == serde_json::json!({"stdout": "files", "exit": 0})
+        ));
+    }
+
+    /// opencode's bash tool completes a command that failed, with its exit code in the metadata.
+    #[rstest]
+    #[case::succeeded(0, false)]
+    #[case::failed(1, true)]
+    fn a_command_that_exited_non_zero_is_an_error(#[case] exit: i64, #[case] error: bool) {
+        let m = part_message(serde_json::json!({
+            "type": "tool",
+            "callID": "call_1",
+            "tool": "bash",
+            "state": {
+                "status": "completed",
+                "input": {"command": "false"},
+                "output": "",
+                "metadata": {"output": "", "exit": exit, "description": "fail"},
+            },
+        }));
+        assert!(matches!(
+            m.content().as_slice(),
+            [Content::ToolUse(_), Content::ToolResult(r)] if r.error == error
         ));
     }
 
@@ -2894,18 +2977,26 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn a_db_without_an_event_table_is_reported_as_not_found() {
+    async fn a_db_without_an_event_table_is_watched_until_it_has_one() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
-        drop(Sqlite::builder(path.as_os_str()).open().await.unwrap());
+        // what SQLite leaves the moment opencode first opens its database
+        std::fs::write(&path, b"").unwrap();
 
-        let listener = OpencodeSessions::builder().db(path).build().listener().unwrap();
+        let listener = OpencodeSessions::builder().db(path.clone()).build().listener().unwrap();
         let mut stream = listener.watch().boxed();
         assert!(matches!(
             stream.next().await,
             Some(Err(WatchError::Io(err))) if err.kind() == io::ErrorKind::NotFound
         ));
-        assert!(stream.next().await.is_none());
+        // reported once, and then waited out: opencode creates its tables and writes a session
+        let db = event_db(&path).await;
+        insert_event(&db, "evt_1", "ses_1", "message.updated.1", &role_event("msg_1", "user"))
+            .await;
+        let offered = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("the session was not offered within 10s");
+        assert!(matches!(offered, Some(Ok(session)) if session.id().to_string() == "ses_1"));
     }
 
     #[rstest]
@@ -4063,10 +4154,13 @@ mod tests {
                 .collect()
                 .await;
             let [session] = <[_; 1]>::try_from(sessions).unwrap();
-            query::<sqlx::Sqlite>("DROP TABLE event")
-                .execute(&mut *db.pool().acquire().await.unwrap())
-                .await
-                .unwrap();
+            // a log that is there but can't be read (a missing one has no rows to read)
+            for sql in ["DROP TABLE event", "CREATE TABLE event (id TEXT PRIMARY KEY)"] {
+                query::<sqlx::Sqlite>(sql)
+                    .execute(&mut *db.pool().acquire().await.unwrap())
+                    .await
+                    .unwrap();
+            }
 
             let read: Vec<_> = session.read().collect().await;
             assert!(
@@ -4306,13 +4400,13 @@ mod tests {
             let titles: Vec<(Option<MessageId>, String)> =
                 messages.iter().filter_map(|m| Some((m.id(), m.title()?.text?))).collect();
             assert_eq!(titles, [
-                (Some(MessageId::from("ses_R:title:New session".to_owned())), "New session".into()),
+                (Some(MessageId::from(title_id("ses_R", "New session"))), "New session".into()),
                 (
-                    Some(MessageId::from("ses_R:title:Fix the flaky test".to_owned())),
+                    Some(MessageId::from(title_id("ses_R", "Fix the flaky test"))),
                     "Fix the flaky test".into()
                 ),
             ]);
-            let session = find(&messages, "ses_R:title:New session");
+            let session = find(&messages, &title_id("ses_R", "New session"));
             assert_eq!(session.role(), Role::System);
             assert!(session.content().is_empty());
             assert_eq!(session.cwd(), Some(PathBuf::from("/work/proj")));
@@ -4586,14 +4680,15 @@ mod tests {
                 "msg_0d149b2d5001gkfmc9bUMDXLJ5",
                 // from the log, which opencode continued after the wipe
                 "prt_0d154c3f0001VPSmfCQt4r6LWN",
-                "ses_W:title:Mock title number 1",
+                title_id("ses_W", "Mock title number 1").as_str(),
                 "prt_0d154c996001Lr5h4i3jpsGN60",
                 "prt_0d154c99a001dtKmLh8SYe2pad",
                 "prt_0d154c9a5001gvwUYJAY42itXy",
             ]);
 
-            let title = find(&messages, "ses_W:title:Mock title number 1");
+            let title = find(&messages, &title_id("ses_W", "Mock title number 1"));
             assert_eq!(title.cwd(), Some(PathBuf::from("/work/proj")));
+            // when its title changed, after the rows before it, not when the session was created
             assert_eq!(title.timestamp().unwrap().unix_timestamp(), 1_790_218_388);
 
             let prompt = find(&messages, "prt_0d148d4bf001JaxA9TwaMgU5vE");
@@ -4688,6 +4783,11 @@ mod tests {
                 child.title().and_then(|t| t.text).as_deref(),
                 Some("mock subtask (@general subagent)")
             );
+            // the session as it stands, at its start: when it was last updated moves with reads
+            assert_eq!(
+                child.timestamp().unwrap().unix_timestamp_nanos(),
+                1_790_217_674_726_000_000
+            );
         }
 
         /// A session whose log holds its `session.created` row is read from the log alone, even
@@ -4707,7 +4807,10 @@ mod tests {
 
             let messages = read_all(&path).await;
             let delivered = ids(&messages);
-            assert_eq!(delivered.first().map(String::as_str), Some("ses_W:title:New session"));
+            assert_eq!(
+                delivered.first().map(String::as_str),
+                Some(title_id("ses_W", "New session").as_str())
+            );
             assert!(
                 !delivered.contains(&"prt_0d148d4bf001JaxA9TwaMgU5vE".to_owned()),
                 "the projection was read for a session the log holds from its start"

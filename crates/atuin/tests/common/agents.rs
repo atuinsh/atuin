@@ -294,6 +294,33 @@ impl Transcript {
         None
     }
 
+    /// Rename the opencode session `title`, as `Session.setTitle` does: a `session.updated.1` row
+    /// with the session's info, `time.updated` bumped to now.
+    pub fn rename(&self, title: &str) {
+        assert_eq!(self.agent, Agent::Opencode, "only opencode's sessions are renamed here");
+        let (directory, created) = rusqlite::Connection::open(&self.path)
+            .unwrap()
+            .query_row(
+                "SELECT directory, time_created FROM session WHERE id = ?1",
+                [&self.id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        let home = self.path.ancestors().nth(4).unwrap();
+        opencode_events(home, &[(
+            "session.updated.1",
+            json!({
+                "sessionID": self.id,
+                "info": {
+                    "id": self.id,
+                    "title": title,
+                    "directory": directory,
+                    "time": {"created": created, "updated": millis(tick())},
+                },
+            }),
+        )]);
+    }
+
     /// The transcript as it stands.
     pub fn read(&self) -> String {
         fs::read_to_string(&self.path).unwrap()
@@ -642,6 +669,18 @@ fn opencode_events(home: &Path, events: &[(&str, Value)]) {
                         info["directory"].as_str(),
                         info["title"].as_str(),
                         info["time"]["created"].as_i64()
+                    ],
+                )
+                .unwrap();
+            }
+            "session.updated.1" => {
+                let info = &data["info"];
+                tx.execute(
+                    "UPDATE session SET title = ?2, time_updated = ?3 WHERE id = ?1",
+                    rusqlite::params![
+                        session,
+                        info["title"].as_str(),
+                        info["time"]["updated"].as_i64()
                     ],
                 )
                 .unwrap();

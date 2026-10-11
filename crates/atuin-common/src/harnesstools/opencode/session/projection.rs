@@ -1,8 +1,9 @@
 //! One session as opencode's projection holds it now (its `session`, `message` and `part`
-//! tables), keyed as capture keys it: what `opencode --session` continues, for sync (see
-//! [`crate::harnesstools::sync`]). The event log capture follows also holds what a revert
-//! removed since; the projection does not.
+//! tables, and opencode 2.0's `session_v2` and `session_message`), keyed as capture keys it: what
+//! `opencode --session` continues, for sync (see [`crate::harnesstools::sync`]). The event log
+//! capture follows also holds what a revert removed since; the projection does not.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +12,8 @@ use sqlx::{Connection, Row, Sqlite};
 use xxhash_rust::xxh3::Xxh3;
 
 use super::{
-    Aggregate, Message, PartProjection, Reader, Reads, SqliteConnectOptions, SqliteConnection, text,
+    Aggregate, Message, PartProjection, Reader, Reads, SqliteConnectOptions, SqliteConnection,
+    text, v2,
 };
 use crate::db::{query, query_as, query_scalar};
 
@@ -36,6 +38,13 @@ pub struct Projected {
     /// When opencode last updated the session or any of its messages or parts (`time_updated`,
     /// milliseconds since the Unix epoch); `None` when that can't be read.
     pub updated: Option<i64>,
+    /// opencode 2.0 holds the session (in `session_v2`; a session it copied from 1.x too), whose
+    /// rows follow 1.x's in [`rows`](Self::rows) and [`messages`](Self::messages). No import
+    /// adds to a session 2.0 holds.
+    pub next: bool,
+    /// Rows the session holds merged into another's (an opencode 2 message atuin wrote from
+    /// several), each with the row it went into.
+    pub merged: HashMap<String, String>,
 }
 
 /// A message of the projection, as sync needs to know it.
@@ -60,7 +69,8 @@ impl Projected {
     }
 }
 
-/// Session `id` in the database `db`; `None` when its `session` table has no such session.
+/// Session `id` in the database `db`; `None` when neither its `session` table nor opencode 2.0's
+/// `session_v2` has such a session.
 pub async fn projected(db: &Path, id: &str) -> Result<Option<Projected>, sqlx::Error> {
     let opts = SqliteConnectOptions::new()
         .filename(db)
@@ -73,6 +83,62 @@ pub async fn projected(db: &Path, id: &str) -> Result<Option<Projected>, sqlx::E
 }
 
 async fn read(
+    conn: &mut SqliteConnection,
+    db: &Path,
+    id: &str,
+) -> Result<Option<Projected>, sqlx::Error> {
+    // A database only opencode 2.0 ever wrote has no 1.x tables.
+    let legacy = if super::projected(conn, &["session", "message", "part"]).await? {
+        legacy(conn, db, id).await?
+    } else {
+        None
+    };
+    let Some(held) = v2::held(conn, id).await? else {
+        return Ok(legacy);
+    };
+    let mut content = Xxh3::new();
+    let mut found = legacy.unwrap_or_else(|| Projected {
+        directory: PathBuf::new(),
+        created: held.created.unwrap_or_default(),
+        reverting: false,
+        rows: Vec::new(),
+        messages: Vec::new(),
+        content: 0,
+        updated: None,
+        next: false,
+        merged: HashMap::new(),
+    });
+    content.update(&found.content.to_le_bytes());
+    // where 2.0 has the session now, which a move changes
+    if let Some(directory) = held.directory {
+        found.directory = PathBuf::from(directory);
+    }
+    found.reverting |= held.reverting;
+    found.updated = found.updated.max(held.updated);
+    found.next = true;
+    for row in held.rows {
+        digest(&mut content, b'v', Some(&row.id), row.created, row.data.as_deref());
+        let assistant = row.kind == "assistant";
+        if assistant || row.kind == "user" {
+            found.messages.push(ProjectedMessage {
+                id: row.id,
+                created: row.created.unwrap_or_default(),
+                assistant,
+                parent: None,
+                completed: row.settled,
+            });
+        }
+        if let Some(into) = &row.delivered {
+            found.merged.extend(row.merged.into_iter().map(|merged| (merged, into.clone())));
+        }
+        found.rows.extend(row.delivered);
+    }
+    found.content = content.digest();
+    Ok(Some(found))
+}
+
+/// Session `id` as opencode 1.x's `session`, `message` and `part` tables hold it.
+async fn legacy(
     conn: &mut SqliteConnection,
     db: &Path,
     id: &str,
@@ -159,6 +225,8 @@ async fn read(
         messages,
         content: content.digest(),
         updated,
+        next: false,
+        merged: HashMap::new(),
     }))
 }
 

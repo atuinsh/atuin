@@ -135,8 +135,8 @@ impl Machine {
     }
 
     /// A machine with the settings `top` and `[ai]` settings `ai`, syncing through the server at
-    /// `sync`, if any, as often as its daemon can.
-    fn configured(sync: Option<&str>, top: &str, ai: &str) -> Self {
+    /// `sync`, if any: its daemon syncing every so many seconds, or (0) never.
+    fn configured(sync: Option<(&str, u32)>, top: &str, ai: &str) -> Self {
         let env = FreshEnv::new();
         let bin = tempfile::Builder::new().prefix("bin-").tempdir_in(target_tmp()).unwrap();
         install_fakes(bin.path(), &Agent::ALL);
@@ -144,10 +144,12 @@ impl Machine {
             agent.install(env.home());
         }
         let (auto_sync, address, frequency) = match sync {
-            Some(address) => {
-                (true, format!("sync_address = \"{address}\"\n"), "sync_frequency = 1\n")
-            }
-            None => (false, String::new(), ""),
+            Some((address, frequency)) => (
+                true,
+                format!("sync_address = \"{address}\"\n"),
+                format!("sync_frequency = {frequency}\n"),
+            ),
+            None => (false, String::new(), String::new()),
         };
         env.write_config(&format!(
             "auto_sync = {auto_sync}\n{address}{top}[daemon]\nenabled = true\nautostart = \
@@ -162,18 +164,30 @@ impl Machine {
         }
     }
 
-    /// Two machines of one account on `server`, their daemons running.
+    /// Two machines of one account on `server`, their daemons running and syncing as often as
+    /// they can.
     pub fn pair(server: &SyncServer) -> (Self, Self) {
-        let one = Self::syncing(server, None);
+        Self::pair_syncing(server, 1)
+    }
+
+    /// Two machines of one account on `server`, their daemons running: the first's syncing as
+    /// often as it can, the second's every `sync_frequency` seconds, or (0) never.
+    pub fn pair_syncing(server: &SyncServer, sync_frequency: u32) -> (Self, Self) {
+        let one = Self::syncing(server, None, 1);
         let key = one.run(&["key", "--base64"]).trim().to_owned();
-        let two = Self::syncing(server, Some((&one, &key)));
+        let two = Self::syncing(server, Some((&one, &key)), sync_frequency);
         (one, two)
     }
 
-    /// A machine syncing through `server`: registering a new account, or logging into `login`'s
-    /// with its key. Logged in before its daemon starts, which keeps the key it starts with.
-    fn syncing(server: &SyncServer, login: Option<(&Self, &str)>) -> Self {
-        let mut machine = Self::configured(Some(&server.address), "", "capture_sessions = true\n");
+    /// A machine syncing through `server`, its daemon every `sync_frequency` seconds: registering
+    /// a new account, or logging into `login`'s with its key. Logged in before its daemon starts,
+    /// which keeps the key it starts with.
+    fn syncing(server: &SyncServer, login: Option<(&Self, &str)>, sync_frequency: u32) -> Self {
+        let mut machine = Self::configured(
+            Some((&server.address, sync_frequency)),
+            "",
+            "capture_sessions = true\n",
+        );
         match login {
             None => {
                 let user = machine.user();

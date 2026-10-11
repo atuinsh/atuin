@@ -27,8 +27,8 @@ use crate::grpc::ai::agent::pb::Session as AiSession;
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, ImportSessionsEvent, ImportSessionsRequest,
-    ListSessionsRequest, RebuildSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
-    TailSessionsEvent, TailSessionsRequest,
+    ListSessionsRequest, ProjectSyncedRequest, RebuildSessionsRequest, SearchSessionsMatch,
+    SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
 };
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
@@ -474,6 +474,13 @@ pub struct AiClient {
 }
 
 impl AiClient {
+    /// The stub over `channel`, taking messages of any size: a message the daemon streams holds
+    /// one captured message, as big as the prompt or reply in it, past tonic's default 4 MiB.
+    /// The daemon is local and trusted (the server encodes any size by default).
+    fn service(channel: Channel) -> AiSessionServiceClient<Channel> {
+        AiSessionServiceClient::new(channel).max_decoding_message_size(usize::MAX)
+    }
+
     #[cfg(unix)]
     pub async fn new(path: PathBuf) -> Result<Self> {
         let log_path = path.clone();
@@ -495,7 +502,7 @@ impl AiClient {
                 })?;
 
         Ok(Self {
-            client: AiSessionServiceClient::new(channel),
+            client: Self::service(channel),
         })
     }
 
@@ -517,7 +524,7 @@ impl AiClient {
             })?;
 
         Ok(Self {
-            client: AiSessionServiceClient::new(channel),
+            client: Self::service(channel),
         })
     }
 
@@ -633,6 +640,14 @@ impl AiClient {
     /// background, and [`Self::wait_for_sessions`] waits it out.
     pub async fn rebuild_sessions(&mut self) -> Result<()> {
         self.client.rebuild_sessions(RebuildSessionsRequest {}).await?;
+        Ok(())
+    }
+
+    /// Have the daemon project the records this process synced into the record store. Returns
+    /// once the projection is over, which goes on if this stops waiting; a failure is only in the
+    /// daemon's log.
+    pub async fn project_synced(&mut self) -> Result<()> {
+        self.client.project_synced(ProjectSyncedRequest {}).await?;
         Ok(())
     }
 

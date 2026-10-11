@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use atuin_client::ai_session::{HarnessKind, SourceId};
+use atuin_client::ai_session::{HarnessKind, Head, SourceId};
 use atuin_client::settings::AiSessionResume;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use atuin_common::harnesstools::rehydrate::{
@@ -112,14 +112,22 @@ pub struct Continued {
     pub plan: ResumePlan,
     /// What the target couldn't take as it was.
     pub flattened: Flattened,
+    /// The host whose branch it carries, as [`catchup::host_label`] names it, when it carries one
+    /// branch of several (or one named).
+    pub along: Option<String>,
     /// Why it resumes somewhere other than the directory the session ran in, when it does.
     pub note: Option<String>,
 }
 
 impl Continued {
-    /// The status line: `continuing in Codex: 42 tool calls become notes, reasoning dropped`.
+    /// The status line: `continuing in Codex: 42 tool calls become notes, reasoning dropped`, and
+    /// whose branch it carries (`; along @3f9a12bc's branch`) when it carries one of several.
     pub fn status(&self) -> String {
-        continuing(self.target, Some(&self.flattened))
+        let status = continuing(self.target, Some(&self.flattened));
+        match &self.along {
+            Some(host) => format!("{status}; along {host}'s branch"),
+            None => status,
+        }
     }
 }
 
@@ -218,13 +226,15 @@ pub trait Resumer: Send + Sync {
     ) -> Result<CatchUp, NotResumable> {
         let resume = self.plan(session).await?;
         let (plan, status) = match &resume.restore {
-            Some(restore) => (self.restore(source, session, restore).await?, restored(restore)),
+            Some(restore) => {
+                (self.restore(source, session, restore).await?, Some(restored(restore)))
+            }
             None => (resume.plan, None),
         };
         Ok(CatchUp::Ready { plan, status })
     }
 
-    /// Switch this machine's copy of `session` to `head`'s branch (the newest it can be switched
+    /// Switch this machine's copy of `session` to `head`'s branch (the only one it can be switched
     /// to when `None`), from what `source` holds of it, and plan resuming it ([`super::catchup`]):
     /// in place, keeping the history it shares with the branch as it is, and the copy as it was
     /// as a backup. Refused, with nothing written, unless sync holds every row of the copy, no
@@ -244,13 +254,16 @@ pub trait Resumer: Send + Sync {
         Vec::new()
     }
 
-    /// Write `session`, from what `source` holds of it, out as a new session of `target`
-    /// ([`continuation`]), and plan resuming that. Only once the user has chosen to.
+    /// Write `session`, from what `source` holds of it along `head` (one of its heads; for a
+    /// session that diverged, the newest when `None`: see [`restored_session`]), out as a new
+    /// session of `target` ([`continuation`]), and plan resuming that. Only once the user has
+    /// chosen to.
     async fn continue_in(
         &self,
         _source: &dyn SessionSource,
         session: &SessionRow,
         _target: HarnessKind,
+        _head: Option<&SourceId>,
     ) -> Result<Continued, NotResumable> {
         Err(NotResumable::Unsupported(harness_label(session.handle.harness)))
     }
@@ -350,9 +363,13 @@ pub trait Machine: Send + Sync {
     }
 }
 
-/// What the status line says of a session restored as `restore`, when anything.
-fn restored(restore: &Restore) -> Option<String> {
-    restore.note.as_ref().map(|note| format!("restored the session from sync; {note}"))
+/// What the status line says of a session restored as `restore`: that it was, and why it resumes
+/// where it does, when that isn't where it ran.
+fn restored(restore: &Restore) -> String {
+    match &restore.note {
+        Some(note) => format!("restored the session from sync; {note}"),
+        None => "restored the session from sync".to_owned(),
+    }
 }
 
 /// This machine, as the harnesses themselves see it.
@@ -519,7 +536,7 @@ impl HarnessResumer {
         restore: &Restore,
         head: Option<&SourceId>,
     ) -> Result<ResumePlan, NotResumable> {
-        let data = restored_session(source, session, &restore.cwd, head)
+        let (data, _) = restored_session(source, session, &restore.cwd, head)
             .await
             .map_err(|e| NotResumable::Restore(format!("{e:#}")))?;
         self.write_out(session.handle.harness, &data, NotResumable::Restore).await
@@ -528,18 +545,20 @@ impl HarnessResumer {
 
 /// `session` as `source` holds it, to be written out and resumed in `cwd`: along `head` (or, for
 /// a session that diverged, its newest head) when there is one ([`catchup::branch_rows`]), so no
-/// other branch's messages come with it; else every row synced of it.
+/// other branch's messages come with it; else every row synced of it. With it, the head it was
+/// written along, if any.
 async fn restored_session(
     source: &dyn SessionSource,
     session: &SessionRow,
     cwd: &Path,
     head: Option<&SourceId>,
-) -> eyre::Result<RehydrateSession> {
+) -> eyre::Result<(RehydrateSession, Option<Head>)> {
     let mut data = source.rehydrate(&session.handle, cwd).await?;
-    if let Some(rows) = catchup::branch_rows(source, &session.handle, head).await? {
-        data.messages = rows;
-    }
-    Ok(data)
+    let Some((rows, along)) = catchup::branch_rows(source, &session.handle, head).await? else {
+        return Ok((data, None));
+    };
+    data.messages = rows;
+    Ok((data, along))
 }
 
 /// This machine's copy of a session, as [`HarnessResumer::plan_here`] read it.
@@ -635,7 +654,7 @@ impl Resumer for HarnessResumer {
         let ready = |plan, status| Ok(CatchUp::Ready { plan, status });
         if let Some(restore) = &resume.restore {
             let plan = self.restore_along(source, session, restore, head).await?;
-            return ready(plan, restored(restore));
+            return ready(plan, Some(restored(restore)));
         }
         let Some(Copy { tip, dir }) = copy else {
             return ready(resume.plan, None);
@@ -646,7 +665,7 @@ impl Resumer for HarnessResumer {
                 // Gone since it was located: restored, as a copy that isn't here is.
                 let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
                 let plan = self.restore_along(source, session, &restore, head).await?;
-                return ready(plan, restored(&restore));
+                return ready(plan, Some(restored(&restore)));
             }
             Err(e) => Err(e),
         };
@@ -670,8 +689,7 @@ impl Resumer for HarnessResumer {
         let here = &self.context.host_id;
         let tip = match tip {
             Ok(tip) => tip,
-            // A copy the agent can't read, or can't catch up (opencode 2.0's): never resumed
-            // as if it were caught up.
+            // A copy the agent can't read: never resumed as if it were caught up.
             Err(e) => {
                 let branches = catchup::branches(&analysis, None, here);
                 return Ok(held(Why::Refused(e.to_string()), kind, resume.plan, branches, chosen));
@@ -761,7 +779,8 @@ impl Resumer for HarnessResumer {
         let analysis = analysis.ok_or_else(|| {
             fail("its branches aren't known yet: the daemon hasn't synced its messages".to_owned())
         })?;
-        let head = catchup::switch_to(&analysis, kind, head, &tip).map_err(fail)?;
+        let (now, here) = (time::OffsetDateTime::now_utc(), &self.context.host_id);
+        let head = catchup::switch_to(&analysis, kind, head, &tip, now, here).map_err(fail)?;
         let running = || fail(format!("{} is running this session here", harness_label(kind)));
         // Never under an agent that may be writing the session: checked again as it is written.
         if resume.live {
@@ -840,7 +859,7 @@ impl Resumer for HarnessResumer {
         let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
         // Restored as a resume would restore it (along its newest head, when it diverged), should
         // pi need it written out below.
-        let mut original = restored_session(source, session, &restore.cwd, None)
+        let (mut original, _) = restored_session(source, session, &restore.cwd, None)
             .await
             .map_err(|e| fail(format!("{e:#}")))?;
         // Checked before anything is written. A fork of no conversation is refused, as a
@@ -893,6 +912,7 @@ impl Resumer for HarnessResumer {
         source: &dyn SessionSource,
         session: &SessionRow,
         target: HarnessKind,
+        head: Option<&SourceId>,
     ) -> Result<Continued, NotResumable> {
         let from_kind = session.handle.harness;
         let from =
@@ -903,8 +923,8 @@ impl Resumer for HarnessResumer {
             return Err(fail("it's that agent's own session".to_owned()));
         }
         let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
-        let original = source
-            .rehydrate(&session.handle, &restore.cwd)
+        // Along one branch, as a restore or a fork is: never every branch's messages at once.
+        let (original, along) = restored_session(source, session, &restore.cwd, head)
             .await
             .map_err(|e| fail(format!("{e:#}")))?;
         let atuin_id = session.atuin_id.to_string();
@@ -917,6 +937,7 @@ impl Resumer for HarnessResumer {
             target,
             plan,
             flattened: continued.flattened,
+            along: along.map(|head| catchup::host_label(&head, &self.context.host_id)),
             note: restore.note,
         })
     }

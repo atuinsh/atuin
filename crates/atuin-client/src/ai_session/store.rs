@@ -10,7 +10,9 @@ use tracing::{debug, warn};
 use typed_builder::TypedBuilder;
 
 use crate::ai_session::Message;
-use crate::ai_session::database::{AiSessionDatabase, DbError, PreparedMessage, Watermark};
+use crate::ai_session::database::{
+    AiSessionDatabase, DbError, Generation, PreparedMessage, Watermark,
+};
 use crate::record::decode::decode_parallel;
 use crate::record::sqlite_store::SqliteStore;
 
@@ -33,6 +35,20 @@ pub struct AiSessionStore {
     store: SqliteStore,
     host_id: HostId,
     key: Key,
+}
+
+/// What capture knows of this host's watermark before it pushes a record, for
+/// [`AiSessionStore::advance_past_capture`] to move it past the record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureMark {
+    /// Nothing but the invalidation generation, read before the push.
+    Unknown(Generation),
+    /// Where capture last moved it, and the generation it moved it under: no invalidation since
+    /// means it still stands there.
+    Moved {
+        generation: Generation,
+        mark: Watermark,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,7 +151,8 @@ impl AiSessionStore {
         Ok(self.store.contains(id).await?)
     }
 
-    pub async fn push(&self, msg: &Message) -> Result<RecordId, PushError> {
+    /// Push `msg` to this host's series, returning where it was stored.
+    pub async fn push(&self, msg: &Message) -> Result<Watermark, PushError> {
         let id = msg.id;
 
         let bytes = AiSessionRecord::Message(msg.clone()).serialize();
@@ -154,9 +171,61 @@ impl AiSessionStore {
                 .build();
 
             if self.store.push_unique(&record.encrypt(&self.key)).await? {
-                return Ok(id);
+                return Ok(Watermark { idx, record_id: id });
             }
         }
+    }
+
+    /// Move this host's watermark onto `pushed`, a record [`Self::push`] stored and the caller
+    /// has since projected, so the next reprojection (each startup's) doesn't replay what capture
+    /// projected as it went. Only when the watermark stands on the record just before it (still
+    /// the record it was, as a reprojection checks), no invalidation happened since `known`'s
+    /// generation, and no reprojection is running, which moves it itself.
+    ///
+    /// Returns where it moved it, for the next capture's `known`: one following on from it moves
+    /// it with a single write. `None` if it didn't move it: the next capture reads the generation
+    /// before its push again.
+    pub async fn advance_past_capture(
+        &self,
+        db: &AiSessionDatabase,
+        known: CaptureMark,
+        pushed: Watermark,
+    ) -> Result<Option<CaptureMark>, BuildError> {
+        let Some(_running) = db.try_lock_reprojection() else {
+            return Ok(None);
+        };
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
+        let (generation, from) = match known {
+            CaptureMark::Moved { generation, mark } => {
+                if mark.idx + 1 != pushed.idx {
+                    return Ok(None);
+                }
+                (generation, Some(mark))
+            }
+            CaptureMark::Unknown(generation) => {
+                let from = db.reproject_watermarks().await?.remove(&series);
+                let follows = match from {
+                    None => pushed.idx == 0,
+                    Some(mark) => {
+                        mark.idx + 1 == pushed.idx
+                            && self
+                                .store
+                                .idx(&series, mark.idx)
+                                .await?
+                                .is_some_and(|record| record.id == mark.record_id)
+                    }
+                };
+                if !follows {
+                    return Ok(None);
+                }
+                (generation, from)
+            }
+        };
+        let moved = db.advance_reproject_watermark(&series, generation, from, pushed).await?;
+        Ok(moved.then_some(CaptureMark::Moved {
+            generation,
+            mark: pushed,
+        }))
     }
 
     /// Decrypt and decode `record` with `key`, and prepare it for the sidecar, which the caller
@@ -179,9 +248,16 @@ impl AiSessionStore {
         // - One that decrypts but whose kind or version this build does not know is held until
         //   an upgrade.
         // - One of a version this build no longer reads (from before records stored the
-        //   session's id) is skipped: no later build reads it either.
+        //   session's id) is skipped: no later build reads it either. Before it is decrypted,
+        //   which is most of what a replay of a store full of them costs. The version is only
+        //   authenticated by decrypting, so a record's version changed to v0 is skipped rather
+        //   than held: no more than a server can do by withholding the record.
         // - One that decrypts to a known kind but fails to decode is skipped: decryption
         //   authenticates it, so it is exactly what its writer wrote, and no retry reads it.
+        if record.version == RecordVersion::V0 {
+            debug!(id = %id.0, "skipping retired ai-session record");
+            return Ok(Projected::Skipped);
+        }
         let decrypted = match record.decrypt(key) {
             Ok(decrypted) => decrypted,
             Err(err) => {
@@ -701,9 +777,13 @@ mod tests {
         let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let s = AiSessionStore::builder().store(store.clone()).host_id(hid()).key(key()).build();
         let msg = sample_message();
-        let id = s.push(&msg).await.unwrap();
+        let pushed = s.push(&msg).await.unwrap();
 
-        assert_eq!(id, msg.id, "push must return the message's own id, not a re-minted one");
+        assert_eq!(
+            pushed.record_id, msg.id,
+            "push must return the message's own id, not a re-minted one"
+        );
+        assert_eq!(pushed.idx, 0);
 
         let recs = store.all_tagged(&RecordTag::AiSession).await.unwrap();
         assert_eq!(recs.len(), 1);
@@ -1521,10 +1601,11 @@ mod tests {
     }
 
     /// A v0 record (from before records stored the session's id) is passed over, not held: it
-    /// would hold the watermark forever.
+    /// would hold the watermark forever. It is passed over unread, so even one this key can't
+    /// decrypt (which would otherwise be held) is.
     #[rstest]
     #[tokio::test]
-    async fn a_v0_record_is_skipped() {
+    async fn a_v0_record_is_skipped(#[values(key(), Key::from([1u8; 32]))] written_with: Key) {
         let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
         let handle = sample_handle();
@@ -1538,7 +1619,7 @@ mod tests {
             .idx(1)
             .data(DecryptedData(AiSessionRecord::Message(msg).serialize()))
             .build();
-        store.push(&record.encrypt(&key())).await.unwrap();
+        store.push(&record.encrypt(&written_with)).await.unwrap();
         push_range(&s, &handle, 1..3).await;
 
         let db = AiSessionDatabase::in_memory().await.unwrap();

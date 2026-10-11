@@ -1382,6 +1382,9 @@ impl Settings {
         let meta = match Self::meta_store().await {
             Ok(m) => m,
             Err(e) => {
+                // Unlike not being logged in, a failure: callers tracing the result at debug
+                // would hide it.
+                tracing::warn!("failed to open the meta store for sync auth: {e}");
                 return SyncAuth::NotLoggedIn {
                     reason: format!("Failed to open meta store: {e}"),
                 };
@@ -1436,8 +1439,11 @@ impl Settings {
     /// Delegates to [`Self::resolve_sync_auth`] and converts the result to an
     /// `AuthToken`. Callers that need to distinguish between auth states
     /// (e.g. to show different UI) should call `resolve_sync_auth` directly.
+    ///
+    /// Not being logged in is an expected state (an offline daemon asks on every start), so the
+    /// error is traced at debug, and callers that fail on it report it themselves.
     #[cfg(feature = "sync")]
-    #[instrument(level = "trace", skip_all, err)]
+    #[instrument(level = "trace", skip_all, err(level = "debug"))]
     pub async fn sync_auth_token(&self) -> Result<crate::api_client::AuthToken> {
         self.resolve_sync_auth().await.into_auth_token()
     }

@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 
 use atuin_client::ai_session::{
-    HarnessKind, HarnessSession, Message, SearchTerms, Session, SessionFilter, SessionMatch,
+    AtuinSessionId, HarnessKind, HarnessSession, Message, SearchTerms, Session, SessionFilter,
+    SessionMatch,
 };
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
@@ -51,6 +52,7 @@ enum SubCmd {
     Search {
         #[arg(
             value_name = "QUERY",
+            allow_hyphen_values = true,
             help = "Words to look for in session titles, message text, reasoning, and tool calls"
         )]
         query: String,
@@ -68,7 +70,10 @@ enum SubCmd {
     /// Follow sessions and messages as they are recorded (until interrupted).
     Tail,
 
+    /// Import every session the agents have on disk, such as ones from before capture was on.
+    /// What is already captured is not stored again.
     Import {
+        /// Only import sessions from this harness.
         #[arg(long, value_parser = parse_harness)]
         harness: Option<HarnessKind>,
     },
@@ -551,6 +556,12 @@ pub enum SelectError {
     NotFound(String),
     #[error("id `{0}` matches more than one session; use a longer or full id")]
     Ambiguous(String),
+    /// Several agents' sessions have the id (a session continued in another agent can keep it).
+    #[error("id `{id}` names a session in more than one agent; use its atuin id:{choices}")]
+    Shared {
+        id: String,
+        choices: String,
+    },
 }
 
 /// Pure selector logic, split out from the RPC so it can be tested directly.
@@ -564,14 +575,26 @@ pub fn select_session(
     }
 
     // `list` prints ids truncated to 12 chars, so accept a unique id prefix as well as a full id.
-    let mut matches = sessions.into_iter().filter(|s| {
-        s.handle.session.as_ref().starts_with(selector) || s.atuin_id.has_prefix(selector)
-    });
-    let first = matches.next().ok_or_else(|| SelectError::NotFound(selector.to_owned()))?;
-    if matches.next().is_some() {
-        return Err(SelectError::Ambiguous(selector.to_owned()));
+    // An id given whole names its session, whatever longer ids it is a prefix of.
+    let atuin_id = selector.parse::<AtuinSessionId>().ok();
+    let (exact, prefixed): (Vec<Session>, Vec<Session>) = sessions
+        .into_iter()
+        .filter(|s| {
+            s.handle.session.as_ref().starts_with(selector) || s.atuin_id.has_prefix(selector)
+        })
+        .partition(|s| s.handle.session.as_ref() == selector || atuin_id == Some(s.atuin_id));
+    match (exact.as_slice(), prefixed.as_slice()) {
+        ([one], _) | ([], [one]) => Ok(one.handle.clone()),
+        ([], []) => Err(SelectError::NotFound(selector.to_owned())),
+        ([], _) => Err(SelectError::Ambiguous(selector.to_owned())),
+        (several, _) => Err(SelectError::Shared {
+            id: selector.to_owned(),
+            choices: several
+                .iter()
+                .map(|s| format!("\n  {:<12} {}", harness_name(s.handle.harness), s.atuin_id))
+                .collect(),
+        }),
     }
-    Ok(first.handle)
 }
 
 // --- human rendering ----------------------------------------------------------------------------
@@ -617,7 +640,12 @@ fn write_session_header(out: &mut dyn Write, s: &Session) -> io::Result<()> {
     writeln!(out)
 }
 
+/// `m` as `show` prints it: nothing for a row with nothing to read (an attachment, session
+/// context, usage alone), which JSON output still holds.
 fn write_message_text(out: &mut dyn Write, m: &Message) -> io::Result<()> {
+    if message_summary(m).is_none() {
+        return Ok(());
+    }
     writeln!(out, "── {} · {} ──", role_name(&m.role), age(m.timestamp))?;
     for block in &m.content {
         match block {
@@ -635,7 +663,7 @@ fn write_message_text(out: &mut dyn Write, m: &Message) -> io::Result<()> {
             Content::ToolUse(tu) => {
                 write!(out, "[tool-call {}]", sanitize(&tu.name))?;
                 if !tu.input.is_null() {
-                    write!(out, " {}", sanitize(&tu.input.to_string()))?;
+                    write!(out, " {}", sanitize(&input_text(&tu.input)))?;
                 }
                 writeln!(out)?;
             }
@@ -660,6 +688,12 @@ fn write_message_text(out: &mut dyn Write, m: &Message) -> io::Result<()> {
         }
     }
     writeln!(out)
+}
+
+/// A call's input as text: a string (a Codex call's arguments, a freeform tool's input) as it
+/// is, any other JSON as encoded.
+fn input_text(input: &serde_json::Value) -> Cow<'_, str> {
+    input.as_str().map_or_else(|| Cow::Owned(input.to_string()), Cow::Borrowed)
 }
 
 fn short_id(session_id: &str) -> &str {
@@ -922,8 +956,11 @@ fn parse_harness(value: &str) -> Result<HarnessKind, String> {
     match value {
         "claude-code" => Ok(HarnessKind::ClaudeCode),
         "codex" => Ok(HarnessKind::Codex),
+        "opencode" => Ok(HarnessKind::Opencode),
         "pi" => Ok(HarnessKind::Pi),
-        other => Err(format!("unknown harness `{other}` (expected claude-code, codex, or pi)")),
+        other => {
+            Err(format!("unknown harness `{other}` (expected claude-code, codex, opencode, or pi)"))
+        }
     }
 }
 
@@ -1200,7 +1237,7 @@ fn content_json(block: &Content, reasoning: Option<u64>) -> Option<ContentJson> 
             input: if tu.input.is_null() {
                 String::new()
             } else {
-                tu.input.to_string()
+                input_text(&tu.input).into_owned()
             },
         },
         Content::ToolResult(tr) => ContentJson::ToolResult {
@@ -1277,6 +1314,7 @@ mod tests {
     #[rstest]
     #[case("claude-code", HarnessKind::ClaudeCode)]
     #[case("codex", HarnessKind::Codex)]
+    #[case("opencode", HarnessKind::Opencode)]
     #[case("pi", HarnessKind::Pi)]
     fn parse_harness_maps_names(#[case] input: &str, #[case] want: HarnessKind) {
         assert_eq!(parse_harness(input).unwrap(), want);
@@ -1284,7 +1322,7 @@ mod tests {
 
     #[rstest]
     fn parse_harness_rejects_unknown_harnesses() {
-        assert!(parse_harness("opencode").is_err());
+        assert!(parse_harness("copilot").is_err());
     }
 
     #[rstest]
@@ -1353,11 +1391,53 @@ mod tests {
         assert!(select_session(sessions, "zzz").is_err());
     }
 
+    /// A query starting with `-` is a query, after `--` or not; flags still parse around it.
     #[rstest]
-    fn ambiguous_id_across_harnesses_is_an_error() {
-        let sessions =
-            vec![session(HarnessKind::Codex, "dup"), session(HarnessKind::ClaudeCode, "dup")];
-        assert!(select_session(sessions, "dup").is_err());
+    #[case::bare(&["search", "-v"])]
+    #[case::after_dashes(&["search", "--", "-v"])]
+    #[case::before_a_flag(&["search", "-v", "--limit", "3"])]
+    #[case::after_a_flag(&["search", "--limit", "3", "-v"])]
+    fn a_search_query_may_start_with_a_hyphen(#[case] args: &[&str]) {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            cmd: Cmd,
+        }
+
+        let cli = <Cli as clap::Parser>::try_parse_from(
+            std::iter::once("session").chain(args.iter().copied()),
+        )
+        .unwrap();
+        let SubCmd::Search { query, .. } = cli.cmd.cmd else {
+            panic!("not a search");
+        };
+        assert_eq!(query, "-v");
+    }
+
+    #[rstest]
+    fn an_exact_id_wins_over_the_ids_it_prefixes() {
+        let sessions = vec![
+            session(HarnessKind::Codex, "abc"),
+            session(HarnessKind::ClaudeCode, "abcdef"),
+            session(HarnessKind::Pi, "abcxyz"),
+        ];
+        assert_eq!(select_session(sessions, "abc").unwrap(), handle(HarnessKind::Codex, "abc"));
+    }
+
+    /// An id several agents' sessions have names none of them, and says how to name each.
+    #[rstest]
+    fn an_id_shared_across_harnesses_lists_their_atuin_ids() {
+        let sessions = vec![
+            session(HarnessKind::Codex, "dup"),
+            session(HarnessKind::ClaudeCode, "dup"),
+            session(HarnessKind::Pi, "dupe"),
+        ];
+        let ids: Vec<String> = sessions.iter().map(|s| s.atuin_id.to_string()).collect();
+        let err = select_session(sessions.clone(), "dup").unwrap_err().to_string();
+        assert!(err.contains(&ids[0]) && err.contains(&ids[1]), "{err}");
+        assert!(!err.contains(&ids[2]), "{err}");
+        let picked = select_session(sessions, &ids[1]).unwrap();
+        assert_eq!(picked, handle(HarnessKind::ClaudeCode, "dup"));
     }
 
     #[rstest]
@@ -1524,6 +1604,37 @@ mod tests {
         assert!(message_summary(&msg(Role::User, vec![])).is_none());
         let blank = msg(Role::User, vec![Content::Text("   ".to_owned())]);
         assert!(message_summary(&blank).is_none());
+    }
+
+    #[rstest]
+    #[case::empty(vec![], false)]
+    #[case::blank(vec![Content::Text(" \n".to_owned())], false)]
+    #[case::raw(vec![Content::Other(json!({"type": "attachment"}))], false)]
+    #[case::text(vec![Content::Text("hi".to_owned())], true)]
+    #[case::uncaptured_call(vec![tool_call("Bash")], true)]
+    fn show_prints_only_rows_with_something_to_read(
+        #[case] content: Vec<Content>,
+        #[case] printed: bool,
+    ) {
+        let mut out = Vec::new();
+        write_message_text(&mut out, &msg(Role::Other(String::new()), content)).unwrap();
+        assert_eq!(!out.is_empty(), printed, "{}", String::from_utf8_lossy(&out));
+    }
+
+    /// A call's text input and a result's text blocks read as text, not as escaped JSON.
+    #[rstest]
+    fn show_prints_tool_text_as_text() {
+        let call = Content::ToolUse(ToolUse {
+            id: ToolCallId::from("c1".to_owned()),
+            name: "exec".to_owned(),
+            input: json!("const out = \"hi\";"),
+        });
+        let result = tool_result(json!([{"type": "text", "text": "line 1\nline 2"}]), false);
+        let mut out = Vec::new();
+        write_message_text(&mut out, &msg(Role::Assistant, vec![call, result])).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("[tool-call exec] const out = \"hi\";\n"), "{out}");
+        assert!(out.contains("[tool-result] line 1\nline 2\n"), "{out}");
     }
 
     #[rstest]
