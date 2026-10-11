@@ -21,8 +21,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::{
-    AtuinSessionId, HarnessKind, HarnessSession, MatchedSession, Message, NativeSessionId,
-    PreviewParts, SearchTerms, Session, SessionFilter, SessionMatch, SourceId,
+    AtuinSessionId, ContentBlocks, HarnessKind, HarnessSession, MatchedSession, Message,
+    MessageRole, NativeSessionId, PreviewParts, SearchTerms, Session, SessionFilter, SessionMatch,
+    SourceId,
 };
 
 mod heads;
@@ -39,7 +40,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -843,7 +844,14 @@ impl AiSessionDatabase {
         filter: &SessionFilter,
         limit: u32,
     ) -> Result<Vec<Session>, DbError> {
-        let (clause, binds) = Self::filter_clause(filter);
+        let (mut clause, mut binds) = Self::filter_clause(filter);
+        if !filter.roles.is_empty() {
+            let (roles, role_binds) = Self::roles_clause(&filter.roles)?;
+            clause.push_str(&format!(
+                " AND EXISTS (SELECT 1 FROM messages m WHERE m.session = s.id{roles})"
+            ));
+            binds.extend(role_binds);
+        }
         let limit_clause = if limit == 0 {
             ""
         } else {
@@ -923,7 +931,48 @@ impl AiSessionDatabase {
             sql.push_str(" AND s.updated_at >= ?");
             binds.push(Bind::Int(Self::millis(since)));
         }
+        if filter.exclude_subagents {
+            // `subagent_like!`, for `s`.
+            sql.push_str(
+                " AND NOT (s.parent_session_id IS NOT NULL AND (s.parent_kind IS 0 OR \
+                 s.parent_kind IS NULL))",
+            );
+        }
         (sql, binds)
+    }
+
+    /// The SQL (`AND …`, over the message `m`) and binds keeping only messages from `roles`, as
+    /// [`MessageRole::of`] tells them from the stored role and [`ContentBlocks`]. Empty for no
+    /// roles.
+    fn roles_clause(roles: &[MessageRole]) -> Result<(String, Vec<Bind>), DbError> {
+        if roles.is_empty() {
+            return Ok((String::new(), Vec::new()));
+        }
+        let tool_output =
+            format!("(m.blocks != 0 AND (m.blocks & ~{}) = 0)", ContentBlocks::TOOL_OUTPUT);
+        let role_is = "m.role IS (SELECT id FROM interned WHERE value = ?)";
+        let mut binds = Vec::new();
+        let mut role = |r: Role| -> Result<&str, DbError> {
+            binds.push(Bind::Text(serde_json::to_string(&r)?));
+            Ok(role_is)
+        };
+        let mut any = Vec::new();
+        for kind in roles {
+            any.push(match kind {
+                MessageRole::User => format!("(NOT {tool_output} AND {})", role(Role::User)?),
+                MessageRole::Assistant => {
+                    format!("(NOT {tool_output} AND {})", role(Role::Assistant)?)
+                }
+                MessageRole::Tool => format!("({tool_output} OR {})", role(Role::Tool)?),
+                MessageRole::Harness => format!(
+                    "(NOT {tool_output} AND NOT {} AND NOT {} AND NOT {})",
+                    role(Role::User)?,
+                    role(Role::Assistant)?,
+                    role(Role::Tool)?
+                ),
+            });
+        }
+        Ok((format!(" AND ({})", any.join(" OR ")), binds))
     }
 
     /// A path as stored in `cwd`, without a trailing separator (`/`, or a Windows `\`).
@@ -1008,7 +1057,10 @@ impl AiSessionDatabase {
                 return;
             };
 
-            let (filter_clause, binds) = Self::filter_clause(&filter);
+            let (mut filter_clause, mut binds) = Self::filter_clause(&filter);
+            let (roles_clause, role_binds) = Self::roles_clause(&filter.roles)?;
+            filter_clause.push_str(&roles_clause);
+            binds.extend(role_binds);
             let (group_harness, group_session) = if filter.roots_only {
                 ("s.root_harness", "s.root_session_id")
             } else {
@@ -1789,8 +1841,8 @@ mod tests {
         SCHEMA_VERSION, TitleSource, Uuid, prefix_successor,
     };
     use crate::ai_session::{
-        HarnessKind, HarnessSession, Message, NativeSessionId, SearchTerms, Session, SessionFilter,
-        SessionMatch, SourceId,
+        ContentBlocks, HarnessKind, HarnessSession, Message, MessageRole, NativeSessionId,
+        SearchTerms, Session, SessionFilter, SessionMatch, SourceId,
     };
 
     fn harness_filter(harness: HarnessKind) -> SessionFilter {
@@ -2400,6 +2452,255 @@ mod tests {
             .unwrap();
         assert_eq!(only_codex.len(), 1);
         assert_eq!(only_codex[0].session.handle, codex);
+    }
+
+    /// One session per kind of message, each searchable by "needle", and who
+    /// [`MessageRole::of`] says it is from. Tool output itself is not indexed, so a tool-output
+    /// message is found by the path its patch changed.
+    fn messages_by_role() -> Vec<(Message, MessageRole)> {
+        let with = |id: &str, role: Role, content: Vec<Content>| {
+            let mut m = message_in(&handle(HarnessKind::ClaudeCode, id), 0, "");
+            m.role = role;
+            m.content = content;
+            m
+        };
+        let result = |error| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("c".to_owned()),
+                output: serde_json::json!("needle"),
+                error,
+            })
+        };
+        let patch = || {
+            use atuin_common::harnesstools::session::{Change, FilePatch, Patch};
+            Content::Patch(Patch {
+                call: ToolCallId::from("c".to_owned()),
+                files: vec![FilePatch {
+                    path: "needle.rs".to_owned(),
+                    change: Change::Update,
+                    moved_to: None,
+                    hunks: Vec::new(),
+                }],
+            })
+        };
+        let call = Content::ToolUse(ToolUse {
+            id: ToolCallId::from("c".to_owned()),
+            name: "Bash".to_owned(),
+            input: serde_json::json!({"command": "needle"}),
+        });
+        let text = || Content::Text("needle".to_owned());
+        vec![
+            (with("prompt", Role::User, vec![text()]), MessageRole::User),
+            (with("output", Role::User, vec![result(false), patch()]), MessageRole::Tool),
+            (with("failed", Role::Tool, vec![result(true), patch()]), MessageRole::Tool),
+            (with("mixed", Role::User, vec![text(), result(false)]), MessageRole::User),
+            (with("reply", Role::Assistant, vec![text()]), MessageRole::Assistant),
+            (with("call", Role::Assistant, vec![call]), MessageRole::Assistant),
+            (with("system", Role::System, vec![text()]), MessageRole::Harness),
+        ]
+    }
+
+    /// The stored blocks pick out the same messages [`MessageRole::of`] does from the decoded
+    /// content, so a search by role agrees with a read by role.
+    #[rstest]
+    #[case::user(&[MessageRole::User])]
+    #[case::assistant(&[MessageRole::Assistant])]
+    #[case::tool(&[MessageRole::Tool])]
+    #[case::harness(&[MessageRole::Harness])]
+    #[case::user_or_tool(&[MessageRole::User, MessageRole::Tool])]
+    #[tokio::test]
+    async fn search_matches_only_messages_from_the_roles_asked_for(#[case] roles: &[MessageRole]) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let messages = messages_by_role();
+        for (m, role) in &messages {
+            assert_eq!(MessageRole::of(&m.role, &m.content), *role, "{:?}", m.content);
+            db.append(m).await.unwrap();
+        }
+
+        let filter = SessionFilter {
+            roles: roles.to_vec(),
+            ..SessionFilter::default()
+        };
+        let found: Vec<SessionMatch> =
+            db.search("needle", SearchTerms::All, &filter, 0).try_collect().await.unwrap();
+
+        let mut found: Vec<_> = found.iter().map(|m| m.session.handle.session.as_ref()).collect();
+        found.sort_unstable();
+        let mut expected: Vec<_> = messages
+            .iter()
+            .filter(|(_, role)| roles.contains(role))
+            .map(|(m, _)| m.session.session.as_ref())
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(found, expected);
+    }
+
+    /// Every kind of block has a bit of its own. A new `Content` variant fails to compile here
+    /// until it is named, and then fails the test until it has a sample and a bit.
+    #[rstest]
+    fn every_kind_of_block_has_its_own_bit() {
+        const KINDS: [&str; 10] = [
+            "text",
+            "reasoning",
+            "tool use",
+            "tool result",
+            "patch",
+            "summary",
+            "error",
+            "other",
+            "reasoning summary",
+            "tool error",
+        ];
+        let kind = |c: &Content| match c {
+            Content::Text(_) => "text",
+            Content::Reasoning(_) => "reasoning",
+            Content::ToolUse(_) => "tool use",
+            Content::ToolResult(r) if r.error => "tool error",
+            Content::ToolResult(_) => "tool result",
+            Content::Patch(_) => "patch",
+            Content::Summary(_) => "summary",
+            Content::Error(_) => "error",
+            Content::Other(_) => "other",
+            Content::ReasoningSummary { .. } => "reasoning summary",
+        };
+        let result = |error| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("c".to_owned()),
+                output: serde_json::Value::Null,
+                error,
+            })
+        };
+        let samples = [
+            Content::Text(String::new()),
+            Content::Reasoning(String::new()),
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("c".to_owned()),
+                name: String::new(),
+                input: serde_json::Value::Null,
+            }),
+            result(false),
+            result(true),
+            Content::Patch(atuin_common::harnesstools::session::Patch {
+                call: ToolCallId::from("c".to_owned()),
+                files: Vec::new(),
+            }),
+            Content::Summary(String::new()),
+            Content::Error(String::new()),
+            Content::Other(serde_json::Value::Null),
+            Content::ReasoningSummary { tokens: None },
+        ];
+
+        let mut kinds: Vec<_> = samples.iter().map(kind).collect();
+        kinds.sort_unstable();
+        let mut expected = KINDS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(kinds, expected, "one sample of every kind");
+
+        let mut seen = 0;
+        for sample in &samples {
+            let ContentBlocks(bits) = ContentBlocks::of(std::slice::from_ref(sample));
+            // A failed tool result is a tool result too: only its error bit is its own.
+            let own = if kind(sample) == "tool error" {
+                bits & !ContentBlocks::TOOL_RESULT
+            } else {
+                bits
+            };
+            assert_eq!(own.count_ones(), 1, "{} has one bit of its own", kind(sample));
+            assert_eq!(seen & own, 0, "{} shares a bit", kind(sample));
+            seen |= own;
+        }
+    }
+
+    /// Without a query, a search (or listing) by role returns the sessions holding a message from
+    /// those roles, as a search with one would.
+    #[rstest]
+    #[case::user(&[MessageRole::User])]
+    #[case::tool(&[MessageRole::Tool])]
+    #[tokio::test]
+    async fn an_empty_search_by_role_returns_sessions_with_such_a_message(
+        #[case] roles: &[MessageRole],
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let messages = messages_by_role();
+        for (m, _) in &messages {
+            db.append(m).await.unwrap();
+        }
+        let filter = SessionFilter {
+            roles: roles.to_vec(),
+            ..SessionFilter::default()
+        };
+        let mut expected: Vec<_> = messages
+            .iter()
+            .filter(|(_, role)| roles.contains(role))
+            .map(|(m, _)| m.session.session.as_ref().to_owned())
+            .collect();
+        expected.sort_unstable();
+
+        let searched: Vec<SessionMatch> =
+            db.search("", SearchTerms::All, &filter, 0).try_collect().await.unwrap();
+        let mut searched: Vec<_> =
+            searched.iter().map(|m| m.session.handle.session.as_ref().to_owned()).collect();
+        searched.sort_unstable();
+        assert_eq!(searched, expected);
+
+        let mut listed: Vec<_> = db
+            .list_sessions(&filter)
+            .await
+            .unwrap()
+            .iter()
+            .map(|s| s.handle.session.as_ref().to_owned())
+            .collect();
+        listed.sort_unstable();
+        assert_eq!(listed, expected);
+    }
+
+    #[rstest]
+    fn content_blocks_tell_tool_output_as_the_content_does() {
+        for (m, _) in messages_by_role() {
+            let blocks = ContentBlocks::of(&m.content);
+            assert_eq!(
+                blocks.is_tool_output(),
+                atuin_common::harnesstools::session::is_tool_output(&m.content),
+                "{:?}",
+                m.content
+            );
+        }
+        assert!(!ContentBlocks::of(&[]).is_tool_output(), "an empty message is no tool output");
+    }
+
+    /// Migration 2 empties what migration 1 projected and clears the watermarks, so the next
+    /// reprojection rebuilds every row with its blocks; checkpoints, which say how far capture
+    /// read each transcript into the record store, stay.
+    #[rstest]
+    fn the_blocks_migration_empties_the_projection_for_a_rebuild() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("migrations/0001_init.sql")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
+                 VALUES (1, 1, 's', x'00', 0, 0);
+             INSERT INTO interned (id, value) VALUES (1, '\"User\"');
+             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
+                 VALUES (x'01', 1, 1, 'a', 0, 1, '[]');
+             INSERT INTO messages_fts (rowid, title, body) VALUES (1, '', 'needle');
+             INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', 't', 3, 'r');",
+        )
+        .unwrap();
+        let checkpoints: i64 =
+            conn.query_row("SELECT count(*) FROM checkpoints", [], |r| r.get(0)).unwrap();
+
+        conn.execute_batch(include_str!("migrations/0002_message_blocks.sql")).unwrap();
+
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(count("SELECT count(*) FROM sessions"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'needle'"), 0);
+        assert_eq!(count("SELECT count(*) FROM reproject_watermark"), 0);
+        assert_eq!(count("SELECT generation FROM projection_state"), 1);
+        assert_eq!(count("SELECT count(*) FROM checkpoints"), checkpoints);
+        assert_eq!(
+            count("SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'blocks'"),
+            1
+        );
     }
 
     fn reply_in(session: &HarnessSession, index: i64, text: &str) -> Message {
@@ -3904,6 +4205,50 @@ mod tests {
         assert_eq!(groups[0].child_count, u64::from(kind != ParentKind::Subagent));
     }
 
+    /// Excluding subagents drops their matches, alone and grouped under their root, and keeps
+    /// forks.
+    #[rstest]
+    #[case::flat(false)]
+    #[case::roots_only(true)]
+    #[tokio::test]
+    async fn search_can_leave_out_subagents(#[case] roots_only: bool) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let root = handle(HarnessKind::ClaudeCode, "root");
+        db.append(&message_in(&root, 0, "root words")).await.unwrap();
+        for (id, kind) in [
+            ("sub", Some(ParentKind::Subagent)),
+            ("unknown", None),
+            ("fork", Some(ParentKind::Fork)),
+        ] {
+            let mut m = message_in(&handle(HarnessKind::ClaudeCode, id), 1, "shared keyword");
+            m.parent = Some(root.clone());
+            m.parent_kind = kind;
+            db.append(&m).await.unwrap();
+        }
+        let found = |exclude_subagents| {
+            let filter = SessionFilter {
+                roots_only,
+                exclude_subagents,
+                ..SessionFilter::default()
+            };
+            db.search("shared", SearchTerms::All, &filter, 0).try_collect::<Vec<_>>()
+        };
+
+        let all = found(false).await.unwrap();
+        let without = found(true).await.unwrap();
+
+        if roots_only {
+            assert_eq!(all.len(), 1);
+            assert_eq!(without.len(), 1);
+            let matched = without[0].matched.as_ref().map(|m| m.handle.session.as_ref());
+            assert_eq!(matched, Some("fork"), "the match is the fork's, not a subagent's");
+        } else {
+            assert_eq!(all.len(), 3);
+            let ids: Vec<_> = without.iter().map(|m| m.session.handle.session.as_ref()).collect();
+            assert_eq!(ids, ["fork"]);
+        }
+    }
+
     /// A child of a kind this build does not know (a newer build's) is grouped under its root
     /// but, like a subagent, not counted in its size.
     #[rstest]
@@ -4637,6 +4982,11 @@ mod tests {
             if let Some(version) = version {
                 #[allow(clippy::disallowed_macros)]
                 sqlx::migrate!("./src/ai_session/migrations").run(db.pool()).await.unwrap();
+                // One migration row, claiming `version`.
+                db::query("DELETE FROM _sqlx_migrations WHERE version > 1")
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
                 db::query("UPDATE _sqlx_migrations SET version = ?")
                     .bind(version)
                     .execute(db.pool())
@@ -4668,7 +5018,9 @@ mod tests {
         let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
         #[allow(clippy::disallowed_macros)]
         sqlx::migrate!("./src/ai_session/migrations").run(db.pool()).await.unwrap();
-        for (version, description) in [(2, "reproject watermark"), (3, "hosts and roots")] {
+        for (version, description) in
+            [(SCHEMA_VERSION + 1, "a newer table"), (SCHEMA_VERSION + 2, "another")]
+        {
             db::query(
                 "INSERT INTO _sqlx_migrations (version, description, success, checksum, \
                  execution_time) VALUES (?, ?, 1, x'00', 0)",

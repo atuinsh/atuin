@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use atuin_common::harnesstools::session::{
-    Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage,
+    Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
 };
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId};
@@ -357,6 +357,82 @@ impl Session {
     }
 }
 
+/// Who a message is from, as a search's [`SessionFilter::roles`] tells them apart: tool output
+/// is [`Self::Tool`] whatever its envelope role, and whatever is neither the person, the model
+/// nor a tool was written by the harness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MessageRole {
+    User,
+    Assistant,
+    Tool,
+    Harness,
+}
+
+impl MessageRole {
+    #[must_use]
+    pub fn of(role: &Role, content: &[Content]) -> Self {
+        if is_tool_output(content) {
+            return Self::Tool;
+        }
+        match role {
+            Role::User => Self::User,
+            Role::Assistant => Self::Assistant,
+            Role::Tool => Self::Tool,
+            Role::System | Role::Other(_) => Self::Harness,
+        }
+    }
+}
+
+/// The kinds of content block a message holds, as a bit set: stored with each message so queries
+/// can classify it (see [`MessageRole`]) without decoding its content.
+///
+/// The bits are stored, so never renumber or reuse one: a new kind of block takes the next free
+/// bit (there are 63), and needs a sidecar migration that rebuilds the projection, as
+/// `0002_message_blocks.sql` does, so rows stored before it get the bit too. A block this build
+/// does not know arrives as [`Content::Other`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, From, Into)]
+pub struct ContentBlocks(pub i64);
+
+impl ContentBlocks {
+    pub const TEXT: i64 = 1;
+    pub const REASONING: i64 = 1 << 1;
+    pub const TOOL_USE: i64 = 1 << 2;
+    pub const TOOL_RESULT: i64 = 1 << 3;
+    /// A tool result that reported an error; always with [`Self::TOOL_RESULT`].
+    pub const TOOL_ERROR: i64 = 1 << 4;
+    pub const PATCH: i64 = 1 << 5;
+    pub const SUMMARY: i64 = 1 << 6;
+    pub const ERROR: i64 = 1 << 7;
+    pub const OTHER: i64 = 1 << 8;
+    pub const REASONING_SUMMARY: i64 = 1 << 9;
+    /// What tool output holds: anything else makes a message more than tool output.
+    pub const TOOL_OUTPUT: i64 = Self::TOOL_RESULT | Self::TOOL_ERROR | Self::PATCH;
+
+    #[must_use]
+    pub fn of(content: &[Content]) -> Self {
+        Self(content.iter().fold(0, |bits, block| {
+            bits | match block {
+                Content::Text(_) => Self::TEXT,
+                Content::Reasoning(_) => Self::REASONING,
+                Content::ToolUse(_) => Self::TOOL_USE,
+                Content::ToolResult(result) if result.error => Self::TOOL_RESULT | Self::TOOL_ERROR,
+                Content::ToolResult(_) => Self::TOOL_RESULT,
+                Content::Patch(_) => Self::PATCH,
+                Content::Summary(_) => Self::SUMMARY,
+                Content::Error(_) => Self::ERROR,
+                Content::Other(_) => Self::OTHER,
+                Content::ReasoningSummary { .. } => Self::REASONING_SUMMARY,
+            }
+        }))
+    }
+
+    /// [`is_tool_output`], from the blocks alone.
+    #[must_use]
+    pub const fn is_tool_output(self) -> bool {
+        self.0 != 0 && self.0 & !Self::TOOL_OUTPUT == 0
+    }
+}
+
 /// Which sessions a listing or search returns. An absent field is not a filter; every present
 /// one must hold.
 ///
@@ -383,6 +459,12 @@ pub struct SessionFilter {
     /// Return only roots, each carrying its [`Session::child_count`], with the sessions grouped
     /// under it counting toward it: in a search, a child's match is its root's.
     pub roots_only: bool,
+    /// Leave out subagents (and children of unknown kind, read as subagents): with
+    /// [`Self::roots_only`], their matches no longer count toward their root.
+    pub exclude_subagents: bool,
+    /// Only sessions with a message from one of these roles (any, when empty); in a search, only
+    /// such messages match.
+    pub roles: Vec<MessageRole>,
     /// Active at or after this time (its `updated_at`).
     pub updated_since: Option<OffsetDateTime>,
 }

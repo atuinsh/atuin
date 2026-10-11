@@ -3,9 +3,9 @@
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use atuin_client::ai_session::{HarnessSession, Message, Session};
+use atuin_client::ai_session::{HarnessSession, Message, MessageRole, Session};
 use atuin_client::settings::Settings;
-use atuin_common::harnesstools::session::{Content, Role};
+use atuin_common::harnesstools::session::{Content, is_tool_output};
 use atuin_common::range::Clamped;
 use atuin_common::string::{NonBlankString, TruncateCharsExt};
 use atuin_common::time::UtcOffsetExt;
@@ -94,18 +94,13 @@ pub enum RoleArg {
     Harness,
 }
 
-impl RoleArg {
-    /// Tool output is `tool` whatever the envelope role, as on a page; whatever is neither the
-    /// person, the model nor a tool was written by the harness.
-    fn of(m: &Message) -> Self {
-        if is_tool_output(m) {
-            return Self::Tool;
-        }
-        match m.role {
-            Role::User => Self::User,
-            Role::Assistant => Self::Assistant,
-            Role::Tool => Self::Tool,
-            Role::System | Role::Other(_) => Self::Harness,
+impl From<RoleArg> for MessageRole {
+    fn from(value: RoleArg) -> Self {
+        match value {
+            RoleArg::User => Self::User,
+            RoleArg::Assistant => Self::Assistant,
+            RoleArg::Tool => Self::Tool,
+            RoleArg::Harness => Self::Harness,
         }
     }
 }
@@ -130,7 +125,10 @@ impl Filter {
 
     /// Whether the page shows `m`: it has something to read and passes the filter.
     fn keeps(&self, m: &Message) -> bool {
-        if !has_content(m) || (!self.roles.is_empty() && !self.roles.contains(&RoleArg::of(m))) {
+        let role = MessageRole::of(&m.role, &m.content);
+        if !has_content(m)
+            || (!self.roles.is_empty() && !self.roles.iter().any(|r| MessageRole::from(*r) == role))
+        {
             return false;
         }
         if self.terms.is_empty() {
@@ -490,6 +488,9 @@ impl AtuinAiSessionReadToolCall {
             }
         }
         shown += tools.flush(&mut out);
+        if tools.folded {
+            let _ = writeln!(out, "{UNCAPTURED_TOOLS_HINT}");
+        }
 
         if filter.is_active() {
             filter.footer(&mut out, &kept, complete, start..end, counted);
@@ -621,19 +622,12 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
         return None;
     }
 
-    let role = if is_tool_output(m) {
+    let role = if is_tool_output(&m.content) {
         "tool".to_owned()
     } else {
         message_role(m)
     };
     Some((role, body))
-}
-
-/// A message of tool results (and the patches they made) alone is tool output whatever the
-/// envelope role: some harnesses model tool output as a user turn.
-fn is_tool_output(m: &Message) -> bool {
-    !m.content.is_empty()
-        && m.content.iter().all(|b| matches!(b, Content::ToolResult(_) | Content::Patch(_)))
 }
 
 /// `text` cut to `budget` chars, saying how much was left out; whole when `full`.
@@ -772,6 +766,12 @@ fn has_content(m: &Message) -> bool {
     })
 }
 
+/// Under a page with folded tool runs: their arguments are gone from the transcript, but an
+/// agent's commands are in shell history.
+const UNCAPTURED_TOOLS_HINT: &str = "\n(\"tools:\" lines are calls whose arguments were not \
+                                     captured. For the commands an agent ran, search \
+                                     atuin_history with authors [\"$all-agent\"].)";
+
 /// A run of consecutive messages that are only tool calls and results whose arguments and output
 /// were not captured. Rendered as one line (`#13–#24 tools: Grep, Bash, Read`) instead of a
 /// numbered entry per call and per result.
@@ -781,6 +781,8 @@ struct ToolRun {
     last: usize,
     names: Vec<String>,
     errors: usize,
+    /// Whether any run was rendered, which lasts past the run itself.
+    folded: bool,
 }
 
 impl ToolRun {
@@ -832,7 +834,10 @@ impl ToolRun {
         }
         out.push('\n');
         let messages = self.last - first + 1;
-        *self = Self::default();
+        *self = Self {
+            folded: true,
+            ..Self::default()
+        };
         messages
     }
 
@@ -862,7 +867,7 @@ impl ToolRun {
 mod tests {
     use atuin_client::ai_session::{AtuinSessionId, HarnessKind, NativeSessionId, SourceId};
     use atuin_common::harnesstools::session::{
-        Change, FilePatch, Hunk, Patch, ToolCallId, ToolResult, ToolUse,
+        Change, FilePatch, Hunk, Patch, Role, ToolCallId, ToolResult, ToolUse,
     };
     use atuin_domain::record::RecordId;
     use rstest::rstest;
@@ -959,6 +964,7 @@ mod tests {
         ];
         let out = render(json!({"session_id": "abc"}), &msgs);
         assert!(out.contains("#1–#5 tools: Grep ×2, Bash (1 error)\n#6 assistant"), "{out}");
+        assert!(out.contains(UNCAPTURED_TOOLS_HINT), "{out}");
         assert!(!out.contains("Reasoning"));
         assert!(out.contains("[messages 0–6 of 7]"), "{out}");
     }
@@ -980,6 +986,7 @@ mod tests {
         let out = render(json!({"session_id": "abc"}), &msgs);
         assert!(out.contains("→ Bash: cargo test"), "{out}");
         assert!(out.contains("← test result: ok"), "{out}");
+        assert!(!out.contains(UNCAPTURED_TOOLS_HINT), "{out}");
     }
 
     /// The header names a few children and counts the rest, so a session with many subagents

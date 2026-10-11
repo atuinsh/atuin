@@ -54,6 +54,15 @@ pub fn reasoning_label(tokens: Option<u64>) -> String {
     tokens.map_or_else(|| "Reasoned".to_owned(), |n| format!("Reasoning · {n} tokens"))
 }
 
+/// Whether a message of `content` is tool output: tool results (and the patches they made) and
+/// nothing else, whatever its envelope role, since some harnesses (Claude Code) send tool output
+/// back as a user turn.
+#[must_use]
+pub fn is_tool_output(content: &[Content]) -> bool {
+    !content.is_empty()
+        && content.iter().all(|c| matches!(c, Content::ToolResult(_) | Content::Patch(_)))
+}
+
 /// Whether a row with `role` and `content` is a message that makes a line of conversation worth
 /// telling apart from another: a user prompt, or assistant text. Tool calls, their results,
 /// reasoning, usage and system context are not, so a fork in a session's rows only counts as a

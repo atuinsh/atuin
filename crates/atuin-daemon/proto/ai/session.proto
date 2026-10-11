@@ -25,6 +25,23 @@ message SessionFilter {
   bool roots_only = 7;
   // Active (updated) at or after this time.
   google.protobuf.Timestamp updated_since = 8;
+  // Leave out subagents (and children of unknown kind); with roots_only, their
+  // matches no longer count toward their root.
+  bool exclude_subagents = 9;
+  // Only sessions with a message from one of these roles (any, when empty); in
+  // a search, only such messages match.
+  repeated MessageRole roles = 10;
+}
+
+// Who a message is from: tool output is TOOL whatever its envelope role, and
+// whatever is neither the person, the model nor a tool was written by the
+// harness.
+enum MessageRole {
+  MESSAGE_ROLE_UNSPECIFIED = 0;
+  MESSAGE_ROLE_USER = 1;
+  MESSAGE_ROLE_ASSISTANT = 2;
+  MESSAGE_ROLE_TOOL = 3;
+  MESSAGE_ROLE_HARNESS = 4;
 }
 
 message ListSessionsRequest {

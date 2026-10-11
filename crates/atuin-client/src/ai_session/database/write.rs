@@ -19,7 +19,7 @@ use super::watermark::BUMP_GENERATION;
 use super::{
     AiSessionDatabase, Appended, CallRow, Claimant, DbError, Generation, SessionKey, Tokens,
 };
-use crate::ai_session::{AtuinSessionId, Message};
+use crate::ai_session::{AtuinSessionId, ContentBlocks, Message};
 
 /// Long enough to wait out the other connection's write, as sqlx's default is.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -181,6 +181,7 @@ pub struct PreparedMessage {
     role: String,
     content: String,
     content_z: Option<Vec<u8>>,
+    blocks: ContentBlocks,
     stop_reason: Option<String>,
     title_change: Option<String>,
     body: String,
@@ -196,6 +197,7 @@ impl PreparedMessage {
             role: serde_json::to_string(&msg.role)?,
             content,
             content_z,
+            blocks: ContentBlocks::of(&msg.content),
             stop_reason: msg.stop_reason.as_ref().map(serde_json::to_string).transpose()?,
             title_change: msg.title_change.as_ref().map(serde_json::to_string).transpose()?,
             body: AiSessionDatabase::searchable_body(&msg),
@@ -299,8 +301,8 @@ impl AiSessionDatabase {
                 id, harness, session, source_id, parent_harness, parent_session_id,
                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
                 usage_input, usage_output, usage_cache_read, usage_cache_write,
-                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host, blocks
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session, source_id) DO NOTHING",
         )
         .bind(id)
@@ -327,6 +329,7 @@ impl AiSessionDatabase {
         .bind(msg.turn_id.as_deref())
         .bind(prepared.title_change.as_deref())
         .bind(interned.id(conn, host.as_deref())?)
+        .bind(prepared.blocks.0)
         .execute(conn)?;
 
         if inserted.rows_affected() == 0 {

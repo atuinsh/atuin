@@ -3,7 +3,9 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use atuin_client::ai_session::{HarnessKind, SearchTerms, SessionFilter, SessionMatch};
+use atuin_client::ai_session::{
+    HarnessKind, MessageRole, SearchTerms, SessionFilter, SessionMatch,
+};
 use atuin_client::settings::Settings;
 use atuin_common::range::Clamped;
 use atuin_common::string::NonBlankString;
@@ -14,6 +16,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::caller::{Caller, is_own};
+use super::read::RoleArg;
 use super::{connect, elsewhere_note, one_line, render_session_summary, resolve_cwd};
 use crate::commands::session::HarnessArg;
 use crate::tools::ToolOutcome;
@@ -42,6 +45,16 @@ pub struct AtuinAiSessionSearchToolCall {
     /// matches the filter left out, and where.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Include subagent sessions (spawned by another agent session to do part of its work). Off
+    /// by default: their prompts are written by the agent that spawned them, so they crowd out
+    /// the sessions a person ran.
+    #[serde(default)]
+    pub include_subagents: bool,
+    /// Match only messages from these roles: 'user' (what the person wrote), 'assistant' (the
+    /// agent's replies and tool calls), 'tool' (tool output), 'harness' (context the harness
+    /// injected). ["user"] finds what people asked for and corrected. Omit for every role.
+    #[serde(default)]
+    pub roles: Option<Vec<RoleArg>>,
 }
 
 impl AtuinAiSessionSearchToolCall {
@@ -51,7 +64,11 @@ impl AtuinAiSessionSearchToolCall {
 
     async fn run(&self, settings: &Settings, caller: &Caller<'_>) -> Result<String, ToolOutcome> {
         let mut client = connect(settings).await?;
-        let harness = self.harness.map(HarnessKind::from);
+        let scope = Scope {
+            harness: self.harness.map(HarnessKind::from),
+            include_subagents: self.include_subagents,
+            roles: self.roles.iter().flatten().copied().map(MessageRole::from).collect(),
+        };
         let cwd = resolve_cwd(self.cwd.as_deref())?;
         let cwd_str = cwd.as_ref().map(|c| c.to_string_lossy());
         let own = caller.own_session(&mut client).await;
@@ -64,17 +81,17 @@ impl AtuinAiSessionSearchToolCall {
         // prefix, so a near-miss query still finds something instead of costing the model a
         // retry. See `should_loosen` for what keeps the looser search from answering a question
         // nobody asked.
-        let strict = search(&mut client, query, harness, cwd_str.as_deref(), false, fetch).await?;
+        let strict = search(&mut client, query, &scope, cwd_str.as_deref(), false, fetch).await?;
         // With a cwd filter, one unscoped strict search serves both that decision and the note.
         let unscoped = match cwd_str {
             Some(_) => {
-                Some(search(&mut client, query, harness, None, false, fetch.max(NOTE_SCAN)).await?)
+                Some(search(&mut client, query, &scope, None, false, fetch.max(NOTE_SCAN)).await?)
             }
             None => None,
         };
         let any_term = should_loosen(&strict, unscoped.as_deref());
         let found = if any_term {
-            search(&mut client, query, harness, cwd_str.as_deref(), true, fetch).await?
+            search(&mut client, query, &scope, cwd_str.as_deref(), true, fetch).await?
         } else {
             strict
         };
@@ -90,7 +107,7 @@ impl AtuinAiSessionSearchToolCall {
         let note = match cwd.as_deref() {
             Some(root) => {
                 let all = if any_term {
-                    search(&mut client, query, harness, None, true, NOTE_SCAN).await.ok()
+                    search(&mut client, query, &scope, None, true, NOTE_SCAN).await.ok()
                 } else {
                     unscoped
                 };
@@ -157,17 +174,26 @@ impl AtuinAiSessionSearchToolCall {
     }
 }
 
+/// The filters every search of one call shares.
+struct Scope {
+    harness: Option<HarnessKind>,
+    include_subagents: bool,
+    roles: Vec<MessageRole>,
+}
+
 async fn search(
     client: &mut AiClient,
     query: &str,
-    harness: Option<HarnessKind>,
+    scope: &Scope,
     cwd: Option<&str>,
     any_term: bool,
     limit: u32,
 ) -> Result<Vec<SessionMatch>, ToolOutcome> {
     let filter = SessionFilter {
-        harness,
+        harness: scope.harness,
         workspace: cwd.map(PathBuf::from),
+        exclude_subagents: !scope.include_subagents,
+        roles: scope.roles.clone(),
         ..SessionFilter::default()
     };
     let terms = if any_term {
@@ -232,6 +258,7 @@ mod tests {
     fn parses_query_and_clamps_limit(#[case] input: serde_json::Value, #[case] limit: u32) {
         let call: AtuinAiSessionSearchToolCall = serde_json::from_value(input).unwrap();
         assert_eq!(call.limit.get(), limit);
+        assert!(!call.include_subagents);
     }
 
     #[rstest]

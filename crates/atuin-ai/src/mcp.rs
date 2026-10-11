@@ -105,9 +105,11 @@ impl ServerHandler for AtuinMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let arguments = request.arguments.unwrap_or_default();
-        let peer = context.peer.peer_info();
+        // Stateless clients (protocol 2026-07-28, e.g. Claude Code) skip `initialize` and send
+        // their client info in each request's `_meta`.
+        let client = context.client_info();
         let caller = Caller {
-            client: peer.as_deref().map(|p| p.client_info.name.as_str()),
+            client: client.as_ref().map(|c| c.name.as_str()),
             own: &self.own_session,
         };
         // Bad arguments come back as a tool error, not a JSON-RPC one, so the model sees what was
