@@ -777,12 +777,12 @@ AI coding agents support hook systems that notify external tools when they're ab
 
 When `atuin hook install` runs, it writes the agent's config file or extension to register Atuin as a hook handler:
 
-| Agent       | Config file / extension               |
-| ----------- | ------------------------------------- |
-| Claude Code | `~/.claude/settings.json`             |
-| Codex       | `~/.codex/hooks.json`                 |
-| opencode    | `~/.config/opencode/plugins/atuin.ts` |
-| pi          | `~/.pi/agent/extensions/atuin.ts`     |
+| Agent       | Config file / extension                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| Claude Code | `~/.claude/settings.json`                                                                         |
+| Codex       | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml` |
+| opencode    | `~/.config/opencode/plugins/atuin.ts`                                                             |
+| pi          | `~/.pi/agent/extensions/atuin.ts`                                                                 |
 
 The hook lifecycle:
 
@@ -845,7 +845,9 @@ This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin ho
 atuin hook install codex
 ```
 
-This adds hook entries to `~/.codex/hooks.json`. Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
+This adds hook entries to `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`). Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
+
+Codex 0.160 and later only run hooks you have trusted, so the install also records Atuin's hooks as trusted in `$CODEX_HOME/config.toml` (`[hooks.state]` entries). It trusts only Atuin's own hooks, as installed, and leaves your other hooks and settings as they are. If you installed the hooks with an earlier version of Atuin, run the install again to trust them.
 
 ### opencode
 
@@ -855,11 +857,13 @@ atuin hook install opencode
 
 This writes Atuin's plugin to `~/.config/opencode/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/opencode/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`.
 
-Then restart opencode. The plugin records every `bash` tool command with author `opencode`, using the tool's description as the entry's intent when opencode supplies one.
+Then restart opencode. The plugin records every shell tool command with author `opencode`, using the tool's description as the entry's intent when opencode supplies one.
 
-Two details are worth knowing:
+opencode 1.x and 2.x load plugins differently, so the install writes the plugin for the opencode it finds (`opencode --version`). After upgrading to opencode 2, run `atuin hook install opencode` again.
 
-- Commands you deny at the permission prompt aren't recorded. The plugin waits until opencode is cleared to run a command before opening a history entry.
+A few details are worth knowing:
+
+- Commands you deny at the permission prompt aren't recorded. With opencode 2, a command is recorded once it has finished, so its time is when it ended, and its duration includes any wait at the permission prompt. A command that timed out is recorded with exit code 124, and one left running in the background isn't recorded.
 - Commands you run yourself in opencode -- with the `!command` prompt prefix or in a terminal pane -- aren't recorded either, since opencode didn't run them. Use Atuin's own shell integration for those.
 
 ### pi
@@ -910,7 +914,7 @@ hooks.PostToolUse: already installed, skipping
 hooks.PostToolUseFailure: already installed, skipping
 ```
 
-For opencode and pi, reinstalling will also skip if the installed extension already matches the bundled version.
+For opencode and pi, reinstalling will also skip if the installed extension already matches the one for your agent's version.
 
 # Keeping Secrets Out of Atuin
 
@@ -5756,6 +5760,7 @@ The rules that keep things out of your history and your captured output apply to
 - A command [`history_filter`](https://docs.atuin.sh/configuration/config/#history_filter) excludes, or one [`secrets_filter`](https://docs.atuin.sh/configuration/config/#secrets_filter) recognises a credential in, is kept as the name of its tool only, without its input or output. Every call in a directory [`cwd_filter`](https://docs.atuin.sh/configuration/config/#cwd_filter) excludes is kept the same way.
 - A command whose output is never stored is kept without its output: one [`command_filter`](https://docs.atuin.sh/configuration/config/#command_filter) matches, one of Atuin's own credential commands (such as `atuin key` and `atuin login`), or another tool's that prints a credential, such as `gh auth token` or `kubectl get secret`.
 - A file holding credentials (`.env`, `~/.ssh/id_ed25519`, `~/.aws/credentials`, any of your [`sensitive_files`](https://docs.atuin.sh/configuration/config/#sensitive_files)) is never captured: a call that reads one, or a command naming one, is kept without its output, and a call that writes to one without what it wrote.
+- Codex runs its tools through a script, and each command and patch in the script is judged as above. A script Atuin can't read in full (one that builds a command or a file name as it runs) is kept as the name of its tool only. The commands it runs still reach your history, filtered, through [Codex's hooks](https://docs.atuin.sh/guide/agent-hooks/#codex).
 
 Text that can't be redacted quickly isn't kept. To keep more out, see [Keeping Secrets Out of Atuin](https://docs.atuin.sh/guide/excluding-commands/index.md).
 
@@ -5875,7 +5880,7 @@ resume_chooser = false
 
 The chooser still opens for a session its own agent can't resume.
 
-From the command line, `atuin resume <id>` resumes a session in its own agent directly (an id prefix works too), writing it out from sync first when it isn't on this machine, and `atuin resume <id> --in codex` continues it in another (`claude`, `codex`, `opencode` or `pi`). `atuin resume <id> --fork` forks it. It catches the session up with sync as the picker does, and fails when that needs a choice, saying which: `--as-is` resumes this copy unchanged, `--switch` switches it to another branch, and `--fork` forks it from its newest branch. `--branch` picks the branch to catch up to, to switch to, or to fork from: `this`, `@<host id>`, or the start of the id the error lists. `--as-is`, `--switch` and `--branch` need an id that names a single session: when it names several, Atuin lists them and asks you to be more specific. `--print` prints the command instead of running it.
+From the command line, `atuin resume <id>` resumes a session in its own agent directly (an id prefix works too), writing it out from sync first when it isn't on this machine, and `atuin resume <id> --in codex` continues it in another (`claude`, `codex`, `opencode` or `pi`). `atuin resume <id> --fork` forks it. It catches the session up with sync as the picker does, and fails when that needs a choice, saying which: `--as-is` resumes this copy unchanged, `--switch` switches it to another branch, and `--fork` forks it from its newest branch. `--branch` picks the branch to catch up to, to switch to, to fork from, or to continue with `--in`: `this`, `@<host id>`, or the start of the id the error lists. A session that went different ways on several machines needs `--branch` with `--in`, and with `--switch` when more than one branch could be switched to; without it, Atuin lists the branches to choose from. `--as-is`, `--switch` and `--branch` need an id that names a single session: when it names several, Atuin lists them and asks you to be more specific. `--print` prints the command instead of running it.
 
 The id can be the agent's own, or the session's Atuin id, which Inspect and the MCP session tools show. An Atuin id is a UUIDv7, written as 32 hex digits like a history id. It's fixed when Atuin first records the session, and is the same for every agent and on every machine. Its first 12 digits are when the session started, so a prefix needs more digits than that to name a single session.
 
