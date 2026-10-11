@@ -119,7 +119,6 @@ opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 ratatui = { workspace = true }
 regex = { workspace = true }
-rpassword = { workspace = true }
 runtime-format = { workspace = true }
 rust-embed = { workspace = true }
 rustix = { workspace = true }
@@ -129,7 +128,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 shlex = { workspace = true }
 sysinfo = { workspace = true }
-tempfile = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tiny-bip39 = { workspace = true }

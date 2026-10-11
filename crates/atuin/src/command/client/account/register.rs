@@ -3,20 +3,21 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use clap::Parser;
+use clap_couture::Couture;
 use eyre::{Result, bail};
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 
-use super::PasswordArg;
-use super::login::or_user_input;
+use super::prompter;
 use crate::i18n::fl;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Couture)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
-    #[clap(long, short, help = fl!("arg-password"))]
-    pub password: Option<PasswordArg>,
+    #[clap(long, short, env = "ATUIN_PASSWORD", hide_env_values = true, help = fl!("arg-password"))]
+    #[couture(accept_stdin(dash))]
+    pub password: Option<SecretString>,
 
     #[clap(long, short)]
     pub email: Option<String>,
@@ -45,17 +46,8 @@ impl Cmd {
         }
 
         if settings.is_hub_sync() {
-            // Only resolved once headless registration is reachable, so that
-            // `--password -` does not swallow stdin before the browser flow.
-            let password = match (&self.username, &self.email) {
-                (Some(_), Some(_)) => {
-                    PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
-                }
-                _ => None,
-            };
-
             if let (Some(username), Some(email), Some(password)) =
-                (&self.username, &self.email, &password)
+                (&self.username, &self.email, &self.password)
             {
                 // Headless registration via v0 API (for CI / scripting).
                 let client = auth::auth_client(settings).await;
@@ -109,10 +101,18 @@ impl Cmd {
             // Legacy registration flow
             println!("{}", fl!("register-legacy-start"));
 
-            let username = or_user_input(self.username.clone(), &fl!("prompt-username"));
-            let email = or_user_input(self.email.clone(), &fl!("prompt-email"));
-            let password = PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
-                .unwrap_or_else(super::login::read_user_password);
+            let username = match self.username.clone() {
+                Some(username) => username,
+                None => prompter("--username")?.text(&fl!("prompt-username"))?,
+            };
+            let email = match self.email.clone() {
+                Some(email) => email,
+                None => prompter("--email")?.text(&fl!("prompt-email"))?,
+            };
+            let password: SecretString = match self.password.clone() {
+                Some(password) => password,
+                None => prompter("--password")?.secret(&fl!("prompt-password"))?,
+            };
 
             if password.expose_secret().is_empty() {
                 bail!(fl!("account-provide-password"));

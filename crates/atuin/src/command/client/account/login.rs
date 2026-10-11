@@ -1,31 +1,34 @@
-use std::io::{self, IsTerminal};
-
 use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
-use atuin_common::utils::env_nonempty;
 use clap::Parser;
+use clap_couture::interactive::PromptError;
+use clap_couture::{Couture, CoutureParser as _};
 use eyre::{Context, Result, bail};
-use rpassword::prompt_password;
-use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretString};
 
-use super::PasswordArg;
+use super::prompter;
+use crate::Atuin;
 use crate::i18n::fl;
 
-const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
-
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Couture)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
-    #[clap(long, short, help = fl!("arg-password"))]
-    pub password: Option<PasswordArg>,
+    #[clap(long, short, env = "ATUIN_PASSWORD", hide_env_values = true, help = fl!("arg-password"))]
+    #[couture(accept_stdin(dash))]
+    pub password: Option<SecretString>,
 
-    #[clap(long, short, help = fl!("arg-account-login-key"))]
+    #[clap(
+        long,
+        short,
+        env = "ATUIN_ENCRYPTION_KEY",
+        hide_env_values = true,
+        help = fl!("arg-account-login-key")
+    )]
     pub key: Option<SecretString>,
 
     #[clap(long, short, help = fl!("arg-totp-code"))]
@@ -33,17 +36,6 @@ pub struct Cmd {
 
     #[clap(long, hide = true)]
     pub from_registration: bool,
-}
-
-/// Read a line from stdin, returning `None` at end of input. The distinction
-/// matters for the key prompts, which re-prompt on a blank line but must not
-/// spin forever once stdin is exhausted.
-fn get_input<T: for<'a> From<&'a str>>() -> Result<Option<T>> {
-    let mut input = Zeroizing::new(String::new());
-    if io::stdin().read_line(&mut input)? == 0 {
-        return Ok(None);
-    }
-    Ok(Some(input.trim_end_matches(&['\r', '\n'][..]).into()))
 }
 
 impl Cmd {
@@ -76,13 +68,7 @@ impl Cmd {
 
     /// Whether a rejected key can be corrected by asking for another one.
     fn interactive(&self) -> bool {
-        self.scripted_key().is_none() && io::stdin().is_terminal()
-    }
-
-    fn scripted_key(&self) -> Option<SecretString> {
-        self.key
-            .clone()
-            .or_else(|| env_nonempty(KEY_ENV)?.into_string().ok().map(SecretString::from))
+        self.key.is_none() && Atuin::prompter().is_some()
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -93,8 +79,10 @@ impl Cmd {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
-            let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
-                .unwrap_or_else(read_user_password);
+            let password = match self.password.clone() {
+                Some(password) => password,
+                None => prompter("--password")?.secret(&fl!("prompt-password"))?,
+            };
 
             self.prompt_and_store_key(settings, store).await?;
 
@@ -106,10 +94,8 @@ impl Cmd {
                 match response {
                     AuthResponse::Success { session, auth_type } => break (session, auth_type),
                     AuthResponse::TwoFactorRequired => {
-                        let Some(code) = read_user_input(&fl!("prompt-two-factor-code")) else {
-                            bail!(fl!("login-totp-required"));
-                        };
-                        totp_code = Some(code);
+                        let code = prompter("--totp-code")?.text(&fl!("prompt-two-factor-code"))?;
+                        totp_code = Some(code.into());
                     }
                 }
             };
@@ -151,9 +137,14 @@ impl Cmd {
     /// Legacy login: always prompt for username/password interactively
     /// (or accept them via flags).
     async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let username = or_user_input(self.username.clone(), &fl!("prompt-username"));
-        let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
-            .unwrap_or_else(read_user_password);
+        let username = match self.username.clone() {
+            Some(username) => username,
+            None => prompter("--username")?.text(&fl!("prompt-username"))?,
+        };
+        let password = match self.password.clone() {
+            Some(password) => password,
+            None => prompter("--password")?.secret(&fl!("prompt-password"))?,
+        };
 
         self.prompt_and_store_key(settings, store).await?;
 
@@ -219,16 +210,21 @@ impl Cmd {
         );
 
         let interactive = self.interactive();
-        let mut flag_key = self.scripted_key();
+        let mut flag_key = self.key.clone();
 
         loop {
             let key = match flag_key.take() {
                 Some(key) => key,
-                None => match read_user_input::<SecretString>(&fl!("prompt-key-or-existing")) {
-                    Some(key) => key,
-                    // Stdin is exhausted, so re-prompting would spin forever.
-                    None => bail!(fl!("login-no-key-provided")),
-                },
+                None => {
+                    let Some(prompter) = Atuin::prompter() else {
+                        bail!(fl!("login-no-key-provided"));
+                    };
+                    if key_path.exists() && prompter.confirm(&fl!("prompt-use-existing-key"), true)? {
+                        SecretString::from("")
+                    } else {
+                        prompter.secret(&fl!("prompt-key"))?
+                    }
+                }
             };
 
             if key.expose_secret().is_empty() {
@@ -319,21 +315,18 @@ async fn verify_key_against_remote(
                 println!("\n{}", fl!("login-key-mismatch"));
                 println!("{}", fl!("login-key-find-correct"));
 
-                let input = read_user_input::<SecretString>(&fl!("prompt-key-or-logout"));
-                match input {
-                    Some(input) if !input.expose_secret().is_empty() => {
-                        match paseto_v4::Key::try_from_mnemonic(input.expose_secret()) {
-                            Ok(candidate) => key = candidate,
-                            Err(err) => {
-                                println!(
-                                    "\n{}",
-                                    fl!("login-key-try-again", error = err.to_string())
-                                );
-                            }
+                let Some(prompter) = Atuin::prompter() else {
+                    logout_wrong_key().await
+                };
+                match prompter.secret(&fl!("prompt-key-or-logout")) {
+                    Ok(input) => match paseto_v4::Key::try_from_mnemonic(input.expose_secret()) {
+                        Ok(candidate) => key = candidate,
+                        Err(err) => {
+                            println!("\n{}", fl!("login-key-try-again", error = err.to_string()));
                         }
-                    }
-                    // A blank line or exhausted stdin both mean "give up".
-                    _ => logout_wrong_key().await,
+                    },
+                    Err(PromptError::Cancelled) => logout_wrong_key().await,
+                    Err(err) => return Err(err.into()),
                 }
             }
             Some(e) => {
@@ -356,31 +349,6 @@ async fn logout_wrong_key() -> ! {
     }
     crate::print_error::print_error(&fl!("login-wrong-key-title"), &fl!("login-wrong-key-body"));
     std::process::exit(1);
-}
-
-#[must_use]
-pub(super) fn or_user_input(value: Option<String>, prompt: &str) -> String {
-    value.unwrap_or_else(|| read_user_input(prompt).unwrap_or_default())
-}
-
-#[must_use]
-pub(super) fn read_user_password() -> SecretString {
-    read_secret(&fl!("prompt-password"))
-}
-
-/// Prompt on the tty without echo.
-#[must_use]
-pub(super) fn read_secret(prompt: &str) -> SecretString {
-    let secret =
-        Zeroizing::new(prompt_password(format!("{prompt}: ")).expect("Failed to read from input"));
-    // `From<&str>` copies; `From<String>` would shrink the buffer and free the old one unwiped.
-    SecretString::from(secret.as_str())
-}
-
-/// Returns `None` if stdin reached end of input before a line was read.
-pub(super) fn read_user_input<T: for<'a> From<&'a str>>(prompt: &str) -> Option<T> {
-    eprint!("{prompt}: ");
-    get_input().expect("Failed to read from input")
 }
 
 #[cfg(test)]

@@ -1,5 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::io::{IsTerminal, Read};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use atuin_client::database::Sqlite;
@@ -12,11 +11,11 @@ use atuin_scripts::execution::{
 use atuin_scripts::store::ScriptStore;
 use atuin_scripts::store::script::Script;
 use clap::{Parser, Subcommand};
-use clap_couture::Couture;
-use eyre::{Context as _, OptionExt, Result, bail};
-use tempfile::NamedTempFile;
+use clap_couture::{Couture, CoutureParser as _};
+use eyre::{Context as _, Result, bail};
 use tracing::{debug, instrument};
 
+use crate::Atuin;
 use crate::i18n::fl;
 
 #[derive(Parser, Debug, Couture)]
@@ -45,6 +44,10 @@ pub struct NewScript {
     #[arg(long)]
     #[arg(help = fl!("arg-scripts-new-no-edit"))]
     pub no_edit: bool,
+
+    #[arg(long, hide = true, conflicts_with_all = ["script", "last"])]
+    #[couture(prompt = "Script", editor(extension = "sh"), accept_stdin)]
+    pub content: Option<String>,
 }
 
 #[derive(Parser, Debug, Couture)]
@@ -110,6 +113,7 @@ pub struct Delete {
     pub name: String,
 
     #[arg(short, long)]
+    #[couture(confirm = "Delete script {name}?")]
     pub force: bool,
 }
 
@@ -128,34 +132,11 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    // Helper function to open an editor with optional initial content
-    fn open_editor(initial_content: Option<&str>) -> Result<String> {
-        // Create a temporary file
-        let temp_file = NamedTempFile::new()?;
-        let path = temp_file.into_temp_path();
-
-        // Write initial content to the temp file if provided
-        if let Some(content) = initial_content {
-            std::fs::write(&path, content)?;
-        }
-
-        // Open the file in the user's preferred editor
-        let editor_str = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-
-        // Use shlex to safely split the string into shell-like parts.
-        let parts = shlex::split(&editor_str).ok_or_eyre("Failed to parse editor command")?;
-        let (command, args) = parts.split_first().ok_or_eyre("No editor command found")?;
-
-        let status = std::process::Command::new(command).args(args).arg(&path).status()?;
-        if !status.success() {
-            bail!("failed to open editor");
-        }
-
-        // Read back the edited content
-        let content = std::fs::read_to_string(&path)?;
-        path.close()?;
-
-        Ok(content)
+    fn open_editor(initial_content: &str) -> Result<String> {
+        let Some(prompter) = Atuin::prompter() else {
+            bail!("no terminal to open an editor on; pass --script or --no-edit");
+        };
+        Ok(prompter.editor("Script", "sh", Some(initial_content))?)
     }
 
     // Helper function to execute a script and manage stdin/stdout/stderr
@@ -228,7 +209,6 @@ impl Cmd {
         script_db: atuin_scripts::database::Database,
         history_db: &Sqlite,
     ) -> Result<()> {
-        let mut stdin = std::io::stdin();
         let script_content = if let Some(count_opt) = new_script.last {
             // Get the last N commands from history, plus 1 to exclude the command that runs this script
             let count = count_opt.unwrap_or(1) + 1; // Add 1 to the count to exclude the current command
@@ -262,18 +242,13 @@ impl Cmd {
                 Some(script_text)
             } else {
                 // Open the editor with the commands pre-loaded
-                Some(Self::open_editor(Some(&script_text))?)
+                Some(Self::open_editor(&script_text)?)
             }
         } else if let Some(script_path) = new_script.script {
             let script_content = std::fs::read_to_string(script_path)?;
             Some(script_content)
-        } else if !stdin.is_terminal() {
-            let mut buffer = String::new();
-            stdin.read_to_string(&mut buffer)?;
-            Some(buffer)
         } else {
-            // Open editor with empty file
-            Some(Self::open_editor(None)?)
+            new_script.content
         };
 
         let script = Script::builder()
@@ -319,29 +294,20 @@ impl Cmd {
             }
 
             // Collect variables that are still needed (not specified via CLI)
-            let remaining_vars: HashSet<String> =
+            let remaining_vars: BTreeSet<String> =
                 variables.into_iter().filter(|var| !variable_values.contains_key(var)).collect();
 
-            // If there are variables in the template that weren't specified on the command line, prompt for them
             if !remaining_vars.is_empty() {
-                println!("This script contains template variables that need values:");
-
-                let stdin = std::io::stdin();
-                let mut input = String::new();
+                let Some(prompter) = Atuin::prompter() else {
+                    let names: Vec<_> = remaining_vars.into_iter().collect();
+                    bail!(
+                        "missing values for template variables: {}; pass them with --var KEY=VALUE",
+                        names.join(", ")
+                    );
+                };
 
                 for var in remaining_vars {
-                    input.clear();
-
-                    println!("Enter value for '{var}': ");
-
-                    if stdin.read_line(&mut input).is_err() {
-                        eprintln!("Failed to read input for variable '{var}'");
-                        // Provide an empty string as fallback
-                        variable_values.insert(var, serde_json::Value::String(String::new()));
-                        continue;
-                    }
-
-                    let value = input.trim().to_string();
+                    let value = prompter.text(&format!("Value for '{var}'"))?;
                     variable_values.insert(var, serde_json::Value::String(value));
                 }
             }
@@ -495,7 +461,7 @@ impl Cmd {
                 std::fs::read_to_string(script_path)?
             } else if !edit.no_edit {
                 // Open the script in editor for interactive editing if --no-edit is not specified
-                Self::open_editor(Some(&script.script))?
+                Self::open_editor(&script.script)?
             } else {
                 // If --no-edit is specified, keep the existing script content
                 script.script.clone()
@@ -528,19 +494,6 @@ impl Cmd {
         let script = script_db.get_by_name(&delete.name).await?;
 
         if let Some(script) = script {
-            // If not force, confirm deletion
-            if !delete.force {
-                println!("Are you sure you want to delete script '{}'? [y/N]", delete.name);
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-
-                let input = input.trim().to_lowercase();
-                if input != "y" && input != "yes" {
-                    println!("Deletion cancelled");
-                    return Ok(());
-                }
-            }
-
             // Delete the script
             script_store.delete(script.id).await?;
 

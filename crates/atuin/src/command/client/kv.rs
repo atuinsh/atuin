@@ -1,5 +1,3 @@
-use std::io::{self, IsTerminal, Read};
-
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
@@ -21,8 +19,8 @@ pub enum Cmd {
         key: String,
 
         #[arg(help = fl!("arg-kv-set-value"))]
-        #[couture(prompt = fl!("prompt-kv-set-value"))]
-        value: Option<String>,
+        #[couture(prompt = fl!("prompt-kv-set-value"), accept_stdin)]
+        value: String,
 
         #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]
         namespace: String,
@@ -31,6 +29,7 @@ pub enum Cmd {
     #[command(alias = "rm", about = fl!("cmd-kv-delete"))]
     Delete {
         #[arg(required = true, help = fl!("arg-kv-delete-keys"))]
+        #[couture(prompt)]
         keys: Vec<String>,
 
         #[arg(long, short, default_value = "default", help = fl!("arg-kv-namespace"))]
@@ -85,19 +84,7 @@ impl Cmd {
                     return Err(eyre!("namespace cannot be empty"));
                 }
 
-                let value = if let Some(v) = value {
-                    v.clone()
-                } else if !io::stdin().is_terminal() {
-                    let mut buf = String::new();
-                    io::stdin()
-                        .read_to_string(&mut buf)
-                        .context("failed to read value from stdin")?;
-                    buf
-                } else {
-                    return Err(eyre!("no value provided. Pass as an argument or pipe via stdin"));
-                };
-
-                kv_store.set(namespace, key, &value).await
+                kv_store.set(namespace, key, value).await
             }
 
             Self::Delete { keys, namespace } => kv_store.delete(namespace, keys).await,

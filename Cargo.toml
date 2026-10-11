@@ -41,9 +41,9 @@ bytes = "1"
 bytesize = { version = "2", features = ["serde"] }
 chrono = "0.4"
 chrono-humanize = "0.2"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 # Unreleased; local checkout.
-clap-couture = { path = "../clap-couture/crates/clap-couture", features = ["interactive-cliclack", "markdown"] }
+clap-couture = { path = "../clap-couture/crates/clap-couture", features = ["interactive-inquire", "interactive-editor", "markdown"] }
 clap_complete = "4"
 clap_complete_nushell = "4"
 colored = "3"
@@ -122,7 +122,6 @@ reqwest-middleware = "0.5"
 rmcp = { version = "3", default-features = false, features = ["server", "transport-io", "schemars"] }
 rmp = "0.8"
 rmp-serde = "1"
-rpassword = "7"
 rstest = "0.27"
 runtime-format = "0.1"
 # The AI session sidecar's synchronous writer. Kept on the libsqlite3-sys that sqlx uses (one
