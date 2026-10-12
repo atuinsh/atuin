@@ -153,8 +153,16 @@ pub(super) fn repo_name(row: &SessionRow) -> String {
         .unwrap_or_default()
 }
 
+/// Whether the session itself is running: its own newest message is recent.
 pub(super) fn is_live(now: OffsetDateTime, row: &SessionRow) -> bool {
-    now.saturating_duration_since(row.updated_at).as_secs() < LIVE_SECS
+    now.saturating_duration_since(row.active_at).as_secs() < LIVE_SECS
+}
+
+/// Whether a fork listed beneath the row is running, and not the row's own (a subagent doesn't
+/// count: it isn't listed).
+pub(super) fn is_fork_live(now: OffsetDateTime, row: &SessionRow) -> bool {
+    !is_live(now, row)
+        && row.forks_at.is_some_and(|at| now.saturating_duration_since(at).as_secs() < LIVE_SECS)
 }
 
 /// The branch a row shows: none when detached (`HEAD`).
@@ -380,6 +388,8 @@ impl SessionList<'_> {
                     let when = clock::When::of(self.now, row.updated_at, self.tz);
                     let (text, meaning) = if is_live(self.now, row) {
                         (format!("● {}", when.short()), Meaning::AlertInfo)
+                    } else if is_fork_live(self.now, row) {
+                        (format!("↳● {}", when.short()), Meaning::AlertInfo)
                     } else {
                         (when.short().to_owned(), Meaning::Guidance)
                     };
@@ -399,6 +409,8 @@ impl SessionList<'_> {
                         let base = style(theme, Meaning::Base);
                         (base, base.add_modifier(Modifier::BOLD))
                     };
+                    w.put(&row.tree, style(theme, Meaning::Annotation));
+                    let cw = cw.saturating_sub(row.tree.width());
                     let spans =
                         highlighted_line(&row.title.text, &row.title.highlights, cw, base, hl);
                     w.put_spans(&spans);
@@ -1321,6 +1333,11 @@ impl State {
                 let mut spans = text(when(row.updated_at));
                 if is_live(now, &row) {
                     spans.push(Span::styled("  ● live", style(theme, Meaning::AlertInfo)));
+                } else if is_fork_live(now, &row) {
+                    spans.push(Span::styled(
+                        "  ↳● a fork is live",
+                        style(theme, Meaning::AlertInfo),
+                    ));
                 }
                 spans
             }),
@@ -1547,6 +1564,21 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    /// A quiet root is marked for a running fork beneath it, not for a running subagent (grouped,
+    /// so newest in `updated_at`, but not listed).
+    #[rstest]
+    #[case::subagent(None, false)]
+    #[case::fork(Some(0), true)]
+    #[case::old_fork(Some(1), false)]
+    fn only_a_listed_fork_marks_its_root_live(#[case] fork_days: Option<i64>, #[case] live: bool) {
+        let now = crate::resume_tui::fake::now();
+        let mut row = crate::resume_tui::fake::row(HarnessKind::ClaudeCode, "a", "t");
+        row.active_at = now - time::Duration::days(1);
+        row.updated_at = now;
+        row.forks_at = fork_days.map(|d| now - time::Duration::days(d));
+        assert_eq!(is_fork_live(now, &row), live);
+    }
 
     /// The title takes the rest of the row, whatever the width: 80 columns is 76 inside the box,
     /// and a split 120 leaves the list 69.

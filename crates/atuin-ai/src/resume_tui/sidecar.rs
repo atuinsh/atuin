@@ -85,6 +85,8 @@ impl SidecarSource {
             usage: s.usage,
             children: u32::try_from(s.child_count).unwrap_or(u32::MAX),
             matched: None,
+            tree: String::new(),
+            forks_at: None,
         }
     }
 }

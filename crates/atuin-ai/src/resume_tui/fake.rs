@@ -72,6 +72,8 @@ pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
         usage: Usage::default(),
         children: 0,
         matched: None,
+        tree: String::new(),
+        forks_at: None,
     }
 }
 
@@ -244,6 +246,8 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
             },
             children: 0,
             matched: None,
+            tree: String::new(),
+            forks_at: None,
         },
         parent: parent.map(|p| p.handle.clone()),
         root: None,

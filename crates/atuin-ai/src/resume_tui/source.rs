@@ -96,6 +96,9 @@ pub struct SessionRow {
     /// The newest message in the session itself, its grouped children not counted: whether it is
     /// the one still running.
     pub active_at: OffsetDateTime,
+    /// The newest message in the forks and continuations listed beneath the row; `None` with
+    /// none.
+    pub forks_at: Option<OffsetDateTime>,
     /// How many messages the session holds: every row stored of it
     /// ([`atuin_client::ai_session::Session::message_count`]).
     pub messages: u64,
@@ -106,6 +109,9 @@ pub struct SessionRow {
     pub children: u32,
     /// The best-matching message text, when there is a query. The match may be in a child.
     pub matched: Option<Snippet>,
+    /// The tree drawn before the title of a fork listed beneath its root (`├─ `); empty for a
+    /// root.
+    pub tree: String,
 }
 
 /// The preview for one session: its opening prompt and where it left off. Tool calls and

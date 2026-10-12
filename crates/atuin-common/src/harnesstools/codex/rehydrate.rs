@@ -204,8 +204,9 @@ pub(crate) fn write(root: &Path, session: &RehydrateSession) -> Result<PathBuf, 
         .join(format!("{:02}", started.day()));
     std::fs::create_dir_all(&dir)?;
     let base = inherited_history(root, session);
+    let provider = root.parent().map_or_else(|| DEFAULT_PROVIDER.to_owned(), provider);
     let mut text = String::new();
-    for line in rollout(session, base) {
+    for line in rollout(session, base, &provider) {
         text.push_str(&line.to_string());
         text.push('\n');
     }
@@ -252,8 +253,8 @@ enum CallKind {
 /// The rollout's lines: its `session_meta`, then each message's, numbered on from it: from 0, or
 /// for a rollout continuing the history `base` names, from where that ends (its
 /// `end_ordinal_exclusive`, as Codex numbers such a rollout: codex-rs `ordinal.rs`).
-fn rollout(session: &RehydrateSession, base: Option<Value>) -> Vec<Value> {
-    let mut header = header(session);
+fn rollout(session: &RehydrateSession, base: Option<Value>, provider: &str) -> Vec<Value> {
+    let mut header = header(session, provider);
     let first = base.as_ref().and_then(|b| b["end_ordinal_exclusive"].as_u64()).unwrap_or(0);
     if let Some(base) = base {
         header["payload"]["history_base"] = base;
@@ -301,14 +302,15 @@ fn inherited_history(root: &Path, session: &RehydrateSession) -> Option<Value> {
 /// every line numbered (`ordinal`), which Codex keeps numbering from the last line's when it
 /// continues the rollout.
 ///
-/// The meta is the session as it is resumed here: its cwd is this machine's. It names no
-/// `model_provider`, which capture does not keep: Codex takes a rollout without one for its
-/// configured provider, where one naming another would be hidden from `codex resume`'s picker.
-/// Nor does it carry `base_instructions`, which Codex then renders from its current model's.
+/// The meta is the session as it is resumed here: its cwd is this machine's, and its
+/// `model_provider` (which capture does not keep) is the one Codex is configured with
+/// ([`provider`]): one naming another would be hidden from `codex resume`'s picker, and Codex
+/// (0.162) indexes a rollout naming none under an empty provider, which it then fails to resume
+/// with. It does not carry `base_instructions`, which Codex then renders from its current model's.
 /// Its `cli_version` is a development build's, which capture (like Codex) reads as a Codex
 /// older than per-call usage records, so that `token_count` lines count as usage again when that
 /// is what they were captured as; `token_usage_record` lines are read as records either way.
-pub(crate) fn header(session: &RehydrateSession) -> Value {
+pub(crate) fn header(session: &RehydrateSession, provider: &str) -> Value {
     let thread = session::resume_id(&session.id);
     let mut meta = json!({
         "session_id": thread,
@@ -319,6 +321,7 @@ pub(crate) fn header(session: &RehydrateSession) -> Value {
         "cli_version": "0.0.0",
         "source": "cli",
         "history_mode": "paginated",
+        "model_provider": provider,
     });
     if let Some(branch) = &session.git_branch {
         meta["git"] = json!({"branch": branch});
@@ -335,6 +338,18 @@ pub(crate) fn header(session: &RehydrateSession) -> Value {
         }
     }
     line(&stamp(session.started_at), "session_meta", meta)
+}
+
+/// The provider Codex uses when its config names none.
+const DEFAULT_PROVIDER: &str = "openai";
+
+/// The `model_provider` Codex home `home`'s `config.toml` names, else Codex's default.
+fn provider(home: &Path) -> String {
+    std::fs::read_to_string(home.join("config.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
+        .and_then(|doc| doc.get("model_provider")?.as_str().map(str::to_owned))
+        .unwrap_or_else(|| DEFAULT_PROVIDER.to_owned())
 }
 
 /// The lines one captured row is written as (none for a row the rollout cannot carry): `lines`,
@@ -981,6 +996,21 @@ pub(crate) mod tests {
         let again = captured(&id, &read(&id, path).await);
         let expected: Vec<RehydrateMessage> = original.into_iter().filter(carried).collect();
         pretty_assertions::assert_eq!(keys(&again), keys(&expected));
+    }
+
+    #[rstest]
+    #[case::configured("model_provider = \"ollama\"\n", "ollama")]
+    #[case::default("model = \"gpt-5\"\n", "openai")]
+    fn a_rehydrated_rollout_names_the_configured_provider(
+        #[case] config: &str,
+        #[case] expected: &str,
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("config.toml"), config).unwrap();
+        let path = write(&home.path().join("sessions"), &session(ID, vec![])).unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        let meta: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(meta["payload"]["model_provider"], expected);
     }
 
     /// The rollout at `path` is in Codex's paginated history mode, its lines numbered from 0 on
