@@ -45,9 +45,8 @@ impl Cmd {
         let mut totp_code = self.totp_code.clone();
 
         loop {
-            let response = client
-                .change_password(current_password, new_password, totp_code.as_ref())
-                .await?;
+            let response =
+                client.change_password(current_password, new_password, totp_code.as_ref()).await?;
 
             match response {
                 MutateResponse::Success => break,

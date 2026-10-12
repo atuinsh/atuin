@@ -212,15 +212,14 @@ impl Cmd {
         let mut flag_key = self.key.clone();
 
         loop {
-            let key = match flag_key.take() {
-                Some(key) => key,
-                None => {
-                    let prompter = Atuin::prompter_unwrap();
-                    if key_path.exists() && prompter.confirm(&fl!("prompt-use-existing-key"), true)? {
-                        SecretString::from("")
-                    } else {
-                        prompter.secret(&fl!("prompt-key"))?
-                    }
+            let key = if let Some(key) = flag_key.take() {
+                key
+            } else {
+                let prompter = Atuin::prompter_unwrap();
+                if key_path.exists() && prompter.confirm(&fl!("prompt-use-existing-key"), true)? {
+                    SecretString::from("")
+                } else {
+                    prompter.secret(&fl!("prompt-key"))?
                 }
             };
 
