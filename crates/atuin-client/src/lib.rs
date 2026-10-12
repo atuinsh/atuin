@@ -10,6 +10,7 @@ pub mod auth;
 #[cfg(feature = "hub")]
 pub mod hub;
 
+pub mod ai_session;
 pub mod database;
 pub mod distro;
 pub mod history;
@@ -23,3 +24,4 @@ pub mod plugin;
 pub mod record;
 pub mod settings;
 pub mod theme;
+pub mod tui;

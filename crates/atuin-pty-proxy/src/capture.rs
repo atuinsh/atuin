@@ -5,7 +5,7 @@ use atuin_client::history::HistoryId;
 use atuin_common::string::TrimExt as _;
 use atuin_common::string::bounded_buffer::{self, BoundedBuffer, BufferContents};
 
-use crate::osc133::{self, Event, EventChunk, EventChunks, Param, Zone};
+use crate::markers::{self, Event, EventChunk, EventChunks};
 
 /// Clears the screen while maintaining cursor position.
 ///
@@ -15,8 +15,6 @@ use crate::osc133::{self, Event, EventChunk, EventChunks, Param, Zone};
 /// attributes with `ESC 8`.
 const CLEAR_SCREEN_CONTENTS: &[u8] = b"\x1b7\x1b[m\x1b[2J\x1b8";
 const DISABLE_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
-
-const HISTORY_ID_PARAM: &[u8] = b"history_id";
 
 pub type CommandCaptureSink = Box<dyn Fn(HistoryId, CommandCapture) + Send + 'static>;
 
@@ -29,19 +27,12 @@ pub struct CaptureConfig {
     pub max_output_bytes: usize,
 }
 
-/// The state of an in-progress command capture.
-#[derive(Default)]
-struct CaptureState {
-    output_start: String,
-    output_end: Option<String>,
-    output_observed_bytes: u64,
-}
-
 /// Type implementing [`vt100::Callbacks`], used for capturing terminal scrollback.
 struct Scrollback {
     buffer: BoundedBuffer,
     state: vt100::capture::BasicFormattedCaptureState,
-    zone: Zone,
+    /// ID of the command currently being captured.
+    history_id: Option<HistoryId>,
 }
 
 impl Scrollback {
@@ -49,14 +40,14 @@ impl Scrollback {
         Self {
             buffer: BoundedBuffer::new(limit),
             state: Default::default(),
-            zone: Zone::Unknown,
+            history_id: None,
         }
     }
 }
 
 impl vt100::Callbacks for Scrollback {
     fn on_scroll(&mut self, contents: vt100::capture::RowContents<'_>, alternate_screen: bool) {
-        if !alternate_screen && self.zone == Zone::Output {
+        if !alternate_screen && self.history_id.is_some() {
             let _ = contents.write_formatted_basic(&mut self.buffer, &mut self.state);
         }
     }
@@ -65,28 +56,28 @@ impl vt100::Callbacks for Scrollback {
 /// The "core" of a [`CommandCaptureTracker`].
 ///
 /// This is a separate type to satisfy Rust's borrowing rules. [`CommandCaptureTracker::push`] can't
-/// call other [`CommandCaptureTracker`] methods while [`CommandCaptureTracker::osc_parser`] is
+/// call other [`CommandCaptureTracker`] methods while [`CommandCaptureTracker::marker_parser`] is
 /// borrowed, so instead we put those methods in a separate type, [`TrackerCore`].
 struct TrackerCore {
-    capture: CaptureState,
     emulator: vt100::Parser<Scrollback>,
     sink: CommandCaptureSink,
+    output_observed_bytes: u64,
 }
 
 impl TrackerCore {
-    fn zone(&self) -> Zone {
-        self.emulator.callbacks().zone
+    fn history_id(&self) -> Option<HistoryId> {
+        self.emulator.callbacks().history_id
     }
 
-    fn zone_mut(&mut self) -> &mut Zone {
-        &mut self.emulator.callbacks_mut().zone
+    fn history_id_mut(&mut self) -> &mut Option<HistoryId> {
+        &mut self.emulator.callbacks_mut().history_id
     }
 
     /// Capture and return the rendered output currently on the screen.
     ///
     /// This also includes rows that have scrolled off the screen. This method resets the scrollback
-    /// buffers but not the screen. Most likely, you will not want to call this method again until
-    /// you clear the screen.
+    /// buffers and capture state (the same as [`Self::clear_capture`]), but does not clear the
+    /// screen. Most likely, you will not want to call this method again until you clear the screen.
     fn take_rendered(&mut self) -> BufferContents {
         let (screen, scrollback) = self.emulator.screen_and_callbacks_mut();
         let _ = screen.write_contents_formatted_basic(
@@ -94,168 +85,149 @@ impl TrackerCore {
             vt100::capture::BasicFormattedCaptureRange::Full(&mut scrollback.state),
         );
 
+        self.output_observed_bytes = 0;
         scrollback.state = Default::default();
+        scrollback.history_id = None;
         scrollback.buffer.take()
     }
 
     /// Clear an in-progress capture and the scrollback buffer.
     fn clear_capture(&mut self) {
-        self.capture = CaptureState::default();
         let scrollback = self.emulator.callbacks_mut();
-        scrollback.buffer.clear();
+
+        self.output_observed_bytes = 0;
         scrollback.state = Default::default();
+        scrollback.history_id = None;
+        scrollback.buffer.clear();
     }
 
-    /// Enter a new OSC 133 zone.
+    /// Disable the alternate screen if it is currently active.
     ///
-    /// This is a no-op if we're already in that zone.
-    fn enter_zone(&mut self, zone: Zone) {
-        let current_zone = self.zone();
-        if zone == self.zone() {
-            return;
-        }
-
+    /// This is called when starting and ending a command capture. Under normal circumstances, we
+    /// should not be on the alternate screen in these cases anyway, but if for some reason we are
+    /// (e.g., corrupted output), this method ensures we are at least in a consistent state.
+    fn disable_alternate_screen(&mut self) {
         if self.emulator.screen().alternate_screen() {
-            // If we're in the alternate screen, leave it. We don't capture anything on the
-            // alternate screen (see `Scrollback::on_scroll`). We do not expect to be on the
-            // alternate screen when switching zones (something has gone wrong in this case,
-            // potentially garbage data), so we disable it here as a last resort, just to ensure
-            // we're in a consistent state, and to recover as much of the main screen output as
-            // possible.
             self.emulator.process(DISABLE_ALTERNATE_SCREEN);
         }
-
-        if matches!(
-            (current_zone, zone),
-            (Zone::Unknown, _) | (Zone::Output, Zone::Prompt | Zone::Input)
-        ) {
-            // If we're coming from the `Unknown` zone, clear the capture to ensure we start in a
-            // fresh state -- there could be a stale capture for which we never received a history
-            // ID.
-            //
-            // If we're in the `Output` zone (capturing command output) but we transition directly
-            // into `Prompt` or `Input` (starting a new command), also clear the capture. Without a
-            // history ID, we can't do anything with it.
-            self.clear_capture();
-        } else if current_zone == Zone::Output {
-            let mut contents = self.take_rendered();
-            // Trim leading and trailing newlines; these correspond to blank lines in the terminal.
-            // Don't trim spaces since indentation is meaningful.
-            //
-            // Note that we will end up trimming leading/trailing space that is technically part of
-            // the output itself too, as it cannot be easily distinguished from empty parts of the
-            // terminal (in some cases it is effectively impossible).
-            if let Some(end) = &mut contents.end {
-                // Technically we could fail to trim all the relevant blank lines here if the
-                // terminal height is greater than the start limit and end limit combined --
-                // trailing blank lines, for example, would get split across the start and end
-                // chunks, but we wouldn't trim the trailing newlines from the start chunk. This is
-                // because we wouldn't know whether the missing middle chunk consisted entirely of
-                // blank lines or had other data (which would make the trailing newlines in the
-                // start chunk actually part of the command output and thus something we *shouldn't*
-                // trim).
-                //
-                // This case is very unlikely in practice, as we expect the output capture limits to
-                // significantly exceed the terminal height -- otherwise not much useful information
-                // could actually be captured. In any case, we err on the side of keeping "too much"
-                // data rather than discarding it.
-                end.trim_end_matches_in_place('\n');
-                contents.start.trim_start_matches_in_place('\n');
-
-                // Ensure the start chunk doesn't end in the middle of a line, and the end chunk
-                // doesn't start in the middle of a line. This is not just to make the output nicer
-                // but is also important for secret redaction -- if a secret got split across the
-                // start and end chunks, we would fail to redact it later. For example, if the
-                // output of a command were one byte over the limit and we happened to truncate the
-                // `=` in `...AWS_SECRET_ACCESS_KEY=SOME_SECRET_VALUE...`, we would fail to redact
-                // the secret. Removing partial lines from the chunks avoids the issue.
-                contents.start.truncate(contents.start.rfind('\n').unwrap_or(0));
-                end.drain(..end.find('\n').map_or(end.len(), |n| n + 1));
-            } else {
-                contents.start.trim_matches_in_place('\n');
-            }
-            self.capture.output_start = contents.start;
-            self.capture.output_end = contents.end;
-        }
-
-        if zone == Zone::Output {
-            // Clear the screen before the command starts producing output, so we can obtain just
-            // the command's output without confusing it for other data that was already in the
-            // terminal.
-            self.emulator.process(CLEAR_SCREEN_CONTENTS);
-        }
-        *self.zone_mut() = zone;
     }
 
-    fn handle_chunk<'a>(&mut self, chunk: EventChunk<'_>, params: impl Iterator<Item = Param<'a>>) {
-        let prev_zone = self.zone();
-        self.enter_zone(chunk.event.zone());
+    /// Start capturing command output.
+    fn start_capture(&mut self, history_id: HistoryId) {
+        self.disable_alternate_screen();
 
-        let Event::CommandFinished { .. } = chunk.event else {
+        // Clear any previous in-progress capture for which we never received an end marker.
+        self.clear_capture();
+
+        // Clear the screen before the command starts producing output, so we can obtain just the
+        // command's output without confusing it for other data that was already in the terminal.
+        self.emulator.process(CLEAR_SCREEN_CONTENTS);
+        *self.history_id_mut() = Some(history_id);
+    }
+
+    /// Stop capturing command output.
+    fn end_capture(&mut self, history_id: HistoryId, marker_len: usize) {
+        let Some(current_id) = self.history_id() else {
+            // We never received a start marker, so we haven't been capturing any output; simply
+            // ignore the end marker.
             return;
         };
 
-        let count = &mut self.capture.output_observed_bytes;
-        // If we were just in the output zone, the OSC 133 "command finished" bytes were counted
-        // toward the total. Correct the count by subtracting them. Note that we cannot safely do
-        // this if the count is `u64::MAX` because it might have saturated, so we don't know the
-        // true count. This case is exceedingly unlikely however.
-        if prev_zone == Zone::Output && *count != u64::MAX {
-            *count = count.saturating_sub(u64::try_from(chunk.osc_len).unwrap_or(u64::MAX));
-        }
+        self.disable_alternate_screen();
 
-        let mut history_id = None;
-        for param in params {
-            if let Param::KeyValue {
-                key: HISTORY_ID_PARAM,
-                value,
-            } = param
-            {
-                history_id = Some(value);
-            }
-        }
-
-        let Some(history_id) = history_id
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
-            .and_then(|s| s.parse::<HistoryId>().ok())
-        else {
-            // We can't finish the capture without a valid history ID. Hold on to the capture for
-            // now in case we get another `CommandFinished` event that does supply one.
+        if current_id != history_id {
+            // The history ID in the end marker doesn't match the history ID in the start marker;
+            // discard the output to avoid saving corrupted data or attributing the output to the
+            // wrong command.
+            self.clear_capture();
             return;
-        };
+        }
 
-        let state = std::mem::take(&mut self.capture);
+        // The end marker was counted toward the total byte count. Correct the count by subtracting
+        // the length of the marker. Note that we cannot safely do this if the count is `u64::MAX`
+        // because it might have saturated, so we don't know the true count. This case is
+        // exceedingly unlikely however.
+        let mut output_observed_bytes = self.output_observed_bytes;
+        if output_observed_bytes != u64::MAX {
+            output_observed_bytes =
+                output_observed_bytes.saturating_sub(u64::try_from(marker_len).unwrap_or(u64::MAX));
+        }
+
+        let mut contents = self.take_rendered();
+
+        // Trim leading and trailing newlines; these correspond to blank lines in the terminal.
+        // Don't trim spaces since indentation is meaningful.
+        //
+        // Note that we will end up trimming leading/trailing space that is technically part of the
+        // output itself too, as it cannot be easily distinguished from empty parts of the terminal
+        // (in some cases it is effectively impossible).
+        if let Some(end) = &mut contents.end {
+            // Technically we could fail to trim all the relevant blank lines here if the terminal
+            // height is greater than the start limit and end limit combined -- trailing blank
+            // lines, for example, would get split across the start and end chunks, but we wouldn't
+            // trim the trailing newlines from the start chunk. This is because we wouldn't know
+            // whether the missing middle chunk consisted entirely of blank lines or had other data
+            // (which would make the trailing newlines in the start chunk actually part of the
+            // command output and thus something we *shouldn't* trim).
+            //
+            // This case is very unlikely in practice, as we expect the output capture limits to
+            // significantly exceed the terminal height -- otherwise not much useful information
+            // could actually be captured. In any case, we err on the side of keeping "too much"
+            // data rather than discarding it.
+            end.trim_end_matches_in_place('\n');
+            contents.start.trim_start_matches_in_place('\n');
+
+            // Ensure the start chunk doesn't end in the middle of a line, and the end chunk doesn't
+            // start in the middle of a line. This is not just to make the output nicer but is also
+            // important for secret redaction -- if a secret got split across the start and end
+            // chunks, we would fail to redact it later. For example, if the output of a command
+            // were one byte over the limit and we happened to truncate the `=` in
+            // `...AWS_SECRET_ACCESS_KEY=SOME_SECRET_VALUE...`, we would fail to redact the secret.
+            // Removing partial lines from the chunks avoids the issue.
+            contents.start.truncate(contents.start.rfind('\n').unwrap_or(0));
+            end.drain(..end.find('\n').map_or(end.len(), |n| n + 1));
+        } else {
+            contents.start.trim_matches_in_place('\n');
+        }
+
         let (rows, cols) = self.emulator.screen().size();
         (self.sink)(history_id, CommandCapture {
-            output_start: state.output_start,
-            output_end: state.output_end,
-            output_observed_bytes: state.output_observed_bytes,
+            output_start: contents.start,
+            output_end: contents.end,
+            output_observed_bytes,
             terminal_width: cols.get(),
             terminal_height: rows.get(),
         });
     }
 
+    fn handle_chunk(&mut self, chunk: EventChunk<'_>) {
+        match chunk.event {
+            Event::OutputStart(history_id) => self.start_capture(history_id),
+            Event::OutputEnd(history_id) => self.end_capture(history_id, chunk.osc_len),
+        }
+    }
+
     /// Pass data to the vt100 emulator, adding it to the output total if necessary.
     fn process_counted(&mut self, data: &[u8]) {
         self.emulator.process(data);
-        if self.zone() == Zone::Output {
-            let count = &mut self.capture.output_observed_bytes;
+        if self.history_id().is_some() {
+            let count = &mut self.output_observed_bytes;
             let data_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
             *count = count.saturating_add(data_len);
         }
     }
 
     fn handle_chunks(&mut self, mut chunks: EventChunks<'_, '_>) {
-        while let Some(chunk) = chunks.next() {
+        for chunk in chunks.by_ref() {
             self.process_counted(chunk.data);
-            self.handle_chunk(chunk, chunks.params());
+            self.handle_chunk(chunk);
         }
         self.process_counted(chunks.trailing_data());
     }
 }
 
 pub struct CommandCaptureTracker {
-    osc_parser: osc133::Parser,
+    marker_parser: markers::Parser,
     core: TrackerCore,
 }
 
@@ -266,9 +238,8 @@ impl CommandCaptureTracker {
             max_output_bytes,
         } = config;
         Self {
-            osc_parser: osc133::Parser::new(),
+            marker_parser: markers::Parser::new(),
             core: TrackerCore {
-                capture: CaptureState::default(),
                 emulator: vt100::Parser::new_with_callbacks(
                     rows,
                     cols,
@@ -276,6 +247,7 @@ impl CommandCaptureTracker {
                     Scrollback::new(bounded_buffer::Limit::split_evenly(max_output_bytes)),
                 ),
                 sink,
+                output_observed_bytes: 0,
             },
         }
     }
@@ -285,7 +257,7 @@ impl CommandCaptureTracker {
     }
 
     pub fn push(&mut self, data: &[u8]) {
-        self.core.handle_chunks(self.osc_parser.push(data));
+        self.core.handle_chunks(self.marker_parser.push(data));
     }
 }
 
@@ -304,11 +276,7 @@ mod tests {
     /// Roomy enough that nothing below is truncated unless the case asks for it.
     const LIMIT: usize = 128 * 1024;
 
-    const PROMPT_START: &[u8] = b"\x1b]133;A\x07";
-    const COMMAND_START: &[u8] = b"\x1b]133;B\x07";
-    const COMMAND_EXECUTED: &[u8] = b"\x1b]133;C\x07";
-
-    // The shell integration only ever sends UUIDs, which `HistoryId` now parses, so fixtures
+    // The shell integration only ever sends UUIDs, which is all `HistoryId` parses, so fixtures
     // use real ones.
     const HID: &str = "00000000-0000-0000-0000-0000000000a1";
     const HID_ONE: &str = "00000000-0000-0000-0000-000000000001";
@@ -377,29 +345,25 @@ mod tests {
         &capture.output_start
     }
 
-    /// A `D` marker carrying the metadata Atuin's shell integration sends.
+    /// The marker the shell integration sends before a command's output.
+    fn start(history_id: &str) -> Vec<u8> {
+        format!("\x1b]18188735;C;{history_id}\x07").into_bytes()
+    }
+
+    /// The marker the shell integration sends after a command's output.
     ///
     /// Its own bytes are discounted from `output_observed_bytes`, so the totals asserted
     /// below are the raw command output alone.
-    fn finished(exit_code: i32, history_id: &str) -> Vec<u8> {
-        format!("\x1b]133;D;{exit_code};history_id={history_id}\x07").into_bytes()
+    fn end(history_id: &str) -> Vec<u8> {
+        format!("\x1b]18188735;D;{history_id}\x07").into_bytes()
     }
 
     /// A whole shell interaction, laid out the way a real shell emits it: the prompt, the
     /// echoed command line ending in the newline the shell prints when Enter is pressed,
-    /// then the command's output.
+    /// then the command's output between its markers.
     fn interaction(prompt: &str, command: &str, output: &str) -> Vec<u8> {
-        [
-            PROMPT_START,
-            prompt.as_bytes(),
-            COMMAND_START,
-            command.as_bytes(),
-            b"\r\n",
-            COMMAND_EXECUTED,
-            output.as_bytes(),
-            &finished(0, HID),
-        ]
-        .concat()
+        [prompt.as_bytes(), command.as_bytes(), b"\r\n", &start(HID), output.as_bytes(), &end(HID)]
+            .concat()
     }
 
     #[fixture]
@@ -424,9 +388,9 @@ mod tests {
             terminal_height: ROWS,
         },
     )]
-    // Only the execute and finish markers: no prompt or command line in the stream at all.
-    #[case::bare_execute_and_finish_markers(
-        [COMMAND_EXECUTED, b"line one\r\n", &finished(0, HID)].concat(),
+    // Only the markers: no prompt or command line in the stream at all.
+    #[case::bare_markers(
+        [start(HID).as_slice(), b"line one\r\n", &end(HID)].concat(),
         CommandCapture {
             output_start: "line one".to_string(),
             output_end: None,
@@ -457,16 +421,21 @@ mod tests {
         let (history_id, capture) = tracker.only_capture();
         assert_eq!(whole_output(&capture), "");
         assert_eq!(history_id, hid(HID));
-        // The command produced nothing, and its `D` marker doesn't count as output.
+        // The command produced nothing, and its end marker doesn't count as output.
         assert_eq!(capture.output_observed_bytes, 0);
     }
 
     #[rstest]
     #[case::no_markers(b"just some regular terminal output\r\n".to_vec())]
-    // A finish marker with no history ID can't be attached to anything, and the prompt that
-    // follows means no later marker can supply one either.
-    #[case::finish_without_a_history_id(
-        [COMMAND_EXECUTED, b"line one\r\n\x1b]133;D;0\x07", PROMPT_START, b"$ "].concat()
+    #[case::start_without_an_end([start(HID).as_slice(), b"line one\r\n$ "].concat())]
+    #[case::end_without_a_start([b"line one\r\n".as_slice(), &end(HID), b"$ "].concat())]
+    // The end marker is for a different command, so the output can't be attributed to either.
+    #[case::mismatched_history_ids(
+        [start(HID_ONE).as_slice(), b"line one\r\n", &end(HID_TWO), b"$ "].concat()
+    )]
+    // OSC 133 markers are other programs' business, and never start or end a capture.
+    #[case::osc_133_markers(
+        format!("\x1b]133;C\x07line one\r\n\x1b]133;D;0;history_id={HID}\x07").into_bytes()
     )]
     fn reports_nothing(mut tracker: Tracker, #[case] input: Vec<u8>) {
         tracker.push(&input);
@@ -488,17 +457,17 @@ mod tests {
         #[case] output: &[u8],
         #[case] expected: &str,
     ) {
-        tracker.push(&[COMMAND_EXECUTED, output, &finished(0, HID)].concat());
+        tracker.push(&[start(HID).as_slice(), output, &end(HID)].concat());
         assert_eq!(whole_output(&tracker.only_capture().1), expected);
     }
 
     #[rstest]
     fn output_that_scrolls_off_the_screen_is_kept(#[with(4, 20)] mut tracker: Tracker) {
-        let mut data = COMMAND_EXECUTED.to_vec();
+        let mut data = start(HID);
         for i in 0..10 {
             data.extend_from_slice(format!("line {i}\r\n").as_bytes());
         }
-        data.extend_from_slice(&finished(0, HID));
+        data.extend_from_slice(&end(HID));
         tracker.push(&data);
 
         let expected: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
@@ -516,11 +485,11 @@ mod tests {
     fn attributes_left_set_do_not_fill_the_capture_with_blanks(
         #[with(6, 20)] mut tracker: Tracker,
     ) {
-        // Erasing the screen at the start of the output zone uses the current attributes, so a
+        // Erasing the screen at the start of the output uses the current attributes, so a
         // command that leaves a background colour set would otherwise turn the whole screen
         // into non-default cells, and every one of them into a space in the next capture.
         tracker
-            .push(&[COMMAND_EXECUTED, b"out\r\n\x1b[41m", &finished(0, HID)].concat())
+            .push(&[start(HID).as_slice(), b"out\r\n\x1b[41m", &end(HID)].concat())
             .push(&interaction("$ ", "id", "\x1b[0mok\r\n"));
 
         let captures = tracker.captures();
@@ -531,18 +500,7 @@ mod tests {
 
     #[rstest]
     fn alternate_screen_output_is_not_captured(#[with(6, 20)] mut tracker: Tracker) {
-        tracker.push(
-            &[
-                PROMPT_START,
-                b"$ ",
-                COMMAND_START,
-                b"vim f\r\n",
-                COMMAND_EXECUTED,
-                b"\x1b[?1049hEDITOR\r\nSCREEN\x1b[?1049l",
-                &finished(0, HID),
-            ]
-            .concat(),
-        );
+        tracker.push(&interaction("$ ", "vim f", "\x1b[?1049hEDITOR\r\nSCREEN\x1b[?1049l"));
 
         let capture = tracker.only_capture().1;
         assert_eq!(whole_output(&capture), "");
@@ -553,27 +511,16 @@ mod tests {
 
     #[rstest]
     fn output_still_in_the_alternate_screen_is_not_captured(#[with(6, 20)] mut tracker: Tracker) {
-        // The output zone always begins on the main screen, but it can end on the alternate one
-        // if the command never leaves it. Leaving the alternate screen has to happen before the
+        // The output always begins on the main screen, but it can end on the alternate one if
+        // the command never leaves it. Leaving the alternate screen has to happen before the
         // output is stored, or the capture is of the alternate screen's contents.
-        tracker.push(
-            &[
-                PROMPT_START,
-                b"$ ",
-                COMMAND_START,
-                b"vim f\r\n",
-                COMMAND_EXECUTED,
-                b"\x1b[?1049hEDITOR\r\nSCREEN",
-                &finished(0, HID),
-            ]
-            .concat(),
-        );
+        tracker.push(&interaction("$ ", "vim f", "\x1b[?1049hEDITOR\r\nSCREEN"));
 
         assert_eq!(whole_output(&tracker.only_capture().1), "");
     }
 
     #[rstest]
-    fn the_output_zone_never_sees_what_the_prompt_drew(#[with(6, 20)] mut tracker: Tracker) {
+    fn the_capture_never_sees_what_the_prompt_drew(#[with(6, 20)] mut tracker: Tracker) {
         tracker
             .push(&interaction("$ ", "first", "aaa\r\n"))
             .push(&interaction("$ ", "second", "bbb\r\n"));
@@ -588,7 +535,7 @@ mod tests {
     fn a_long_prompt_does_not_leak_into_the_output(#[with(4, 20)] mut tracker: Tracker) {
         // A prompt and command line long enough to scroll the screen. The output capture is
         // built from the scrollback buffer plus the screen, so rows that scroll away outside the
-        // output zone must never reach that buffer in the first place.
+        // output must never reach that buffer in the first place.
         let long = "p".repeat(4 * 20);
         tracker.push(&interaction(&long, &long, "hi\r\n"));
 
@@ -596,15 +543,15 @@ mod tests {
     }
 
     #[rstest]
-    fn resets_between_consecutive_bare_command_cycles(mut tracker: Tracker) {
+    fn resets_between_consecutive_commands(mut tracker: Tracker) {
         tracker.push(
             &[
-                COMMAND_EXECUTED,
+                start(HID_ONE).as_slice(),
                 b"first\r\n",
-                &finished(0, HID_ONE),
-                COMMAND_EXECUTED,
+                &end(HID_ONE),
+                &start(HID_TWO),
                 b"second\r\n",
-                &finished(1, HID_TWO),
+                &end(HID_TWO),
             ]
             .concat(),
         );
@@ -620,67 +567,32 @@ mod tests {
     // -- Marker handling ------------------------------------------------------
 
     #[rstest]
-    fn a_repeated_prompt_marker_is_tolerated(mut tracker: Tracker) {
+    fn a_new_start_abandons_a_capture_that_never_ended(mut tracker: Tracker) {
+        // The first command's end marker never arrives. The next command must not inherit any of
+        // its output, nor may the first command be reported with the second's.
         tracker.push(
             &[
-                PROMPT_START,
-                b"$ ",
-                PROMPT_START,
-                b"continued ",
-                COMMAND_START,
-                b"echo hi\r\n",
-                COMMAND_EXECUTED,
-                b"hi\r\n",
-                &finished(0, HID),
+                start(HID_ONE).as_slice(),
+                b"stale\r\n$ echo fresh\r\n",
+                &start(HID_TWO),
+                b"fresh\r\n",
+                &end(HID_TWO),
             ]
             .concat(),
         );
 
-        assert_eq!(whole_output(&tracker.only_capture().1), "hi");
-    }
-
-    #[rstest]
-    fn a_command_marker_ahead_of_its_prompt_marker_is_tolerated(mut tracker: Tracker) {
-        // Some shells get the order wrong and mark the command line before the prompt. Entering
-        // the prompt zone from the input zone therefore keeps the capture, and neither zone
-        // contributes anything to it.
-        tracker.push(
-            &[
-                COMMAND_START,
-                b"leftover\r\n",
-                PROMPT_START,
-                b"$ ",
-                COMMAND_START,
-                b"echo hi\r\n",
-                COMMAND_EXECUTED,
-                b"hi\r\n",
-                &finished(0, HID),
-            ]
-            .concat(),
-        );
-
-        assert_eq!(whole_output(&tracker.only_capture().1), "hi");
-    }
-
-    #[rstest]
-    fn a_new_prompt_abandons_an_unreported_capture(mut tracker: Tracker) {
-        // The first command finishes without metadata, so it is never reported. The next
-        // prompt must not inherit any of it.
-        tracker
-            .push(&[COMMAND_EXECUTED, b"stale\r\n\x1b]133;D;0\x07"].concat())
-            .push(&interaction("$ ", "echo hi", "hi\r\n"));
-
-        let capture = tracker.only_capture().1;
-        assert_eq!(whole_output(&capture), "hi");
-        assert_eq!(capture.output_observed_bytes, u64::conv(b"hi\r\n".len()));
+        let (history_id, capture) = tracker.only_capture();
+        assert_eq!(history_id, hid(HID_TWO));
+        assert_eq!(whole_output(&capture), "fresh");
+        assert_eq!(capture.output_observed_bytes, u64::conv(b"fresh\r\n".len()));
     }
 
     #[rstest]
     fn an_abandoned_command_leaves_nothing_on_the_screen(#[with(4, 20)] mut tracker: Tracker) {
-        // No `D` marker at all: the command is abandoned when the next prompt starts. Its rows
-        // have scrolled off the screen, so dropping the capture is not enough on its own -- the
-        // buffer they scrolled into has to be dropped with it.
-        let mut abandoned = COMMAND_EXECUTED.to_vec();
+        // No end marker at all: the command is abandoned when the next one starts. Its rows have
+        // scrolled off the screen, so dropping the capture is not enough on its own -- the buffer
+        // they scrolled into has to be dropped with it.
+        let mut abandoned = start(HID_ONE);
         for i in 0..8 {
             abandoned.extend_from_slice(format!("stale {i}\r\n").as_bytes());
         }
@@ -690,41 +602,22 @@ mod tests {
     }
 
     #[rstest]
-    fn an_unreported_capture_is_abandoned_by_a_bare_command_cycle(mut tracker: Tracker) {
-        // Same as `a_new_prompt_abandons_an_unreported_capture`, but the next command arrives
-        // without a prompt, straight from the unknown zone.
+    fn a_mismatched_end_marker_ends_the_capture(mut tracker: Tracker) {
+        // The output is discarded rather than left running, so a later end marker for the
+        // right command can't pick it up either.
         tracker.push(
-            &[
-                COMMAND_EXECUTED,
-                b"stale\r\n\x1b]133;D;0\x07",
-                COMMAND_EXECUTED,
-                b"fresh\r\n",
-                &finished(0, HID),
-            ]
-            .concat(),
+            &[start(HID_ONE).as_slice(), b"line one\r\n", &end(HID_TWO), b"$ ", &end(HID_ONE)]
+                .concat(),
         );
 
-        let capture = tracker.only_capture().1;
-        assert_eq!(whole_output(&capture), "fresh");
-        assert_eq!(capture.output_observed_bytes, u64::conv(b"fresh\r\n".len()));
+        assert_eq!(tracker.captures(), vec![]);
     }
 
     #[rstest]
-    fn metadata_from_a_later_finish_marker_is_used(mut tracker: Tracker) {
-        const BARE_FINISH: &[u8] = b"\x1b]133;D;1\x07";
-        tracker.push(&[COMMAND_EXECUTED, b"line one\r\n", BARE_FINISH, &finished(0, HID)].concat());
+    fn a_repeated_end_marker_reports_nothing_more(mut tracker: Tracker) {
+        tracker.push(&[interaction("$ ", "echo hi", "hi\r\n").as_slice(), &end(HID)].concat());
 
-        let (history_id, capture) = tracker.only_capture();
-        assert_eq!(history_id, hid(HID));
-        assert_eq!(capture, CommandCapture {
-            output_start: "line one".to_string(),
-            output_end: None,
-            // The first `D` ends the output zone and is discounted; the second arrives
-            // after it, in the unknown zone, so it was never counted to begin with.
-            output_observed_bytes: u64::conv(b"line one\r\n".len()),
-            terminal_width: COLS,
-            terminal_height: ROWS,
-        });
+        assert_eq!(whole_output(&tracker.only_capture().1), "hi");
     }
 
     #[rstest]
@@ -732,7 +625,7 @@ mod tests {
         // Split the marker partway through the history ID, so neither push holds a whole one.
         let (head, tail) = HID.split_at(20);
         tracker.push(
-            &[COMMAND_EXECUTED, format!("line one\r\n\x1b]133;D;0;history_id={head}").as_bytes()]
+            &[start(HID).as_slice(), format!("line one\r\n\x1b]18188735;D;{head}").as_bytes()]
                 .concat(),
         );
         assert_eq!(tracker.captures(), vec![]);
@@ -750,11 +643,8 @@ mod tests {
         // terminator split off would leave the emulator mid-sequence, and the stray
         // backslash would end up printed on the screen we capture.
         tracker.push(
-            format!(
-                "\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\echo \
-                 hi\r\n\x1b]133;C\x1b\\hi\r\n\x1b]133;D;0;history_id={HID}\x1b\\"
-            )
-            .as_bytes(),
+            format!("$ echo hi\r\n\x1b]18188735;C;{HID}\x1b\\hi\r\n\x1b]18188735;D;{HID}\x1b\\")
+                .as_bytes(),
         );
 
         let capture = tracker.only_capture().1;
@@ -767,11 +657,8 @@ mod tests {
         let (head, tail) = HID.split_at(20);
         tracker
             .push(
-                &[
-                    COMMAND_EXECUTED,
-                    format!("line one\r\n\x1b]133;D;0;history_id={head}").as_bytes(),
-                ]
-                .concat(),
+                &[start(HID).as_slice(), format!("line one\r\n\x1b]18188735;D;{head}").as_bytes()]
+                    .concat(),
             )
             .push(format!("{tail}\x07").as_bytes());
 
@@ -803,11 +690,11 @@ mod tests {
 
     /// Numbered lines, one per row, so any kept fragment says where in the output it came from.
     fn numbered_lines(count: usize) -> Vec<u8> {
-        let mut input = COMMAND_EXECUTED.to_vec();
+        let mut input = start(HID);
         for i in 0..count {
             input.extend_from_slice(format!("line {i:04}\r\n").as_bytes());
         }
-        input.extend_from_slice(&finished(0, HID));
+        input.extend_from_slice(&end(HID));
         input
     }
 
@@ -874,11 +761,11 @@ mod tests {
     const SECRET_LINE_LEN: usize = "AWS_SECRET_ACCESS_KEY=hunter0000".len();
 
     fn secret_lines(count: usize) -> Vec<u8> {
-        let mut input = COMMAND_EXECUTED.to_vec();
+        let mut input = start(HID);
         for i in 0..count {
             input.extend_from_slice(format!("AWS_SECRET_ACCESS_KEY=hunter{i:04}\r\n").as_bytes());
         }
-        input.extend_from_slice(&finished(0, HID));
+        input.extend_from_slice(&end(HID));
         input
     }
 
@@ -972,9 +859,9 @@ mod tests {
 
     #[rstest]
     fn resizing_reflows_the_capture(#[with(6, 20)] mut tracker: Tracker) {
-        tracker.push(&[COMMAND_EXECUTED, b"abcdefghij"].concat());
+        tracker.push(&[start(HID).as_slice(), b"abcdefghij"].concat());
         tracker.resize(6, 5);
-        tracker.push(&[b"klmno\r\n".as_slice(), &finished(0, HID)].concat());
+        tracker.push(&[b"klmno\r\n".as_slice(), &end(HID)].concat());
 
         // The first ten columns were rendered on a twenty-column screen; narrowing it drops
         // what no longer fits, and the rest is appended at the new width.

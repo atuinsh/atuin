@@ -127,23 +127,30 @@ fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
                 return;
             };
 
+            let redactor = settings.security.redactor(settings.secrets_filter);
             while let Ok((history_id, capture)) = rx.recv() {
                 // Output can carry credentials the command line never showed, e.g. `cat .env`.
                 // Swap the string only when something was actually taken out, so that clean
-                // output -- nearly all of it -- reaches the daemon without being copied.
+                // output -- nearly all of it -- reaches the daemon without being copied. Output
+                // that can't be redacted quickly is not kept at all.
                 let redact = |output: &mut String| {
-                    if settings.secrets_filter
-                        && let Cow::Owned(redacted) = atuin_common::secrets::redact(output)
-                    {
-                        *output = redacted;
+                    match redactor.redact_within(output, atuin_common::secrets::REDACT_BUDGET) {
+                        Some(Cow::Borrowed(_)) => true,
+                        Some(Cow::Owned(redacted)) => {
+                            *output = redacted;
+                            true
+                        }
+                        None => false,
                     }
                 };
 
                 let mut output_start = capture.output_start;
-                redact(&mut output_start);
                 let mut output_end = capture.output_end;
-                if let Some(output_end) = output_end.as_mut() {
-                    redact(output_end);
+                let redacted = redact(&mut output_start)
+                    && output_end.as_mut().is_none_or(redact);
+                if !redacted {
+                    tracing::debug!(%history_id, "output took too long to redact; dropping it");
+                    continue;
                 }
 
                 if let Err(err) = client

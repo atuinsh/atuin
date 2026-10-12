@@ -60,7 +60,9 @@ macro_rules! internal_errors {
     };
 }
 
+pub mod ai;
 pub mod common;
 pub mod history;
 
+pub use ai::session::Service as AiSessionService;
 pub use history::Service as HistoryService;

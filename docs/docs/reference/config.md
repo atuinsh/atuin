@@ -112,6 +112,43 @@ $ atuin config set logs true
 Error: 'logs' is a table; use a dotted key like 'logs.key' to set a value within it
 ```
 
+### `atuin config enable <feature>`
+
+Turn on a feature along with the settings it depends on, then restart the
+daemon so it takes effect.
+
+```shell
+$ atuin config enable output-capture
+```
+
+| Feature | What it sets |
+| ------- | ------------ |
+| `daemon` | `daemon.enabled`, `daemon.autostart`, and `search_mode = "daemon-fuzzy"` |
+| `output-capture` | `daemon.enabled`, `daemon.autostart`, `pty_proxy.enabled`, and `output.enabled`. See [Capturing Command Output](../guide/output-capture.md) |
+
+If the daemon is already enabled, its `autostart` is left alone, since a
+service manager such as systemd or `launchd` may run it. With `autostart` off,
+Atuin asks you to restart the daemon rather than doing it itself. Open a new
+shell afterward.
+
+### `atuin config disable <feature>`
+
+Turn off a feature.
+
+```shell
+$ atuin config disable output-capture
+```
+
+| Feature          | What it sets                                                                                                 |
+|------------------|--------------------------------------------------------------------------------------------------------------|
+| `daemon`         | `daemon.enabled = false`, `daemon.autostart = false`, and `search_mode = "fuzzy"` if it was `"daemon-fuzzy"` |
+| `output-capture` | `output.enabled = false`. Leaves the daemon and search mode unchanged                                        |
+
+Disabling the daemon stops it if it was running.
+
+Disabling output capture restarts an enabled daemon with `autostart` on so
+it picks up the change. Open a new shell afterward.
+
 ### `atuin config print [key]`
 
 Print configuration values from your config file in TOML format. Without a

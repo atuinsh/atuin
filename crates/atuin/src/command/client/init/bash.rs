@@ -15,10 +15,14 @@ fn write_tmux_config<W: Write>(writer: &mut W, tmux: &Tmux) -> io::Result<()> {
 }
 
 fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) -> io::Result<()> {
-    let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
-        (false, false)
+    let (bind_ctrl_r, bind_up_arrow, bind_ai_resume) = if std::env::var("ATUIN_NOBIND").is_ok() {
+        (false, false, false)
     } else {
-        (options.enable_ctrl_r, options.enable_up_arrow)
+        (
+            options.enable_ctrl_r,
+            options.enable_up_arrow,
+            cfg!(feature = "ai") && options.enable_ai_resume,
+        )
     };
 
     writeln!(writer, "{} && {{", BASH.include_guard)?;
@@ -35,6 +39,7 @@ fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) 
     write_tmux_config(writer, options.tmux)?;
     writeln!(writer, "__atuin_bind_ctrl_r={bind_ctrl_r}")?;
     writeln!(writer, "__atuin_bind_up_arrow={bind_up_arrow}")?;
+    writeln!(writer, "__atuin_bind_ai_resume={bind_ai_resume}")?;
     writeln!(writer, "{}", BASH.main)?;
 
     #[cfg(feature = "ai")]

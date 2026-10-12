@@ -2,13 +2,14 @@ name: Beta Release
 
 # Automated daily beta release. Follows the same steps as the /release skill's
 # prerelease path: bump the workspace version, refresh the running
-# `## [unreleased]` changelog section, commit, then tag. The tag push triggers
-# release.yml. Prereleases are not published to crates.io.
+# `## [unreleased]` changelog section, open a pull request and `/merge` it, then
+# tag the commit it lands as. The tag push triggers release.yml. Prereleases are
+# not published to crates.io.
 #
 # Requires a `RELEASE_TOKEN` secret: a PAT belonging to the atuin-bot user
-# with contents: write on this repo. The default GITHUB_TOKEN cannot be used:
-# tags pushed with it do not trigger other workflows, so release.yml would
-# never run.
+# with contents: write and pull requests: write on this repo. The default
+# GITHUB_TOKEN cannot be used: tags pushed with it do not trigger other
+# workflows, so release.yml would never run.
 
 on:
   schedule:
@@ -86,6 +87,8 @@ jobs:
     needs: gate
     if: needs.gate.outputs.go == 'true'
     runs-on: depot-ubuntu-24.04
+    outputs:
+      pull: ${{ steps.pull.outputs.url }}
     env:
       OLD_VERSION: ${{ needs.gate.outputs.old-version }}
       NEW_VERSION: ${{ needs.gate.outputs.new-version }}
@@ -136,15 +139,53 @@ jobs:
             tail -n "+$first" /tmp/stripped.md
           } > CHANGELOG.md
 
-      - name: Commit, tag, and push
+      - name: Commit, push, and /merge
+        id: pull
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           git config user.name "atuin-bot"
           git config user.email "engineering@atuin.sh"
+          git switch -c "$NEW_VERSION"
           git add -A
           git commit -m "chore(release): prepare for release $NEW_VERSION"
-          git tag "v$NEW_VERSION"
-          git push --atomic \
+          git push \
               "https://atuin-bot:${RELEASE_TOKEN}@github.com/${{ github.repository }}.git" \
-              "HEAD:refs/heads/main" "refs/tags/v$NEW_VERSION"
+              "HEAD:refs/heads/$NEW_VERSION"
+          url=$(gh pr create --repo "${{ github.repository }}" --base main --head "$NEW_VERSION" \
+              --title "chore(release): prepare for release $NEW_VERSION" --body "")
+          gh pr comment "$url" --body /merge
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+  # Waits on a free runner: a /merge takes a while to show the pull request merged.
+  tag:
+    needs: [gate, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      NEW_VERSION: ${{ needs.gate.outputs.new-version }}
+      PULL: ${{ needs.release.outputs.pull }}
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+    steps:
+      - name: Wait for the release to land
+        run: |
+          while state=$(gh pr view "$PULL" --json state --jq .state); [ "$state" != MERGED ]; do
+            if [ "$state" = CLOSED ]; then
+              echo "::error::$PULL was closed without landing"
+              exit 1
+            fi
+            sleep 60
+          done
+
+      - name: Tag
+        run: |
+          sha=$(gh pr view "$PULL" --json headRefOid --jq .headRefOid)
+          git init -q tag
+          cd tag
+          git fetch -q --depth=1 "https://github.com/${{ github.repository }}.git" "$sha"
+          git tag "v$NEW_VERSION" FETCH_HEAD
+          git push \
+              "https://atuin-bot:${RELEASE_TOKEN}@github.com/${{ github.repository }}.git" \
+              "refs/tags/v$NEW_VERSION"

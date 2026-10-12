@@ -2,6 +2,7 @@
 
 mod duration;
 mod offset_date_time;
+mod system_time;
 mod utc_offset;
 
 #[allow(deprecated)]
@@ -13,4 +14,5 @@ pub use offset_date_time::{
     OffsetDateTimeDisplay, OffsetDateTimeExt, OffsetDateTimeStyle, TimespecOutOfRange, YMD_HM,
     YMD_HMS,
 };
+pub use system_time::SystemTimeExt;
 pub use utc_offset::{TimezoneDecodingError, UtcOffsetExt, UtcOffsetSpec};

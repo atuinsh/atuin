@@ -95,6 +95,8 @@ If you don't wish to use the installer, the manual installation steps are as fol
     nix profile install "github:atuinsh/atuin"
     ```
 
+    Linux builds of `main` are cached on [Cachix](https://atuin.cachix.org). Run `cachix use atuin` first to download them instead of building from source.
+
 === "Pacman"
 
     Atuin is available in the Arch Linux [extra repository](https://archlinux.org/packages/extra/x86_64/atuin/):

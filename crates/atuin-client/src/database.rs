@@ -430,16 +430,6 @@ impl Sqlite {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
-    async fn delete_row_raw(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        id: HistoryId,
-    ) -> Result<()> {
-        db::query("delete from history where id = ?1").bind(id).execute(&mut **tx).await?;
-
-        Ok(())
-    }
-
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn save(&self, h: &History) -> Result<()> {
         debug!("saving history to sqlite");
@@ -509,6 +499,13 @@ impl Sqlite {
         .await?;
 
         Ok(res)
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn active_ids(&self) -> Result<Vec<HistoryId>> {
+        db::query_scalar::<_, HistoryId>("select id from history where deleted_at is null")
+            .fetch_all(self.sqlite.pool())
+            .await
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -888,18 +885,7 @@ impl Sqlite {
             .fetch_all(self.sqlite.pool())
             .await?;
 
-        // Rank against the same characters SQL matched: drop spaces, operators and negated terms.
-        let reorder_query: String = QueryTokenizer::new(orig_query)
-            .filter(|token| !token.is_inverse())
-            .filter_map(|token| match token {
-                QueryToken::Match(term, _)
-                | QueryToken::MatchStart(term, _)
-                | QueryToken::MatchEnd(term, _)
-                | QueryToken::MatchFull(term, _) => Some(term),
-                QueryToken::Or | QueryToken::Regex(_) => None,
-            })
-            .collect();
-        Ok(ordering::reorder_fuzzy(search_mode, &reorder_query, res))
+        Ok(ordering::reorder_fuzzy(search_mode, &ranking_query(orig_query), res))
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -999,8 +985,8 @@ impl Sqlite {
     }
 
     #[must_use]
-    pub fn all_paged(&self, page_size: usize, include_deleted: bool, unique: bool) -> Paged {
-        Paged::new(self.clone(), page_size, include_deleted, unique)
+    pub fn all_paged(&self, page_size: usize, include_deleted: bool) -> Paged {
+        Paged::new(self.clone(), page_size, include_deleted)
     }
 
     // This used to scramble the command and set deleted_at, so that sync v1 could
@@ -1020,10 +1006,21 @@ impl Sqlite {
             return Ok(());
         }
 
+        // One `in (...)` statement per chunk that fits the bind-parameter limit, not one
+        // statement per id: per-row deletes made removing 200k entries take ~13s.
+        let ids_per_delete = self.sqlite.info().await.variable_number_limit().max(1);
+
         let mut tx = self.sqlite.pool().begin().await?;
 
-        for id in ids {
-            Self::delete_row_raw(&mut tx, id).await?;
+        while ids.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new("delete from history where id in (");
+            let mut list = builder.separated(", ");
+            for id in ids.by_ref().take(ids_per_delete) {
+                list.push_bind(id);
+            }
+            builder.push(")");
+
+            builder.build().execute(&mut *tx).await?;
         }
 
         tx.commit().await?;
@@ -1144,18 +1141,16 @@ pub struct Paged {
     page_size: usize,
     last_id: Option<String>,
     include_deleted: bool,
-    unique: bool,
 }
 
 impl Paged {
     #[must_use]
-    pub fn new(database: Sqlite, page_size: usize, include_deleted: bool, unique: bool) -> Self {
+    pub fn new(database: Sqlite, page_size: usize, include_deleted: bool) -> Self {
         Self {
             database,
             page_size,
             last_id: None,
             include_deleted,
-            unique,
         }
     }
 
@@ -1167,13 +1162,6 @@ impl Paged {
 
         if !self.include_deleted {
             query.and_where_is_null("deleted_at");
-        }
-
-        if self.unique {
-            // We want to deduplicate on command, but the user can search via cwd, hostname, and session.
-            // Without those fields, filter modes won't work right. With those fields, we get duplicates.
-            // This must be handled upstream.
-            query.group_by("command, cwd, hostname, session").having("max(timestamp)");
         }
 
         query.limit(self.page_size);
@@ -1232,6 +1220,29 @@ impl SqlBuilderExt for SqlBuilder {
             self.and_where(cond)
         }
     }
+}
+
+/// The characters fuzzy results are ranked against: the same ones the SQL matched, without
+/// spaces, operators or negated terms.
+#[must_use]
+pub fn ranking_query(query: &str) -> String {
+    QueryTokenizer::new(query)
+        .filter(|token| !token.is_inverse())
+        .filter_map(|token| match token {
+            QueryToken::Match(term, _)
+            | QueryToken::MatchStart(term, _)
+            | QueryToken::MatchEnd(term, _)
+            | QueryToken::MatchFull(term, _) => Some(term),
+            QueryToken::Or | QueryToken::Regex(_) => None,
+        })
+        .collect()
+}
+
+/// Whether fuzzy and full-text search differ for `query`: only plain terms match differently
+/// (spread out or as a substring); operators such as `^prefix` and `'exact` match the same.
+#[must_use]
+pub fn has_fuzzy_terms(query: &str) -> bool {
+    QueryTokenizer::new(query).any(|token| matches!(token, QueryToken::Match(..)))
 }
 
 pub struct QueryTokenizer<'a> {
@@ -2159,6 +2170,7 @@ mod test {
 
     // SQL operators are stripped when performing fuzzy reordering, but this must not affect the
     // initial SQL matching.
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_fuzzy_operator() {
         let db = db_with(&["use screen", "screenshot tool"]).await;
@@ -2182,7 +2194,7 @@ mod test {
         }
 
         // Create a paged iterator with page_size of 2
-        let mut paged = db.all_paged(2, false, false);
+        let mut paged = db.all_paged(2, false);
 
         // First page should have 2 items
         let page1 = paged.next().await.unwrap();
@@ -2212,35 +2224,11 @@ mod test {
         db: Sqlite,
     ) {
         // Create a paged iterator on empty database
-        let mut paged = db.all_paged(10, false, false);
+        let mut paged = db.all_paged(10, false);
 
         // Should return None immediately
         let page = paged.next().await.unwrap();
         assert!(page.is_none());
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_paged_unique(
-        #[future(awt)]
-        #[from(empty_db)]
-        db: Sqlite,
-    ) {
-        // Add duplicate commands
-        new_history_item(&db, "duplicate").await.unwrap();
-        new_history_item(&db, "duplicate").await.unwrap();
-        new_history_item(&db, "unique1").await.unwrap();
-        new_history_item(&db, "unique2").await.unwrap();
-
-        // Without unique flag - should get all 4
-        let mut paged = db.all_paged(10, false, false);
-        let page = paged.next().await.unwrap().unwrap();
-        assert_eq!(page.len(), 4);
-
-        // With unique flag - should get 3 (duplicates collapsed)
-        let mut paged_unique = db.all_paged(10, false, true);
-        let page_unique = paged_unique.next().await.unwrap().unwrap();
-        assert_eq!(page_unique.len(), 3);
     }
 
     #[rstest]
@@ -2279,11 +2267,11 @@ mod test {
         db.delete(to_delete).await.unwrap();
 
         // Deletes remove the row outright, so both views should get 2
-        let mut paged = db.all_paged(10, false, false);
+        let mut paged = db.all_paged(10, false);
         let page = paged.next().await.unwrap().unwrap();
         assert_eq!(page.len(), 2);
 
-        let mut paged_deleted = db.all_paged(10, true, false);
+        let mut paged_deleted = db.all_paged(10, true);
         let page_deleted = paged_deleted.next().await.unwrap().unwrap();
         assert_eq!(page_deleted.len(), 2);
 
@@ -2292,11 +2280,11 @@ mod test {
         legacy.deleted_at = Some(OffsetDateTime::now_utc());
         db.update(&legacy).await.unwrap();
 
-        let mut paged = db.all_paged(10, false, false);
+        let mut paged = db.all_paged(10, false);
         let page = paged.next().await.unwrap().unwrap();
         assert_eq!(page.len(), 1);
 
-        let mut paged_deleted = db.all_paged(10, true, false);
+        let mut paged_deleted = db.all_paged(10, true);
         let page_deleted = paged_deleted.next().await.unwrap().unwrap();
         assert_eq!(page_deleted.len(), 2);
     }

@@ -7,6 +7,7 @@ use atuin_client::history::{AuthorPattern, History};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{FilterMode, KeymapMode, RequestedSearchMode, Settings};
 use atuin_client::theme::Theme;
+use atuin_client::tui::cursor;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::filter::OrFilter;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
@@ -17,7 +18,6 @@ use tracing::instrument;
 
 use super::history::ListMode;
 
-mod cursor;
 mod engines;
 mod history_list;
 mod inspector;

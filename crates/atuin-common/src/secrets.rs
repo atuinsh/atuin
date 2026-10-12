@@ -16,6 +16,12 @@
 //! - [`redact`] only replaces captured groups, so that same string comes back untouched -- there
 //!   is nothing in it to take out.
 //!
+//! Patterns come in two kinds. The credential formats (`SECRET_PATTERNS`, and the services' in
+//! `vendors`) are what both see. The credentials recognised by where they sit (in `structural`: a
+//! URL's password, a private key's armour, a value assigned to `DB_PASSWORD`) are only redacted,
+//! so they never keep a command out of history; nor is a value of theirs that is plainly a
+//! stand-in (`${TOKEN}`, `<password>`). A [`Redactor`] also takes the user's own patterns.
+//!
 //! Both are best-effort. [`redact`] in particular is applied to rendered terminal output, where a
 //! credential can be broken up by SGR escape sequences, which will not match. (A soft wrap at the
 //! right margin is re-joined by the terminal emulator before capture, so a wrap alone does not
@@ -24,11 +30,16 @@
 use std::borrow::Cow;
 use std::ops::Range;
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 use regex::{Regex, RegexSet};
 
 #[cfg(test)]
 use self::tests::Test;
+
+pub mod files;
+mod structural;
+mod vendors;
 
 /// The string every credential [`redact`] locates is replaced with.
 pub const REDACTED: &str = "****";
@@ -391,51 +402,209 @@ static SECRET_PATTERNS: &[Pattern] = &[
     },
 ];
 
+/// The patterns [`contains_secret`] recognises: the credential formats.
+#[cfg(test)]
+fn history_patterns() -> impl Iterator<Item = &'static Pattern> {
+    SECRET_PATTERNS.iter().chain(vendors::VENDOR_PATTERNS)
+}
+
+/// The patterns [`redact`] takes out: the credential formats, then the structural ones, then
+/// those of a value assigned to a credential's name.
+#[cfg(test)]
+fn redaction_patterns() -> impl Iterator<Item = &'static Pattern> {
+    history_patterns().chain(structural::STRUCTURAL_PATTERNS).chain(structural::NAMED_PATTERNS)
+}
+
 static PREFILTER: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new(SECRET_PATTERNS.iter().map(|pattern| pattern.prefilter.unwrap_or(pattern.regex)))
         .expect("failed to build secrets regex set")
 });
 
-static REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    SECRET_PATTERNS
-        .iter()
-        .map(|pattern| {
-            Regex::new(pattern.regex)
-                .unwrap_or_else(|e| panic!("failed to compile regex for {}: {e}", pattern.name))
+/// Which values a pattern's matches are kept for, though it finds them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Spare {
+    /// None: a credential format is a credential wherever it is.
+    Nothing,
+    /// Stand-ins and references (see [`structural::is_placeholder`]).
+    Placeholders,
+    /// Those, and words (see [`structural::is_word`]): a name's value can be a type.
+    Words,
+}
+
+/// Patterns compiled to find what [`redact`] takes out.
+struct Table {
+    /// Finds which of `regexes` can match, in one pass, where that is fast: for a handful of
+    /// patterns. A set of many is a state machine big enough that a long hostile line overflows
+    /// the regex engine's cache, and it falls back to an engine many times slower; each of those
+    /// is run on its own instead, which, for the many that begin with a literal (`glpat-`), is a
+    /// fast search for it.
+    set: Option<RegexSet>,
+    regexes: Vec<Regex>,
+    spare: Vec<Spare>,
+}
+
+impl Table {
+    fn new<'p>(patterns: impl IntoIterator<Item = (&'p Pattern, Spare)>, set: bool) -> Self {
+        let (patterns, spare): (Vec<_>, Vec<_>) = patterns.into_iter().unzip();
+        let set = set.then(|| {
+            RegexSet::new(patterns.iter().map(|pattern| pattern.prefilter.unwrap_or(pattern.regex)))
+                .expect("failed to build the redaction regex set")
+        });
+        Self {
+            set,
+            regexes: patterns.iter().map(|pattern| compile(pattern)).collect(),
+            spare,
+        }
+    }
+
+    /// Where in `s` this table's `i`th pattern finds something to take out.
+    fn spans<'s>(&'s self, i: usize, s: &'s str) -> impl Iterator<Item = Range<usize>> + 's {
+        self.regexes[i].captures_iter(s).filter_map(move |caps| {
+            let secret = caps.name(SECRET_GROUP)?;
+            let spared = match self.spare[i] {
+                Spare::Nothing => false,
+                Spare::Placeholders => structural::is_placeholder(secret.as_str()),
+                Spare::Words => structural::is_word(secret.as_str()),
+            };
+            (!spared).then(|| secret.range())
         })
-        .collect()
+    }
+}
+
+fn compile(pattern: &Pattern) -> Regex {
+    Regex::new(pattern.regex)
+        .unwrap_or_else(|e| panic!("failed to compile regex for {}: {e}", pattern.name))
+}
+
+/// The vendor formats, each compiled on its own (see [`Table::set`]), for [`contains_secret`].
+static VENDOR_REGEXES: LazyLock<Vec<Regex>> =
+    LazyLock::new(|| vendors::VENDOR_PATTERNS.iter().map(compile).collect());
+
+/// The tables [`redact`] scans with: the original credential formats, in a set; the vendor formats
+/// and the structural patterns, each on its own.
+static REDACTION: LazyLock<[Table; 3]> = LazyLock::new(|| {
+    [
+        Table::new(SECRET_PATTERNS.iter().map(|pattern| (pattern, Spare::Nothing)), true),
+        Table::new(vendors::VENDOR_PATTERNS.iter().map(|pattern| (pattern, Spare::Nothing)), false),
+        Table::new(
+            structural::STRUCTURAL_PATTERNS
+                .iter()
+                .map(|pattern| (pattern, Spare::Placeholders))
+                .chain(structural::NAMED_PATTERNS.iter().map(|pattern| (pattern, Spare::Words))),
+            false,
+        ),
+    ]
 });
 
 static SGR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").expect("sgr regex"));
 
-macro_rules! executed {
-    ($subcommand:literal) => {
+/// `$command` run as a command (not merely mentioned, in an `echo` or a commit message): at the
+/// start of a line or after a separator, behind any `sudo`, `env`, `VAR=value` and the like, and
+/// by any path.
+macro_rules! ran {
+    ($command:expr) => {
         concat!(
-            r"(?:^|[;&|(`\n])[ \t]*(?:(?:sudo|command|exec|time|env|nohup)\s+|\w+=\S*\s+)*(?:\S*/)?atuin\s+",
-            $subcommand
+            r"(?:^|[;&|(`{!\n])[ \t]*(?:(?:sudo|command|exec|time|env|nohup|then|do|else)\s+|\w+=\S*\s+)*(?:\S*/)?",
+            $command
         )
     };
 }
 
+/// The rest of a command's line, up to the next separator: where a subcommand follows the
+/// program's global flags (`aws --profile x configure get ...`).
+macro_rules! then {
+    () => {
+        r"\b[^\n;&|]*?\b"
+    };
+}
+
+macro_rules! executed {
+    ($subcommand:literal) => {
+        ran!(concat!(r"atuin\s+", $subcommand))
+    };
+}
+
+/// Commands whose output may hold a credential: Atuin's own, and other tools' that print a token,
+/// a password or a key, or the whole environment.
 static OUTPUT_UNSAFE: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new([
         executed!(r"key\b"),
         executed!(r"(?:account\s+)?login\b"),
         executed!(r"(?:account\s+)?register\b"),
         executed!(r"account\s+change-password\b"),
+        ran!(r"gh\s+auth\s+token\b"),
+        ran!(r"gh\s+auth\s+status\b[^\n;&|]*?\s(?:--show-token|-t)\b"),
+        ran!(r"glab\s+auth\s+status\b[^\n;&|]*--show-token\b"),
+        ran!(r"gcloud\s+auth\s+(?:application-default\s+)?print-(?:access|identity)-token\b"),
+        ran!(concat!(r"aws", then!(), r"configure\s+(?:get|export-credentials)\b")),
+        ran!(concat!(
+            r"aws",
+            then!(),
+            r"sts\s+(?:get-session-token|assume-role\S*|get-federation-token)\b"
+        )),
+        ran!(concat!(r"aws", then!(), r"(?:ecr|ecr-public)\s+get-login-password\b")),
+        ran!(concat!(r"aws", then!(), r"codeartifact\s+get-authorization-token\b")),
+        ran!(r"az\s+account\s+get-access-token\b"),
+        ran!(r"az\s+ad\s+sp\s+(?:create-for-rbac|credential\s+reset)\b"),
+        ran!(concat!(r"kubectl", then!(), r"(?:get|describe)\s+secrets?\b")),
+        ran!(concat!(r"kubectl", then!(), r"config\s+view\b[^\n;&|]*--raw\b")),
+        ran!(concat!(r"kubectl", then!(), r"create\s+token\b")),
+        ran!(r"vault\s+(?:read|login|print\s+token|token\s+create|kv\s+get)\b"),
+        ran!(r"op\s+(?:read|inject|item\s+get|signin\b[^\n;&|]*--raw)\b"),
+        ran!(r"pass\s+show\b"),
+        ran!(r"gopass\s+(?:show|cat)\b"),
+        ran!(r"security\s+find-(?:generic|internet)-password\b[^\n;&|]*\s-[a-zA-Z]*[wg]"),
+        ran!(r"secret-tool\s+lookup\b"),
+        ran!(r"heroku\s+auth:token\b"),
+        ran!(r"doppler\s+secrets\b"),
+        ran!(r"npm\s+token\s+create\b"),
+        ran!(r"git\s+credential\s+fill\b"),
+        ran!(r"terraform\s+output\b[^\n;&|]*\s-(?:json|raw)\b"),
+        ran!(r"printenv\b"),
+        // The environment, the shell's variables: alone, not running a command.
+        ran!(r"(?:env|set|export\s+-p|declare\s+-[a-zA-Z]*[px])[ \t]*(?:\z|[;&|)\n])"),
     ])
     .expect("failed to build output-unsafe set")
 });
 
+/// Whether `command` runs one of the commands whose output may hold a credential (`atuin key`,
+/// `gh auth token`, `printenv`, ...), there or in a script it hands a shell.
 #[must_use]
 pub fn output_unsafe(command: &str) -> bool {
-    OUTPUT_UNSAFE.is_match(&SGR.replace_all(command, ""))
+    let command = SGR.replace_all(command, "");
+    OUTPUT_UNSAFE.is_match(&command) || shell_scripts(&command).iter().any(|s| output_unsafe(s))
+}
+
+/// The scripts `command` hands a shell to run (`bash -lc '<script>'`, `fish --command
+/// '<script>'`), which run though they are quoted.
+fn shell_scripts(command: &str) -> Vec<String> {
+    let Some(words) = shlex::split(command) else {
+        return Vec::new();
+    };
+    let mut scripts = Vec::new();
+    let mut shell = false;
+    for (n, word) in words.iter().enumerate() {
+        let name = word.rsplit('/').next().unwrap_or(word);
+        if matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "fish") {
+            shell = true;
+        } else if let Some(script) = shell.then(|| word.strip_prefix("--command=")).flatten() {
+            scripts.push(script.to_owned());
+            shell = false;
+        } else if shell
+            && (word == "--command"
+                || (word.starts_with('-') && !word.starts_with("--") && word.ends_with('c')))
+        {
+            scripts.extend(words.get(n + 1).cloned());
+            shell = false;
+        }
+    }
+    scripts
 }
 
 /// Whether `s` contains anything that looks like it involves a credential.
 #[must_use]
 pub fn contains_secret(s: &str) -> bool {
-    PREFILTER.is_match(s)
+    PREFILTER.is_match(s) || VENDOR_REGEXES.iter().any(|regex| regex.is_match(s))
 }
 
 fn is_multiline_opener(value: &str) -> bool {
@@ -447,21 +616,54 @@ fn is_multiline_opener(value: &str) -> bool {
             && value[1..].chars().all(|c| c.is_alphanumeric() || c == '_'))
 }
 
-/// A single pass over `s`, replacing every credential the patterns can locate with [`REDACTED`].
-fn redact_once(s: &str) -> Cow<'_, str> {
-    let mut spans: Vec<Range<usize>> = PREFILTER
-        .matches(s)
-        .iter()
-        .flat_map(|i| REGEXES[i].captures_iter(s))
-        .filter_map(|caps| Some(caps.name(SECRET_GROUP)?.range()))
-        // Text that is already the marker is not a change. This is what makes `redact`
-        // idempotent and keeps "Borrowed iff nothing changed" exact.
-        .filter(|span| &s[span.clone()] != REDACTED)
-        .filter(|span| !is_multiline_opener(&s[span.clone()]))
-        .collect();
+/// Redaction ran past its deadline (see [`Redactor::redact_within`]).
+struct TooSlow;
+
+/// A single pass over `s`, replacing every credential `redactor`'s patterns can locate with
+/// [`REDACTED`]; [`TooSlow`] once `deadline` passes, checked between patterns.
+fn redact_once<'a>(
+    s: &'a str,
+    redactor: &Redactor,
+    deadline: Option<Instant>,
+) -> Result<Cow<'a, str>, TooSlow> {
+    let late = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
+    let mut spans: Vec<Range<usize>> = Vec::new();
+    let tables: &[Table] = if redactor.builtin {
+        &*REDACTION
+    } else {
+        &[]
+    };
+    for table in tables {
+        let candidates: Vec<usize> = match &table.set {
+            Some(set) => set.matches(s).into_iter().collect(),
+            None => (0..table.regexes.len()).collect(),
+        };
+        for i in candidates {
+            if late() {
+                return Err(TooSlow);
+            }
+            // A YAML or shell block opener (`|`, `<<EOF`) is where a value starts, not the
+            // value.
+            spans.extend(table.spans(i, s).filter(|span| !is_multiline_opener(&s[span.clone()])));
+        }
+    }
+    // The user's own: the `secret` group where one names it, else the whole match.
+    for regex in &redactor.extra {
+        if late() {
+            return Err(TooSlow);
+        }
+        spans.extend(
+            regex.captures_iter(s).filter_map(|caps| {
+                caps.name(SECRET_GROUP).or_else(|| caps.get(0)).map(|m| m.range())
+            }),
+        );
+    }
+    // Text that is already the marker is not a change. This is what makes `redact` idempotent
+    // and keeps "Borrowed iff nothing changed" exact.
+    spans.retain(|span| !span.is_empty() && &s[span.clone()] != REDACTED);
 
     if spans.is_empty() {
-        return Cow::Borrowed(s);
+        return Ok(Cow::Borrowed(s));
     }
     spans.sort_unstable_by_key(|span| span.start);
 
@@ -480,7 +682,7 @@ fn redact_once(s: &str) -> Cow<'_, str> {
     }
     out.push_str(&s[cursor..]);
 
-    Cow::Owned(out)
+    Ok(Cow::Owned(out))
 }
 
 /// Replace every credential [`redact`] can locate in `s` with [`REDACTED`].
@@ -488,37 +690,104 @@ fn redact_once(s: &str) -> Cow<'_, str> {
 /// Returns [`Cow::Borrowed`] if and only if nothing was replaced, so
 /// `matches!(redact(s), Cow::Owned(_))` is an exact test for "something was taken out". Note that
 /// this is a stronger condition than [`contains_secret`]: everything replaced was recognised, but
-/// a pattern can also match text that holds no value to remove.
+/// a pattern can also match text that holds no value to remove, and the structural patterns
+/// replace what [`contains_secret`] doesn't recognise.
 ///
 /// Best-effort; in particular it cannot see through SGR escape sequences.
 #[must_use]
 pub fn redact(s: &str) -> Cow<'_, str> {
-    let mut out = match redact_once(s) {
-        Cow::Borrowed(_) => return Cow::Borrowed(s),
-        Cow::Owned(out) => out,
-    };
+    Redactor::default().redact(s)
+}
 
-    // Two patterns can carve one stretch into spans whose leftovers a second pass captures
-    // differently (see `redaction_reaches_a_fixed_point_in_one_call`), so iterate until a pass
-    // changes nothing. Each pass replaces at least one span that is not already the marker, so
-    // this converges in a couple of iterations; the bound is a backstop, not a budget — a test
-    // panics on it, a running sink only warns.
-    for _ in 0..8 {
-        let next = match redact_once(&out) {
-            Cow::Borrowed(_) => None,
-            Cow::Owned(next) => Some(next),
-        };
-        let Some(next) = next else {
-            return Cow::Owned(out);
-        };
-        out = next;
+/// How long redacting one capture may take before what it redacts is better not kept (see
+/// [`Redactor::redact_within`]): typical output of a megabyte takes a few milliseconds. A debug
+/// build is many times slower, so tests on a busy machine would find ordinary text withheld; it
+/// waits longer.
+pub const REDACT_BUDGET: Duration = if cfg!(debug_assertions) {
+    Duration::from_secs(5)
+} else {
+    Duration::from_millis(250)
+};
+
+/// [`redact`], taking out what the user's own patterns (`[security] redact_patterns`) match too:
+/// a pattern's `secret` group where it names one, else all it matches.
+#[derive(Clone, Debug)]
+pub struct Redactor {
+    extra: Vec<Regex>,
+    /// Whether the built-in patterns apply (`secrets_filter`), or only `extra`.
+    builtin: bool,
+}
+
+impl Default for Redactor {
+    fn default() -> Self {
+        Self::new(Vec::new(), true)
     }
-    #[allow(clippy::manual_assert)]
-    if cfg!(test) {
-        panic!("redact did not reach a fixed point in 8 passes on {s:?}");
+}
+
+impl Redactor {
+    #[must_use]
+    pub const fn new(extra: Vec<Regex>, builtin: bool) -> Self {
+        Self { extra, builtin }
     }
-    tracing::warn!("redact did not reach a fixed point in 8 passes; storing the last pass");
-    Cow::Owned(out)
+
+    /// Whether this redacts anything at all.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.builtin || !self.extra.is_empty()
+    }
+
+    /// See [`redact`].
+    #[must_use]
+    pub fn redact<'a>(&self, s: &'a str) -> Cow<'a, str> {
+        match self.redact_by(s, None) {
+            Ok(redacted) => redacted,
+            Err(TooSlow) => unreachable!("no deadline"),
+        }
+    }
+
+    /// [`Self::redact`], or `None` once it has taken `budget`: text that can't be redacted
+    /// quickly (a hostile line, a pathological pattern of the user's) is better not kept than
+    /// kept slowly. Checked between patterns, so it can overrun by one pattern's scan.
+    #[must_use]
+    pub fn redact_within<'a>(&self, s: &'a str, budget: Duration) -> Option<Cow<'a, str>> {
+        self.redact_by(s, Some(Instant::now() + budget)).ok()
+    }
+
+    fn redact_by<'a>(
+        &self,
+        s: &'a str,
+        deadline: Option<Instant>,
+    ) -> Result<Cow<'a, str>, TooSlow> {
+        if !self.is_active() {
+            return Ok(Cow::Borrowed(s));
+        }
+        let mut out = match redact_once(s, self, deadline)? {
+            Cow::Borrowed(_) => return Ok(Cow::Borrowed(s)),
+            Cow::Owned(out) => out,
+        };
+
+        // Two patterns can carve one stretch into spans whose leftovers a second pass captures
+        // differently (see `redaction_reaches_a_fixed_point_in_one_call`), so iterate until a
+        // pass changes nothing. Each pass replaces at least one span that is not already the
+        // marker, so this converges in a couple of iterations; the bound is a backstop, not a
+        // budget — a test panics on it, a running sink only warns.
+        for _ in 0..8 {
+            let next = match redact_once(&out, self, deadline)? {
+                Cow::Borrowed(_) => None,
+                Cow::Owned(next) => Some(next),
+            };
+            let Some(next) = next else {
+                return Ok(Cow::Owned(out));
+            };
+            out = next;
+        }
+        #[allow(clippy::manual_assert)]
+        if cfg!(test) {
+            panic!("redact did not reach a fixed point in 8 passes on {s:?}");
+        }
+        tracing::warn!("redact did not reach a fixed point in 8 passes; storing the last pass");
+        Ok(Cow::Owned(out))
+    }
 }
 
 #[cfg(test)]
@@ -531,7 +800,8 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        REDACTED, REGEXES, SECRET_GROUP, SECRET_PATTERNS, contains_secret, output_unsafe, redact,
+        REDACTED, REDACTION, Redactor, SECRET_GROUP, contains_secret, history_patterns,
+        output_unsafe, redact, redaction_patterns, vendors,
     };
 
     pub(super) struct Test {
@@ -543,8 +813,7 @@ mod tests {
     /// string must yield exactly one [`REDACTED`]. Derived from the table rather than repeated, so
     /// a new pattern joins the property tests for free.
     fn plantable() -> Vec<&'static str> {
-        SECRET_PATTERNS
-            .iter()
+        redaction_patterns()
             .flat_map(|pattern| pattern.tests)
             .filter(|test| test.redacted == REDACTED)
             .map(|test| test.input)
@@ -634,8 +903,13 @@ mod tests {
         "npm_[A-Za-z0-9]{36}",
         "pul-[0-9a-f]{40}",
     ];
-    static OLD: LazyLock<RegexSet> =
-        LazyLock::new(|| RegexSet::new(OLD_PATTERNS).expect("frozen old patterns compile"));
+    /// The old set, and the credential formats of particular services added since, each reviewed
+    /// for what it keeps out of history (see `vendors`).
+    static OLD: LazyLock<RegexSet> = LazyLock::new(|| {
+        let vendors = vendors::VENDOR_PATTERNS.iter().map(|pattern| pattern.regex);
+        RegexSet::new(OLD_PATTERNS.iter().copied().chain(vendors))
+            .expect("frozen old patterns compile")
+    });
 
     /// Boundary strings where a rewrite is most likely to drift from the old set: bare mentions,
     /// odd whitespace inside the Azure wildcard, newlines inside `atuin\s+login`, near-misses.
@@ -664,7 +938,8 @@ mod tests {
     /// is the credential and which is the variable name holding it.
     #[rstest]
     fn every_pattern_names_its_secret_group() {
-        for (pattern, regex) in SECRET_PATTERNS.iter().zip(REGEXES.iter()) {
+        let regexes = REDACTION.iter().flat_map(|table| &table.regexes);
+        for (pattern, regex) in redaction_patterns().zip(regexes) {
             assert!(
                 regex.capture_names().any(|name| name == Some(SECRET_GROUP)),
                 "{} does not name a `{SECRET_GROUP}` capture group",
@@ -675,7 +950,7 @@ mod tests {
 
     #[rstest]
     fn every_pattern_is_recognised() {
-        for pattern in SECRET_PATTERNS {
+        for pattern in history_patterns() {
             for test in pattern.tests {
                 assert!(
                     contains_secret(test.input),
@@ -691,7 +966,7 @@ mod tests {
     /// and embedded in surrounding text, since output is rarely just the credential.
     #[rstest]
     fn every_pattern_redacts_to_its_declared_value(#[values(false, true)] embed: bool) {
-        for pattern in SECRET_PATTERNS {
+        for pattern in redaction_patterns() {
             for test in pattern.tests {
                 let wrap = |s: &str| {
                     if embed {
@@ -768,6 +1043,81 @@ mod tests {
     )]
     // Five stars is not the marker; it is a value, and comes out as the marker.
     #[case::five_stars_are_a_value("AWS_SECRET_ACCESS_KEY=*****", "AWS_SECRET_ACCESS_KEY=****")]
+    // A patch's lines (Codex `apply_patch`, opencode `patchText`, a unified diff) start with
+    // `+`, `-` or ` `: what is set on one is redacted as it would be on its own.
+    #[case::added_to_a_patch(
+        "*** Add File: config/database.yml\n+production:\n+  password: hunter2xyz\n+  host: db",
+        "*** Add File: config/database.yml\n+production:\n+  password: ****\n+  host: db"
+    )]
+    #[case::changed_in_a_patch(
+        "@@\n-spring.datasource.password=old\n+spring.datasource.password=hunter2xyz",
+        "@@\n-spring.datasource.password=****\n+spring.datasource.password=****"
+    )]
+    #[case::added_aws_credentials(
+        "+[default]\n+aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "+[default]\n+aws_secret_access_key = ****"
+    )]
+    #[case::added_env_var("+API_KEY=abcdef1234567\n", "+API_KEY=****\n")]
+    #[case::added_list_item("+  - password: hunter2xyz", "+  - password: ****")]
+    // JSON text, its lines escaped (`\n`): a line it holds is still a line.
+    #[case::patch_in_json_text(
+        r#"{"patchText":"*** Begin Patch\n+password: hunter2xyz\n*** End Patch"}"#,
+        r#"{"patchText":"*** Begin Patch\n+password: ****\n*** End Patch"}"#
+    )]
+    #[case::setting_in_json_text(
+        r#"log: "first\npassword=hunter2xyz""#,
+        r#"log: "first\npassword=****""#
+    )]
+    #[case::env_var_in_json_text(r#""x\nAPI_KEY=abcdef123456""#, r#""x\nAPI_KEY=****""#)]
+    #[case::bearer_in_json_text(
+        r#""result\nBearer abcdefghijklmnopqrstuvwxyz""#,
+        r#""result\nBearer ****""#
+    )]
+    // JSON text clipped mid-string: its last line ends with the text.
+    #[case::clipped_json_text(r#""a\npassword: hunter2"#, r#""a\npassword: ****"#)]
+    #[case::command_in_json_text(
+        r#"{"cmd": "PGPASSWORD=hunter2xyz psql -h db -c select1"}"#,
+        r#"{"cmd": "PGPASSWORD=**** psql -h db -c select1"}"#
+    )]
+    #[case::password_flag_in_a_script(
+        "bash -lc 'docker login --password s3cret'",
+        "bash -lc 'docker login --password ****'"
+    )]
+    #[case::password_flag_in_json_text(
+        r#"{"cmd":"docker login --password s3cret\ndocker push x"}"#,
+        r#"{"cmd":"docker login --password ****\ndocker push x"}"#
+    )]
+    #[case::password_flag_then_command(
+        "docker login --password s3cret; docker push x",
+        "docker login --password ****; docker push x"
+    )]
+    #[case::password_flag_in_a_subshell(
+        "(docker login --password s3cret)&& echo",
+        "(docker login --password ****)&& echo"
+    )]
+    #[case::password_flag_then_and(
+        "docker login --password s3cret&& echo",
+        "docker login --password ****&& echo"
+    )]
+    #[case::clipped_json_line_in_output(
+        "\"a\\naws_secret_access_key = CXAT00ju\nmore output",
+        "\"a\\naws_secret_access_key = ****\nmore output"
+    )]
+    #[case::password_flag_quoted_in_prose("`--password=hunter2xyz`, or", "`--password=****`, or")]
+    #[case::jwt_in_json_text(
+        r#"{"data":"x\teyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"}"#,
+        r#"{"data":"x\t****"}"#
+    )]
+    // A password given on the command line.
+    #[case::password_flag_apart(
+        "docker login -u me --password hunter2xyz r.io",
+        "docker login -u me --password **** r.io"
+    )]
+    // AWS's own files and commands spell the name in lowercase.
+    #[case::lowercase_aws_assignment(
+        "export aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "export aws_secret_access_key=****"
+    )]
     fn redacts(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(&*redact(input), expected);
     }
@@ -903,7 +1253,7 @@ mod tests {
 
         #[rstest]
         fn each_prefilter_matches_exactly_where_its_pattern_does(s in credential_dense()) {
-            for pattern in SECRET_PATTERNS {
+            for pattern in history_patterns() {
                 let Some(prefilter) = pattern.prefilter else { continue };
                 prop_assert_eq!(
                     regex::Regex::new(prefilter).unwrap().is_match(&s),
@@ -926,7 +1276,10 @@ mod tests {
         // from a filter are capped far higher.
         #[rstest]
         fn text_with_nothing_recognisable_is_returned_as_is(
-            s in credential_dense().prop_filter("contains a secret", |s| !contains_secret(s)),
+            s in credential_dense().prop_filter("contains a secret", |s| {
+                !contains_secret(s)
+                    && !REDACTION.iter().flat_map(|table| &table.regexes).any(|r| r.is_match(s))
+            }),
         ) {
             prop_assert!(matches!(redact(&s), Cow::Borrowed(_)));
         }
@@ -973,7 +1326,7 @@ mod tests {
             ("NAME=", "NAME="),
             ("NAME= ", "NAME= "),
             ("NAME=\nOTHER=value", "NAME=\nOTHER=value"),
-            ("NAME:\n  password: hunter2", "NAME:\n  password: hunter2"),
+            ("NAME:\n  password: hunter2", "NAME:\n  password: ****"),
             ("echo $NAME", "echo $NAME"),
             ("NAME is required", "NAME is required"),
             ("set NAME, and OTHER", "set NAME, and OTHER"),
@@ -1188,7 +1541,6 @@ mod tests {
     #[case::ghp_one_short(&format!("ghp_{}", "a".repeat(35)))]
     #[case::ghs_one_short(&format!("ghs_{}", "a".repeat(35)))]
     #[case::akia_one_short(&format!("AKIA{}", "B".repeat(15)))]
-    #[case::lowercase_aws_name("aws_secret_access_key = wJalrXUtnFEMI")]
     #[case::pulumi_uppercase_hex(&format!("pul-{}", "ABCDEF0123".repeat(4)))]
     #[case::v1_unescaped_dot(&format!("v1x{}", "0".repeat(40)))]
     #[case::github_pat_no_leading_digit(&format!("github_pat_A{}_{}", "a".repeat(21), "b".repeat(59)))]
@@ -1196,7 +1548,7 @@ mod tests {
     #[case::stripe_one_short(&format!("sk_live_{}", "a".repeat(23)))]
     #[case::slack_webhook_short_team(&format!("T1234567/B12345678/{}", "x".repeat(24)))]
     #[case::slack_webhook_wrong_team_prefix(&format!("U00000000/B00000000/{}", "x".repeat(24)))]
-    #[case::slack_bot_short_first_group(&format!("xoxb-1234567890-12345678901-{}", "x".repeat(24)))]
+    #[case::slack_bot_short_first_group(&format!("xoxb-123456789-12345678901-{}", "x".repeat(24)))]
     #[case::npm_one_short(&format!("npm_{}", "a".repeat(35)))]
     #[case::netlify_unknown_kind(&format!("nfx_{}", "a".repeat(36)))]
     #[case::stripe_test_one_short(&format!("sk_test_{}", "a".repeat(23)))]
@@ -1205,12 +1557,24 @@ mod tests {
         assert!(matches!(redact(input), Cow::Borrowed(_)), "{input:?} should be left alone");
     }
 
+    /// Credentials the structural patterns redact, but no credential format recognises: these
+    /// don't keep a command out of history. The lowercase AWS case pins that the history formats
+    /// are case-sensitive.
+    #[rstest]
+    #[case::lowercase_aws_name("aws_secret_access_key = wJalrXUtnFEMI")]
+    #[case::url_password("postgres://app:123456@db/app")]
+    #[case::quoted_password(r#"{"password": "violetmeadow"}"#)]
+    fn redacted_but_not_kept_out_of_history(#[case] input: &str) {
+        assert!(!contains_secret(input), "{input:?} should not drop a command");
+        assert!(matches!(redact(input), Cow::Owned(_)), "{input:?} should be redacted");
+    }
+
     /// The table-driven tests and the planted-credential properties only cover a pattern if it
     /// brings its own cases. Without this floor, `tests: &[]` silently removes a pattern from all
     /// of them and the suite stays green.
     #[rstest]
     fn every_pattern_has_a_case_that_actually_redacts() {
-        for pattern in SECRET_PATTERNS {
+        for pattern in redaction_patterns() {
             assert!(!pattern.tests.is_empty(), "{} has no test cases", pattern.name);
             assert!(
                 pattern.tests.iter().any(|test| test.input != test.redacted),
@@ -1249,11 +1613,119 @@ mod tests {
     #[case::timed("time atuin account register", true)]
     #[case::env_prefix("ATUIN_CONFIG_DIR=/tmp/x atuin login -u me", true)]
     #[case::by_path("./target/debug/atuin key", true)]
+    #[case::brace_group("{ atuin key; }", true)]
+    #[case::shell_script("bash -lc 'atuin key'", true)]
+    #[case::shell_script_flags_apart("/bin/zsh -l -c \"atuin login -u me\"", true)]
+    #[case::shell_script_after("cd ~ && sh -c 'atuin key --base64'", true)]
+    #[case::shell_script_mention("bash -c 'echo atuin key'", false)]
+    #[case::shell_script_long_flag("fish --command 'atuin key'", true)]
+    #[case::shell_script_long_flag_joined("fish --command='atuin login -u me'", true)]
+    #[case::negated("! atuin key", true)]
+    #[case::in_a_branch("if true; then atuin key; fi", true)]
+    #[case::in_a_loop("for i in 1; do atuin login -u me; done", true)]
+    #[case::otherwise("if false; then :; else atuin key; fi", true)]
     #[case::absolute_path("/usr/local/bin/atuin key --base64", true)]
-    fn commands_whose_output_holds_the_encryption_key(
-        #[case] command: &str,
-        #[case] unsafe_: bool,
-    ) {
+    #[case::gh_token("gh auth token", true)]
+    #[case::gh_status_token("gh auth status --show-token", true)]
+    #[case::gh_status("gh auth status", false)]
+    #[case::gcloud("gcloud auth print-access-token", true)]
+    #[case::gcloud_adc("gcloud auth application-default print-access-token", true)]
+    #[case::aws_configure("aws --profile prod configure get aws_secret_access_key", true)]
+    #[case::aws_ecr("aws ecr get-login-password | docker login --password-stdin x", true)]
+    #[case::aws_sts("aws sts assume-role --role-arn x --role-session-name y", true)]
+    #[case::aws_other("aws s3 ls", false)]
+    #[case::az("az account get-access-token", true)]
+    #[case::kubectl_secret("kubectl -n prod get secret db -o yaml", true)]
+    #[case::kubectl_pods("kubectl get pods", false)]
+    #[case::kubectl_raw("kubectl config view --raw", true)]
+    #[case::vault("vault kv get secret/db", true)]
+    #[case::op("op read op://vault/item/password", true)]
+    #[case::pass("pass show email/work", true)]
+    #[case::keychain("security find-generic-password -s x -w", true)]
+    #[case::keychain_no_password("security find-generic-password -s x", false)]
+    #[case::printenv("printenv GITHUB_TOKEN", true)]
+    #[case::env_alone("env", true)]
+    #[case::env_piped("env | grep AWS", true)]
+    #[case::env_prefix_runs("env FOO=1 cargo test", false)]
+    #[case::set_alone("set", true)]
+    #[case::set_option("set -euo pipefail", false)]
+    #[case::export_p("export -p", true)]
+    #[case::terraform_json("terraform output -json", true)]
+    #[case::terraform("terraform output", false)]
+    #[case::git_credential("git credential fill", true)]
+    #[case::wrapped("bash -lc 'gh auth token'", true)]
+    #[case::mentioned("echo gh auth token", false)]
+    fn commands_whose_output_may_hold_a_credential(#[case] command: &str, #[case] unsafe_: bool) {
         assert_eq!(output_unsafe(command), unsafe_);
+    }
+
+    /// The user's patterns redact their `secret` group, or all they match.
+    #[rstest]
+    #[case::whole(r"ACME-[0-9]{6}", "id ACME-123456 ok", "id **** ok")]
+    #[case::group(r"pin: (?<secret>\d+)", "pin: 4242", "pin: ****")]
+    #[case::with_builtin(
+        r"ACME-[0-9]{6}",
+        "ACME-123456 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",
+        "**** ****"
+    )]
+    #[case::nothing(r"ACME-[0-9]{6}", "nothing here", "nothing here")]
+    #[case::like_a_block_opener(r"!![A-Za-z0-9]+", "pw !!S3cret42", "pw ****")]
+    fn the_users_patterns_redact_too(
+        #[case] pattern: &str,
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        let redactor = Redactor::new(vec![regex::Regex::new(pattern).unwrap()], true);
+        assert_eq!(redactor.redact(input), expected);
+    }
+
+    #[rstest]
+    fn redaction_past_its_budget_gives_up() {
+        let line = "atuin login ".repeat(87_381);
+        assert!(Redactor::default().redact_within(&line, std::time::Duration::ZERO).is_none());
+        let clean = "nothing to see";
+        assert_eq!(
+            Redactor::default().redact_within(clean, std::time::Duration::from_secs(5)),
+            Some(Cow::Borrowed(clean))
+        );
+    }
+
+    /// What a structural pattern finds that is plainly not a credential stays.
+    #[rstest]
+    #[case::reference("export GITHUB_TOKEN=$(gh auth token)")]
+    #[case::braced("DB_PASSWORD=${DB_PASSWORD}")]
+    #[case::actions("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}")]
+    #[case::stand_in(r#"{"password": "changeme"}"#)]
+    #[case::masked("postgres://app:****@db/app")]
+    #[case::masked_x("API_KEY=xxxxxxxx")]
+    #[case::typed_field("    password: Option<String>,")]
+    #[case::usage(r#"{"max_tokens": 4096, "input_tokens": 123456789}"#)]
+    #[case::count("tokens: 1500")]
+    #[case::prose("Set the token in your settings.")]
+    #[case::password_flag_reference("docker login --password \"$REGISTRY_PASSWORD\" r.io")]
+    #[case::password_from_stdin("docker login --password-stdin r.io")]
+    #[case::password_flag_then_flag("mysql --password --host db")]
+    #[case::password_flag_in_help("  -p, --password string   Password")]
+    #[case::password_flag_in_click_help("  --password TEXT  The password")]
+    #[case::password_flag_in_urfave_help("   --password value  the password")]
+    #[case::passwd_flag_in_help("  --passwd FILE")]
+    #[case::password_flag_in_prose("use the --password flag, or see the --password option.")]
+    #[case::password_flag_listed("--password and --user")]
+    #[case::password_flag_in_a_subject("fix(secrets): redact --password flags and more")]
+    #[case::password_flag_reference_in_json_text(
+        r#"{"cmd":"docker login --password \"$REGISTRY_PASSWORD\" r.io"}"#
+    )]
+    #[case::setting_concatenated(r#"password = prompt + "x""#)]
+    #[case::setting_joined(r#"token = base + "/v1""#)]
+    #[case::setting_in_prose(r#"secret: see "docs""#)]
+    #[case::command_in_a_string(r#""VAULT_TOKEN=x vault status""#)]
+    #[case::password_flag_then_or("mysql --password || true")]
+    #[case::password_flag_then_redirect("mysql --password 2>&1 | tee log")]
+    #[case::password_flag_substituted("docker login --password `cat pw` r.io")]
+    #[case::password_flag_in_a_subshell("(mysql --password)")]
+    #[case::added_field("+    token: String,")]
+    #[case::short_lowercase_aws("aws configure get aws_secret_access_key --profile prod")]
+    fn stand_ins_are_kept(#[case] input: &str) {
+        assert_eq!(redact(input), input);
     }
 }

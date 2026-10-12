@@ -25,9 +25,13 @@ const KEY_LAST_VERSION_CHECK: &str = "last_version_check_time";
 const KEY_LATEST_VERSION: &str = "latest_version";
 const KEY_SESSION: &str = "session";
 const KEY_HUB_SESSION: &str = "hub_session";
+const KEY_HUB_USER_ID: &str = "hub_user_id";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
 
 const HUB_TOKEN_PREFIX: &str = "atapi_";
+
+/// The longest to wait for another process's commit to the store before failing.
+const LOCK_WAIT: Duration = Duration::from_mins(1);
 
 /// Whether `token` is a Hub API token rather than a legacy CLI session token.
 #[must_use]
@@ -62,8 +66,15 @@ impl MetaStore {
     }
 
     async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        // A rollback journal, as every atuin before has forced it: one that opened it in WAL mode
+        // would lock an older one out for as long as it ran. So a commit holds out readers
+        // while it syncs, which on a busy disk can take many seconds (the daemon commits on every
+        // sync): wait that out rather than fail. The wait outlasts the user's `local_timeout`, and
+        // holds up interactive paths too (Ctrl-R's host id, nushell's `history end` without the
+        // daemon): a hang on a stalled disk, rather than an error.
         let sqlite = builder
-            .timeout(timeout)
+            .timeout(timeout.max(LOCK_WAIT))
+            .busy_timeout(LOCK_WAIT)
             .journal(Some(Journaling::Delete))
             .foreign_keys(false)
             .restrict_permissions()
@@ -188,11 +199,68 @@ impl MetaStore {
     }
 
     pub async fn save_hub_session(&self, token: &SecretString) -> Result<()> {
-        self.set(KEY_HUB_SESSION, token.expose_secret()).await
+        let mut tx = self.sqlite.pool().begin().await?;
+        db::query(
+            "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, strftime('%s', 'now'))
+             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
+        )
+        .bind(KEY_HUB_SESSION)
+        .bind(token.expose_secret())
+        .execute(&mut *tx)
+        .await?;
+        db::query("DELETE FROM meta WHERE key = ?1")
+            .bind(KEY_HUB_USER_ID)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     pub async fn delete_hub_session(&self) -> Result<()> {
-        self.delete(KEY_HUB_SESSION).await
+        db::query("DELETE FROM meta WHERE key IN (?1, ?2)")
+            .bind(KEY_HUB_SESSION)
+            .bind(KEY_HUB_USER_ID)
+            .execute(self.sqlite.pool())
+            .await?;
+
+        Ok(())
+    }
+
+    /// The id of the hub user `token` logs in, if `token` is still the hub session and
+    /// [`Self::save_hub_user_id`] recorded it.
+    pub async fn hub_user_id(&self, token: &SecretString) -> Result<Option<String>> {
+        let row: Option<(String,)> = db::query_as(
+            "SELECT user_id.value FROM meta AS user_id
+             JOIN meta AS session ON session.key = ?2 AND session.value = ?3
+             WHERE user_id.key = ?1",
+        )
+        .bind(KEY_HUB_USER_ID)
+        .bind(KEY_HUB_SESSION)
+        .bind(token.expose_secret())
+        .fetch_optional(self.sqlite.pool())
+        .await?;
+
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Records that `token` logs in the hub user `user_id`, unless a login or logout replaced
+    /// `token` as the hub session since it was read.
+    pub async fn save_hub_user_id(&self, token: &SecretString, user_id: &str) -> Result<()> {
+        db::query(
+            "INSERT INTO meta (key, value, updated_at)
+             SELECT ?1, ?2, strftime('%s', 'now') WHERE EXISTS
+               (SELECT 1 FROM meta WHERE key = ?3 AND value = ?4)
+             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
+        )
+        .bind(KEY_HUB_USER_ID)
+        .bind(user_id)
+        .bind(KEY_HUB_SESSION)
+        .bind(token.expose_secret())
+        .execute(self.sqlite.pool())
+        .await?;
+
+        Ok(())
     }
 
     pub async fn hub_logged_in(&self) -> Result<bool> {
@@ -383,5 +451,35 @@ mod tests {
         let store = MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap();
 
         assert_eq!(store.get(KEY_FILES_MIGRATED).await.unwrap(), None);
+    }
+
+    /// A commit by another process held up past sqlite's usual 5s wait (the daemon saving its
+    /// last sync on a busy disk) is waited out: a command opening and reading the store meanwhile
+    /// gets there, and sees the store as committed.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn waits_out_another_process_committing_slowly() {
+        use sqlx::{ConnectOptions as _, Connection as _};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meta.db");
+        MetaStore::new(&path, Duration::from_secs(2)).await.unwrap().set("k", "v").await.unwrap();
+
+        let mut writer =
+            sqlx::sqlite::SqliteConnectOptions::new().filename(&path).connect().await.unwrap();
+        db::query("BEGIN EXCLUSIVE").execute(&mut writer).await.unwrap();
+        db::query("UPDATE meta SET value = 'w' WHERE key = 'k'")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+        let commit = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(6)).await;
+            db::query("COMMIT").execute(&mut writer).await.unwrap();
+            writer.close().await.unwrap();
+        });
+
+        let store = MetaStore::new(&path, Duration::from_secs(2)).await.unwrap();
+        assert_eq!(store.get("k").await.unwrap().as_deref(), Some("w"));
+        commit.await.unwrap();
     }
 }

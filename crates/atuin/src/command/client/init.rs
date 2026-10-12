@@ -13,6 +13,7 @@ mod xonsh;
 mod zsh;
 
 #[derive(Parser, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Cmd {
     shell: Shell,
 
@@ -24,6 +25,9 @@ pub struct Cmd {
 
     #[clap(long, help = fl!("arg-init-disable-ai"))]
     disable_ai: bool,
+
+    #[clap(long, help = fl!("arg-init-bind-ai-resume"))]
+    bind_ai_resume: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
@@ -44,11 +48,16 @@ pub enum Shell {
     PowerShell,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct StaticInitOptions<'a> {
     pub enable_up_arrow: bool,
     pub enable_ctrl_r: bool,
     #[cfg_attr(not(feature = "ai"), allow(dead_code))]
     pub enable_ai: bool,
+    /// Bind ctrl-] to `atuin ai resume`. Off unless asked for: it replaces the shell's own
+    /// binding (character search). The widgets are defined either way.
+    #[cfg_attr(not(feature = "ai"), allow(dead_code))]
+    pub enable_ai_resume: bool,
     pub tmux: &'a Tmux,
 }
 
@@ -83,6 +92,7 @@ impl Cmd {
             enable_up_arrow: !self.disable_up_arrow,
             enable_ctrl_r: !self.disable_ctrl_r,
             enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
+            enable_ai_resume: self.bind_ai_resume && settings.ai.enabled.unwrap_or(true),
             tmux: &settings.tmux,
         }
     }
@@ -140,5 +150,24 @@ impl Cmd {
         self.static_init(settings);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::settings::Settings;
+    use clap::Parser;
+    use rstest::rstest;
+
+    use super::Cmd;
+
+    /// ctrl-] stays the shell's own unless `--bind-ai-resume` asks for the resume picker.
+    #[rstest]
+    #[case::default(&[], false)]
+    #[case::asked(&["--bind-ai-resume"], true)]
+    fn ai_resume_is_bound_only_when_asked(#[case] args: &[&str], #[case] bound: bool) {
+        let settings = Settings::utc();
+        let cmd = Cmd::try_parse_from([&["init", "zsh"], args].concat()).unwrap();
+        assert_eq!(cmd.to_options(&settings).enable_ai_resume, bound);
     }
 }

@@ -390,6 +390,8 @@ pub fn default_prefix_keymap() -> Keymap {
     km.bind(key("d"), Action::Delete);
     km.bind(key("D"), Action::DeleteAll);
     km.bind(key("a"), Action::CursorStart);
+    km.bind(key("g"), Action::AcceptCd);
+    km.bind(key("G"), Action::ReturnCd);
     km.bind_conditional(key("c"), vec![
         KeyRule::when(ConditionAtom::HasContext, Action::ClearContext),
         KeyRule::always(Action::SwitchContext),
@@ -508,10 +510,12 @@ impl KeymapSet {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rstest::rstest;
 
     use super::*;
     use crate::command::client::search::keybindings::conditions::EvalContext;
+    use crate::command::client::search::keybindings::key::SingleKey;
 
     fn make_ctx(cursor: usize, width: usize, selected: usize, len: usize) -> EvalContext {
         EvalContext {
@@ -686,6 +690,8 @@ mod tests {
     #[rstest]
     #[case::d_deletes("d", 0, 0, 0, 10, Some(Action::Delete))]
     #[case::a_cursor_start("a", 0, 0, 0, 10, Some(Action::CursorStart))]
+    #[case::g_accept_cd("g", 0, 0, 0, 10, Some(Action::AcceptCd))]
+    #[case::shift_g_return_cd("G", 0, 0, 0, 10, Some(Action::ReturnCd))]
     #[case::unknown_key_returns_none("x", 0, 0, 0, 10, None)]
     fn prefix_keymap_resolves(
         #[case] k: &str,
@@ -698,6 +704,18 @@ mod tests {
         let km = default_prefix_keymap();
         let ctx = make_ctx(cursor, width, selected, len);
         assert_eq!(km.resolve(&key(k), &ctx), expected);
+    }
+
+    #[rstest]
+    #[case::g(KeyCode::Char('g'), KeyModifiers::NONE, Action::AcceptCd)]
+    #[case::shift_g(KeyCode::Char('G'), KeyModifiers::SHIFT, Action::ReturnCd)]
+    fn prefix_g_from_terminal_events_is_case_sensitive(
+        #[case] code: KeyCode,
+        #[case] modifiers: KeyModifiers,
+        #[case] expected: Action,
+    ) {
+        let key = KeyInput::Single(SingleKey::from_event(&KeyEvent::new(code, modifiers)).unwrap());
+        assert_eq!(default_prefix_keymap().resolve(&key, &make_ctx(0, 0, 0, 10)), Some(expected));
     }
 
     // -- KeymapSet tests --

@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use atuin_common::db;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
-use directories::BaseDirs;
 use eyre::{Result, eyre};
 use sqlx::Pool;
 use sqlx::sqlite::SqlitePool;
@@ -86,8 +85,9 @@ async fn hist_from_db_conn(pool: Pool<sqlx::Sqlite>) -> Result<Vec<HistDbEntry>>
 
 impl NuHistDb {
     pub fn histpath() -> Result<PathBuf> {
-        let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-        let config_dir = base.config_dir().join("nushell");
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| eyre!("could not determine config directory"))?
+            .join("nushell");
 
         let histdb_path = config_dir.join("history.sqlite3");
         if histdb_path.exists() {

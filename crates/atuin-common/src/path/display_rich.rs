@@ -74,12 +74,9 @@ impl<'a> RichDisplay<'a> {
     /// Abbreviate the path relative to the current user's home directory.
     #[must_use]
     pub fn tilde_me(self) -> Self {
-        // TODO(markovejnovic): Do not call BaseDirs here. It does a lot of work. This is a massive
-        //                      amount of work. We should lazily initialize, but this pattern is
-        //                      spread throughout the code everywhere.
-        match directories::BaseDirs::new() {
-            Some(dirs) => Self {
-                tilde: Some(Cow::Owned(dirs.home_dir().to_owned())),
+        match dirs::home_dir() {
+            Some(home) => Self {
+                tilde: Some(Cow::Owned(home)),
                 ..self
             },
             None => self,

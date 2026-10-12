@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
-use directories::UserDirs;
 use easy_cast::CastFloat;
 use eyre::{Result, eyre};
 use serde::Deserialize;
@@ -77,8 +76,7 @@ pub struct Resh {
 }
 
 fn default_histpath() -> Result<PathBuf> {
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
-    let home_dir = user_dirs.home_dir();
+    let home_dir = dirs::home_dir().ok_or_else(|| eyre!("could not find home directory"))?;
 
     Ok(home_dir.join(".resh_history.json"))
 }

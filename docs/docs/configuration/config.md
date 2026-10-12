@@ -363,6 +363,11 @@ history_filter = [
 ]
 ```
 
+A filtered command's output isn't captured either. To keep a command in history
+but not its output, use [`command_filter`](#command_filter) in `[output]`. The
+filter applies to the commands your AI agents run too: a matching call is
+[captured](../ai/sessions.md#whats-captured) with its tool's name only.
+
 ### `cwd_filter`
 
 Use the `cwd` filter to exclude directories from history tracking.
@@ -378,6 +383,9 @@ This supports regular expressions, so you can hide pretty much whatever you want
 ```
 
 After updating that parameter, you can run [the prune command](../reference/prune.md) to remove old history entries that match the new filters.
+
+An [AI session](../ai/sessions.md#whats-captured) captured in a matching
+directory keeps only the names of the tools its agent called there.
 
 ### `store_failed`
 
@@ -402,33 +410,50 @@ to save it if any of them match. The patterns currently cover:
 
 | Service | Matches |
 |---------|---------|
-| AWS | Access key IDs, and commands setting `AWS_SECRET_ACCESS_KEY` or `AWS_SESSION_TOKEN` |
-| Azure | Commands setting `AZURE_*_KEY` |
-| Google Cloud | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY` |
+| AWS | Access key IDs, commands setting `AWS_SECRET_ACCESS_KEY` or `AWS_SESSION_TOKEN`, and Amazon Bedrock API keys |
+| Azure | Commands setting `AZURE_*_KEY`, and Entra ID client secrets |
+| Google Cloud | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY`, and API keys |
 | GitHub | Personal access tokens (old and new), OAuth access tokens (app and user), app installation tokens, and refresh tokens |
-| GitLab | Personal access tokens |
-| Slack | OAuth v2 bot and user tokens, and webhook URLs |
-| Stripe | Live and test keys |
-| Netlify | Authentication tokens |
-| npm | Tokens |
-| Pulumi | Personal access tokens |
+| GitLab | Personal, deploy, runner, CI/CD job, feed, SCIM, agent and OAuth tokens |
+| AI providers | Anthropic, OpenAI, OpenRouter, Groq, xAI, Perplexity, Pinecone, LangSmith and Hugging Face keys |
+| Slack | Bot, user, app and config tokens, and webhook URLs |
+| Stripe | Live, test and restricted keys |
+| Package registries | npm, PyPI, RubyGems, Clojars, Docker Hub and Artifactory tokens |
+| Infrastructure | DigitalOcean, Terraform Cloud, HashiCorp Vault, Fly.io, Heroku, Cloudflare origin CA, Databricks, PlanetScale, Supabase, Tailscale, Dynatrace, Grafana, Sentry, Doppler and OpenShift tokens |
+| Other services | Netlify, Pulumi, Atlassian, Linear, Notion, Postman, Shopify, SendGrid, Brevo, Square, EasyPost, Duffel, Frame.io, ReadMe, Prefect, Infracost and Telegram tokens, Discord and Microsoft Teams webhooks, 1Password service account tokens and age secret keys |
 | Atuin | `atuin login`, which takes your password and encryption key as arguments |
 
+Many of these come from the rules of [gitleaks](https://github.com/gitleaks/gitleaks).
 For the exact expressions, see
 [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-common/src/secrets.rs).
 
-The same patterns are applied to captured command output. A command whose
-own text is clean can still print a credential — `cat .env`, `gh auth token`
-— so recognised values in the captured output are replaced with `****`
-before storage. Only the value is replaced; the variable name or flag
-beside it stays.
+The same patterns are applied to captured command output, and to
+[AI sessions](../ai/sessions.md#whats-captured). A command whose own text is
+clean can still print a credential, so recognised values in the captured
+output are replaced with `****` before storage. Only the value is replaced; the
+variable name or flag beside it stays. Output is also checked for credentials
+recognised by where they sit, which never keep a command out of history:
+
+- private keys (`-----BEGIN ... PRIVATE KEY-----`), JSON web tokens,
+  `Authorization` headers and bearer tokens, and `curl -u user:password`
+- the password in a web address or connection string (`postgres://app:pw@db`,
+  `password=...`)
+- a value assigned to a name that holds a credential, such as
+  `DB_PASSWORD=...`, `"client_secret": "..."` or `api_key: ...`. Placeholders
+  like `${TOKEN}`, `<password>` and `changeme` stay.
+
+A credential that color codes split apart in the output isn't recognised.
+Output that can't be redacted quickly (within a quarter of a second) isn't
+stored at all. Add patterns of your own with
+[`redact_patterns`](#redact_patterns).
 
 !!! note
 
     This is a safety net, not a guarantee. It only catches credentials in
     recognized formats — use [`history_filter`](#history_filter) for anything
-    else you need kept out, and see
-    [Excluding Commands from History](../guide/excluding-commands.md).
+    else you need kept out, or [`command_filter`](#command_filter) to keep a
+    command but not its output, and see
+    [Keeping Secrets Out of Atuin](../guide/excluding-commands.md).
 
 ### macOS Ctrl-n key shortcuts
 
@@ -1026,6 +1051,177 @@ The port to use for client -> daemon communication. Only used on non-Unix system
 ```toml
 tcp_port = 8889
 ```
+
+## Output capture
+
+Settings for [capturing command output](../guide/output-capture.md), which
+needs the [daemon](#daemon) and [pty-proxy](../reference/pty-proxy.md).
+
+```toml
+[output]
+enabled = true
+max_output_size = "1MB"
+max_disk_usage = "10%"
+command_filter = []
+```
+
+### `enabled`
+
+Default: `false`
+
+Capture and store the output of the commands you run. When `false`, nothing is
+captured and the other keys in this section are ignored. Turning it off stops
+the daemon storing output right away; turning it on takes a daemon restart and
+a new shell, or run `atuin config enable output-capture`, which also sets up
+the daemon and pty-proxy.
+
+```toml
+[output]
+enabled = true
+```
+
+### `max_output_size`
+
+Default: `"1MB"`
+
+The most output kept for a single command. When a command prints more, Atuin
+keeps the start and the end, half each, and drops the middle. Takes a size like
+`"512KB"` or `"2MB"`. pty-proxy reads it when your shell starts.
+
+```toml
+[output]
+max_output_size = "1MB"
+```
+
+### `max_disk_usage`
+
+Default: `"10%"`
+
+The most disk space captured output may use: a size (`"10GB"`), a share of
+the total size of the disk that holds Atuin's data directory (`"10%"`), or
+`"unlimited"`. Past the limit, the daemon deletes the oldest output first.
+Restart the daemon after changing it.
+
+```toml
+[output]
+max_disk_usage = "10%"
+```
+
+### `command_filter`
+
+Default: `[]`
+
+Commands whose output is never stored. Unlike
+[`history_filter`](#history_filter), a matching command is still recorded in
+your history -- only its output is dropped. Commands `history_filter` excludes
+never have their output stored either.
+
+```toml
+[output]
+## Note that these regular expressions are unanchored, i.e. if they don't start
+## with ^ or end with $, they'll match anywhere in the command.
+command_filter = [
+   "^cat ",
+   "^kubectl get secret",
+]
+```
+
+The filter applies to output captured after the daemon picks up the change; it
+doesn't remove output that's already stored.
+
+Some commands' output is never stored, whatever this filter says, because it
+can hold a credential: Atuin's own `atuin key`, `atuin login`, `atuin register`
+and `atuin account change-password`; commands that print a token or a password,
+such as `gh auth token`, `gcloud auth print-access-token`,
+`aws configure get`, `kubectl get secret`, `vault kv get`, `op read`,
+`pass show` and `security find-generic-password -w`; commands that print the
+environment (`printenv`, `env`); and commands that name a
+[sensitive file](#sensitive_files), such as `cat .env`.
+
+The filter also applies to the commands your AI agents run, whether or not
+output capture is enabled: a matching call is
+[captured](../ai/sessions.md#whats-captured) without its output.
+
+### `sync`
+
+Default: `false`
+
+Reserved for syncing captured output between machines, which isn't
+implemented yet: captured output never leaves your machine, whatever this is
+set to.
+
+## Security
+
+Settings under `[security]` add to Atuin's built-in rules for keeping
+credentials out of what it stores: captured command output and
+[AI sessions](../ai/sessions.md#whats-captured). For which setting to reach for,
+see [Keeping Secrets Out of Atuin](../guide/excluding-commands.md).
+
+```toml
+[security]
+redact_patterns = []
+sensitive_files = []
+```
+
+### `redact_patterns`
+
+Default: `[]`
+
+Regular expressions for credentials of your own, redacted wherever Atuin
+redacts, alongside the [built-in patterns](#secrets_filter). Atuin replaces a
+pattern's `secret` group with `****` if it has one, otherwise everything the
+pattern matches.
+
+```toml
+[security]
+redact_patterns = [
+   "ACME-[0-9A-F]{32}",
+   "internal-api-key: (?<secret>\\S+)",
+]
+```
+
+These patterns don't keep a command out of history; use
+[`history_filter`](#history_filter) for that. When
+[`secrets_filter`](#secrets_filter) is off, captured command output is redacted
+with these patterns only.
+
+### `sensitive_files`
+
+Default: `[]`
+
+Files whose contents are credentials, on top of the built-in ones. The output
+of a command naming one isn't stored. An AI agent's reads of one aren't
+captured, and nor is what it writes to one.
+
+A glob without a `/` matches a file's name wherever it is. A glob with a `/`
+matches its path, from `~` or `/`, or anywhere below a directory for a relative
+one.
+
+```toml
+[security]
+sensitive_files = [
+   "*.secret",
+   "~/work/credentials/**",
+   "config/master.key",
+]
+```
+
+The built-in files are:
+
+- `.env` and `.env.*` (but not `.env.example`, `.env.sample`, `.env.template`
+  or `.env.dist`), `*.env` and `.envrc`
+- private keys: `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` (not their
+  `.pub` halves), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks` and `*.keystore`
+- Terraform state and variables: `*.tfstate`, `*.tfvars`
+- `.netrc`, `.pgpass`, `.git-credentials`, `.npmrc`, `.pypirc`, `.htpasswd`
+  and `.vault-token`
+- cloud and registry logins: `~/.aws/credentials` and its SSO cache, the
+  gcloud credential files, `~/.kube/config`, `~/.docker/config.json`, the
+  `gh` and `glab` logins, and Cargo, RubyGems and Terraform Cloud credentials
+- `~/.gnupg/private-keys-v1.d` and `~/.password-store`
+- the AI agents' own logins: `~/.claude/.credentials.json`,
+  `~/.codex/auth.json`, opencode's and Pi's `auth.json`
+- Atuin's encryption key ([`key_path`](#key_path))
 
 ## logs
 

@@ -4,7 +4,6 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use directories::BaseDirs;
 use eyre::{Result, eyre};
 use time::{Duration, OffsetDateTime};
 
@@ -24,8 +23,9 @@ impl Nu {
 }
 
 fn get_histpath() -> Result<PathBuf> {
-    let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-    let config_dir = base.config_dir().join("nushell");
+    let config_dir = dirs::config_dir()
+        .ok_or_else(|| eyre!("could not determine config directory"))?
+        .join("nushell");
 
     let histpath = config_dir.join("history.txt");
     if histpath.exists() {

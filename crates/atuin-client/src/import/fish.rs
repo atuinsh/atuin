@@ -4,7 +4,6 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use directories::BaseDirs;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;
 
@@ -19,9 +18,12 @@ pub struct Fish {
 
 /// see <https://fishshell.com/docs/current/interactive.html#searchable-command-history>
 fn default_histpath() -> Result<PathBuf> {
-    let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-    let data = std::env::var("XDG_DATA_HOME")
-        .map_or_else(|_| base.home_dir().join(".local").join("share"), PathBuf::from);
+    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).ok_or(()).or_else(|_| {
+        let Some(home) = dirs::home_dir() else {
+            eyre::bail!("could not determine home directory");
+        };
+        Ok(home.join(".local").join("share"))
+    })?;
 
     // fish supports multiple history sessions
     // If `fish_history` var is missing, or set to `default`, use `fish` as the session

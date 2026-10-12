@@ -21,7 +21,7 @@ history_filter = [
 
 You can also exclude commands by directory with `cwd_filter`, or prefix individual commands with a space.
 
-See [Excluding Commands from History](guide/excluding-commands.md) for more options.
+See [Keeping Secrets Out of Atuin](guide/excluding-commands.md) for more options.
 
 ## How do I remove the default up arrow binding?
 

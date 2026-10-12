@@ -1,0 +1,190 @@
+syntax = "proto3";
+package ai.session;
+
+import "ai/agent.proto";
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+
+// Which sessions a listing or search returns. An absent field is not a filter;
+// every present one must hold.
+message SessionFilter {
+  // Captured on this host (a hyphenated host id).
+  optional string host_id = 1;
+  // Working directory at or under this path.
+  optional string workspace = 2;
+  // Working directory exactly this path.
+  optional string directory = 3;
+  // On exactly this git branch.
+  optional string branch = 4;
+  optional ai.agent.HarnessKind harness = 5;
+  // Model name containing this, ignoring ASCII case.
+  optional string model = 6;
+  // Return only the roots of session groups (forks and subagents grouped under
+  // their top-most ancestor), each with its child_count; a group passes when
+  // any of its sessions does.
+  bool roots_only = 7;
+  // Active (updated) at or after this time.
+  google.protobuf.Timestamp updated_since = 8;
+  // Leave out subagents (and children of unknown kind); with roots_only, their
+  // matches no longer count toward their root.
+  bool exclude_subagents = 9;
+  // Only sessions with a message from one of these roles (any, when empty); in
+  // a search, only such messages match.
+  repeated MessageRole roles = 10;
+}
+
+// Who a message is from: tool output is TOOL whatever its envelope role, and
+// whatever is neither the person, the model nor a tool was written by the
+// harness.
+enum MessageRole {
+  MESSAGE_ROLE_UNSPECIFIED = 0;
+  MESSAGE_ROLE_USER = 1;
+  MESSAGE_ROLE_ASSISTANT = 2;
+  MESSAGE_ROLE_TOOL = 3;
+  MESSAGE_ROLE_HARNESS = 4;
+}
+
+message ListSessionsRequest {
+  SessionFilter filter = 1;
+}
+
+message GetSessionRequest {
+  ai.agent.HarnessSession session = 1;
+}
+
+// Streamed by GetSession: the first event carries the session, and every event
+// after it carries one message, in order.
+message GetSessionEvent {
+  oneof event {
+    ai.agent.Session session = 1;
+    ai.agent.Message message = 2;
+  }
+}
+
+message SearchSessionsRequest {
+  string query = 1;
+  // Maximum number of distinct sessions to return, most-relevant first. 0 means
+  // unbounded: every matching session is ranked and streamed. Ranking is eager
+  // (the full match set is scored before the first result), so prefer a bound.
+  uint32 limit = 2;
+  // Match messages containing any of the query's terms, each as a prefix, instead of all of them
+  // as whole words.
+  bool any_term = 3;
+  SessionFilter filter = 4;
+}
+
+message SearchSessionsMatch {
+  ai.agent.Session session = 1;
+  // The session's title, highlighted where the query matched it. When the match is in
+  // `matched`, only highlighted if the title matches the query itself.
+  common.HighlightedText title = 2;
+  common.HighlightedText preview = 3;
+  double score = 4;
+  // Position of the best-matching message in the session holding it (`session`, or `matched`
+  // when set), in GetSession message order.
+  uint64 message_index = 5;
+  // The session holding the best-matching message, when it is not `session`: in a roots-only
+  // search, a session grouped under the root returned.
+  MatchedSession matched = 6;
+}
+
+// The session of a group holding a search match, when it is not the group's root.
+message MatchedSession {
+  ai.agent.HarnessSession session = 1;
+  // Its title, highlighted where the query matched it.
+  common.HighlightedText title = 2;
+}
+
+// Which sessions to follow. An absent field is not a filter.
+message TailSessionsRequest {
+  // Only stream events for sessions from this harness. Absent follows every
+  // harness.
+  optional ai.agent.HarnessKind harness = 1;
+}
+
+message TailSessionsEvent {
+  oneof event {
+    // A new session was created.
+    ai.agent.Session session_started = 1;
+    // A session's summary changed (title, message_count, tokens, updated_at).
+    ai.agent.Session session_updated = 2;
+    // A message was recorded.
+    ai.agent.Message message = 3;
+    // The consumer fell behind the stream and events were dropped.
+    common.Lagged lagged = 4;
+  }
+}
+
+// Which existing on-disk sessions to import. An absent field is not a filter.
+message ImportSessionsRequest {
+  // Only import sessions from this harness. Absent imports every file-based
+  // harness.
+  optional ai.agent.HarnessKind harness = 1;
+}
+
+// Per-session progress: one session finished importing.
+message ImportSessionsProgress {
+  ai.agent.HarnessKind harness = 1;
+  string session_id = 2;
+  uint64 imported = 3;
+  uint64 skipped = 4;
+}
+
+// The final tally, emitted once after every session drains.
+message ImportSessionsSummary {
+  uint64 sessions = 1;
+  uint64 imported = 2;
+  uint64 skipped = 3;
+  uint64 failed = 4;
+}
+
+message RebuildSessionsRequest {}
+
+message RebuildSessionsReply {}
+
+message ProjectSyncedRequest {}
+
+message ProjectSyncedReply {}
+
+message ImportSessionsEvent {
+  oneof event {
+    ImportSessionsProgress progress = 1;
+    ImportSessionsSummary summary = 2;
+  }
+}
+
+service AiSession {
+  // List session summaries, newest first, streamed one per message so a machine with a long
+  // harness history never has to fit every session into a single response.
+  rpc ListSessions(ListSessionsRequest) returns (stream ai.agent.Session);
+
+  // Fetch one session and its messages, streamed: the session first, then each
+  // message in order. Streamed so a large session never has to fit in one
+  // response.
+  rpc GetSession(GetSessionRequest) returns (stream GetSessionEvent);
+
+  // Full-text search sessions (every term as a whole word, or any term as a
+  // prefix with any_term), streamed most-relevant-first (bm25 blended with
+  // recency). An empty query streams sessions newest first.
+  rpc SearchSessions(SearchSessionsRequest) returns (stream SearchSessionsMatch);
+
+  // Follow sessions and messages as they are recorded.
+  rpc TailSessions(TailSessionsRequest) returns (stream TailSessionsEvent);
+
+  // Import every already-existing on-disk session, streaming per-session
+  // progress and a final summary.
+  rpc ImportSessions(ImportSessionsRequest) returns (stream ImportSessionsEvent);
+
+  // Rebuild the sessions from the record store, after records were deleted
+  // under them: everything projected is deleted before this returns, then
+  // replayed in the background, reads meanwhile failing as rebuilding (as after
+  // the daemon starts). FAILED_PRECONDITION when the store failed to open or
+  // recover at startup.
+  rpc RebuildSessions(RebuildSessionsRequest) returns (RebuildSessionsReply);
+
+  // Project the records another process synced into the record store (`atuin
+  // sync`), as the daemon does those it syncs itself, once startup recovery is
+  // over. Returns once the projection is over; it runs to the end even if the
+  // caller stops waiting, and a failure is left in the daemon's log.
+  rpc ProjectSynced(ProjectSyncedRequest) returns (ProjectSyncedReply);
+}

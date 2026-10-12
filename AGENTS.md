@@ -34,6 +34,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - **Client**: SQLite everywhere. Separate DBs for history, record store, KV, scripts. All use sqlx + WAL mode.
 - **Server**: Postgres (primary) or SQLite. Auto-detected from URI prefix.
 - Migrations live alongside each crate. Never modify existing migrations, only add new ones.
+  - Exception: the AI session sidecar's migrations (`atuin-client/src/ai_session/migrations`) were squashed into one `0001_init.sql` before release, and the sidecar file was renamed (`ai_harness_sessions.db` → `ai_session_sidecar.db`) so no old sidecar meets the new history. Don't add back compatibility with the old migrations; from here on, add new ones as usual.
 
 ## Hot paths
 

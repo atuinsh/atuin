@@ -39,7 +39,6 @@ use async_trait::async_trait;
 use atuin_common::db;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
-use directories::UserDirs;
 use eyre::{Result, eyre};
 use sqlx::Pool;
 use sqlx::sqlite::SqlitePool;
@@ -107,8 +106,8 @@ impl ZshHistDb {
             return Ok(PathBuf::from(path));
         }
 
-        let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
-        Ok(user_dirs.home_dir().join(".histdb/zsh-history.db"))
+        let home_dir = dirs::home_dir().ok_or_else(|| eyre!("could not find home directory"))?;
+        Ok(home_dir.join(".histdb/zsh-history.db"))
     }
 
     pub fn histpath() -> Result<PathBuf> {

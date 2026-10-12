@@ -5,7 +5,7 @@ mod cwd_updater;
 #[cfg(unix)]
 mod debug;
 #[cfg(unix)]
-mod osc133;
+mod markers;
 #[cfg(unix)]
 mod pty_proxy;
 #[cfg(unix)]
@@ -27,9 +27,10 @@ mod unsupported {
 
     #[derive(Args, Debug)]
     pub struct PtyProxy {
-        /// Highlight OSC 133 prompt, input, output, and exit-code regions
+        /// Highlight `OSC 18188735` escape sequences used to mark the start and end of command
+        /// output.
         #[arg(long)]
-        debug_osc133: bool,
+        debug_markers: bool,
 
         /// Path to the shell binary that atuin pty-proxy should spawn.
         /// Defaults to the system login shell. Only valid when no subcommand is given.

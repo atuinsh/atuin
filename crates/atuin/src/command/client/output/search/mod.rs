@@ -161,11 +161,7 @@ impl Cmd {
         // TODO(markovejnovic): This should ideally be injected rather than prepared here ad-hoc.
         //                      Existing precedent.
         let open = async || {
-            #[cfg(unix)]
-            let mut client =
-                SearchClient::new(settings.daemon.existing_socket_path().into_owned()).await?;
-            #[cfg(not(unix))]
-            let mut client = SearchClient::new(settings.daemon.tcp_port).await?;
+            let mut client = SearchClient::from_settings(settings).await?;
             client.search_command_output(query.clone(), None, self.context).await
         };
 

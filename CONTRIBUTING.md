@@ -181,7 +181,8 @@ Atuin writes logs to `~/.atuin/logs` unless configured otherwise. Log files are 
 
 ### Log Levels
 
-You can set the `ATUIN_LOG` environment variable to override log verbosity from the config file:
+You can set the `ATUIN_LOG` environment variable to override log verbosity from
+the config file:
 
 ```shell
 ATUIN_LOG=debug atuin search  # Enable debug logging

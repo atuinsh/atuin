@@ -21,6 +21,12 @@ use atuin_daemon::grpc::history::pb::{
     TailHistoryReply, tail_history_reply::Event as TailEventProto,
 };
 use atuin_domain::record::CmdOrigin;
+#[cfg(feature = "octavo")]
+use atuin_octavo::hub::{HubCallError, HubClient};
+#[cfg(feature = "octavo")]
+use atuin_octavo::pb;
+#[cfg(feature = "octavo")]
+use atuin_octavo::queue::UploadQueue;
 use clap::Subcommand;
 #[cfg(feature = "daemon")]
 use colored::Colorize;
@@ -610,9 +616,47 @@ pub(super) async fn delete_history_entries(
         return Ok(());
     }
 
+    let entries: Vec<History> = entries.into_iter().collect();
+    #[cfg(feature = "octavo")]
+    let history_ids: Vec<HistoryId> = entries.iter().map(|h| h.id).collect();
+
     let ids = history_store.delete_entries(entries).await?;
     history_store.build_all(db, &ids).await?;
+
+    #[cfg(feature = "octavo")]
+    queue_octavo_deletions(settings, history_ids).await;
     Ok(())
+}
+
+/// Queues the deletion of `ids` from Octavo, for the daemon to send once it runs, if Octavo was
+/// ever on here.
+#[cfg(feature = "octavo")]
+async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
+    let path = Settings::octavo_queue_path();
+    if !path.exists() {
+        return;
+    }
+
+    let login = async { HubClient::new(settings)?.login(settings).await };
+    let login = match login.await {
+        Ok(login) => login,
+        Err(HubCallError::NotLoggedIn) => return,
+        Err(err) => {
+            warn!(
+                ?err,
+                "failed to learn which hub user is logged in; deletions won't reach octavo"
+            );
+            return;
+        }
+    };
+
+    // Octavo never stored an entry whose id isn't a UUIDv7.
+    let stored = ids.into_iter().filter(|&id| pb::UuidV7::try_from(id).is_ok());
+    let queued =
+        async { UploadQueue::open(path).await?.push_deletions(login.user_id(), stored).await };
+    if let Err(err) = queued.await {
+        warn!(?err, "failed to queue history deletions for octavo; they will not reach it");
+    }
 }
 
 #[cfg(feature = "daemon")]

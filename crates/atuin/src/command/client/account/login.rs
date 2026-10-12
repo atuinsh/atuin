@@ -177,14 +177,25 @@ impl Cmd {
     async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &url::Url) -> Result<()> {
         tracing::info!("Authenticating with Atuin Hub...");
 
-        let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
-        println!("{}", fl!("account-hub-open-url"));
+        let mut session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
+
+        // Asks the Hub to show signed-out users its signup page rather than its login page.
+        if self.from_registration {
+            session.auth_url.query_pairs_mut().append_pair("signup", "1");
+        }
+
+        if session.open_in_browser() {
+            println!("{}", fl!("account-hub-browser-opened"));
+        } else {
+            println!("{}", fl!("account-hub-open-url"));
+        }
         println!("{}", session.auth_url);
 
         let token = session
             .wait_for_completion(
                 atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
                 atuin_client::hub::DEFAULT_POLL_INTERVAL,
+                &fl!("account-hub-waiting"),
             )
             .await?;
 
@@ -267,6 +278,7 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
 
     println!("\n{}", fl!("login-reencrypting"));
     store.re_encrypt(&current_key, key).await?;
+    crate::command::client::store::invalidate_ai_sessions().await;
 
     println!("{}", fl!("login-writing-key"));
     key.overwrite_path(key_path)?;

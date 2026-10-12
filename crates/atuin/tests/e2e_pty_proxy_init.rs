@@ -97,6 +97,6 @@ fn fish_keeps_its_keyboard_however_the_preamble_is_sourced(
 
     // Typing has to reach the shell the proxy hosts, and the proxy has to have taken over -- a
     // preamble that quietly declined to exec would keep the keyboard working too.
-    pty.send_line("echo proxy=$ATUIN_PTY_PROXY_ACTIVE");
+    pty.send_line("test -n \"$ATUIN_PTY_PROXY_ACTIVE\" && echo proxy=1 || echo proxy=0");
     pty.wait_for_line("proxy=1");
 }

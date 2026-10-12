@@ -1,8 +1,11 @@
 use std::time::Duration;
 
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_common::encryption::paseto_v4;
 use atuin_common::utils::uuid_v7;
-use atuin_domain::record::{EncryptedData, Host, HostId, Record, RecordTag, RecordVersion};
+use atuin_domain::record::{
+    DecryptedData, EncryptedData, Host, HostId, Record, RecordTag, RecordVersion,
+};
 use easy_cast::Conv;
 use rand::Rng;
 use rand::distributions::Alphanumeric;
@@ -29,17 +32,12 @@ impl BenchRecord {
     ///  - author (string)
     const PAYLOAD_SIZE: usize = 300;
 
-    /// Rough size of the PASETO PIE-wrapped key.
-    const KEY_SIZE: usize = 150;
-
     fn chain(ctx: &mut BenchCtx, n: usize) -> Vec<Record<EncryptedData>> {
         let host = Host::new(HostId(uuid_v7()));
         let version: String = "v1".into();
         let tag = uuid_v7().simple().to_string();
-        let data: String =
-            ctx.rng().sample_iter(&Alphanumeric).take(Self::PAYLOAD_SIZE).map(char::from).collect();
-        let key: String =
-            ctx.rng().sample_iter(&Alphanumeric).take(Self::KEY_SIZE).map(char::from).collect();
+        let data: Vec<u8> = ctx.rng().sample_iter(&Alphanumeric).take(Self::PAYLOAD_SIZE).collect();
+        let key = paseto_v4::Key::generate();
 
         (0..u64::conv(n))
             .map(|idx| {
@@ -47,12 +45,10 @@ impl BenchRecord {
                     .host(host.clone())
                     .version(RecordVersion::from(version.clone()))
                     .tag(RecordTag::Other(tag.clone()))
-                    .data(EncryptedData {
-                        raw: data.clone(),
-                        cek: key.clone(),
-                    })
+                    .data(DecryptedData(data.clone()))
                     .idx(idx)
                     .build()
+                    .encrypt(&key)
             })
             .collect()
     }

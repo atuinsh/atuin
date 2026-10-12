@@ -5,7 +5,6 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use directories::UserDirs;
 use eyre::{Result, eyre};
 use time::{Duration, OffsetDateTime};
 
@@ -30,8 +29,7 @@ fn default_histpath() -> Result<PathBuf> {
     // zsh has no default value for this var, but uses ~/.zhistory.
     // zsh-newuser-install propose as default .histfile https://github.com/zsh-users/zsh/blob/master/Functions/Newuser/zsh-newuser-install#L794
     // we could maybe be smarter about this in the future :)
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
-    let home_dir = user_dirs.home_dir();
+    let home_dir = dirs::home_dir().ok_or_else(|| eyre!("could not find home directory"))?;
 
     let mut candidates = [".zhistory", ".zsh_history", ".histfile"].iter();
     loop {

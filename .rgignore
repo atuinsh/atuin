@@ -1,0 +1,5 @@
+*.lock
+*-lock.json
+*-lock.yaml
+*.svg
+/vendor/

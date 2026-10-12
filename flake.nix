@@ -2,6 +2,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
+    crane.url = "github:ipetkov/crane";
     flake-compat = {
       url = "github:edolstra/flake-compat";
       flake = false;
@@ -12,7 +13,12 @@
     };
   };
   outputs =
-    inputs@{ flake-parts, fenix, ... }:
+    inputs@{
+      flake-parts,
+      fenix,
+      crane,
+      ...
+    }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [
         "x86_64-linux"
@@ -28,10 +34,7 @@
             sha256 = "sha256-P30Tm3O7vQAE725YtDCDHGjNrSsfZO4us11UwJGZSJo=";
           };
           atuin = pkgs.callPackage ./atuin.nix {
-            rustPlatform = pkgs.makeRustPlatform {
-              cargo = toolchain;
-              rustc = toolchain;
-            };
+            craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
           };
         in
         {

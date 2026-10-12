@@ -6,9 +6,7 @@ use std::str::Utf8Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::Sqlite;
 use sqlx::error::DatabaseError;
-use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{LockedSqliteHandle, SqlitePool};
 use thiserror::Error;
 use tracing::warn;
@@ -34,6 +32,50 @@ pub enum SqlitePathError {
 
     #[error("failed to acquire a connection to query the sqlite path: {0}")]
     Acquire(#[from] Arc<sqlx::Error>),
+}
+
+/// Check whether a sqlx error is `SQLITE_BUSY` or `SQLITE_LOCKED`.
+fn err_is_locked(err: &sqlx::Error) -> bool {
+    err.as_database_error()
+        .and_then(DatabaseError::code)
+        .and_then(|code| code.parse::<c_int>().ok())
+        .is_some_and(|code| {
+            let primary = code & 0xff;
+            primary == libsqlite3_sys::SQLITE_BUSY || primary == libsqlite3_sys::SQLITE_LOCKED
+        })
+}
+
+/// Perform a SQL operation, retrying with backoff if the database is locked.
+///
+/// SQLite's busy handler (sqlx sets `busy_timeout` to 5s by default) only covers `SQLITE_BUSY`. In
+/// shared-cache mode (used for in-memory databases), an in-progress schema change on another
+/// connection causes the operation to fail with `SQLITE_LOCKED_SHAREDCACHE` immediately.
+async fn retry_while_locked<T, F, R>(mut f: F) -> Result<T, sqlx::Error>
+where
+    F: FnMut() -> R,
+    R: Future<Output = Result<T, sqlx::Error>>,
+{
+    const TIMEOUT: Duration = Duration::from_millis(500);
+    const BACKOFF: Backoff = Backoff::Exponential {
+        initial: Duration::from_millis(20),
+        max: Duration::from_millis(200),
+        factor: NonZeroU32::new(2).unwrap(),
+    };
+
+    BACKOFF
+        .retry(
+            || {
+                let attempt = f();
+                async move {
+                    match attempt.await {
+                        Err(err) if err_is_locked(&err) => ControlFlow::Continue(err),
+                        result => ControlFlow::Break(result),
+                    }
+                }
+            },
+            TIMEOUT,
+        )
+        .await?
 }
 
 /// Metadata which is queried on startup, and never again.
@@ -62,8 +104,8 @@ impl FfiInfo {
         // can return SQLITE_BUSY or SQLITE_LOCKED. In effect, this means the whole database is
         // locked by someone else and the lock will be removed soon-ish.
         //
-        // `Self::acquire_retrying` will perform that retry logic.
-        let mut conn = match Self::acquire_retrying(pool).await {
+        // `retry_while_locked` will perform that retry logic.
+        let mut conn = match retry_while_locked(|| pool.acquire()).await {
             Ok(conn) => conn,
             Err(err) => return Self::unavailable(err),
         };
@@ -89,37 +131,6 @@ impl FfiInfo {
             variable_number_limit: None,
             wal_path: Err(SqlitePathError::Acquire(Arc::new(err))),
         }
-    }
-
-    fn err_is_locked(err: &sqlx::Error) -> bool {
-        err.as_database_error()
-            .and_then(DatabaseError::code)
-            .and_then(|code| code.parse::<c_int>().ok())
-            .is_some_and(|code| {
-                let primary = code & 0xff;
-                primary == libsqlite3_sys::SQLITE_BUSY || primary == libsqlite3_sys::SQLITE_LOCKED
-            })
-    }
-
-    async fn acquire_retrying(pool: &SqlitePool) -> Result<PoolConnection<Sqlite>, sqlx::Error> {
-        const TIMEOUT: Duration = Duration::from_millis(500);
-        const BACKOFF: Backoff = Backoff::Exponential {
-            initial: Duration::from_millis(20),
-            max: Duration::from_millis(200),
-            factor: NonZeroU32::new(2).unwrap(),
-        };
-
-        BACKOFF
-            .retry(
-                || async move {
-                    match pool.acquire().await {
-                        Err(err) if Self::err_is_locked(&err) => ControlFlow::Continue(err),
-                        result => ControlFlow::Break(result),
-                    }
-                },
-                TIMEOUT,
-            )
-            .await?
     }
 
     fn query_variable_number_limit(handle: &mut LockedSqliteHandle<'_>) -> Option<usize> {
@@ -211,8 +222,10 @@ impl Info {
     }
 
     async fn query_version(pool: &SqlitePool) -> Result<semver::Version, VersionError> {
-        let str: String =
-            crate::db::query_scalar("SELECT sqlite_version()").fetch_one(pool).await?;
+        let str: String = retry_while_locked(|| {
+            crate::db::query_scalar("SELECT sqlite_version()").fetch_one(pool)
+        })
+        .await?;
         Ok(semver::Version::parse(&str)?)
     }
 
@@ -225,5 +238,43 @@ impl Info {
     /// Get the path to the WAL database.
     pub fn wal_path(&self) -> Result<&Path, SqlitePathError> {
         self.ffi_info.wal_path.as_deref().map_err(Clone::clone)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::{fixture, rstest};
+    use sqlx::Sqlite;
+
+    use super::*;
+    use crate::db::sqlite::Sqlite as CommonSqlite;
+
+    #[fixture]
+    async fn memory() -> CommonSqlite {
+        CommonSqlite::builder_in_memory().open().await.unwrap()
+    }
+
+    /// In-memory databases run in shared-cache mode, where a schema change in flight on one
+    /// connection (e.g. a migration) makes every other connection fail with
+    /// `SQLITE_LOCKED_SHAREDCACHE` instead of waiting. The version query must ride that out.
+    #[rstest]
+    #[tokio::test]
+    async fn query_version_waits_out_a_schema_lock(#[future] memory: CommonSqlite) {
+        let sqlite = memory.await;
+        let mut tx = sqlite.pool().begin().await.unwrap();
+        crate::db::query::<Sqlite>("create table held (x integer)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            tx.commit().await.unwrap();
+        });
+
+        let version = Info::query_version(sqlite.pool()).await;
+        release.await.unwrap();
+
+        version.unwrap();
     }
 }

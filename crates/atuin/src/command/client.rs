@@ -110,6 +110,10 @@ pub enum Cmd {
     #[command(subcommand)]
     Ai(atuin_ai::commands::Command),
 
+    /// Pick a captured AI coding-agent session and resume it (short for `atuin ai resume`)
+    #[cfg(feature = "ai")]
+    Resume(atuin_ai::commands::ResumeCmd),
+
     #[cfg(feature = "ai")]
     #[command(about = fl!("cmd-mcp"))]
     Mcp,
@@ -157,6 +161,12 @@ pub enum Cmd {
 
 impl Cmd {
     pub fn run(self) -> Result<()> {
+        // `atuin resume` is `atuin ai resume`, so it runs exactly as that does.
+        #[cfg(feature = "ai")]
+        if let Self::Resume(cmd) = self {
+            return Self::Ai(atuin_ai::commands::Command::Resume(cmd)).run();
+        }
+
         // Daemonize before creating the async runtime – fork() inside a live
         // tokio runtime corrupts its internal state.
         #[cfg(all(unix, feature = "daemon"))]
@@ -307,7 +317,19 @@ impl Cmd {
             Self::Update(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
-            Self::Ai(cli) => atuin_ai::commands::run(cli, &settings).await,
+            Self::Resume(_) => unreachable!(),
+
+            #[cfg(feature = "ai")]
+            Self::Ai(cli) => {
+                // Session commands talk to the daemon: start or replace it as history does,
+                // instead of failing against a stopped or stale one.
+                #[cfg(feature = "daemon")]
+                if matches!(cli, atuin_ai::commands::Command::Session(_)) {
+                    daemon::ready_client(&settings).await?;
+                }
+
+                atuin_ai::commands::run(cli, &settings).await
+            }
 
             #[cfg(feature = "ai")]
             Self::Mcp => Box::pin(atuin_ai::mcp::run(&db, &settings)).await,
@@ -374,5 +396,14 @@ mod tests {
         let cli = Cli::try_parse_from(std::iter::once("atuin").chain(args.iter().copied()))
             .expect("the argv parses");
         assert!(!format!("{:?}", cli.cmd).contains(SECRET));
+    }
+
+    /// `atuin resume` takes what `atuin ai resume` does.
+    #[cfg(feature = "ai")]
+    #[rstest]
+    fn resume_is_short_for_ai_resume() {
+        let cli = Cli::try_parse_from(["atuin", "resume", "0199abcdef", "--in", "codex"])
+            .expect("the argv parses");
+        assert!(matches!(cli.cmd, Cmd::Resume(_)), "{:?}", cli.cmd);
     }
 }

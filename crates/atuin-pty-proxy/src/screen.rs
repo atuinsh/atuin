@@ -10,7 +10,7 @@ use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 use easy_cast::Conv;
 
 use crate::capture::{CaptureConfig, CommandCaptureTracker};
-use crate::debug::Osc133DebugHighlighter;
+use crate::debug::MarkerDebugHighlighter;
 
 pub enum Msg {
     Data(Vec<u8>),
@@ -68,13 +68,13 @@ fn live_socket(mut socket_dir: PathBuf, tty: TtyId) -> Option<PathBuf> {
 
 pub struct ParserOptions {
     pub command_capture: Option<CaptureConfig>,
-    pub debug_osc133: bool,
+    pub debug_markers: bool,
 }
 
 struct Parser {
     emulator: vt100::Parser,
     tracker: Option<CommandCaptureTracker>,
-    highlighter: Option<Osc133DebugHighlighter>,
+    highlighter: Option<MarkerDebugHighlighter>,
 }
 
 impl Parser {
@@ -97,7 +97,7 @@ impl Parser {
         Self {
             emulator: vt100::Parser::new(rows, cols, Self::SCROLLBACK_CAPACITY),
             tracker: options.command_capture.map(|c| CommandCaptureTracker::new(rows, cols, c)),
-            highlighter: options.debug_osc133.then(Osc133DebugHighlighter::new),
+            highlighter: options.debug_markers.then(MarkerDebugHighlighter::new),
         }
     }
 
@@ -474,14 +474,12 @@ mod tests {
                 sink,
                 max_output_bytes: 1024 * 1024,
             }),
-            debug_osc133: false,
+            debug_markers: false,
         });
 
-        parser.handle_msg(Msg::Data(b"\x1b]133;C\x07abcdefghij".to_vec()));
+        parser.handle_msg(Msg::Data(format!("\x1b]18188735;C;{HID}\x07abcdefghij").into_bytes()));
         parser.handle_msg(Msg::Resize { rows: 6, cols: 5 });
-        parser.handle_msg(Msg::Data(
-            format!("klmno\r\n\x1b]133;D;0;history_id={HID}\x07").into_bytes(),
-        ));
+        parser.handle_msg(Msg::Data(format!("klmno\r\n\x1b]18188735;D;{HID}\x07").into_bytes()));
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
@@ -504,16 +502,13 @@ mod tests {
                 sink,
                 max_output_bytes: 1024 * 1024,
             }),
-            debug_osc133: false,
+            debug_markers: false,
         });
 
         msg_tx
             .send(Msg::Data(
-                format!(
-                    "\x1b]133;A\x07$ \x1b]133;B\x07echo \
-                     hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id={HID}\x07"
-                )
-                .into_bytes(),
+                format!("$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07")
+                    .into_bytes(),
             ))
             .expect("parser thread alive");
         // A screen request only comes back once the data above has been handled.
@@ -538,15 +533,12 @@ mod tests {
                 sink,
                 max_output_bytes: 1024 * 1024,
             }),
-            debug_osc133: true,
+            debug_markers: true,
         });
 
         parser.handle_msg(Msg::Data(
-            [
-                b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n".as_slice(),
-                format!("\x1b]133;C\x07hi\r\n\x1b]133;D;0;history_id={HID}\x07").as_bytes(),
-            ]
-            .concat(),
+            format!("$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07")
+                .into_bytes(),
         ));
 
         let captures: Vec<_> = captures.try_iter().collect();
@@ -556,13 +548,15 @@ mod tests {
 
         // The screen snapshot, on the other hand, is where the labels belong.
         let rows = rows_of(&encode_screen(&parser.emulator)).join("\n");
-        assert!(rows.contains("[OSC133:A prompt]"), "{rows:?}");
-        assert!(rows.contains("[OSC133:D exit=0]"), "{rows:?}");
+        assert!(rows.contains("[atuin: output start]"), "{rows:?}");
+        assert!(rows.contains("[atuin: output end]"), "{rows:?}");
     }
 
     #[rstest]
     fn a_parser_without_a_sink_still_tracks_the_screen(#[with(6, 20)] mut parser: Parser) {
-        parser.handle_msg(Msg::Data(b"\x1b]133;C\x07hi\r\n\x1b]133;D;0\x07".to_vec()));
+        parser.handle_msg(Msg::Data(
+            format!("\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07").into_bytes(),
+        ));
 
         assert!(rows_of(&encode_screen(&parser.emulator))[0].contains("hi"));
     }
@@ -581,7 +575,7 @@ mod tests {
     fn plain() -> ParserOptions {
         ParserOptions {
             command_capture: None,
-            debug_osc133: false,
+            debug_markers: false,
         }
     }
 

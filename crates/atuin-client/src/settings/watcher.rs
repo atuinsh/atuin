@@ -161,12 +161,7 @@ impl SettingsWatcher {
                             return;
                         }
 
-                        // Only react to modify events (content changes) or creates
-                        if matches!(
-                            event.kind,
-                            EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Any)
-                                | EventKind::Create(_)
-                        ) {
+                        if reloads_on(event.kind) {
                             debug!("config file event detected: {:?}", event);
                             // Send to debounce channel (ignore send errors - receiver might be gone)
                             let _ = debounce_tx.send(());
@@ -244,5 +239,36 @@ impl SettingsWatcher {
                 }
             }
         }
+    }
+}
+
+/// Whether an event on the config file may have changed its contents: a write, a create, or a
+/// rename onto it, which is how editors that save atomically (and `sed -i`) replace the file. A
+/// rename away from it is let through too; the reload skips a file that no longer exists.
+fn reloads_on(kind: EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Name(_) | ModifyKind::Any)
+            | EventKind::Create(_)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use notify::event::{AccessKind, CreateKind, DataChange, MetadataKind, RemoveKind, RenameMode};
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn reloads_on_writes_creates_and_renames_onto_the_file() {
+        assert!(reloads_on(EventKind::Modify(ModifyKind::Data(DataChange::Content))));
+        assert!(reloads_on(EventKind::Create(CreateKind::File)));
+        assert!(reloads_on(EventKind::Modify(ModifyKind::Name(RenameMode::To))));
+        assert!(reloads_on(EventKind::Modify(ModifyKind::Name(RenameMode::Both))));
+
+        assert!(!reloads_on(EventKind::Access(AccessKind::Read)));
+        assert!(!reloads_on(EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions))));
+        assert!(!reloads_on(EventKind::Remove(RemoveKind::File)));
     }
 }

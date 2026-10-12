@@ -1,0 +1,778 @@
+{
+ "info": {
+  "id": "ses_ee1b7b1dfffe46nQL0NuU68GcR",
+  "projectID": "7d479df3519baa04d706cdddd6c38a1b88cd34e3",
+  "model": {
+   "id": "big-pickle",
+   "providerID": "opencode",
+   "variant": "default"
+  },
+  "cost": 0,
+  "tokens": {
+   "input": 7475,
+   "output": 558,
+   "reasoning": 354,
+   "cache": {
+    "read": 82304,
+    "write": 0
+   }
+  },
+  "outcome": "succeeded",
+  "time": {
+   "created": 1791509417520,
+   "updated": 1791509629685,
+   "idle": 1791509645461
+  },
+  "title": "octest",
+  "location": {
+   "directory": "/work/proj"
+  }
+ },
+ "messages": [
+  {
+   "id": "msg_11e484e44001y9aBZ5Ki93Ka5M",
+   "time": {
+    "created": 1791509417569
+   },
+   "text": "\"Marker OCALPHA. Use the bash tool to run: echo ocalpha-out && ls. Then use the read tool to read notes.txt. Then reply with one short sentence containing the word OCALPHADONE.\"",
+   "files": [],
+   "type": "user"
+  },
+  {
+   "id": "msg_11e484e73001tHe41p17eurFKY",
+   "time": {
+    "created": 1791509417649,
+    "streamed": 1791509419466,
+    "completed": 1791509419547
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "reasoning",
+     "text": "Let me follow the instructions.",
+     "state": {
+      "reasoningField": "reasoning_content"
+     },
+     "time": {
+      "created": 1791509419190,
+      "completed": 1791509419454
+     }
+    },
+    {
+     "type": "tool",
+     "id": "call_00_9wmbw0r7375sn5egtq8mhas6",
+     "name": "shell",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "echo ocalpha-out && ls"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "ocalpha-out\ngreet.py\nnotes.txt\n"
+       }
+      ],
+      "metadata": {
+       "status": "completed",
+       "truncated": false,
+       "exit": 0
+      }
+     },
+     "time": {
+      "created": 1791509419238,
+      "ran": 1791509419460,
+      "completed": 1791509419529
+     }
+    },
+    {
+     "type": "tool",
+     "id": "call_01_oxfcqov5rjteil044qz6otjl",
+     "name": "read",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "path": "notes.txt"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "Read file notes.txt, lines 1-2\n1: alpha line\n2: beta line"
+       }
+      ],
+      "metadata": {
+       "truncated": false
+      }
+     },
+     "time": {
+      "created": 1791509419290,
+      "ran": 1791509419464,
+      "completed": 1791509419481
+     }
+    }
+   ],
+   "snapshot": {
+    "start": "2d340ce5eeb94eb91fe0c17056193a24b37a999a",
+    "end": "2d340ce5eeb94eb91fe0c17056193a24b37a999a",
+    "files": []
+   },
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "cost": 0,
+   "tokens": {
+    "input": 5456,
+    "output": 71,
+    "reasoning": 6,
+    "cache": {
+     "read": 2048,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e48562d001LoisbfgKtTjN6N",
+   "time": {
+    "created": 1791509419595,
+    "streamed": 1791509421018,
+    "completed": 1791509421045
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "OCALPHADONE: the command printed `ocalpha-out`, the directory holds `greet.py` and `notes.txt`, and `notes.txt` contains \"alpha line\" and \"beta line\"."
+    }
+   ],
+   "snapshot": {
+    "start": "2d340ce5eeb94eb91fe0c17056193a24b37a999a",
+    "end": "2d340ce5eeb94eb91fe0c17056193a24b37a999a",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "stop",
+   "cost": 0,
+   "tokens": {
+    "input": 208,
+    "output": 43,
+    "reasoning": 0,
+    "cache": {
+     "read": 7424,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e485bfc001J3OIfsfEAZTPqW",
+   "time": {
+    "created": 1791509421052
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_11e4a7b12001229UBmORgwKQSM",
+   "time": {
+    "created": 1791509560106
+   },
+   "text": "\"Marker OCBRAVO. Do these steps with tools, one at a time: 1) create a new file created.txt containing the single line OCCREATED. 2) edit greet.py replacing the string \\\"hello \\\" with \\\"OCEDITED hello \\\". 3) run the shell command: ls /nonexistent-ocfail. It will fail; that is expected. Then reply with one short sentence containing OCBRAVODONE.\"",
+   "files": [],
+   "type": "user"
+  },
+  {
+   "id": "msg_11e4a7b34001CaXaW6v4hhIuuZ",
+   "time": {
+    "created": 1791509560154,
+    "streamed": 1791509562068,
+    "completed": 1791509562109
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "reasoning",
+     "text": "The user wants me to do steps one at a time with tools. Let me first create the file, then edit greet.py, then run the shell command. Let me check greet.py first? The instruction says edit greet.py replacing \"hello \" with \"OCEDITED hello \". Let me just do it.\n\nStep 1: create created.txt.",
+     "state": {
+      "reasoningField": "reasoning_content"
+     },
+     "time": {
+      "created": 1791509561418,
+      "completed": 1791509562060
+     }
+    },
+    {
+     "type": "tool",
+     "id": "call_00_mny7won4f7szrw7m19260lbs",
+     "name": "write",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "path": "created.txt",
+       "content": "OCCREATED\n"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "Created file successfully: created.txt"
+       }
+      ],
+      "metadata": {
+       "truncated": false
+      }
+     },
+     "time": {
+      "created": 1791509561856,
+      "ran": 1791509562065,
+      "completed": 1791509562075
+     }
+    }
+   ],
+   "snapshot": {
+    "start": "2d340ce5eeb94eb91fe0c17056193a24b37a999a",
+    "end": "9681da6b2f70128b8453a30f7202ca5ba46f75e8",
+    "files": [
+     "created.txt"
+    ]
+   },
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "cost": 0,
+   "tokens": {
+    "input": 222,
+    "output": 58,
+    "reasoning": 70,
+    "cache": {
+     "read": 7552,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e4a830d001Uzcu2018zN2OJ2",
+   "time": {
+    "created": 1791509562150,
+    "streamed": 1791509564187,
+    "completed": 1791509564214
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "reasoning",
+     "text": "Step 2: edit greet.py. Let me read it first? The edit tool requires exact text. The user says replace \"hello \" with \"OCEDITED hello \". I need to know exact content. Let me read greet.py first to get exact string. But the instruction says one at a time, tools. Reading is fine.\n\nActually let me just read it.",
+     "state": {
+      "reasoningField": "reasoning_content"
+     },
+     "time": {
+      "created": 1791509563598,
+      "completed": 1791509564178
+     }
+    },
+    {
+     "type": "tool",
+     "id": "call_00_tjc6jgeah1p8x0i8i58fluqk",
+     "name": "read",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "path": "greet.py"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "Read file greet.py, lines 1-2\n1: def greet(name):\n2:     return \"hello \" + name"
+       }
+      ],
+      "metadata": {
+       "truncated": false
+      }
+     },
+     "time": {
+      "created": 1791509564065,
+      "ran": 1791509564184,
+      "completed": 1791509564195
+     }
+    }
+   ],
+   "snapshot": {
+    "start": "9681da6b2f70128b8453a30f7202ca5ba46f75e8",
+    "end": "9681da6b2f70128b8453a30f7202ca5ba46f75e8",
+    "files": []
+   },
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "cost": 0,
+   "tokens": {
+    "input": 240,
+    "output": 39,
+    "reasoning": 75,
+    "cache": {
+     "read": 7680,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e4a8b44001czDhsKOsToTGf3",
+   "time": {
+    "created": 1791509564280,
+    "streamed": 1791509566013,
+    "completed": 1791509566063
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "tool",
+     "id": "call_00_qr44ecq9v2mu34w7df8bfyl7",
+     "name": "edit",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "path": "greet.py",
+       "oldString": "\"hello \"",
+       "newString": "\"OCEDITED hello \""
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "Edited greet.py (1 replacement)"
+       }
+      ],
+      "metadata": {
+       "files": [
+        {
+         "file": "greet.py",
+         "patch": "Index: greet.py\n===================================================================\n--- greet.py\n+++ greet.py\n@@ -1,2 +1,2 @@\n def greet(name):\n-    return \"hello \" + name\n+    return \"OCEDITED hello \" + name\n",
+         "status": "modified",
+         "additions": 1,
+         "deletions": 1
+        }
+       ],
+       "truncated": false
+      }
+     },
+     "time": {
+      "created": 1791509565808,
+      "ran": 1791509566010,
+      "completed": 1791509566018
+     }
+    }
+   ],
+   "snapshot": {
+    "start": "9681da6b2f70128b8453a30f7202ca5ba46f75e8",
+    "end": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "files": [
+     "greet.py"
+    ]
+   },
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "cost": 0,
+   "tokens": {
+    "input": 264,
+    "output": 78,
+    "reasoning": 0,
+    "cache": {
+     "read": 7808,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e4a927d0014iEkQGd3okYmP6",
+   "time": {
+    "created": 1791509566102,
+    "streamed": 1791509567718,
+    "completed": 1791509567750
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "tool",
+     "id": "call_00_fl3ofucqjfie07qtfvoq11ls",
+     "name": "shell",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "ls /nonexistent-ocfail"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "ls: cannot access '/nonexistent-ocfail': No such file or directory\n"
+       },
+       {
+        "type": "text",
+        "text": "Exited with code 2"
+       }
+      ],
+      "metadata": {
+       "status": "completed",
+       "truncated": false,
+       "exit": 2
+      }
+     },
+     "time": {
+      "created": 1791509567554,
+      "ran": 1791509567715,
+      "completed": 1791509567736
+     }
+    }
+   ],
+   "snapshot": {
+    "start": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "end": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "files": []
+   },
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "cost": 0,
+   "tokens": {
+    "input": 104,
+    "output": 44,
+    "reasoning": 0,
+    "cache": {
+     "read": 8064,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e4a9914001nHuzXWhRL9f9gV",
+   "time": {
+    "created": 1791509567791,
+    "streamed": 1791509569332,
+    "completed": 1791509569343
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "OCBRAVODONE: created `created.txt` with \"OCCREATED\", changed greet.py to `return \"OCEDITED hello \" + name`, and the `ls /nonexistent-ocfail` command failed as expected."
+    }
+   ],
+   "snapshot": {
+    "start": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "end": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "stop",
+   "cost": 0,
+   "tokens": {
+    "input": 184,
+    "output": 51,
+    "reasoning": 0,
+    "cache": {
+     "read": 8064,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e4a9f43001DuO3wyTyu0FJGg",
+   "time": {
+    "created": 1791509569347
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_11e4b88a1001rPpaETKG8fvrIJ",
+   "time": {
+    "created": 1791509629710
+   },
+   "text": "\"Marker OCCHARLIE. Run these shell commands one at a time, each as a separate tool call: echo occharlie-one; sleep 4; echo occharlie-two; sleep 4; echo occharlie-three. Then reply with one short sentence containing OCCHARLIEDONE.\"",
+   "files": [],
+   "type": "user"
+  },
+  {
+   "id": "msg_11e4b8b1b001sZQXcrCo3kLFDO",
+   "time": {
+    "created": 1791509629768,
+    "streamed": 1791509632666,
+    "completed": 1791509636773
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "reasoning",
+     "text": "The user wants me to run these shell commands one at a time, each as a separate tool call: echo occharlie-one; sleep 4; echo occharlie-two; sleep 4; echo occharlie-three. Hmm, this is ambiguous. \"one at a time, each as a separate tool call\" \u2014 I think they mean three commands: `echo occharlie-one && sleep 4`, then `echo occharlie-two && sleep 4`, then `echo occharlie-three`. The semicolons separate the sequence but they say one at a time each as separate tool call. So I'll split into three calls.\n\nWait, \"one at a time\" implies sequential, not parallel. So I cannot make them in parallel. Since each has sleep 4, and they must be sequential, I'll do them one after another. That's 3 separate tool calls, each waiting for completion.\n\nLet me do call 1.",
+     "state": {
+      "reasoningField": "reasoning_content"
+     },
+     "time": {
+      "created": 1791509631177,
+      "completed": 1791509632651
+     }
+    },
+    {
+     "type": "tool",
+     "id": "call_00_hbd26xs90wkohszm6oc93xe9",
+     "name": "shell",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "echo occharlie-one; sleep 4"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "occharlie-one\n"
+       }
+      ],
+      "metadata": {
+       "status": "completed",
+       "truncated": false,
+       "exit": 0
+      }
+     },
+     "time": {
+      "created": 1791509632532,
+      "ran": 1791509632662,
+      "completed": 1791509636744
+     }
+    }
+   ],
+   "snapshot": {
+    "start": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "end": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "files": []
+   },
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "cost": 0,
+   "tokens": {
+    "input": 176,
+    "output": 46,
+    "reasoning": 203,
+    "cache": {
+     "read": 8192,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e4ba6c6001EqbdVvOaJFiMaE",
+   "time": {
+    "created": 1791509636839,
+    "streamed": 1791509638597,
+    "completed": 1791509642655
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "tool",
+     "id": "call_00_ufwu7lcsqa0c1sp4tezqba8l",
+     "name": "shell",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "echo occharlie-two; sleep 4"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "occharlie-two\n"
+       }
+      ],
+      "metadata": {
+       "status": "completed",
+       "truncated": false,
+       "exit": 0
+      }
+     },
+     "time": {
+      "created": 1791509638455,
+      "ran": 1791509638591,
+      "completed": 1791509642625
+     }
+    }
+   ],
+   "snapshot": {
+    "start": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "end": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "files": []
+   },
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "cost": 0,
+   "tokens": {
+    "input": 315,
+    "output": 46,
+    "reasoning": 0,
+    "cache": {
+     "read": 8320,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e4bbdb9001OrfcTiVfOWxcAL",
+   "time": {
+    "created": 1791509642713,
+    "streamed": 1791509644045,
+    "completed": 1791509644085
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "tool",
+     "id": "call_00_o80zozm0csfwz1kqrecxoabt",
+     "name": "shell",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "command": "echo occharlie-three"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "occharlie-three\n"
+       }
+      ],
+      "metadata": {
+       "status": "completed",
+       "truncated": false,
+       "exit": 0
+      }
+     },
+     "time": {
+      "created": 1791509643879,
+      "ran": 1791509644041,
+      "completed": 1791509644065
+     }
+    }
+   ],
+   "snapshot": {
+    "start": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "end": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "files": []
+   },
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "cost": 0,
+   "tokens": {
+    "input": 123,
+    "output": 42,
+    "reasoning": 0,
+    "cache": {
+     "read": 8576,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e4bc34c0015OkyREcrN5wc71",
+   "time": {
+    "created": 1791509644138,
+    "streamed": 1791509645428,
+    "completed": 1791509645453
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "big-pickle",
+    "providerID": "opencode",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "OCCHARLIEDONE: ran the three commands in separate sequential calls, which printed `occharlie-one`, `occharlie-two`, and `occharlie-three`."
+    }
+   ],
+   "snapshot": {
+    "start": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "end": "2455321451b4af4d863c3855b4cdb2b8947e6331",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "stop",
+   "cost": 0,
+   "tokens": {
+    "input": 183,
+    "output": 40,
+    "reasoning": 0,
+    "cache": {
+     "read": 8576,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_11e4bc895001t74Z6FxEfkstCP",
+   "time": {
+    "created": 1791509645461
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  }
+ ]
+}

@@ -447,10 +447,12 @@ publish_crates() {
 
     local crates=(
         atuin-common
+        atuin-domain
         atuin-client
         atuin-ai
         atuin-dotfiles
         atuin-history
+        atuin-octavo
         atuin-daemon
         atuin-kv
         atuin-scripts

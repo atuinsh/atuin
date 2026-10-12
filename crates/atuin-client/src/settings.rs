@@ -34,19 +34,23 @@ static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static META_CONFIG: OnceLock<(String, f64)> = OnceLock::new();
 static META_STORE: OnceCell<crate::meta::MetaStore> = OnceCell::const_new();
 
+pub mod ai_sessions;
 pub mod daemon;
 pub mod disk_usage_limit;
 mod kv;
 pub(crate) mod meta;
 pub mod output;
 mod scripts;
+pub mod security;
 pub mod shells;
 pub mod watcher;
 
+pub use ai_sessions::{AiSessionFilterMode, AiSessionResume, AiSessions};
 pub use daemon::Daemon;
 pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
 use output::OutputCaptureConfig;
-pub use output::{CaptureLimits, OutputCapture};
+pub use output::{CaptureLimits, CommandFilter, OutputCapture};
+pub use security::Security;
 pub use shells::Shells;
 
 /// Default sync address for Atuin's hosted service, parsed once.
@@ -538,6 +542,15 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Octavo {
+    pub enabled: bool,
+    pub endpoint: Option<Url>,
+    /// Whether captured command output goes to Octavo too, while `enabled` and output capture are
+    /// both on.
+    pub upload_output: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Search {
     /// The list of enabled filter modes, in order of priority.
@@ -704,6 +717,30 @@ pub struct Ai {
 
     /// Whether the AI TUI surfaces feature tips. `None` = enabled.
     pub tips: Option<bool>,
+
+    /// Whether the daemon captures live AI harness sessions (Claude Code, Codex, ...) into the
+    /// synced record store. Off by default: capture copies the conversation (what was said, and
+    /// the tools called, see [`Self::capture_tools`]) into the encrypted store used by sync, so
+    /// it is strictly opt-in.
+    #[serde(default)]
+    pub capture_sessions: bool,
+
+    /// With [`Self::capture_sessions`], also capture what each tool call was given and what it
+    /// returned (commands and their output, files read and written), so a resumed session has
+    /// them too. On by default, with secrets redacted and each payload held to 64 KiB; off keeps
+    /// only each tool's name.
+    #[serde(default = "Ai::default_capture_tools")]
+    pub capture_tools: bool,
+
+    /// The `atuin ai resume` session picker (`[ai.sessions]`).
+    #[serde(default)]
+    pub sessions: AiSessions,
+}
+
+impl Ai {
+    const fn default_capture_tools() -> bool {
+        true
+    }
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -1123,6 +1160,9 @@ pub struct Settings {
     pub output: OutputCapture,
 
     #[serde(default)]
+    pub octavo: Octavo,
+
+    #[serde(default)]
     pub search: Search,
 
     #[serde(default)]
@@ -1148,6 +1188,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub ai: Ai,
+
+    #[serde(default)]
+    pub security: Security,
 }
 
 impl Settings {
@@ -1201,6 +1244,19 @@ impl Settings {
     #[must_use]
     pub fn command_capture_dir() -> PathBuf {
         Self::effective_data_dir().join("output-capture")
+    }
+
+    /// The AI harness session sidecar database, under the [effective data
+    /// dir](Self::effective_data_dir). The daemon owns and writes it; other readers open it
+    /// read-only (`AiSessionDatabase::open_read_only`).
+    #[must_use]
+    pub fn ai_session_sidecar_path() -> PathBuf {
+        Self::effective_data_dir().join("ai_session_sidecar.db")
+    }
+
+    #[must_use]
+    pub fn octavo_queue_path() -> PathBuf {
+        Self::effective_data_dir().join("octavo.db")
     }
 
     // -- Meta store: lazily initialized on first access --
@@ -1326,6 +1382,9 @@ impl Settings {
         let meta = match Self::meta_store().await {
             Ok(m) => m,
             Err(e) => {
+                // Unlike not being logged in, a failure: callers tracing the result at debug
+                // would hide it.
+                tracing::warn!("failed to open the meta store for sync auth: {e}");
                 return SyncAuth::NotLoggedIn {
                     reason: format!("Failed to open meta store: {e}"),
                 };
@@ -1380,8 +1439,11 @@ impl Settings {
     /// Delegates to [`Self::resolve_sync_auth`] and converts the result to an
     /// `AuthToken`. Callers that need to distinguish between auth states
     /// (e.g. to show different UI) should call `resolve_sync_auth` directly.
+    ///
+    /// Not being logged in is an expected state (an offline daemon asks on every start), so the
+    /// error is traced at debug, and callers that fail on it report it themselves.
     #[cfg(feature = "sync")]
-    #[instrument(level = "trace", skip_all, err)]
+    #[instrument(level = "trace", skip_all, err(level = "debug"))]
     pub async fn sync_auth_token(&self) -> Result<crate::api_client::AuthToken> {
         self.resolve_sync_auth().await.into_auth_token()
     }
@@ -1582,6 +1644,8 @@ impl Settings {
             .set_default("ai.db_path", ai_sessions_path.to_str())?
             .set_default("ai.session_continue_minutes", 60)?
             .set_default("ai.send_cwd", false)?
+            .set_default("ai.capture_sessions", false)?
+            .set_default("ai.capture_tools", true)?
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
@@ -1607,6 +1671,9 @@ impl Settings {
             )?
             .set_default("no_mouse", false)?
             .set_default("pty_proxy.enabled", false)?
+            .set_default("octavo.enabled", false)?
+            .set_default("octavo.endpoint", None::<String>)?
+            .set_default("octavo.upload_output", false)?
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 
@@ -2168,6 +2235,66 @@ mod tests {
 
         let settings = parse_settings("[ai]\nsession_continue_minutes = -5\n");
         assert_eq!(settings.ai.session_continue_minutes, None);
+    }
+
+    #[rstest]
+    #[case::anchored(Some(r#"["^cat "]"#), "cat .env", true)]
+    #[case::anchor_holds(Some(r#"["^cat "]"#), "echo cat .env", false)]
+    #[case::unanchored(Some(r#"["token"]"#), "gh auth token", true)]
+    #[case::any_of_several(Some(r#"["^cat ", "token"]"#), "gh auth token", true)]
+    #[case::omitted(None, "cat .env", false)]
+    fn output_command_filter_matches_the_command_line(
+        #[case] patterns: Option<&str>,
+        #[case] command: &str,
+        #[case] expected: bool,
+    ) {
+        let filter = patterns.map(|p| format!("command_filter = {p}\n")).unwrap_or_default();
+        let settings = parse_settings(&format!("[output]\nenabled = true\n{filter}"));
+
+        let limits = settings.output.limits().expect("output capture is enabled");
+        assert_eq!(limits.command_filter.is_match(command), expected);
+    }
+
+    #[rstest]
+    fn output_command_filter_rejects_an_invalid_expression() {
+        assert!(Settings::validate_str("[output]\ncommand_filter = [\"(\"]\n").is_err());
+    }
+
+    /// AI session capture applies `command_filter` to the commands agents run, whether or not
+    /// output capture is on.
+    #[rstest]
+    #[case::enabled("enabled = true\n")]
+    #[case::disabled("enabled = false\n")]
+    fn output_command_filter_is_kept_with_capture_off(#[case] enabled: &str) {
+        let settings =
+            parse_settings(&format!("[output]\n{enabled}command_filter = [\"^cat \"]\n"));
+        assert!(settings.output.command_filter().is_match("cat .env"));
+    }
+
+    #[rstest]
+    fn security_settings_load() {
+        let settings = parse_settings(concat!(
+            "[security]\n",
+            "redact_patterns = [\"ACME-[0-9]{6}\"]\n",
+            "sensitive_files = [\"*.secret\"]\n",
+        ));
+        assert_eq!(settings.security.redactor(true).redact("id ACME-123456"), "id ****");
+        let files = settings.security.sensitive_files(&settings.key_path);
+        assert!(files.matches("notes.secret", None));
+        assert!(files.matches(&settings.key_path.to_string_lossy(), None));
+        assert!(files.matches(".env", None), "the built-in files stay");
+    }
+
+    #[rstest]
+    fn security_settings_default_to_the_built_in_rules() {
+        let settings = parse_settings("");
+        assert!(settings.security.redact_patterns.is_empty());
+        assert!(settings.security.sensitive_files(&settings.key_path).matches(".env", None));
+    }
+
+    #[rstest]
+    fn redact_patterns_reject_an_invalid_expression() {
+        assert!(Settings::validate_str("[security]\nredact_patterns = [\"(\"]\n").is_err());
     }
 
     #[rstest]

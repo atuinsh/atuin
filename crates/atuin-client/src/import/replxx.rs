@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::str;
 
 use async_trait::async_trait;
-use directories::UserDirs;
 use eyre::{Result, eyre};
 use time::macros::format_description;
 use time::{OffsetDateTime, PrimitiveDateTime};
@@ -17,8 +16,7 @@ pub struct Replxx {
 }
 
 fn default_histpath() -> Result<PathBuf> {
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
-    let home_dir = user_dirs.home_dir();
+    let home_dir = dirs::home_dir().ok_or_else(|| eyre!("could not find home directory"))?;
 
     // There is no default histfile for replxx.
     // Here we try a couple of common names.

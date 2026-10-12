@@ -4,16 +4,30 @@ use std::path::PathBuf;
 
 use enum_dispatch::enum_dispatch;
 
+pub mod access;
 pub mod ccode;
 pub mod codex;
+pub mod continuation;
+pub mod fork;
 mod json_hooks;
+pub mod note;
 pub mod opencode;
 pub mod pi;
+pub mod rehydrate;
+pub mod resume;
+pub mod session;
+pub mod sync;
 
 use ccode::Ccode;
 use codex::Codex;
 use opencode::Opencode;
 use pi::Pi;
+use rehydrate::{RehydrateError, RehydrateSession};
+use resume::{ResumeError, ResumePlan, ResumeTarget};
+use session::Observable;
+use session::any::AnySessions;
+
+use crate::sync::BlockingPool;
 
 /// Defines a generic harness trait that all implementations need to implement.
 #[enum_dispatch]
@@ -31,6 +45,38 @@ pub trait Harness: std::fmt::Debug {
     /// Install this harness's hooks on the current user's machine, returning the path written.
     #[allow(async_fn_in_trait)]
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError>;
+
+    /// How this harness itself reopens `target`: its own resume command, and whether that has to
+    /// run from the session's directory. `Err` for a session the harness cannot reopen.
+    fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError>;
+
+    /// [`Self::resume_plan`], with the program and arguments replaced by the user's `template`
+    /// when there is one (see [`ResumePlan::with_template`]). The harness's plan still decides
+    /// whether the session can be resumed at all, and from where.
+    fn resume(
+        &self,
+        target: &ResumeTarget,
+        template: Option<&str>,
+    ) -> Result<ResumePlan, ResumeError> {
+        let plan = self.resume_plan(target)?;
+        match template {
+            Some(template) => plan.with_template(template, target),
+            None => Ok(plan),
+        }
+    }
+
+    /// Where the native record of session `id` is on this machine, `None` when it is not here:
+    /// the transcript file, or for a harness that keeps its sessions in a database, the database
+    /// holding it. Looks where the harness keeps sessions by default.
+    #[allow(async_fn_in_trait)]
+    async fn locate(&self, id: &str) -> Option<PathBuf>;
+
+    /// Write `session` out as this harness's own transcript, where [`Self::locate`] (and the
+    /// harness itself) will find it, and return where it went: a session recorded on another
+    /// machine, or whose transcript is gone, can then be resumed like any other. Never replaces a
+    /// transcript already there ([`RehydrateError::AlreadyExists`]).
+    #[allow(async_fn_in_trait)]
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError>;
 }
 
 #[enum_dispatch(Harness)]
@@ -102,5 +148,16 @@ impl AnyHarness {
     #[must_use]
     pub fn all() -> &'static [Self] {
         &[Self::ClaudeCode(Ccode), Self::Codex(Codex), Self::Opencode(Opencode), Self::Pi(Pi)]
+    }
+
+    /// The harness's sessions, whose file reads all run in `pool`.
+    #[must_use]
+    pub fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions> {
+        match self {
+            Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Opencode(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
+        }
     }
 }

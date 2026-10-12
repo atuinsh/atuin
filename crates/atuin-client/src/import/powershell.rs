@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use directories::BaseDirs;
 use easy_cast::Conv;
 use eyre::{Result, eyre};
 use time::{Duration, OffsetDateTime};
@@ -17,8 +16,6 @@ pub struct PowerShell {
 }
 
 fn get_history_path() -> Result<PathBuf> {
-    let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-
     // The command line history in PowerShell is maintained by the PSReadLine module:
     // https://learn.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline#command-history
     //
@@ -29,10 +26,22 @@ fn get_history_path() -> Result<PathBuf> {
     // > or `$Env:HOME/.local/share/powershell/PSReadLine`.
 
     let dir = if cfg!(windows) {
-        base.data_dir().join("Microsoft").join("Windows").join("PowerShell").join("PSReadLine")
+        dirs::data_dir()
+            .ok_or_else(|| eyre!("could not determine data directory"))?
+            .join("Microsoft")
+            .join("Windows")
+            .join("PowerShell")
+            .join("PSReadLine")
     } else {
-        std::env::var("XDG_DATA_HOME")
-            .map_or_else(|_| base.home_dir().join(".local").join("share"), PathBuf::from)
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .ok_or(())
+            .or_else(|_| {
+                let Some(home) = dirs::home_dir() else {
+                    eyre::bail!("could not determine home directory");
+                };
+                Ok(home.join(".local").join("share"))
+            })?
             .join("powershell")
             .join("PSReadLine")
     };

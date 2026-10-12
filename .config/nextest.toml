@@ -16,3 +16,10 @@ retries = 3
 # most one heavy case runs at a time with a few lightweight neighbours.
 filter = 'binary_id(=atuin-daemon::scale) and test(/hundred_k/)'
 threads-required = 4
+
+# CI profile (Buildkite sets NEXTEST_PROFILE=ci). Inherits the default
+# profile's settings and overrides; adds a JUnit report, which
+# .buildkite/scripts/nextest-bktec.py reports to Buildkite Test Engine.
+[profile.ci.junit]
+# Relative to target/nextest/ci/, so test-results/ in the workspace root.
+path = "../../../test-results/junit.xml"

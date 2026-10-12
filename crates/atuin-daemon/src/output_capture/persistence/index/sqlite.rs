@@ -96,6 +96,8 @@ impl Index for SqliteIndex {
 mod tests {
     use std::collections::HashSet;
 
+    use rstest::rstest;
+
     use super::super::schema::CHUNK;
     use super::*;
 
@@ -257,6 +259,38 @@ mod tests {
         index.insert(hid(1), "removable content").await.expect("insert");
         index.remove(std::iter::once(hid(1))).await.expect("remove");
         assert!(search_hits(&index, "removable", "removable content").await.is_empty());
+    }
+
+    /// A bulk removal mixing indexed and never-indexed ids drops exactly the indexed ones, from
+    /// both the id table and the FTS index, however the ids split into statements.
+    #[rstest]
+    #[case::one_id_per_statement(1)]
+    #[case::chunks_split_mid_batch(2)]
+    #[case::one_chunk(1000)]
+    #[tokio::test]
+    async fn bulk_remove_drops_only_the_given_ids_across_chunks(#[case] keys_per_delete: usize) {
+        let (index, _dir) = temp_index().await;
+        for n in 1..=5 {
+            index.insert(hid(n), &format!("word{n}")).await.expect("insert");
+        }
+
+        // Three indexed ids and two that were never indexed, interleaved across the chunks.
+        let keys: Vec<[u8; 16]> =
+            [1, 100, 3, 101, 5].into_iter().map(|n| hid(n).into_bytes()).collect();
+        Current::remove_chunked(&index.db, &keys, keys_per_delete).await.expect("remove");
+
+        let mut ids: Vec<HistoryId> =
+            index.indexed_ids().await.try_collect().await.expect("indexed_ids");
+        ids.sort_by_key(|id| id.to_string());
+        assert_eq!(ids, vec![hid(2), hid(4)]);
+        for n in [1, 3, 5] {
+            let word = format!("word{n}");
+            assert!(search_hits(&index, &word, &word).await.is_empty(), "{word} still indexed");
+        }
+        for n in [2, 4] {
+            let word = format!("word{n}");
+            assert_eq!(search_hits(&index, &word, &word).await.len(), 1, "{word} was removed");
+        }
     }
 
     #[tokio::test]
