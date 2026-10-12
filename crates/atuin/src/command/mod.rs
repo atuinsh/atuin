@@ -42,7 +42,7 @@ pub enum AtuinCmd {
 
     #[cfg(feature = "pty-proxy")]
     #[command(alias = "hex", about = fl!("cmd-pty-proxy"))]
-    #[category("advanced")]
+    #[couture(category = "advanced")]
     PtyProxy(atuin_pty_proxy::PtyProxy),
 
     // Plumbing: every shell init calls `atuin uuid` to seed ATUIN_SESSION; not for interactive use.
@@ -50,11 +50,11 @@ pub enum AtuinCmd {
     Uuid,
 
     #[command(about = fl!("cmd-contributors"))]
-    #[category("advanced")]
+    #[couture(category = "advanced")]
     Contributors,
 
     #[command(about = fl!("cmd-gen-completions"))]
-    #[category("setup")]
+    #[couture(category = "setup")]
     GenCompletions(gen_completions::Cmd),
 
     #[command(external_subcommand)]

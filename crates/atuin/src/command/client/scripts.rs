@@ -46,7 +46,7 @@ pub struct NewScript {
     pub no_edit: bool,
 
     #[arg(long, hide = true, conflicts_with_all = ["script", "last"])]
-    #[couture(prompt = "Script", editor(extension = "sh"), stdin)]
+    #[couture(prompt = "Script", editor(extension = "sh"), stdin(piped))]
     pub content: Option<String>,
 }
 

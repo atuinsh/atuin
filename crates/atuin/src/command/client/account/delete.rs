@@ -11,7 +11,7 @@ use crate::i18n::fl;
 #[derive(Parser, Debug, Couture)]
 pub struct Cmd {
     #[clap(long, short)]
-    #[couture(prompt = fl!("prompt-password"), secret(allow_argv), stdin(dash))]
+    #[couture(prompt = fl!("prompt-password"), secret(allow_argv), stdin)]
     pub password: SecretString,
 
     #[clap(long, short, help = fl!("arg-totp-code"))]

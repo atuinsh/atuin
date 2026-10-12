@@ -16,7 +16,7 @@ pub struct Cmd {
     pub username: Option<String>,
 
     #[clap(long, short, env = "ATUIN_PASSWORD", hide_env_values = true, help = fl!("arg-password"))]
-    #[couture(stdin(dash))]
+    #[couture(stdin)]
     pub password: Option<SecretString>,
 
     #[clap(long, short)]

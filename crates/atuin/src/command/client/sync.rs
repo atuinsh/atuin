@@ -21,33 +21,33 @@ use crate::i18n::fl;
 #[couture(inherit = ["sync", "advanced"])]
 pub enum Cmd {
     #[command(about = fl!("cmd-sync"))]
-    #[category("sync")]
+    #[couture(category = "sync")]
     Sync {
         #[arg(long, short, help = fl!("arg-sync-force"))]
         force: bool,
     },
 
     #[command(about = fl!("cmd-login"))]
-    #[category("sync")]
+    #[couture(category = "sync")]
     Login(account::login::Cmd),
 
     #[command(about = fl!("cmd-logout"))]
-    #[category("sync")]
+    #[couture(category = "sync")]
     Logout,
 
     #[command(about = fl!("cmd-register"))]
-    #[category("sync")]
+    #[couture(category = "sync")]
     Register(account::register::Cmd),
 
     #[command(about = fl!("cmd-key"))]
-    #[category("advanced")]
+    #[couture(category = "advanced")]
     Key {
         #[arg(long, help = fl!("arg-key-base64"))]
         base64: bool,
     },
 
     #[command(about = fl!("cmd-status"))]
-    #[category("sync")]
+    #[couture(category = "sync")]
     Status,
 }
 
