@@ -234,28 +234,19 @@ fn request_plan(state: &mut State, requests: &Requests, row: &SessionRow) {
 }
 
 fn send_search(state: &mut State, requests: &Requests) {
-    if let Some((generation, mode, filter)) = state.next_search() {
-        requests.send(Request::Search {
-            generation,
-            mode,
-            filter,
-        });
+    if let Some((generation, filter)) = state.next_search() {
+        requests.send(Request::Search { generation, filter });
     }
 }
 
 /// Apply a worker response.
 fn apply_response(state: &mut State, response: Response, requests: &Requests) {
     match response {
-        Response::Results {
-            generation,
-            mode,
-            rows,
-        } => match rows {
+        Response::Results { generation, rows } => match rows {
             Ok(rows) => {
-                if state.apply_results(generation, mode, rows) {
-                    // A widened workspace needs a new search.
-                    send_search(state, requests);
-                }
+                state.apply_results(generation, rows);
+                // An empty workspace falls back to every session: search again.
+                send_search(state, requests);
             }
             Err(e) if generation == state.issued => {
                 state.status = Some((format!("search failed: {e}"), Meaning::AlertError));
@@ -911,10 +902,10 @@ impl Picker<'_> {
                     // Not while typing or browsing: the list shouldn't move under the cursor.
                     if last_input.elapsed() >= REFRESH_IDLE
                         && last_refresh.elapsed() >= REFRESH_EVERY
-                        && let Some((generation, mode, filter)) = state.refresh()
+                        && let Some((generation, filter)) = state.refresh()
                     {
                         last_refresh = std::time::Instant::now();
-                        requests.send(Request::Search { generation, mode, filter });
+                        requests.send(Request::Search { generation, filter });
                     }
                 }
                 changed = rebuilding.changed(), if probing => {

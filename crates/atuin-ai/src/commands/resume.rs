@@ -122,7 +122,7 @@ pub struct Cmd {
     #[arg(long, value_name = "BRANCH", conflicts_with = "as_is")]
     branch: Option<String>,
 
-    /// The filter the picker opens in (default: workspace, widening to global).
+    /// The filter the picker opens in (default: global).
     #[arg(long, value_enum)]
     filter_mode: Option<AiSessionFilterMode>,
 

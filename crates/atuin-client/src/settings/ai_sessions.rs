@@ -26,10 +26,10 @@ pub enum AiSessionFilterMode {
 }
 
 impl AiSessionFilterMode {
-    /// The order ctrl-r cycles through the modes, wrapping around: from the workspace (where the
-    /// picker opens) straight to every session.
+    /// The order ctrl-r cycles through the modes, wrapping around: from every session (where the
+    /// picker opens) straight to the workspace.
     pub const CYCLE: [Self; 5] =
-        [Self::Workspace, Self::Global, Self::Host, Self::Directory, Self::Branch];
+        [Self::Global, Self::Workspace, Self::Host, Self::Directory, Self::Branch];
 
     /// The label shown in the `[ MODE ] >` input prefix.
     #[must_use]
@@ -87,8 +87,9 @@ impl AiSessionResume {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AiSessions {
-    /// The filter the picker opens in. Unset: `workspace`, widening to `global` when not in a git
-    /// repository or when the workspace has no sessions.
+    /// The filter the picker opens in. Unset: `global`. A mode that can't apply here (`workspace`
+    /// or `branch` outside a git repository) opens in `global`, as does `workspace` when the
+    /// workspace has no sessions.
     pub filter_mode: Option<AiSessionFilterMode>,
 
     /// Height of the inline picker. Unset: the top-level `inline_height`.

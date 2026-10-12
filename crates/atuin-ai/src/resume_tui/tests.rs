@@ -20,6 +20,8 @@ fn settings() -> Settings {
     s.enter_accept = true;
     s.show_preview = true;
     s.max_preview_height = 4;
+    // The fixtures are laid out around the workspace filter.
+    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Workspace);
     s
 }
 
@@ -31,9 +33,9 @@ async fn loaded(settings: &Settings, query: &str, tab: usize) -> State {
     state.now = Box::new(fake::now);
     state.input = Cursor::from(query.to_owned());
     state.input.end();
-    while let Some((generation, mode, filter)) = state.next_search() {
+    while let Some((generation, filter)) = state.next_search() {
         let rows = source.search(&filter).await.unwrap();
-        state.apply_results(generation, mode, rows);
+        state.apply_results(generation, rows);
     }
     for row in &state.results {
         state.previews.insert(row.handle.clone(), source.preview(&row.handle).await.unwrap());
@@ -110,8 +112,8 @@ async fn other_hosts_rows_look_like_this_hosts() {
     let mut state = loaded(&settings(), "", 0).await;
     state.mode = atuin_client::settings::AiSessionFilterMode::Global;
     let source = FakeSource::new();
-    let (generation, mode, filter) = state.next_search().unwrap();
-    state.apply_results(generation, mode, source.search(&filter).await.unwrap());
+    let (generation, filter) = state.next_search().unwrap();
+    state.apply_results(generation, source.search(&filter).await.unwrap());
     let buf = render(&mut state, &settings(), 100, 30);
     let out = text(&buf);
     assert!(!out.contains('@'), "no host on any row: {out}");
@@ -336,19 +338,21 @@ async fn vim_normal_highlights_the_whole_row() {
 
 #[rstest]
 #[tokio::test]
-async fn no_sessions_in_workspace_widens() {
+async fn opens_on_every_session() {
     let mut ctx = fake::context();
     ctx.cwd = "/home/ellie/src/empty".into();
     ctx.git_root = Some("/home/ellie/src/empty".into());
     let source = FakeSource::new();
-    let s = settings();
+    let mut s = settings();
+    s.ai.sessions.filter_mode = None;
     let mut state = State::new(&s, ctx, "");
     state.now = Box::new(fake::now);
-    while let Some((generation, mode, filter)) = state.next_search() {
-        state.apply_results(generation, mode, source.search(&filter).await.unwrap());
+    while let Some((generation, filter)) = state.next_search() {
+        state.apply_results(generation, source.search(&filter).await.unwrap());
     }
     let out = text(&render(&mut state, &s, 100, 30));
-    assert!(out.contains("[  WS→GLOBAL 14  ]"), "{out}");
+    assert!(out.contains("[   GLOBAL 14    ]"), "{out}");
+    assert!(out.contains("ctrl-r: workspace"), "{out}");
     assert!(out.contains("Bisect the aarch64"), "{out}");
 }
 
@@ -949,12 +953,11 @@ async fn a_refresh_does_not_drop_a_waiting_resume(#[case] query: &str, #[case] h
     assert!(state.pending.is_some());
 
     // An idle refresh: the session is gone from the results.
-    let (generation, mode, filter) = state.refresh().unwrap();
+    let (generation, filter) = state.refresh().unwrap();
     let mut rows = FakeSource::new().search(&filter).await.unwrap();
     rows.retain(|r| r.handle != row.handle);
     let results = Response::Results {
         generation,
-        mode,
         rows: Ok(rows),
     };
     assert_eq!(respond(&mut state, results, resumer.as_ref(), &requests), None);
@@ -1975,12 +1978,12 @@ async fn a_refresh_keeps_the_frame_as_it_was() {
         let s = settings();
         let mut state = loaded(&s, "", 0).await;
         let before = text(&render(&mut state, &s, width, 30));
-        let (generation, mode, filter) = state.refresh().unwrap();
+        let (generation, filter) = state.refresh().unwrap();
         let selected = state.selected().unwrap().handle.clone();
         assert!(state.wants_preview(&selected), "the live session's preview is read again");
         assert_eq!(text(&render(&mut state, &s, width, 30)), before);
         let rows = FakeSource::new().search(&filter).await.unwrap();
-        state.apply_results(generation, mode, rows);
+        state.apply_results(generation, rows);
         assert_eq!(text(&render(&mut state, &s, width, 30)), before);
     }
 }
