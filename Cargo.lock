@@ -1214,9 +1214,9 @@ dependencies = [
 
 [[package]]
 name = "clap-couture"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dbcc8a6d11f149be9d654c262e64182deeb1685dae0c0cf824656a0ae1f67b5"
+checksum = "677f73c6dff8ee9520bc8ebd0019910584ac504dcd2dfe2c1276798e3565dc83"
 dependencies = [
  "anstream",
  "clap",
@@ -1238,9 +1238,9 @@ dependencies = [
 
 [[package]]
 name = "clap-couture-derive"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebdfa750cadb17c69e85a4cd8c3dede5b43e84099838a3d0e924693534b5db7a"
+checksum = "34475cf29eb237834f15ede9bb15c7ded0dab82a91ab2bd989fd09d5ae72b380"
 dependencies = [
  "darling 0.24.1",
  "heck",
@@ -6063,7 +6063,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
