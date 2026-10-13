@@ -110,6 +110,20 @@ impl<'a> HookRegistration<'a> {
                         found_hook = true;
                         if let Some(hook) = hook.as_object_mut() {
                             hook.insert("command".to_owned(), Value::String(self.command.clone()));
+                            if cfg!(windows) {
+                                for field in ["commandWindows", "command_windows"] {
+                                    let owned = hook
+                                        .get(field)
+                                        .and_then(Value::as_str)
+                                        .is_some_and(|command| self.invokes_atuin_hook(command));
+                                    if owned {
+                                        hook.insert(
+                                            field.to_owned(),
+                                            Value::String(self.command.clone()),
+                                        );
+                                    }
+                                }
+                            }
                             hook.remove("args");
                         }
                         true
@@ -237,6 +251,41 @@ mod tests {
                 "PostToolUseFailure": [installed],
             })
         );
+    }
+
+    #[rstest]
+    #[case::old_atuin(r#""C:/Old/atuin.exe" hook codex"#, true)]
+    #[case::current_atuin(r#""C:/New/atuin.exe" hook codex"#, true)]
+    #[case::other_command("echo other", false)]
+    #[case::other_harness(r#""C:/Old/atuin.exe" hook claude-code"#, false)]
+    fn reinstall_updates_only_owned_windows_overrides(
+        #[case] windows_command: &str,
+        #[case] owned: bool,
+        #[values("commandWindows", "command_windows")] field: &str,
+    ) {
+        let command = r#""C:/New/atuin.exe" hook codex"#;
+        let registration = HookRegistration {
+            matcher: "^Bash$",
+            harness: "codex",
+            command: command.to_owned(),
+        };
+        let mut handler = json!({
+            "type": "command", "command": "atuin hook codex", "timeout": 30,
+        });
+        handler[field] = json!(windows_command);
+        let mut hooks = json!({"PreToolUse": [{"matcher": "Bash|Shell", "hooks": [handler]}]});
+        assert!(registration.add_entries(hooks.as_object_mut().unwrap()).unwrap());
+        let installed = &hooks["PreToolUse"][0]["hooks"][0];
+        let expected = if cfg!(windows) && owned {
+            command
+        } else {
+            windows_command
+        };
+        assert_eq!(installed["command"], command);
+        assert_eq!(installed[field], expected);
+        assert_eq!(installed["timeout"], 30);
+        assert_eq!(hooks["PreToolUse"][0]["matcher"], "Bash|Shell");
+        assert!(!registration.add_entries(hooks.as_object_mut().unwrap()).unwrap());
     }
 
     /// Installed again, atuin's entry stays where it is, ahead of the user's added since.
