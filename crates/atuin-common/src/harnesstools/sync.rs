@@ -538,10 +538,12 @@ fn branch_point(
     if branch[..=last].iter().any(|m| m.source_id == line) {
         return Ok((last + 1, line));
     }
-    // Merged into a line past where it leaves: a run's last, holding what the rest said too.
-    let before = branch[..last]
+    // Merged into a line past where it leaves: a run's last, holding what the rest said too. Cut
+    // before the first row merged into it, as a failed call's row can sit between them.
+    let first = branch.iter().position(|m| line_of(m) == line).unwrap_or(last);
+    let before = branch[..first]
         .iter()
-        .rposition(|m| tree(&m) && line_of(m) != line)
+        .rposition(|m| tree(&m))
         .ok_or(SyncError::Unsupported("the transcript here shares nothing with that branch"))?;
     Ok((before + 1, line_of(&branch[before])))
 }
