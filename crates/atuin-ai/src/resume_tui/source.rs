@@ -6,6 +6,7 @@
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{
@@ -157,7 +158,16 @@ pub trait SessionSource: Send + Sync {
     async fn analyse(&self, _session: &HarnessSession) -> eyre::Result<Option<Analysis>> {
         Ok(None)
     }
+
+    /// Something that changes whenever the sessions may have: an idle picker searches again only
+    /// once it does. `None` when the source can't tell, so it always does.
+    fn stamp(&self) -> Option<Stamp> {
+        None
+    }
 }
+
+/// See [`SessionSource::stamp`]: the modification time and length of each file a source reads.
+pub type Stamp = Vec<Option<(SystemTime, u64)>>;
 
 /// How a session's host shows: `this machine` when it is `here`, and another by a short form of
 /// its id, `@3f9a12bc` (sessions record only the host's id).

@@ -1305,21 +1305,23 @@ mod tests {
     }
 
     #[rstest]
-    fn alt_a_rewrites_the_input() {
+    fn ctrl_t_rewrites_the_input() {
         let mut state = state_in(fake::context());
         let s = settings();
         state.input = Cursor::from("flaky".to_owned());
-        let _ = state.handle_input(&s, &key(KeyCode::Char('a'), KeyModifiers::ALT));
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "flaky agent:claude-code");
-        let _ = state.handle_input(&s, &key(KeyCode::Char('a'), KeyModifiers::ALT));
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "flaky agent:codex");
         // The short form is cycled too, and comes back as the long one.
         state.input = Cursor::from("a:opencode flaky".to_owned());
-        let _ = state.handle_input(&s, &key(KeyCode::Char('a'), KeyModifiers::ALT));
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "agent:pi flaky");
-        // alt-h is unbound: it neither cycles nor types.
-        let _ = state.handle_input(&s, &key(KeyCode::Char('h'), KeyModifiers::ALT));
-        assert_eq!(state.input.as_str(), "agent:pi flaky");
+        // alt-a and alt-h are unbound: they neither cycle nor type.
+        for c in ['a', 'h'] {
+            let _ = state.handle_input(&s, &key(KeyCode::Char(c), KeyModifiers::ALT));
+            assert_eq!(state.input.as_str(), "agent:pi flaky");
+        }
     }
 
     #[rstest]

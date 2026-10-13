@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use atuin_client::ai_session::{
     AiSessionDatabase, AiSessionStore, Appended, AtuinSessionId, BuildError, CaptureMark, DbError,
-    HarnessKind, HarnessSession, Message, PushError, ReprojectProgress, SearchTerms, Session,
-    SessionFilter, SessionMatch,
+    HarnessKind, HarnessSession, Message, NewRow, PushError, ReprojectProgress, SearchTerms,
+    Session, SessionFilter, SessionMatch,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
@@ -447,19 +447,29 @@ impl Sink {
         let started = self.sidecar.get_session(&msg.session).await?.is_none();
         let appended = self.sidecar.append(msg).await?;
         if self.tail.receiver_count() > 0 {
-            if let Some(session) = self.sidecar.get_session(&msg.session).await? {
-                let event = if started {
-                    SessionTailEvent::SessionStarted(session)
-                } else {
-                    SessionTailEvent::SessionUpdated(session)
-                };
-                let _ = self.tail.send(event);
-            }
-            let _ = self.tail.send(SessionTailEvent::Message(msg.clone()));
+            let session = self.sidecar.get_session(&msg.session).await?;
+            send(&self.tail, session, started, msg.clone());
         }
-
         Ok(appended)
     }
+}
+
+/// Send `msg` to the tail, after its session as projected (started, if `msg` began it).
+fn send(
+    tail: &broadcast::Sender<SessionTailEvent>,
+    session: Option<Session>,
+    started: bool,
+    msg: Message,
+) {
+    if let Some(session) = session {
+        let event = if started {
+            SessionTailEvent::SessionStarted(session)
+        } else {
+            SessionTailEvent::SessionUpdated(session)
+        };
+        let _ = tail.send(event);
+    }
+    let _ = tail.send(SessionTailEvent::Message(msg));
 }
 
 /// The calls [`Sink::withhold_unsafe_output`] withholds the results of.
@@ -582,6 +592,8 @@ pub struct Recovery {
     /// The coordinator's mailbox, for a series only it may forget. Weak: the sync worker does
     /// not keep the coordinator alive. None without a persistent store.
     coordinator: Option<mpsc::WeakUnboundedSender<Msg>>,
+    /// Capture's tail, which synced rows not projected before are sent to as well.
+    tail: broadcast::Sender<SessionTailEvent>,
 }
 
 impl Recovery {
@@ -595,8 +607,35 @@ impl Recovery {
     /// which capture dedups against, and never sets the store's state: a series whose forgetting
     /// would is handed to the coordinator, which holds capture off first, as for a rebuild. A
     /// reprojection that kept being invalidated is left to the next sync.
+    ///
+    /// Rows not projected before reach the tail, as captured ones do; rows already projected
+    /// (this host's own, coming back from the server) do not. Startup recovery and rebuilds
+    /// replay without sending anything, and so does this once a rebuild or a series forgotten
+    /// invalidates it.
     pub async fn project_synced(&self, records: &AiSessionStore, sidecar: &AiSessionDatabase) {
-        let host = match records.reproject_beside_capture(sidecar).await {
+        let tail = &self.tail;
+        let to_tail = |rows: Vec<NewRow>| async move {
+            if tail.receiver_count() == 0 {
+                return;
+            }
+            // Each session as the page left it, looked up once per page.
+            let mut sessions = HashMap::new();
+            for row in rows {
+                let handle = &row.message.session;
+                if !sessions.contains_key(handle) {
+                    let session = sidecar.get_session(handle).await.unwrap_or_else(|err| {
+                        tracing::warn!(?err, "failed to read a synced ai-session for the tail");
+                        None
+                    });
+                    sessions.insert(handle.clone(), session);
+                }
+                send(tail, sessions[handle].clone(), row.started, row.message);
+                // A page outgrows the tail's buffer: let subscribers read it, on the daemon's
+                // single thread too, as capture's per-row writes do.
+                tokio::task::yield_now().await;
+            }
+        };
+        let host = match records.reproject_beside_capture(sidecar, to_tail).await {
             Ok(_) => return,
             Err(BuildError::ForgetHeldOff(host)) => host,
             Err(BuildError::Incomplete) => {
@@ -861,6 +900,7 @@ impl AiHarnessSessionCapture {
         Recovery {
             state: self.state.clone(),
             coordinator: self.coordinator.as_ref().map(mpsc::UnboundedSender::downgrade),
+            tail: self.sink.tail.clone(),
         }
     }
 
@@ -969,6 +1009,7 @@ mod tests {
     use futures::StreamExt;
     use rstest::rstest;
     use time::OffsetDateTime;
+    use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
     use super::*;
 
@@ -1839,6 +1880,101 @@ mod tests {
         })
         .await
         .expect("the projection stopped with its asker");
+    }
+
+    /// Rows that arrive by sync reach the tail as captured ones do, once each: replaying records
+    /// already projected, this host's own among them, sends nothing.
+    #[rstest]
+    #[tokio::test]
+    async fn synced_rows_reach_the_tail_once() {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let key = Key::generate();
+        let records_of = |host| {
+            AiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build()
+        };
+        let records = records_of(HostId(atuin_common::utils::uuid_v7()));
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar.clone(),
+            false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        let mut sub = capture.subscribe();
+        capture.sink.append(message_of("local", "l1")).await.unwrap();
+        while sub.next().now_or_never().is_some() {}
+
+        // Downloaded from another host.
+        let other = records_of(HostId(atuin_common::utils::uuid_v7()));
+        let (first, second) = (message_of("synced", "s1"), message_of("synced", "s2"));
+        other.push(&first).await.unwrap();
+        other.push(&second).await.unwrap();
+        capture.project_synced().await;
+
+        let mut events = Vec::new();
+        while let Some(event) = sub.next().now_or_never() {
+            events.push(event.unwrap().unwrap());
+        }
+        let shown: Vec<_> = events
+            .iter()
+            .map(|event| match event {
+                SessionTailEvent::SessionStarted(s) => format!("started {}", s.handle.session),
+                SessionTailEvent::SessionUpdated(s) => format!("updated {}", s.handle.session),
+                SessionTailEvent::Message(m) => format!("message {}", m.source_id),
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            ["started synced", "message s1", "updated synced", "message s2"],
+            "synced rows reach the tail as captured ones do"
+        );
+
+        sidecar.clear_reproject_watermarks().await.unwrap();
+        capture.project_synced().await;
+        assert!(sub.next().now_or_never().is_none(), "known rows are not sent again");
+    }
+
+    /// A synced page of one session, far longer than the tail's buffer, reaches a subscriber
+    /// whole on the daemon's single thread.
+    #[rstest]
+    #[tokio::test]
+    async fn a_long_synced_session_reaches_the_tail_whole() {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let key = Key::generate();
+        let records_of = |host| {
+            AiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build()
+        };
+        let capture = AiHarnessSessionCapture::open(
+            records_of(HostId(atuin_common::utils::uuid_v7())),
+            AiSessionDatabase::in_memory().await.unwrap(),
+            false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        let other = records_of(HostId(atuin_common::utils::uuid_v7()));
+        for n in 0..300 {
+            other.push(&message_of("synced", &format!("s{n}"))).await.unwrap();
+        }
+
+        let mut sub = capture.subscribe();
+        let tail = tokio::spawn(async move {
+            let mut messages = 0;
+            while messages < 300 {
+                if let SessionTailEvent::Message(_) = sub.next().await.unwrap()? {
+                    messages += 1;
+                }
+            }
+            Ok::<_, BroadcastStreamRecvError>(())
+        });
+        capture.project_synced().await;
+
+        let tailed = tokio::time::timeout(Duration::from_secs(5), tail).await.unwrap().unwrap();
+        assert_eq!(tailed, Ok(()), "the tail lagged behind a synced page");
     }
 
     /// A message of session `session`, from line `source`.

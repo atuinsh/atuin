@@ -593,3 +593,66 @@ fn a_switch_passes_the_rows_beside_the_tree_by(dir: TempDir) {
     let tip = read_tip(&path).unwrap();
     assert!(tip.is_tip("syn-0000000000000002"), "merged into the last line");
 }
+
+/// A copy restored from sync whose turn u1 → a1 → r1 → a2 made a call capture kept without its
+/// input: written as u1 → a2, a2 holding a1's text with the call as a note.
+fn restored_with_a_merged_run() -> Vec<u8> {
+    use crate::harnesstools::session::{ToolResult, ToolUse};
+
+    let mut a1 = row("a1", "u1", Role::Assistant, 2);
+    a1.content.push(Content::ToolUse(ToolUse {
+        id: "toolu_1".to_owned().into(),
+        name: "Bash".to_owned(),
+        input: Value::Null,
+    }));
+    let mut r1 = row("r1", "a1", Role::Tool, 3);
+    r1.content = vec![Content::ToolResult(ToolResult {
+        call: "toolu_1".to_owned().into(),
+        output: Value::Null,
+        error: false,
+    })];
+    let session = RehydrateSession {
+        id: SESSION.to_owned(),
+        title: None,
+        cwd: PathBuf::from("/work/proj"),
+        original_cwd: None,
+        git_branch: None,
+        model: None,
+        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        messages: vec![
+            RehydrateMessage {
+                parent_source_id: None,
+                ..row("u1", "", Role::User, 1)
+            },
+            a1,
+            r1,
+            row("a2", "r1", Role::Assistant, 4),
+        ],
+        fork_of: None,
+    };
+    jsonl(&rehydrate::lines(&session, None))
+}
+
+/// Switching a restored copy to a branch that leaves it inside a run merged into its last line
+/// writes the run again as far as the branch shares it: what the shared rows said, and nothing
+/// the rest of the run did.
+#[rstest]
+#[case::off_the_call("a1")]
+#[case::off_its_result("r1")]
+fn a_switch_inside_a_merged_run_keeps_its_text(dir: TempDir, #[case] from: &str) {
+    let backups = tempfile::tempdir().unwrap();
+    let path = write(&dir, &restored_with_a_merged_run());
+    let base = read_tip(&path).unwrap();
+    assert_eq!(base.tip_source_id.as_deref(), Some("a2"));
+    let mut branch = their_branch();
+    branch.truncate(branch.iter().position(|m| m.source_id == from).unwrap() + 1);
+    branch.extend([row("u3", from, Role::User, 6), row("a3", "u3", Role::Assistant, 7)]);
+
+    let outcome = replace_to(SESSION, &base, &branch, None, backups.path()).unwrap();
+
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("a3"));
+    let bytes = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    assert!(bytes.contains("said a1"), "the shared reply is gone:\n{bytes}");
+    assert!(!bytes.contains("said a2"), "the reply the branch left kept:\n{bytes}");
+    assert_eq!(read_back(&path), ["u1", "a1", "u3", "a3"]);
+}

@@ -2,6 +2,7 @@
 //! that writes it, so the picker's first frame never waits on the daemon.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -15,11 +16,15 @@ use eyre::{Result, WrapErr};
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 
-use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
+use super::source::{
+    Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet, Stamp,
+};
 use super::{ResumeContext, title};
 
 pub struct SidecarSource {
     db: AiSessionDatabase,
+    /// The database and its write-ahead log, where it's a file.
+    files: Vec<PathBuf>,
     /// This host's id (simple form).
     host_id: String,
     /// The git repository each session directory is in, looked up once per picker: finding it
@@ -33,12 +38,18 @@ impl SidecarSource {
         let db = AiSessionDatabase::open_read_only(path).await.wrap_err_with(|| {
             format!("could not open the AI session database {}", path.display())
         })?;
-        Ok(Self::new(db, context))
+        let mut wal = OsString::from(path);
+        wal.push("-wal");
+        Ok(Self {
+            files: vec![path.to_owned(), wal.into()],
+            ..Self::new(db, context)
+        })
     }
 
     fn new(db: AiSessionDatabase, context: &ResumeContext) -> Self {
         Self {
             db,
+            files: Vec::new(),
             host_id: super::simple_host_id(&context.host_id),
             git_roots: Mutex::new(HashMap::new()),
         }
@@ -194,6 +205,15 @@ impl SessionSource for SidecarSource {
 
     async fn analyse(&self, session: &HarnessSession) -> Result<Option<Analysis>> {
         Ok(Some(self.db.analyse(session).await?))
+    }
+
+    fn stamp(&self) -> Option<Stamp> {
+        // The daemon's commits land in the log, and its checkpoints in the database.
+        let stamp = |path: &PathBuf| {
+            let meta = std::fs::metadata(path).ok()?;
+            Some((meta.modified().ok()?, meta.len()))
+        };
+        (!self.files.is_empty()).then(|| self.files.iter().map(stamp).collect())
     }
 }
 
@@ -417,6 +437,25 @@ mod tests {
 
         let preview = source.preview(&handle("root")).await.unwrap();
         assert_eq!(preview.last_assistant.as_deref(), Some("switched to a fixed clock"));
+    }
+
+    /// An idle picker searches again only once the daemon has written something.
+    #[rstest]
+    #[tokio::test]
+    async fn the_stamp_moves_only_when_the_database_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai_session_sidecar.db");
+        let writer = AiSessionDatabase::open(&path).await.unwrap();
+        writer.append(&message("root", None, Role::User, "first", 0)).await.unwrap();
+        let source = SidecarSource::open(&path, &context()).await.unwrap();
+
+        let before = source.stamp();
+        assert!(before.is_some());
+        source.search(&roots("")).await.unwrap();
+        assert_eq!(source.stamp(), before, "reading changes nothing");
+
+        writer.append(&message("root", None, Role::Assistant, "second", 1)).await.unwrap();
+        assert_ne!(source.stamp(), before);
     }
 
     // --- hosts ----------------------------------------------------------------------------------

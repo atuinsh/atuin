@@ -137,7 +137,7 @@ as chips in the input:
 
 - `agent:<name>` (or `a:<name>` for short): only that agent's sessions, with
   `claude-code` (or `claude`, `cc`), `codex` (`cx`), `opencode` (`oc`) or `pi`.
-  ++alt+a++ cycles through them in turn, and back to all agents.
+  ++ctrl+t++ cycles through them in turn, and back to all agents.
 - `m:<model>`: only sessions whose model contains this, as in `m:opus`.
 - `b:<branch>`: only sessions on this git branch.
 
@@ -295,9 +295,8 @@ opened the chooser did: it resumes (or, without `enter_accept`, puts the
 command on your command line), and after ++tab++ it edits. ++tab++ in the
 chooser always edits. ++ctrl+y++ copies the command.
 
-++alt+enter++ in the list or Inspect opens the chooser with the fork selected
-(++shift+f++ in vim's normal mode, ++f++ in Inspect). Some terminals keep
-++alt+enter++ for themselves; ++enter++ then ++f++ always works.
+++ctrl+x++ in the list or Inspect opens the chooser with the fork selected
+(++shift+f++ in vim's normal mode, ++f++ in Inspect).
 
 To resume in the session's own agent straight away, without the chooser:
 

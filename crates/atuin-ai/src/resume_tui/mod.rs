@@ -453,7 +453,7 @@ fn complete(
     outcome
 }
 
-/// A new choice (an enter, tab, ctrl-y or alt-enter on a session, or a line of the chooser
+/// A new choice (an enter, tab, ctrl-y or ctrl-x on a session, or a line of the chooser
 /// picked) supersedes any older one still waiting: the original's plan or restore, whose answer
 /// then finishes nothing, and a continuation or fork, whose answer is then ignored and which the
 /// worker drops if it hasn't started writing it. One already being written is left to finish (see
@@ -535,7 +535,7 @@ fn open_chooser(
     request_flatten(state, requests);
 }
 
-/// alt-enter (vim normal `F`, Inspect's `f`): the chooser on the session acted on, forking it
+/// ctrl-x (vim normal `F`, Inspect's `f`): the chooser on the session acted on, forking it
 /// selected, whether or not `resume_chooser` is on; enter in it then does what `action` (enter's)
 /// does.
 fn ask_fork(state: &mut State, action: Pending, resumer: &dyn Resumer, requests: &Requests) {
@@ -828,6 +828,7 @@ impl Picker<'_> {
         } else if !self.matches.is_empty() {
             state.pin_matches(self.matches);
         }
+        let source = self.source.clone();
         let (requests, mut responses) = worker::spawn(self.source, self.resumer.clone());
         let resumer = self.resumer.as_ref();
         let mut rebuilding =
@@ -839,6 +840,9 @@ impl Picker<'_> {
         }
         // Paint before the first search answers, so the picker shows up immediately.
         terminal.draw(|f| state.draw(f, settings, self.theme))?;
+        // The sessions as of the last idle refresh that came back, and the one in flight.
+        let mut searched = None;
+        let mut refreshing = None;
         send_search(&mut state, &requests);
 
         let mut events = terminal::Events::new();
@@ -908,11 +912,15 @@ impl Picker<'_> {
                 () = tokio::time::sleep_until(hold_ends.unwrap_or_else(Instant::now).into()),
                     if hold_ends.is_some() => {}
                 _ = tick.tick() => {
-                    // Not while typing or browsing: the list shouldn't move under the cursor.
+                    // Not while typing or browsing: the list shouldn't move under the cursor. Nor
+                    // when nothing has changed since.
                     if last_input.elapsed() >= REFRESH_IDLE
                         && last_refresh.elapsed() >= REFRESH_EVERY
+                        && let stamp = source.stamp()
+                        && (stamp.is_none() || stamp != searched)
                         && let Some((generation, mode, filter)) = state.refresh()
                     {
+                        refreshing = Some((generation, stamp));
                         last_refresh = std::time::Instant::now();
                         requests.send(Request::Search { generation, mode, filter });
                     }
@@ -938,6 +946,12 @@ impl Picker<'_> {
                         tracing::error!("the session picker's workers stopped");
                         break Outcome::Cancelled;
                     };
+                    // A failed refresh is tried again, changes or not.
+                    if let Response::Results { generation, rows: Ok(_), .. } = &response
+                        && let Some((_, stamp)) = refreshing.take_if(|(g, _)| g == generation)
+                    {
+                        searched = stamp;
+                    }
                     let finished = match response {
                         Response::Continued(id, result) => {
                             finish_continuation(&mut state, id, result)

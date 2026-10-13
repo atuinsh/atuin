@@ -1320,9 +1320,11 @@ async fn a_session_in_both_layouts_is_one_session(#[future] mixed: Db) {
     db.append("ses_m", "msg_new", "user", user("from two point oh")).await;
 
     let mut stream = events(&db.path, ReplayBehavior::All, &stored);
-    let mut got = lines(&next_n(&mut stream, &stored, 3).await);
+    let mut got = lines(&next_n(&mut stream, &stored, 4).await);
     got.sort();
+    // the title is the 1.x projection's, ahead of the log, and 2.0's: a title repeats
     assert_eq!(got, [
+        "System ses_m:title:Old: ",
         "System ses_m:title:Old: ",
         "User msg_new: from two point oh",
         "User prt_1: from one point x",

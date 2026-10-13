@@ -770,11 +770,11 @@ async fn a_session_with_nothing_to_fork_never_picks_the_fork(#[values(false, tru
     }
 }
 
-/// alt-enter (vim normal `F`, Inspect's `f`) opens the chooser with the fork selected, even with
+/// ctrl-x (vim normal `F`, Inspect's `f`) opens the chooser with the fork selected, even with
 /// `resume_chooser` off; enter in it then does what enter does.
 #[rstest]
 #[tokio::test]
-async fn alt_enter_opens_the_chooser_on_the_fork() {
+async fn ctrl_x_opens_the_chooser_on_the_fork() {
     use std::sync::Arc;
 
     use super::state::{InputAction, Pending};
@@ -785,7 +785,7 @@ async fn alt_enter_opens_the_chooser_on_the_fork() {
     let resumer = Arc::new(FakeResumer::default());
     let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
     let mut state = loaded(&s, "", 0).await;
-    assert_eq!(press(&mut state, &s, "alt-enter"), InputAction::Fork);
+    assert_eq!(press(&mut state, &s, "ctrl-x"), InputAction::Fork);
     ask_fork(&mut state, Pending::Resume, resumer.as_ref(), &requests);
     let chooser = state.chooser.as_ref().expect("the chooser opens");
     assert_eq!((chooser.selected, chooser.moved, chooser.action), (1, true, Pending::Resume));
@@ -1743,11 +1743,11 @@ async fn a_capped_list_says_so() {
     assert!(out.contains("[ WORKSPACE 500+ ]"), "{out}");
 }
 
-/// A session that is still running says what resuming it does, without stopping it; the fork is
-/// selected instead.
+/// A session used in the last [`LIVE_SECS`](super::state::LIVE_SECS) says so, and what resuming
+/// it does if it's still open, without claiming it is; the fork is selected instead.
 #[rstest]
 #[tokio::test]
-async fn the_chooser_says_a_live_session_is_running() {
+async fn the_chooser_says_a_session_was_recently_used() {
     use super::state::Pending;
 
     let s = settings();
@@ -1756,10 +1756,7 @@ async fn the_chooser_says_a_live_session_is_running() {
     let resumer = FakeResumer::default();
     state.open_chooser(&row, resumer.continue_targets(&row), true, Pending::Resume);
     let out = text(&render(&mut state, &s, 100, 30));
-    assert!(
-        out.contains("  1 CC Claude Code  original · running elsewhere — resuming forks it"),
-        "{out}"
-    );
+    assert!(out.contains("  1 CC Claude Code  original · recently used — forks if open"), "{out}");
     assert!(out.contains("> 2 CC Claude Code  fork: new session, same history"), "{out}");
     press(&mut state, &s, "up");
     assert_eq!(press(&mut state, &s, "enter"), picked(&state, None, Pending::Resume));
@@ -1768,7 +1765,7 @@ async fn the_chooser_says_a_live_session_is_running() {
     let mut state = with_chooser(&s, "flaky", Pending::Resume).await;
     let out = text(&render(&mut state, &s, 100, 30));
     assert!(out.contains("> 1 CX Codex        original "), "{out}");
-    assert!(!out.contains("running elsewhere"), "{out}");
+    assert!(!out.contains("recently used"), "{out}");
 }
 
 /// The detail pane counts the forks (not the subagents), and all the input tokens, with the

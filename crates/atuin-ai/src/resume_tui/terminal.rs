@@ -7,7 +7,7 @@
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::Event;
 #[cfg(not(target_os = "windows"))]
@@ -21,6 +21,13 @@ use tokio::sync::mpsc;
 /// How long [`Events`] waits for input before letting go of crossterm's input lock, so a cursor
 /// position query (which gives up after two seconds without it) always gets its turn.
 const POLL: Duration = Duration::from_millis(100);
+/// How long [`Events`] waits once no input has come for as long. Each wait ends in about a
+/// millisecond of busy polling (crossterm rounds what's left down to whole milliseconds, and polls
+/// without a timeout until it's gone), so an idle picker waits longer. The cursor position queries
+/// follow input (a resize, ctrl-l), and so still get their turn within [`POLL`]. Not on Windows,
+/// where a resumed agent runs beside the picker on the same console, and a reader still waiting
+/// would take its first key.
+const IDLE_POLL: Duration = Duration::from_secs(1);
 
 /// Terminal events, read on a thread of their own.
 ///
@@ -42,12 +49,19 @@ impl Events {
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
         std::thread::spawn(move || {
+            let mut last = Instant::now();
             while !stopped.load(Ordering::Relaxed) && !tx.is_closed() {
-                let event = match event::poll(POLL) {
+                let wait = if cfg!(windows) || last.elapsed() < IDLE_POLL {
+                    POLL
+                } else {
+                    IDLE_POLL
+                };
+                let event = match event::poll(wait) {
                     Ok(false) => continue,
                     Ok(true) => event::read(),
                     Err(e) => Err(e),
                 };
+                last = Instant::now();
                 let failed = event.is_err();
                 if tx.send(event).is_err() || failed {
                     return;

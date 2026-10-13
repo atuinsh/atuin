@@ -208,27 +208,41 @@ impl PreparedMessage {
     }
 }
 
+/// A row [`AiSessionDatabase::append_all`] appended, not projected before.
+#[derive(Debug, Clone)]
+pub struct NewRow {
+    pub message: Message,
+    /// Whether it began its session.
+    pub started: bool,
+}
+
 impl AiSessionDatabase {
     /// Append each of `msgs` in order, in one transaction, unless an invalidation since
     /// `generation`: see [`Self::append_all`].
     pub(super) fn append_page(
         conn: &mut Connection,
         interned: &mut Interned,
-        msgs: &[PreparedMessage],
+        msgs: Vec<PreparedMessage>,
         generation: Generation,
-    ) -> Result<bool, DbError> {
+    ) -> Result<Option<Vec<NewRow>>, DbError> {
         interned.transaction(|interned| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let current: i64 = query_scalar("SELECT generation FROM projection_state WHERE id = 0")
                 .fetch_one(&tx)?;
             if current != generation.0 {
-                return Ok((false, false));
+                return Ok((None, false));
             }
+            let mut new = Vec::new();
             for msg in msgs {
-                Self::append_in(&tx, interned, msg)?;
+                if let (Appended::New, started) = Self::append_in(&tx, interned, &msg)? {
+                    new.push(NewRow {
+                        message: msg.msg,
+                        started,
+                    });
+                }
             }
             tx.commit()?;
-            Ok((true, true))
+            Ok((Some(new), true))
         })
     }
 
@@ -240,7 +254,7 @@ impl AiSessionDatabase {
     ) -> Result<Appended, DbError> {
         interned.transaction(|interned| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let appended = Self::append_in(&tx, interned, msg)?;
+            let (appended, _) = Self::append_in(&tx, interned, msg)?;
             tx.commit()?;
             Ok((appended, true))
         })
@@ -250,7 +264,7 @@ impl AiSessionDatabase {
         conn: &Connection,
         interned: &mut Interned,
         prepared: &PreparedMessage,
-    ) -> Result<Appended, DbError> {
+    ) -> Result<(Appended, bool), DbError> {
         let msg = &prepared.msg;
         let harness = msg.session.harness as i64;
         let session_id = msg.session.session.as_ref();
@@ -342,7 +356,7 @@ impl AiSessionDatabase {
                 .bind(atuin_id)
                 .bind(session)
                 .execute(conn)?;
-            return Ok(Appended::Duplicate);
+            return Ok((Appended::Duplicate, false));
         }
 
         let rowid = inserted.last_insert_rowid();
@@ -537,7 +551,7 @@ impl AiSessionDatabase {
             }
         }
 
-        Ok(Appended::New)
+        Ok((Appended::New, !existed))
     }
 
     /// What decides a session's claim on a shared model call (see [`Self::attribute_call`]),
