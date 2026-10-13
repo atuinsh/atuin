@@ -8,9 +8,9 @@ use std::{io, ptr};
 
 use windows_sys::Win32::System::Threading::{CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW};
 
+use super::cli::argv_to_command_line;
 use super::fallible_do;
 use super::process::Handle;
-use crate::os::windows_command_line::argv_to_command_line;
 use crate::string::NonNulStr;
 
 /// A process builder mirroring [`std::process::Command`], whose child inherits none of our handles.

@@ -2,9 +2,7 @@
 //!
 //! The rules are Windows', but every byte they care about (`"`, `\`, space, tab) is ASCII, and
 //! ASCII never occurs inside a multi-byte character, so escaping an `OsStr`'s encoded bytes gives
-//! the same result as escaping its UTF-16. That keeps this module free of Windows APIs, outside
-//! `os::windows`, and tested on every platform.
-#![cfg_attr(not(windows), allow(dead_code, reason = "only os::windows::command spawns with it"))]
+//! the same result as escaping its UTF-16.
 
 use std::ffi::{OsStr, OsString};
 use std::{io, iter};

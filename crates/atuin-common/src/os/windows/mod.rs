@@ -6,6 +6,7 @@
 
 use windows_sys::Win32::Foundation::GetLastError;
 
+mod cli;
 pub mod command;
 pub mod disk;
 pub mod process;

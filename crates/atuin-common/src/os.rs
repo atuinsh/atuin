@@ -9,4 +9,3 @@ pub mod unix;
 
 #[cfg(windows)]
 pub mod windows;
-mod windows_command_line;
