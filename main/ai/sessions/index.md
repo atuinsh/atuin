@@ -70,7 +70,7 @@ Each row shows when the session was last active, its agent, its title and its me
 
 Words in the query of the form `filter:value` narrow the search further, and show as chips in the input:
 
-- `agent:<name>` (or `a:<name>` for short): only that agent's sessions, with `claude-code` (or `claude`, `cc`), `codex` (`cx`), `opencode` (`oc`) or `pi`. `Alt`+`A` cycles through them in turn, and back to all agents.
+- `agent:<name>` (or `a:<name>` for short): only that agent's sessions, with `claude-code` (or `claude`, `cc`), `codex` (`cx`), `opencode` (`oc`) or `pi`. `Ctrl`+`T` cycles through them in turn, and back to all agents.
 - `m:<model>`: only sessions whose model contains this, as in `m:opus`.
 - `b:<branch>`: only sessions on this git branch.
 
@@ -126,7 +126,7 @@ A session written back out from sync, or continued in another agent, resumes in 
 
 In the chooser, `Up` / `Down` (or `K` / `J`) move, `F` moves to the fork, a digit picks that line, and `Esc` goes back to the list. `Enter` does what the key that opened the chooser did: it resumes (or, without `enter_accept`, puts the command on your command line), and after `Tab` it edits. `Tab` in the chooser always edits. `Ctrl`+`Y` copies the command.
 
-`Alt`+`Enter` in the list or Inspect opens the chooser with the fork selected (`Shift`+`F` in vim's normal mode, `F` in Inspect). Some terminals keep `Alt`+`Enter` for themselves; `Enter` then `F` always works.
+`Ctrl`+`X` in the list or Inspect opens the chooser with the fork selected (`Shift`+`F` in vim's normal mode, `F` in Inspect).
 
 To resume in the session's own agent straight away, without the chooser:
 
