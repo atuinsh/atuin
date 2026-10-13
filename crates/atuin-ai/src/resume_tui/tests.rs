@@ -158,7 +158,7 @@ async fn inspect_says_a_remote_session_is_restored() {
     s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "aarch64", 1).await;
     let out = text(&render(&mut state, &s, 120, 30));
-    let line = out.lines().find(|l| l.contains("Resume    cd -- ")).unwrap();
+    let line = out.lines().find(|l| l.contains("Resume     cd -- ")).unwrap();
     assert!(line.contains(" && claude --resume d4e6f8a0-2c3d-4e4f-8a7b-8c9d0e1f2a3b  from sync"));
     assert!(!out.contains("Restore"), "{out}");
 }
@@ -257,10 +257,10 @@ async fn the_detail_pane_and_inspect_render_markdown() {
 #[tokio::test]
 async fn inspect_tab_shows_metadata_command_and_children() {
     let out = frame(&settings(), "", 1, 100, 30).await;
-    assert!(out.contains("Session   7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10  Claude Code"), "{out}");
-    assert!(out.contains("Host      01900000000070008000000000000001  (this machine)"), "{out}");
+    assert!(out.contains("Harness ID 7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10  Claude Code"), "{out}");
+    assert!(out.contains("Host       01900000000070008000000000000001  (this machine)"), "{out}");
     assert!(out.contains(
-        "Resume    cd -- /home/ellie/src/atuin && claude --resume \
+        "Resume     cd -- /home/ellie/src/atuin && claude --resume \
          7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10"
     ));
     // The forks, never the subagents (three under the session, one under its fork).
@@ -268,11 +268,11 @@ async fn inspect_tab_shows_metadata_command_and_children() {
     assert!(out.contains("   └─ Add an interactive resume picker to atuin ai (fork)"), "{out}");
     assert!(!out.contains("subagent  ") && !out.contains("Explore:"), "{out}");
     assert!(!out.contains("Review the resume picker diff"), "{out}");
-    assert!(out.lines().any(|l| l.trim_matches(['│', ' ']) == "Messages  142"), "{out}");
+    assert!(out.lines().any(|l| l.trim_matches(['│', ' ']) == "Messages   142"), "{out}");
     // All the input, and what it was made of.
     assert!(
         out.contains(
-            "Tokens    in 3.2M (327k uncached · 2.7M cache read · 170k cache write) · out 58k"
+            "Tokens     in 3.2M (327k uncached · 2.7M cache read · 170k cache write) · out 58k"
         ),
         "{out}"
     );
@@ -1899,7 +1899,7 @@ async fn the_wheel_scrolls_the_pane_under_it(#[case] origin: u16) {
 #[rstest]
 #[case::strip(0, 100, "atuin · ai-resume · 1 fork")]
 #[case::side(0, 150, "Claude Code · claude-opus-4-5")]
-#[case::inspect(1, 100, "Session   7f3c9a12")]
+#[case::inspect(1, 100, "Harness ID 7f3c9a12")]
 #[tokio::test]
 async fn the_keys_scroll_the_preview_showing(
     #[case] tab: usize,

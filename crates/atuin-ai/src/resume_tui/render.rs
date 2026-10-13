@@ -1291,9 +1291,9 @@ impl State {
         let tz = settings.timezone.0;
         let key = style(theme, Meaning::Annotation);
         let base = style(theme, Meaning::Base);
-        let width = usize::from(inner.width).saturating_sub(11);
+        let width = usize::from(inner.width).saturating_sub(12);
         let field = |name: &'static str, spans: Vec<Span<'static>>| {
-            let mut line = vec![Span::styled(format!(" {name:<10}"), key)];
+            let mut line = vec![Span::styled(format!(" {name:<11}"), key)];
             line.extend(spans);
             Line::from(line)
         };
@@ -1301,15 +1301,18 @@ impl State {
         let when = |ts: OffsetDateTime| format_when(ts, now, tz);
 
         let mut lines = vec![
-            field("Session", vec![
-                Span::styled(row.handle.session.to_string(), base.add_modifier(Modifier::BOLD)),
+            field("ID", vec![Span::styled(
+                row.atuin_id.to_string(),
+                base.add_modifier(Modifier::BOLD),
+            )]),
+            field("Harness ID", vec![
+                Span::styled(row.handle.session.to_string(), base),
                 Span::raw("  "),
                 Span::styled(
                     harness_label(row.handle.harness),
                     harness_style(theme, row.handle.harness),
                 ),
             ]),
-            field("Atuin id", text(row.atuin_id.to_string())),
             field("Title", highlighted_line(&row.title.text, &[], width, base, base)),
             field("Host", vec![
                 Span::styled(row.host_id.clone(), base),
