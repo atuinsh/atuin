@@ -63,7 +63,12 @@ impl SidecarSource {
         };
         // A session with no recorded host predates host tracking: it can only be this host's.
         let host_id = s.host.map_or_else(|| self.host_id.clone(), |h| h.0.as_simple().to_string());
-        let git_root = s.cwd.as_deref().and_then(|cwd| self.git_root(cwd));
+
+        // Another host's paths mean nothing here, and walking them can be slow: on macOS a Linux
+        // host's `/home/...` goes through the automounter, ~100ms a lookup.
+        let git_root = (host_id == self.host_id)
+            .then(|| s.cwd.as_deref().and_then(|cwd| self.git_root(cwd)))
+            .flatten();
         let title = titled(&s)
             .map_or_else(|| title::derive(s.preview.as_deref().unwrap_or_default()), str::to_owned);
         SessionRow {
@@ -451,5 +456,31 @@ mod tests {
             let found = source.search(&filter).await.unwrap();
             assert_eq!(hosts(found), pairs(&[("here", HOST), ("old", HOST)]), "{text:?}");
         }
+    }
+
+    /// Only this host's sessions have their repository looked up: another host's paths aren't
+    /// this machine's, and walking them can stall the first search.
+    #[rstest]
+    #[tokio::test]
+    async fn only_this_hosts_sessions_have_their_repo_looked_up() {
+        const OTHER: &str = "0190bbbb0000700080000000000000b1";
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let cwd = repo.path().join("src");
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for (i, (id, on)) in [("here", HOST), ("there", OTHER)].into_iter().enumerate() {
+            let mut m = message(id, None, Role::User, "words", i64::try_from(i).unwrap());
+            m.cwd = Some(cwd.clone());
+            m.host = Some(HostId(Uuid::try_parse(on).unwrap()));
+            db.append(&m).await.unwrap();
+        }
+        let source = SidecarSource::new(db, &context());
+
+        let rows = source.search(&roots("")).await.unwrap();
+        let root =
+            |id: &str| rows.iter().find(|r| r.handle == handle(id)).unwrap().git_root.clone();
+        assert_eq!(root("here"), Some(repo.path().to_owned()));
+        assert_eq!(root("there"), None);
     }
 }

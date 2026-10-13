@@ -83,7 +83,8 @@ pub struct SessionRow {
     /// The session title, falling back to the first prompt. Highlights mark query matches.
     pub title: Snippet,
     pub cwd: Option<PathBuf>,
-    /// The git repository root the session ran in, if any.
+    /// The git repository root the session ran in, if any. Only looked up for this host's
+    /// sessions.
     pub git_root: Option<PathBuf>,
     pub branch: Option<String>,
     pub model: Option<String>,
