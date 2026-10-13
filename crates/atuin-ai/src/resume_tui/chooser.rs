@@ -9,7 +9,8 @@
 //! can't resume here or an agent here has it open. It is dimmed, and can't be picked, once
 //! the session turns out to hold no conversation to fork. Then every other harness installed
 //! here, to continue the session in: it is written out as a new session there, its tool calls
-//! flattened into notes, and that is resumed. Harnesses
+//! carried over as the target's own where it has a like tool (notes where they weren't captured
+//! whole), and that is resumed. Harnesses
 //! that aren't installed aren't listed: there is nothing to do with them. The session's own
 //! harness is always listed, dimmed with the reason when it can't resume it here (a Copilot
 //! session, a directory that's gone, a harness that isn't installed), and the first line that

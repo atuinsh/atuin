@@ -18,7 +18,7 @@
 //! same native id and file, which the agent then resumes from the head. The history the copy
 //! shares with the branch is kept as it is, native detail and all; what it went on with here is
 //! dropped, and the branch's messages since are appended from sync, as a fast-forward appends
-//! them (so with what capture keeps of them: no tool output or images, as a restore). The copy as
+//! them (so with what capture keeps of them, as a restore: no reasoning or images). The copy as
 //! it was is kept whole as a backup, in atuin's data directory, where no agent looks. Only when
 //! nothing of the copy would be lost from atuin: every row of it is synced (its own line stays
 //! there as a branch, so a fork from it brings it back), no agent here has it open, and its

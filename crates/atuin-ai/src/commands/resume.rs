@@ -11,7 +11,8 @@
 //!   the picker, or named by id), in this process, before the command is run or handed to the
 //!   shell widget, so the command the widget puts on the command line works as it stands.
 //! - `--in <harness>` continues the session the id names in another harness instead: it is
-//!   written out there as a new session (its tool calls flattened into notes; see
+//!   written out there as a new session (its tool calls carried over as the target's own where
+//!   it has a like tool, notes where they weren't captured whole; see
 //!   [`atuin_common::harnesstools::continuation`]) and that is resumed, the same way. A session
 //!   that went on separately on several machines is continued along one branch, which `--branch`
 //!   must name: without it, it fails listing them (the picker takes the newest, saying so). In the
@@ -91,8 +92,9 @@ pub struct Cmd {
     print: bool,
 
     /// Continue the session QUERY names (by id, or a unique id prefix) in another agent: it is
-    /// written out as a new session there, tool calls flattened into notes, and resumed. One that
-    /// went on separately on several machines needs `--branch`.
+    /// written out as a new session there, tool calls carried over as its own where it has a like
+    /// tool (notes where they weren't captured whole), and resumed. One that went on separately on
+    /// several machines needs `--branch`.
     #[arg(long = "in", value_enum, value_name = "HARNESS")]
     continue_in: Option<ContinueIn>,
 
