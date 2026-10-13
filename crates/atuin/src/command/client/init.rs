@@ -1,4 +1,5 @@
 use atuin_client::settings::{Settings, Tmux};
+use atuin_common::shell::Shell as CommonShell;
 use clap::{Parser, ValueEnum};
 use eyre::Result;
 use tracing::instrument;
@@ -15,6 +16,8 @@ mod zsh;
 #[derive(Parser, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Cmd {
+    /// Shell to generate init for, or "auto" to detect
+    #[arg(default_value = "auto")]
     shell: Shell,
 
     #[clap(long, help = fl!("arg-init-disable-ctrl-r"))]
@@ -34,6 +37,8 @@ pub struct Cmd {
 #[value(rename_all = "lower")]
 #[allow(clippy::enum_variant_names, clippy::doc_markdown)]
 pub enum Shell {
+    #[value(help = fl!("value-init-shell-auto"))]
+    Auto,
     #[value(help = fl!("value-init-shell-zsh"))]
     Zsh,
     #[value(help = fl!("value-init-shell-bash"))]
@@ -62,10 +67,29 @@ struct StaticInitOptions<'a> {
 }
 
 impl Cmd {
-    fn static_init(&self, settings: &Settings) {
+    /// Resolve `Shell::Auto` to a concrete shell with the parent process name.
+    fn resolve_shell(&self) -> Result<Shell> {
+        match self.shell {
+            Shell::Auto => match CommonShell::current() {
+                CommonShell::Zsh => Ok(Shell::Zsh),
+                CommonShell::Bash => Ok(Shell::Bash),
+                CommonShell::Fish => Ok(Shell::Fish),
+                CommonShell::Nu => Ok(Shell::Nu),
+                CommonShell::Xonsh => Ok(Shell::Xonsh),
+                CommonShell::Powershell => Ok(Shell::PowerShell),
+                CommonShell::Sh | CommonShell::Unknown => Err(eyre::eyre!(
+                    "could not detect shell. Supported shells: zsh, bash, fish, nu, xonsh, \
+                     powershell"
+                )),
+            },
+            other => Ok(other),
+        }
+    }
+
+    fn static_init(&self, shell: Shell, settings: &Settings) {
         let options = self.to_options(settings);
 
-        match self.shell {
+        match shell {
             Shell::Zsh => {
                 zsh::init_static(&options);
             }
@@ -84,6 +108,7 @@ impl Cmd {
             Shell::PowerShell => {
                 powershell::init_static(&options);
             }
+            Shell::Auto => unreachable!("shell should be resolved before static_init"),
         }
     }
 
@@ -103,12 +128,12 @@ impl Cmd {
     /// won't spawn another, so users who still have the standalone line keep working: whichever
     /// copy runs first wins and the other no-ops.
     #[cfg(all(feature = "pty-proxy", unix))]
-    fn pty_proxy_init(&self, settings: &Settings) {
+    fn pty_proxy_init(shell: Shell, settings: &Settings) {
         if !settings.pty_proxy.enabled {
             return;
         }
 
-        let shell = match self.shell {
+        let shell = match shell {
             Shell::Zsh => atuin_pty_proxy::Shell::Zsh,
             Shell::Bash => atuin_pty_proxy::Shell::Bash,
             Shell::Fish => atuin_pty_proxy::Shell::Fish,
@@ -120,13 +145,14 @@ impl Cmd {
                 );
                 return;
             }
+            Shell::Auto => unreachable!("shell should be resolved before pty_proxy_init"),
         };
 
         print!("{}", atuin_pty_proxy::init_script(shell));
     }
 
     #[cfg(not(all(feature = "pty-proxy", unix)))]
-    fn pty_proxy_init(&self, settings: &Settings) {
+    fn pty_proxy_init(_shell: Shell, settings: &Settings) {
         if settings.pty_proxy.enabled {
             eprintln!(
                 "atuin: pty_proxy.enabled is set, but this build of atuin does not include \
@@ -145,9 +171,11 @@ impl Cmd {
             return Ok(());
         }
 
-        self.pty_proxy_init(settings);
+        let shell = self.resolve_shell()?;
 
-        self.static_init(settings);
+        Self::pty_proxy_init(shell, settings);
+
+        self.static_init(shell, settings);
 
         Ok(())
     }
