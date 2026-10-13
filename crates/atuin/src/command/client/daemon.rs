@@ -4,6 +4,7 @@ use std::ops::ControlFlow;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -13,6 +14,8 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::fs::lock::{LockMode, LockOptions};
 use atuin_common::futures::Backoff;
+#[cfg(windows)]
+use atuin_common::os::windows::process::Handle as ProcessHandle;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::pidfile::{self, PidfileGuard};
 use atuin_daemon::{PROTOCOL_VERSION, VERSION};
@@ -179,21 +182,20 @@ async fn request_shutdown(settings: &Settings) {
 fn spawn_daemon_process() -> Result<()> {
     let exe = std::env::current_exe().wrap_err("could not locate atuin executable")?;
 
-    let mut cmd = Command::new(exe);
-    cmd.arg("daemon").arg("start").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-
     #[cfg(unix)]
-    cmd.arg("--daemonize");
+    Command::new(exe)
+        .args(["daemon", "start", "--daemonize"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .wrap_err("failed to spawn daemon process")?;
 
+    // Not `Command`: the daemon would inherit the pipe a shell hook's output goes to, and the shell
+    // would wait on it until the daemon exits.
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
-        cmd.creation_flags(DETACHED_PROCESS);
-        cmd.inherit_handles(false);
-    }
-
-    cmd.spawn().wrap_err("failed to spawn daemon process")?;
+    ProcessHandle::spawn_detached(&exe, "daemon start")
+        .wrap_err("failed to spawn daemon process")?;
 
     Ok(())
 }

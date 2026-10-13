@@ -1,2 +1,2 @@
 [toolchain]
-channel = "nightly"
+channel = "1.98.0"
