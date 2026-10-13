@@ -26,6 +26,7 @@ use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
 use super::catchup::{self, CatchUp};
+use super::panel;
 use super::resumer::{
     Continued, Forked, NotResumable, Restore, Resume, ResumePlan, Resumer, Switched,
 };
@@ -151,7 +152,10 @@ async fn searches(
         else {
             continue;
         };
-        let rows = source.search(&filter).await.map_err(|e| format!("{e:#}"));
+        let rows = match source.search(&filter).await {
+            Ok(rows) => Ok(with_forks(source.as_ref(), rows).await),
+            Err(e) => Err(format!("{e:#}")),
+        };
         let response = Response::Results {
             generation,
             mode,
@@ -161,6 +165,28 @@ async fn searches(
             return;
         }
     }
+}
+
+/// `rows` with the forks grouped under each listed beneath it, as a tree.
+async fn with_forks(source: &dyn SessionSource, rows: Vec<SessionRow>) -> Vec<SessionRow> {
+    let mut out = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        let children = if row.children > 0 {
+            source.children(&row.handle).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let order = panel::tree_order(&row.handle, &children);
+        row.forks_at = children.iter().map(|c| c.active_at).max();
+        out.push(row);
+        for (mut tree, i) in order {
+            let mut child = children[i].clone();
+            // Flush with the root's title, not indented as in Inspect.
+            child.tree = tree.split_off(3.min(tree.len()));
+            out.push(child);
+        }
+    }
+    out
 }
 
 /// The newest unanswered detail request of each kind.

@@ -509,8 +509,10 @@ fn off_tree(m: &RehydrateMessage, links: Links) -> bool {
 /// with it: [`off_tree`]) leaves the transcript `base` read: how many of its first rows go with
 /// the history the transcript shares with it (through the last row of the tree it holds), and the
 /// line the last of those is (or was merged into), which the lines the transcript went on with
-/// here descend from. Rows beside the tree say nothing of where it leaves: the transcript keeps
-/// its own (its titles), and those it hasn't got past there are written after it ([`past`]).
+/// here descend from. A run of rows merged into a line the branch doesn't go through goes with
+/// neither: the branch leaves before it, and writes its rows again without the rest of the line.
+/// Rows beside the tree say nothing of where it leaves: the transcript keeps its own (its
+/// titles), and those it hasn't got past there are written after it ([`past`]).
 ///
 /// Refused ([`SyncError::Unsupported`]) when it holds no row of the tree of it, or holds rows of
 /// the tree past where it leaves it (which would be written twice).
@@ -525,15 +527,25 @@ fn branch_point(
     let Some(last) = branch[..leaves].iter().rposition(|m| tree(&m)) else {
         return Err(SyncError::Unsupported("the transcript here shares nothing with that branch"));
     };
-    let shared = last + 1;
-    if branch[shared..].iter().filter(tree).any(held) {
+    if branch[last + 1..].iter().filter(tree).any(held) {
         return Err(SyncError::Unsupported(
             "the transcript here holds rows of that branch past where it leaves it",
         ));
     }
-    let last = &branch[last].source_id;
-    let line = base.merged.get(last).unwrap_or(last);
-    Ok((shared, line.clone()))
+    let line_of =
+        |m: &RehydrateMessage| base.merged.get(&m.source_id).unwrap_or(&m.source_id).clone();
+    let line = line_of(&branch[last]);
+    if branch[..=last].iter().any(|m| m.source_id == line) {
+        return Ok((last + 1, line));
+    }
+    // Merged into a line past where it leaves: a run's last, holding what the rest said too. Cut
+    // before the first row merged into it, as a failed call's row can sit between them.
+    let first = branch.iter().position(|m| line_of(m) == line).unwrap_or(last);
+    let before = branch[..first]
+        .iter()
+        .rposition(|m| tree(&m))
+        .ok_or(SyncError::Unsupported("the transcript here shares nothing with that branch"))?;
+    Ok((before + 1, line_of(&branch[before])))
 }
 
 /// The rows of `branch` past where it leaves a transcript (its first `shared`; see

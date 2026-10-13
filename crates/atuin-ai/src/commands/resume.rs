@@ -42,6 +42,7 @@
 //!   leave the command line alone.
 //! - Standalone on a terminal, resuming changes directory and execs the harness.
 //! - With `--print`, or when stdout is not a terminal, the command is printed instead.
+//! - The picker needs a terminal: without one, it fails saying to name the session instead.
 //!
 //! The picker reads the sidecar database directly and never waits for the daemon.
 
@@ -241,9 +242,10 @@ fn resumable_first(mut found: Vec<SessionRow>) -> Vec<SessionRow> {
     found
 }
 
-/// Whether the picker has a terminal to run on: stdout, or `/dev/tty` when stdout is captured.
+/// Whether the picker has a terminal to run on: stdin and stdout, or `/dev/tty` for whichever of
+/// them isn't one (crossterm reads keys from stdin only when it is a terminal).
 fn picker_has_a_terminal() -> bool {
-    io::stdout().is_terminal()
+    (io::stdin().is_terminal() && io::stdout().is_terminal())
         || std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").is_ok()
 }
 
@@ -477,6 +479,12 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         }
     }
 
+    if !picker_has_a_terminal() {
+        bail!(
+            "the picker needs a terminal; to resume without one, name the session: `atuin ai \
+             resume <id>` (`atuin ai session list` lists them)"
+        );
+    }
     let mut themes = ThemeManager::new(settings.theme.debug, None);
     let theme = themes.load_theme(settings.theme.name.as_str(), settings.theme.max_depth);
     let (outcome, note) = Picker {

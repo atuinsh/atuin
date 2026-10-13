@@ -593,3 +593,151 @@ fn a_switch_passes_the_rows_beside_the_tree_by(dir: TempDir) {
     let tip = read_tip(&path).unwrap();
     assert!(tip.is_tip("syn-0000000000000002"), "merged into the last line");
 }
+
+/// A copy restored from sync whose turn u1 → a1 → r1 → a2 made a call capture kept without its
+/// input: written as u1 → a2, a2 holding a1's text with the call as a note.
+fn restored_with_a_merged_run() -> Vec<u8> {
+    use crate::harnesstools::session::{ToolResult, ToolUse};
+
+    let mut a1 = row("a1", "u1", Role::Assistant, 2);
+    a1.content.push(Content::ToolUse(ToolUse {
+        id: "toolu_1".to_owned().into(),
+        name: "Bash".to_owned(),
+        input: Value::Null,
+    }));
+    let mut r1 = row("r1", "a1", Role::Tool, 3);
+    r1.content = vec![Content::ToolResult(ToolResult {
+        call: "toolu_1".to_owned().into(),
+        output: Value::Null,
+        error: false,
+    })];
+    let session = RehydrateSession {
+        id: SESSION.to_owned(),
+        title: None,
+        cwd: PathBuf::from("/work/proj"),
+        original_cwd: None,
+        git_branch: None,
+        model: None,
+        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        messages: vec![
+            RehydrateMessage {
+                parent_source_id: None,
+                ..row("u1", "", Role::User, 1)
+            },
+            a1,
+            r1,
+            row("a2", "r1", Role::Assistant, 4),
+        ],
+        fork_of: None,
+    };
+    jsonl(&rehydrate::lines(&session, None))
+}
+
+/// Switching a restored copy to a branch that leaves it inside a run merged into its last line
+/// writes the run again as far as the branch shares it: what the shared rows said, and nothing
+/// the rest of the run did.
+#[rstest]
+#[case::off_the_call("a1")]
+#[case::off_its_result("r1")]
+fn a_switch_inside_a_merged_run_keeps_its_text(dir: TempDir, #[case] from: &str) {
+    let backups = tempfile::tempdir().unwrap();
+    let path = write(&dir, &restored_with_a_merged_run());
+    let base = read_tip(&path).unwrap();
+    assert_eq!(base.tip_source_id.as_deref(), Some("a2"));
+    let mut branch = their_branch();
+    branch.truncate(branch.iter().position(|m| m.source_id == from).unwrap() + 1);
+    branch.extend([row("u3", from, Role::User, 6), row("a3", "u3", Role::Assistant, 7)]);
+
+    let outcome = replace_to(SESSION, &base, &branch, None, backups.path()).unwrap();
+
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("a3"));
+    let bytes = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    assert!(bytes.contains("said a1"), "the shared reply is gone:\n{bytes}");
+    assert!(!bytes.contains("said a2"), "the reply the branch left kept:\n{bytes}");
+    assert_eq!(read_back(&path), ["u1", "a1", "u3", "a3"]);
+}
+
+/// A copy restored from sync whose turn u1 → a1 → r1 → e1 → a2 → r2 → a3 made two calls capture
+/// kept without their input, around a call that failed: written as u1 → e1 → a3, a3 holding a1's
+/// and a2's text.
+fn restored_with_a_failed_call_in_a_merged_run() -> Vec<u8> {
+    use crate::harnesstools::session::{ToolResult, ToolUse};
+
+    let call = |id: &str, parent: &str, at: i64| {
+        let mut m = row(id, parent, Role::Assistant, at);
+        m.content.push(Content::ToolUse(ToolUse {
+            id: format!("toolu_{id}").into(),
+            name: "Bash".to_owned(),
+            input: Value::Null,
+        }));
+        m
+    };
+    let result = |id: &str, call: &str, at: i64| {
+        let mut m = row(id, call, Role::Tool, at);
+        m.content = vec![Content::ToolResult(ToolResult {
+            call: format!("toolu_{call}").into(),
+            output: Value::Null,
+            error: false,
+        })];
+        m
+    };
+    let mut e1 = row("e1", "r1", Role::Assistant, 4);
+    e1.content = vec![Content::Error("overloaded".to_owned())];
+    let session = RehydrateSession {
+        id: SESSION.to_owned(),
+        title: None,
+        cwd: PathBuf::from("/work/proj"),
+        original_cwd: None,
+        git_branch: None,
+        model: None,
+        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        messages: vec![
+            RehydrateMessage {
+                parent_source_id: None,
+                ..row("u1", "", Role::User, 1)
+            },
+            call("a1", "u1", 2),
+            result("r1", "a1", 3),
+            e1,
+            call("a2", "e1", 5),
+            result("r2", "a2", 6),
+            row("a3", "r2", Role::Assistant, 7),
+        ],
+        fork_of: None,
+    };
+    jsonl(&rehydrate::lines(&session, None))
+}
+
+/// Switching such a copy to a branch that leaves it past the failed call writes the run again
+/// from before its first row: the failed call's line holds none of the run's text, so cutting
+/// there would lose a1's.
+#[rstest]
+fn a_switch_inside_a_merged_run_past_a_failed_call_keeps_its_text(dir: TempDir) {
+    let backups = tempfile::tempdir().unwrap();
+    let path = write(&dir, &restored_with_a_failed_call_in_a_merged_run());
+    let base = read_tip(&path).unwrap();
+    assert_eq!(base.tip_source_id.as_deref(), Some("a3"));
+    let mut e1 = row("e1", "r1", Role::Assistant, 4);
+    e1.content = vec![Content::Error("overloaded".to_owned())];
+    let branch = vec![
+        RehydrateMessage {
+            parent_source_id: None,
+            ..row("u1", "", Role::User, 1)
+        },
+        row("a1", "u1", Role::Assistant, 2),
+        row("r1", "a1", Role::Tool, 3),
+        e1,
+        row("a2", "e1", Role::Assistant, 5),
+        row("r2", "a2", Role::Tool, 6),
+        row("u4", "r2", Role::User, 8),
+        row("a4", "u4", Role::Assistant, 9),
+    ];
+
+    let outcome = replace_to(SESSION, &base, &branch, None, backups.path()).unwrap();
+
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("a4"));
+    let bytes = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    assert!(bytes.contains("said a1"), "the shared reply before the failed call is gone:\n{bytes}");
+    assert!(bytes.contains("said a2"), "the shared reply after the failed call is gone:\n{bytes}");
+    assert!(!bytes.contains("said a3"), "the reply the branch left kept:\n{bytes}");
+}

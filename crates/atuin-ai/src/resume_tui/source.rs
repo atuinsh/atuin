@@ -6,6 +6,7 @@
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{
@@ -83,7 +84,8 @@ pub struct SessionRow {
     /// The session title, falling back to the first prompt. Highlights mark query matches.
     pub title: Snippet,
     pub cwd: Option<PathBuf>,
-    /// The git repository root the session ran in, if any.
+    /// The git repository root the session ran in, if any. Only looked up for this host's
+    /// sessions.
     pub git_root: Option<PathBuf>,
     pub branch: Option<String>,
     pub model: Option<String>,
@@ -96,6 +98,9 @@ pub struct SessionRow {
     /// The newest message in the session itself, its grouped children not counted: whether it is
     /// the one still running.
     pub active_at: OffsetDateTime,
+    /// The newest message in the forks and continuations listed beneath the row; `None` with
+    /// none.
+    pub forks_at: Option<OffsetDateTime>,
     /// How many messages the session holds: every row stored of it
     /// ([`atuin_client::ai_session::Session::message_count`]).
     pub messages: u64,
@@ -106,6 +111,9 @@ pub struct SessionRow {
     pub children: u32,
     /// The best-matching message text, when there is a query. The match may be in a child.
     pub matched: Option<Snippet>,
+    /// The tree drawn before the title of a fork listed beneath its root (`├─ `); empty for a
+    /// root.
+    pub tree: String,
 }
 
 /// The preview for one session: its opening prompt and where it left off. Tool calls and
@@ -150,7 +158,16 @@ pub trait SessionSource: Send + Sync {
     async fn analyse(&self, _session: &HarnessSession) -> eyre::Result<Option<Analysis>> {
         Ok(None)
     }
+
+    /// Something that changes whenever the sessions may have: an idle picker searches again only
+    /// once it does. `None` when the source can't tell, so it always does.
+    fn stamp(&self) -> Option<Stamp> {
+        None
+    }
 }
+
+/// See [`SessionSource::stamp`]: the modification time and length of each file a source reads.
+pub type Stamp = Vec<Option<(SystemTime, u64)>>;
 
 /// How a session's host shows: `this machine` when it is `here`, and another by a short form of
 /// its id, `@3f9a12bc` (sessions record only the host's id).

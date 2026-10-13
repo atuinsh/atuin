@@ -78,10 +78,11 @@ pub const UNCAPTURED_OUTPUT: &str = "(output not captured)";
 /// How a writer lays out the calls [`flatten_uncaptured_calls`] turns into notes.
 pub enum Flatten<'f> {
     /// Every run of assistant rows holding such a call (the rows between two the writer sends as
-    /// something else: a prompt, a result it keeps) is merged into the run's first row, its text
+    /// something else: a prompt, a result it keeps) is merged into the run's last row, its text
     /// and notes rendered as one text, so the run stays one assistant message once the results
-    /// between its rows are dropped. For formats that write every row under its source id, and
-    /// whose harnesses send consecutive assistant rows as separate messages (Claude Code, pi).
+    /// between its rows are dropped, and its tip keeps its id: what goes on from it elsewhere
+    /// follows the same row it does here. For formats that write every row under its source id,
+    /// and whose harnesses send consecutive assistant rows as separate messages (Claude Code, pi).
     Runs,
     /// Each call's note joins the text of the latest assistant row before it that `host` takes
     /// (given the host and the call's row), with nothing but reasoning, empty rows or other
@@ -119,6 +120,22 @@ pub fn flatten_uncaptured_calls(
     messages: &[RehydrateMessage],
     how: &Flatten<'_>,
 ) -> Vec<RehydrateMessage> {
+    flatten(messages, how).0
+}
+
+/// [`flatten_uncaptured_calls`] with [`Flatten::Runs`], and each row of a merged run before its
+/// last, by source id, with that last row's, which holds what the row said.
+#[must_use]
+pub fn merge_uncaptured_runs(
+    messages: &[RehydrateMessage],
+) -> (Vec<RehydrateMessage>, HashMap<String, String>) {
+    flatten(messages, &Flatten::Runs)
+}
+
+fn flatten(
+    messages: &[RehydrateMessage],
+    how: &Flatten<'_>,
+) -> (Vec<RehydrateMessage>, HashMap<String, String>) {
     let calls: HashSet<ToolCallId> = messages
         .iter()
         .filter(|m| m.role == Role::Assistant)
@@ -129,8 +146,9 @@ pub fn flatten_uncaptured_calls(
         })
         .collect();
     let mut rows = messages.to_vec();
+    let mut hosts = HashMap::new();
     if calls.is_empty() {
-        return rows;
+        return (rows, hosts);
     }
     for row in &mut rows {
         row.content.retain(|c| match c {
@@ -140,10 +158,10 @@ pub fn flatten_uncaptured_calls(
         });
     }
     match how {
-        Flatten::Runs => merge_runs(&mut rows),
+        Flatten::Runs => merge_runs(&mut rows, &mut hosts),
         Flatten::Notes { host, own } => join_notes(&mut rows, host, own),
     }
-    rows
+    (rows, hosts)
 }
 
 /// A piece of a flattened row: text or a note (rendered together), or content kept as it is.
@@ -193,7 +211,7 @@ fn failed(m: &RehydrateMessage) -> bool {
 }
 
 /// [`Flatten::Runs`].
-fn merge_runs(rows: &mut [RehydrateMessage]) {
+fn merge_runs(rows: &mut [RehydrateMessage], hosts: &mut HashMap<String, String>) {
     let mut at = 0;
     while at < rows.len() {
         if rows[at].role != Role::Assistant {
@@ -206,13 +224,13 @@ fn merge_runs(rows: &mut [RehydrateMessage]) {
             .map_or(rows.len(), |n| at + n);
         let run = &mut rows[at..end];
         if run.iter().any(|m| m.content.iter().any(is_uncaptured)) {
-            merge_run(run);
+            merge_run(run, hosts);
         }
         at = end;
     }
 }
 
-fn merge_run(run: &mut [RehydrateMessage]) {
+fn merge_run(run: &mut [RehydrateMessage], hosts: &mut HashMap<String, String>) {
     // A failed call's row stays where it is (the harnesses leave those out of what they send the
     // model), its calls flattened in place: merged, its error would fail the whole turn.
     for row in run.iter_mut().filter(|m| m.role == Role::Assistant && failed(m)) {
@@ -220,10 +238,9 @@ fn merge_run(run: &mut [RehydrateMessage]) {
     }
     let merged: Vec<usize> =
         (0..run.len()).filter(|&i| run[i].role == Role::Assistant && !failed(&run[i])).collect();
-    let (Some(&host), Some(&last)) = (merged.first(), merged.last()) else {
+    let Some(&host) = merged.last() else {
         return;
     };
-    let last_stop = run[last].stop_reason.clone();
     let mut all = Vec::new();
     for &i in &merged {
         // Neither writer keeps reasoning (capture keeps only that there was some): left in, it
@@ -231,14 +248,16 @@ fn merge_run(run: &mut [RehydrateMessage]) {
         let content = std::mem::take(&mut run[i].content);
         all.extend(pieces(content.into_iter().filter(|c| !is_reasoning(c)).collect()));
     }
+    for row in &run[..host] {
+        hosts.insert(row.source_id.clone(), run[host].source_id.clone());
+    }
     let host = &mut run[host];
     host.content = assemble(all);
     // The turn ends as its last row did, but not on a call it no longer makes.
     let calls = host.content.iter().any(|c| matches!(c, Content::ToolUse(_)));
-    host.stop_reason = match last_stop {
-        Some(StopReason::ToolUse) if !calls => Some(StopReason::EndTurn),
-        other => other,
-    };
+    if host.stop_reason == Some(StopReason::ToolUse) && !calls {
+        host.stop_reason = Some(StopReason::EndTurn);
+    }
 }
 
 /// [`Flatten::Notes`].
@@ -408,7 +427,8 @@ pub(crate) fn break_line_cycles(lines: &mut [serde_json::Value], id_key: &str, l
 
 /// The field of a written line recording the synced rows its writer wrote no line for (merged
 /// into another by [`flatten_uncaptured_calls`], or with nothing the format can carry), each with
-/// the line it went into: `"atuinMerged": {"<row>": "<line>"}`, the line being the row's nearest
+/// the line it went into: `"atuinMerged": {"<row>": "<line>"}`, the line being the last of the
+/// row's merged run, which holds what it said ([`merge_uncaptured_runs`]), else the row's nearest
 /// written ancestor (Claude Code, pi; `""` for a row before any line, which a row hanging from it
 /// then hangs from too), or the written row before it (Codex, whose rows are placed by number).
 ///

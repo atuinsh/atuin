@@ -149,20 +149,20 @@ pub struct Choice {
     pub unavailable: Option<String>,
 }
 
-/// Whether the session itself looks to be running still: written to in the last
-/// [`LIVE_SECS`]. Only its own messages count, not its children's (a fork or subagent busy
-/// under an idle session leaves the session free to resume).
-fn running(now: OffsetDateTime, row: &SessionRow) -> bool {
+/// Whether the session itself was written to in the last [`LIVE_SECS`], so may still be open
+/// (here or on another host: there's no telling). Only its own messages count, not its
+/// children's (a fork or subagent busy under an idle session leaves the session free to resume).
+fn recently_used(now: OffsetDateTime, row: &SessionRow) -> bool {
     now.saturating_duration_since(row.active_at).as_secs() < LIVE_SECS
 }
 
-/// What resuming a session that is still running (see [`running`]) does, briefly. Claude Code
+/// What resuming a session that is still open (see [`recently_used`]) does, briefly. Claude Code
 /// turns a `--resume` of a running session into a fork (a new session id, grouped under the
 /// original); the others open the same session again, and both processes append to it.
 fn concurrent(harness: HarnessKind) -> &'static str {
     match harness {
-        HarnessKind::ClaudeCode => "resuming forks it",
-        _ => "both will append to it",
+        HarnessKind::ClaudeCode => "forks if open",
+        _ => "both append if open",
     }
 }
 
@@ -291,7 +291,7 @@ impl State {
         let session = &chooser.row.handle;
         // As the list last read it, while it still shows it.
         let row = self.target().filter(|r| r.handle == *session).unwrap_or(&chooser.row);
-        let live = running((self.now)(), row);
+        let recent = recently_used((self.now)(), row);
         if let Some(held) = &chooser.held {
             return self.held_choices(chooser, held);
         }
@@ -303,8 +303,8 @@ impl State {
             },
             Some(Ok(resume)) if resume.restore.is_some() => Choice {
                 harness: session.harness,
-                detail: if live {
-                    "original, from sync · still running — this resumes a copy".to_owned()
+                detail: if recent {
+                    "original, from sync · recently used — this resumes a copy".to_owned()
                 } else {
                     "original, from sync".to_owned()
                 },
@@ -312,8 +312,8 @@ impl State {
             },
             _ => Choice {
                 harness: session.harness,
-                detail: if live {
-                    format!("original · running elsewhere — {}", concurrent(session.harness))
+                detail: if recent {
+                    format!("original · recently used — {}", concurrent(session.harness))
                 } else {
                     "original".to_owned()
                 },

@@ -201,6 +201,8 @@ pub struct ListState {
 #[allow(clippy::struct_excessive_bools)]
 pub struct State {
     pub input: Cursor,
+    /// Whether the list is drawn top-down (index 0 at the top).
+    invert: bool,
     pub keymap_mode: KeymapMode,
     keymaps: KeymapSet,
     pending_vim_key: Option<char>,
@@ -280,6 +282,20 @@ pub struct State {
     pub now: Box<dyn Fn() -> OffsetDateTime + Send>,
 }
 
+/// Drawn bottom-up (index 0 at the bottom), each root's forks go before it, last first, so they
+/// still read top-down beneath it.
+fn bottom_up(rows: &mut [SessionRow]) {
+    let mut start = 0;
+    while start < rows.len() {
+        let end = rows[start + 1..]
+            .iter()
+            .position(|r| r.tree.is_empty())
+            .map_or(rows.len(), |n| start + 1 + n);
+        rows[start..end].reverse();
+        start = end;
+    }
+}
+
 impl State {
     pub fn new(settings: &Settings, context: ResumeContext, query: &str) -> Self {
         let sessions = &settings.ai.sessions;
@@ -288,6 +304,7 @@ impl State {
 
         let mut state = Self {
             input,
+            invert: settings.invert,
             keymap_mode: match settings.keymap_mode {
                 KeymapMode::Auto => KeymapMode::Emacs,
                 mode => mode,
@@ -461,6 +478,9 @@ impl State {
             self.widened = Some(Widened::NoMatches);
             return true;
         }
+        if !self.invert {
+            bottom_up(&mut rows);
+        }
         let selected = self.selected().map(|r| r.handle.clone());
         self.results = rows;
         self.applied = generation;
@@ -470,6 +490,7 @@ impl State {
         let index = selected
             .filter(|_| keep)
             .and_then(|h| self.results.iter().position(|r| r.handle == h))
+            .or_else(|| self.results.iter().position(|r| r.tree.is_empty()))
             .unwrap_or(0);
         self.list.selected = index;
         true
@@ -1284,21 +1305,23 @@ mod tests {
     }
 
     #[rstest]
-    fn alt_a_rewrites_the_input() {
+    fn ctrl_t_rewrites_the_input() {
         let mut state = state_in(fake::context());
         let s = settings();
         state.input = Cursor::from("flaky".to_owned());
-        let _ = state.handle_input(&s, &key(KeyCode::Char('a'), KeyModifiers::ALT));
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "flaky agent:claude-code");
-        let _ = state.handle_input(&s, &key(KeyCode::Char('a'), KeyModifiers::ALT));
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "flaky agent:codex");
         // The short form is cycled too, and comes back as the long one.
         state.input = Cursor::from("a:opencode flaky".to_owned());
-        let _ = state.handle_input(&s, &key(KeyCode::Char('a'), KeyModifiers::ALT));
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "agent:pi flaky");
-        // alt-h is unbound: it neither cycles nor types.
-        let _ = state.handle_input(&s, &key(KeyCode::Char('h'), KeyModifiers::ALT));
-        assert_eq!(state.input.as_str(), "agent:pi flaky");
+        // alt-a and alt-h are unbound: they neither cycle nor type.
+        for c in ['a', 'h'] {
+            let _ = state.handle_input(&s, &key(KeyCode::Char(c), KeyModifiers::ALT));
+            assert_eq!(state.input.as_str(), "agent:pi flaky");
+        }
     }
 
     #[rstest]
@@ -1377,5 +1400,21 @@ mod tests {
         assert_eq!(state.list.selected, 4, "gg jumps to the visual top");
         let _ = state.handle_input(&s, &key(KeyCode::Char('i'), KeyModifiers::NONE));
         assert_eq!(state.keymap_mode, KeymapMode::VimInsert);
+    }
+
+    /// Drawn bottom-up, each root's forks come before it, last first, so they read top-down
+    /// beneath it on screen.
+    #[rstest]
+    fn forks_sit_beneath_their_root_bottom_up() {
+        let row = |id: &str, tree: &str| {
+            let mut r = fake::row(HarnessKind::ClaudeCode, id, "t");
+            r.tree = tree.to_owned();
+            r
+        };
+        let mut rows =
+            vec![row("a", ""), row("a1", "├─ "), row("a2", "└─ "), row("b", ""), row("c", "")];
+        bottom_up(&mut rows);
+        let ids: Vec<String> = rows.iter().map(|r| r.handle.session.to_string()).collect();
+        assert_eq!(ids, ["a2", "a1", "a", "b", "c"]);
     }
 }

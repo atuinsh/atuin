@@ -67,14 +67,15 @@ fn turn() -> Vec<RehydrateMessage> {
     rows
 }
 
-/// Merged by runs, a turn is one assistant row, the first, holding the text and the notes in
-/// order (repeats counted), and the rows merged into it and the results are left empty.
+/// Merged by runs, a turn is one assistant row, the last, holding the text and the notes in
+/// order (repeats counted), and the rows merged into it and the results are left empty. The
+/// turn's tip keeps its id: what goes on from it on another machine goes on from the same row.
 #[rstest]
-fn runs_merge_into_their_first_row() {
+fn runs_merge_into_their_last_row() {
     let rows = flatten_uncaptured_calls(&turn(), &Flatten::Runs);
     assert_eq!(contents(&rows), vec![
         ("u1", vec![text("fix the tests")]),
-        ("a1", vec![text("Looking.\n\n[ran a shell command] ×2\n[edited a file]\n\nFixed.")]),
+        ("a1", vec![]),
         ("a2", vec![]),
         ("t1", vec![]),
         ("a3", vec![]),
@@ -82,11 +83,10 @@ fn runs_merge_into_their_first_row() {
         ("a4", vec![]),
         ("a5", vec![]),
         ("t3", vec![]),
-        ("a6", vec![]),
+        ("a6", vec![text("Looking.\n\n[ran a shell command] ×2\n[edited a file]\n\nFixed.")]),
         ("u2", vec![text("thanks")]),
     ]);
-    // The turn no longer ends on a call.
-    assert_eq!(rows[1].stop_reason, None);
+    assert_eq!(rows[9].stop_reason, None);
 }
 
 /// A run ending on a call it no longer makes ends the turn instead.
@@ -95,8 +95,8 @@ fn a_run_ending_on_a_flattened_call_ends_the_turn() {
     let mut rows = turn();
     rows.truncate(5);
     let rows = flatten_uncaptured_calls(&rows, &Flatten::Runs);
-    assert_eq!(rows[1].content, vec![text("Looking.\n\n[ran a shell command] ×2")]);
-    assert_eq!(rows[1].stop_reason, Some(StopReason::EndTurn));
+    assert_eq!(rows[4].content, vec![text("Looking.\n\n[ran a shell command] ×2")]);
+    assert_eq!(rows[4].stop_reason, Some(StopReason::EndTurn));
 }
 
 /// Joined as notes, each note goes to the text before it in the turn, and the rows after it stay
@@ -220,9 +220,9 @@ fn a_failed_row_is_not_merged() {
     ];
     let rows = flatten_uncaptured_calls(&rows, &Flatten::Runs);
     assert_eq!(contents(&rows), vec![
-        ("a1", vec![text("trying\n\n[read a file]")]),
+        ("a1", vec![]),
         ("a2", vec![text("[ran a shell command]"), Content::Error("overloaded".to_owned())]),
-        ("a3", vec![]),
+        ("a3", vec![text("trying\n\n[read a file]")]),
     ]);
 }
 

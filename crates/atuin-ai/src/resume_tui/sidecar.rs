@@ -2,6 +2,7 @@
 //! that writes it, so the picker's first frame never waits on the daemon.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -15,11 +16,15 @@ use eyre::{Result, WrapErr};
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 
-use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
+use super::source::{
+    Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet, Stamp,
+};
 use super::{ResumeContext, title};
 
 pub struct SidecarSource {
     db: AiSessionDatabase,
+    /// The database and its write-ahead log, where it's a file.
+    files: Vec<PathBuf>,
     /// This host's id (simple form).
     host_id: String,
     /// The git repository each session directory is in, looked up once per picker: finding it
@@ -33,12 +38,18 @@ impl SidecarSource {
         let db = AiSessionDatabase::open_read_only(path).await.wrap_err_with(|| {
             format!("could not open the AI session database {}", path.display())
         })?;
-        Ok(Self::new(db, context))
+        let mut wal = OsString::from(path);
+        wal.push("-wal");
+        Ok(Self {
+            files: vec![path.to_owned(), wal.into()],
+            ..Self::new(db, context)
+        })
     }
 
     fn new(db: AiSessionDatabase, context: &ResumeContext) -> Self {
         Self {
             db,
+            files: Vec::new(),
             host_id: super::simple_host_id(&context.host_id),
             git_roots: Mutex::new(HashMap::new()),
         }
@@ -63,7 +74,12 @@ impl SidecarSource {
         };
         // A session with no recorded host predates host tracking: it can only be this host's.
         let host_id = s.host.map_or_else(|| self.host_id.clone(), |h| h.0.as_simple().to_string());
-        let git_root = s.cwd.as_deref().and_then(|cwd| self.git_root(cwd));
+
+        // Another host's paths mean nothing here, and walking them can be slow: on macOS a Linux
+        // host's `/home/...` goes through the automounter, ~100ms a lookup.
+        let git_root = (host_id == self.host_id)
+            .then(|| s.cwd.as_deref().and_then(|cwd| self.git_root(cwd)))
+            .flatten();
         let title = titled(&s)
             .map_or_else(|| title::derive(s.preview.as_deref().unwrap_or_default()), str::to_owned);
         SessionRow {
@@ -85,6 +101,8 @@ impl SidecarSource {
             usage: s.usage,
             children: u32::try_from(s.child_count).unwrap_or(u32::MAX),
             matched: None,
+            tree: String::new(),
+            forks_at: None,
         }
     }
 }
@@ -187,6 +205,15 @@ impl SessionSource for SidecarSource {
 
     async fn analyse(&self, session: &HarnessSession) -> Result<Option<Analysis>> {
         Ok(Some(self.db.analyse(session).await?))
+    }
+
+    fn stamp(&self) -> Option<Stamp> {
+        // The daemon's commits land in the log, and its checkpoints in the database.
+        let stamp = |path: &PathBuf| {
+            let meta = std::fs::metadata(path).ok()?;
+            Some((meta.modified().ok()?, meta.len()))
+        };
+        (!self.files.is_empty()).then(|| self.files.iter().map(stamp).collect())
     }
 }
 
@@ -412,6 +439,25 @@ mod tests {
         assert_eq!(preview.last_assistant.as_deref(), Some("switched to a fixed clock"));
     }
 
+    /// An idle picker searches again only once the daemon has written something.
+    #[rstest]
+    #[tokio::test]
+    async fn the_stamp_moves_only_when_the_database_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai_session_sidecar.db");
+        let writer = AiSessionDatabase::open(&path).await.unwrap();
+        writer.append(&message("root", None, Role::User, "first", 0)).await.unwrap();
+        let source = SidecarSource::open(&path, &context()).await.unwrap();
+
+        let before = source.stamp();
+        assert!(before.is_some());
+        source.search(&roots("")).await.unwrap();
+        assert_eq!(source.stamp(), before, "reading changes nothing");
+
+        writer.append(&message("root", None, Role::Assistant, "second", 1)).await.unwrap();
+        assert_ne!(source.stamp(), before);
+    }
+
     // --- hosts ----------------------------------------------------------------------------------
 
     /// The host filter mode keeps this host's sessions, those from before hosts were recorded
@@ -449,5 +495,31 @@ mod tests {
             let found = source.search(&filter).await.unwrap();
             assert_eq!(hosts(found), pairs(&[("here", HOST), ("old", HOST)]), "{text:?}");
         }
+    }
+
+    /// Only this host's sessions have their repository looked up: another host's paths aren't
+    /// this machine's, and walking them can stall the first search.
+    #[rstest]
+    #[tokio::test]
+    async fn only_this_hosts_sessions_have_their_repo_looked_up() {
+        const OTHER: &str = "0190bbbb0000700080000000000000b1";
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let cwd = repo.path().join("src");
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for (i, (id, on)) in [("here", HOST), ("there", OTHER)].into_iter().enumerate() {
+            let mut m = message(id, None, Role::User, "words", i64::try_from(i).unwrap());
+            m.cwd = Some(cwd.clone());
+            m.host = Some(HostId(Uuid::try_parse(on).unwrap()));
+            db.append(&m).await.unwrap();
+        }
+        let source = SidecarSource::new(db, &context());
+
+        let rows = source.search(&roots("")).await.unwrap();
+        let root =
+            |id: &str| rows.iter().find(|r| r.handle == handle(id)).unwrap().git_root.clone();
+        assert_eq!(root("here"), Some(repo.path().to_owned()));
+        assert_eq!(root("there"), None);
     }
 }

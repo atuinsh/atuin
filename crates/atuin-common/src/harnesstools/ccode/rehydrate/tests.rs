@@ -244,7 +244,7 @@ fn calls_synced_with_their_payloads_come_back_as_calls_the_api_takes(
 
 /// What capture syncs keeps no call's input and no output. Written back, each such call is a
 /// note in its turn's text, which the API takes; re-captured, every line reads back under an id
-/// already synced (so nothing is pushed): a turn's first line with its notes, the lines merged
+/// already synced (so nothing is pushed): a turn's last line with its notes, the lines merged
 /// into it and the results not at all.
 #[rstest]
 #[case::session1(include_str!("../../../../tests/fixtures/ccode/session1.jsonl"))]
@@ -276,7 +276,7 @@ async fn synced_calls_come_back_as_notes_the_api_takes(projects: TempDir, #[case
         .filter(|(_, _, content)| !content.is_empty())
         .collect();
     testing::assert_nothing_new(&synced, again.iter().map(|(id, ..)| id.as_str()));
-    let flattened = flatten_uncaptured_calls(&synced, &Flatten::Runs);
+    let flattened = merge_uncaptured_runs(&synced).0;
     assert_eq!(again, carried(&flattened));
     for row in synced.iter().filter(|m| m.content.iter().any(is_uncaptured)) {
         if let Some((_, _, content)) = again.iter().find(|(id, ..)| *id == row.source_id) {

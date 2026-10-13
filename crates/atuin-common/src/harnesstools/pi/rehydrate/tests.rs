@@ -326,7 +326,7 @@ fn assert_the_api_takes(lines: &[serde_json::Value]) {
 
 /// What capture syncs keeps no call's input and no output. Written back, each such call is a
 /// note in its turn's text, which the APIs take; re-captured, every entry reads back under an id
-/// already synced (so nothing is pushed): a turn's first message with its notes, the messages
+/// already synced (so nothing is pushed): a turn's last message with its notes, the messages
 /// merged into it and the results not at all.
 #[rstest]
 #[case::mock(include_str!("../../../../tests/fixtures/pi/session-mock-0.85.jsonl"))]
@@ -362,7 +362,7 @@ async fn synced_calls_come_back_as_notes_the_api_takes(sessions: TempDir, #[case
         .filter(|(_, _, content)| !content.is_empty())
         .collect();
     testing::assert_nothing_new(&synced, again.iter().map(|(id, ..)| id.as_str()));
-    let flattened = flatten_uncaptured_calls(&synced, &Flatten::Runs);
+    let flattened = merge_uncaptured_runs(&synced).0;
     assert_eq!(again, carried(&flattened));
 }
 

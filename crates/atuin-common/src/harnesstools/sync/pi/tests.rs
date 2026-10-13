@@ -452,3 +452,132 @@ fn a_switch_writes_the_rows_beside_the_tree_that_go_with_the_branch(dir: TempDir
     assert!(tip.is_tip("syn-0000000000000003"), "the title merged into the last entry");
     assert!(!tip.known_source_ids.contains("syn-0000000000000001"));
 }
+
+/// Switching a copy restored from sync to a branch that leaves it inside a run merged into its
+/// last entry writes the run again as far as the branch shares it: what the shared rows said,
+/// and nothing the rest of the run did.
+#[rstest]
+#[case::off_the_call("aaaa0002")]
+#[case::off_its_result("aaaa0010")]
+fn a_switch_inside_a_merged_run_keeps_its_text(dir: TempDir, #[case] from: &str) {
+    use crate::harnesstools::session::{ToolResult, ToolUse};
+
+    let backups = tempfile::tempdir().unwrap();
+    let mut rows = their_branch();
+    rows.truncate(3);
+    rows[1].content.push(Content::ToolUse(ToolUse {
+        id: "call_1".to_owned().into(),
+        name: "bash".to_owned(),
+        input: Value::Null,
+    }));
+    rows[2].content = vec![Content::ToolResult(ToolResult {
+        call: "call_1".to_owned().into(),
+        output: Value::Null,
+        error: false,
+    })];
+    rows.push(row("aaaa0003", "aaaa0010", Role::Assistant));
+    let session = RehydrateSession {
+        id: "5e55e55e-0000-4000-8000-000000000002".to_owned(),
+        title: None,
+        cwd: PathBuf::from("/work/proj"),
+        original_cwd: None,
+        git_branch: None,
+        model: None,
+        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        messages: rows.clone(),
+        fork_of: None,
+    };
+    let continuing = Continuing {
+        after: None,
+        kept_from: None,
+    };
+    let mut lines = vec![header(3)];
+    lines.extend(rehydrate::lines(&session, &continuing, false));
+    let path = write(&dir, &jsonl(&lines));
+    let base = File::read(&path).unwrap().tip(&path);
+    assert_eq!(base.tip_source_id.as_deref(), Some("aaaa0003"));
+    rows.truncate(rows.iter().position(|m| m.source_id == from).unwrap() + 1);
+    rows.extend([row("bbbb0001", from, Role::User), row("bbbb0002", "bbbb0001", Role::Assistant)]);
+
+    let outcome = replace_to(&base, &rows, None, backups.path()).unwrap();
+
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("bbbb0002"));
+    let bytes = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    assert!(bytes.contains("said aaaa0002"), "the shared reply is gone:\n{bytes}");
+    assert!(!bytes.contains("said aaaa0003"), "the reply the branch left kept:\n{bytes}");
+}
+
+/// Switching a copy restored from sync, whose run of two calls kept without their input sits
+/// around a failed call, to a branch that leaves it past the failed call writes the run again
+/// from before its first row: the failed call's entry holds none of the run's text, so cutting
+/// there would lose the first call's.
+#[rstest]
+fn a_switch_inside_a_merged_run_past_a_failed_call_keeps_its_text(dir: TempDir) {
+    use crate::harnesstools::session::{ToolResult, ToolUse};
+
+    let backups = tempfile::tempdir().unwrap();
+    let call = |id: &str, parent: &str| {
+        let mut m = row(id, parent, Role::Assistant);
+        m.content.push(Content::ToolUse(ToolUse {
+            id: format!("call_{id}").into(),
+            name: "bash".to_owned(),
+            input: Value::Null,
+        }));
+        m
+    };
+    let result = |id: &str, call: &str| {
+        let mut m = row(id, call, Role::Tool);
+        m.content = vec![Content::ToolResult(ToolResult {
+            call: format!("call_{call}").into(),
+            output: Value::Null,
+            error: false,
+        })];
+        m
+    };
+    let mut first = row("aaaa0001", "", Role::User);
+    first.parent_source_id = None;
+    let mut failed = row("eeee0001", "aaaa0010", Role::Assistant);
+    failed.content = vec![Content::Error("overloaded".to_owned())];
+    let mut rows = vec![
+        first,
+        call("aaaa0002", "aaaa0001"),
+        result("aaaa0010", "aaaa0002"),
+        failed,
+        call("aaaa0003", "eeee0001"),
+        result("aaaa0011", "aaaa0003"),
+        row("aaaa0004", "aaaa0011", Role::Assistant),
+    ];
+    let session = RehydrateSession {
+        id: "5e55e55e-0000-4000-8000-000000000002".to_owned(),
+        title: None,
+        cwd: PathBuf::from("/work/proj"),
+        original_cwd: None,
+        git_branch: None,
+        model: None,
+        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        messages: rows.clone(),
+        fork_of: None,
+    };
+    let continuing = Continuing {
+        after: None,
+        kept_from: None,
+    };
+    let mut lines = vec![header(3)];
+    lines.extend(rehydrate::lines(&session, &continuing, false));
+    let path = write(&dir, &jsonl(&lines));
+    let base = File::read(&path).unwrap().tip(&path);
+    assert_eq!(base.tip_source_id.as_deref(), Some("aaaa0004"));
+    rows.truncate(6);
+    rows.extend([
+        row("bbbb0001", "aaaa0011", Role::User),
+        row("bbbb0002", "bbbb0001", Role::Assistant),
+    ]);
+
+    let outcome = replace_to(&base, &rows, None, backups.path()).unwrap();
+
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("bbbb0002"));
+    let bytes = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    assert!(bytes.contains("said aaaa0002"), "the reply before the failed call is gone:\n{bytes}");
+    assert!(bytes.contains("said aaaa0003"), "the reply after the failed call is gone:\n{bytes}");
+    assert!(!bytes.contains("said aaaa0004"), "the reply the branch left kept:\n{bytes}");
+}

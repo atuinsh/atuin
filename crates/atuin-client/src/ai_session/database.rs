@@ -32,8 +32,8 @@ mod watermark;
 
 pub use heads::{Analysis, FastForward, Head};
 pub use watermark::{Generation, Watermark};
-pub use write::PreparedMessage;
 use write::{Interned, Writer};
+pub use write::{NewRow, PreparedMessage};
 
 const COMPRESS_THRESHOLD: usize = 256;
 const ZSTD_LEVEL: i32 = 3;
@@ -553,19 +553,20 @@ impl AiSessionDatabase {
     /// none. A reprojection replays a page of records at a time this way, as committing each row
     /// on its own (and flushing the full-text index with it) is most of what replaying costs.
     ///
-    /// Appends nothing, and returns false, if the sidecar was invalidated since `generation` (see
+    /// Returns the rows not projected before, in order. Appends nothing, and returns None, if
+    /// the sidecar was invalidated since `generation` (see
     /// [`Self::advance_reproject_watermark`]): a wipe may have deleted what the page builds on,
     /// and a write that outlives the replay waiting on it lands after whatever came next.
     pub async fn append_all(
         &self,
         msgs: Vec<PreparedMessage>,
         generation: Generation,
-    ) -> Result<bool, DbError> {
+    ) -> Result<Option<Vec<NewRow>>, DbError> {
         if msgs.is_empty() {
-            return Ok(true);
+            return Ok(Some(Vec::new()));
         }
         self.write_interning(move |conn, interned| {
-            Self::append_page(conn, interned, &msgs, generation)
+            Self::append_page(conn, interned, msgs, generation)
         })
         .await
     }
@@ -3126,12 +3127,12 @@ mod tests {
 
         let stale = db.projection_generation().await.unwrap();
         db.reset().await.unwrap();
-        assert!(!db.append_all(page(0..2), stale).await.unwrap());
+        assert!(db.append_all(page(0..2), stale).await.unwrap().is_none());
         let first = message_in(&session, 0, "text");
         assert!(!db.contains_message(&first.session, &first.source_id).await.unwrap());
 
         let current = db.projection_generation().await.unwrap();
-        assert!(db.append_all(page(0..2), current).await.unwrap());
+        assert!(db.append_all(page(0..2), current).await.unwrap().is_some());
         assert!(db.contains_message(&first.session, &first.source_id).await.unwrap());
     }
 

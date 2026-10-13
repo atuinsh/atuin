@@ -11,7 +11,7 @@ use typed_builder::TypedBuilder;
 
 use crate::ai_session::Message;
 use crate::ai_session::database::{
-    AiSessionDatabase, DbError, Generation, PreparedMessage, Watermark,
+    AiSessionDatabase, DbError, Generation, NewRow, PreparedMessage, Watermark,
 };
 use crate::record::decode::decode_parallel;
 use crate::record::sqlite_store::SqliteStore;
@@ -324,7 +324,7 @@ impl AiSessionStore {
         db: &AiSessionDatabase,
         progress: &ReprojectProgress,
     ) -> Result<Reprojected, BuildError> {
-        self.reproject_as(db, progress, Forgetting::HeldOff).await
+        self.reproject_as(db, progress, Forgetting::HeldOff, &mut |_| async {}).await
     }
 
     /// [`Self::reproject`], safe beside live capture, for projecting what a sync downloaded:
@@ -337,18 +337,25 @@ impl AiSessionStore {
     /// added rows to this host's sessions) is skipped, forgetting nothing, and once the other
     /// series are projected this fails with [`BuildError::ForgetHeldOff`] naming its host (the
     /// first, if several).
-    pub async fn reproject_beside_capture(
+    ///
+    /// Each page's rows not projected before are handed to `appended` once committed, until
+    /// something invalidates the projection or forgets a series: what is replayed after that was
+    /// projected before.
+    pub async fn reproject_beside_capture<F: Future<Output = ()>>(
         &self,
         db: &AiSessionDatabase,
+        mut appended: impl FnMut(Vec<NewRow>) -> F,
     ) -> Result<Reprojected, BuildError> {
-        self.reproject_as(db, &ReprojectProgress::default(), Forgetting::BesideCapture).await
+        let progress = ReprojectProgress::default();
+        self.reproject_as(db, &progress, Forgetting::BesideCapture, &mut appended).await
     }
 
-    async fn reproject_as(
+    async fn reproject_as<F: Future<Output = ()>>(
         &self,
         db: &AiSessionDatabase,
         progress: &ReprojectProgress,
         forgetting: Forgetting,
+        appended: &mut impl FnMut(Vec<NewRow>) -> F,
     ) -> Result<Reprojected, BuildError> {
         let _running = db.lock_reprojection().await;
         if db.check_projection_key(&self.key.key_id().to_string()).await? {
@@ -358,14 +365,17 @@ impl AiSessionStore {
 
         let mut stats = Reprojected::default();
         let mut result = None;
+        let mut appended = Some(appended);
         for _ in 0..REPROJECT_PASSES {
-            match self.reproject_pass(db, &mut stats, progress, forgetting).await {
+            let to = appended.as_deref_mut();
+            match self.reproject_pass(db, &mut stats, progress, forgetting, to).await {
                 Ok(Pass::Done) => {
                     result = Some(Ok(()));
                     break;
                 }
                 Ok(Pass::Invalidated) => {
                     warn!("ai-session projection invalidated under reproject, starting over");
+                    appended = None;
                 }
                 Err(err) => {
                     result = Some(Err(err));
@@ -386,12 +396,13 @@ impl AiSessionStore {
         }
     }
 
-    async fn reproject_pass(
+    async fn reproject_pass<F: Future<Output = ()>>(
         &self,
         db: &AiSessionDatabase,
         stats: &mut Reprojected,
         progress: &ReprojectProgress,
         forgetting: Forgetting,
+        mut appended: Option<&mut impl FnMut(Vec<NewRow>) -> F>,
     ) -> Result<Pass, BuildError> {
         let mut marks = db.reproject_watermarks().await?;
         let mut series: Vec<(RecordSeriesKey, RecordIdx)> = self
@@ -425,10 +436,16 @@ impl AiSessionStore {
         let mut held_off = None;
         for (series, last) in series {
             let mark = marks.remove(&series);
-            match self.reproject_series(db, &series, last, mark, stats, progress, forgetting).await
-            {
+            let to = appended.as_deref_mut();
+            let replayed = self
+                .reproject_series(db, &series, last, mark, stats, progress, forgetting, to)
+                .await;
+            match replayed {
                 Ok(Pass::Done) => {}
-                Ok(Pass::Invalidated) => pass = Pass::Invalidated,
+                Ok(Pass::Invalidated) => {
+                    pass = Pass::Invalidated;
+                    appended = None;
+                }
                 Err(BuildError::ForgetHeldOff(host)) => {
                     held_off.get_or_insert(host);
                 }
@@ -499,7 +516,7 @@ impl AiSessionStore {
     /// Replay `series` past `mark`. [`Pass::Invalidated`] when an invalidation stopped it, or it
     /// forgot other hosts' watermarks, so that the reprojection goes round again.
     #[expect(clippy::too_many_arguments)]
-    async fn reproject_series(
+    async fn reproject_series<F: Future<Output = ()>>(
         &self,
         db: &AiSessionDatabase,
         series: &RecordSeriesKey,
@@ -508,6 +525,7 @@ impl AiSessionStore {
         stats: &mut Reprojected,
         progress: &ReprojectProgress,
         forgetting: Forgetting,
+        mut appended: Option<&mut impl FnMut(Vec<NewRow>) -> F>,
     ) -> Result<Pass, BuildError> {
         let mut pass = Pass::Done;
         let (start, mut from) = match mark {
@@ -528,6 +546,7 @@ impl AiSessionStore {
                     if self.forget_host(db, series.host_id, forgetting).await? {
                         pass = Pass::Invalidated;
                     }
+                    appended = None;
                     stats.restarted += 1;
                     (0, None)
                 }
@@ -578,12 +597,17 @@ impl AiSessionStore {
             // in one transaction (committing each row alone is most of a replay's cost), while
             // the next one is read and decoded.
             let local = self.lock_if_local(db, series.host_id).await;
-            let (appended, following) =
+            let (new, following) =
                 tokio::join!(db.append_all(msgs, generation), self.read_page(series, next));
             drop(local);
-            if !appended? {
+            let Some(new) = new? else {
                 warn!(host = %series.host_id, "ai-session sidecar invalidated under reproject");
                 return Ok(Pass::Invalidated);
+            };
+            if let Some(appended) = appended.as_mut()
+                && !new.is_empty()
+            {
+                appended(new).await;
             }
             stats.replayed += page_len;
             progress.replayed.fetch_add(page_len, Ordering::Relaxed);
@@ -1275,7 +1299,10 @@ mod tests {
         .await
         .unwrap();
         assert!(matches!(s.reproject(&db).await, Err(BuildError::Incomplete)));
-        assert!(matches!(s.reproject_beside_capture(&db).await, Err(BuildError::Incomplete)));
+        assert!(matches!(
+            s.reproject_beside_capture(&db, |_| async {}).await,
+            Err(BuildError::Incomplete)
+        ));
         assert_eq!(mark(&db, &s).await, None);
 
         atuin_common::db::query("DROP TRIGGER invalidate").execute(raw.pool()).await.unwrap();
@@ -1313,7 +1340,7 @@ mod tests {
         // Host c's store is reset: its sessions hold no row of `a`, so it is forgotten.
         delete_all_of(c.host_id).await;
         push_range(&c, &session_named("again"), 30..31).await;
-        a.reproject_beside_capture(&db).await.unwrap();
+        a.reproject_beside_capture(&db, |_| async {}).await.unwrap();
         assert_eq!(count(&db, &theirs).await, None);
         assert_eq!(count(&db, &session_named("again")).await, Some(1));
 
@@ -1322,7 +1349,7 @@ mod tests {
         delete_all_of(b.host_id).await;
         push_range(&b, &session_named("anew"), 40..41).await;
         push_range(&c, &session_named("again"), 31..32).await;
-        let err = a.reproject_beside_capture(&db).await.unwrap_err();
+        let err = a.reproject_beside_capture(&db, |_| async {}).await.unwrap_err();
         assert!(matches!(err, BuildError::ForgetHeldOff(host) if host == b.host_id), "{err:?}");
         assert_eq!(count(&db, &shared).await, Some(3), "nothing was forgotten");
         assert_eq!(count(&db, &session_named("anew")).await, None);
@@ -1334,13 +1361,48 @@ mod tests {
         // This host's own series rewritten under its watermark (reset, and pushed again).
         delete_all_of(a.host_id).await;
         push_range(&a, &mine, 0..2).await;
-        let err = a.reproject_beside_capture(&db).await.unwrap_err();
+        let err = a.reproject_beside_capture(&db, |_| async {}).await.unwrap_err();
         assert!(matches!(err, BuildError::ForgetHeldOff(host) if host == a.host_id), "{err:?}");
         assert_eq!(count(&db, &mine).await, Some(2), "nothing was forgotten");
         assert_eq!(count(&db, &shared).await, Some(1));
         a.reproject(&db).await.unwrap();
         assert_eq!(count(&db, &mine).await, Some(2));
         assert_eq!(count(&db, &shared).await, None, "its row went with the old series");
+    }
+
+    /// Beside capture, the rows a reprojection appends are handed on once, as new: not again
+    /// when a series found rewritten is forgotten and replayed.
+    #[rstest]
+    #[tokio::test]
+    async fn beside_capture_rows_replayed_after_a_forget_are_not_new() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [a, c] = <[_; 2]>::try_from(writers(&store, 2)).ok().unwrap();
+        let theirs = session_named("theirs");
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let reproject = async || {
+            let mut sent = Vec::new();
+            let to = |rows: Vec<super::NewRow>| {
+                sent.extend(rows.into_iter().map(|row| row.message.source_id));
+                async {}
+            };
+            a.reproject_beside_capture(&db, to).await.unwrap();
+            sent.len()
+        };
+
+        push_range(&c, &theirs, 0..2).await;
+        assert_eq!(reproject().await, 2);
+        assert_eq!(reproject().await, 0);
+
+        // Host c's store is reset and pushed again: forgotten, then replayed.
+        for r in store.all_tagged(&RecordTag::AiSession).await.unwrap() {
+            store.delete(r.id).await.unwrap();
+        }
+        push_range(&c, &theirs, 0..2).await;
+        assert_eq!(reproject().await, 0);
+        assert_eq!(count(&db, &theirs).await, Some(2));
+
+        push_range(&c, &theirs, 2..3).await;
+        assert_eq!(reproject().await, 1);
     }
 
     /// Forgetting a host deletes its sessions whole, rows other hosts added included, so those

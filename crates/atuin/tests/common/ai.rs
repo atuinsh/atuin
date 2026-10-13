@@ -167,27 +167,29 @@ impl Machine {
     /// Two machines of one account on `server`, their daemons running and syncing as often as
     /// they can.
     pub fn pair(server: &SyncServer) -> (Self, Self) {
-        Self::pair_syncing(server, 1)
+        Self::pair_syncing(server, 1, "capture_sessions = true\n")
     }
 
-    /// Two machines of one account on `server`, their daemons running: the first's syncing as
-    /// often as it can, the second's every `sync_frequency` seconds, or (0) never.
-    pub fn pair_syncing(server: &SyncServer, sync_frequency: u32) -> (Self, Self) {
-        let one = Self::syncing(server, None, 1);
+    /// Two machines of one account on `server` with the `[ai]` settings `ai`, their daemons
+    /// running: the first's syncing as often as it can, the second's every `sync_frequency`
+    /// seconds, or (0) never.
+    pub fn pair_syncing(server: &SyncServer, sync_frequency: u32, ai: &str) -> (Self, Self) {
+        let one = Self::syncing(server, None, 1, ai);
         let key = one.run(&["key", "--base64"]).trim().to_owned();
-        let two = Self::syncing(server, Some((&one, &key)), sync_frequency);
+        let two = Self::syncing(server, Some((&one, &key)), sync_frequency, ai);
         (one, two)
     }
 
-    /// A machine syncing through `server`, its daemon every `sync_frequency` seconds: registering
-    /// a new account, or logging into `login`'s with its key. Logged in before its daemon starts,
-    /// which keeps the key it starts with.
-    fn syncing(server: &SyncServer, login: Option<(&Self, &str)>, sync_frequency: u32) -> Self {
-        let mut machine = Self::configured(
-            Some((&server.address, sync_frequency)),
-            "",
-            "capture_sessions = true\n",
-        );
+    /// A machine syncing through `server`, its daemon every `sync_frequency` seconds, with the
+    /// `[ai]` settings `ai`: registering a new account, or logging into `login`'s with its key.
+    /// Logged in before its daemon starts, which keeps the key it starts with.
+    fn syncing(
+        server: &SyncServer,
+        login: Option<(&Self, &str)>,
+        sync_frequency: u32,
+        ai: &str,
+    ) -> Self {
+        let mut machine = Self::configured(Some((&server.address, sync_frequency)), "", ai);
         match login {
             None => {
                 let user = machine.user();

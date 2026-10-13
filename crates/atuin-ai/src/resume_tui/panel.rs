@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
-use super::render::{harness_style, is_live, repo_name, shown_branch, style};
+use super::render::{harness_style, is_fork_live, is_live, repo_name, shown_branch, style};
 use super::source::{SessionRow, harness_label, host_label};
 use super::state::State;
 use super::{clock, markdown};
@@ -170,6 +170,11 @@ impl State {
         let mut when = Vec::new();
         if is_live(now, row) {
             when.extend([Span::styled("● live", style(theme, Meaning::AlertInfo)), sep()]);
+        } else if is_fork_live(now, row) {
+            when.extend([
+                Span::styled("↳● a fork is live", style(theme, Meaning::AlertInfo)),
+                sep(),
+            ]);
         }
         when.push(Span::styled(format!("{} messages", row.messages), muted));
         if let Some(forks) = forks(self.children.get(&row.handle).map(Vec::as_slice)) {
@@ -389,11 +394,16 @@ pub fn tree_lines(
                     atuin_common::string::Alignment::Start,
                 )
                 .into_owned();
+            let (dot, tail_style) = if is_live(now, child) {
+                ("● ", style(theme, Meaning::AlertInfo))
+            } else {
+                ("  ", muted)
+            };
             Line::from(vec![
                 Span::styled(branch, muted),
                 Span::styled(title, base),
-                Span::raw("  "),
-                Span::styled(tail, muted),
+                Span::styled(dot, tail_style),
+                Span::styled(tail, tail_style),
             ])
         })
         .collect()
