@@ -4,16 +4,14 @@ use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
-use std::{io, iter, ptr};
+use std::{io, ptr};
 
 use windows_sys::Win32::System::Threading::{CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW};
 
 use super::fallible_do;
 use super::process::Handle;
+use crate::os::windows_command_line::argv_to_command_line;
 use crate::string::NonNulStr;
-
-const QUOTE: u16 = b'"' as u16;
-const BACKSLASH: u16 = b'\\' as u16;
 
 /// A process builder mirroring [`std::process::Command`], whose child inherits none of our handles.
 ///
@@ -87,7 +85,9 @@ impl Command {
             self.current_dir.as_deref().map(|dir| Self::non_nul(dir.as_os_str())).transpose()?;
 
         let application = Self::nul_terminated(program);
-        let mut command_line = Self::argv_to_command_line(program, &args)?;
+        // Escaping NUL-free arguments adds no NUL.
+        let mut command_line: Vec<u16> =
+            argv_to_command_line(program, &args)?.encode_wide().chain([0]).collect();
         let current_dir = current_dir.map(Self::nul_terminated);
         let startup_info = STARTUPINFOW {
             cb: u32::try_from(size_of::<STARTUPINFOW>()).expect("STARTUPINFOW is ~100 bytes"),
@@ -131,60 +131,6 @@ impl Command {
         NonNulStr::new(s).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
     }
 
-    /// Quote `program` and escape `args` into a NUL-terminated command line, as std does.
-    fn argv_to_command_line(
-        program: NonNulStr<&OsStr>,
-        args: &[NonNulStr<&OsStr>],
-    ) -> io::Result<Vec<u16>> {
-        // A Windows path cannot contain `"`, so argv[0] is quoted without escaping.
-        if program.as_os_str().as_encoded_bytes().contains(&b'"') {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "program path contains a quote",
-            ));
-        }
-        let mut line: Vec<u16> =
-            iter::once(QUOTE).chain(program.as_os_str().encode_wide()).chain([QUOTE]).collect();
-        for &arg in args {
-            line.push(u16::from(b' '));
-            line.extend(Self::escape_arg(arg));
-        }
-        line.push(0);
-        Ok(line)
-    }
-
-    /// Escape `arg` so `CommandLineToArgvW` reads it back, quoting it only if it is empty or
-    /// contains whitespace.
-    fn escape_arg(arg: NonNulStr<&OsStr>) -> Vec<u16> {
-        let bytes = arg.as_os_str().as_encoded_bytes();
-        let quote = bytes.is_empty() || bytes.iter().any(|&b| b == b' ' || b == b'\t');
-        let mut escaped = Vec::new();
-        if quote {
-            escaped.push(QUOTE);
-        }
-
-        let mut backslashes = 0;
-        for unit in arg.as_os_str().encode_wide() {
-            match unit {
-                BACKSLASH => backslashes += 1,
-                // 2n+1 backslashes before an embedded quote: n literal ones and the escape.
-                QUOTE => {
-                    escaped.extend(iter::repeat_n(BACKSLASH, backslashes + 1));
-                    backslashes = 0;
-                }
-                _ => backslashes = 0,
-            }
-            escaped.push(unit);
-        }
-
-        if quote {
-            // Double any trailing backslashes so they don't escape the closing quote.
-            escaped.extend(iter::repeat_n(BACKSLASH, backslashes));
-            escaped.push(QUOTE);
-        }
-        escaped
-    }
-
     fn nul_terminated(s: NonNulStr<&OsStr>) -> Vec<u16> {
         s.as_os_str().encode_wide().chain([0]).collect()
     }
@@ -222,7 +168,8 @@ mod tests {
     }
 
     /// Split `line` the way a child reads its command line, dropping argv[0].
-    fn command_line_to_argv(line: &[u16]) -> Vec<String> {
+    fn command_line_to_argv(line: &OsStr) -> Vec<String> {
+        let line: Vec<u16> = line.encode_wide().chain([0]).collect();
         let mut argc = 0;
         // SAFETY: `line` is NUL-terminated.
         let argv = unsafe { CommandLineToArgvW(line.as_ptr(), &raw mut argc) };
@@ -259,20 +206,8 @@ mod tests {
     #[case::non_ascii(&["é ü"])]
     fn arguments_round_trip(#[case] args: &[&str]) {
         let argv: Vec<_> = args.iter().copied().map(arg).collect();
-        let line = Command::argv_to_command_line(arg(PROGRAM), &argv).unwrap();
+        let line = argv_to_command_line(arg(PROGRAM), &argv).unwrap();
         assert_eq!(command_line_to_argv(&line), args);
-    }
-
-    #[rstest]
-    #[case::plain("plain", "plain")]
-    #[case::empty("", r#""""#)]
-    #[case::space("a b", r#""a b""#)]
-    #[case::quote(r#"a"b"#, r#"a\"b"#)]
-    #[case::lone_backslash(r"a\b", r"a\b")]
-    #[case::backslash_before_a_quote(r#"a\"b"#, r#"a\\\"b"#)]
-    #[case::trailing_backslash_in_quotes(r"a b\", r#""a b\\""#)]
-    fn escapes_exactly_as_std_does(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(String::from_utf16(&Command::escape_arg(arg(input))).unwrap(), expected);
     }
 
     proptest! {
@@ -285,7 +220,7 @@ mod tests {
             ),
         ) {
             let argv: Vec<_> = args.iter().map(String::as_str).map(arg).collect();
-            let line = Command::argv_to_command_line(arg(PROGRAM), &argv).unwrap();
+            let line = argv_to_command_line(arg(PROGRAM), &argv).unwrap();
             prop_assert_eq!(command_line_to_argv(&line), args);
         }
     }
