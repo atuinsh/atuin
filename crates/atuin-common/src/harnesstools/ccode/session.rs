@@ -19,7 +19,7 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Change, Checkpoint, FilePatch, Hunk, Listener, Message, MessageError, Observable, Patch,
-    RuntimeError, Session, SessionId, Sessions, WatchError, scan_sessions,
+    RuntimeError, Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
@@ -351,6 +351,11 @@ impl Session for CcodeSession {
                 };
             }
         }
+    }
+
+    async fn changed_after(mut self, since: std::time::SystemTime) -> Option<Self> {
+        modified_after(self.changes.as_mut(), since).await?;
+        Some(self)
     }
 }
 
@@ -1512,7 +1517,10 @@ mod tests {
             .unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events(|_| std::future::ready(None)).take(2).try_collect(),
+            listener
+                .events(std::time::SystemTime::UNIX_EPOCH, |_| std::future::ready(None))
+                .take(2)
+                .try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
@@ -1548,13 +1556,97 @@ mod tests {
             Checkpoint::new(u64::try_from(first.len()).unwrap(), first.trim_end().as_bytes());
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events(move |_| std::future::ready(Some(from))).take(1).try_collect(),
+            listener
+                .events(std::time::SystemTime::UNIX_EPOCH, move |_| std::future::ready(Some(from)))
+                .take(1)
+                .try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
         .unwrap();
         assert_eq!(events[0].message.role(), Role::Assistant);
         assert_eq!(events[0].checkpoint.at, u64::try_from(body.len()).unwrap());
+    }
+
+    /// A transcript with nothing stored of it that nobody has written to since `since` is history,
+    /// left alone until it is written to, and then read whole; or, stored meanwhile (imported),
+    /// from where that left off.
+    #[rstest]
+    #[case::untouched(false, vec![Role::User, Role::Assistant])]
+    #[case::imported_meanwhile(true, vec![Role::Assistant])]
+    #[tokio::test]
+    async fn events_leave_an_untouched_transcript_alone_until_it_changes(
+        projects: Projects,
+        #[case] imported: bool,
+        #[case] read: Vec<Role>,
+    ) {
+        use std::io::Write as _;
+
+        let path = projects.project.join("77777777-7777-7777-7777-777777777777.jsonl");
+        let first = line("user", "user", serde_json::json!("hi"));
+        std::fs::write(&path, first.clone() + "\n").unwrap();
+        let since = std::time::SystemTime::now();
+        // Older than the clock slack allows for, but not so old the content poll stops looking
+        // at it (filesystem events alone are slow on macOS).
+        let minute_ago = since - std::time::Duration::from_secs(60);
+        File::options().write(true).open(&path).unwrap().set_modified(minute_ago).unwrap();
+
+        let listener = CcodeSessions::builder()
+            .root(projects.root.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
+        let stored = std::sync::Arc::new(parking_lot::Mutex::new(None));
+        let checkpoint = {
+            let stored = std::sync::Arc::clone(&stored);
+            move |_: &SessionId| std::future::ready(*stored.lock())
+        };
+        let mut events = Box::pin(listener.events(since, checkpoint));
+        let early = tokio::time::timeout(std::time::Duration::from_secs(1), events.next()).await;
+        assert!(early.is_err(), "read before it changed");
+
+        if imported {
+            let end = u64::try_from(first.len() + 1).unwrap();
+            *stored.lock() = Some(Checkpoint::new(end, first.as_bytes()));
+        }
+        let reply =
+            line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}]));
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{reply}").unwrap();
+        let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            events.take(read.len()).try_collect(),
+        )
+        .await
+        .expect("events() did not produce within 10s")
+        .unwrap();
+        let roles: Vec<Role> = events.iter().map(|event| event.message.role()).collect();
+        assert_eq!(roles, read);
+    }
+
+    /// File times come from a coarser clock: one written just before `since` may be new.
+    #[rstest]
+    #[tokio::test]
+    async fn events_read_a_transcript_written_just_before_since_at_once(projects: Projects) {
+        let path = projects.project.join("88888888-8888-8888-8888-888888888888.jsonl");
+        std::fs::write(&path, line("user", "user", serde_json::json!("hi")) + "\n").unwrap();
+        let since = std::time::SystemTime::now() + std::time::Duration::from_secs(1);
+
+        let listener = CcodeSessions::builder()
+            .root(projects.root.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
+        let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            listener.events(since, |_| std::future::ready(None)).take(1).try_collect(),
+        )
+        .await
+        .expect("events() did not produce within 10s")
+        .unwrap();
+        assert_eq!(events[0].message.role(), Role::User);
     }
 
     /// A nested subagent's transcript followed before Claude Code wrote its metadata takes its

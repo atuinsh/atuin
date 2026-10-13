@@ -20,7 +20,7 @@ use crate::harnesstools::session::model::{
 use crate::harnesstools::session::synthetic::{content_hash, synthetic_id};
 use crate::harnesstools::session::{
     Change, Checkpoint, FilePatch, Hunk, Listener, Message, MessageError, Observable, Patch,
-    RuntimeError, Session, SessionId, Sessions, WatchError, scan_sessions,
+    RuntimeError, Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
@@ -367,6 +367,11 @@ impl Session for CodexSession {
                 };
             }
         }
+    }
+
+    async fn changed_after(mut self, since: std::time::SystemTime) -> Option<Self> {
+        modified_after(self.changes.as_mut(), since).await?;
+        Some(self)
     }
 }
 

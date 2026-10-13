@@ -174,6 +174,13 @@ enum Output {
 }
 
 impl Cmd {
+    /// Whether someone is there to answer a question first: the shell widget, or a terminal
+    /// picker, not a printed command.
+    #[must_use]
+    pub fn is_interactive(&self) -> bool {
+        self.output() != Output::Print
+    }
+
     fn output(&self) -> Output {
         if self.shell_widget {
             Output::Widget
@@ -420,6 +427,13 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
 
     let context = ResumeContext::current().await?;
     let path = Settings::ai_session_sidecar_path();
+    // The daemon makes it the first time it runs with sessions on.
+    if !path.exists() {
+        if settings.ai.capture_sessions {
+            bail!("no AI sessions here yet: the Atuin daemon hasn't recorded any");
+        }
+        bail!("no AI sessions here yet: turn them on with `atuin config enable ai-sessions`");
+    }
     let source: Arc<dyn SessionSource> = Arc::new(SidecarSource::open(&path, &context).await?);
     let resumer: Arc<dyn Resumer> =
         Arc::new(HarnessResumer::new(context.clone(), settings.ai.sessions.resume.clone()));

@@ -70,7 +70,7 @@ Display tips in Atuin AI at the bottom of agent turns.
 
 Default: `false`
 
-Capture the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) into the encrypted record store, and sync them. See [Agent sessions](./sessions.md).
+Capture the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin ai session import` brings in the rest. `atuin config enable ai-sessions` sets it, along with the daemon it needs. See [Agent sessions](./sessions.md).
 
 ### `capture_tools`
 

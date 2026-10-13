@@ -19,6 +19,9 @@ mod account;
 #[cfg(feature = "daemon")]
 mod daemon;
 
+#[cfg(all(feature = "ai", feature = "daemon"))]
+mod ai_sessions;
+
 mod config;
 mod default_config;
 mod doctor;
@@ -321,6 +324,29 @@ impl Cmd {
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => {
+                // Resume is what sessions are for, so while capture is off it offers to turn it
+                // on, every time.
+                #[cfg(feature = "daemon")]
+                if let atuin_ai::commands::Command::Resume(cmd) = &cli
+                    && !settings.ai.capture_sessions
+                    && cmd.is_interactive()
+                    && let Some(mut term) = ai_sessions::Terminal::tty()
+                    && let Some(enabled) = ai_sessions::offer(&settings, &mut term).await
+                {
+                    settings = enabled;
+                }
+
+                // Resume reads the session database itself, which a daemon of an older build
+                // keeps at an older schema: replace one, as history does, when Atuin manages it.
+                #[cfg(feature = "daemon")]
+                if matches!(cli, atuin_ai::commands::Command::Resume(_))
+                    && settings.daemon.enabled
+                    && settings.daemon.autostart
+                    && let Err(e) = daemon::ready_client(&settings).await
+                {
+                    tracing::debug!(?e, "couldn't make the daemon ready before resuming");
+                }
+
                 // Session commands talk to the daemon: start or replace it as history does,
                 // instead of failing against a stopped or stale one.
                 #[cfg(feature = "daemon")]

@@ -1,5 +1,16 @@
 # Agent sessions
 
+To turn them on, run:
+
+```shell
+atuin config enable ai-sessions
+```
+
+That sets `capture_sessions = true` under `[ai]`, turns on the daemon if it
+isn't already, and offers to import the sessions your agents already have.
+`atuin resume` offers the same each time it runs while they're off, and
+`atuin config disable ai-sessions` turns them off again.
+
 With `capture_sessions = true` under `[ai]`, the Atuin daemon records the
 sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) into the
 encrypted record store, and syncs them like your history. `atuin ai session`
@@ -8,6 +19,17 @@ lists, shows, searches and follows them.
 The daemon keeps a local search index of these sessions beside the record
 store, and brings it up to date as sessions are captured, synced in from your
 other machines, or imported.
+
+Capture starts from when you turn it on: a session your agents already had
+then is left alone until you go on with it, and then it's captured whole. To
+bring in the rest too, import them:
+
+```shell
+atuin ai session import
+```
+
+That imports every session the agents have on this machine (or just one
+agent's, with `--harness`), and running it again imports only what's new.
 
 ## What's captured
 

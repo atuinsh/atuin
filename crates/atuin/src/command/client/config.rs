@@ -16,6 +16,8 @@ use eyre::WrapErr;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 use tracing::instrument;
 
+#[cfg(all(feature = "ai", feature = "daemon"))]
+use crate::command::client::ai_sessions;
 #[cfg(feature = "daemon")]
 use crate::command::client::daemon;
 use crate::i18n::fl;
@@ -264,10 +266,19 @@ pub enum Feature {
     #[cfg(feature = "octavo")]
     #[value(help = fl!("value-config-feature-octavo"))]
     Octavo,
+    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[value(help = fl!("value-config-feature-ai-sessions"))]
+    AiSessions,
 }
 
 impl EnableCmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
+        #[cfg(all(feature = "ai", feature = "daemon"))]
+        if self.feature == Feature::AiSessions {
+            ai_sessions::enable(settings, &mut ai_sessions::Terminal::stdio()).await?;
+            return Ok(());
+        }
+
         #[cfg(feature = "octavo")]
         let octavo = match self.feature {
             Feature::Octavo => {
@@ -277,7 +288,7 @@ impl EnableCmd {
                 };
                 Some(onboarding)
             }
-            Feature::Daemon | Feature::OutputCapture => None,
+            _ => None,
         };
 
         let config_file = Settings::get_config_path()?;
@@ -316,7 +327,11 @@ impl EnableCmd {
         backfilled
     }
 
-    fn get_updated_config(&self, config_str: &str, daemon_enabled: bool) -> Result<String> {
+    pub(super) fn get_updated_config(
+        &self,
+        config_str: &str,
+        daemon_enabled: bool,
+    ) -> Result<String> {
         let mut doc: DocumentMut = config_str.parse()?;
 
         // An already-running daemon may be managed externally (systemd, launchd), so leave
@@ -334,6 +349,10 @@ impl EnableCmd {
             }
             #[cfg(feature = "octavo")]
             Feature::Octavo => set_deep_key(&mut doc, "octavo.enabled", Value::from(true))?,
+            #[cfg(all(feature = "ai", feature = "daemon"))]
+            Feature::AiSessions => {
+                set_deep_key(&mut doc, "ai.capture_sessions", Value::from(true))?;
+            }
         }
 
         let updated = doc.to_string();
@@ -454,6 +473,9 @@ impl DisableCmd {
             Feature::OutputCapture => restart_autostarted_daemon(settings).await,
             #[cfg(feature = "octavo")]
             Feature::Octavo => restart_autostarted_daemon(settings).await,
+            // The daemon notices the change itself, and the shell doesn't care.
+            #[cfg(feature = "ai")]
+            Feature::AiSessions => return Ok(()),
         }
 
         println!("Restart your shell for the change to take effect.");
@@ -477,6 +499,10 @@ impl DisableCmd {
             }
             #[cfg(feature = "octavo")]
             Feature::Octavo => set_deep_key(&mut doc, "octavo.enabled", Value::from(false))?,
+            #[cfg(all(feature = "ai", feature = "daemon"))]
+            Feature::AiSessions => {
+                set_deep_key(&mut doc, "ai.capture_sessions", Value::from(false))?;
+            }
         }
 
         let updated = doc.to_string();
@@ -817,6 +843,24 @@ mod tests {
         "[daemon]\nenabled = true\nautostart = false\n\n[pty_proxy]\nenabled = \
          true\n\n[output]\nenabled = true\n"
     )]
+    #[cfg_attr(
+        all(feature = "ai", feature = "daemon"),
+        case::ai_sessions(
+            Feature::AiSessions,
+            "",
+            false,
+            "[daemon]\nenabled = true\nautostart = true\n\n[ai]\ncapture_sessions = true\n"
+        )
+    )]
+    #[cfg_attr(
+        all(feature = "ai", feature = "daemon"),
+        case::ai_sessions_with_daemon_already_enabled(
+            Feature::AiSessions,
+            "[daemon]\nenabled = true\nautostart = false\n",
+            true,
+            "[daemon]\nenabled = true\nautostart = false\n\n[ai]\ncapture_sessions = true\n"
+        )
+    )]
     fn enable_writes(
         #[case] feature: Feature,
         #[case] input: &str,
@@ -833,6 +877,14 @@ mod tests {
     #[rstest]
     #[case::daemon(Feature::Daemon, "", "[daemon]\nenabled = false\nautostart = false\n")]
     #[case::output_capture(Feature::OutputCapture, "", "[output]\nenabled = false\n")]
+    #[cfg_attr(
+        all(feature = "ai", feature = "daemon"),
+        case::ai_sessions(
+            Feature::AiSessions,
+            "[daemon]\nenabled = true\n\n[ai]\ncapture_sessions = true\n",
+            "[daemon]\nenabled = true\n\n[ai]\ncapture_sessions = false\n"
+        )
+    )]
     #[case::daemon_search(
         Feature::Daemon,
         "search_mode = \"daemon-fuzzy\"\n[daemon]\nenabled = true",

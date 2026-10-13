@@ -6,6 +6,7 @@ pub mod synthetic;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 pub use checkpoint::Checkpoint;
 use enum_dispatch::enum_dispatch;
@@ -18,7 +19,9 @@ pub use model::{
 };
 pub use patch::{Change, FilePatch, Hunk, Patch};
 use time::OffsetDateTime;
+use tokio::sync::watch;
 
+use crate::fs::tree_watcher::FileStat;
 use crate::sync::BlockingPool;
 
 /// Recursively scan `root` for session files, calling `accept(path, is_file)` on each non-directory
@@ -147,6 +150,34 @@ pub trait Session: Send + 'static {
     }
 
     fn read(&self) -> impl Stream<Item = Result<Self::Message, MessageError>> + Send + 'static;
+
+    /// The session once it has changed after `since` (at once if it has), `None` once it no
+    /// longer can. At once for a session that can't tell.
+    fn changed_after(self, since: SystemTime) -> impl Future<Output = Option<Self>> + Send
+    where
+        Self: Sized,
+    {
+        let _ = since;
+        std::future::ready(Some(self))
+    }
+}
+
+/// [`Session::changed_after`] for a session over a file `changes` follows: once the file is
+/// modified after `since`, or at once without a watch or a modification time. `None` once the
+/// watch has ended.
+pub(crate) async fn modified_after(
+    changes: Option<&mut watch::Receiver<FileStat>>,
+    since: SystemTime,
+) -> Option<()> {
+    // File times come from a coarser clock than `since`, and are whole seconds on some
+    // filesystems: a file written just after it can be stamped just before.
+    const SLACK: Duration = Duration::from_secs(2);
+    let Some(changes) = changes else {
+        return Some(());
+    };
+    let since = since.checked_sub(SLACK).unwrap_or(since);
+    let modified = changes.wait_for(|stat| stat.modified().is_none_or(|at| at >= since)).await;
+    modified.ok().map(drop)
 }
 
 pub trait Listener {
@@ -159,10 +190,13 @@ pub trait Listener {
     ///
     /// `checkpoint` gives that checkpoint, `None` for none. A session checks it itself and reads
     /// from its beginning when it no longer names what it was taken after
-    /// ([`Session::messages_from`]).
+    /// ([`Session::messages_from`]). A session with none is read, whole, only once it changes
+    /// after `since` ([`Session::changed_after`]): one nobody touches since is history, left to
+    /// an import.
     fn events<F>(
         self,
-        checkpoint: impl Fn(&SessionId) -> F + Send + 'static,
+        since: SystemTime,
+        checkpoint: impl Fn(&SessionId) -> F + Clone + Send + 'static,
     ) -> impl Stream<Item = Result<SessionEvent<<Self::Session as Session>::Message>, CaptureError>>
     + Send
     + 'static
@@ -193,8 +227,23 @@ pub trait Listener {
                             let id = session.id();
                             let from = checkpoint(&id).await;
                             let tag = id.clone();
+                            let checkpoint = checkpoint.clone();
+                            let changed = futures::stream::once(async move {
+                                match from {
+                                    Some(_) => Some((session, from)),
+                                    None => {
+                                        let session = session.changed_after(since).await?;
+                                        // An import may have stored it meanwhile.
+                                        let from = checkpoint(&session.id()).await;
+                                        Some((session, from))
+                                    }
+                                }
+                            });
+                            let messages = changed
+                                .filter_map(std::future::ready)
+                                .flat_map(|(session, from)| session.messages_from(from));
                             let (tagged, handle) = futures::stream::abortable(
-                                session.messages_from(from).map(move |item| (tag.clone(), item)),
+                                messages.map(move |item| (tag.clone(), item)),
                             );
                             if let Some(old) = handles.insert(id, handle) {
                                 old.abort();
@@ -365,7 +414,7 @@ mod tests {
                 hang: false,
             },
         };
-        let events = listener.events(|_| async { None });
+        let events = listener.events(SystemTime::UNIX_EPOCH, |_| async { None });
         let offsets: Vec<u64> = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             events.map(|ev| ev.unwrap().checkpoint.at).collect(),

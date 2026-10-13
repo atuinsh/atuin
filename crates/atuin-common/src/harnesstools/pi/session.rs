@@ -36,7 +36,7 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Checkpoint, FilePatch, Listener, Message, MessageError, Observable, Patch, RuntimeError,
-    Session, SessionId, Sessions, WatchError, scan_sessions,
+    Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
@@ -498,6 +498,11 @@ impl Session for PiSession {
                 let (dir, pool) = (dir.clone(), pool.clone());
                 async move { Ok(resolve_parent(message, dir.as_deref(), &pool).await) }
             })
+    }
+
+    async fn changed_after(mut self, since: std::time::SystemTime) -> Option<Self> {
+        modified_after(self.changes.as_mut(), since).await?;
+        Some(self)
     }
 }
 

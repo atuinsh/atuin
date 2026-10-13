@@ -2,7 +2,7 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use atuin_client::ai_session::{
     Appended, DbError, HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
@@ -47,7 +47,10 @@ pub struct SessionCaptureEngine {
 }
 
 impl SessionCaptureEngine {
-    pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool) -> Self {
+    /// Capture every harness's sessions from `since` on: one with nothing stored yet only once
+    /// it changes after, then whole. The rest, sessions nobody touches since, are history, which
+    /// is `atuin ai session import`'s to bring in.
+    pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool, since: SystemTime) -> Self {
         let mut listeners = Vec::new();
 
         for harness in AnyHarness::all() {
@@ -56,7 +59,7 @@ impl SessionCaptureEngine {
             };
             let kind = HarnessKind::from(harness);
             let sink = sink.clone();
-            let listen = move || listen(kind, sink.clone(), sessions.clone());
+            let listen = move || listen(kind, sink.clone(), sessions.clone(), since);
             listeners.push(tokio::spawn(supervise(kind, listen, LISTENER_RETRY_START)));
         }
 
@@ -105,11 +108,13 @@ where
     }
 }
 
-/// Capture what one harness's `sessions` write until its listener ends.
+/// Capture what one harness's `sessions` write until its listener ends, those with nothing stored
+/// once they change after `since`.
 async fn listen(
     kind: HarnessKind,
     sink: Arc<Sink>,
     sessions: AnySessions,
+    since: SystemTime,
 ) -> Result<(), RuntimeError> {
     let listener = sessions.listener()?;
     // Sessions `events()` has just (re)opened, with the checkpoint each was handed: set before
@@ -126,7 +131,7 @@ async fn listen(
             }
         }
     };
-    capture(kind, &sink, listener.events(checkpoint), &opened, UNTIMED_GRACE).await;
+    capture(kind, &sink, listener.events(since, checkpoint), &opened, UNTIMED_GRACE).await;
     Ok(())
 }
 
@@ -1035,7 +1040,7 @@ mod tests {
                 }
             }
         };
-        let events = listener.events(checkpoint).map(|ev| {
+        let events = listener.events(SystemTime::UNIX_EPOCH, checkpoint).map(|ev| {
             ev.map(|ev| SessionEvent {
                 session: ev.session,
                 checkpoint: ev.checkpoint,

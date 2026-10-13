@@ -186,14 +186,18 @@ fn a_renamed_session_is_listed_under_its_new_title(machine: Machine, project: Te
     assert!(finds(&machine, last_word(&title), &transcript.id), "the new title didn't find it");
 }
 
-/// Turning capture on in the config takes effect in the running daemon, which then captures what
-/// the agents wrote while it was off.
+/// Turning capture on in the config takes effect in the running daemon, which captures the
+/// sessions the agents work in from then on. One they wrote while it was off is history, left
+/// alone until the agent goes on with it, and then captured whole; or until `atuin ai session
+/// import` brings it in.
 #[rstest]
 fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
     let mut machine = Machine::with_config("", "capture_sessions = false\n");
     machine.start_daemon();
-    let turns = [Turn::new()];
-    let transcript = Transcript::create(machine.home(), Agent::Claude, project.path(), &turns);
+    let old: Vec<Turn> = (0..2).map(|_| Turn::new()).collect();
+    let resumed = Transcript::create(machine.home(), Agent::Claude, project.path(), &old[..1]);
+    let idle = [Turn::new()];
+    let untouched = Transcript::create(machine.home(), Agent::Claude, project.path(), &idle);
     // Longer than the daemon takes to see a new transcript when capturing.
     std::thread::sleep(std::time::Duration::from_secs(3));
     assert_eq!(machine.sessions(), Vec::<serde_json::Value>::new(), "captured while off");
@@ -203,7 +207,18 @@ fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
         .unwrap()
         .replace("capture_sessions = false", "capture_sessions = true");
     std::fs::write(&config, on).unwrap();
-    machine.wait_until_said(&transcript.id, &said(&turns));
+    // Longer than the daemon takes to see the config change.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let new = [Turn::new()];
+    let started = Transcript::create(machine.home(), Agent::Claude, project.path(), &new);
+    machine.wait_until_said(&started.id, &said(&new));
+
+    resumed.append(project.path(), &old[1..]);
+    machine.wait_until_said(&resumed.id, &said(&old));
+    assert_eq!(machine.session(&untouched.id), None, "history captured unasked");
+
+    machine.run(&["ai", "session", "import"]);
+    machine.wait_until_said(&untouched.id, &said(&idle));
 }
 
 /// The command `atuin ai resume --print` prints to resume `transcript` in its own agent, from

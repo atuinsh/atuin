@@ -140,6 +140,7 @@ arg-config-disable-feature = The feature to disable
 value-config-feature-daemon = The background daemon and daemon-backed search
 value-config-feature-output-capture = Command output capture, via the daemon and the pty proxy
 value-config-feature-octavo = Use Octavo, once it is enabled for your account on the hub
+value-config-feature-ai-sessions = Capture your AI coding agents' sessions, to search and resume them
 config-enable-octavo-not-logged-in = You are not logged in to the hub, so it cannot say whether Octavo is enabled for your account. Run 'atuin login' first.
 config-enable-octavo-not-enabled = Octavo is not enabled for your account on { $address }.
 config-enable-octavo-description = Octavo is Atuin's sync for sharing and searching your history.
@@ -148,6 +149,19 @@ config-enable-octavo-declined = Octavo was not enabled.
 config-enable-octavo-backfill = Also upload the { $count } entries already in your history, not just new commands.
 config-enable-octavo-backfilled = Queued { $count } history entries for upload.
 config-enable-octavo-backfill-old = { $count } entries recorded before Atuin v14 were left out: Octavo only takes the history ids Atuin has used since.
+
+ai-sessions-offer = Enable AI sessions?
+ai-sessions-offer-description = Atuin records your coding agents' sessions (Claude Code, Codex, opencode and Pi), so you can search them and resume them here or on another machine. They're encrypted and synced like your history.
+ai-sessions-enabled = AI sessions are on: sessions your agents work in from now on are captured.
+ai-sessions-import = Import past sessions?
+ai-sessions-import-description = Bring in the sessions your agents already have on this machine too.
+ai-sessions-import-tools = Tool calls are included.
+ai-sessions-import-later = Run 'atuin ai session import' any time to import past sessions.
+ai-sessions-no-daemon = The Atuin daemon couldn't be started: { $error }
+    Start it, then run 'atuin ai session import' to import past sessions.
+ai-sessions-import-failed = Couldn't import past sessions: { $error }
+    Run 'atuin ai session import' to try again.
+ai-sessions-failed = Couldn't enable AI sessions: { $error }
 arg-config-print-key = Print the value of a specific key and all its children
 arg-daemon-daemonize = Internal flag for daemonization
 arg-daemon-show-logs = Also write daemon logs to the console (useful for debugging)

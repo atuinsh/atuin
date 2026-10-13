@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use atuin_client::ai_session::{
     AiSessionDatabase, AiSessionStore, Appended, AtuinSessionId, BuildError, CaptureMark, DbError,
@@ -675,13 +675,13 @@ impl Recovery {
 
 /// Keep what `start` returns while `enabled` is on, dropping it when turned off, until the
 /// sender is gone.
-async fn follow<T>(mut enabled: watch::Receiver<bool>, start: impl Fn() -> T) {
+async fn follow<T>(mut enabled: watch::Receiver<bool>, mut start: impl FnMut() -> T) {
     let mut running = None;
     loop {
         let on = *enabled.borrow_and_update();
         if on != running.is_some() {
             tracing::info!(enabled = on, "ai-session capture");
-            running = on.then(&start);
+            running = on.then(&mut start);
         }
         if enabled.changed().await.is_err() {
             return;
@@ -781,6 +781,9 @@ impl AiHarnessSessionCapture {
         // its own (see [`Sink::append`]), and the checkpoint never passes a line not stored, so
         // turning capture back on reads again whatever was not. Rows a listener holds in memory
         // for a transcript replaced under it ([`engine::Held`]) go with it, as on a restart.
+        // On from the start, capture starts from when the daemon did, not once the store is
+        // ready: a session written while it recovers is new (see [`SessionCaptureEngine::spawn`]).
+        let mut started = capture.then(SystemTime::now);
         let (capture, enabled) = watch::channel(capture);
         let capturing = tokio::spawn({
             let sink = sink.clone();
@@ -788,7 +791,15 @@ impl AiHarnessSessionCapture {
             let mut state = state.clone();
             async move {
                 if state.wait_for(|state| *state == StoreState::Ready).await.is_ok() {
-                    follow(enabled, || SessionCaptureEngine::spawn(&sink, &pool)).await;
+                    // Turned off (or on again) meanwhile, it starts from when it next is on.
+                    if enabled.has_changed().unwrap_or(true) {
+                        started = None;
+                    }
+                    follow(enabled, || {
+                        let since = started.take().unwrap_or_else(SystemTime::now);
+                        SessionCaptureEngine::spawn(&sink, &pool, since)
+                    })
+                    .await;
                 }
             }
         });
