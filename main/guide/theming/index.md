@@ -6,7 +6,7 @@ Atuin ships with only a couple of built-in alternative themes, but more can be a
 
 ## Required config
 
-The following is required in your config file (`~/.config/atuin/config.toml`)
+The following is required in your config file (`~/.atuin/config.toml`)
 
 ```
 [theme]
@@ -69,7 +69,7 @@ These may expand over time as they're added to Atuin's codebase. Atuin should ha
 
 ### Theme creation
 
-When a theme name is read but not yet loaded, Atuin will look for it in the folder `~/.config/atuin/themes/` unless overridden by the `ATUIN_THEME_DIR` environment variable. It will attempt to open a file of name `THEMENAME.toml` and read it as a map from *Meanings* to foreground colors.
+When a theme name is read but not yet loaded, Atuin will look for it in the folder `~/.atuin/themes/`. It will attempt to open a file of name `THEMENAME.toml` and read it as a map from *Meanings* to foreground colors.
 
 Note that, at present, it's not possible to specify the default terminal color explicitly in a theme file. However, the default theme Base color will always be unset and therefore will be the user's default terminal color. Hence, you should only override the Base color in your theme, or derive from a theme that does so, if your theme wouldn't make sense otherwise. For example, the `marine` theme is intended to make everything green/blue, so it overrides the Base color, but the `autumn` theme only seeks to make the custom colors warmer, so it doesn't.
 
@@ -106,7 +106,7 @@ where not all of the *Meanings* need to be explicitly defined. If they're absent
 
 If the named theme is missing entirely, that's an error. The theme then drops to `(none)` and leaves Atuin unstyled, rather than falling back to the default or any other theme.
 
-This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the following added to `~/.config/atuin/config.toml`:
+This theme file should be moved to `~/.atuin/themes/my-theme.toml` and the following added to `~/.atuin/config.toml`:
 
 ```
 [theme]

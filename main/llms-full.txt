@@ -343,14 +343,14 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 Run in *Nushell*:
 
 ```
-mkdir ~/.local/share/atuin/
-atuin init nu | save ~/.local/share/atuin/init.nu
+mkdir ~/.atuin/
+atuin init nu | save ~/.atuin/init.nu
 ```
 
 Add to `config.nu`:
 
 ```
-source ~/.local/share/atuin/init.nu
+source ~/.atuin/init.nu
 ```
 
 Optional: Atuin pty-proxy
@@ -358,15 +358,15 @@ Optional: Atuin pty-proxy
 pty-proxy is a lightweight pty proxy that renders the Atuin popup over your previous output, restoring it when closed — no clearing, no fullscreen. To use pty-proxy with Nushell, generate the init script:
 
 ```
-mkdir ~/.local/share/atuin/
-atuin pty-proxy init nu | save -f ~/.local/share/atuin/pty-proxy-init.nu
+mkdir ~/.atuin/
+atuin pty-proxy init nu | save -f ~/.atuin/pty-proxy-init.nu
 ```
 
 Then source it as early as possible in your `config.nu`, *before* the regular atuin init:
 
 ```
-source ~/.local/share/atuin/pty-proxy-init.nu
-source ~/.local/share/atuin/init.nu
+source ~/.atuin/pty-proxy-init.nu
+source ~/.atuin/init.nu
 ```
 
 Nushell's `source` command requires a static file path, so you must pre-generate both files.
@@ -511,7 +511,7 @@ See the [advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md) pa
 
 For a full set of config values, please see the [config reference page](https://docs.atuin.sh/configuration/config/index.md).
 
-The default configuration file is located at `~/.config/atuin/config.toml`.
+The default configuration file is located at `~/.atuin/config.toml`.
 
 ### Keybindings
 
@@ -1152,7 +1152,7 @@ When a command prints more than [`max_output_size`](https://docs.atuin.sh/config
 
 ## Storage and retention
 
-Output is stored on disk in the `output-capture` directory of Atuin's data directory (`~/.local/share/atuin/output-capture` by default), so it survives daemon restarts. Don't edit that directory by hand.
+Output is stored on disk in the `output-capture` directory of Atuin's data directory (`~/.atuin/data/output-capture` by default), so it survives daemon restarts. Don't edit that directory by hand.
 
 - **Disk budget.** Output may use up to [`max_disk_usage`](https://docs.atuin.sh/configuration/config/#max_disk_usage), 10% of the disk by default. The daemon checks about once a minute; past 95% of the budget, it deletes the oldest output until usage is back to 90%.
 - **Deleting history deletes output.** Deleting an entry from the search UI, with `atuin search --delete`, `atuin history prune`, or `atuin history dedup` also deletes its output.
@@ -1350,7 +1350,7 @@ Atuin ships with only a couple of built-in alternative themes, but more can be a
 
 ## Required config
 
-The following is required in your config file (`~/.config/atuin/config.toml`)
+The following is required in your config file (`~/.atuin/config.toml`)
 
 ```
 [theme]
@@ -1413,7 +1413,7 @@ These may expand over time as they're added to Atuin's codebase. Atuin should ha
 
 ### Theme creation
 
-When a theme name is read but not yet loaded, Atuin will look for it in the folder `~/.config/atuin/themes/` unless overridden by the `ATUIN_THEME_DIR` environment variable. It will attempt to open a file of name `THEMENAME.toml` and read it as a map from *Meanings* to foreground colors.
+When a theme name is read but not yet loaded, Atuin will look for it in the folder `~/.atuin/themes/`. It will attempt to open a file of name `THEMENAME.toml` and read it as a map from *Meanings* to foreground colors.
 
 Note that, at present, it's not possible to specify the default terminal color explicitly in a theme file. However, the default theme Base color will always be unset and therefore will be the user's default terminal color. Hence, you should only override the Base color in your theme, or derive from a theme that does so, if your theme wouldn't make sense otherwise. For example, the `marine` theme is intended to make everything green/blue, so it overrides the Base color, but the `autumn` theme only seeks to make the custom colors warmer, so it doesn't.
 
@@ -1450,7 +1450,7 @@ where not all of the *Meanings* need to be explicitly defined. If they're absent
 
 If the named theme is missing entirely, that's an error. The theme then drops to `(none)` and leaves Atuin unstyled, rather than falling back to the default or any other theme.
 
-This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the following added to `~/.config/atuin/config.toml`:
+This theme file should be moved to `~/.atuin/themes/my-theme.toml` and the following added to `~/.atuin/config.toml`:
 
 ```
 [theme]
@@ -1462,30 +1462,72 @@ When you next run Atuin, your theme should be applied.
 
 # Config
 
-Atuin maintains two configuration files in `~/.config/atuin/`, and stores data in `~/.local/share/atuin` (unless overridden by XDG\_\*).
+Atuin's files are stored in `~/.atuin` by default. Atuin's main config file is `~/.atuin/config.toml`.
 
-The full path to the config file would be `~/.config/atuin/config.toml`
+You can configure Atuin to use a different directory by setting the `ATUIN_HOME` environment variable to that directory. The path must be absolute; otherwise it will be ignored. Note: if you're using `ATUIN_HOME` to switch between multiple profiles, make sure each one sets an explicit [`daemon.socket_path`](#socket_path), to avoid connecting to the wrong daemon.
 
-The config location can be overridden with ATUIN_CONFIG_DIR
+Additionally, if set, `ATUIN_CONFIG_DIR` will override the location of `config.toml` and [`server.toml`](https://docs.atuin.sh/self-hosting/server-setup/index.md): Atuin will look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
 
-### `db_path`
+Upgrading from older versions
 
-Default: `~/.local/share/atuin/history.db`
+Older versions of Atuin stored data in `~/.config/atuin` (or `$XDG_CONFIG_HOME/atuin`) and `~/.local/share/atuin` (or `$XDG_DATA_HOME/atuin`). If `ATUIN_HOME` is unset (the default), Atuin will continue to look for data in the old locations if it doesn't find it in `~/.atuin`, so existing installations will keep working without any modifications.
 
-The path to the Atuin SQLite database.
+If you want to migrate to the new layout, run these commands in Bash, Zsh, or fish (you'll have to adjust the paths if you have `XDG_CONFIG_HOME` or `XDG_DATA_HOME` set).
 
-```
-db_path = "~/.history.db"
-```
-
-### `key_path`
-
-Default: `~/.local/share/atuin/key`
-
-The path to the Atuin encryption key.
+Temporarily stop the daemon and disable autostart:
 
 ```
-key_path = "~/.atuin-key"
+atuin config set daemon.autostart false
+atuin daemon stop
+```
+
+Make sure `~/.atuin` exists:
+
+```
+mkdir -p ~/.atuin
+```
+
+Check whether you have any AI-related files in `~/.atuin`:
+
+```
+ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills -e TERMINAL.md
+```
+
+If you do, please expand and follow this section:
+
+Migrating home-scoped AI config
+
+In older installations, `permissions.ai.toml`, `skills`, or `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas in newer installations, they are applied *globally*. The existence of `~/.atuin/config.toml` is what determines whether the new or old behavior is used; if `~/.atuin/config.toml` exists, these items are interpreted as global.
+
+Before you move your `config.toml` to `~/.atuin`, review the existing AI files in `~/.atuin`, especially `permissions.ai.toml`. Anything you're ok with being made global can be left as-is (global is likely not too different from applying to your entire home directory anyway); anything else should be deleted or moved to subdirectories (meaning moving it into `~/subdir/.atuin/` for each subdirectory).
+
+After you've confirmed that the AI items in `~/.atuin` can be interpreted as global, check whether any AI items appear in both `~/.atuin` and `~/.config/atuin`:
+
+```
+ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills \
+    -e TERMINAL.md | sort | uniq -d
+```
+
+If there are any such items, you must merge the items in `~/.config/atuin` into the configuration at `~/.atuin` if you still want them to take effect; otherwise, the items in `~/.config/atuin` will be shadowed by those in `~/.atuin`.
+
+Next, move your config items:
+
+```
+cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
+    -e themes -e skills -e permissions.ai.toml -e TERMINAL.md) ~/.atuin/
+```
+
+Then, move your data:
+
+```
+[ -e ~/.atuin/data ] && echo 'error: destination exists' || \
+    mv -n ~/.local/share/atuin ~/.atuin/data
+```
+
+Finally, re-enable daemon autostart, if you had it enabled before:
+
+```
+atuin config set daemon.autostart true
 ```
 
 ### `dialect`
@@ -2368,6 +2410,8 @@ Default if \[`systemd_socket`\] is true: `$XDG_RUNTIME_DIR/atuin.sock` if `$XDG_
 
 Where to bind a Unix socket for client -> daemon communication.
 
+The default doesn't depend on `ATUIN_HOME`. To run daemons for more than one `ATUIN_HOME` at the same time, set a different `socket_path` in each one's config.
+
 Older versions of Atuin used to listen on `$XDG_RUNTIME_DIR/atuin.sock` if `$XDG_RUNTIME_DIR` was set, otherwise `$XDG_DATA_HOME/atuin/atuin.sock` if `$XDG_DATA_HOME` was set, otherwise `~/.local/share/atuin/atuin.sock`. If you don't manually set `socket_path` in your config, Atuin will still look for an existing socket at the old path, as an older version of the daemon may be running there.
 
 ### `pidfile_path`
@@ -2375,7 +2419,7 @@ Older versions of Atuin used to listen on `$XDG_RUNTIME_DIR/atuin.sock` if `$XDG
 Default:
 
 ```
-pidfile_path = "~/.local/share/atuin/atuin-daemon.pid"
+pidfile_path = "~/.atuin/data/atuin-daemon.pid"
 ```
 
 Path to the daemon `pidfile` used for process coordination.
@@ -2527,7 +2571,7 @@ The built-in files are:
 - cloud and registry logins: `~/.aws/credentials` and its SSO cache, the gcloud credential files, `~/.kube/config`, `~/.docker/config.json`, the `gh` and `glab` logins, and Cargo, RubyGems and Terraform Cloud credentials
 - `~/.gnupg/private-keys-v1.d` and `~/.password-store`
 - the AI agents' own logins: `~/.claude/.credentials.json`, `~/.codex/auth.json`, opencode's and Pi's `auth.json`
-- Atuin's encryption key ([`key_path`](#key_path))
+- Atuin's encryption key (typically `~/.atuin/data/key`, or `~/.local/share/atuin/key` in older installs)
 
 ## logs
 
@@ -2649,7 +2693,7 @@ max_depth = 10
 
 Default: `"default"`
 
-A theme name that must be present as a built-in (unset or `default` for the default, else `autumn` or `marine`), or found in the themes directory, with the suffix `.toml`. By default this is `~/.config/atuin/themes/` but can be overridden with the `ATUIN_THEME_DIR` environment variable.
+A theme name that must be present as a built-in (unset or `default` for the default, else `autumn` or `marine`), or found in `~/.atuin/themes/`, with the suffix `.toml`.
 
 ```
 name = "my-theme"
@@ -2920,8 +2964,8 @@ Adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide the
 
 ```
 $env.ATUIN_NOBIND = true
-atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin`
-source ~/.local/share/atuin/init.nu
+atuin init nu | save -f ~/.atuin/init.nu  # make sure you created the directory beforehand with `mkdir ~/.atuin`
+source ~/.atuin/init.nu
 
 #bind to ctrl-r in emacs, vi_normal and vi_insert modes, add any other bindings you want here too
 $env.config = (
@@ -3663,7 +3707,7 @@ This also works for table keys, showing all resolved children as flat dotted key
 $ atuin config get logs --resolved
 logs.ai.file = ai.log
 logs.daemon.file = daemon.log
-logs.dir = /home/user/.local/share/atuin/logs
+logs.dir = /home/user/.atuin/logs
 logs.enabled = true
 logs.level = info
 logs.search.file = search.log
@@ -3986,7 +4030,7 @@ Output capture needs **both** pty-proxy and the daemon running. Nothing is captu
 
 ## Initialization
 
-The simplest way to enable pty-proxy is via your Atuin config (`~/.config/atuin/config.toml`) — no extra shell config needed:
+The simplest way to enable pty-proxy is via your Atuin config (`~/.atuin/config.toml`) — no extra shell config needed:
 
 ```
 [pty_proxy]
@@ -4020,14 +4064,14 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 Run in *Nushell*:
 
 ```
-mkdir ~/.local/share/atuin/
-atuin pty-proxy init nu | save -f ~/.local/share/atuin/pty-proxy-init.nu
+mkdir ~/.atuin/
+atuin pty-proxy init nu | save -f ~/.atuin/pty-proxy-init.nu
 ```
 
 Add to `config.nu`, **before** the regular `atuin init`:
 
 ```
-source ~/.local/share/atuin/pty-proxy-init.nu
+source ~/.atuin/pty-proxy-init.nu
 ```
 
 Nushell's `source` command requires a static file path, so you must pre-generate the file.
@@ -4133,14 +4177,15 @@ Example output:
 
 ```
 Config files:
-client config: "/Users/ellie/.config/atuin/config.toml"
-server config: "/Users/ellie/.config/atuin/server.toml"
-client db path: "/Users/ellie/.local/share/atuin/history.db"
-key path: "/Users/ellie/.local/share/atuin/key"
-session path: "/Users/ellie/.local/share/atuin/session"
+client config: "/Users/ellie/.atuin/config.toml"
+server config: "/Users/ellie/.atuin/server.toml"
+client db path: "/Users/ellie/.atuin/data/history.db"
+key path: "/Users/ellie/.atuin/data/key"
+session path: "/Users/ellie/.atuin/data/session"
 
 Env Vars:
-ATUIN_CONFIG_DIR = "None"
+ATUIN_HOME = None
+ATUIN_CONFIG_DIR = None
 
 Version info:
 version: 18.1.0
@@ -4525,7 +4570,7 @@ This will remove your account and all synchronized history from the server. Loca
 
 ## Key
 
-As all your data is encrypted, Atuin generates a key for you. It's stored in the Atuin data directory (`~/.local/share/atuin` on Linux).
+As all your data is encrypted, Atuin generates a key for you. It's stored in the Atuin data directory (`~/.atuin/data` by default).
 
 You can also get this with
 
@@ -4577,7 +4622,7 @@ atuin-server start
 
 ## Configuration
 
-The server's config lives at `~/.config/atuin/server.toml`, separate from the client's config.
+The server's config lives at `~/.atuin/server.toml`, separate from the client's config.
 
 It looks something like this for PostgreSQL:
 
@@ -4669,7 +4714,7 @@ We can't guarantee that all updates will apply cleanly, and some may require som
 
 ## Client setup
 
-In order use a self hosted server with Atuin, you'll have to set up the `sync_address` in the config file at `~/.config/atuin/config.toml`. See the [config](https://docs.atuin.sh/configuration/config/#sync_address) page for more details on how to set the `sync_address`.
+In order use a self hosted server with Atuin, you'll have to set up the `sync_address` in the config file at `~/.atuin/config.toml`. See the [config](https://docs.atuin.sh/configuration/config/#sync_address) page for more details on how to set the `sync_address`.
 
 Alternatively you can set the environment variable `ATUIN_SYNC_ADDRESS` to the correct host, for example `ATUIN_SYNC_ADDRESS=https://api.atuin.sh`.
 
@@ -5234,12 +5279,6 @@ Default: unset
 
 The Atuin AI model to use for new sessions. If unset, the default model will be used. You can see the available models by running `/model` inside the Atuin AI interface.
 
-### `db_path`
-
-Default: `ai_sessions.db` in the Atuin data directory.
-
-The path to the SQLite database where Atuin AI sessions are stored.
-
 ### `session_continue_minutes`
 
 Default: `1h`
@@ -5389,7 +5428,7 @@ Atuin AI looks for additional context in the current directory and its parent di
 - `.atuin/TERMINAL.md` — scoped inside the `.atuin` dotdir
 - `TERMINAL.md` — at the directory root (for example, project root)
 
-It also checks `TERMINAL.md` in your Atuin config directory (`~/.config/atuin/TERMINAL.md` by default).
+It also checks `TERMINAL.md` in your Atuin home directory (`~/.atuin/TERMINAL.md` by default).
 
 If it finds any of these files, it sends their contents as additional context to the LLM. Atuin AI will send at maximum 10 additional context files, prioritizing files found globally first and then other files in order of filesystem depth, shallowest to deepest, and each file is limited to 10,000 characters.
 
@@ -5462,10 +5501,10 @@ Current branch: !`git branch --show-current`
 
 ## Skill Locations
 
-| Scope   | Path                                     |
-| ------- | ---------------------------------------- |
-| Project | `.atuin/skills/<name>/SKILL.md`          |
-| Global  | `~/.config/atuin/skills/<name>/SKILL.md` |
+| Scope   | Path                              |
+| ------- | --------------------------------- |
+| Project | `.atuin/skills/<name>/SKILL.md`   |
+| Global  | `~/.atuin/skills/<name>/SKILL.md` |
 
 Project skills override global skills when names collide. Nested directories are supported for organization (for example, `.atuin/skills/ops/deploy/SKILL.md`).
 
@@ -5537,7 +5576,7 @@ By default, Atuin AI asks your permission before using any client-side tool. You
 
 ### Permission Files
 
-Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in the Atuin config directory (`~/.config/atuin/permissions.ai.toml` by default).
+Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in your Atuin home directory (`~/.atuin/permissions.ai.toml`[1](#fn:1) by default).
 
 A permission file is a TOML file with the following format:
 
@@ -5696,6 +5735,10 @@ For `deny` rules, a pattern without any wildcard (for example, `rm`) is a **pref
 Compound Commands
 
 When the AI runs a compound command (for example, `git add . && npm test`), Atuin parses it into individual subcommands. For a command to be automatically allowed, all subcommands must be allowed. This means that `git add . && npm test` must be enabled by both `Shell(git add *)` and `Shell(npm test)` for it to be allowed, else it would fall through and ask for permission. However, our parsing isn't perfect, and there may be edge cases where it fails to correctly identify the subcommands, and some shells where command parsing is sub-par. For this reason, we recommend being cautious when allowing compound commands with broad patterns.
+
+______________________________________________________________________
+
+1. Because `~/.atuin/permissions.ai.toml` is the global permissions file, "Always allow in this directory" is unavailable when your current directory is `$HOME`. (Similarly, if your `$HOME` is a Git repository, "Always allow in this workspace" is unavailable when your workspace is that repository.) If a global rule is acceptable, select "Always allow" instead. [↩](#fnref:1 "Jump back to footnote 1 in the text")
 
 # Reading Command Output
 
@@ -6146,7 +6189,7 @@ See [Shell Integration and Interoperability](https://docs.atuin.sh/guide/shell-i
 
 ## How do I exclude certain commands from my history?
 
-Use the `history_filter` option in `~/.config/atuin/config.toml`:
+Use the `history_filter` option in `~/.atuin/config.toml`:
 
 ```
 history_filter = [
@@ -6185,7 +6228,7 @@ eval "$(atuin init zsh --disable-ai)"
 
 Press tab! By default, enter will execute a command, and tab will insert it ready for editing.
 
-You can make `enter` edit a command by putting `enter_accept = false` into your config file (`~/.config/atuin/config.toml`)
+You can make `enter` edit a command by putting `enter_accept = false` into your config file (`~/.atuin/config.toml`)
 
 ## How do I delete my account?
 
@@ -6205,7 +6248,7 @@ We don't currently have a password reset system. As long as you're still logged 
 
 That's the update checker. At most once per hour, Atuin checks `https://api.atuin.sh` for the latest release, and lets you know if you're out of date. It's a version lookup — no history or personal data is involved.
 
-To turn it off, add this to `~/.config/atuin/config.toml`:
+To turn it off, add this to `~/.atuin/config.toml`:
 
 ```
 update_check = false
@@ -6223,10 +6266,10 @@ This compiles out the update checker, the sync commands, and AI.
 
 ## I didn't set up sync, and now I have to reinstall my system!
 
-If you have a backup of `~/.local/share/atuin`, you can import it by:
+If you have a backup of your data directory (`~/.atuin/data`, or `~/.local/share/atuin` for older installs), you can import it by:
 
 1. disabling Atuin by commenting out the shell integration; for example, for bash it's `eval "$(atuin init bash)"`
-1. copying the backup to `~/.local/share/atuin`
+1. copying the backup to `~/.atuin/data`
 1. reenabling Atuin
 1. setting up sync!
 
@@ -6247,9 +6290,8 @@ Sorry to see you go!
 
 If you used the Atuin installer, you can totally delete it by following these steps:
 
-1. Delete the `~/.atuin` directory
-1. Delete the `~/.config/atuin` directory
-1. Delete the `~/.local/share/atuin` directory
+1. Delete the `~/.atuin` directory (and `$ATUIN_HOME`, if set).
+1. Delete the `~/.config/atuin` and `~/.local/share/atuin` directories if they exist. Older versions of Atuin used to store data there.
 1. Remove the shell integration:
 1. On Bash, remove the lines referencing `atuin init` and `~/.atuin/bin/env` from ~/.profile, ~/.bashrc, and ~/.bash_login. The installer may have installed bash-preexec; if you wish to remove it too, delete ~/.bash-preexec.sh and remove the line referencing it from ~/.bashrc.
 1. On Zsh, remove the lines referencing `atuin init` and `~/.atuin/bin/env` from ~/.zshrc and ~/.zshenv.

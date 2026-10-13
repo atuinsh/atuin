@@ -10,7 +10,7 @@ See [Shell Integration and Interoperability](https://docs.atuin.sh/guide/shell-i
 
 ## How do I exclude certain commands from my history?
 
-Use the `history_filter` option in `~/.config/atuin/config.toml`:
+Use the `history_filter` option in `~/.atuin/config.toml`:
 
 ```
 history_filter = [
@@ -49,7 +49,7 @@ eval "$(atuin init zsh --disable-ai)"
 
 Press tab! By default, enter will execute a command, and tab will insert it ready for editing.
 
-You can make `enter` edit a command by putting `enter_accept = false` into your config file (`~/.config/atuin/config.toml`)
+You can make `enter` edit a command by putting `enter_accept = false` into your config file (`~/.atuin/config.toml`)
 
 ## How do I delete my account?
 
@@ -69,7 +69,7 @@ We don't currently have a password reset system. As long as you're still logged 
 
 That's the update checker. At most once per hour, Atuin checks `https://api.atuin.sh` for the latest release, and lets you know if you're out of date. It's a version lookup — no history or personal data is involved.
 
-To turn it off, add this to `~/.config/atuin/config.toml`:
+To turn it off, add this to `~/.atuin/config.toml`:
 
 ```
 update_check = false
@@ -87,10 +87,10 @@ This compiles out the update checker, the sync commands, and AI.
 
 ## I didn't set up sync, and now I have to reinstall my system!
 
-If you have a backup of `~/.local/share/atuin`, you can import it by:
+If you have a backup of your data directory (`~/.atuin/data`, or `~/.local/share/atuin` for older installs), you can import it by:
 
 1. disabling Atuin by commenting out the shell integration; for example, for bash it's `eval "$(atuin init bash)"`
-1. copying the backup to `~/.local/share/atuin`
+1. copying the backup to `~/.atuin/data`
 1. reenabling Atuin
 1. setting up sync!
 

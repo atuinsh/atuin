@@ -27,7 +27,7 @@ See the [advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md) pa
 
 For a full set of config values, please see the [config reference page](https://docs.atuin.sh/configuration/config/index.md).
 
-The default configuration file is located at `~/.config/atuin/config.toml`.
+The default configuration file is located at `~/.atuin/config.toml`.
 
 ### Keybindings
 

@@ -187,14 +187,14 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 Run in *Nushell*:
 
 ```
-mkdir ~/.local/share/atuin/
-atuin init nu | save ~/.local/share/atuin/init.nu
+mkdir ~/.atuin/
+atuin init nu | save ~/.atuin/init.nu
 ```
 
 Add to `config.nu`:
 
 ```
-source ~/.local/share/atuin/init.nu
+source ~/.atuin/init.nu
 ```
 
 Optional: Atuin pty-proxy
@@ -202,15 +202,15 @@ Optional: Atuin pty-proxy
 pty-proxy is a lightweight pty proxy that renders the Atuin popup over your previous output, restoring it when closed — no clearing, no fullscreen. To use pty-proxy with Nushell, generate the init script:
 
 ```
-mkdir ~/.local/share/atuin/
-atuin pty-proxy init nu | save -f ~/.local/share/atuin/pty-proxy-init.nu
+mkdir ~/.atuin/
+atuin pty-proxy init nu | save -f ~/.atuin/pty-proxy-init.nu
 ```
 
 Then source it as early as possible in your `config.nu`, *before* the regular atuin init:
 
 ```
-source ~/.local/share/atuin/pty-proxy-init.nu
-source ~/.local/share/atuin/init.nu
+source ~/.atuin/pty-proxy-init.nu
+source ~/.atuin/init.nu
 ```
 
 Nushell's `source` command requires a static file path, so you must pre-generate both files.

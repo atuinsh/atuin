@@ -29,7 +29,7 @@ Output capture needs **both** pty-proxy and the daemon running. Nothing is captu
 
 ## Initialization
 
-The simplest way to enable pty-proxy is via your Atuin config (`~/.config/atuin/config.toml`) — no extra shell config needed:
+The simplest way to enable pty-proxy is via your Atuin config (`~/.atuin/config.toml`) — no extra shell config needed:
 
 ```
 [pty_proxy]
@@ -63,14 +63,14 @@ to your `is-interactive` block in your `~/.config/fish/config.fish` file
 Run in *Nushell*:
 
 ```
-mkdir ~/.local/share/atuin/
-atuin pty-proxy init nu | save -f ~/.local/share/atuin/pty-proxy-init.nu
+mkdir ~/.atuin/
+atuin pty-proxy init nu | save -f ~/.atuin/pty-proxy-init.nu
 ```
 
 Add to `config.nu`, **before** the regular `atuin init`:
 
 ```
-source ~/.local/share/atuin/pty-proxy-init.nu
+source ~/.atuin/pty-proxy-init.nu
 ```
 
 Nushell's `source` command requires a static file path, so you must pre-generate the file.

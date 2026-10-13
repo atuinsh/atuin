@@ -70,7 +70,7 @@ When a command prints more than [`max_output_size`](https://docs.atuin.sh/config
 
 ## Storage and retention
 
-Output is stored on disk in the `output-capture` directory of Atuin's data directory (`~/.local/share/atuin/output-capture` by default), so it survives daemon restarts. Don't edit that directory by hand.
+Output is stored on disk in the `output-capture` directory of Atuin's data directory (`~/.atuin/data/output-capture` by default), so it survives daemon restarts. Don't edit that directory by hand.
 
 - **Disk budget.** Output may use up to [`max_disk_usage`](https://docs.atuin.sh/configuration/config/#max_disk_usage), 10% of the disk by default. The daemon checks about once a minute; past 95% of the budget, it deletes the oldest output until usage is back to 90%.
 - **Deleting history deletes output.** Deleting an entry from the search UI, with `atuin search --delete`, `atuin history prune`, or `atuin history dedup` also deletes its output.

@@ -8,7 +8,7 @@ By default, Atuin AI asks your permission before using any client-side tool. You
 
 ### Permission Files
 
-Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in the Atuin config directory (`~/.config/atuin/permissions.ai.toml` by default).
+Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in your Atuin home directory (`~/.atuin/permissions.ai.toml`[1](#fn:1) by default).
 
 A permission file is a TOML file with the following format:
 
@@ -167,3 +167,7 @@ For `deny` rules, a pattern without any wildcard (for example, `rm`) is a **pref
 Compound Commands
 
 When the AI runs a compound command (for example, `git add . && npm test`), Atuin parses it into individual subcommands. For a command to be automatically allowed, all subcommands must be allowed. This means that `git add . && npm test` must be enabled by both `Shell(git add *)` and `Shell(npm test)` for it to be allowed, else it would fall through and ask for permission. However, our parsing isn't perfect, and there may be edge cases where it fails to correctly identify the subcommands, and some shells where command parsing is sub-par. For this reason, we recommend being cautious when allowing compound commands with broad patterns.
+
+______________________________________________________________________
+
+1. Because `~/.atuin/permissions.ai.toml` is the global permissions file, "Always allow in this directory" is unavailable when your current directory is `$HOME`. (Similarly, if your `$HOME` is a Git repository, "Always allow in this workspace" is unavailable when your workspace is that repository.) If a global rule is acceptable, select "Always allow" instead. [↩](#fnref:1 "Jump back to footnote 1 in the text")
