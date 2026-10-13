@@ -95,6 +95,7 @@ use atuin_common::sync::AsyncShardedMutex;
 use atuin_domain::caps::{CapClient, PackfileCap};
 use atuin_domain::record::{RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use dashmap::DashMap;
+use futures::TryStreamExt;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
@@ -103,7 +104,7 @@ use tracing::{Instrument, Span};
 #[cfg(feature = "octavo")]
 use crate::octavo::Octavo;
 use crate::output_capture::{CaptureError, GetOutputError, OutputCaptureEngine};
-use crate::search::SearchIndex;
+use crate::search::{CommandRuns, SearchIndex};
 
 /// History-db rows removed per transaction by [`HistoryJournal::delete`]; matches the chunking of
 /// `HistoryStore::build_all`, which this path used to go through.
@@ -666,7 +667,7 @@ impl HistoryJournal {
 
         let mut runs = Vec::with_capacity(commands.len());
         for command in commands {
-            match self.history_db.command_runs(&command).await {
+            match self.runs_left(&index, &command).await {
                 Ok(command_runs) => runs.push((command, command_runs)),
                 Err(e) => {
                     tracing::warn!(
@@ -681,6 +682,17 @@ impl HistoryJournal {
         }
 
         index.sync_commands(runs, search_settings);
+    }
+
+    /// The runs `command` has left in the history db, folded into `index`'s view of them one row
+    /// at a time, so no command's rows are ever all in memory.
+    async fn runs_left(&self, index: &SearchIndex, command: &str) -> eyre::Result<CommandRuns> {
+        let mut runs = CommandRuns::default();
+        let mut rows = self.history_db.command_runs(command);
+        while let Some(row) = rows.try_next().await? {
+            index.add_run(&mut runs, &row);
+        }
+        Ok(runs)
     }
 
     /// Rebuild the history db from the record store, then reload the search index from it.
