@@ -15,7 +15,7 @@ use atuin_client::settings::Settings;
 use atuin_common::fs::lock::{LockMode, LockOptions};
 use atuin_common::futures::Backoff;
 #[cfg(windows)]
-use atuin_common::os::windows::process::Handle as ProcessHandle;
+use atuin_common::os::windows::command::Command as WindowsCommand;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::pidfile::{self, PidfileGuard};
 use atuin_daemon::{PROTOCOL_VERSION, VERSION};
@@ -23,6 +23,8 @@ use clap::Subcommand;
 #[cfg(unix)]
 use daemonix::Daemonize;
 use eyre::{Result, WrapErr, bail, eyre};
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
 
 use crate::i18n::fl;
 
@@ -191,10 +193,13 @@ fn spawn_daemon_process() -> Result<()> {
         .spawn()
         .wrap_err("failed to spawn daemon process")?;
 
-    // Not `Command`: the daemon would inherit the pipe a shell hook's output goes to, and the shell
-    // would wait on it until the daemon exits.
+    // Not std's `Command`: the daemon would inherit the pipe a shell hook's output goes to, and
+    // the shell would wait on it until the daemon exits.
     #[cfg(windows)]
-    ProcessHandle::spawn_detached(&exe, "daemon start")
+    WindowsCommand::new(&exe)
+        .args(["daemon", "start"])
+        .creation_flags(DETACHED_PROCESS)
+        .spawn()
         .wrap_err("failed to spawn daemon process")?;
 
     Ok(())
