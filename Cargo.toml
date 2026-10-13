@@ -202,7 +202,6 @@ windows-sys = {
         "Win32_System_Threading",
         "Win32_Foundation",
         "Win32_Storage_FileSystem",
-        # CreateProcessW's signature names SECURITY_ATTRIBUTES.
         "Win32_Security",
     ],
 }
