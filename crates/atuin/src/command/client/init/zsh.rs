@@ -15,7 +15,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
     print_tmux_config(options.tmux);
     println!("{}", crate::shell::ZSH);
 
-    if std::env::var("ATUIN_NOBIND").is_err() {
+    if atuin_common::env::var("ATUIN_NOBIND").is_err() {
         const BIND_CTRL_R: &str = r"bindkey -M emacs '^r' atuin-search
 bindkey -M viins '^r' atuin-search-viins
 bindkey -M vicmd '/' atuin-search";

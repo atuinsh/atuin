@@ -73,7 +73,7 @@ fn get_histpath<D>(def: D) -> Result<PathBuf>
 where
     D: FnOnce() -> Result<PathBuf>,
 {
-    if let Ok(p) = std::env::var("HISTFILE") {
+    if let Ok(p) = atuin_common::env::var("HISTFILE") {
         Ok(PathBuf::from(p))
     } else {
         def()

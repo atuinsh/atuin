@@ -74,7 +74,7 @@ pub fn capability_strings(capabilities: &AiCapabilities, daemon_enabled: bool) -
     {
         caps.push(cap(descriptor::ATUIN_OUTPUT));
     }
-    if let Ok(extra) = std::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
+    if let Ok(extra) = atuin_common::env::var("ATUIN_AI__ADDITIONAL_CAPS") {
         caps.extend(extra.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
     }
     caps

@@ -47,7 +47,7 @@ dotted key=value pairs:
 $ atuin config get logs --resolved
 logs.ai.file = ai.log
 logs.daemon.file = daemon.log
-logs.dir = /home/user/.local/share/atuin/logs
+logs.dir = /home/user/.atuin/logs
 logs.enabled = true
 logs.level = info
 logs.search.file = search.log

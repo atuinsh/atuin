@@ -4,7 +4,7 @@ use eyre::{Result, bail};
 use crate::i18n::fl;
 
 pub async fn run(settings: &Settings) -> Result<()> {
-    let meta = Settings::meta_store().await?;
+    let meta = settings.meta_store().await?;
 
     let cli_token = meta.session_token().await?;
     let hub_token = meta.hub_session_token().await?;
@@ -37,11 +37,11 @@ pub async fn run(settings: &Settings) -> Result<()> {
             )
             .await?;
 
-        atuin_client::hub::save_session(&token).await?;
+        atuin_client::hub::save_session(&token, settings).await?;
         println!("{}", fl!("link-hub-complete"));
     }
 
-    atuin_client::hub::link_account(&hub_address, &cli_token).await?;
+    atuin_client::hub::link_account(&hub_address, &cli_token, settings).await?;
     println!("{}", fl!("link-success"));
 
     Ok(())

@@ -109,6 +109,8 @@ use crate::db::sqlite::observe::{
     TableSchema, Tailable,
 };
 use crate::db::{query_as, query_scalar};
+use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::session::model::{
     Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
@@ -120,7 +122,6 @@ use crate::harnesstools::session::{
 };
 use crate::os::fs::FdIdentity;
 use crate::sync::BlockingPool;
-use crate::utils::{env_nonempty, home_dir};
 
 pub(crate) mod projection;
 mod v2;
@@ -140,7 +141,7 @@ pub struct OpencodeSessions {
 
 impl OpencodeSessions {
     fn data_dir() -> PathBuf {
-        env_nonempty("XDG_DATA_HOME")
+        var_nonempty("XDG_DATA_HOME")
             .map_or_else(|| home_dir().join(".local").join("share"), PathBuf::from)
             .join("opencode")
     }
@@ -183,7 +184,7 @@ impl OpencodeSessions {
         if let Some(db) = &self.db {
             return Ok(db.clone());
         }
-        if let Some(env) = env_nonempty("OPENCODE_DB") {
+        if let Some(env) = var_nonempty("OPENCODE_DB") {
             let path = PathBuf::from(env);
             if path.as_os_str() == OsStr::new(":memory:") {
                 return Err(RuntimeError::Io(io::Error::new(
@@ -199,7 +200,7 @@ impl OpencodeSessions {
             });
         }
         let data = Self::data_dir();
-        if env_nonempty("OPENCODE_DISABLE_CHANNEL_DB")
+        if var_nonempty("OPENCODE_DISABLE_CHANNEL_DB")
             .is_some_and(|v| matches!(v.to_str(), Some("1" | "true")))
         {
             return Ok(data.join("opencode.db"));

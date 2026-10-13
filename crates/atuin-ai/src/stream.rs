@@ -2,8 +2,10 @@
 // SSE streaming
 // ───────────────────────────────────────────────────────────────────
 
+use std::sync::Arc;
+
 use atuin_client::history::History;
-use atuin_client::settings::AiCapabilities;
+use atuin_client::settings::{AiCapabilities, Settings};
 use atuin_common::url::UrlAppendExt;
 use easy_cast::Conv;
 use eventsource_stream::Eventsource;
@@ -99,6 +101,7 @@ pub fn create_chat_stream(
     user_contexts: Vec<crate::user_context::UserContext>,
     skill_summaries: Vec<crate::skills::SkillSummary>,
     skill_overflow: Option<String>,
+    settings: Arc<Settings>,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamFrame>> + Send>> {
     Box::pin(async_stream::stream! {
         let endpoint = match hub_address.append_path("api/cli/chat") {
@@ -165,7 +168,7 @@ pub fn create_chat_stream(
         if status == reqwest::StatusCode::UNAUTHORIZED {
             if token_from_hub_session {
                 tracing::error!("SSE request failed with status: {status}, clearing session");
-                let _ = atuin_client::hub::delete_session().await;
+                let _ = atuin_client::hub::delete_session(&settings).await;
                 yield Err(eyre::eyre!("Hub session expired. Re-run to authenticate again."));
             } else if token.is_none() {
                 tracing::error!("SSE request failed with status: {status}");

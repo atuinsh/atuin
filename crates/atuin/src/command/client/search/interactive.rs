@@ -1944,7 +1944,7 @@ pub async fn history(
     let history_count = tokio::spawn(async move { count_db.history_count(false).await }).fuse();
     tokio::pin!(history_count);
 
-    let initial_context = current_context().await?;
+    let initial_context = current_context(settings).await?;
     let search_mode_state = SearchModeState::new(settings);
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding
@@ -2944,7 +2944,7 @@ mod tests {
             "back\\",
             "\u{e9} \u{4e2d}",
         ];
-        let required = std::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_some()
+        let required = atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_some()
             && matches!(shell, Shell::Bash | Shell::Zsh | Shell::Fish);
         let root = tempfile::tempdir().unwrap();
         let mut script = String::new();
@@ -2961,7 +2961,7 @@ mod tests {
         let skipped = NAMES.iter().filter(|n| shell == Shell::Powershell && n.contains('\\'));
         assert_eq!(expected.len(), NAMES.len() - skipped.count(), "unexpected skips");
         // Same override as the e2e shell setups, e.g. Homebrew bash on macOS.
-        let program = std::env::var(format!("ATUIN_E2E_{}", program.to_uppercase()))
+        let program = atuin_common::env::var(format!("ATUIN_E2E_{}", program.to_uppercase()))
             .unwrap_or_else(|_| program.to_owned());
         let output = match std::process::Command::new(&program)
             .args(args)

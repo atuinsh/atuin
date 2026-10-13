@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
-use crate::utils::{env_nonempty, home_dir};
+use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 
 pub mod rehydrate;
 pub mod session;
@@ -44,7 +45,7 @@ impl Harness for Opencode {
 
         // Opencode is XDG-compliant: plugins live under $XDG_CONFIG_HOME/opencode,
         // falling back to ~/.config/opencode.
-        let plugins_dir = env_nonempty("XDG_CONFIG_HOME")
+        let plugins_dir = var_nonempty("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home_dir().join(".config"))
             .join("opencode")
@@ -167,7 +168,7 @@ await fire("tool.execute.after", { tool: "read", id: "c6", status: "completed", 
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(dir.path().join("atuin.ts"), PLUGIN_2).unwrap();
         std::fs::write(dir.path().join("driver.mts"), DRIVER).unwrap();
-        let path = std::env::var("PATH").unwrap_or_default();
+        let path = crate::env::var("PATH").unwrap_or_default();
 
         let ran = std::process::Command::new("node")
             .arg("driver.mts")

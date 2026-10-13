@@ -144,11 +144,12 @@ impl HubClient {
             timeout: settings.network_timeout,
         };
 
-        let user_id = match Self::known_user(&token).await? {
+        let user_id = match Self::known_user(&token, settings).await? {
             Some(id) => id,
             None => {
                 let id = caller.who_am_i().await?;
-                Settings::meta_store()
+                settings
+                    .meta_store()
                     .await
                     .map_err(HubCallError::Meta)?
                     .save_hub_user_id(&token, id.as_str())
@@ -166,12 +167,16 @@ impl HubClient {
     pub async fn user_of(
         &self,
         HubToken(token): &HubToken,
+        settings: &Settings,
     ) -> Result<Option<UserId>, HubCallError> {
-        Self::known_user(token).await
+        Self::known_user(token, settings).await
     }
 
-    async fn known_user(token: &SecretString) -> Result<Option<UserId>, HubCallError> {
-        let meta = Settings::meta_store().await.map_err(HubCallError::Meta)?;
+    async fn known_user(
+        token: &SecretString,
+        settings: &Settings,
+    ) -> Result<Option<UserId>, HubCallError> {
+        let meta = settings.meta_store().await.map_err(HubCallError::Meta)?;
         let id = meta.hub_user_id(token).await.map_err(HubCallError::Meta)?;
         Ok(id.map(UserId))
     }

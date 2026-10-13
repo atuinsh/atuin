@@ -1,4 +1,3 @@
-use std::env;
 use std::sync::LazyLock;
 
 use atuin_common::filter::OrFilter;
@@ -68,7 +67,7 @@ impl AuthorKind {
     /// The kind stated by the invoking integration's environment (`ATUIN_HISTORY_AUTHOR_KIND`).
     #[must_use]
     pub fn probe_current() -> Option<Self> {
-        let value = env::var(HISTORY_AUTHOR_KIND_ENV).ok()?;
+        let value = atuin_common::env::var(HISTORY_AUTHOR_KIND_ENV).ok()?;
         clap::ValueEnum::from_str(&value, true).ok()
     }
 }
@@ -124,7 +123,7 @@ const HISTORY_INTENT_ENV: &str = "ATUIN_HISTORY_INTENT";
 /// The author identity exported by the invoking integration (`ATUIN_HISTORY_AUTHOR`).
 #[must_use]
 pub fn probe_author() -> Option<String> {
-    normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok())
+    normalize_optional_string(atuin_common::env::var(HISTORY_AUTHOR_ENV).ok())
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
@@ -398,14 +397,14 @@ impl History {
         author_kind: Option<AuthorKind>,
     ) -> Self {
         let session = session
-            .or_else(|| env::var("ATUIN_SESSION").ok())
+            .or_else(|| atuin_common::env::var("ATUIN_SESSION").ok())
             .unwrap_or_else(|| uuid_v7().as_simple().to_string());
         let cmd_origin = cmd_origin.unwrap_or_else(CmdOrigin::probe_current);
         let author = normalize_optional_string(author)
-            .or_else(|| normalize_optional_string(env::var(HISTORY_AUTHOR_ENV).ok()))
+            .or_else(|| normalize_optional_string(atuin_common::env::var(HISTORY_AUTHOR_ENV).ok()))
             .unwrap_or_else(|| cmd_origin.user().to_string());
         let intent = normalize_optional_string(intent)
-            .or_else(|| normalize_optional_string(env::var(HISTORY_INTENT_ENV).ok()));
+            .or_else(|| normalize_optional_string(atuin_common::env::var(HISTORY_INTENT_ENV).ok()));
         let shell = normalize_optional_string(shell);
 
         Self {

@@ -98,7 +98,7 @@ proptest! {
             // `History::new` falls back to `ATUIN_HISTORY_AUTHOR`/`ATUIN_HISTORY_INTENT` when the
             // wire field is unset, so a developer shell exporting either must not fail this test.
             let expected_intent = normalize_optional_string(Some(req.intent.clone()))
-                .or_else(|| normalize_optional_string(std::env::var("ATUIN_HISTORY_INTENT").ok()));
+                .or_else(|| normalize_optional_string(atuin_common::env::var("ATUIN_HISTORY_INTENT").ok()));
             prop_assert_eq!(&row.intent, &expected_intent);
             prop_assert_eq!(&row.shell, &normalize_optional_string(Some(req.shell.clone())));
             let expected_author = normalize_optional_string(Some(req.author.clone()))

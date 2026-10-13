@@ -7,7 +7,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        let dir = atuin_common::utils::data_dir();
+        let dir = atuin_common::dirs::unconfigured_data_dir();
         let path = dir.join("kv.db");
 
         Self {

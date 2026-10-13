@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
-use crate::utils::{env_nonempty, home_dir};
+use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 
 mod hook_trust;
 pub mod rehydrate;
@@ -12,7 +13,7 @@ pub(crate) mod state_db;
 
 /// Codex's home: `$CODEX_HOME`, else `~/.codex`.
 pub(crate) fn home() -> PathBuf {
-    env_nonempty("CODEX_HOME").map_or_else(|| home_dir().join(".codex"), PathBuf::from)
+    var_nonempty("CODEX_HOME").map_or_else(|| home_dir().join(".codex"), PathBuf::from)
 }
 
 #[derive(Debug, Clone, Copy, Default)]

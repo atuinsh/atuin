@@ -183,7 +183,7 @@ impl AliasStore {
     }
 
     pub async fn build(&self) -> Result<()> {
-        let dir = atuin_common::utils::dotfiles_cache_dir();
+        let dir = atuin_common::dirs::dotfiles_cache_dir();
         tokio::fs::create_dir_all(dir.clone()).await?;
 
         let aliases = self.aliases().await?;
@@ -334,7 +334,7 @@ impl AliasStore {
 
 #[cfg(test)]
 pub(crate) fn test_local_timeout() -> std::time::Duration {
-    let secs = std::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
+    let secs = atuin_common::env::var("ATUIN_TEST_LOCAL_TIMEOUT")
         .ok()
         .and_then(|x| x.parse::<f64>().ok())
         // this hardcoded value should be replaced by a simple way to get the

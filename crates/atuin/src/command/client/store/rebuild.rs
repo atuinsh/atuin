@@ -65,7 +65,7 @@ impl Rebuild {
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
             .context("could not load encryption key")?;
 
-        let host_id = Settings::host_id().await?;
+        let host_id = settings.host_id().await?;
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         history_store.build(database).await?;
@@ -76,7 +76,7 @@ impl Rebuild {
     async fn rebuild_scripts(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
             .context("could not load encryption key")?;
-        let host_id = Settings::host_id().await?;
+        let host_id = settings.host_id().await?;
         let script_store = ScriptStore::new(store, host_id, encryption_key);
         let database = atuin_scripts::database::Database::new(
             settings.scripts.db_path.clone(),

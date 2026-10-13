@@ -274,7 +274,7 @@ pub async fn boot(
 
     let output_capture = match settings.output.limits() {
         Some(limits) => {
-            OutputCaptureEngine::open(Settings::command_capture_dir(), limits.max_disk_usage).await
+            OutputCaptureEngine::open(settings.command_capture_dir(), limits.max_disk_usage).await
         }
         None => OutputCaptureEngine::nop(),
     };
@@ -293,9 +293,9 @@ pub async fn boot(
 
     let handle = daemon.handle();
 
-    let host_id = Settings::host_id().await?;
+    let host_id = settings.host_id().await?;
 
-    let ai_session_db_path = atuin_client::ai_session::sidecar_path();
+    let ai_session_db_path = atuin_client::ai_session::sidecar_path(&settings);
     let ai_session_db = match AiSessionDatabase::open(&ai_session_db_path).await {
         Ok(db) => Some(db),
         Err(err) => {

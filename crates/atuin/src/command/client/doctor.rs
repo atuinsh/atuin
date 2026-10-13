@@ -1,4 +1,3 @@
-use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
@@ -6,6 +5,7 @@ use std::time::Duration;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
+use atuin_common::env;
 use atuin_common::path::PathExt;
 use atuin_common::shell::{Shell, shell_name};
 use atuin_common::string::NonEmptyOrExt as _;
@@ -256,7 +256,7 @@ impl SyncInfo {
         // Build auth state description from raw token state without calling
         // resolve_sync_auth(), which has side effects (token migration cleanup)
         // that a diagnostic command should not trigger.
-        let meta = Settings::meta_store().await.ok();
+        let meta = settings.meta_store().await.ok();
         let has_hub_token = match &meta {
             Some(m) => m
                 .hub_session_token()
@@ -284,7 +284,8 @@ impl SyncInfo {
         Self {
             auth_state,
             auto_sync: settings.auto_sync,
-            last_sync: Settings::last_sync()
+            last_sync: settings
+                .last_sync()
                 .await
                 .map_or_else(|_| "no last sync".to_string(), |v| v.to_string()),
         }

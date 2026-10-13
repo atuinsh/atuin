@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
+use atuin_common::env;
 use atuin_daemon::client::SearchClient;
 use clap::{Parser, ValueEnum};
 use futures_util::{StreamExt, TryStreamExt};
@@ -123,7 +124,7 @@ fn writer_for(style: Style) -> Writer {
             Writer::Pretty(PrettyWriter)
         }
         Style::Auto => {
-            let pretty = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+            let pretty = io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none();
             colored::control::set_override(pretty);
             if pretty {
                 Writer::Pretty(PrettyWriter)

@@ -256,14 +256,14 @@ After installing, remember to restart your shell.
     Run in *Nushell*:
 
     ```shell
-    mkdir ~/.local/share/atuin/
-    atuin init nu | save ~/.local/share/atuin/init.nu
+    mkdir ~/.atuin/
+    atuin init nu | save ~/.atuin/init.nu
     ```
 
     Add to `config.nu`:
 
     ```shell
-    source ~/.local/share/atuin/init.nu
+    source ~/.atuin/init.nu
     ```
 
     ??? tip "Optional: Atuin pty-proxy"
@@ -272,16 +272,16 @@ After installing, remember to restart your shell.
         fullscreen. To use pty-proxy with Nushell, generate the init script:
 
         ```shell
-        mkdir ~/.local/share/atuin/
-        atuin pty-proxy init nu | save -f ~/.local/share/atuin/pty-proxy-init.nu
+        mkdir ~/.atuin/
+        atuin pty-proxy init nu | save -f ~/.atuin/pty-proxy-init.nu
         ```
 
         Then source it as early as possible in your `config.nu`, *before*
         the regular atuin init:
 
         ```shell
-        source ~/.local/share/atuin/pty-proxy-init.nu
-        source ~/.local/share/atuin/init.nu
+        source ~/.atuin/pty-proxy-init.nu
+        source ~/.atuin/init.nu
         ```
 
         Nushell's `source` command requires a static file path, so you must

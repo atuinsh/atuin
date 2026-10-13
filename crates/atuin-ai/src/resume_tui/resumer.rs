@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, Head, SourceId};
-use atuin_client::settings::AiSessionResume;
+use atuin_client::settings::{AiSessionResume, Settings};
+use atuin_common::env;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use atuin_common::harnesstools::rehydrate::{
     ForkOf, RehydrateError, RehydrateMessage, RehydrateSession,
@@ -442,35 +443,28 @@ pub struct HarnessResumer {
 
 /// Where copies switched to another branch are kept as they were: `ai/switched` in atuin's data
 /// directory (`data_dir`, `ATUIN_DATA_DIR`), which no agent lists sessions from.
-pub fn switched_dir() -> PathBuf {
-    atuin_client::settings::Settings::effective_data_dir().join("ai").join("switched")
+pub fn switched_dir(settings: &Settings) -> PathBuf {
+    settings.data_dir.join("ai").join("switched")
 }
 
 impl HarnessResumer {
-    pub fn new(context: ResumeContext, templates: AiSessionResume) -> Self {
-        Self::on(context, templates, ThisMachine)
-    }
-
-    /// The resumer, keeping copies switched to another branch in `dir` instead of
-    /// [`switched_dir`].
-    #[cfg(test)]
-    #[must_use]
-    pub fn keeping_switched_in(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.switched = dir.into();
-        self
+    pub fn new(context: ResumeContext, settings: &Settings) -> Self {
+        let templates = settings.ai.sessions.resume.clone();
+        Self::on(context, templates, ThisMachine, switched_dir(settings))
     }
 
     /// A resumer looking at `machine` instead of this one.
-    pub fn on(
+    fn on(
         context: ResumeContext,
         templates: AiSessionResume,
         machine: impl Machine + 'static,
+        switched: impl Into<PathBuf>,
     ) -> Self {
         Self {
             templates,
             context,
             machine: Box::new(machine),
-            switched: switched_dir(),
+            switched: switched.into(),
         }
     }
 
@@ -1054,7 +1048,7 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
     if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
         return runnable(Path::new(program));
     }
-    let paths = std::env::var_os("PATH")?;
+    let paths = env::var_os("PATH")?;
     std::env::split_paths(&paths).find_map(|dir| runnable(&dir.join(program)))
 }
 
@@ -1086,7 +1080,7 @@ fn runnable(path: &Path) -> Option<PathBuf> {
         if path.is_file() {
             return Some(path.to_path_buf());
         }
-        let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+        let extensions = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
         extensions.split(';').filter(|ext| !ext.is_empty()).find_map(|ext| {
             let mut with_ext = path.as_os_str().to_owned();
             with_ext.push(ext);

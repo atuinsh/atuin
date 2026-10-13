@@ -5,7 +5,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
-use atuin_common::utils::env_nonempty;
+use atuin_common::env::var_nonempty;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
@@ -82,7 +82,7 @@ impl Cmd {
     fn scripted_key(&self) -> Option<SecretString> {
         self.key
             .clone()
-            .or_else(|| env_nonempty(KEY_ENV)?.into_string().ok().map(SecretString::from))
+            .or_else(|| var_nonempty(KEY_ENV)?.into_string().ok().map(SecretString::from))
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -114,7 +114,7 @@ impl Cmd {
                 }
             };
 
-            let meta = Settings::meta_store().await?;
+            let meta = settings.meta_store().await?;
             let is_hub_token =
                 auth_type.as_deref() == Some("hub") || atuin_client::meta::is_hub_token(&session);
 
@@ -139,7 +139,7 @@ impl Cmd {
 
         // Silently attempt to link CLI account to Hub if one exists
         if let Ok(cli_token) = settings.session_token().await
-            && let Err(e) = atuin_client::hub::link_account(&endpoint, &cli_token).await
+            && let Err(e) = atuin_client::hub::link_account(&endpoint, &cli_token, settings).await
         {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
@@ -162,7 +162,7 @@ impl Cmd {
 
         match response {
             AuthResponse::Success { session, .. } => {
-                Settings::meta_store().await?.save_session(&session).await?;
+                settings.meta_store().await?.save_session(&session).await?;
             }
             AuthResponse::TwoFactorRequired => {
                 // Legacy server doesn't support 2FA, so this shouldn't happen.
@@ -174,7 +174,7 @@ impl Cmd {
         Ok(())
     }
 
-    async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &url::Url) -> Result<()> {
+    async fn ensure_hub_session(&self, settings: &Settings, hub_address: &url::Url) -> Result<()> {
         tracing::info!("Authenticating with Atuin Hub...");
 
         let mut session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
@@ -201,7 +201,7 @@ impl Cmd {
 
         tracing::info!("Authentication complete, saving session token");
 
-        atuin_client::hub::save_session(&token).await?;
+        atuin_client::hub::save_session(&token, settings).await?;
 
         Ok(())
     }
@@ -278,7 +278,7 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
 
     println!("\n{}", fl!("login-reencrypting"));
     store.re_encrypt(&current_key, key).await?;
-    crate::command::client::store::invalidate_ai_sessions().await;
+    crate::command::client::store::invalidate_ai_sessions(settings).await;
 
     println!("{}", fl!("login-writing-key"));
     key.overwrite_path(key_path)?;
@@ -313,7 +313,7 @@ async fn verify_key_against_remote(
             None => return store_key(settings, store, &key).await,
             Some(SyncError::WrongKey) => {
                 if !interactive {
-                    logout_wrong_key().await;
+                    logout_wrong_key(settings).await;
                 }
 
                 println!("\n{}", fl!("login-key-mismatch"));
@@ -333,7 +333,7 @@ async fn verify_key_against_remote(
                         }
                     }
                     // A blank line or exhausted stdin both mean "give up".
-                    _ => logout_wrong_key().await,
+                    _ => logout_wrong_key(settings).await,
                 }
             }
             Some(e) => {
@@ -349,8 +349,8 @@ async fn verify_key_against_remote(
 
 /// Roll back the saved session so the user is not left in a half-authenticated
 /// state with a key that can't read the data, then exit.
-async fn logout_wrong_key() -> ! {
-    if let Ok(meta) = Settings::meta_store().await {
+async fn logout_wrong_key(settings: &Settings) -> ! {
+    if let Ok(meta) = settings.meta_store().await {
         let _ = meta.delete_session().await;
         let _ = meta.delete_hub_session().await;
     }

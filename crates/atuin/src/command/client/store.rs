@@ -58,8 +58,8 @@ pub enum Cmd {
 /// re-encrypted the records under it: they say what they said, so what is projected stays and
 /// the replay only has to cover it again with the new key. Best effort: the maintenance itself
 /// has already happened.
-pub async fn invalidate_ai_sessions() {
-    if let Err(err) = atuin_client::ai_session::invalidate_sidecar().await {
+pub async fn invalidate_ai_sessions(settings: &Settings) {
+    if let Err(err) = atuin_client::ai_session::invalidate_sidecar(settings).await {
         eprintln!("Failed to schedule a rebuild of the ai session index: {err}");
     }
 }
@@ -101,7 +101,7 @@ pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
 /// index is now stale, and how to fix it. Nothing to do when there is no index yet: the daemon
 /// builds it from the records as they are now.
 pub async fn reset_ai_sessions_after(settings: &Settings) -> Result<()> {
-    if !atuin_client::ai_session::sidecar_path().exists() {
+    if !atuin_client::ai_session::sidecar_path(settings).exists() {
         return Ok(());
     }
     reset_ai_sessions(settings).await.wrap_err(
@@ -119,7 +119,7 @@ impl Cmd {
         store: SqliteStore,
     ) -> Result<()> {
         match self {
-            Self::Status => self.status(store).await,
+            Self::Status => self.status(settings, store).await,
             Self::Rebuild(rebuild) => rebuild.run(settings, store, database).await,
             Self::Rekey(rekey) => rekey.run(settings, store).await,
             Self::Compact => {
@@ -148,8 +148,8 @@ impl Cmd {
         }
     }
 
-    pub async fn status(&self, store: SqliteStore) -> Result<()> {
-        let host_id = Settings::host_id().await?;
+    pub async fn status(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        let host_id = settings.host_id().await?;
         let offset = time::UtcOffset::local_or_utc();
 
         let status = store.status().await?;

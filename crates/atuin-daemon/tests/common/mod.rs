@@ -134,6 +134,11 @@ impl TestEnvBuilder {
             .unwrap()
             .set_override("daemon.socket_path", socket_path.to_str().unwrap())
             .unwrap()
+            .set_override("meta.db_path", tmp.path().join("meta.db").to_str().unwrap())
+            .unwrap()
+            // Prevent meta store from migrating files from the real data dir.
+            .set_override("data_dir", tmp.path().to_str().unwrap())
+            .unwrap()
             // Unroutable on purpose: the capability warm-up must fail fast, not dial the internet.
             .set_override("sync_address", "http://127.0.0.1:1")
             .unwrap()

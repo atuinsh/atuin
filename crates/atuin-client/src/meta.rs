@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -45,7 +46,15 @@ pub struct MetaStore {
 }
 
 impl MetaStore {
-    pub async fn new(path: impl AsRef<OsStr>, timeout: Duration) -> Result<Self> {
+    /// Load the meta store at `path`.
+    ///
+    /// Legacy plain-text files in `data_dir` will be migrated to the meta store when the meta
+    /// store is first created.
+    pub async fn new(
+        path: impl AsRef<OsStr>,
+        data_dir: impl AsRef<Path>,
+        timeout: Duration,
+    ) -> Result<Self> {
         let path = path.as_ref();
         debug!("opening meta sqlite database at {path:?}");
 
@@ -55,7 +64,7 @@ impl MetaStore {
         let store = Self::from_builder(builder, timeout).await?;
 
         if !ephemeral {
-            store.migrate_files().await?;
+            store.migrate_files(data_dir.as_ref()).await?;
         }
 
         Ok(store)
@@ -270,12 +279,10 @@ impl MetaStore {
     // File migration: on first open, migrate old plain-text files into the database.
     // Old files are left in place for safe downgrades.
 
-    async fn migrate_files(&self) -> Result<()> {
+    async fn migrate_files(&self, data_dir: &Path) -> Result<()> {
         if self.get(KEY_FILES_MIGRATED).await?.is_some() {
             return Ok(());
         }
-
-        let data_dir = crate::settings::Settings::effective_data_dir();
 
         // host_id — validate as UUID
         let host_id_path = data_dir.join(LEGACY_HOST_ID_FILENAME);
@@ -447,8 +454,26 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn legacy_files_are_migrated_from_the_given_data_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let host_id = Uuid::now_v7().as_simple().to_string();
+        std::fs::write(data_dir.join(LEGACY_HOST_ID_FILENAME), &host_id).unwrap();
+
+        let store = MetaStore::new(tmp.path().join("meta.db"), &data_dir, Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        assert_eq!(store.get(KEY_HOST_ID).await.unwrap(), Some(host_id));
+        assert!(store.get(KEY_FILES_MIGRATED).await.unwrap().is_some());
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn memory_store_skips_file_migration() {
-        let store = MetaStore::new(":memory:", Duration::from_secs(2)).await.unwrap();
+        let store =
+            MetaStore::new(":memory:", "/nonexistent", Duration::from_secs(2)).await.unwrap();
 
         assert_eq!(store.get(KEY_FILES_MIGRATED).await.unwrap(), None);
     }
@@ -463,7 +488,12 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("meta.db");
-        MetaStore::new(&path, Duration::from_secs(2)).await.unwrap().set("k", "v").await.unwrap();
+        MetaStore::new(&path, dir.path(), Duration::from_secs(2))
+            .await
+            .unwrap()
+            .set("k", "v")
+            .await
+            .unwrap();
 
         let mut writer =
             sqlx::sqlite::SqliteConnectOptions::new().filename(&path).connect().await.unwrap();
@@ -478,7 +508,7 @@ mod tests {
             writer.close().await.unwrap();
         });
 
-        let store = MetaStore::new(&path, Duration::from_secs(2)).await.unwrap();
+        let store = MetaStore::new(&path, dir.path(), Duration::from_secs(2)).await.unwrap();
         assert_eq!(store.get("k").await.unwrap().as_deref(), Some("w"));
         commit.await.unwrap();
     }

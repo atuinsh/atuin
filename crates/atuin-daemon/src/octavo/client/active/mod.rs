@@ -37,7 +37,7 @@ impl ActiveOctavoClient {
         handle: DaemonHandle,
         outputs: Arc<OutputStore>,
     ) -> Result<Self, OpenActiveOctavoClientError> {
-        let queue = UploadQueue::open(Settings::octavo_queue_path()).await?;
+        let queue = UploadQueue::open(settings.octavo_queue_path()).await?;
         let hub = HubClient::new(settings)?;
         let wake = Arc::new(Notify::new());
         let engine =
@@ -191,7 +191,7 @@ impl DirectUploader {
     /// That needs the token's user, known once the daemon has reached the hub since the login;
     /// until then a detached task asks the hub first.
     async fn queue_for(self: &Arc<Self>, settings: Settings, token: HubToken, work: Queued) {
-        match self.hub.user_of(&token).await {
+        match self.hub.user_of(&token, &settings).await {
             Ok(Some(user)) => self.enqueue(&user, work).await,
             Ok(None) => {
                 tokio::spawn(Arc::clone(self).learn_user_and_queue(settings, token, work));

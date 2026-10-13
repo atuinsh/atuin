@@ -203,7 +203,7 @@ impl Cmd {
 
     fn query(&self) -> String {
         if self.query.is_empty() {
-            std::env::var("ATUIN_QUERY").unwrap_or_default()
+            atuin_common::env::var("ATUIN_QUERY").unwrap_or_default()
         } else {
             self.query.join(" ")
         }
@@ -425,8 +425,8 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let output = cmd.output();
     let query = cmd.query();
 
-    let context = ResumeContext::current().await?;
-    let path = Settings::ai_session_sidecar_path();
+    let context = ResumeContext::current(&settings).await?;
+    let path = settings.ai_session_sidecar_path();
     // The daemon makes it the first time it runs with sessions on.
     if !path.exists() {
         if settings.ai.capture_sessions {
@@ -435,8 +435,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         bail!("no AI sessions here yet: turn them on with `atuin config enable ai-sessions`");
     }
     let source: Arc<dyn SessionSource> = Arc::new(SidecarSource::open(&path, &context).await?);
-    let resumer: Arc<dyn Resumer> =
-        Arc::new(HarnessResumer::new(context.clone(), settings.ai.sessions.resume.clone()));
+    let resumer: Arc<dyn Resumer> = Arc::new(HarnessResumer::new(context.clone(), &settings));
 
     if cmd.fork || cmd.continue_in.is_some() {
         let (source, resumer, query) = (source.as_ref(), resumer.as_ref(), query.trim());
@@ -502,7 +501,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
              resume <id>` (`atuin ai session list` lists them)"
         );
     }
-    let mut themes = ThemeManager::new(settings.theme.debug, None);
+    let mut themes = ThemeManager::from_settings(&settings.theme);
     let theme = themes.load_theme(settings.theme.name.as_str(), settings.theme.max_depth);
     let (outcome, note) = Picker {
         settings: &settings,

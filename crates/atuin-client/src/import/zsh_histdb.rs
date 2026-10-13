@@ -102,7 +102,7 @@ impl ZshHistDb {
         //
         //  if [[ -z ${HISTDB_FILE} ]]; then
         //      typeset -g HISTDB_FILE="${HOME}/.histdb/zsh-history.db"
-        if let Ok(path) = std::env::var("HISTDB_FILE") {
+        if let Ok(path) = atuin_common::env::var("HISTDB_FILE") {
             return Ok(PathBuf::from(path));
         }
 
@@ -175,28 +175,29 @@ impl Importer for ZshHistDb {
 
 #[cfg(test)]
 mod test {
-
-    use std::env;
-
+    use atuin_common::env::MockEnv;
+    use rstest::rstest;
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
+
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    #[allow(unsafe_code)]
     async fn test_env_vars() {
         let test_env_db = "nonstd-zsh-history.db";
         let key = "HISTDB_FILE";
-        // SAFETY: Runs in a single-threaded test context, so no other thread accesses the environment concurrently.
-        unsafe { env::set_var(key, test_env_db) };
+        let env = MockEnv::install();
+        env.set(key, test_env_db);
 
         // test the env got set
-        assert_eq!(env::var(key).unwrap(), test_env_db.to_string());
+        assert_eq!(atuin_common::env::var(key).unwrap(), test_env_db.to_string());
 
         // test histdb returns the proper db from previous step
         let histdb_path = ZshHistDb::histpath_candidate().unwrap();
         assert_eq!(histdb_path.to_str().unwrap(), test_env_db);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn duration_saturates_instead_of_overflowing() {
         use time::macros::datetime;
@@ -226,6 +227,7 @@ mod test {
         assert_eq!(loader.buf[0].duration, i64::MAX);
     }
 
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_import() {
         let pool: SqlitePool =

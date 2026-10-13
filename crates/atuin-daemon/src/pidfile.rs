@@ -304,6 +304,21 @@ pub fn try_read_pid(pidfile_path: &Path) -> Option<u32> {
         .ok()
 }
 
+/// Check whether a pidfile is live; that is, whether it is associated with an actively running
+/// daemon.
+#[must_use]
+pub fn is_live(pidfile_path: &Path) -> bool {
+    LockOptions {
+        create: false,
+        // The daemon always acquires an exclusive lock on the pidfile. Here, try to obtain a shared
+        // lock to slightly reduce the chance of false positives in case some other process is
+        // holding a lock on the file.
+        mode: LockMode::Shared,
+    }
+    .try_open(pidfile_path)
+    .is_err_and(|e| matches!(e, LockError::WouldBlock))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::OpenOptions;

@@ -24,7 +24,7 @@ impl Octavo {
     ) -> Self {
         // Once Octavo has been on here, deletions keep reaching it with uploads off, so what the
         // user deletes locally leaves Octavo too.
-        if !settings.octavo.enabled && !Settings::octavo_queue_path().exists() {
+        if !settings.octavo.enabled && !settings.octavo_queue_path().exists() {
             return Self::nop();
         }
 

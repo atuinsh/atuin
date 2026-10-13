@@ -75,8 +75,8 @@ pub struct ResumeContext {
 
 impl ResumeContext {
     /// The current directory, repository, branch and host.
-    pub async fn current() -> Result<Self> {
-        let ctx = atuin_client::database::query_context().await?;
+    pub async fn current(settings: &Settings) -> Result<Self> {
+        let ctx = atuin_client::database::query_context(settings).await?;
         // `$PWD` as it is set, which may end in a separator: rebuilt from its components, so a
         // session restored or continued here isn't written with `…/dir/` as its directory.
         let cwd: PathBuf = Path::new(&ctx.cwd).components().collect();
@@ -1015,7 +1015,7 @@ impl Picker<'_> {
 fn set_clipboard(s: &str) -> Result<()> {
     // Over SSH the system clipboard is the remote machine's, if it has one: the terminal's is
     // the one wanted.
-    if std::env::var_os("SSH_CONNECTION").is_some() {
+    if atuin_common::env::var_os("SSH_CONNECTION").is_some() {
         return Ok(terminal::copy(s)?);
     }
     let system = || -> Result<()> {

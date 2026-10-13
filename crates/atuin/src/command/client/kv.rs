@@ -62,7 +62,7 @@ impl Cmd {
         let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
             .context("could not load or generate encryption key")?;
 
-        let host_id = Settings::host_id().await?;
+        let host_id = settings.host_id().await?;
 
         let kv_db = atuin_kv::database::Database::new(
             settings.kv.db_path.clone(),

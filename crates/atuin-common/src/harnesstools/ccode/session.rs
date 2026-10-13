@@ -10,6 +10,8 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
+use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::resume;
@@ -24,7 +26,6 @@ use crate::harnesstools::session::{
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
 use crate::sync::BlockingPool;
-use crate::utils::{env_nonempty, home_dir};
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct CcodeSessions {
@@ -43,7 +44,7 @@ impl CcodeSessions {
 /// Claude Code's projects directory: `$CLAUDE_CONFIG_DIR/projects`, else
 /// `~/.claude/projects`.
 pub(crate) fn default_root() -> PathBuf {
-    env_nonempty("CLAUDE_CONFIG_DIR")
+    var_nonempty("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join(".claude"))
         .join("projects")

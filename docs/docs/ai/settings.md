@@ -14,12 +14,6 @@ Default: unset
 
 The Atuin AI model to use for new sessions. If unset, the default model will be used. You can see the available models by running `/model` inside the Atuin AI interface.
 
-### `db_path`
-
-Default: `ai_sessions.db` in the Atuin data directory.
-
-The path to the SQLite database where Atuin AI sessions are stored.
-
 ### `session_continue_minutes`
 
 Default: `1h`
