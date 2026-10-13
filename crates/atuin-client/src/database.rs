@@ -948,6 +948,21 @@ impl Sqlite {
             .await
     }
 
+    /// Every run of this exact command, newest id first: the order [`Self::all_paged`] reads them
+    /// in.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn command_runs(&self, command: &str) -> Result<Vec<History>> {
+        let query = format!(
+            "select {HISTORY_COLUMNS} from history
+             where command = ?1 and deleted_at is null
+             order by id desc"
+        );
+        db::query_as::<_, History>(sqlx::AssertSqlSafe(query))
+            .bind(command)
+            .fetch_all(self.sqlite.pool())
+            .await
+    }
+
     #[instrument(level = "trace", skip_all, err)]
     pub async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
         debug!("listing history");
@@ -2229,6 +2244,31 @@ mod test {
         // Should return None immediately
         let page = paged.next().await.unwrap();
         assert!(page.is_none());
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_command_runs(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        for cmd in ["cargo build", "cargo test", "cargo build", "cargo build"] {
+            new_history_item(&db, cmd).await.unwrap();
+        }
+
+        let runs = db.command_runs("cargo build").await.unwrap();
+        assert_eq!(runs.len(), 3);
+        assert!(runs.iter().all(|h| h.command == "cargo build"));
+        assert!(runs.is_sorted_by(|a, b| a.id > b.id), "newest id first");
+
+        assert!(db.command_runs("cargo").await.unwrap().is_empty(), "exact match only");
+
+        // Tombstones written by older versions are not runs
+        let mut legacy = runs[0].clone();
+        legacy.deleted_at = Some(OffsetDateTime::now_utc());
+        db.update(&legacy).await.unwrap();
+        assert_eq!(db.command_runs("cargo build").await.unwrap().len(), 2);
     }
 
     #[rstest]
