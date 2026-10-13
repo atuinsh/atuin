@@ -220,6 +220,12 @@ impl CommandData {
     }
 }
 
+/// The runs a command has left in the history db, folded one at a time by
+/// [`SearchIndex::add_run`] into what the index would hold for them, for
+/// [`SearchIndex::sync_commands`]. Holds no rows, however many runs a command has.
+#[derive(Debug, Default)]
+pub struct CommandRuns(Option<CommandData>);
+
 /// Filter mode for search queries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexFilterMode {
@@ -460,10 +466,26 @@ impl SearchIndex {
         !history.is_agent() && self.shells.contains(history.shell.as_deref().unwrap_or_default())
     }
 
-    /// Make the index agree with the history db about each command, given `runs`: every row left
-    /// for that command, newest id first (the order [`Self::load_from_db`] reads them in).
+    /// Fold one of the runs a command has left into `runs`, the way [`Self::add_history`] would
+    /// index it. Feed them newest id first, the order [`Self::load_from_db`] reads them in.
+    pub fn add_run(&self, runs: &mut CommandRuns, history: &History) {
+        if !self.indexes(history) {
+            return;
+        }
+
+        match &mut runs.0 {
+            Some(data) => {
+                data.add_invocation(history, &self.interner);
+            }
+            // `sync_commands` sets the real haystack position.
+            None => runs.0 = CommandData::new(history, 0, &self.interner),
+        }
+    }
+
+    /// Make the index agree with the history db about each command, given the runs it has left
+    /// there, folded by [`Self::add_run`].
     ///
-    /// This lets a delete update the index without reloading all of history: [`CommandData`] only
+    /// This lets a delete update the index without reloading all of history: `CommandData` only
     /// keeps aggregates, so a single invocation cannot be subtracted from it, but the command can
     /// be rebuilt from the runs it has left. A command left with none is dropped, and the haystack
     /// compacted, so the fuzzy matcher no longer sees it. The frecency map is rebuilt last, since
@@ -471,18 +493,18 @@ impl SearchIndex {
     #[instrument(skip_all, level = tracing::Level::DEBUG, name = "index_sync_commands")]
     pub fn sync_commands(
         &self,
-        runs: impl IntoIterator<Item = (String, Vec<History>)>,
+        commands: impl IntoIterator<Item = (String, CommandRuns)>,
         search_settings: &Search,
     ) {
         let mut haystack = self.haystack.write();
         let mut dropped = false;
 
-        for (command, runs) in runs {
+        for (command, CommandRuns(data)) in commands {
             let current = self.commands.get(command.as_str()).map(|data| data.haystack_index);
-            let haystack_index = current.map_or(haystack.len(), usize::conv);
 
-            match (current, self.command_data(&runs, haystack_index)) {
-                (Some(_), Some(data)) => {
+            match (current, data) {
+                (Some(haystack_index), Some(mut data)) => {
+                    data.haystack_index = haystack_index;
                     if let Some(mut entry) = self.commands.get_mut(command.as_str()) {
                         *entry = data;
                     }
@@ -492,7 +514,11 @@ impl SearchIndex {
                     dropped = true;
                 }
                 // Runs the index never saw, e.g. one a racing reload dropped (see #4052).
-                (None, Some(data)) => {
+                (None, Some(mut data)) => {
+                    let Ok(haystack_index) = u32::try_from(haystack.len()) else {
+                        continue; // As `CommandData::new` does past 2^32 commands.
+                    };
+                    data.haystack_index = haystack_index;
                     let command: Arc<str> = command.into();
                     haystack.push(HaystackEntry::new(command.clone()));
                     self.commands.insert(command, data);
@@ -512,19 +538,6 @@ impl SearchIndex {
 
         drop(haystack);
         self.rebuild_frecency(search_settings);
-    }
-
-    /// The [`CommandData`] for a command with these runs, the way [`Self::add_history`] would
-    /// build it from them, or [`None`] if none of them belongs in the index.
-    fn command_data(&self, runs: &[History], haystack_index: usize) -> Option<CommandData> {
-        let mut runs = runs.iter().filter(|history| self.indexes(history));
-        let mut data = runs
-            .by_ref()
-            .find_map(|history| CommandData::new(history, haystack_index, &self.interner))?;
-        for history in runs {
-            data.add_invocation(history, &self.interner);
-        }
-        Some(data)
     }
 
     /// Get the number of unique commands in the index.
@@ -733,12 +746,20 @@ mod tests {
         index
     }
 
-    /// The rows `command` has in `histories`, newest id first, as `Sqlite::command_runs` returns
-    /// them.
-    fn runs_of(histories: &[History], command: &str) -> Vec<History> {
-        let mut runs: Vec<_> = histories.iter().filter(|h| h.command == command).cloned().collect();
-        runs.sort_by_key(|h| std::cmp::Reverse(h.id));
-        runs
+    /// `command`'s rows in `histories` folded by `index`, newest id first, as the journal folds
+    /// what `Sqlite::command_runs` streams.
+    fn runs_left(
+        index: &SearchIndex,
+        histories: &[History],
+        command: &str,
+    ) -> (String, CommandRuns) {
+        let mut rows: Vec<_> = histories.iter().filter(|h| h.command == command).collect();
+        rows.sort_by_key(|h| std::cmp::Reverse(h.id));
+        let mut runs = CommandRuns::default();
+        for row in rows {
+            index.add_run(&mut runs, row);
+        }
+        (command.to_owned(), runs)
     }
 
     /// Per command: use count, last use, most recent id, directories, hosts, sessions and
@@ -800,7 +821,7 @@ mod tests {
         let index = index_of(&all);
         index.sync_commands(
             ["git status", "ls -la", "cargo build"]
-                .map(|command| (command.to_owned(), runs_of(&remaining, command))),
+                .map(|command| runs_left(&index, &remaining, command)),
             &Search::default(),
         );
 
@@ -829,7 +850,7 @@ mod tests {
         index.add_history(&gone);
         index.add_history(&kept);
 
-        index.sync_commands([("echo gone".to_owned(), Vec::new())], &Search::default());
+        index.sync_commands([runs_left(&index, &[], "echo gone")], &Search::default());
 
         assert_eq!(index.command_count(), 1);
         let global: Vec<_> = index.search("echo", &IndexFilterMode::Global, 10).collect();
@@ -857,7 +878,7 @@ mod tests {
         index.add_history(&agent);
         assert_eq!(index.commands.get("make deploy").unwrap().global_frecency.count, 1);
 
-        index.sync_commands([("make deploy".to_owned(), vec![agent])], &Search::default());
+        index.sync_commands([runs_left(&index, &[agent], "make deploy")], &Search::default());
 
         assert_eq!(index.command_count(), 0);
         assert!(snapshot(&index).is_empty());
@@ -869,7 +890,8 @@ mod tests {
         let index = SearchIndex::default();
         let missed = make_history("echo missed", "/tmp", datetime!(2024-01-01 10:00 UTC));
 
-        index.sync_commands([("echo missed".to_owned(), vec![missed.clone()])], &Search::default());
+        let runs = runs_left(&index, std::slice::from_ref(&missed), "echo missed");
+        index.sync_commands([runs], &Search::default());
 
         let hits: Vec<_> = index.search("missed", &IndexFilterMode::Global, 10).collect();
         assert_eq!(hits, vec![missed.id]);
