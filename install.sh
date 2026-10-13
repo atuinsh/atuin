@@ -142,39 +142,63 @@ Sync your history across all your machines with Atuin Cloud:
 
 EOF
 
-  echo "Set up sync with an Atuin account?"
-  echo ""
-  echo "  1) Yes - create a new account"
-  echo "  2) Log in to an existing account"
-  echo "  3) Skip sync for now"
-  echo ""
-  printf "Select an option [1/2/3] (default 1): "
-  read -r sync_answer </dev/tty || sync_answer="3"
-  sync_answer="${sync_answer:-1}"
+  # `auth --check` fails for a self-hosted sync server, which still needs the menu below, and for
+  # a release that predates `atuin auth` (this script is served from main but installs the latest
+  # release).
+  if "$ATUIN_BIN" auth --check >/dev/null 2>&1; then
+    printf "Set up sync? You'll log in or create an account in your browser. [Y/n] "
+    read -r sync_answer </dev/tty || sync_answer="n"
 
-  case "$sync_answer" in
-    1|[yYcC]*)
-      echo ""
-      if ! "$ATUIN_BIN" register </dev/tty; then
+    case "${sync_answer:-y}" in
+      [yY]*)
         echo ""
-        echo "Registration did not complete. You can run 'atuin register' any time to try again."
-      fi
-      ;;
-    2|[lL]*)
-      echo ""
-      # Silences pre-#3916 401 log spam; drop once that fix is in the latest release.
-      if ! ATUIN_LOG="warn,atuin_client::hub=off" "$ATUIN_BIN" login </dev/tty; then
+        if ! "$ATUIN_BIN" auth </dev/tty; then
+          echo ""
+          echo "Sync setup did not complete. You can run 'atuin auth' any time to try again."
+        fi
+        ;;
+      *)
         echo ""
-        echo "Login did not complete. You can run 'atuin login' any time to try again."
-      fi
-      ;;
-    *)
-      echo ""
-      echo "Skipping sync setup."
-      echo "You can run 'atuin register' any time to create an account,"
-      echo "or 'atuin login' if you already have one."
-      ;;
-  esac
+        echo "Skipping sync setup. You can run 'atuin auth' any time to set it up."
+        ;;
+    esac
+  else
+
+    echo "Set up sync with an Atuin account?"
+    echo ""
+    echo "  1) Yes - create a new account"
+    echo "  2) Log in to an existing account"
+    echo "  3) Skip sync for now"
+    echo ""
+    printf "Select an option [1/2/3] (default 1): "
+    read -r sync_answer </dev/tty || sync_answer="3"
+    sync_answer="${sync_answer:-1}"
+
+    case "$sync_answer" in
+      1|[yYcC]*)
+        echo ""
+        if ! "$ATUIN_BIN" register </dev/tty; then
+          echo ""
+          echo "Registration did not complete. You can run 'atuin register' any time to try again."
+        fi
+        ;;
+      2|[lL]*)
+        echo ""
+        # Silences pre-#3916 401 log spam; drop once that fix is in the latest release.
+        if ! ATUIN_LOG="warn,atuin_client::hub=off" "$ATUIN_BIN" login </dev/tty; then
+          echo ""
+          echo "Login did not complete. You can run 'atuin login' any time to try again."
+        fi
+        ;;
+      *)
+        echo ""
+        echo "Skipping sync setup."
+        echo "You can run 'atuin register' any time to create an account,"
+        echo "or 'atuin login' if you already have one."
+        ;;
+    esac
+
+  fi
 
 else
   echo "Non-interactive environment detected — skipping setup prompts."
