@@ -21,6 +21,7 @@ pub mod query;
 pub mod rebuild;
 pub mod render;
 pub mod resumer;
+mod select;
 pub mod sidecar;
 pub mod source;
 pub mod state;
@@ -598,7 +599,7 @@ fn start_fork(
     requests: &Requests,
 ) {
     if action == Pending::Copy {
-        let id = resumer::quote(row.handle.session.as_ref());
+        let id = row.atuin_id;
         let pick = branch.map(|b| format!(" --branch {}", resumer::quote(&b.selector)));
         copy(state, &format!("atuin resume {id} --fork{}", pick.unwrap_or_default()));
         return;
@@ -654,7 +655,7 @@ fn start_switch(
     requests: &Requests,
 ) {
     if action == Pending::Copy {
-        let id = resumer::quote(row.handle.session.as_ref());
+        let id = row.atuin_id;
         let pick = resumer::quote(&branch.selector);
         copy(state, &format!("atuin resume {id} --switch --branch {pick}"));
         return;
@@ -722,7 +723,7 @@ fn start_continuation(
     requests: &Requests,
 ) {
     if action == Pending::Copy {
-        let id = resumer::quote(row.handle.session.as_ref());
+        let id = row.atuin_id;
         let into = source::harness_arg(target).unwrap_or_default();
         copy(state, &format!("atuin resume {id} --in {into}"));
         return;
@@ -774,19 +775,26 @@ fn finish_continuation(
 
 /// What ctrl-y copies to resume `row`, planned as `resume`, in its own harness. Copying writes
 /// nothing, so when running the harness's own command wouldn't do (the session has to be
-/// restored from sync, or caught up with it, first), it is `atuin resume <id>`, which does
+/// restored from sync, or caught up with it, first), it is `atuin resume <atuin id>`, which does
 /// that when run.
 fn resume_line(row: &SessionRow, resume: &Resume) -> String {
     if resume.restore.is_none() && !resume.catch_up {
         return resumer::shell_line(&resume.plan);
     }
-    format!("atuin resume {}", resumer::quote(row.handle.session.as_ref()))
+    format!("atuin resume {}", row.atuin_id)
 }
 
-/// Put `line` on the clipboard, saying so in the status row.
+/// Put `line` on the clipboard, saying so in the status row (its first line, when it has more).
 fn copy(state: &mut State, line: &str) {
+    let mut lines = line.lines();
+    let first = lines.next().unwrap_or_default();
+    let more = if lines.next().is_some() {
+        " …"
+    } else {
+        ""
+    };
     state.status = Some(match set_clipboard(line) {
-        Ok(()) => (format!("copied: {line}"), Meaning::AlertInfo),
+        Ok(()) => (format!("copied: {first}{more}"), Meaning::AlertInfo),
         Err(e) => (format!("copy failed: {e}"), Meaning::AlertError),
     });
 }
@@ -876,6 +884,10 @@ impl Picker<'_> {
                         InputAction::Resume => Some(Pending::Resume),
                         InputAction::ReturnCommand => Some(Pending::Edit),
                         InputAction::Copy => Some(Pending::Copy),
+                        InputAction::CopyText(text) => {
+                            copy(&mut state, &text);
+                            None
+                        }
                         InputAction::Fork => {
                             let enter = if settings.enter_accept {
                                 Pending::Resume
@@ -1001,19 +1013,27 @@ impl Picker<'_> {
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
 fn set_clipboard(s: &str) -> Result<()> {
-    let mut ctx = arboard::Clipboard::new()?;
-    ctx.set_text(s.to_owned())?;
-    // Read it back so the clipboard owner keeps it after we exit.
-    ctx.get_text()?;
-    Ok(())
+    // Over SSH the system clipboard is the remote machine's, if it has one: the terminal's is
+    // the one wanted.
+    if std::env::var_os("SSH_CONNECTION").is_some() {
+        return Ok(terminal::copy(s)?);
+    }
+    let system = || -> Result<()> {
+        let mut ctx = arboard::Clipboard::new()?;
+        ctx.set_text(s.to_owned())?;
+        // Read it back so the clipboard owner keeps it after we exit.
+        ctx.get_text()?;
+        Ok(())
+    };
+    system().or_else(|_| Ok(terminal::copy(s)?))
 }
 
 #[cfg(not(all(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
-fn set_clipboard(_s: &str) -> Result<()> {
-    eyre::bail!("this build has no clipboard support")
+fn set_clipboard(s: &str) -> Result<()> {
+    Ok(terminal::copy(s)?)
 }
 
 #[cfg(test)]

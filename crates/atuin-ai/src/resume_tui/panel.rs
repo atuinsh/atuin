@@ -187,6 +187,7 @@ impl State {
         if let Some(t) = tokens(&row.usage) {
             meta.push(Line::from(Span::styled(format!("{t} tokens"), muted)));
         }
+        meta.push(Line::from(Span::styled(format!("id {}", row.atuin_id), muted)));
         for line in meta {
             lines.extend(markdown::wrap_plain(&line.spans, width, 0, muted));
         }

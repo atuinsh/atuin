@@ -899,8 +899,7 @@ async fn a_session_from_another_machine_is_restored_first() {
     assert_ne!(row.host_id, fake::THIS_HOST_ID, "another machine's session");
     let resume = state.plans[&row.handle].clone().unwrap();
     assert!(resume.restore.is_some());
-    let id = row.handle.session.to_string();
-    assert_eq!(resume_line(&row, &resume), format!("atuin resume {id}"));
+    assert_eq!(resume_line(&row, &resume), format!("atuin resume {}", row.atuin_id));
 
     let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
     assert_eq!(outcome, None, "waits for the restore");
@@ -914,7 +913,10 @@ async fn a_session_from_another_machine_is_restored_first() {
     let Some(Outcome::Resume(plan)) = outcome else {
         panic!("{outcome:?}");
     };
-    assert_eq!(plan.native_path, Some(std::path::PathBuf::from(format!("/restored/{id}.jsonl"))));
+    assert_eq!(
+        plan.native_path,
+        Some(std::path::PathBuf::from(format!("/restored/{}.jsonl", row.handle.session)))
+    );
 }
 
 /// An enter waiting on its session's plan, or on its restore from sync, and then an idle refresh
@@ -2507,4 +2509,104 @@ async fn a_session_open_here_preselects_the_fork(
     let targets = FakeResumer::default().continue_targets(&row);
     state.open_chooser(&row, targets, true, Pending::Resume);
     assert_eq!(state.chooser.as_ref().unwrap().selected, selected);
+}
+
+fn mouse(
+    state: &mut State,
+    settings: &Settings,
+    kind: crossterm::event::MouseEventKind,
+    at: (u16, u16),
+) -> super::state::InputAction {
+    use crossterm::event::{Event, KeyModifiers, MouseEvent};
+    let event = Event::Mouse(MouseEvent {
+        kind,
+        column: at.0,
+        row: at.1,
+        modifiers: KeyModifiers::NONE,
+    });
+    state.handle_input(settings, &event)
+}
+
+/// A drag selects the preview's text, shown reversed, kept to the pane it started in, and
+/// letting go copies it; a click copies nothing.
+#[rstest]
+#[tokio::test]
+async fn a_drag_copies_the_text_under_it() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    use super::state::{InputAction, Pane};
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let _ = render(&mut state, &s, 100, 30);
+    let area = state.scrolls[Pane::Strip as usize].area.unwrap();
+    let row = (area.y..area.bottom())
+        .find(|&y| {
+            let line: String =
+                (area.x..area.right()).map(|x| state.screen[(x, y)].symbol()).collect();
+            line.contains("first  Build atuin ai resume")
+        })
+        .unwrap();
+
+    let left = MouseButton::Left;
+    mouse(&mut state, &s, MouseEventKind::Down(left), (area.x, row));
+    // Past the bottom of the screen: kept to the strip.
+    mouse(&mut state, &s, MouseEventKind::Drag(left), (area.right() + 5, 200));
+    let out = render(&mut state, &s, 100, 30);
+    assert!(out[(area.x + 2, row)].modifier.contains(ratatui::style::Modifier::REVERSED));
+    let InputAction::CopyText(text) = mouse(&mut state, &s, MouseEventKind::Up(left), (0, 0))
+    else {
+        panic!("nothing copied");
+    };
+    assert!(text.starts_with("first  Build atuin ai resume"), "no border or margin: {text}");
+    assert!(!text.contains("[ GLOBAL"), "the input row is outside the strip: {text}");
+    assert!(!text.contains('─'), "not the strip's bottom border: {text}");
+    assert!(state.selection.is_none());
+
+    mouse(&mut state, &s, MouseEventKind::Down(left), (area.x + 3, row));
+    let click = mouse(&mut state, &s, MouseEventKind::Up(left), (area.x + 3, row));
+    assert_eq!(click, InputAction::Continue);
+}
+
+/// The detail pane beside the list has no border: a drag over all of it copies its text,
+/// without the scrollbar beside it.
+#[rstest]
+#[tokio::test]
+async fn a_drag_over_the_side_pane_copies_its_text() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    use super::state::{InputAction, Pane};
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let _ = render(&mut state, &s, 200, 30);
+    let text = state.scrolls[Pane::Side as usize].text.unwrap();
+    let left = MouseButton::Left;
+    mouse(&mut state, &s, MouseEventKind::Down(left), (text.x, text.y));
+    mouse(&mut state, &s, MouseEventKind::Drag(left), (300, 300));
+    let InputAction::CopyText(copied) = mouse(&mut state, &s, MouseEventKind::Up(left), (0, 0))
+    else {
+        panic!("nothing copied");
+    };
+    assert!(copied.contains("First prompt"), "{copied}");
+    assert!(copied.lines().all(|l| !l.ends_with('┃') && !l.ends_with('│')), "{copied}");
+}
+
+/// A click before the first frame (nothing drawn to select) selects nothing, rather than
+/// clamping to an empty area.
+#[rstest]
+#[tokio::test]
+async fn a_click_with_nothing_drawn_selects_nothing() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    use super::state::InputAction;
+
+    let s = settings();
+    let mut state = loaded(&s, "", 0).await;
+    let left = MouseButton::Left;
+    mouse(&mut state, &s, MouseEventKind::Down(left), (3, 3));
+    assert!(state.selection.is_none());
+    mouse(&mut state, &s, MouseEventKind::Drag(left), (9, 4));
+    let up = mouse(&mut state, &s, MouseEventKind::Up(left), (9, 4));
+    assert_eq!(up, InputAction::Continue);
 }

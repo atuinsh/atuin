@@ -921,7 +921,9 @@ impl SessionSource for FakeSource {
             .sessions
             .iter()
             .filter(|s| {
-                s.row.handle.session.as_ref().starts_with(id) || s.row.atuin_id.has_prefix(id)
+                s.row.handle.session.as_ref().starts_with(id)
+                    || s.row.atuin_id.has_prefix(id)
+                    || s.row.atuin_id.has_suffix(id)
             })
             .map(|s| s.row.clone())
             .collect())

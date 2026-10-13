@@ -121,6 +121,34 @@ impl AtuinSessionId {
     pub fn has_prefix(&self, prefix: &str) -> bool {
         Self::prefix_range(prefix).is_some_and(|(low, high)| (low..=high).contains(self))
     }
+
+    /// The id as the UI shows it: its last [`Self::SHORT_LEN`] hex digits. The leading digits
+    /// are the start time, shared by every session started around then; these are random.
+    #[must_use]
+    pub fn short(&self) -> String {
+        let hex = self.to_string();
+        hex[hex.len() - Self::SHORT_LEN..].to_owned()
+    }
+
+    pub const SHORT_LEN: usize = 8;
+
+    /// The fewest hex digits a suffix takes to name an id, so a short word doesn't match one by
+    /// chance.
+    pub const MIN_SUFFIX_LEN: usize = 6;
+
+    /// Whether the id's displayed form ends with `suffix`, of at least [`Self::MIN_SUFFIX_LEN`]
+    /// hex digits.
+    #[must_use]
+    pub fn has_suffix(&self, suffix: &str) -> bool {
+        Self::is_suffix(suffix) && self.to_string().ends_with(&suffix.to_ascii_lowercase())
+    }
+
+    /// Whether `suffix` is one [`Self::has_suffix`] can match.
+    #[must_use]
+    pub fn is_suffix(suffix: &str) -> bool {
+        (Self::MIN_SUFFIX_LEN..=32).contains(&suffix.len())
+            && suffix.bytes().all(|b| b.is_ascii_hexdigit())
+    }
 }
 
 impl std::str::FromStr for AtuinSessionId {
@@ -735,5 +763,19 @@ mod tests {
         let id: AtuinSessionId = "01a0d147-e745-7ae2-8000-0123456789ab".parse().unwrap();
         assert_eq!(id.to_string(), "01a0d147e7457ae280000123456789ab");
         assert_eq!(id.has_prefix(prefix), matches);
+    }
+
+    #[rstest]
+    #[case::short("456789ab", true)]
+    #[case::shortest("6789ab", true)]
+    #[case::upper("6789AB", true)]
+    #[case::whole("01a0d147e7457ae280000123456789ab", true)]
+    #[case::too_short("789ab", false)]
+    #[case::other("6789ac", false)]
+    #[case::not_hex("6789ag", false)]
+    fn a_suffix_names_the_ids_it_ends(#[case] suffix: &str, #[case] matches: bool) {
+        let id: AtuinSessionId = "01a0d147-e745-7ae2-8000-0123456789ab".parse().unwrap();
+        assert_eq!(id.short(), "456789ab");
+        assert_eq!(id.has_suffix(suffix), matches);
     }
 }

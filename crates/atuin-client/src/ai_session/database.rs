@@ -704,9 +704,10 @@ impl AiSessionDatabase {
         self.recent_sessions(filter, 0).await
     }
 
-    /// Every session whose id or [atuin id](AtuinSessionId) starts with `prefix`, across
-    /// harnesses, newest first (to find a session by an abbreviated id). Wildcards mean nothing
-    /// here: the prefix is a byte range, not a pattern.
+    /// Every session whose id or [atuin id](AtuinSessionId) starts with `prefix`, or whose atuin
+    /// id ends with it (see [`AtuinSessionId::has_suffix`]), across harnesses, newest first (to
+    /// find a session by an abbreviated id). Wildcards mean nothing here: the prefix is a byte
+    /// range, and the suffix is only hex.
     pub async fn sessions_with_id_prefix(&self, prefix: &str) -> Result<Vec<Session>, DbError> {
         // Text compares by its UTF-8 bytes, which order as the code points do: the ids starting
         // with `prefix` are those at or past it and before its successor.
@@ -723,9 +724,18 @@ impl AiSessionDatabase {
             ""
         };
 
+        // Hex has no LIKE wildcards, and LIKE ignores ASCII case, as hex() is upper.
+        let suffix = AtuinSessionId::is_suffix(prefix).then(|| format!("%{prefix}"));
+        let suffix_clause = if suffix.is_some() {
+            " OR hex(s.atuin_id) LIKE ?"
+        } else {
+            ""
+        };
+
         let sql = format!(
-            "SELECT {}, {} FROM sessions s WHERE (s.session_id >= ?{upper_clause}){atuin_clause} \
-             ORDER BY s.updated_at DESC, s.session_id",
+            "SELECT {}, {} FROM sessions s WHERE (s.session_id >= \
+             ?{upper_clause}){atuin_clause}{suffix_clause} ORDER BY s.updated_at DESC, \
+             s.session_id",
             session_columns!(),
             no_group_columns!(),
         );
@@ -735,6 +745,9 @@ impl AiSessionDatabase {
         }
         if let Some((low, high)) = &atuin_ids {
             query = query.bind(low.as_bytes().as_slice()).bind(high.as_bytes().as_slice());
+        }
+        if let Some(suffix) = suffix {
+            query = query.bind(suffix);
         }
         let rows: Vec<SessionRow> = query.fetch_all(self.db.pool()).await?;
         rows.into_iter().map(Self::session_from_row).collect()
@@ -4583,6 +4596,30 @@ mod tests {
         let sessions = db.sessions_with_id_prefix(&id.to_string()[..len]).await.unwrap();
         assert_eq!(sessions.len(), found);
         assert!(sessions.iter().any(|s| s.handle == wanted));
+    }
+
+    #[rstest]
+    #[case::short(8, 1)]
+    #[case::shortest(6, 1)]
+    #[case::too_short(4, 0)]
+    #[tokio::test]
+    async fn the_end_of_an_atuin_id_finds_a_session(#[case] len: usize, #[case] found: usize) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let wanted = handle(HarnessKind::ClaudeCode, "wanted");
+        // The ids differ only in their last six digits, given in upper case.
+        let id = |n: u128| {
+            AtuinSessionId::from(Uuid::from_u128(0x0199_6dc4_0800_7000_8000_00ab_cd00_0000 | n))
+        };
+        for (session, n) in [(&wanted, 0x12_3456), (&handle(HarnessKind::Pi, "other"), 0x65_4321)] {
+            let mut msg = message_in(session, 1_790_000_000, "words");
+            msg.atuin_id = Some(id(n));
+            db.append(&msg).await.unwrap();
+        }
+
+        let hex = id(0x12_3456).to_string().to_uppercase();
+        let sessions = db.sessions_with_id_prefix(&hex[hex.len() - len..]).await.unwrap();
+        assert_eq!(sessions.len(), found);
+        assert!(sessions.iter().all(|s| s.handle == wanted));
     }
 
     #[rstest]

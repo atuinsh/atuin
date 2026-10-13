@@ -356,6 +356,7 @@ dependencies = [
  "atuin-daemon",
  "atuin-domain",
  "atuin-vt100",
+ "base64",
  "chrono",
  "chrono-humanize",
  "clap",

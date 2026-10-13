@@ -203,11 +203,12 @@ impl Cmd {
     }
 }
 
-/// A query that looks like a session id: one word of id characters, long enough.
+/// A query that looks like a session id: one word of id characters, long enough, with a digit
+/// unless it could be the end of an atuin id (which can be letters alone).
 fn looks_like_id(query: &str) -> bool {
     query.len() >= MIN_ID_PREFIX
         && query.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-        && query.chars().any(|c| c.is_ascii_digit())
+        && (query.chars().any(|c| c.is_ascii_digit()) || AtuinSessionId::is_suffix(query))
 }
 
 /// The single session `query` names, if it is an exact id or a unique prefix (an id several
@@ -829,6 +830,8 @@ mod tests {
     #[case("7f3c9", false)]
     #[case("fix flaky", false)]
     #[case("release", false)]
+    #[case::a_short_id_of_letters("deadbeef", true)]
+    #[case::too_short_for_one("beef", false)]
     fn id_like_queries(#[case] query: &str, #[case] want: bool) {
         assert_eq!(looks_like_id(query), want);
     }

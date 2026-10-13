@@ -14,7 +14,8 @@ use atuin_client::tui::key::{KeyCodeValue, KeyInput, SingleKey};
 use atuin_common::harnesstools::continuation::Flattened;
 use atuin_common::time::OffsetDateTimeExt as _;
 use atuin_domain::record::HostId;
-use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use time::OffsetDateTime;
 
@@ -23,6 +24,7 @@ use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
 use super::rebuild::Rebuilding;
 use super::resumer::{NotResumable, Resume};
+use super::select::Selection;
 use super::source::{SessionFilter, SessionPreview, SessionRow};
 use super::{ResumeContext, panel};
 
@@ -75,6 +77,8 @@ pub struct PaneScroll {
     /// Where the pane was drawn this frame (screen coordinates, so an inline viewport's rows are
     /// as the mouse reports them), or `None` when it wasn't.
     pub area: Option<Rect>,
+    /// Where its text was drawn, without borders or scrollbar (what a drag selects).
+    pub text: Option<Rect>,
     /// How many lines of text it had room for.
     pub height: usize,
     /// The lines of the parts in full rendered so far.
@@ -121,6 +125,8 @@ pub enum InputAction {
     ReturnCommand,
     /// Copy the session's resume command, and stay open.
     Copy,
+    /// Copy text selected with the mouse.
+    CopyText(String),
     /// A line of the chooser picked.
     Pick(Box<Picked>),
     /// Ask where to resume the session acted on, the fork selected.
@@ -274,6 +280,11 @@ pub struct State {
     /// What catching the session being resumed up with sync wrote, to say once the picker is gone.
     pub note: Option<String>,
 
+    /// Text being selected with the mouse.
+    pub selection: Option<Selection>,
+    /// The last frame drawn, which a selection copies from.
+    pub screen: Buffer,
+
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
     /// The daemon is rebuilding the session index, so results may be incomplete: said in the
@@ -340,6 +351,8 @@ impl State {
             continuing: None,
             continued: 0,
             note: None,
+            selection: None,
+            screen: Buffer::empty(Rect::default()),
             status: None,
             rebuilding: None,
             now: if settings.prefers_reduced_motion {
@@ -683,10 +696,42 @@ impl State {
         }
     }
 
-    /// The wheel over a preview scrolls it; anywhere else (the list, the input) it moves the
-    /// selection, as in the history search. The mouse reports screen positions, which is what
-    /// the panes' areas are, inline or not.
+    /// The scrolling pane drawn at `at`, if any.
+    fn pane_at(&self, at: Position) -> Option<Pane> {
+        PANES.into_iter().find(|p| self.scrolls[*p as usize].area.is_some_and(|a| a.contains(at)))
+    }
+
+    /// A drag selects text within the pane it starts in (the whole picker outside one's text), and
+    /// letting go copies it. The wheel over a preview scrolls it; anywhere else (the list, the
+    /// input) it moves the selection, as in the history search. The mouse reports screen
+    /// positions, which is what the panes' areas are, inline or not.
     fn handle_mouse_input(&mut self, settings: &Settings, event: MouseEvent) -> InputAction {
+        let at = Position::new(event.column, event.row);
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let area = self
+                    .pane_at(at)
+                    .and_then(|p| self.scrolls[p as usize].text)
+                    .unwrap_or(self.screen.area);
+                // Nothing to select in a pane squeezed to nothing, or before the first frame.
+                self.selection = (!area.is_empty()).then(|| Selection::new(area, at));
+                return InputAction::Continue;
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(selection) = &mut self.selection {
+                    selection.extend(at);
+                }
+                return InputAction::Continue;
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                return self
+                    .selection
+                    .take()
+                    .and_then(|s| s.text(&self.screen))
+                    .map_or(InputAction::Continue, InputAction::CopyText);
+            }
+            _ => {}
+        }
         // The chooser is for the session it opened on.
         if self.chooser.is_some() {
             return InputAction::Continue;
@@ -696,11 +741,7 @@ impl State {
             MouseEventKind::ScrollUp => false,
             _ => return InputAction::Continue,
         };
-        let at = Position::new(event.column, event.row);
-        let over = PANES
-            .into_iter()
-            .find(|p| self.scrolls[*p as usize].area.is_some_and(|a| a.contains(at)));
-        if let Some(pane) = over {
+        if let Some(pane) = self.pane_at(at) {
             let lines = isize::try_from(WHEEL_LINES).unwrap_or(1);
             self.scroll_pane(
                 pane,

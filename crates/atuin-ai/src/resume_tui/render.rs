@@ -742,13 +742,13 @@ impl State {
         (lines, Some((row.handle.clone(), top, body)))
     }
 
-    /// Note how `pane` was drawn: for `session`, in `area` (what the mouse wheel scrolls), with
-    /// `height` lines of text showing `body`.
+    /// Note how `pane` was drawn: for `session`, in `area` (what the mouse wheel scrolls), its
+    /// text in `text` (what a drag selects), with `height` lines of text showing `body`.
     fn drawn(
         &mut self,
         pane: Pane,
         session: HarnessSession,
-        area: Rect,
+        (area, text): (Rect, Rect),
         height: usize,
         body: &Body,
     ) {
@@ -756,6 +756,7 @@ impl State {
         scroll.session = Some(session);
         scroll.offset = body.offset;
         scroll.area = Some(area);
+        scroll.text = Some(text);
         scroll.height = height;
         scroll.len = body.len;
         scroll.more = body.more;
@@ -823,6 +824,11 @@ impl State {
         if self.chooser.is_some() {
             self.draw_chooser(f, settings, theme);
         }
+        let buf = f.buffer_mut();
+        self.screen = buf.clone();
+        if let Some(selection) = &self.selection {
+            selection.highlight(buf);
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -831,6 +837,7 @@ impl State {
         self.list_anchor = None;
         for scroll in &mut self.scrolls {
             scroll.area = None;
+            scroll.text = None;
         }
         f.render_widget(Clear, area);
         let compactness = to_compactness(area, settings);
@@ -1121,7 +1128,8 @@ impl State {
                 height,
             };
             draw_scrollbar(f, track, &body, usize::from(height), theme);
-            self.drawn(Pane::Strip, session, preview_chunk, usize::from(height), &body);
+            let areas = (preview_chunk, strip);
+            self.drawn(Pane::Strip, session, areas, usize::from(height), &body);
         }
 
         // Join the divider to the box's top and bottom borders.
@@ -1405,7 +1413,12 @@ impl State {
             ..area
         };
         draw_scrollbar(f, track, &body, left, theme);
-        self.drawn(Pane::Inspect, row.handle.clone(), area, left, &body);
+        // All of it but the scrollbar's column, the metadata above the conversation included.
+        let text = Rect {
+            width: track.x.saturating_sub(inner.x),
+            ..inner
+        };
+        self.drawn(Pane::Inspect, row.handle.clone(), (area, text), left, &body);
     }
 
     /// The detail pane beside the list, in `pane`: the session previewed (see
@@ -1444,7 +1457,7 @@ impl State {
             height: text.height.saturating_sub(top),
         };
         draw_scrollbar(f, track, &body, left, theme);
-        self.drawn(Pane::Side, row.handle, pane, left, &body);
+        self.drawn(Pane::Side, row.handle, (pane, text), left, &body);
     }
 
     /// Inspect's list of the forks grouped under `row`, in at most `room` lines: a blank line, a

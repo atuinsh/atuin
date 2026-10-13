@@ -125,6 +125,16 @@ impl Write for Writer {
     }
 }
 
+/// Put `text` on the terminal's own clipboard (OSC 52), which reaches it over SSH. Terminals that
+/// don't take OSC 52 ignore it, and tmux passes it on only with `set-clipboard on`.
+pub fn copy(text: &str) -> io::Result<()> {
+    use base64::Engine as _;
+
+    let mut writer = Writer::new()?;
+    write!(writer, "\x1b]52;c;{}\x07", base64::engine::general_purpose::STANDARD.encode(text))?;
+    writer.flush()
+}
+
 /// How the terminal was set up, while it is: what a panic has to undo.
 static SETUP: Mutex<Option<(bool, bool)>> = Mutex::new(None);
 

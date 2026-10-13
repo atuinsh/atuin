@@ -41,9 +41,10 @@ enum SubCmd {
     /// List captured sessions, newest first.
     List,
 
-    /// Show a session and its messages. Accepts a session id or `latest`.
+    /// Show a session and its messages. Accepts an id, a harness id or `latest`.
     Show {
-        /// Session id (a unique prefix is enough), or `latest` for the most recently active session.
+        /// Id (its last 8 digits, as `list` shows them, are enough) or harness id (a unique prefix
+        /// is enough), or `latest` for the most recently active session.
         #[arg(value_name = "ID|latest")]
         session: String,
     },
@@ -221,16 +222,12 @@ async fn list(client: &mut AiClient, style: Style) -> Result<()> {
                 writeln!(out, "No sessions captured yet.")?;
                 return Ok(());
             }
-            writeln!(
-                out,
-                "{:<14} {:<12} {:<16} {:>5}  TITLE",
-                "SESSION", "HARNESS", "UPDATED", "MSGS"
-            )?;
+            writeln!(out, "{:<8} {:<12} {:<16} {:>5}  TITLE", "ID", "HARNESS", "UPDATED", "MSGS")?;
             for s in &sessions {
                 writeln!(
                     out,
-                    "{:<14} {:<12} {:<16} {:>5}  {}",
-                    short_id(s.handle.session.as_ref()),
+                    "{:<8} {:<12} {:<16} {:>5}  {}",
+                    s.atuin_id.short(),
                     harness_name(s.handle.harness),
                     age(s.updated_at),
                     s.message_count,
@@ -322,7 +319,7 @@ async fn search(
                 writeln!(out, "No sessions matched `{query}`.")?;
                 return Ok(());
             }
-            writeln!(out, "{:<14} {:<12} {:<16}  MATCH", "SESSION", "HARNESS", "UPDATED")?;
+            writeln!(out, "{:<8} {:<12} {:<16}  MATCH", "ID", "HARNESS", "UPDATED")?;
             for m in &matches {
                 let title = m.title.to_plain().text;
                 let label = if title.trim().is_empty() {
@@ -332,8 +329,8 @@ async fn search(
                 };
                 writeln!(
                     out,
-                    "{:<14} {:<12} {:<16}  {}",
-                    short_id(m.session.handle.session.as_ref()),
+                    "{:<8} {:<12} {:<16}  {}",
+                    m.session.atuin_id.short(),
                     harness_name(m.session.handle.harness),
                     age(m.session.updated_at),
                     one_line(&label, 80),
@@ -557,7 +554,7 @@ pub enum SelectError {
     #[error("id `{0}` matches more than one session; use a longer or full id")]
     Ambiguous(String),
     /// Several agents' sessions have the id (a session continued in another agent can keep it).
-    #[error("id `{id}` names a session in more than one agent; use its atuin id:{choices}")]
+    #[error("id `{id}` names a session in more than one agent; use its id:{choices}")]
     Shared {
         id: String,
         choices: String,
@@ -574,13 +571,15 @@ pub fn select_session(
         return sessions.into_iter().next().map(|s| s.handle).ok_or(SelectError::NoSessions);
     }
 
-    // `list` prints ids truncated to 12 chars, so accept a unique id prefix as well as a full id.
+    // Accept a unique prefix of either id, or the end of the atuin id, as well as a full one.
     // An id given whole names its session, whatever longer ids it is a prefix of.
     let atuin_id = selector.parse::<AtuinSessionId>().ok();
     let (exact, prefixed): (Vec<Session>, Vec<Session>) = sessions
         .into_iter()
         .filter(|s| {
-            s.handle.session.as_ref().starts_with(selector) || s.atuin_id.has_prefix(selector)
+            s.handle.session.as_ref().starts_with(selector)
+                || s.atuin_id.has_prefix(selector)
+                || s.atuin_id.has_suffix(selector)
         })
         .partition(|s| s.handle.session.as_ref() == selector || atuin_id == Some(s.atuin_id));
     match (exact.as_slice(), prefixed.as_slice()) {
@@ -591,7 +590,9 @@ pub fn select_session(
             id: selector.to_owned(),
             choices: several
                 .iter()
-                .map(|s| format!("\n  {:<12} {}", harness_name(s.handle.harness), s.atuin_id))
+                .map(|s| {
+                    format!("\n  {:<12} {}", harness_name(s.handle.harness), s.atuin_id.short())
+                })
                 .collect(),
         }),
     }
@@ -600,38 +601,38 @@ pub fn select_session(
 // --- human rendering ----------------------------------------------------------------------------
 
 fn write_session_header(out: &mut dyn Write, s: &Session) -> io::Result<()> {
-    writeln!(out, "session   {}", sanitize(s.handle.session.as_ref()))?;
-    writeln!(out, "atuin id  {}", s.atuin_id)?;
-    writeln!(out, "harness   {}", harness_name(s.handle.harness))?;
+    writeln!(out, "id          {}", s.atuin_id)?;
+    writeln!(out, "harness id  {}", sanitize(s.handle.session.as_ref()))?;
+    writeln!(out, "harness     {}", harness_name(s.handle.harness))?;
     if let Some(title) = &s.title {
-        writeln!(out, "title     {}", sanitize(title))?;
+        writeln!(out, "title       {}", sanitize(title))?;
     }
     if let Some(cwd) = &s.cwd {
-        writeln!(out, "cwd       {}", sanitize(&cwd.to_string_lossy()))?;
+        writeln!(out, "cwd         {}", sanitize(&cwd.to_string_lossy()))?;
     }
     if let Some(branch) = &s.git_branch {
-        writeln!(out, "branch    {}", sanitize(branch))?;
+        writeln!(out, "branch      {}", sanitize(branch))?;
     }
     if let Some(model) = &s.model {
-        writeln!(out, "model     {}", sanitize(model))?;
+        writeln!(out, "model       {}", sanitize(model))?;
     }
-    // Links by atuin id, for the stored sessions they name.
+    // Links by id, for the stored sessions they name.
     if let Some(parent) = s.parent_atuin_id {
-        writeln!(out, "parent    {parent}")?;
+        writeln!(out, "parent      {parent}")?;
     }
     if let Some(root) = s.root_atuin_id {
-        writeln!(out, "root      {root}")?;
+        writeln!(out, "root        {root}")?;
     }
     if !s.child_atuin_ids.is_empty() {
         let children: Vec<String> = s.child_atuin_ids.iter().map(ToString::to_string).collect();
-        writeln!(out, "children  {}", children.join(", "))?;
+        writeln!(out, "children    {}", children.join(", "))?;
     }
-    writeln!(out, "started   {}", age(s.started_at))?;
-    writeln!(out, "updated   {}", age(s.updated_at))?;
-    writeln!(out, "messages  {}", s.message_count)?;
+    writeln!(out, "started     {}", age(s.started_at))?;
+    writeln!(out, "updated     {}", age(s.updated_at))?;
+    writeln!(out, "messages    {}", s.message_count)?;
     writeln!(
         out,
-        "tokens    in {} / out {} / cache {}+{}",
+        "tokens      in {} / out {} / cache {}+{}",
         s.usage.input.unwrap_or_default(),
         s.usage.output.unwrap_or_default(),
         s.usage.cache_read.unwrap_or_default(),
@@ -815,10 +816,13 @@ fn display_role(m: &Message, summary: &Summary) -> (String, Ansi) {
 }
 
 /// The session-group header line printed the first time a session appears in the pretty `tail`
-/// view and whenever the active session changes.
+/// view and whenever the active session changes. Names the session by its id once its metadata
+/// has arrived.
 fn tail_header(handle: &HarnessSession, session: Option<&Session>, color: bool) -> String {
     let bullet = paint("●", harness_color(handle.harness), color);
-    let id = paint(short_id(handle.session.as_ref()), Ansi::Bold, color);
+    let id = session
+        .map_or_else(|| short_id(handle.session.as_ref()).to_owned(), |s| s.atuin_id.short());
+    let id = paint(&id, Ansi::Bold, color);
     let harness_label = paint(harness_name(handle.harness), Ansi::Dim, color);
     let title = session.map(title_of).map(|t| one_line(t, SUMMARY_WIDTH)).unwrap_or_default();
     if title.is_empty() {
@@ -1379,6 +1383,15 @@ mod tests {
     }
 
     #[rstest]
+    fn the_short_id_resolves_a_session() {
+        let sessions =
+            vec![session(HarnessKind::Codex, "aaa"), session(HarnessKind::ClaudeCode, "bbb")];
+        let short = sessions[1].atuin_id.short();
+        let selected = select_session(sessions, &short).unwrap();
+        assert_eq!(selected, handle(HarnessKind::ClaudeCode, "bbb"));
+    }
+
+    #[rstest]
     fn ambiguous_prefix_is_an_error() {
         let sessions =
             vec![session(HarnessKind::Codex, "abc111"), session(HarnessKind::ClaudeCode, "abc222")];
@@ -1432,7 +1445,7 @@ mod tests {
             session(HarnessKind::ClaudeCode, "dup"),
             session(HarnessKind::Pi, "dupe"),
         ];
-        let ids: Vec<String> = sessions.iter().map(|s| s.atuin_id.to_string()).collect();
+        let ids: Vec<String> = sessions.iter().map(|s| s.atuin_id.short()).collect();
         let err = select_session(sessions.clone(), "dup").unwrap_err().to_string();
         assert!(err.contains(&ids[0]) && err.contains(&ids[1]), "{err}");
         assert!(!err.contains(&ids[2]), "{err}");
@@ -1506,9 +1519,9 @@ mod tests {
         let mut out = Vec::new();
         write_session_header(&mut out, &s).unwrap();
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains(&format!("parent    {}\n", id(1))), "{text}");
-        assert!(text.contains(&format!("root      {}\n", id(2))), "{text}");
-        assert!(text.contains(&format!("children  {}, {}\n", id(3), id(4))), "{text}");
+        assert!(text.contains(&format!("parent      {}\n", id(1))), "{text}");
+        assert!(text.contains(&format!("root        {}\n", id(2))), "{text}");
+        assert!(text.contains(&format!("children    {}, {}\n", id(3), id(4))), "{text}");
 
         let alone = session(HarnessKind::Codex, "alone");
         let v = serde_json::to_value(session_json(&alone)).unwrap();
@@ -1671,7 +1684,7 @@ mod tests {
         s.title = Some("My Session".to_owned());
         assert_eq!(
             tail_header(&s.handle, Some(&s), false),
-            "● abcdef012345 · claude-code · My Session"
+            format!("● {} · claude-code · My Session", s.atuin_id.short())
         );
     }
 

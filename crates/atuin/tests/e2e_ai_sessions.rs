@@ -281,7 +281,7 @@ fn the_picker_needs_a_terminal_to_read_keys_from(machine: Machine) {
 }
 
 /// A session whose transcript is on this machine resumes in its agent where it ran, named by the
-/// agent's id, by its atuin id, or by enough of that, and is left as it was. How a name is
+/// agent's id, by its atuin id, by enough of the start or end of that, and is left as it was. How a name is
 /// resolved is the same for every agent; where its transcript is, and how it resumes, isn't.
 #[rstest]
 #[case::claude(Agent::Claude, "agent id")]
@@ -290,6 +290,7 @@ fn the_picker_needs_a_terminal_to_read_keys_from(machine: Machine) {
 #[case::pi(Agent::Pi, "agent id")]
 #[case::by_atuin_id(Agent::Opencode, "atuin id")]
 #[case::by_atuin_id_prefix(Agent::Opencode, "atuin id prefix")]
+#[case::by_short_id(Agent::Opencode, "short id")]
 fn a_local_session_resumes_in_its_agent_where_it_ran(
     machine: Machine,
     project: TempDir,
@@ -306,6 +307,8 @@ fn a_local_session_resumes_in_its_agent_where_it_ran(
     let name = match named_by {
         "agent id" => transcript.id.clone(),
         "atuin id" => atuin_id,
+        // Its end, as the UI shows it.
+        "short id" => atuin_id[atuin_id.len() - 8..].to_owned(),
         // Past the timestamp the id starts with, which sessions started together share.
         _ => atuin_id[..16].to_owned(),
     };
