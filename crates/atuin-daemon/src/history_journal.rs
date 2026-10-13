@@ -80,6 +80,7 @@
 //!     [`HistoryJournal::delete`].
 //!
 
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -107,6 +108,12 @@ use crate::search::SearchIndex;
 /// History-db rows removed per transaction by [`HistoryJournal::delete`]; matches the chunking of
 /// `HistoryStore::build_all`, which this path used to go through.
 const DELETE_ROWS_BATCH_SIZE: usize = 5000;
+
+/// Most ids [`HistoryJournal::delete`] looks up to update the search index in place rather than
+/// reload it, and most distinct commands it rebuilds that way. A bigger delete reloads the whole
+/// index instead, which costs one scan of the history db however much was deleted.
+const MAX_IDS_SYNCED_IN_PLACE: usize = 10_000;
+const MAX_COMMANDS_SYNCED_IN_PLACE: usize = 100;
 
 /// An event describing a change in the lifecycle of a command.
 #[derive(Debug, Clone)]
@@ -506,8 +513,9 @@ impl HistoryJournal {
     /// Delete the given history entries from Atuin's memory completely, including any captured
     /// output they have, and refuse output for them from then on.
     ///
-    /// `search_settings` is needed to rebuild the search index's frecency map after the deletion,
-    /// so the swapped-in index has correct rankings immediately rather than after the next refresh.
+    /// The search index rebuilds just the commands that lost a run, or reloads whole after a bulk
+    /// delete. `search_settings` is needed to rebuild its frecency map after the deletion, so the
+    /// index has correct rankings immediately rather than after the next refresh.
     ///
     /// Returns how many history entries Atuin forgot.
     ///
@@ -578,14 +586,18 @@ impl HistoryJournal {
                 .await
                 .map_err(CmdDeleteError::HistoryStoreFailed)?;
             deleted += to_delete.len();
+            // These are in the search index but not the history db, so keep their commands.
+            let mut unsaved = Vec::new();
             for id in &to_delete {
-                self.unsaved_cmds.remove(id);
+                if let Some((_id, (command, _cwd))) = self.unsaved_cmds.remove(id) {
+                    unsaved.push(command);
+                }
             }
 
-            Ok((deleted, to_delete))
+            Ok((deleted, to_delete, unsaved))
         };
 
-        let (deleted, to_delete) = delete_records().await?;
+        let (deleted, to_delete, unsaved) = delete_records().await?;
         if to_delete.is_empty() {
             return Ok(deleted);
         }
@@ -593,6 +605,9 @@ impl HistoryJournal {
         // The tombstones commit the deletion, so Octavo hears of it even if a chunk below fails.
         #[cfg(feature = "octavo")]
         self.octavo.delete_history(&to_delete).await;
+
+        // Read while the rows are still there.
+        let touched = self.touched_commands(&to_delete, unsaved).await;
 
         // The tombstones were just written above, so replaying them through
         // `HistoryStore::build_all` would only read and decrypt them back into these same ids.
@@ -606,9 +621,66 @@ impl HistoryJournal {
                 .map_err(|e| CmdDeleteError::HistoryDbFailed(e.into()))?;
         }
 
-        self.reload_search_index(search_settings).await;
+        match touched {
+            Some(commands) => self.sync_search_index(commands, search_settings).await,
+            None => self.reload_search_index(search_settings).await,
+        }
 
         Ok(deleted)
+    }
+
+    /// The commands `ids` are runs of, plus `unsaved` ones, or [`None`] when there are too many to
+    /// update the search index in place or they can't be read.
+    async fn touched_commands(
+        &self,
+        ids: &[HistoryId],
+        unsaved: Vec<String>,
+    ) -> Option<HashSet<String>> {
+        if ids.len() > MAX_IDS_SYNCED_IN_PLACE {
+            return None;
+        }
+
+        let rows = match self.history_db.load_active(ids.iter().copied()).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(
+                    "could not read the commands being deleted, reloading the whole search index \
+                     instead: {e}"
+                );
+                return None;
+            }
+        };
+
+        let commands: HashSet<String> =
+            unsaved.into_iter().chain(rows.into_iter().map(|h| h.command)).collect();
+        (commands.len() <= MAX_COMMANDS_SYNCED_IN_PLACE).then_some(commands)
+    }
+
+    /// Rebuild just `commands` in the search index from the runs they have left in the history db.
+    /// See [`SearchIndex::sync_commands`].
+    async fn sync_search_index(&self, commands: HashSet<String>, search_settings: &Search) {
+        // Held across the reads, so a `finish()` of one of these commands can't add its run to the
+        // index between our read and our write, which would lose it; at worst a run is counted
+        // twice. Searches wait meanwhile, for one indexed query per command.
+        let index = self.search_index.write().await;
+
+        let mut runs = Vec::with_capacity(commands.len());
+        for command in commands {
+            match self.history_db.command_runs(&command).await {
+                Ok(command_runs) => runs.push((command, command_runs)),
+                Err(e) => {
+                    tracing::warn!(
+                        "could not read what is left of a deleted command, reloading the whole \
+                         search index instead: {e}"
+                    );
+                    drop(index);
+                    self.reload_search_index(search_settings).await;
+                    return;
+                }
+            }
+        }
+
+        index.sync_commands(runs, search_settings);
     }
 
     /// Rebuild the history db from the record store, then reload the search index from it.
