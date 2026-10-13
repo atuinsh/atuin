@@ -32,7 +32,7 @@ use super::source::{SessionRow, Snippet, harness_badge, harness_label};
 use super::state::{LIVE_SECS, ListState, Pane, SEARCH_LIMIT, State, TAB_TITLES};
 use super::{clock, markdown};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const TITLE: &str = concat!("Atuin v", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum Compactness {
@@ -935,11 +935,15 @@ impl State {
 
         let header_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(16), Constraint::Min(0), Constraint::Length(16)])
+            .constraints([
+                Constraint::Length(u16::try_from(TITLE.len()).unwrap_or(u16::MAX)),
+                Constraint::Min(0),
+                Constraint::Length(16),
+            ])
             .split(header_chunk);
         f.render_widget(
             Paragraph::new(Span::styled(
-                format!("Atuin v{VERSION}"),
+                TITLE,
                 style(theme, Meaning::Base).add_modifier(Modifier::BOLD),
             )),
             header_chunks[0],
