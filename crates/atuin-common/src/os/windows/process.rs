@@ -17,12 +17,17 @@ use windows_sys::Win32::System::Threading::{
 use super::{fallible_do, get_last_error};
 
 /// RAII-safe operations on a windows process handle.
+#[derive(Debug)]
 pub struct Handle {
     inner: OwnedHandle,
     pid: u32,
 }
 
 impl Handle {
+    pub(super) const fn new(inner: OwnedHandle, pid: u32) -> Self {
+        Self { inner, pid }
+    }
+
     /// Open the given pid with the specified desired access mask.
     ///
     /// See [`OpenProcess`].
