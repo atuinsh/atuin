@@ -160,7 +160,7 @@ mod tests {
 
     #[fixture]
     fn cmd() -> OsString {
-        std::env::var_os("ComSpec").expect("Windows sets ComSpec")
+        crate::env::var_os("ComSpec").expect("Windows sets ComSpec")
     }
 
     fn arg(s: &str) -> NonNulStr<&OsStr> {
