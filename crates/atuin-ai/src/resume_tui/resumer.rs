@@ -121,8 +121,8 @@ pub struct Continued {
 }
 
 impl Continued {
-    /// The status line: `continuing in Codex: 42 tool calls become notes, reasoning dropped`, and
-    /// whose branch it carries (`; along @3f9a12bc's branch`) when it carries one of several.
+    /// The status line: `continuing in Codex: 42 tool calls become notes`, and whose branch it
+    /// carries (`; along @3f9a12bc's branch`) when it carries one of several.
     pub fn status(&self) -> String {
         let status = continuing(self.target, Some(&self.flattened));
         match &self.along {

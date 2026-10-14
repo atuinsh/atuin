@@ -63,7 +63,7 @@ use crate::resume_tui::resumer::{HarnessResumer, NotResumable, Resume, quote, sh
 use crate::resume_tui::sidecar::SidecarSource;
 use crate::resume_tui::source::{Relation, harness_label};
 use crate::resume_tui::{
-    Outcome, Picker, ResumeContext, ResumePlan, Resumer, SessionRow, SessionSource,
+    Outcome, Picker, ResumeContext, ResumePlan, Resumer, SessionRow, SessionSource, startup,
 };
 
 const ACCEPT_PREFIX: &str = "__atuin_accept__:";
@@ -125,7 +125,7 @@ pub struct Cmd {
     #[arg(long, value_name = "BRANCH", conflicts_with = "as_is")]
     branch: Option<String>,
 
-    /// The filter the picker opens in (default: workspace, widening to global).
+    /// The filter the picker opens in (default: global).
     #[arg(long, value_enum)]
     filter_mode: Option<AiSessionFilterMode>,
 
@@ -415,6 +415,7 @@ async fn direct_target(
 }
 
 pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
+    startup("started");
     let mut settings = settings.clone();
     if let Some(mode) = cmd.filter_mode {
         settings.ai.sessions.filter_mode = Some(mode);
@@ -426,6 +427,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     let query = cmd.query();
 
     let context = ResumeContext::current(&settings).await?;
+    startup("context read");
     let path = settings.ai_session_sidecar_path();
     // The daemon makes it the first time it runs with sessions on.
     if !path.exists() {
@@ -435,6 +437,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         bail!("no AI sessions here yet: turn them on with `atuin config enable ai-sessions`");
     }
     let source: Arc<dyn SessionSource> = Arc::new(SidecarSource::open(&path, &context).await?);
+    startup("session database open");
     let resumer: Arc<dyn Resumer> = Arc::new(HarnessResumer::new(context.clone(), &settings));
 
     if cmd.fork || cmd.continue_in.is_some() {
@@ -495,6 +498,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
         }
     }
 
+    startup("query checked");
     if !picker_has_a_terminal() {
         bail!(
             "the picker needs a terminal; to resume without one, name the session: `atuin ai \
@@ -1156,7 +1160,7 @@ mod tests {
         .unwrap();
         assert_eq!(plan.program, "codex");
         assert_eq!(plan.args, ["resume", "continued-7f3c9a12-5be0-4d7e-9c41-0a8e2b6f4d10"]);
-        assert_eq!(status, "continuing in Codex: 42 tool calls become notes, reasoning dropped");
+        assert_eq!(status, "continuing in Codex: 42 tool calls become notes");
 
         let err =
             continue_plan(&source, &resumer, "fix flaky", ContinueIn::Pi, None, fake::THIS_HOST_ID)
