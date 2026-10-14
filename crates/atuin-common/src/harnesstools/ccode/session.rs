@@ -25,6 +25,7 @@ use crate::harnesstools::session::{
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 #[derive(Debug, Clone, TypedBuilder)]
@@ -46,8 +47,8 @@ impl CcodeSessions {
 pub(crate) fn default_root() -> PathBuf {
     var_nonempty("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".claude"))
-        .join("projects")
+        .unwrap_or_else(|| home_dir().joined(".claude"))
+        .joined("projects")
 }
 
 /// The transcript of session `id` under the projects directory `root`:
@@ -63,7 +64,7 @@ pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
         .ok()?
         .filter_map(Result::ok)
         .filter(|project| project.file_type().is_ok_and(|t| t.is_dir()))
-        .map(|project| project.path().join(&name))
+        .map(|project| project.path().joined(&name))
         .find(|path| path.is_file())
 }
 
@@ -1252,7 +1253,7 @@ mod tests {
     async fn existing_skips_files_that_are_not_transcripts(projects: Projects) {
         let workflow = projects.project.join("0b3c/subagents/workflows/run1");
         std::fs::create_dir_all(&workflow).unwrap();
-        for path in [projects.project.join("0b3c.jsonl"), workflow.join("journal.jsonl")] {
+        for path in [projects.project.join("0b3c.jsonl"), workflow.joined("journal.jsonl")] {
             std::fs::write(path, line("user", "user", serde_json::json!("hi")) + "\n").unwrap();
         }
         let sessions =

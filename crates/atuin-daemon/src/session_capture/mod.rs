@@ -3265,6 +3265,7 @@ mod tests {
 mod pipeline_tests {
     use atuin_client::ai_session::HarnessSession;
     use atuin_common::harnesstools::session::{AnyMessage, SessionId};
+    use atuin_common::path::PathBufExt as _;
     use rstest::{fixture, rstest};
 
     use super::engine::{Start, warm};
@@ -4000,7 +4001,7 @@ mod pipeline_tests {
         let sink = sink.await;
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../atuin-common/tests/fixtures/codex")
-            .join(name);
+            .joined(name);
         let first: serde_json::Value = serde_json::from_str(
             std::fs::read_to_string(&fixture).unwrap().lines().next().unwrap(),
         )

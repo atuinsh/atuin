@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::env::{var_abspath, var_nonempty};
+use crate::path::PathBufExt as _;
 
 /// Error returned when the user's home directory can't be determined.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -66,9 +67,7 @@ pub fn try_atuin_home() -> Result<AtuinHome, HomeError> {
     if let Some(value) = var_abspath("ATUIN_HOME") {
         return Ok(AtuinHome::Set(value));
     }
-    let mut path = try_home_dir()?;
-    path.push(".atuin");
-    Ok(AtuinHome::Default(path))
+    Ok(AtuinHome::Default(try_home_dir()?.joined(".atuin")))
 }
 
 /// Variant of [`try_atuin_home`] that panics instead of returning a [`HomeError`].
@@ -139,16 +138,11 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
     if ATUIN_CONFIG_DIR_ITEMS.iter().any(|name| *name == top)
         && let Some(value) = var_nonempty("ATUIN_CONFIG_DIR")
     {
-        let mut path = PathBuf::from(value);
-        path.push(child);
-        return path;
+        return PathBuf::from(value).joined(child);
     }
 
     let home = match try_atuin_home() {
-        Ok(AtuinHome::Set(mut path)) => {
-            path.push(child);
-            return path;
-        }
+        Ok(AtuinHome::Set(path)) => return path.joined(child),
         Ok(AtuinHome::Default(path)) => Ok(path),
         Err(e) => Err(e),
     };
@@ -160,9 +154,7 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
     if AI_ITEMS.iter().any(|name| *name == top)
         && !matches!(&home, Ok(home) if home.join("config.toml").exists())
     {
-        let mut path = legacy_config_dir().unwrap_or_else(|err| panic!("{err}"));
-        path.push(child);
-        return path;
+        return legacy_config_dir().unwrap_or_else(|err| panic!("{err}")).joined(child);
     }
 
     let home = match home {
@@ -205,14 +197,8 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
         legacy_config_dir().ok(),
     ];
 
-    if let Some(mut existing) = potential_dirs
-        .into_iter()
-        .flatten()
-        .map(|mut dir| {
-            dir.push(top);
-            dir
-        })
-        .find(|dir| dir.exists())
+    if let Some(mut existing) =
+        potential_dirs.into_iter().flatten().map(|dir| dir.joined(top)).find(|dir| dir.exists())
     {
         existing.pop(); // pop `top` from the path
         existing.push(child);
@@ -220,24 +206,19 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
     }
 
     // At this point, we cannot continue without being able to determine the user's home directory.
-    let mut path = home.unwrap_or_else(|err| panic!("{err}"));
-    path.push(child);
-    path
+    home.unwrap_or_else(|err| panic!("{err}")).joined(child)
 }
 
 /// Get the legacy config directory, used before the switch to [`atuin_home`].
 ///
 /// This is `$XDG_CONFIG_HOME/atuin`, or `~/.config/atuin` if unset.
 fn legacy_config_dir() -> Result<PathBuf, HomeError> {
-    let mut path = if let Some(path) = var_abspath("XDG_CONFIG_HOME") {
+    let path = if let Some(path) = var_abspath("XDG_CONFIG_HOME") {
         path
     } else {
-        let mut path = try_home_dir()?;
-        path.push(".config");
-        path
+        try_home_dir()?.joined(".config")
     };
-    path.push("atuin");
-    Ok(path)
+    Ok(path.joined("atuin"))
 }
 
 /// Get the data directory used when `data_dir` isn't set in config.toml.
@@ -250,12 +231,9 @@ fn legacy_config_dir() -> Result<PathBuf, HomeError> {
 #[must_use]
 pub fn unconfigured_data_dir() -> PathBuf {
     match atuin_home() {
-        AtuinHome::Set(mut path) => {
-            path.push("data");
-            path
-        }
-        AtuinHome::Default(mut path) => {
-            path.push("data");
+        AtuinHome::Set(path) => path.joined("data"),
+        AtuinHome::Default(path) => {
+            let path = path.joined("data");
             if !path.exists() {
                 let old_path = legacy_data_dir();
                 if old_path.exists() {
@@ -272,14 +250,9 @@ pub fn unconfigured_data_dir() -> PathBuf {
 /// This is `$XDG_DATA_HOME/atuin`, or `~/.local/share/atuin` if unset.
 #[must_use]
 pub fn legacy_data_dir() -> PathBuf {
-    let mut path = var_abspath("XDG_DATA_HOME").unwrap_or_else(|| {
-        let mut path = home_dir();
-        path.push(".local");
-        path.push("share");
-        path
-    });
-    path.push("atuin");
-    path
+    var_abspath("XDG_DATA_HOME")
+        .unwrap_or_else(|| home_dir().joined(".local").joined("share"))
+        .joined("atuin")
 }
 
 /// Get the logs directory.
@@ -287,9 +260,7 @@ pub fn legacy_data_dir() -> PathBuf {
 /// This is `$ATUIN_HOME/logs`.
 #[must_use]
 pub fn logs_dir() -> PathBuf {
-    let mut path = PathBuf::from(atuin_home());
-    path.push("logs");
-    path
+    PathBuf::from(atuin_home()).joined("logs")
 }
 
 #[must_use]
@@ -305,10 +276,7 @@ pub fn dotfiles_cache_dir() -> PathBuf {
     // It would potentially be more correct to check `atuin_common::settings::Settings::data_dir`
     // first, since that would respect `data_dir` in config.toml, but that would involve significant
     // changes to atuin-dotfiles. Not worth it for a removed feature.
-    let mut path = unconfigured_data_dir();
-    path.push("dotfiles");
-    path.push("cache");
-    path
+    unconfigured_data_dir().joined("dotfiles").joined("cache")
 }
 
 #[cfg(test)]
@@ -424,7 +392,7 @@ mod tests {
     impl Homes {
         /// The default `$ATUIN_HOME`, `~/.atuin`.
         fn new_home(&self) -> PathBuf {
-            self.tmp.path().join("home").join(".atuin")
+            self.tmp.path().join("home").joined(".atuin")
         }
 
         /// Set `$ATUIN_THEME_DIR` to `value`.
@@ -440,17 +408,17 @@ mod tests {
         }
 
         fn legacy_config(&self) -> PathBuf {
-            self.tmp.path().join("xdg-config").join("atuin")
+            self.tmp.path().join("xdg-config").joined("atuin")
         }
 
         /// Create `~/.atuin/config.toml`, which marks an installation that uses `~/.atuin` (a new
         /// one, or one that has moved there) rather than the legacy config dir.
         fn migrate(&self) {
-            create(&self.new_home().join("config.toml"));
+            create(&self.new_home().joined("config.toml"));
         }
 
         fn legacy_data(&self) -> PathBuf {
-            self.tmp.path().join("xdg-data").join("atuin")
+            self.tmp.path().join("xdg-data").joined("atuin")
         }
 
         fn config_path(&self, child: &str, atuin_config_dir: Option<&str>) -> PathBuf {
@@ -483,7 +451,7 @@ mod tests {
 
     #[rstest]
     fn unconfigured_data_dir_is_new_by_default(homes: Homes) {
-        let expected = homes.new_home().join("data");
+        let expected = homes.new_home().joined("data");
         assert_eq!(unconfigured_data_dir(), expected);
     }
 
@@ -491,15 +459,15 @@ mod tests {
     fn unconfigured_data_dir_is_legacy_when_only_legacy_exists(homes: Homes) {
         create(&homes.legacy_data());
         // `$ATUIN_HOME` itself existing (e.g. for logs) doesn't count.
-        create(&homes.new_home().join("logs"));
+        create(&homes.new_home().joined("logs"));
         assert_eq!(unconfigured_data_dir(), homes.legacy_data());
     }
 
     #[rstest]
     fn unconfigured_data_dir_is_new_when_both_exist(homes: Homes) {
         create(&homes.legacy_data());
-        create(&homes.new_home().join("data"));
-        let expected = homes.new_home().join("data");
+        create(&homes.new_home().joined("data"));
+        let expected = homes.new_home().joined("data");
         assert_eq!(unconfigured_data_dir(), expected);
     }
 
@@ -507,7 +475,7 @@ mod tests {
     fn unconfigured_data_dir_ignores_legacy_when_atuin_home_is_set(homes: Homes) {
         create(&homes.legacy_data());
         let atuin_home = homes.set_atuin_home();
-        assert_eq!(unconfigured_data_dir(), atuin_home.join("data"));
+        assert_eq!(unconfigured_data_dir(), atuin_home.joined("data"));
     }
 
     #[rstest]
@@ -528,13 +496,13 @@ mod tests {
     ) {
         // A sibling item living in the legacy dir mustn't drag this one along with it, nor the
         // other way round.
-        create(&homes.legacy_config().join("sibling.toml"));
-        create(&homes.new_home().join("other.toml"));
+        create(&homes.legacy_config().joined("sibling.toml"));
+        create(&homes.new_home().joined("other.toml"));
         if in_legacy {
-            create(&homes.legacy_config().join(item));
+            create(&homes.legacy_config().joined(item));
         }
         if in_new {
-            create(&homes.new_home().join(item));
+            create(&homes.new_home().joined(item));
         }
         if migrated {
             homes.migrate();
@@ -547,20 +515,20 @@ mod tests {
         } else {
             homes.new_home()
         };
-        assert_eq!(homes.config_path(item, None), base.join(item));
+        assert_eq!(homes.config_path(item, None), base.joined(item));
     }
 
     #[rstest]
     fn nested_config_paths_are_resolved_by_their_top_level_item(homes: Homes) {
         homes.migrate();
-        create(&homes.legacy_config().join("themes"));
+        create(&homes.legacy_config().joined("themes"));
         assert_eq!(
             homes.config_path("themes/dark.toml", None),
-            homes.legacy_config().join("themes/dark.toml")
+            homes.legacy_config().joined("themes/dark.toml")
         );
         assert_eq!(
             homes.config_path("skills/foo/SKILL.md", None),
-            homes.new_home().join("skills/foo/SKILL.md")
+            homes.new_home().joined("skills/foo/SKILL.md")
         );
     }
 
@@ -572,12 +540,12 @@ mod tests {
         homes: Homes,
         #[values("permissions.ai.toml", "TERMINAL.md", "skills")] item: &str,
     ) {
-        create(&homes.new_home().join(item));
-        assert_eq!(homes.config_path(item, None), homes.legacy_config().join(item));
+        create(&homes.new_home().joined(item));
+        assert_eq!(homes.config_path(item, None), homes.legacy_config().joined(item));
 
         // Once the installation uses `~/.atuin`, that's where they are.
         homes.migrate();
-        assert_eq!(homes.config_path(item, None), homes.new_home().join(item));
+        assert_eq!(homes.config_path(item, None), homes.new_home().joined(item));
     }
 
     /// Atuin AI's items stay in the legacy dir without a home directory, which works when
@@ -595,7 +563,7 @@ mod tests {
         .into();
         env.set("XDG_CONFIG_HOME", &config);
         assert_eq!(try_home_dir(), Err(HomeError));
-        assert_eq!(config_path(child), config.join("atuin").join(child));
+        assert_eq!(config_path(child), config.joined("atuin").joined(child));
     }
 
     /// Which Atuin home an installation uses.
@@ -644,7 +612,7 @@ mod tests {
             (homes.legacy_config(), in_legacy),
         ] {
             if present {
-                create(&dir.join(child));
+                create(&dir.joined(child));
             }
         }
         if migrated {
@@ -670,7 +638,7 @@ mod tests {
             home
         };
         let config_dir = config_dir_set.then(|| config_dir.to_str().unwrap());
-        assert_eq!(homes.config_path(child, config_dir), base.join(child));
+        assert_eq!(homes.config_path(child, config_dir), base.joined(child));
     }
 
     /// `ATUIN_THEME_DIR` is only a fallback for the default `~/.atuin`, when it has no themes; a
@@ -700,9 +668,9 @@ mod tests {
         homes.set_theme_dir(&theme_dir);
 
         let expected = if atuin_home_set || in_home {
-            home.join(child)
+            home.joined(child)
         } else {
-            theme_dir.join(within)
+            theme_dir.joined(within)
         };
         let config_dir = config_dir.to_str().unwrap();
         assert_eq!(homes.config_path(child, Some(config_dir)), expected);
@@ -715,7 +683,7 @@ mod tests {
     ) {
         homes.migrate();
         homes.set_theme_dir(&homes.tmp.path().join("theme-dir"));
-        assert_eq!(homes.config_path(child, None), homes.new_home().join(child));
+        assert_eq!(homes.config_path(child, None), homes.new_home().joined(child));
     }
 
     /// An empty `ATUIN_THEME_DIR` has to be treated as unset.
@@ -724,7 +692,7 @@ mod tests {
         homes.set_theme_dir(Path::new(""));
         assert_eq!(
             homes.config_path("themes/dark.toml", None),
-            homes.new_home().join("themes/dark.toml")
+            homes.new_home().joined("themes/dark.toml")
         );
     }
 

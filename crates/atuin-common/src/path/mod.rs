@@ -39,6 +39,23 @@ impl<P: AsRef<Path>> PathExt for P {
     }
 }
 
+/// Extension trait for [`PathBuf`].
+pub trait PathBufExt: Sized + PathExt {
+    /// Like [`Path::join`], but reuses the [`PathBuf`].
+    ///
+    /// When you have a [`PathBuf`], prefer this method to [`Path::join`], unless you need to keep
+    /// the original [`PathBuf`] around.
+    #[must_use]
+    fn joined(self, path: impl AsRef<Path>) -> Self;
+}
+
+impl PathBufExt for PathBuf {
+    fn joined(mut self, path: impl AsRef<Path>) -> Self {
+        self.push(path);
+        self
+    }
+}
+
 /// An owned path that is dependent on environment variables.
 ///
 /// This type is used as part of a workaround to handle the case where the daemon may have been
@@ -71,7 +88,7 @@ mod tests {
         std::fs::create_dir(&b).unwrap();
 
         assert!(a.is_same_path(&a));
-        assert!(a.is_same_path(dir.path().join("b").join("..").join("a")));
+        assert!(a.is_same_path(dir.path().join("b").joined("..").joined("a")));
         assert!(!a.is_same_path(&b));
         // Paths that don't exist are only the same if they're equal.
         assert!(dir.path().join("x").is_same_path(dir.path().join("x")));

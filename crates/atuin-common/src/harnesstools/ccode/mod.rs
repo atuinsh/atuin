@@ -5,6 +5,7 @@ use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
 use crate::dirs::home_dir;
+use crate::path::PathBufExt as _;
 
 pub mod rehydrate;
 pub mod session;
@@ -31,7 +32,7 @@ impl Harness for Ccode {
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         // Claude Code reads hooks from its settings.json.
-        let config_path = home_dir().join(".claude").join("settings.json");
+        let config_path = home_dir().joined(".claude").joined("settings.json");
         json_hooks::install(&config_path, "^Bash$", self.name()).await?;
         Ok(config_path)
     }

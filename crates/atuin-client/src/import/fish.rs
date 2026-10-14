@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::env;
+use atuin_common::path::PathBufExt as _;
 use eyre::{Result, eyre};
 use time::OffsetDateTime;
 
@@ -23,7 +24,7 @@ fn default_histpath() -> Result<PathBuf> {
         let Some(home) = dirs::home_dir() else {
             eyre::bail!("could not determine home directory");
         };
-        Ok(home.join(".local").join("share"))
+        Ok(home.joined(".local").joined("share"))
     })?;
 
     // fish supports multiple history sessions
@@ -35,8 +36,7 @@ fn default_histpath() -> Result<PathBuf> {
         session
     };
 
-    let mut histpath = data.join("fish");
-    histpath.push(format!("{session}_history"));
+    let histpath = data.joined("fish").joined(format!("{session}_history"));
 
     if histpath.exists() {
         Ok(histpath)

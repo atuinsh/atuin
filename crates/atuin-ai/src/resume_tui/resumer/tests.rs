@@ -220,13 +220,13 @@ struct Dirs {
 #[fixture]
 fn dirs() -> Dirs {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().join("checkouts").join("atuin");
+    let repo = tmp.path().join("checkouts").joined("atuin");
     let here = repo.join("docs");
     let elsewhere = tmp.path().join("elsewhere");
-    for dir in [&here, &repo.join("crates").join("atuin"), &elsewhere] {
+    for dir in [&here, &repo.join("crates").joined("atuin"), &elsewhere] {
         std::fs::create_dir_all(dir).unwrap();
     }
-    let switched = tmp.path().join("data").join("ai").join("switched");
+    let switched = tmp.path().join("data").joined("ai").joined("switched");
     Dirs {
         _tmp: tmp,
         here,
@@ -468,8 +468,8 @@ fn resumes_where_it_ran_or_nearest_here(
     let restore = resolve_cwd(original.as_deref(), &context(&dirs));
     let expected = match expect {
         Expect::Original => dirs.elsewhere,
-        Expect::RepoSubdir => dirs.repo.join("crates"),
-        Expect::RepoNamesake => dirs.repo.join("crates").join("atuin"),
+        Expect::RepoSubdir => dirs.repo.joined("crates"),
+        Expect::RepoNamesake => dirs.repo.joined("crates").joined("atuin"),
         Expect::RepoRoot => dirs.repo,
         Expect::Here => dirs.here,
     };
@@ -495,21 +495,21 @@ fn a_checkout_named_twice_resumes_where_the_current_directory_is(
     #[case] cwd: Cwd,
     #[case] expected: &str,
 ) {
-    let outer = dirs.repo.join("other").join("atuin").join("crates");
+    let outer = dirs.repo.join("other").joined("atuin").joined("crates");
     let inner = dirs.repo.join("crates");
     std::fs::create_dir_all(outer.join("deeper")).unwrap();
     std::fs::create_dir_all(inner.join("deeper")).unwrap();
     let context = ResumeContext {
         cwd: match cwd {
-            Cwd::InOuter => outer.join("deeper"),
-            Cwd::InInner => inner.join("deeper"),
+            Cwd::InOuter => outer.joined("deeper"),
+            Cwd::InInner => inner.joined("deeper"),
             Cwd::Elsewhere => dirs.here.clone(),
         },
         ..context(&dirs)
     };
     let original = Path::new("/work/atuin/other/atuin/crates");
     let restore = resolve_cwd(Some(original), &context);
-    let expected: PathBuf = expected.split('/').fold(dirs.repo, |p, c| p.join(c));
+    let expected: PathBuf = expected.split('/').fold(dirs.repo, |p, c| p.joined(c));
     assert_eq!(restore.cwd, expected);
 }
 
@@ -1055,7 +1055,7 @@ async fn an_agent_is_looked_for_where_the_session_works_here(
     #[case] appends: bool,
 ) {
     let agent_in = match agent {
-        Agent::InTheMappedDir => dirs.repo.join("crates").join("atuin"),
+        Agent::InTheMappedDir => dirs.repo.join("crates").joined("atuin"),
         Agent::Unrelated => dirs.elsewhere.clone(),
     };
     let machine = FakeMachine {
@@ -1213,7 +1213,7 @@ async fn an_agent_is_looked_for_where_the_copy_works(
     #[case] recorded: bool,
     #[case] exists: bool,
 ) {
-    let copy_dir = dirs.repo.join("crates").join("atuin");
+    let copy_dir = dirs.repo.join("crates").joined("atuin");
     let copy_dir = if exists {
         copy_dir
     } else {
@@ -1240,10 +1240,10 @@ async fn an_agent_is_looked_for_where_the_copy_works(
     // An agent where the copy works holds the append, wherever the session row says.
     if recorded && exists {
         let mut tip = fake::local_tip(&["a", "b"], Some("b"));
-        tip.cwd = Some(dirs.repo.join("crates").join("atuin"));
+        tip.cwd = Some(dirs.repo.join("crates").joined("atuin"));
         let machine = FakeMachine {
             tip: Some(tip),
-            agent_in: Some(dirs.repo.join("crates").join("atuin")),
+            agent_in: Some(dirs.repo.join("crates").joined("atuin")),
             ..FakeMachine::default()
         };
         let caught = catch_up(&dirs, machine, false).await;

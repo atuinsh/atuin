@@ -7,6 +7,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use atuin_common::path::PathBufExt as _;
 use atuin_daemon::client::HistoryClient;
 use common::{FreshEnv, Process, SESSION, TIMEOUT, marker, output, wait_until};
 use rstest::{fixture, rstest};
@@ -66,8 +67,8 @@ async fn fresh_daemon_serves_history(
     #[values(1, 4)] writers: usize,
 ) {
     daemon.env.write_config(&format!("[daemon]\nenabled = true\nautostart = {autostart}\n"));
-    assert!(!daemon.env.data_dir().join("key").exists());
-    assert!(!daemon.env.data_dir().join("history.db").exists());
+    assert!(!daemon.env.data_dir().joined("key").exists());
+    assert!(!daemon.env.data_dir().joined("history.db").exists());
     assert!(!daemon.env.socket().exists());
 
     // Check socket and startup-lock reuse after shutdown.
@@ -107,12 +108,12 @@ async fn fresh_daemon_serves_history(
         assert!(status.healthy);
         assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
         let pidfile =
-            std::fs::read_to_string(daemon.env.data_dir().join("atuin-daemon.pid")).unwrap();
+            std::fs::read_to_string(daemon.env.data_dir().joined("atuin-daemon.pid")).unwrap();
         assert_eq!(pidfile.lines().next().unwrap(), status.pid.to_string());
         if let Some(process) = &daemon.foreground {
             assert_eq!(process.child.id(), status.pid);
         }
-        assert!(daemon.env.data_dir().join("key").is_file());
+        assert!(daemon.env.data_dir().joined("key").is_file());
 
         let expected: Vec<_> =
             ids.iter().zip(&commands).map(|(id, command)| format!("{id}\t7\t{command}")).collect();
@@ -221,7 +222,7 @@ async fn stale_ai_session_index(env: &FreshEnv) -> PathBuf {
     use atuin_common::harnesstools::session::{Content, Role};
 
     std::fs::create_dir_all(env.data_dir()).unwrap();
-    let path = env.data_dir().join("ai_session_sidecar.db");
+    let path = env.data_dir().joined("ai_session_sidecar.db");
     let db = AiSessionDatabase::open(&path).await.unwrap();
     let msg = Message::builder()
         .id(atuin_domain::record::RecordId(atuin_common::utils::uuid_v7()))
@@ -277,7 +278,7 @@ async fn ai_session_rebuild_without_the_daemon_fails_and_touches_nothing(
     daemon.env.write_config(&format!("[daemon]\nenabled = {enabled}\nautostart = false\n"));
     let index = stale_ai_session_index(&daemon.env).await;
     atuin_common::encryption::paseto_v4::Key::generate()
-        .try_write_path(&daemon.env.data_dir().join("key"))
+        .try_write_path(&daemon.env.data_dir().joined("key"))
         .unwrap();
 
     let args: &[&str] = if purge {

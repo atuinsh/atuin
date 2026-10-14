@@ -15,6 +15,7 @@ use toml_edit::{DocumentMut, Item, Table, TableLike};
 
 use crate::harnesstools::InstallHookError;
 use crate::harnesstools::json_hooks::invokes_atuin_hook;
+use crate::path::PathBufExt as _;
 
 /// The events Codex runs atuin's hooks for, as `hooks.json` and the trust key name them.
 const EVENTS: &[(&str, &str)] = &[("PreToolUse", "pre_tool_use"), ("PostToolUse", "post_tool_use")];
@@ -60,7 +61,7 @@ pub(super) async fn trust(
     harness: &str,
     mut config: Config,
 ) -> Result<bool, InstallHookError> {
-    let hooks_path = tokio::fs::canonicalize(home).await?.join("hooks.json");
+    let hooks_path = tokio::fs::canonicalize(home).await?.joined("hooks.json");
     let hooks: Value = serde_json::from_str(&tokio::fs::read_to_string(&hooks_path).await?)?;
     let mut changed = false;
     let state = state(&mut config.doc)?;
@@ -189,7 +190,7 @@ mod tests {
         assert!(trust(home.path(), "codex", config_of().await.unwrap()).await.unwrap());
         assert!(!trust(home.path(), "codex", config_of().await.unwrap()).await.unwrap());
 
-        let path = std::fs::canonicalize(home.path()).unwrap().join("hooks.json");
+        let path = std::fs::canonicalize(home.path()).unwrap().joined("hooks.json");
         let text = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
         let config: toml_edit::DocumentMut = text.parse().unwrap();
         let state = config["hooks"]["state"].as_table_like().unwrap();

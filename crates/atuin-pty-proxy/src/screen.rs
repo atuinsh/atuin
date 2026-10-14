@@ -7,6 +7,7 @@ use std::thread::JoinHandle;
 
 use atuin_common::os::unix::tty::TtyId;
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
+use atuin_common::path::PathBufExt as _;
 use easy_cast::Conv;
 
 use crate::capture::{CaptureConfig, CommandCaptureTracker};
@@ -23,7 +24,7 @@ pub enum Msg {
 
 /// The path to the PTY proxy socket for the given terminal.
 pub fn socket_path(tty_id: TtyId) -> Result<PathBuf, SecureTempDirError> {
-    Ok(socket_dir()?.join(socket_name(tty_id)))
+    Ok(socket_dir()?.joined(socket_name(tty_id)))
 }
 
 /// The name of the PTY proxy socket for the given terminal.
@@ -35,7 +36,7 @@ fn socket_name(tty_id: TtyId) -> String {
 /// The directory in which PTY proxy sockets are stored.
 fn socket_dir() -> Result<PathBuf, SecureTempDirError> {
     let uid = atuin_common::os::unix::uid();
-    let dir = atuin_common::os::unix::tmp_dir().join(format!("atuin-{uid}"));
+    let dir = atuin_common::os::unix::tmp_dir().joined(format!("atuin-{uid}"));
     create_secure_temp_dir(dir)
 }
 

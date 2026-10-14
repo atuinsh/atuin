@@ -13,7 +13,8 @@ const PAGINATED: &str = "paginated-compacted.jsonl";
 const LEGACY: &str = "legacy-forked-subagent.jsonl";
 
 fn fixture(name: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex").join(name);
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures/codex").joined(name);
     std::fs::read_to_string(path).unwrap()
 }
 
@@ -27,7 +28,7 @@ fn thread(text: &str) -> String {
 fn rollout(home: &Path, thread: &str, text: &str, lines: usize) -> PathBuf {
     let dir = home.join("sessions/2026/09/24");
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("rollout-2026-09-24T02-47-48-{thread}.jsonl"));
+    let path = dir.joined(format!("rollout-2026-09-24T02-47-48-{thread}.jsonl"));
     let kept: String = text.lines().take(lines).map(|l| format!("{l}\n")).collect();
     std::fs::write(&path, kept).unwrap();
     path
@@ -136,7 +137,7 @@ async fn a_fast_forward_numbers_on_from_the_last_line(
     let again = synced(&path).await;
     testing::assert_nothing_new(&all, again.iter().map(|r| r.source_id.as_str()));
     if locks {
-        assert!(!dir.path().join(LOCKS).join(format!("{thread}.lock")).exists(), "let go");
+        assert!(!dir.path().join(LOCKS).joined(format!("{thread}.lock")).exists(), "let go");
     }
 }
 
@@ -147,7 +148,7 @@ async fn a_thread_codex_holds_is_left_alone(dir: TempDir) {
     let locks = dir.path().join(LOCKS);
     std::fs::create_dir_all(&locks).unwrap();
     let (thread, path, base, missing) = behind(dir.path(), 20).await;
-    let held = File::create(locks.join(format!("{thread}.lock"))).unwrap();
+    let held = File::create(locks.joined(format!("{thread}.lock"))).unwrap();
     held.lock().unwrap();
     let before = std::fs::read(&path).unwrap();
     let err = append_in(dir.path(), &thread, &base, &missing, None).unwrap_err();
@@ -255,7 +256,7 @@ async fn a_switch_writes_the_rollout_out_along_the_branch_in_place(
     let again = synced(&path).await;
     testing::assert_nothing_new(&rows, again.iter().map(|r| r.source_id.as_str()));
     if locks {
-        assert!(!dir.path().join(LOCKS).join(format!("{thread}.lock")).exists(), "let go");
+        assert!(!dir.path().join(LOCKS).joined(format!("{thread}.lock")).exists(), "let go");
     }
     let projected = state_db::tests::projected(&history, &thread).await;
     assert_eq!(projected, 0, "Codex projects its history again, from the branch");
@@ -280,7 +281,7 @@ async fn a_switch_that_cant_be_made_writes_nothing(
         // The thread's first rollout, which a newer one continues.
         let older = dir.path().join("sessions/2026/09/23");
         std::fs::create_dir_all(&older).unwrap();
-        std::fs::write(older.join(format!("rollout-2026-09-23T00-00-00-{thread}.jsonl")), &text)
+        std::fs::write(older.joined(format!("rollout-2026-09-23T00-00-00-{thread}.jsonl")), &text)
             .unwrap();
     }
     let (_, path, base, _) = behind(dir.path(), 45).await;
@@ -296,7 +297,7 @@ async fn a_switch_that_cant_be_made_writes_nothing(
         "locked" => {
             let locks = dir.path().join(LOCKS);
             std::fs::create_dir_all(&locks).unwrap();
-            let lock = File::create(locks.join(format!("{thread}.lock"))).unwrap();
+            let lock = File::create(locks.joined(format!("{thread}.lock"))).unwrap();
             lock.lock().unwrap();
             held = Some(lock);
         }
@@ -436,7 +437,7 @@ async fn the_copy_says_up_front_when_it_cant_be_switched(
             let older = dir.path().join("sessions/2026/09/23");
             std::fs::create_dir_all(&older).unwrap();
             let name = format!("rollout-2026-09-23T00-00-00-{thread}.jsonl");
-            std::fs::write(older.join(name), &text).unwrap();
+            std::fs::write(older.joined(name), &text).unwrap();
         }
         "a segment" => id = format!("{thread}_01a0d14f-0000-7000-8000-000000000000"),
         "history base" => {

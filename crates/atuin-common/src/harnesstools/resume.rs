@@ -287,6 +287,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::path::PathBufExt as _;
 
     #[rstest]
     #[case::bare("abc-123_x.y/z", "abc-123_x.y/z")]
@@ -390,7 +391,7 @@ mod tests {
     #[rstest]
     fn shells_run_a_rendered_plan(#[values("bash", "zsh", "fish")] shell: &str) {
         let root = tempfile::tempdir().unwrap();
-        let dir = std::fs::canonicalize(root.path()).unwrap().join(r"-it's a \ dir プ $x");
+        let dir = std::fs::canonicalize(root.path()).unwrap().joined(r"-it's a \ dir プ $x");
         std::fs::create_dir(&dir).unwrap();
         let plan = ResumePlan {
             program: "printf".into(),

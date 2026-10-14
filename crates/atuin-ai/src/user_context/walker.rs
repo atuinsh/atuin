@@ -94,6 +94,7 @@ async fn load_context_file(path: &Path, depth: usize) -> Result<Option<FoundFile
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::path::PathBufExt as _;
     use rstest::rstest;
 
     use super::*;
@@ -110,8 +111,8 @@ mod tests {
         #[case] expected: usize,
     ) {
         let home = tempfile::tempdir().unwrap();
-        let dotfile = home.path().join(".atuin").join(CONTEXT_FILENAME);
-        let elsewhere = home.path().join("elsewhere").join(CONTEXT_FILENAME);
+        let dotfile = home.path().join(".atuin").joined(CONTEXT_FILENAME);
+        let elsewhere = home.path().join("elsewhere").joined(CONTEXT_FILENAME);
         for file in [&dotfile, &elsewhere] {
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
             std::fs::write(file, "context").unwrap();

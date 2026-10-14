@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use atuin_client::history::HistoryId;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::range::PyStyleIdxRange;
 use atuin_daemon::client::HistoryClient;
 use common::{FreshEnv, Process, SESSION, TIMEOUT, marker, output};
@@ -61,7 +62,7 @@ fn bash() -> Option<PathBuf> {
     let found = match atuin_common::env::var_os("ATUIN_E2E_BASH") {
         Some(path) => Some(PathBuf::from(path)),
         None => std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
-            .map(|dir| dir.join("bash"))
+            .map(|dir| dir.joined("bash"))
             .find(|path| path.is_file()),
     };
     if found.is_none() {

@@ -4,6 +4,7 @@
 
 mod common;
 
+use atuin_common::path::PathBufExt as _;
 use common::{FreshEnv, Process, SESSION};
 use rstest::{fixture, rstest};
 
@@ -32,9 +33,9 @@ fn fresh_history_list_is_empty_and_bootstraps_data_dir(env: FreshEnv) {
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(stdout(&out).trim(), "");
 
-    assert!(env.data_dir().join("key").is_file(), "encryption key was not auto-generated");
-    assert!(env.data_dir().join("history.db").is_file());
-    assert!(env.atuin_home().join("config.toml").is_file());
+    assert!(env.data_dir().joined("key").is_file(), "encryption key was not auto-generated");
+    assert!(env.data_dir().joined("history.db").is_file());
+    assert!(env.atuin_home().joined("config.toml").is_file());
     assert!(!env.home().join(".local/share/atuin").exists());
     assert!(!env.home().join(".config/atuin").exists());
 }
@@ -76,7 +77,7 @@ fn existing_xdg_install_is_used_in_place(env: FreshEnv) {
     std::fs::create_dir_all(&legacy_config).unwrap();
     let db_path = env.home().join("legacy-config-was-read.db");
     std::fs::write(
-        legacy_config.join("config.toml"),
+        legacy_config.joined("config.toml"),
         format!("db_path = {:?}\n", db_path.display().to_string()),
     )
     .unwrap();
@@ -86,10 +87,10 @@ fn existing_xdg_install_is_used_in_place(env: FreshEnv) {
     let out = Process::spawn(command).wait();
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
 
-    assert!(legacy_data.join("key").is_file(), "key was not generated in the legacy data dir");
+    assert!(legacy_data.joined("key").is_file(), "key was not generated in the legacy data dir");
     assert!(db_path.is_file(), "the legacy config.toml was not read");
     assert!(!env.data_dir().exists(), "a new data dir was created alongside the legacy one");
-    assert!(!env.atuin_home().join("config.toml").exists());
+    assert!(!env.atuin_home().joined("config.toml").exists());
 }
 
 /// `$ATUIN_HOME` holds a whole, separate installation, even alongside an install from before
@@ -101,7 +102,7 @@ fn atuin_home_holds_a_separate_install(env: FreshEnv, #[values(false, true)] xdg
     if xdg_install {
         std::fs::create_dir_all(&legacy_data).unwrap();
         std::fs::create_dir_all(&legacy_config).unwrap();
-        std::fs::write(legacy_config.join("config.toml"), "").unwrap();
+        std::fs::write(legacy_config.joined("config.toml"), "").unwrap();
     }
 
     let profile = env.home().join("profile");
@@ -114,25 +115,25 @@ fn atuin_home_holds_a_separate_install(env: FreshEnv, #[values(false, true)] xdg
     assert!(profile.join("data/history.db").is_file());
     assert!(profile.join("config.toml").is_file());
     assert!(!env.data_dir().exists());
-    assert!(!env.atuin_home().join("config.toml").exists());
-    assert!(!legacy_data.join("key").exists(), "the legacy data dir was used");
+    assert!(!env.atuin_home().joined("config.toml").exists());
+    assert!(!legacy_data.joined("key").exists(), "the legacy data dir was used");
 }
 
 #[rstest]
 fn key_loads_but_never_generates(env: FreshEnv) {
     let out = Process::spawn(env.atuin(&["key"])).wait();
     assert!(!out.status.success(), "atuin key should fail before a key exists");
-    assert!(!env.data_dir().join("key").exists());
+    assert!(!env.data_dir().joined("key").exists());
 
     let mut command = env.atuin(&["history", "list"]);
     command.env("ATUIN_SESSION", SESSION);
     let out = Process::spawn(command).wait();
     assert!(out.status.success());
 
-    let key = std::fs::read(env.data_dir().join("key")).unwrap();
+    let key = std::fs::read(env.data_dir().joined("key")).unwrap();
     let out = Process::spawn(env.atuin(&["key"])).wait();
     assert!(out.status.success());
-    assert_eq!(std::fs::read(env.data_dir().join("key")).unwrap(), key);
+    assert_eq!(std::fs::read(env.data_dir().joined("key")).unwrap(), key);
     assert_eq!(stdout(&out).split_whitespace().count(), 24, "expected a 24-word mnemonic");
 }
 

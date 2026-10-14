@@ -54,6 +54,11 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Rustdoc: CI runs `cargo doc --document-private-items --no-deps --workspace` with `RUSTDOCFLAGS=-D warnings`. Broken intra-doc links fail the build.
 - Format: `cargo +nightly fmt`. `.rustfmt.toml` uses nightly-only options, so formatting requires the nightly toolchain even though the project builds on stable 1.97.0.
 - IDs: UUIDv7 (time-ordered), newtype wrappers (`HistoryId`, `RecordId`, `HostId`).
+- Paths: when the original owned `PathBuf` isn't needed afterwards, use
+  `atuin_common::path::PathBufExt::joined` (import `PathBufExt as _`) instead of `.join()`. This
+  always applies to the second and later joins of a chain (`a.join(x).joined(y)`) and to owned
+  temporaries (`home_dir().joined(x)`). Also prefer it over `let mut p = ..; p.push(..);` when
+  that's simpler. Clippy can't flag this, so watch for it.
 - Serialization: MessagePack for encrypted payloads, JSON for API, TOML for config.
 - Storage traits: `Database` (client), `Store` (record store), `Database` (server) -- all `async_trait`.
 - History builders: `HistoryImported`, `HistoryCaptured`, `HistoryFromDb` with compile-time field validation.

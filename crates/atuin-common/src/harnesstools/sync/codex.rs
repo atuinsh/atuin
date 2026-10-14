@@ -53,6 +53,7 @@ use crate::harnesstools::codex::{Codex, rehydrate, state_db};
 use crate::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use crate::harnesstools::resume::is_plain_name;
 use crate::harnesstools::session::Session;
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 impl SessionSync for Codex {
@@ -132,7 +133,7 @@ pub(super) fn liveness(home: &Path, id: &str, procs: &Processes, seen: &Seen) ->
     if !locks.is_dir() {
         return agent_running(procs, "codex", &[], seen);
     }
-    match flock_holder(&locks.join(format!("{thread}.lock")), procs) {
+    match flock_holder(&locks.joined(format!("{thread}.lock")), procs) {
         // Whether Codex on Windows holds the lock as it does elsewhere is unconfirmed: a lock
         // nothing holds there says no more than the processes do.
         Liveness::NotLive if cfg!(windows) => agent_running(procs, "codex", &[], seen),

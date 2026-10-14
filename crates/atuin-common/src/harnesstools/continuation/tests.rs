@@ -16,6 +16,7 @@ use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
 use crate::harnesstools::{ccode, codex, opencode, pi};
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 pub const CLAUDE: AnyHarness = AnyHarness::ClaudeCode(Ccode);
@@ -26,7 +27,7 @@ pub const PI: AnyHarness = AnyHarness::Pi(Pi);
 const ATUIN_ID: &str = "01a0d147e7457ae280000123456789ab";
 
 fn fixture(path: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(path)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures").joined(path)
 }
 
 pub fn pool() -> BlockingPool {

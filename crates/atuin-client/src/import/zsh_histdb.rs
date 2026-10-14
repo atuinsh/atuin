@@ -37,6 +37,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::db;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use eyre::{Result, eyre};
@@ -107,7 +108,7 @@ impl ZshHistDb {
         }
 
         let home_dir = dirs::home_dir().ok_or_else(|| eyre!("could not find home directory"))?;
-        Ok(home_dir.join(".histdb/zsh-history.db"))
+        Ok(home_dir.joined(".histdb/zsh-history.db"))
     }
 
     pub fn histpath() -> Result<PathBuf> {

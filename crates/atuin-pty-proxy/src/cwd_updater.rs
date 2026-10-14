@@ -126,6 +126,7 @@ mod tests {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    use atuin_common::path::PathBufExt as _;
     use portable_pty::{CommandBuilder, PtyPair, PtySize, native_pty_system};
     use rstest::rstest;
 
@@ -248,7 +249,7 @@ mod tests {
     #[rstest]
     fn the_cwd_follows_the_shell_as_it_moves() {
         let dir = tempfile::tempdir().unwrap();
-        let elsewhere = dir.path().canonicalize().unwrap().join("elsewhere");
+        let elsewhere = dir.path().canonicalize().unwrap().joined("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
         let mut fixture = Fixture::new(dir.path());
 

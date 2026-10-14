@@ -39,6 +39,7 @@ use std::time::{Duration, Instant};
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
+use atuin_common::path::PathBufExt as _;
 use eyre::Result;
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
@@ -150,7 +151,7 @@ fn current_branch(root: &Path) -> Option<String> {
     } else {
         dot_git
     };
-    let head = fs_err::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = fs_err::read_to_string(git_dir.joined("HEAD")).ok()?;
     head.trim().strip_prefix("ref: refs/heads/").map(str::to_owned)
 }
 

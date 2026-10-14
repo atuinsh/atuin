@@ -7,6 +7,7 @@ use atuin_client::history::{AuthorPattern, History};
 use atuin_client::settings::FilterMode;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::time::UtcOffsetExt;
 use easy_cast::Conv;
 use enum_dispatch::enum_dispatch;
@@ -33,7 +34,7 @@ use crate::permissions::rule::Rule;
 /// `?`, and `[...]` via `glob_match`.
 fn path_matches_scope(path: &Path, scope: &str) -> bool {
     let path = if path.is_relative() {
-        std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir().map(|cwd| cwd.joined(path)).unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
     };
@@ -318,7 +319,7 @@ impl ReadToolCall {
     pub fn resolved_path(&self) -> PathBuf {
         if self.path.is_relative() {
             std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
+                .map(|cwd| cwd.joined(&self.path))
                 .unwrap_or_else(|_| self.path.clone())
         } else {
             self.path.clone()
@@ -452,7 +453,7 @@ impl EditToolCall {
     pub fn resolved_path(&self) -> PathBuf {
         if self.path.is_relative() {
             std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
+                .map(|cwd| cwd.joined(&self.path))
                 .unwrap_or_else(|_| self.path.clone())
         } else {
             self.path.clone()
@@ -642,7 +643,7 @@ impl WriteToolCall {
     pub fn resolved_path(&self) -> PathBuf {
         if self.path.is_relative() {
             std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
+                .map(|cwd| cwd.joined(&self.path))
                 .unwrap_or_else(|_| self.path.clone())
         } else {
             self.path.clone()
@@ -1500,7 +1501,7 @@ mod tests {
     fn relative_multi_segment_glob(#[case] scope: &str, #[case] expected: bool) {
         // This matches against the path relative to cwd
         let cwd = std::env::current_dir().unwrap();
-        let abs = cwd.join("crates").join("atuin-ai").join("src").join("lib.rs");
+        let abs = cwd.joined("crates").joined("atuin-ai").joined("src").joined("lib.rs");
         let tool = read_tool(abs.to_str().unwrap());
         assert_eq!(tool.matches_rule(&read_rule(Some(scope))), expected);
     }
@@ -1792,7 +1793,7 @@ mod tests {
             let file_path = dir.path().join("config.toml");
             std::fs::write(&file_path, "[db]\nhost = localhost\nport = 5432\n").unwrap();
 
-            let snapshot_dir = dir.path().join("snapshots").join("session-1");
+            let snapshot_dir = dir.path().join("snapshots").joined("session-1");
             let mut tracker = FileReadTracker::default();
             let mut store = SnapshotStore::open(snapshot_dir.clone()).unwrap();
 
@@ -1914,7 +1915,7 @@ mod tests {
             let file_path = dir.path().join("config.toml");
             std::fs::write(&file_path, "a = 1\nb = 2\n").unwrap();
 
-            let snapshot_dir = dir.path().join("snapshots").join("session-1");
+            let snapshot_dir = dir.path().join("snapshots").joined("session-1");
             let mut tracker = FileReadTracker::default();
             let mut store = SnapshotStore::open(snapshot_dir).unwrap();
 
@@ -2026,7 +2027,7 @@ mod tests {
 
         #[rstest]
         fn creates_parent_directories(tempdir: tempfile::TempDir) {
-            let path = tempdir.path().join("sub").join("dir").join("file.txt");
+            let path = tempdir.path().join("sub").joined("dir").joined("file.txt");
 
             let call = WriteToolCall {
                 path: path.clone(),

@@ -128,7 +128,7 @@ async fn a_session_reads_back_as_it_was_captured(projects: TempDir, #[case] json
     let path = rehydrate_into(projects.path(), &session).unwrap();
     assert_eq!(
         path,
-        projects.path().join(project_dir_name(&cwd)).join(format!("{}.jsonl", session.id))
+        projects.path().join(project_dir_name(&cwd)).joined(format!("{}.jsonl", session.id))
     );
     assert_eq!(locate(projects.path(), &session.id), Some(path.clone()));
 
@@ -535,7 +535,7 @@ fn line_directories_have_no_trailing_separator(
     let expected = if expected_sub.is_empty() {
         here
     } else {
-        here.join(expected_sub)
+        here.joined(expected_sub)
     };
     assert_eq!(lines(&path)[0]["cwd"], expected.to_string_lossy().as_ref());
 }

@@ -25,6 +25,7 @@ use std::process::Stdio;
 use agents::{Agent, Transcript, Turn, said, whole, word};
 use ai::{Machine, SyncServer, shared_dir, succeeded};
 use atuin_common::harnesstools::resume::quote;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::secrets::REDACTED;
 use regex::Regex;
 use rstest::{fixture, rstest};
@@ -555,7 +556,8 @@ fn a_diverged_copy_resumes_only_as_chosen(
         "{stderr}"
     );
     assert!(
-        Path::new(backup).starts_with(here.data_dir().join("ai/switched").join(agent.harness())),
+        Path::new(backup)
+            .starts_with(here.data_dir().joined("ai/switched").joined(agent.harness())),
         "{backup}"
     );
     assert_eq!(std::fs::read_to_string(backup).unwrap(), copy, "the backup isn't the copy");

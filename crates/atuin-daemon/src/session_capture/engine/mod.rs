@@ -561,6 +561,7 @@ impl Drop for SessionCaptureEngine {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use atuin_common::path::PathBufExt as _;
     use rstest::rstest;
 
     use super::*;
@@ -1014,7 +1015,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("-work-proj");
         std::fs::create_dir(&project).unwrap();
-        let path = project.join("s1.jsonl");
+        let path = project.joined("s1.jsonl");
         let old = turn("u1", None, 1)
             + &title("mine")
             + &turn("u2", Some("u1"), 2)

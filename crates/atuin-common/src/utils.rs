@@ -6,6 +6,8 @@ use getrandom::fill;
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox, SecretString};
 use uuid::Uuid;
 
+use crate::path::PathBufExt as _;
+
 /// Generate N random bytes, using a cryptographically secure source
 #[must_use]
 pub fn crypto_random_bytes<const N: usize>() -> SecretBox<[u8; N]> {
@@ -40,10 +42,7 @@ pub fn uuid_v4() -> String {
 
 #[must_use]
 pub fn has_git_dir(path: &str) -> bool {
-    let mut gitdir = PathBuf::from(path);
-    gitdir.push(".git");
-
-    gitdir.exists()
+    PathBuf::from(path).joined(".git").exists()
 }
 
 // in a git worktree, .git is a file containing "gitdir: <path>" pointing
@@ -182,9 +181,9 @@ mod tests {
     #[rstest]
     fn in_git_repo_regular() {
         // regular git repo should resolve to the directory containing .git
-        let tmp = std::env::temp_dir().join("atuin-test-regular-git");
+        let tmp = std::env::temp_dir().joined("atuin-test-regular-git");
         let _ = std::fs::remove_dir_all(&tmp);
-        let subdir = tmp.join("src").join("deep");
+        let subdir = tmp.join("src").joined("deep");
         std::fs::create_dir_all(&subdir).unwrap();
         std::fs::create_dir_all(tmp.join(".git")).unwrap();
 
@@ -199,12 +198,12 @@ mod tests {
     fn in_git_repo_worktree_resolves_to_main_repo() {
         // worktree .git is a file pointing back to the main repo —
         // in_git_repo should follow it so all worktrees share a workspace
-        let tmp = std::env::temp_dir().join("atuin-test-worktree-git");
+        let tmp = std::env::temp_dir().joined("atuin-test-worktree-git");
         let _ = std::fs::remove_dir_all(&tmp);
 
         // main repo at tmp/main with a real .git directory
         let main_repo = tmp.join("main");
-        let worktree_git_dir = main_repo.join(".git").join("worktrees").join("feature");
+        let worktree_git_dir = main_repo.join(".git").joined("worktrees").joined("feature");
         std::fs::create_dir_all(&worktree_git_dir).unwrap();
 
         // worktree at tmp/worktree with a .git file
@@ -248,7 +247,7 @@ mod tests {
         git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
         let worktree = tmp.path().join("feature-wt");
         git(&main, &["worktree", "add", "-q", "-b", "feature", worktree.to_str().unwrap()]);
-        let deep = worktree.join("src").join("deep");
+        let deep = worktree.join("src").joined("deep");
         std::fs::create_dir_all(&deep).unwrap();
 
         assert_eq!(git_checkout_root(deep.to_str().unwrap()), Some(worktree));

@@ -59,6 +59,7 @@ use crate::harnesstools::resume;
 use crate::harnesstools::session::{
     Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
 };
+use crate::path::PathBufExt as _;
 
 /// The longest project directory name Claude Code writes before shortening it with a hash
 /// (`Kne` in CC 2.1.283).
@@ -90,7 +91,7 @@ pub(crate) fn rehydrate_into(
     }
     let dir = root.join(project_dir_name(&session.cwd));
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.jsonl", session.id));
+    let path = dir.joined(format!("{}.jsonl", session.id));
     crate::fs::write_new(&path, transcript(session).as_bytes()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::AlreadyExists {
             RehydrateError::AlreadyExists(path.clone())

@@ -5,6 +5,7 @@ use std::str::FromStr;
 use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError, codex};
+use atuin_common::path::PathBufExt as _;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
 use tracing::instrument;
@@ -54,7 +55,7 @@ impl Cmd {
 }
 
 fn id_file_path(tool_use_id: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("atuin-hook-{tool_use_id}"))
+    std::env::temp_dir().joined(format!("atuin-hook-{tool_use_id}"))
 }
 
 /// How the user makes an agent pick up a freshly installed extension. Only the

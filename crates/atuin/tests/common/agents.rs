@@ -10,6 +10,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use atuin_common::path::PathBufExt as _;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -186,7 +187,9 @@ impl Transcript {
         let id = agent.new_id();
         let started = tick();
         let path = match agent {
-            Agent::Claude => agent.root(home).join(claude_project(cwd)).join(format!("{id}.jsonl")),
+            Agent::Claude => {
+                agent.root(home).joined(claude_project(cwd)).joined(format!("{id}.jsonl"))
+            }
             Agent::Codex => {
                 let day = started.format(time::macros::format_description!("[year]/[month]/[day]"));
                 let stamp = started.format(time::macros::format_description!(
@@ -194,8 +197,8 @@ impl Transcript {
                 ));
                 agent
                     .root(home)
-                    .join(day.unwrap())
-                    .join(format!("rollout-{}-{id}.jsonl", stamp.unwrap()))
+                    .joined(day.unwrap())
+                    .joined(format!("rollout-{}-{id}.jsonl", stamp.unwrap()))
             }
             Agent::Pi => {
                 let dir = format!(
@@ -203,7 +206,7 @@ impl Transcript {
                     cwd.display().to_string().trim_matches('/').replace('/', "-")
                 );
                 let stamp = rfc3339(started).replace([':', '.'], "-");
-                agent.root(home).join(dir).join(format!("{stamp}_{id}.jsonl"))
+                agent.root(home).joined(dir).joined(format!("{stamp}_{id}.jsonl"))
             }
             Agent::Opencode => agent.root(home),
         };
@@ -261,11 +264,11 @@ impl Transcript {
     pub fn claude_subagent(parent: &Self, cwd: &Path, turns: &[Turn]) -> Self {
         assert_eq!(parent.agent, Agent::Claude);
         let id = format!("agent-{}", &short()[16..]);
-        let dir = parent.path.with_extension("").join("subagents");
+        let dir = parent.path.with_extension("").joined("subagents");
         fs::create_dir_all(&dir).unwrap();
         let subagent = Self {
             agent: Agent::Claude,
-            path: dir.join(format!("{id}.jsonl")),
+            path: dir.joined(format!("{id}.jsonl")),
             id,
         };
         subagent.append(cwd, turns);

@@ -5,6 +5,7 @@ use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget}
 use super::{Harness, InstallHookError};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
+use crate::path::PathBufExt as _;
 
 pub mod rehydrate;
 pub mod session;
@@ -47,13 +48,13 @@ impl Harness for Opencode {
         // falling back to ~/.config/opencode.
         let plugins_dir = var_nonempty("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .unwrap_or_else(|| home_dir().join(".config"))
-            .join("opencode")
-            .join("plugins");
+            .unwrap_or_else(|| home_dir().joined(".config"))
+            .joined("opencode")
+            .joined("plugins");
 
         tokio::fs::create_dir_all(&plugins_dir).await?;
 
-        let extension_path = plugins_dir.join(PLUGIN_NAME);
+        let extension_path = plugins_dir.joined(PLUGIN_NAME);
 
         let already_installed = tokio::fs::read_to_string(&extension_path)
             .await

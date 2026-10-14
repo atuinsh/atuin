@@ -24,6 +24,7 @@ mod shell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use atuin_common::path::PathBufExt as _;
 use common::FreshEnv;
 use pty::PtyShell;
 use rstest::rstest;
@@ -58,7 +59,7 @@ fn fish() -> Option<PathBuf> {
         return Some(path);
     }
     let found = std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
-        .map(|dir| dir.join("fish"))
+        .map(|dir| dir.joined("fish"))
         .find(|path| path.is_file());
     if found.is_none() {
         assert!(

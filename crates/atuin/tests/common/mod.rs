@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use std::time::{Duration, Instant};
 
+use atuin_common::path::PathBufExt as _;
 use tempfile::TempDir;
 
 pub const TIMEOUT: Duration = Duration::from_secs(30);
@@ -27,7 +28,7 @@ impl FreshEnv {
         fs::create_dir_all(home.path().join(".cache")).unwrap();
         fs::create_dir_all(home.path().join("tmp")).unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_atuin"), bin.join("atuin"))
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_atuin"), bin.joined("atuin"))
             .expect("failed to symlink atuin into fresh env");
         Self { home }
     }
@@ -96,11 +97,11 @@ impl FreshEnv {
     }
 
     pub fn data_dir(&self) -> PathBuf {
-        self.atuin_home().join("data")
+        self.atuin_home().joined("data")
     }
 
     pub fn config_file(&self) -> PathBuf {
-        self.atuin_home().join("config.toml")
+        self.atuin_home().joined("config.toml")
     }
 
     pub fn write_config(&self, contents: &str) {

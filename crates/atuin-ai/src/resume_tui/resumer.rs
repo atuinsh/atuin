@@ -30,6 +30,7 @@ use atuin_common::harnesstools::sync::{
     AppendOptions, AppendOutcome, Liveness, LocalTip, ReplaceOutcome, SessionSync as _, SyncError,
 };
 use atuin_common::harnesstools::{AnyHarness, Harness as _, fork};
+use atuin_common::path::PathBufExt as _;
 
 use super::ResumeContext;
 use super::catchup::{self, CatchUp, Held, Step, Why};
@@ -444,7 +445,7 @@ pub struct HarnessResumer {
 /// Where copies switched to another branch are kept as they were: `ai/switched` in atuin's data
 /// directory (`data_dir`, `ATUIN_DATA_DIR`), which no agent lists sessions from.
 pub fn switched_dir(settings: &Settings) -> PathBuf {
-    settings.data_dir.join("ai").join("switched")
+    settings.data_dir.join("ai").joined("switched")
 }
 
 impl HarnessResumer {
@@ -1049,7 +1050,7 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
         return runnable(Path::new(program));
     }
     let paths = env::var_os("PATH")?;
-    std::env::split_paths(&paths).find_map(|dir| runnable(&dir.join(program)))
+    std::env::split_paths(&paths).find_map(|dir| runnable(&dir.joined(program)))
 }
 
 /// The program a plan runs, as [`on_path`] should check it: a relative path such as

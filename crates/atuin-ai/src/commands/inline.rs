@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use atuin_client::database::Sqlite;
 use atuin_common::dirs;
+use atuin_common::path::PathBufExt as _;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -175,23 +176,18 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 /// [legacy data dir]: dirs::legacy_data_dir
 /// [`data_dir`]: field@atuin_client::settings::Settings::data_dir
 fn snapshots_dir(settings: &atuin_client::settings::Settings) -> PathBuf {
-    fn push_snapshots(path: &mut PathBuf) {
-        path.push("ai");
-        path.push("snapshots");
+    fn join_snapshots(path: impl Into<PathBuf>) -> PathBuf {
+        path.into().joined("ai").joined("snapshots")
     }
 
-    let mut path = settings.data_dir.clone();
-    push_snapshots(&mut path);
-
+    let path = join_snapshots(&settings.data_dir);
     if !path.exists() && !dirs::atuin_home_is_set() {
         // Check the legacy path, but only if `ATUIN_HOME` isn't set.
-        let mut legacy = dirs::legacy_data_dir();
-        push_snapshots(&mut legacy);
+        let legacy = join_snapshots(dirs::legacy_data_dir());
         if legacy.exists() {
             return legacy;
         }
     }
-
     path
 }
 
@@ -311,7 +307,7 @@ async fn run_inline_tui(
         settings.ai.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
 
     // ─── Snapshot store ─────────────────────────────────────────
-    let snapshot_dir = snapshots_dir(settings).join(session_mgr.session_id());
+    let snapshot_dir = snapshots_dir(settings).joined(session_mgr.session_id());
     let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
     // ─── Discover skills ───────────────────────────────────────

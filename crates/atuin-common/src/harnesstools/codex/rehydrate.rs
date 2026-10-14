@@ -87,6 +87,7 @@ use crate::harnesstools::resume::is_plain_name;
 use crate::harnesstools::session::{
     Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, UNREADABLE_SUMMARY, Usage,
 };
+use crate::path::PathBufExt as _;
 
 /// What Codex puts ahead of a compaction summary (codex-rs
 /// `prompts/templates/compact/summary_prefix.md`), which its reader strips again.
@@ -200,8 +201,8 @@ pub(crate) fn write(root: &Path, session: &RehydrateSession) -> Result<PathBuf, 
     }
     let dir = root
         .join(format!("{:04}", started.year()))
-        .join(format!("{:02}", u8::from(started.month())))
-        .join(format!("{:02}", started.day()));
+        .joined(format!("{:02}", u8::from(started.month())))
+        .joined(format!("{:02}", started.day()));
     std::fs::create_dir_all(&dir)?;
     let base = inherited_history(root, session);
     let provider = root.parent().map_or_else(|| DEFAULT_PROVIDER.to_owned(), provider);
@@ -210,7 +211,7 @@ pub(crate) fn write(root: &Path, session: &RehydrateSession) -> Result<PathBuf, 
         text.push_str(&line.to_string());
         text.push('\n');
     }
-    let path = dir.join(&name);
+    let path = dir.joined(&name);
     create_new(&path, text.as_bytes())?;
     Ok(path)
 }
@@ -863,7 +864,7 @@ pub(crate) mod tests {
     use crate::sync::BlockingPool;
 
     pub fn fixture(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex").join(name)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures/codex").joined(name)
     }
 
     pub async fn read(id: &str, path: PathBuf) -> Vec<CodexMessage> {
@@ -1537,7 +1538,7 @@ pub(crate) mod tests {
         let home = tempfile::tempdir().unwrap();
         let archive = home.path().join("archived_sessions");
         std::fs::create_dir_all(&archive).unwrap();
-        let archived = archive.join(format!("rollout-2026-01-01T00-00-00-{ID}.jsonl"));
+        let archived = archive.joined(format!("rollout-2026-01-01T00-00-00-{ID}.jsonl"));
         std::fs::write(&archived, "{}\n").unwrap();
         assert!(matches!(
             write(&home.path().join("sessions"), &session(ID, vec![])),

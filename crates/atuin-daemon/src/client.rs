@@ -775,6 +775,7 @@ mod tests {
     use std::path::Path;
 
     use atuin_common::env::MockEnv;
+    use atuin_common::path::PathBufExt as _;
     use rstest::rstest;
 
     use super::*;
@@ -851,8 +852,8 @@ mod tests {
             dir.join("configured.sock")
         } else {
             dir.join("tmp")
-                .join(format!("atuin-{}", atuin_common::os::unix::uid()))
-                .join("atuin.sock")
+                .joined(format!("atuin-{}", atuin_common::os::unix::uid()))
+                .joined("atuin.sock")
         }
     }
 

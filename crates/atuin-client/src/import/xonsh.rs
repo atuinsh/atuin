@@ -2,6 +2,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use atuin_common::path::PathBufExt as _;
 use atuin_domain::record::CmdOrigin;
 use easy_cast::CastFloat;
 use eyre::{Result, eyre};
@@ -46,15 +47,13 @@ pub struct Xonsh {
 fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Some(d) = xonsh_data_dir {
-        let mut path = PathBuf::from(d);
-        path.push("history_json");
-        return Ok(path);
+        return Ok(PathBuf::from(d).joined("history_json"));
     }
 
     // otherwise, fall back to default
     let data_dir = dirs::data_dir().ok_or_else(|| eyre!("Could not determine data directory"))?;
 
-    let hist_dir = data_dir.join("xonsh/history_json");
+    let hist_dir = data_dir.joined("xonsh/history_json");
     if hist_dir.exists() || cfg!(test) {
         Ok(hist_dir)
     } else {

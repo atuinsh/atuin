@@ -121,6 +121,7 @@ use crate::harnesstools::session::{
     RuntimeError, Session, SessionId, Sessions, WatchError,
 };
 use crate::os::fs::FdIdentity;
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 pub(crate) mod projection;
@@ -142,8 +143,8 @@ pub struct OpencodeSessions {
 impl OpencodeSessions {
     fn data_dir() -> PathBuf {
         var_nonempty("XDG_DATA_HOME")
-            .map_or_else(|| home_dir().join(".local").join("share"), PathBuf::from)
-            .join("opencode")
+            .map_or_else(|| home_dir().joined(".local").joined("share"), PathBuf::from)
+            .joined("opencode")
     }
 
     /// When a database was last written: the newer of its file and `-wal` mtimes. `-shm` is
@@ -196,16 +197,16 @@ impl OpencodeSessions {
             return Ok(if path.is_absolute() {
                 path
             } else {
-                Self::data_dir().join(path)
+                Self::data_dir().joined(path)
             });
         }
         let data = Self::data_dir();
         if var_nonempty("OPENCODE_DISABLE_CHANNEL_DB")
             .is_some_and(|v| matches!(v.to_str(), Some("1" | "true")))
         {
-            return Ok(data.join("opencode.db"));
+            return Ok(data.joined("opencode.db"));
         }
-        Ok(Self::discover(&data).unwrap_or_else(|| data.join("opencode.db")))
+        Ok(Self::discover(&data).unwrap_or_else(|| data.joined("opencode.db")))
     }
 }
 

@@ -41,6 +41,7 @@ use crate::harnesstools::session::{
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 /// How far into a file the header line is looked for, like pi's own bounded header scan
@@ -109,7 +110,7 @@ pub(crate) fn new_session_dir(cwd: &Path) -> PathBuf {
     custom_session_dir(&agent_dir, env.as_deref()).unwrap_or_else(|| {
         let cwd = cwd.to_string_lossy();
         let cwd = cwd.strip_prefix(['/', '\\']).unwrap_or(&cwd).replace(['/', '\\', ':'], "-");
-        agent_dir.join("sessions").join(format!("--{cwd}--"))
+        agent_dir.joined("sessions").joined(format!("--{cwd}--"))
     })
 }
 
@@ -1203,7 +1204,7 @@ mod tests {
         let sub = dir.path().join("--proj--");
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(
-            sub.join("1700000000_s1.jsonl"),
+            sub.joined("1700000000_s1.jsonl"),
             serde_json::json!({"type": "session", "id": "s1"}).to_string(),
         )
         .unwrap();
@@ -1328,12 +1329,12 @@ mod tests {
         let header = |id: &str| serde_json::json!({"type": "session", "id": id}).to_string() + "\n";
         std::fs::write(dir.path().join("1_a.jsonl"), header("a")).unwrap();
         std::fs::create_dir(dir.path().join("nested")).unwrap();
-        std::fs::write(dir.path().join("nested").join("2_b.jsonl"), header("b")).unwrap();
+        std::fs::write(dir.path().join("nested").joined("2_b.jsonl"), header("b")).unwrap();
         std::fs::write(dir.path().join("ignore.txt"), header("c")).unwrap();
         // pi-subagents' default event log, beside the sessions: no header, no session.
         std::fs::create_dir(dir.path().join("subagent-artifacts")).unwrap();
         std::fs::write(
-            dir.path().join("subagent-artifacts").join("run1_worker_0.jsonl"),
+            dir.path().join("subagent-artifacts").joined("run1_worker_0.jsonl"),
             b"{\"type\":\"agent_start\"}\n",
         )
         .unwrap();

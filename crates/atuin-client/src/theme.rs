@@ -3,6 +3,7 @@ use std::error;
 use std::io::{Error, ErrorKind};
 use std::sync::LazyLock;
 
+use atuin_common::path::PathBufExt as _;
 use config::{Config, File as ConfigFile, FileFormat};
 use palette::named;
 use serde::{Deserialize, Serialize};
@@ -409,10 +410,7 @@ impl ThemeManager {
             )));
         }
 
-        let mut theme_file = atuin_common::dirs::config_path("themes");
-
-        let theme_toml = format!("{name}.toml");
-        theme_file.push(theme_toml);
+        let theme_file = atuin_common::dirs::config_path("themes").joined(format!("{name}.toml"));
 
         let mut config_builder = Config::builder();
 

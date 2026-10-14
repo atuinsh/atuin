@@ -6,7 +6,7 @@ use std::{borrow::Cow, path::Path};
 #[cfg(unix)]
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 #[cfg(unix)]
-use atuin_common::path::EnvDependentPathBuf;
+use atuin_common::path::{EnvDependentPathBuf, PathBufExt as _};
 // `AsDisableableDuration` is deprecated.
 #[allow(deprecated)]
 use atuin_common::time::{AsDisableableDuration, NonZeroDuration, Seconds};
@@ -228,11 +228,7 @@ trait SocketCtx: Copy + Sized {
 
     fn default_socket_path(&self) -> EnvDependentPathBuf {
         let subdir_name = format!("atuin-{}", self.uid());
-        let make_socket_path = |mut tmp: PathBuf| {
-            tmp.push(&subdir_name);
-            tmp.push(SOCKET_NAME);
-            tmp
-        };
+        let make_socket_path = |tmp: PathBuf| tmp.joined(&subdir_name).joined(SOCKET_NAME);
 
         let tmp = self.tmp_dir();
         let envless_tmp = self.envless_tmp_dir();
@@ -245,18 +241,11 @@ trait SocketCtx: Copy + Sized {
     }
 
     fn runtime_socket_path(&self) -> Option<PathBuf> {
-        self.runtime_dir().map(|mut dir| {
-            dir.push(SOCKET_NAME);
-            dir
-        })
+        self.runtime_dir().map(|dir| dir.joined(SOCKET_NAME))
     }
 
     fn legacy_socket_path(&self) -> PathBuf {
-        self.runtime_socket_path().unwrap_or_else(|| {
-            let mut path = self.legacy_data_dir();
-            path.push(SOCKET_NAME);
-            path
-        })
+        self.runtime_socket_path().unwrap_or_else(|| self.legacy_data_dir().joined(SOCKET_NAME))
     }
 }
 

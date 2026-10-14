@@ -5,6 +5,7 @@ use atuin_client::api_client;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_common::encryption::paseto_v4;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{
     DecryptedData, EncryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordTag,
@@ -73,7 +74,7 @@ impl Drop for TestServer {
 
 #[fixture]
 async fn server() -> TestServer {
-    let db = temp_dir().join(format!("atuin-record-sync-{}.db", uuid_v7().as_simple()));
+    let db = temp_dir().joined(format!("atuin-record-sync-{}.db", uuid_v7().as_simple()));
 
     let server_settings = ServerSettings {
         host: "127.0.0.1".to_owned(),

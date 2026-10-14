@@ -24,6 +24,7 @@ use crate::harnesstools::session::{
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 #[derive(Debug, Clone, TypedBuilder)]
@@ -42,7 +43,7 @@ impl CodexSessions {
 
 /// Codex's live rollouts: `$CODEX_HOME/sessions`, else `~/.codex/sessions`.
 pub(crate) fn default_root() -> PathBuf {
-    super::home().join("sessions")
+    super::home().joined("sessions")
 }
 
 /// The rollout of session `id` under `root` (`<yyyy>/<mm>/<dd>/rollout-<timestamp>-<id>.jsonl`).
@@ -1783,11 +1784,11 @@ mod tests {
     #[tokio::test]
     async fn watch_emits_sessions_as_files_appear() {
         let dir = tempfile::tempdir().unwrap();
-        let sub = dir.path().join("2026").join("09").join("19");
+        let sub = dir.path().join("2026").joined("09").joined("19");
         std::fs::create_dir_all(&sub).unwrap();
         let sid = "0a1b2c3d-4e5f-6789-abcd-ef0123456789";
         std::fs::write(
-            sub.join(format!("rollout-2026-09-19T00-00-00-{sid}.jsonl")),
+            sub.joined(format!("rollout-2026-09-19T00-00-00-{sid}.jsonl")),
             serde_json::json!({"type": "session_meta", "payload": {"id": sid}}).to_string(),
         )
         .unwrap();
@@ -1921,7 +1922,7 @@ mod tests {
     #[tokio::test]
     async fn a_real_rollout_counts_each_recorded_call_once() {
         let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex/session1.jsonl");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures/codex/session1.jsonl");
         let session = CodexSession::open(SessionId::from("s".to_owned()), path, pool());
         let lines: Vec<CodexMessage> = session.read().try_collect().await.unwrap();
         let usage: Vec<&CodexMessage> = lines.iter().filter(|m| m.usage().is_some()).collect();
@@ -2591,7 +2592,7 @@ mod tests {
     }
 
     fn fixture(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex").join(name)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures/codex").joined(name)
     }
 
     async fn read_session(id: &str, path: PathBuf) -> Vec<CodexMessage> {
@@ -3187,7 +3188,7 @@ mod tests {
         let sessions = root.path().join("sessions");
         let earlier = sessions.join("2026/09/23");
         std::fs::create_dir_all(&earlier).unwrap();
-        let base_path = earlier.join(format!("rollout-2026-09-23T00-00-00-{base_name}.jsonl"));
+        let base_path = earlier.joined(format!("rollout-2026-09-23T00-00-00-{base_name}.jsonl"));
         let meta = serde_json::json!({"type": "session_meta", "payload": {"id": THREAD}});
         let kept = [meta, prompt("m1"), prompt("m2"), task_started()];
         let end: usize = kept.iter().map(|l| l.to_string().len() + 1).sum();
@@ -3196,7 +3197,7 @@ mod tests {
         let later = sessions.join("2026/09/24");
         std::fs::create_dir_all(&later).unwrap();
         let rollout = "01a0d160-0000-7000-8000-000000000001";
-        let path = later.join(format!("rollout-2026-09-24T03-00-00-{THREAD}_{rollout}.jsonl"));
+        let path = later.joined(format!("rollout-2026-09-24T03-00-00-{THREAD}_{rollout}.jsonl"));
         let segment_meta = serde_json::json!({"type": "session_meta", "payload": {"id": THREAD,
             "history_base": {"thread_id": base, "end_ordinal_exclusive": 4, "end_byte_offset": end}}});
         write_lines(&path, &[segment_meta, prompt("m4")]);

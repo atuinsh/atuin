@@ -834,6 +834,7 @@ mod test {
     use rstest::{fixture, rstest};
 
     use super::*;
+    use crate::path::PathBufExt as _;
 
     #[fixture]
     fn key() -> Key {
@@ -905,7 +906,8 @@ mod test {
 
     #[rstest]
     fn overwrite_path_replaces_an_existing_key() {
-        let dir = std::env::temp_dir().join(format!("atuin-key-overwrite-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().joined(format!("atuin-key-overwrite-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         let path = dir.join("key");
