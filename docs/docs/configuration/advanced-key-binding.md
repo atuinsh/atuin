@@ -109,6 +109,16 @@ Separate keys with a space to define a sequence. The first key is buffered until
 
 If the second key doesn't complete a known sequence, both keys are handled individually.
 
+In emacs and vim-insert mode, where the first key is usually text being typed, it is
+handled on its own if the second key doesn't arrive within
+[`keymap_sequence_timeout_ms`](config.md#keymap_sequence_timeout_ms) (100 ms by default).
+This makes a typing escape possible:
+
+```toml
+[keymap.vim-insert]
+"j k" = "vim-enter-normal"
+```
+
 ## Keymap format
 
 Each entry in a keymap section maps a key to either a direct action or a conditional rule list.
