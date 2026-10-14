@@ -48,12 +48,14 @@ default = [
     "daemon",
     "ai",
     "pty-proxy",
+    "octavo",
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
+octavo = ["sync", "daemon", "atuin-daemon/octavo", "dep:atuin-octavo"]
 hex = ["pty-proxy"]
 clipboard = ["dep:arboard", "atuin-ai?/clipboard"]
 check-update = ["atuin-client/check-update"]
@@ -77,7 +79,7 @@ atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
-atuin-client = { path = "../atuin-client", version = "18.23.0", optional = true, default-features = false }
+atuin-client = { path = "../atuin-client", version = "18.24.0-beta.1", optional = true, default-features = false }
 atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
@@ -85,6 +87,7 @@ atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
 atuin-vt100 = { workspace = true }
 atuin-kv = { workspace = true }
+atuin-octavo = { workspace = true, optional = true }
 atuin-pty-proxy = { workspace = true, optional = true }
 atuin-scripts = { workspace = true }
 
@@ -163,10 +166,15 @@ tree-sitter-powershell = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+atuin-common = { workspace = true, features = ["test-utils"] }
+# An in-process sync server for the AI session e2e tests (tests/e2e_ai_sessions.rs).
+atuin-server = { workspace = true }
 divan = { workspace = true }
 parking_lot = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
+# opencode keeps its sessions in SQLite: the e2e tests write one as it does.
+rusqlite = { workspace = true }
 tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
 

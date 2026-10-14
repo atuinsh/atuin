@@ -63,7 +63,7 @@ pub fn parse_harness(s: &str) -> Option<HarnessKind> {
     }
 }
 
-/// The harnesses alt-a cycles through, after "all".
+/// The harnesses ctrl-t cycles through, after "all".
 const HARNESS_CYCLE: [HarnessKind; 4] =
     [HarnessKind::ClaudeCode, HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi];
 
@@ -145,7 +145,7 @@ pub fn parse(input: &str) -> ParsedQuery {
     parsed
 }
 
-/// alt-a: advance the input's agent token through all → claude-code → codex → opencode → pi → all.
+/// ctrl-t: advance the input's agent token through all → claude-code → codex → opencode → pi → all.
 ///
 /// Rewrites the first agent token (`agent:` or `a:`) in place as `agent:<name>` (removing it for
 /// "all"), or appends one.

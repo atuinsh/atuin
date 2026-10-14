@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
-use super::render::{harness_style, is_live, repo_name, shown_branch, style};
+use super::render::{harness_style, is_fork_live, is_live, repo_name, shown_branch, style};
 use super::source::{SessionRow, harness_label, host_label};
 use super::state::State;
 use super::{clock, markdown};
@@ -170,6 +170,11 @@ impl State {
         let mut when = Vec::new();
         if is_live(now, row) {
             when.extend([Span::styled("● live", style(theme, Meaning::AlertInfo)), sep()]);
+        } else if is_fork_live(now, row) {
+            when.extend([
+                Span::styled("↳● a fork is live", style(theme, Meaning::AlertInfo)),
+                sep(),
+            ]);
         }
         when.push(Span::styled(format!("{} messages", row.messages), muted));
         if let Some(forks) = forks(self.children.get(&row.handle).map(Vec::as_slice)) {
@@ -182,6 +187,7 @@ impl State {
         if let Some(t) = tokens(&row.usage) {
             meta.push(Line::from(Span::styled(format!("{t} tokens"), muted)));
         }
+        meta.push(Line::from(Span::styled(format!("id {}", row.atuin_id), muted)));
         for line in meta {
             lines.extend(markdown::wrap_plain(&line.spans, width, 0, muted));
         }
@@ -376,7 +382,11 @@ pub fn tree_lines(
             );
             let lead = branch.width();
             let title_w = width.saturating_sub(lead + 2 + tail.width());
-            let title = child.title.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let mut title = child.title.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            // A continuation in another harness (`atuin ai resume --in`) says where it went on.
+            if child.parent.as_ref().is_some_and(|p| p.harness != child.handle.harness) {
+                title = format!("continued in {} · {title}", harness_label(child.handle.harness));
+            }
             let title = title
                 .pad_ellipsize(
                     Measure::Columns(title_w),
@@ -385,11 +395,16 @@ pub fn tree_lines(
                     atuin_common::string::Alignment::Start,
                 )
                 .into_owned();
+            let (dot, tail_style) = if is_live(now, child) {
+                ("● ", style(theme, Meaning::AlertInfo))
+            } else {
+                ("  ", muted)
+            };
             Line::from(vec![
                 Span::styled(branch, muted),
                 Span::styled(title, base),
-                Span::raw("  "),
-                Span::styled(tail, muted),
+                Span::styled(dot, tail_style),
+                Span::styled(tail, tail_style),
             ])
         })
         .collect()
@@ -502,7 +517,11 @@ mod tests {
         #[case] host_id: &str,
         #[case] want: &str,
     ) {
-        let mut themes = atuin_client::theme::ThemeManager::new(None, None);
+        let mut themes = atuin_client::theme::ThemeManagerOptions {
+            debug: false,
+            builtin_only: true,
+        }
+        .build();
         let theme = themes.load_theme("default", None);
         let mut row = row();
         row.git_root = Some("/src/atuin".into());

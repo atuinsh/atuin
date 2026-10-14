@@ -6,9 +6,12 @@
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use async_trait::async_trait;
-use atuin_client::ai_session::{HarnessKind, HarnessSession, SessionFilter as DbFilter};
+use atuin_client::ai_session::{
+    Analysis, AtuinSessionId, HarnessKind, HarnessSession, SessionFilter as DbFilter,
+};
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::Usage;
 use time::OffsetDateTime;
@@ -35,22 +38,18 @@ pub struct SessionFilter {
 pub enum Relation {
     #[default]
     Root,
-    /// Spawned by its parent to do part of its work.
+    /// Spawned by its parent to do part of its work. Also a child of a kind this build does not
+    /// know (a newer build's).
     Subagent,
     /// Branches off its parent's conversation, or copies it.
     Fork,
-    /// Carries its parent's conversation on under a new session.
+    /// Carries its parent's conversation on under a new session (maybe in another harness).
     Continuation,
-    /// Has a parent, but no kind was recorded and the harness doesn't say which kind of child it
-    /// is.
-    Child,
 }
 
 impl Relation {
     /// Whether the picker shows sessions of this kind: roots, forks and continuations (which
-    /// resume like any session). Subagents never resume, so they are left out everywhere, with
-    /// the children whose kind is unknown: before capture recorded kinds, Codex and opencode
-    /// linked their spawned agents (by far the most of their children) and forks alike.
+    /// resume like any session). Subagents never resume, so they are left out everywhere.
     pub fn is_listed(self) -> bool {
         matches!(self, Self::Root | Self::Fork | Self::Continuation)
     }
@@ -78,13 +77,15 @@ impl Snippet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionRow {
     pub handle: HarnessSession,
+    pub atuin_id: AtuinSessionId,
     /// The session this one was forked or spawned from.
     pub parent: Option<HarnessSession>,
     pub relation: Relation,
     /// The session title, falling back to the first prompt. Highlights mark query matches.
     pub title: Snippet,
     pub cwd: Option<PathBuf>,
-    /// The git repository root the session ran in, if any.
+    /// The git repository root the session ran in, if any. Only looked up for this host's
+    /// sessions.
     pub git_root: Option<PathBuf>,
     pub branch: Option<String>,
     pub model: Option<String>,
@@ -94,6 +95,12 @@ pub struct SessionRow {
     pub started_at: OffsetDateTime,
     /// The newest message in the session or any of its grouped children.
     pub updated_at: OffsetDateTime,
+    /// The newest message in the session itself, its grouped children not counted: whether it is
+    /// the one still running.
+    pub active_at: OffsetDateTime,
+    /// The newest message in the forks and continuations listed beneath the row; `None` with
+    /// none.
+    pub forks_at: Option<OffsetDateTime>,
     /// How many messages the session holds: every row stored of it
     /// ([`atuin_client::ai_session::Session::message_count`]).
     pub messages: u64,
@@ -104,6 +111,9 @@ pub struct SessionRow {
     pub children: u32,
     /// The best-matching message text, when there is a query. The match may be in a child.
     pub matched: Option<Snippet>,
+    /// The tree drawn before the title of a fork listed beneath its root (`├─ `); empty for a
+    /// root.
+    pub tree: String,
 }
 
 /// The preview for one session: its opening prompt and where it left off. Tool calls and
@@ -142,7 +152,22 @@ pub trait SessionSource: Send + Sync {
     ) -> eyre::Result<RehydrateSession> {
         eyre::bail!("this source can't restore sessions")
     }
+
+    /// The branches of `session` as its synced rows hold them now: its heads, and the rows on
+    /// each (see [`super::catchup`]). `None` when the source doesn't know them.
+    async fn analyse(&self, _session: &HarnessSession) -> eyre::Result<Option<Analysis>> {
+        Ok(None)
+    }
+
+    /// Something that changes whenever the sessions may have: an idle picker searches again only
+    /// once it does. `None` when the source can't tell, so it always does.
+    fn stamp(&self) -> Option<Stamp> {
+        None
+    }
 }
+
+/// See [`SessionSource::stamp`]: the modification time and length of each file a source reads.
+pub type Stamp = Vec<Option<(SystemTime, u64)>>;
 
 /// How a session's host shows: `this machine` when it is `here`, and another by a short form of
 /// its id, `@3f9a12bc` (sessions record only the host's id).
@@ -170,6 +195,17 @@ pub fn harness_badge(harness: HarnessKind) -> &'static str {
         HarnessKind::Pi => "PI",
         HarnessKind::Copilot => "CP",
         HarnessKind::Unknown => "??",
+    }
+}
+
+/// The harness as `atuin ai resume --in` names it; `None` for one that can't be continued in.
+pub fn harness_arg(harness: HarnessKind) -> Option<&'static str> {
+    match harness {
+        HarnessKind::ClaudeCode => Some("claude"),
+        HarnessKind::Codex => Some("codex"),
+        HarnessKind::Opencode => Some("opencode"),
+        HarnessKind::Pi => Some("pi"),
+        HarnessKind::Copilot | HarnessKind::Unknown => None,
     }
 }
 

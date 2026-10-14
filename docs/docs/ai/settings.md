@@ -14,12 +14,6 @@ Default: unset
 
 The Atuin AI model to use for new sessions. If unset, the default model will be used. You can see the available models by running `/model` inside the Atuin AI interface.
 
-### `db_path`
-
-Default: `ai_sessions.db` in the Atuin data directory.
-
-The path to the SQLite database where Atuin AI sessions are stored.
-
 ### `session_continue_minutes`
 
 Default: `1h`
@@ -65,6 +59,18 @@ This setting _doesn't_ enable any capabilities. Instead, it only bypasses any pe
 Default: `true`
 
 Display tips in Atuin AI at the bottom of agent turns.
+
+### `capture_sessions`
+
+Default: `false`
+
+Capture the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin ai session import` brings in the rest. `atuin config enable ai-sessions` sets it, along with the daemon it needs. See [Agent sessions](./sessions.md).
+
+### `capture_tools`
+
+Default: `true`
+
+With `capture_sessions`, also capture what each tool call was given and what it returned, and the diff of each edit, so a resumed session has its tool calls and edits back. Set it to `false` to keep only the name of each tool called. See [What's captured](./sessions.md#whats-captured).
 
 ## Capabilities
 

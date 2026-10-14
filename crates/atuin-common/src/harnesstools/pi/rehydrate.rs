@@ -8,8 +8,8 @@
 //!
 //! - **Thinking.** Capture keeps only a marker ([`Content::ReasoningSummary`]), no text or
 //!   signature, so it is dropped; pi itself drops a thinking block it can't replay.
-//! - **Pasted images**: capture keeps their type, not their bytes; each becomes a text
-//!   placeholder saying so.
+//! - **Pasted images** and extension-injected messages (`custom_message`): capture keeps
+//!   neither, so they are not written back.
 //! - **Compactions** become `compaction` entries keeping every entry since the one before
 //!   (capture doesn't record which entries pi kept): the model sees the summary and the full
 //!   history since the previous compaction. A branch summary is written the same way.
@@ -17,22 +17,26 @@
 //!   content and are skipped, so pi starts on its configured thinking level; the model is named
 //!   by each assistant turn, its provider guessed from the model's name, and pi falls back to its
 //!   default model when it can't use it. A system-role text entry is skipped too.
-//! - **Tool calls captured without their input** (capture keeps only a call's name now): pi-ai
-//!   sends a `toolCall` without `arguments` as an empty input to Anthropic and as `"null"` to
-//!   OpenAI, a call on nothing either way, so each becomes a note in its turn's text (`[ran a
-//!   shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its `toolResult` is dropped. The run of
-//!   assistant messages the dropped results stood between is merged into its first one, so the
+//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//!   it): pi-ai sends a `toolCall` without `arguments` as an empty input to Anthropic and as
+//!   `"null"` to OpenAI, a call on nothing either way, so each becomes a note in its turn's text
+//!   (`[ran a shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its
+//!   `toolResult` is dropped. The run of assistant messages the dropped results stood between is merged into its last one, so the
 //!   turns still alternate ([`Flatten::Runs`]). Re-captured, that entry keeps its id (capture
 //!   already holds it: nothing is pushed), and the entries merged away and the results are not
 //!   there to capture again. The entry records which synced rows went into it
 //!   ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)), as does the entry a row
 //!   with nothing to write hangs from, so the file says which synced rows it holds.
 //! - **Tool results** keep their output; their tool's name comes from the call they answer. With
-//!   none captured (capture keeps none now), a result says [`UNCAPTURED_OUTPUT`], as does a
-//!   `!command`'s output.
+//!   none captured (withheld by a policy, or over the size limit), a result says
+//!   [`UNCAPTURED_OUTPUT`], as does a `!command`'s output. An `edit`'s result whose patch capture kept gets back the `details` pi
+//!   shows its diff from: the unified diff (`patch`), pi's own line-numbered one (`diff`) and the
+//!   first line it changed.
 //! - A `!command` keeps its command, output and whether it failed, not its exit code; one from a
 //!   v1 file (no entry ids) has its result renamed after the id it is written under.
 //! - The title is written as a `session_info` entry, under the id of the row that set it.
+//!
+//! [`Flatten::Runs`]: crate::harnesstools::rehydrate::Flatten::Runs
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -43,11 +47,11 @@ use time::macros::format_description;
 
 use super::session::{default_root, locate, new_session_dir};
 use crate::harnesstools::rehydrate::{
-    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
-    flatten_uncaptured_calls, record_merged,
+    RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, break_line_cycles,
+    merge_uncaptured_runs, on_parent_cycles, record_merged,
 };
 use crate::harnesstools::resume;
-use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, Usage};
+use crate::harnesstools::session::{Content, Patch, Role, StopReason, ToolResult, Usage, patch};
 
 /// The session file format version this writes (session-manager.ts `CURRENT_SESSION_VERSION`).
 const VERSION: u32 = 3;
@@ -77,6 +81,11 @@ pub(crate) fn rehydrate_into(
     if let Some(existing) = locate(root, &session.id) {
         return Err(RehydrateError::AlreadyExists(existing));
     }
+    if session.fork_of.as_ref().is_some_and(|of| of.path.is_none()) {
+        return Err(RehydrateError::Other(
+            "a pi fork names the file of the session it was forked from, which isn't here".into(),
+        ));
+    }
     std::fs::create_dir_all(dir)?;
     // pi's own name: the start time with `:` and `.` made file-safe, then the id.
     let started = timestamp(session.started_at).replace([':', '.'], "-");
@@ -104,32 +113,68 @@ fn millis(at: OffsetDateTime) -> i64 {
 }
 
 fn transcript(session: &RehydrateSession) -> String {
-    let header = json!({
+    let mut header = json!({
         "type": "session",
         "version": VERSION,
         "id": session.id,
         "timestamp": timestamp(session.started_at),
         "cwd": session.cwd,
     });
-    let session = &RehydrateSession {
-        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
-        ..session.clone()
-    };
-    let mut writer = Writer::new(session);
-    for message in &session.messages {
-        writer.push(message);
+    // A fork names the file of the session it was forked from, as pi's own `/fork` does.
+    if let Some(path) = session.fork_of.as_ref().and_then(|of| of.path.as_ref()) {
+        header["parentSession"] = json!(path);
     }
-    writer.title();
-    let mut lines = writer.lines;
-    // The rows written as no entry of their own, on the entries they went into.
-    record_merged(&mut lines, &writer.merged, |l| l["id"].as_str().map(str::to_owned));
     let mut out = header.to_string();
     out.push('\n');
-    for line in lines {
+    for line in lines(session, &Continuing::default(), true) {
         out.push_str(&line.to_string());
         out.push('\n');
     }
     out
+}
+
+/// A session file rows are appended to: what [`lines`] needs to know of it.
+#[derive(Default)]
+pub(crate) struct Continuing<'a> {
+    /// The entry the file ends on, which the first row then hangs from.
+    pub after: Option<&'a str>,
+    /// The first entry since the last compaction on the path to `after`: a compaction among the
+    /// rows keeps from it.
+    pub kept_from: Option<&'a str>,
+}
+
+/// The entries for `session`'s rows, calls captured without their input flattened into notes
+/// ([`Flatten::Runs`]), and its title when `title`: for a whole session, or for rows appended to
+/// the file `continuing` describes. The rows written as no entry of their own are recorded on the
+/// entries they went into ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)).
+///
+/// [`Flatten::Runs`]: crate::harnesstools::rehydrate::Flatten::Runs
+pub(crate) fn lines(
+    session: &RehydrateSession,
+    continuing: &Continuing<'_>,
+    title: bool,
+) -> Vec<Value> {
+    let (messages, hosts) = merge_uncaptured_runs(&session.messages);
+    let session = &RehydrateSession {
+        messages,
+        ..session.clone()
+    };
+    let mut writer = Writer::new(session, continuing);
+    for message in &session.messages {
+        writer.push(message);
+    }
+    if title {
+        writer.title();
+    }
+    let mut lines = writer.lines;
+    break_line_cycles(&mut lines, "id", &["parentId"]);
+    for (row, into) in &mut writer.merged {
+        if let Some(host) = hosts.get(row) {
+            into.clone_from(host);
+        }
+    }
+    record_merged(&mut lines, &writer.merged, |l| l["id"].as_str().map(str::to_owned));
+    lines
 }
 
 struct Writer<'a> {
@@ -139,6 +184,10 @@ struct Writer<'a> {
     by_id: HashMap<&'a str, &'a RehydrateMessage>,
     /// The rows that are written (the rest have nothing an entry can carry).
     writable: HashSet<&'a str>,
+    /// The rows written so far.
+    written: HashSet<&'a str>,
+    /// The rows on a parent cycle.
+    on_cycle: HashSet<&'a str>,
     /// The last row written.
     last: Option<&'a str>,
     /// The first entry since the last compaction written: the next compaction keeps from it.
@@ -150,7 +199,7 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(session: &'a RehydrateSession) -> Self {
+    fn new(session: &'a RehydrateSession, continuing: &Continuing<'a>) -> Self {
         let tools = session
             .messages
             .iter()
@@ -160,13 +209,16 @@ impl<'a> Writer<'a> {
                 _ => None,
             })
             .collect();
+        let by_id = session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect();
         let mut writer = Self {
             session,
             lines: Vec::new(),
-            by_id: session.messages.iter().map(|m| (m.source_id.as_str(), m)).collect(),
+            on_cycle: on_parent_cycles(&by_id),
+            by_id,
             writable: HashSet::new(),
-            last: None,
-            kept_from: None,
+            written: HashSet::new(),
+            last: continuing.after,
+            kept_from: continuing.kept_from,
             tools,
             merged: Vec::new(),
         };
@@ -180,20 +232,33 @@ impl<'a> Writer<'a> {
     }
 
     /// The entry `m` hangs from: its nearest written ancestor, however the rows are ordered;
-    /// `None` at the root. A parent that was never synced stands for the entry before.
+    /// `None` at the root. A parent that was never synced stands for the entry before, and so
+    /// does a parent cycle (a corrupt session's) holding no entry written yet.
     fn parent(&self, m: &'a RehydrateMessage) -> Option<&'a str> {
+        let candidates = if self.on_cycle.contains(m.source_id.as_str()) {
+            &self.written
+        } else {
+            &self.writable
+        };
         let mut parent = m.parent_source_id.as_deref();
-        // At most one step per row: a cycle ends it.
+
+        // At most one step per row, and never back to `m`.
         for _ in 0..=self.by_id.len() {
             let p = parent?;
-            if self.writable.contains(p) {
+            if p == m.source_id {
+                break;
+            }
+
+            if candidates.contains(p) {
                 return Some(p);
             }
+
             match self.by_id.get(p) {
                 Some(row) => parent = row.parent_source_id.as_deref(),
                 None => break,
             }
         }
+
         self.last
     }
 
@@ -215,6 +280,7 @@ impl<'a> Writer<'a> {
         line.append(fields);
         self.lines.push(Value::Object(line));
         self.last = Some(&m.source_id);
+        self.written.insert(&m.source_id);
         if compaction {
             self.kept_from = None;
         } else if self.kept_from.is_none() {
@@ -276,7 +342,7 @@ impl<'a> Writer<'a> {
                     _ => None,
                 })?;
                 let name = self.tools.get(result.call.as_ref()).copied().unwrap_or_default();
-                Some(json!({
+                let mut entry = json!({
                     "type": "message",
                     "message": {
                         "role": "toolResult",
@@ -286,7 +352,15 @@ impl<'a> Writer<'a> {
                         "isError": result.error,
                         "timestamp": at,
                     },
-                }))
+                });
+                let patch = m.content.iter().find_map(|c| match c {
+                    Content::Patch(p) if p.call == result.call => Some(p),
+                    _ => None,
+                });
+                if let Some(details) = patch.and_then(edit_details) {
+                    entry["message"]["details"] = details;
+                }
+                Some(entry)
             }
             Role::System => {
                 let summary = m.content.iter().find_map(|c| match c {
@@ -304,24 +378,12 @@ impl<'a> Writer<'a> {
                 }
                 Some(entry)
             }
-            Role::Other(kind) if kind == "custom" => {
-                let content = user_blocks(&m.content);
-                (!content.is_empty()).then(|| {
-                    json!({
-                        "type": "custom_message",
-                        "customType": "atuin-restored",
-                        "content": content,
-                        "display": true,
-                    })
-                })
-            }
             Role::Other(_) => None,
         }
     }
 }
 
-/// Text blocks for user-role content, with a placeholder for media whose bytes were never
-/// captured.
+/// Text blocks for user-role content.
 fn user_blocks(content: &[Content]) -> Vec<Value> {
     content
         .iter()
@@ -329,12 +391,22 @@ fn user_blocks(content: &[Content]) -> Vec<Value> {
             Content::Text(t) | Content::Summary(t) if !t.is_empty() => {
                 Some(json!({"type": "text", "text": t}))
             }
-            Content::Other(raw) if raw["type"] == "image" => {
-                Some(json!({"type": "text", "text": "[image not restored]"}))
-            }
             _ => None,
         })
         .collect()
+}
+
+/// The `details` pi's `edit` tool keeps of the file `patch` changed (edit.ts): its diff as pi
+/// shows it (`diff`, see [`patch::pi_diff`]), as a unified diff (`patch`), and the first line it
+/// changed, numbered in the new file.
+fn edit_details(patch: &Patch) -> Option<Value> {
+    let file = patch.files.first().filter(|f| !f.hunks.is_empty())?;
+    let (diff, first) = patch::pi_diff(&file.hunks);
+    let mut details = json!({"diff": diff, "patch": file.unified()});
+    if let Some(first) = first {
+        details["firstChangedLine"] = json!(first);
+    }
+    Some(details)
 }
 
 /// A tool result's content blocks: the ones captured, a text of what was, else

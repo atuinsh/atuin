@@ -19,6 +19,9 @@ mod account;
 #[cfg(feature = "daemon")]
 mod daemon;
 
+#[cfg(all(feature = "ai", feature = "daemon"))]
+mod ai_sessions;
+
 mod config;
 mod default_config;
 mod doctor;
@@ -110,6 +113,10 @@ pub enum Cmd {
     #[command(subcommand)]
     Ai(atuin_ai::commands::Command),
 
+    /// Pick a captured AI coding-agent session and resume it (short for `atuin ai resume`)
+    #[cfg(feature = "ai")]
+    Resume(atuin_ai::commands::ResumeCmd),
+
     #[cfg(feature = "ai")]
     #[command(about = fl!("cmd-mcp"))]
     Mcp,
@@ -157,6 +164,12 @@ pub enum Cmd {
 
 impl Cmd {
     pub fn run(self) -> Result<()> {
+        // `atuin resume` is `atuin ai resume`, so it runs exactly as that does.
+        #[cfg(feature = "ai")]
+        if let Self::Resume(cmd) = self {
+            return Self::Ai(atuin_ai::commands::Command::Resume(cmd)).run();
+        }
+
         // Daemonize before creating the async runtime – fork() inside a live
         // tokio runtime corrupts its internal state.
         #[cfg(all(unix, feature = "daemon"))]
@@ -226,7 +239,7 @@ impl Cmd {
     #[allow(clippy::future_not_send)]
     async fn run_async(self, mut settings: Settings) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
-        let mut theme_manager = theme::ThemeManager::new(settings.theme.debug, None);
+        let mut theme_manager = theme::ThemeManager::from_settings(&settings.theme);
 
         // Skip initializing any databases for history
         // This is a pretty hot path, as it runs before and after every single command the user
@@ -307,7 +320,33 @@ impl Cmd {
             Self::Update(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
+            Self::Resume(_) => unreachable!(),
+
+            #[cfg(feature = "ai")]
             Self::Ai(cli) => {
+                // Resume is what sessions are for, so while capture is off it offers to turn it
+                // on, every time.
+                #[cfg(feature = "daemon")]
+                if let atuin_ai::commands::Command::Resume(cmd) = &cli
+                    && !settings.ai.capture_sessions
+                    && cmd.is_interactive()
+                    && let Some(mut term) = ai_sessions::Terminal::tty()
+                    && let Some(enabled) = ai_sessions::offer(&settings, &mut term).await
+                {
+                    settings = enabled;
+                }
+
+                // Resume reads the session database itself, which a daemon of an older build
+                // keeps at an older schema: replace one, as history does, when Atuin manages it.
+                #[cfg(feature = "daemon")]
+                if matches!(cli, atuin_ai::commands::Command::Resume(_))
+                    && settings.daemon.enabled
+                    && settings.daemon.autostart
+                    && let Err(e) = daemon::ready_client(&settings).await
+                {
+                    tracing::debug!(?e, "couldn't make the daemon ready before resuming");
+                }
+
                 // Session commands talk to the daemon: start or replace it as history does,
                 // instead of failing against a stopped or stale one.
                 #[cfg(feature = "daemon")]
@@ -383,5 +422,14 @@ mod tests {
         let cli = Cli::try_parse_from(std::iter::once("atuin").chain(args.iter().copied()))
             .expect("the argv parses");
         assert!(!format!("{:?}", cli.cmd).contains(SECRET));
+    }
+
+    /// `atuin resume` takes what `atuin ai resume` does.
+    #[cfg(feature = "ai")]
+    #[rstest]
+    fn resume_is_short_for_ai_resume() {
+        let cli = Cli::try_parse_from(["atuin", "resume", "0199abcdef", "--in", "codex"])
+            .expect("the argv parses");
+        assert!(matches!(cli.cmd, Cmd::Resume(_)), "{:?}", cli.cmd);
     }
 }

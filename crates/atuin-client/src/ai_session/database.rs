@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -7,35 +7,41 @@ use atuin_common::db::sqlite::fts::{
 };
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
+use atuin_common::harnesstools::continuation;
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{
     Checkpoint, Content, ParentKind, Role, TitleChange, TitleSource, Usage,
 };
 use atuin_common::string::TruncateCharsExt;
 use atuin_common::string::highlighted::HighlightedString;
-use atuin_domain::record::{HostId, RecordId, RecordTag};
-use futures::{Stream, StreamExt, TryStreamExt};
-use sqlx::SqliteConnection;
+use atuin_domain::record::{HostId, RecordId};
+use futures::{Stream, TryStreamExt};
 use sqlx::migrate::MigrateError;
 use time::OffsetDateTime;
 use tracing::warn;
+use uuid::Uuid;
 
 use super::{
-    HarnessKind, HarnessSession, MatchedSession, Message, NativeSessionId, PreviewParts,
-    SearchTerms, Session, SessionFilter, SessionMatch, SourceId,
+    AtuinSessionId, ContentBlocks, HarnessKind, HarnessSession, MatchedSession, Message,
+    MessageRole, NativeSessionId, PreviewParts, SearchTerms, Session, SessionFilter, SessionMatch,
+    SourceId,
 };
 
+mod heads;
 mod watermark;
+
+pub use heads::{Analysis, FastForward, Head};
 pub use watermark::{Generation, Watermark};
+use write::{Interned, Writer};
+pub use write::{NewRow, PreparedMessage};
 
 const COMPRESS_THRESHOLD: usize = 256;
 const ZSTD_LEVEL: i32 = 3;
-const REINDEX_CHUNK: i64 = 512;
 const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 2;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -46,6 +52,14 @@ const RECENCY_DAYS: f64 = 30.0;
 
 const DAY_MILLIS: f64 = 86_400_000.0;
 
+/// The most a row stores of each usage count: far past any model call, and small enough that a
+/// session's totals, adding up millions of calls, never overflow.
+const MAX_ROW_TOKENS: u64 = 1 << 40;
+
+/// [`Message::EARLIEST`] and [`Message::LATEST`] in milliseconds: the range of a stored timestamp.
+const EARLIEST_MILLIS: i64 = Message::EARLIEST.unix_timestamp() * 1000;
+const LATEST_MILLIS: i64 = Message::LATEST.unix_timestamp() * 1000;
+
 /// The shortest last term that matches as a prefix. A one-character prefix matches most of the
 /// index (every row with a word starting `e`), which costs hundreds of milliseconds to rank for
 /// nothing useful, so a lone character matches only as a whole token until the next keystroke.
@@ -53,13 +67,22 @@ const MIN_PREFIX_CHARS: usize = 2;
 
 /// The `sessions` columns [`SessionRow`] reads, from a table aliased `s`. Every query also selects
 /// `child_count` and `group_updated_at`.
+///
+/// Links are stored as the harness gave them, (harness, native id): the atuin ids of the parent,
+/// root and children are looked up here, at read time, from whichever of them are stored.
+/// `child_uuids` is comma-separated.
 macro_rules! session_columns {
     () => {
         "s.harness, s.session_id, s.parent_harness, s.parent_session_id, s.cwd, s.git_branch, \
          s.model, s.started_at, s.updated_at, s.message_count, s.usage_input, s.usage_output, \
          s.usage_cache_read, s.usage_cache_write, s.usage_reasoning, s.title, s.title_source, \
          s.preview, s.last_reply, s.parent_kind, s.host_id, s.root_harness, s.root_session_id, \
-         s.copy_of_session_id"
+         s.copy_of_session_id, s.atuin_id, (SELECT lp.atuin_id FROM sessions lp WHERE lp.harness = \
+         s.parent_harness AND lp.session_id = s.parent_session_id) AS parent_atuin_id, (SELECT \
+         lr.atuin_id FROM sessions lr WHERE lr.harness = s.root_harness AND lr.session_id = \
+         s.root_session_id) AS root_atuin_id, (SELECT group_concat(hex(lc.atuin_id)) FROM sessions \
+         lc WHERE lc.parent_harness = s.harness AND lc.parent_session_id = s.session_id) AS \
+         child_atuin_ids"
     };
 }
 
@@ -69,24 +92,25 @@ macro_rules! message_columns {
     () => {
         "m.id, m.harness, (SELECT session_id FROM sessions WHERE id = m.session) AS session_id, \
          (SELECT parent_kind FROM sessions WHERE id = m.session) AS parent_kind, m.source_id, \
-         m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, m.role, \
-         m.content, m.content_z, m.cwd, m.git_branch, m.model, m.usage_input, m.usage_output, \
-         m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, m.stop_reason, \
-         m.usage_present, m.turn_id, m.title_change, m.host_id"
+         m.parent_harness, m.parent_session_id, m.parent_source_id, m.timestamp, (SELECT value \
+         FROM interned WHERE id = m.role) AS role, m.content, m.content_z, (SELECT value FROM \
+         interned WHERE id = m.cwd) AS cwd, (SELECT value FROM interned WHERE id = m.git_branch) \
+         AS git_branch, (SELECT value FROM interned WHERE id = m.model) AS model, m.usage_input, \
+         m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
+         m.stop_reason, m.usage_present, m.turn_id, m.title_change, (SELECT value FROM interned \
+         WHERE id = m.host) AS host_id"
     };
 }
 
-/// Whether the session `c` is a subagent, or a child of unknown kind: what
+/// Whether the session `c` is a subagent, or a child of unknown kind, as
 /// [`Session::inferred_parent_kind`] tells from its parent kind (`ParentKind` as
-/// [`parent_kind_repr`] stores it), else from its harness and id, in SQL. Such a session is
-/// grouped under its root but not counted in its size.
+/// [`parent_kind_repr`] stores it), in SQL. Such a session is grouped under its root but not
+/// counted in its size.
 ///
 /// [`parent_kind_repr`]: AiSessionDatabase::parent_kind_repr
 macro_rules! subagent_like {
     () => {
-        "(c.parent_session_id IS NOT NULL AND (c.parent_kind IS 0 OR (c.parent_kind IS NULL AND \
-         c.parent_harness = c.harness AND (c.harness NOT IN (1, 5) OR (c.harness = 1 AND \
-         substr(c.session_id, 1, 6) = 'agent-')))))"
+        "(c.parent_session_id IS NOT NULL AND (c.parent_kind IS 0 OR c.parent_kind IS NULL))"
     };
 }
 
@@ -139,6 +163,10 @@ macro_rules! no_group_columns {
     };
 }
 
+// After the macros, which they use.
+mod query;
+mod write;
+
 #[derive(Debug, Clone)]
 pub struct AiSessionDatabase {
     db: Sqlite,
@@ -147,6 +175,9 @@ pub struct AiSessionDatabase {
     local_projection: Arc<tokio::sync::Mutex<()>>,
     /// See [`Self::lock_reprojection`]. Shared by clones, like `local_projection`.
     reprojection: Arc<tokio::sync::Mutex<()>>,
+    /// Every write that projects rows goes through this connection (see [`mod@write`]). None when
+    /// opened read-only.
+    writer: Option<Writer>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,12 +194,16 @@ pub enum DbError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("ai-session sqlite query failed: {0}")]
     Query(#[from] sqlx::Error),
+    #[error("ai-session sqlite write failed: {0}")]
+    Write(#[from] rusqlite::Error),
+    #[error("the ai-session sqlite write was cancelled")]
+    WriterCancelled,
+    #[error("the ai-session sqlite database is open read-only")]
+    ReadOnly,
     #[error("failed to serialize ai-session message: {0}")]
     Json(#[from] serde_json::Error),
     #[error("failed to compress ai-session message content: {0}")]
     Compress(std::io::Error),
-    #[error("stored ai-session timestamp is out of range: {0}")]
-    Time(#[from] time::error::ComponentRange),
     #[error("unknown ai-session harness discriminant {0}")]
     UnknownHarness(i64),
     #[error("failed to decompress ai-session message content: {0}")]
@@ -177,6 +212,8 @@ pub enum DbError {
     InvalidContentEncoding,
     #[error("stored ai-session record id is not a valid uuid")]
     InvalidRecordId,
+    #[error("stored ai-session atuin id is missing or not a valid uuid")]
+    InvalidAtuinId,
     /// No daemon has created the sidecar yet.
     #[error(
         "the AI session database has not been created yet: start the atuin daemon (`atuin daemon \
@@ -249,6 +286,10 @@ struct SessionRow {
     root_harness: Option<i64>,
     root_session_id: Option<String>,
     copy_of_session_id: Option<String>,
+    atuin_id: Vec<u8>,
+    parent_atuin_id: Option<Vec<u8>>,
+    root_atuin_id: Option<Vec<u8>>,
+    child_atuin_ids: Option<String>,
     child_count: i64,
     group_updated_at: Option<i64>,
 }
@@ -285,8 +326,8 @@ struct MessageRow {
 /// Input, output, cache read, cache write, reasoning: the `usage_*` columns in order.
 type Tokens = [i64; 5];
 
-#[derive(sqlx::FromRow)]
 struct SessionKey {
+    id: i64,
     started_at: i64,
     parent_harness: Option<i64>,
     parent_session_id: Option<String>,
@@ -301,7 +342,6 @@ impl SessionKey {
 }
 
 /// A session holding rows of one model call, with the most usage any of them reported.
-#[derive(sqlx::FromRow)]
 struct Claimant {
     session_id: String,
     /// The group the session is in, as a content-derived call's scope (see
@@ -334,7 +374,7 @@ impl Claimant {
 }
 
 /// A `calls` row: one count of a model call, in `scope`, owned by `session_id`.
-#[derive(sqlx::FromRow, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 struct CallRow {
     scope: String,
     session_id: String,
@@ -371,14 +411,6 @@ struct SearchRow {
     score: f64,
 }
 
-#[derive(sqlx::FromRow)]
-struct ReindexRow {
-    rowid: i64,
-    #[sqlx(flatten)]
-    message: MessageRow,
-    session_title: Option<String>,
-}
-
 impl AiSessionDatabase {
     /// Open the sidecar at `path` to write, creating and migrating it as needed.
     ///
@@ -387,7 +419,9 @@ impl AiSessionDatabase {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let path = path.as_ref();
         let db = Sqlite::builder(path.as_os_str()).restrict_permissions().open().await?;
-        let db = Self::from_sqlite(db);
+        // The pool opening it checked the path is UTF-8, and created the file.
+        let writer = Writer::open(&path.to_string_lossy())?;
+        let db = Self::from_sqlite(db, Some(writer));
         db.migrate().await.map_err(|err| match err {
             DbError::Migrate(
                 source @ (MigrateError::VersionMismatch(_)
@@ -399,31 +433,40 @@ impl AiSessionDatabase {
             },
             err => err,
         })?;
-        db.reindex().await?;
         Ok(db)
     }
 
     /// Open the sidecar to read beside the daemon that writes it (WAL keeps the two apart): no
-    /// migration or reindex, and no writes. Fails when the file is missing, and with
+    /// migration, and no writes. Fails when the file is missing, and with
     /// [`DbError::Uninitialized`], [`DbError::OutdatedSchema`] or [`DbError::UnknownSchema`]
     /// unless it is at exactly the schema this build reads.
     pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let db = Sqlite::builder(path.as_ref().as_os_str()).read_only().open().await?;
-        let db = Self::from_sqlite(db);
+        let db = Self::from_sqlite(db, None);
         db.check_schema().await?;
         Ok(db)
     }
 
     pub async fn in_memory() -> Result<Self, DbError> {
-        let db = Sqlite::builder_in_memory().open().await?;
-        let db = Self::from_sqlite(db);
+        let (db, writer) = Self::memory().await?;
+        let db = Self::from_sqlite(db, Some(writer));
         db.migrate().await?;
         Ok(db)
     }
 
-    fn from_sqlite(db: Sqlite) -> Self {
+    /// A fresh in-memory database, unmigrated, and a writer on it: named and shared-cache, so
+    /// the writer opens the same database as the pool.
+    async fn memory() -> Result<(Sqlite, Writer), DbError> {
+        let location = format!("file:ai-session-{}?mode=memory&cache=shared", Uuid::now_v7());
+        let db = Sqlite::builder(OsStr::new(&location)).open().await?;
+        let writer = Writer::open(&location)?;
+        Ok((db, writer))
+    }
+
+    fn from_sqlite(db: Sqlite, writer: Option<Writer>) -> Self {
         Self {
             db,
+            writer,
             local_projection: Arc::default(),
             reprojection: Arc::default(),
         }
@@ -443,6 +486,12 @@ impl AiSessionDatabase {
     /// until one gave up with the sidecar short of the store.
     pub async fn lock_reprojection(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.reprojection.clone().lock_owned().await
+    }
+
+    /// [`Self::lock_reprojection`], unless a reprojection holds it.
+    #[must_use]
+    pub fn try_lock_reprojection(&self) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.reprojection.clone().try_lock_owned().ok()
     }
 
     /// Whether the sidecar is at exactly the schema this build reads, by the newest migration
@@ -474,385 +523,52 @@ impl AiSessionDatabase {
     async fn migrate(&self) -> Result<(), DbError> {
         let pool = self.db.pool();
         db::migrate!(pool, "./src/ai_session/migrations").await?;
-        self.group_migrated().await?;
-        self.recount_migrated().await
-    }
-
-    /// Attribute the usage stored before the `session_scoped_calls` migration afresh from the
-    /// stored rows: that migration empties `calls`, whose rows were attributed by a rule that
-    /// merged unrelated sessions' calls sharing a content-derived turn id. Each session's usage
-    /// starts over from its rows outside any model call, and every call is attributed as rows
-    /// arriving later are ([`Self::attribute_call`]), which depends only on the rows stored and
-    /// how they are grouped (so this runs after [`Self::group_migrated`]: a content-derived call
-    /// is counted once per group of its holders). Runs until it has committed once, and then
-    /// never again.
-    async fn recount_migrated(&self) -> Result<(), DbError> {
-        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let recount: i64 =
-            db::query_scalar("SELECT recount_calls FROM projection_state WHERE id = 0")
-                .fetch_one(&mut *tx)
-                .await?;
-        if recount == 0 {
-            return Ok(());
-        }
-        db::query("DELETE FROM calls").execute(&mut *tx).await?;
-        db::query(
-            "UPDATE sessions SET (usage_input, usage_output, usage_cache_read, usage_cache_write, \
-             usage_reasoning) = (SELECT COALESCE(SUM(m.usage_input), 0), \
-             COALESCE(SUM(m.usage_output), 0), COALESCE(SUM(m.usage_cache_read), 0), \
-             COALESCE(SUM(m.usage_cache_write), 0), COALESCE(SUM(m.usage_reasoning), 0) FROM \
-             messages m WHERE m.session = sessions.id AND m.usage_present = 1 AND m.turn_id IS \
-             NULL)",
-        )
-        .execute(&mut *tx)
-        .await?;
-        let turns: Vec<(i64, String)> = db::query_as(
-            "SELECT DISTINCT harness, turn_id FROM messages WHERE usage_present = 1 AND turn_id \
-             IS NOT NULL",
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-        for (harness, turn) in &turns {
-            Self::attribute_call(&mut tx, *harness, turn).await?;
-        }
-        db::query("UPDATE projection_state SET recount_calls = 0 WHERE id = 0")
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
         Ok(())
     }
 
-    /// Link and group the sessions stored before the `incremental_sidecar` migration, which
-    /// leaves them without a root: in Rust rather than in the migration, so it links copies by
-    /// the same [`linkable_turn`] rule and groups them with the same query ([`Self::regroup_all`])
-    /// as rows arriving later are. Every session stored since has a root, so this runs until it
-    /// has committed once, and then never again.
-    async fn group_migrated(&self) -> Result<(), DbError> {
-        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let ungrouped: Option<i64> =
-            db::query_scalar("SELECT 1 FROM sessions WHERE root_harness IS NULL LIMIT 1")
-                .fetch_optional(&mut *tx)
-                .await?;
-        if ungrouped.is_none() {
-            return Ok(());
-        }
-        // Each parentless session links to the lowest-ranked other parentless session sharing a
-        // call, when that ranks below it (see the migration), as `relink` does one at a time.
-        db::query(concat!(
-            "UPDATE sessions SET copy_of_session_id = (SELECT t.session_id FROM messages m CROSS \
-             JOIN messages o ON o.harness = m.harness AND o.turn_id = m.turn_id AND o.session <> \
-             m.session CROSS JOIN sessions t ON t.id = o.session WHERE m.session = sessions.id \
-             AND ",
-            linkable_turn!(),
-            " AND t.parent_session_id IS NULL AND (t.started_at, t.session_id) < \
-             (sessions.started_at, sessions.session_id) ORDER BY t.started_at, t.session_id LIMIT \
-             1) WHERE parent_session_id IS NULL"
-        ))
-        .execute(&mut *tx)
-        .await?;
-        Self::regroup_all(&mut tx).await?;
-        for (harness, turn) in Self::take_regrouped_calls(&mut tx).await? {
-            Self::attribute_call(&mut tx, harness, &turn).await?;
-        }
-        tx.commit().await?;
-        Ok(())
+    /// Run `write` on the writer (see [`Writer::run`]).
+    async fn write<T, F>(&self, write: F) -> Result<T, DbError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut rusqlite::Connection) -> Result<T, DbError> + Send + 'static,
+    {
+        self.writer.as_ref().ok_or(DbError::ReadOnly)?.run(write).await
+    }
+
+    /// Run `write` on the writer with its interned ids (see [`Writer::run_interning`]).
+    async fn write_interning<T, F>(&self, write: F) -> Result<T, DbError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut rusqlite::Connection, &mut Interned) -> Result<T, DbError> + Send + 'static,
+    {
+        self.writer.as_ref().ok_or(DbError::ReadOnly)?.run_interning(write).await
     }
 
     pub async fn append(&self, msg: &Message) -> Result<Appended, DbError> {
-        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let msg = PreparedMessage::new(msg.clone())?;
+        self.write_interning(move |conn, interned| Self::append_one(conn, interned, &msg)).await
+    }
 
-        let harness = msg.session.harness as i64;
-        let session_id = msg.session.session.as_ref();
-        let source_id = msg.source_id.as_ref();
-        let id = msg.id.0.as_bytes().as_slice();
-
-        let (parent_harness, parent_session_id) = match &msg.parent {
-            Some(parent) => (Some(parent.harness as i64), Some(parent.session.as_ref().to_owned())),
-            None => (None, None),
-        };
-
-        let timestamp = Self::millis(msg.timestamp);
-        let role_json = serde_json::to_string(&msg.role)?;
-        let content_json = serde_json::to_string(&msg.content)?;
-        let (content, content_z) = Self::split_content(content_json)?;
-        let stop_reason_json = msg.stop_reason.as_ref().map(serde_json::to_string).transpose()?;
-        let title_change = msg.title_change.as_ref().map(serde_json::to_string).transpose()?;
-        let [usage_input, usage_output, usage_cache_read, usage_cache_write, _] =
-            Self::fold_usage(msg.usage.as_ref());
-        // Unlike the others, a row's reasoning stays NULL when unreported: most harnesses never
-        // break it out, and zero would claim the call did not reason.
-        let usage_reasoning =
-            msg.usage.and_then(|u| u.reasoning).map(|n| i64::try_from(n).unwrap_or(i64::MAX));
-        let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
-        let host = msg.host.map(Self::host_repr);
-
-        let before = Self::session_key(&mut tx, harness, session_id).await?;
-
-        // Messages reference their session by id, so it has to exist first. The upsert below
-        // folds this row in exactly as it would a fresh insert: same timestamps, nothing counted.
-        // A new session starts as its own root; regroup() below places it.
-        db::query(
-            "INSERT INTO sessions (harness, session_id, started_at, updated_at, root_harness,
-                root_session_id)
-            VALUES (?1, ?2, ?3, ?3, ?1, ?2)
-            ON CONFLICT(harness, session_id) DO NOTHING",
-        )
-        .bind(harness)
-        .bind(session_id)
-        .bind(timestamp)
-        .execute(&mut *tx)
-        .await?;
-        let session: i64 =
-            db::query_scalar("SELECT id FROM sessions WHERE harness = ? AND session_id = ?")
-                .bind(harness)
-                .bind(session_id)
-                .fetch_one(&mut *tx)
-                .await?;
-
-        let inserted = db::query(
-            "INSERT INTO messages (
-                id, harness, session, source_id, parent_harness, parent_session_id,
-                parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
-                usage_input, usage_output, usage_cache_read, usage_cache_write,
-                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(session, source_id) DO NOTHING",
-        )
-        .bind(id)
-        .bind(harness)
-        .bind(session)
-        .bind(source_id)
-        .bind(parent_harness)
-        .bind(parent_session_id.clone())
-        .bind(msg.parent_source_id.as_ref().map(|s| s.as_ref()))
-        .bind(timestamp)
-        .bind(role_json)
-        .bind(content)
-        .bind(content_z)
-        .bind(cwd.clone())
-        .bind(msg.git_branch.as_deref())
-        .bind(msg.model.as_deref())
-        .bind(usage_input)
-        .bind(usage_output)
-        .bind(usage_cache_read)
-        .bind(usage_cache_write)
-        .bind(usage_reasoning)
-        .bind(stop_reason_json)
-        .bind(i64::from(msg.usage.is_some()))
-        .bind(msg.turn_id.as_deref())
-        .bind(title_change)
-        .bind(host.as_deref())
-        .execute(&mut *tx)
-        .await?;
-
-        if inserted.rows_affected() == 0 {
-            // A row stored before hosts were tracked learns its host when the reproject replays
-            // its record (see the `incremental_sidecar` migration).
-            if let Some(host) = &host {
-                Self::backfill_host(&mut tx, session, source_id, host).await?;
-            }
-            tx.commit().await?;
-            return Ok(Appended::Duplicate);
+    /// [`Self::append`] each of `msgs` in order, in one transaction: all of them or, on an error,
+    /// none. A reprojection replays a page of records at a time this way, as committing each row
+    /// on its own (and flushing the full-text index with it) is most of what replaying costs.
+    ///
+    /// Returns the rows not projected before, in order. Appends nothing, and returns None, if
+    /// the sidecar was invalidated since `generation` (see
+    /// [`Self::advance_reproject_watermark`]): a wipe may have deleted what the page builds on,
+    /// and a write that outlives the replay waiting on it lands after whatever came next.
+    pub async fn append_all(
+        &self,
+        msgs: Vec<PreparedMessage>,
+        generation: Generation,
+    ) -> Result<Option<Vec<NewRow>>, DbError> {
+        if msgs.is_empty() {
+            return Ok(Some(Vec::new()));
         }
-
-        let rowid = inserted.last_insert_rowid();
-        let body = Self::searchable_body(msg);
-        db::query("INSERT INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)")
-            .bind(rowid)
-            .bind(msg.session_title.as_deref().unwrap_or(""))
-            .bind(&body)
-            .execute(&mut *tx)
-            .await?;
-
-        // Session title denormalised onto the message so it survives a reproject from records
-        // (which carry messages only). The session upsert below takes the newest row's, so a
-        // cleared title clears; the capture pipeline stamps every row with the ranked title.
-        let title = msg.session_title.as_deref();
-        let preview = Self::preview_text(msg);
-        let last_reply = Self::reply_text(msg);
-
-        // Usage is not folded in here: it is attributed per model call below. A structural row
-        // (usage, title, session context, a tree node with nothing to show) is no message.
-        let counted = i64::from(!msg.content.is_empty());
-        db::query(
-            "INSERT INTO sessions (
-                harness, session_id, parent_harness, parent_session_id, cwd, git_branch, model,
-                started_at, updated_at, message_count, title, title_source, preview, last_reply,
-                last_reply_at, parent_kind, host_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(harness, session_id) DO UPDATE SET
-                host_id = COALESCE(sessions.host_id, excluded.host_id),
-                parent_harness = COALESCE(excluded.parent_harness, sessions.parent_harness),
-                parent_session_id = COALESCE(excluded.parent_session_id, \
-             sessions.parent_session_id),
-                parent_kind = COALESCE(excluded.parent_kind, sessions.parent_kind),
-                cwd = COALESCE(excluded.cwd, sessions.cwd),
-                git_branch = COALESCE(excluded.git_branch, sessions.git_branch),
-                model = COALESCE(excluded.model, sessions.model),
-                started_at = MIN(sessions.started_at, excluded.started_at),
-                updated_at = MAX(sessions.updated_at, excluded.updated_at),
-                message_count = sessions.message_count + excluded.message_count,
-                title = CASE WHEN excluded.updated_at >= sessions.updated_at THEN excluded.title \
-             ELSE sessions.title END,
-                title_source = CASE WHEN excluded.updated_at >= sessions.updated_at THEN \
-             excluded.title_source ELSE sessions.title_source END,
-                preview = COALESCE(sessions.preview, excluded.preview),
-                last_reply = CASE WHEN excluded.last_reply_at >= COALESCE(sessions.last_reply_at, \
-             excluded.last_reply_at) THEN excluded.last_reply ELSE sessions.last_reply END,
-                last_reply_at = MAX(COALESCE(sessions.last_reply_at, excluded.last_reply_at), \
-             COALESCE(excluded.last_reply_at, sessions.last_reply_at))",
-        )
-        .bind(harness)
-        .bind(session_id)
-        .bind(parent_harness)
-        .bind(parent_session_id)
-        .bind(cwd)
-        .bind(msg.git_branch.as_deref())
-        .bind(msg.model.as_deref())
-        .bind(timestamp)
-        .bind(timestamp)
-        .bind(counted)
-        .bind(title)
-        .bind(msg.session_title_source.map(Self::title_source_repr))
-        .bind(preview)
-        .bind(last_reply.as_deref())
-        .bind(last_reply.as_ref().map(|_| timestamp))
-        .bind(msg.parent.as_ref().and(msg.parent_kind).map(Self::parent_kind_repr))
-        .bind(host.as_deref())
-        .execute(&mut *tx)
-        .await?;
-
-        // A session is on the host of its earliest row, whatever order its rows arrive in (a
-        // replay takes one host's series at a time). A row at or before the earliest so far may
-        // be the new earliest, so the session's host is worked out again.
-        if before.as_ref().is_some_and(|b| timestamp <= b.started_at) {
-            Self::refresh_session_host(&mut tx, session).await?;
-        }
-
-        // A session is placed in its group when it first appears and when it learns its parent
-        // (the parent link only ever goes from absent to present).
-        let gained_parent =
-            before.as_ref().is_some_and(|b| b.parent_session_id.is_none() && msg.parent.is_some());
-        if before.is_none() || gained_parent {
-            Self::regroup(&mut tx, harness, session_id).await?;
-        }
-        // A copy names no parent, so it is linked to its original through the calls they share
-        // (see the `incremental_sidecar` migration). A link that moves other than by being made regroups
-        // everything.
-        let mut relinked = false;
-        if let Some(before) = &before {
-            if gained_parent {
-                relinked |= Self::unlink(&mut tx, harness, session_id).await?;
-            }
-            let started_at: i64 = db::query_scalar(
-                "SELECT started_at FROM sessions WHERE harness = ? AND session_id = ?",
-            )
-            .bind(harness)
-            .bind(session_id)
-            .fetch_one(&mut *tx)
-            .await?;
-            if started_at != before.started_at {
-                relinked |= Self::relink_sharers(&mut tx, harness, session_id).await?;
-            }
-        }
-        if let Some(turn) = &msg.turn_id {
-            relinked |= Self::link_copies(&mut tx, harness, session_id, turn).await?;
-        }
-        if relinked {
-            Self::regroup_all(&mut tx).await?;
-        }
-        // A content-derived call is scoped to its holders' group, and owned by who in it descends
-        // from no other holder: a session whose root or ancestry moved has its calls attributed
-        // afresh.
-        if gained_parent {
-            Self::mark_descendants(&mut tx, &format!("[{session}]")).await?;
-        }
-        let mut recount: BTreeSet<(i64, String)> =
-            Self::take_regrouped_calls(&mut tx).await?.into_iter().collect();
-
-        if let Some(usage) = &msg.usage {
-            match &msg.turn_id {
-                Some(turn) => {
-                    recount.insert((harness, turn.clone()));
-                }
-                // A row outside any model call counts on its own.
-                None => {
-                    let tokens = Self::fold_usage(Some(usage));
-                    Self::add_usage(&mut tx, harness, session_id, tokens, 1).await?;
-                }
-            }
-        }
-        // Which session owns a call shared with others depends on each claimant's start and
-        // ancestry: when either moves, every call this session claims is attributed afresh.
-        let existed = before.is_some();
-        let previous_title = match before {
-            Some(before) => {
-                let after = Self::session_key(&mut tx, harness, session_id).await?;
-                if after.as_ref().map(SessionKey::rank) != Some(before.rank()) {
-                    let turns: Vec<String> = db::query_scalar(
-                        "SELECT DISTINCT turn_id FROM messages WHERE session = ? AND \
-                         usage_present = 1 AND turn_id IS NOT NULL",
-                    )
-                    .bind(session)
-                    .fetch_all(&mut *tx)
-                    .await?;
-                    recount.extend(turns.into_iter().map(|turn| (harness, turn)));
-                }
-                before.title
-            }
-            None => None,
-        };
-        for (harness, turn) in &recount {
-            Self::attribute_call(&mut tx, *harness, turn).await?;
-        }
-
-        // A changed (or cleared) title has to reach the rows indexed before it. messages_fts is
-        // contentless, so a single-column UPDATE is not supported: rewrite each of the session's
-        // index rows, re-deriving the body from the stored content. Gated on the session's title
-        // actually changing, since every replayed line of a titled session carries it.
-        let current_title: Option<String> =
-            db::query_scalar("SELECT title FROM sessions WHERE harness = ? AND session_id = ?")
-                .bind(harness)
-                .bind(session_id)
-                .fetch_one(&mut *tx)
-                .await?;
-        if existed && current_title != previous_title {
-            let title = current_title.as_deref().unwrap_or("");
-            type BodyRow =
-                (i64, String, Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
-            let rows: Vec<BodyRow> = db::query_as(
-                "SELECT rowid, content, content_z, cwd, git_branch, model FROM messages WHERE \
-                 session = ?",
-            )
-            .bind(session)
-            .fetch_all(&mut *tx)
-            .await?;
-
-            for (rowid, content, content_z, cwd, git_branch, model) in rows {
-                let body = Self::body_from_parts(
-                    content,
-                    content_z,
-                    cwd.as_deref(),
-                    git_branch.as_deref(),
-                    model.as_deref(),
-                )
-                .unwrap_or_else(|err| {
-                    warn!(?err, rowid, "failed to decode ai-session message; indexing empty");
-                    String::new()
-                });
-                db::query(
-                    "INSERT OR REPLACE INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)",
-                )
-                .bind(rowid)
-                .bind(title)
-                .bind(&body)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
-
-        tx.commit().await?;
-        Ok(Appended::New)
+        self.write_interning(move |conn, interned| {
+            Self::append_page(conn, interned, msgs, generation)
+        })
+        .await
     }
 
     pub async fn contains_message(
@@ -909,13 +625,12 @@ impl AiSessionDatabase {
         Ok(ids.into_iter().map(SourceId::from).collect())
     }
 
-    /// Where capture resumes a session, if it checkpointed one with a digest; one without a
-    /// digest reads as `None`, so the session is read again from its start.
+    /// Where capture resumes a session, if it checkpointed one.
     pub async fn checkpoint(
         &self,
         session: &HarnessSession,
     ) -> Result<Option<Checkpoint>, DbError> {
-        let row: Option<(i64, Option<i64>)> = db::query_as(
+        let row: Option<(i64, i64)> = db::query_as(
             "SELECT \"offset\", digest FROM checkpoints WHERE harness = ? AND session_id = ?",
         )
         .bind(session.harness as i64)
@@ -923,11 +638,10 @@ impl AiSessionDatabase {
         .fetch_optional(self.db.pool())
         .await?;
 
-        Ok(row.and_then(|(at, digest)| {
-            Some(Checkpoint {
-                at: u64::try_from(at).unwrap_or(0),
-                digest: digest?.cast_unsigned(),
-            })
+        Ok(row.map(|(at, digest)| Checkpoint {
+            at: at.cast_unsigned(),
+            digest: digest.cast_unsigned(),
+            generation: 0,
         }))
     }
 
@@ -942,7 +656,9 @@ impl AiSessionDatabase {
         )
         .bind(session.harness as i64)
         .bind(session.session.as_ref())
-        .bind(i64::try_from(checkpoint.at).unwrap_or(i64::MAX))
+        // Both are kept bit for bit: a checkpoint may use every bit of either (opencode's packs
+        // two places into `at`, its top bit set).
+        .bind(checkpoint.at.cast_signed())
         .bind(checkpoint.digest.cast_signed())
         .execute(self.db.pool())
         .await?;
@@ -988,9 +704,10 @@ impl AiSessionDatabase {
         self.recent_sessions(filter, 0).await
     }
 
-    /// Every session whose id starts with `prefix`, across harnesses, newest first (to find a
-    /// session by an abbreviated id). Wildcards mean nothing here: the prefix is a byte range,
-    /// not a pattern.
+    /// Every session whose id or [atuin id](AtuinSessionId) starts with `prefix`, or whose atuin
+    /// id ends with it (see [`AtuinSessionId::has_suffix`]), across harnesses, newest first (to
+    /// find a session by an abbreviated id). Wildcards mean nothing here: the prefix is a byte
+    /// range, and the suffix is only hex.
     pub async fn sessions_with_id_prefix(&self, prefix: &str) -> Result<Vec<Session>, DbError> {
         // Text compares by its UTF-8 bytes, which order as the code points do: the ids starting
         // with `prefix` are those at or past it and before its successor.
@@ -1000,15 +717,37 @@ impl AiSessionDatabase {
         } else {
             ""
         };
+        let atuin_ids = AtuinSessionId::prefix_range(prefix);
+        let atuin_clause = if atuin_ids.is_some() {
+            " OR s.atuin_id BETWEEN ? AND ?"
+        } else {
+            ""
+        };
+
+        // Hex has no LIKE wildcards, and LIKE ignores ASCII case, as hex() is upper.
+        let suffix = AtuinSessionId::is_suffix(prefix).then(|| format!("%{prefix}"));
+        let suffix_clause = if suffix.is_some() {
+            " OR hex(s.atuin_id) LIKE ?"
+        } else {
+            ""
+        };
+
         let sql = format!(
-            "SELECT {}, {} FROM sessions s WHERE s.session_id >= ?{upper_clause} ORDER BY \
-             s.updated_at DESC, s.session_id",
+            "SELECT {}, {} FROM sessions s WHERE (s.session_id >= \
+             ?{upper_clause}){atuin_clause}{suffix_clause} ORDER BY s.updated_at DESC, \
+             s.session_id",
             session_columns!(),
             no_group_columns!(),
         );
         let mut query = db::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(sql)).bind(prefix);
         if let Some(upper) = upper {
             query = query.bind(upper);
+        }
+        if let Some((low, high)) = &atuin_ids {
+            query = query.bind(low.as_bytes().as_slice()).bind(high.as_bytes().as_slice());
+        }
+        if let Some(suffix) = suffix {
+            query = query.bind(suffix);
         }
         let rows: Vec<SessionRow> = query.fetch_all(self.db.pool()).await?;
         rows.into_iter().map(Self::session_from_row).collect()
@@ -1062,15 +801,15 @@ impl AiSessionDatabase {
         let Some(id) = id else {
             return Ok(parts);
         };
-        // Roles are stored as their JSON, so a role is matched as that text: SQLite walks the
-        // session's messages in time order (`messages_session_timestamp`) and stops at the first
-        // match, without the roles of the rest ever reaching here.
+        // Roles are stored as their JSON's `interned` id, so a role is matched by that: SQLite walks
+        // the session's messages in time order (`messages_session_timestamp`) and stops at the
+        // first match, without the roles of the rest ever reaching here.
         let user = serde_json::to_string(&Role::User)?;
         let assistant = serde_json::to_string(&Role::Assistant)?;
 
         let first: Option<(String, Option<Vec<u8>>)> = db::query_as(
-            "SELECT content, content_z FROM messages WHERE session = ? AND role = ? ORDER BY \
-             timestamp, id LIMIT 1",
+            "SELECT content, content_z FROM messages WHERE session = ? AND role = (SELECT id FROM \
+             interned WHERE value = ?) ORDER BY timestamp, id LIMIT 1",
         )
         .bind(id)
         .bind(&user)
@@ -1090,7 +829,8 @@ impl AiSessionDatabase {
                 None => {
                     db::query_as(
                         "SELECT timestamp, id, content, content_z FROM messages WHERE session = ? \
-                         AND role = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
+                         AND role = (SELECT id FROM interned WHERE value = ?) ORDER BY timestamp \
+                         DESC, id DESC LIMIT 1",
                     )
                     .bind(id)
                     .bind(&assistant)
@@ -1100,8 +840,8 @@ impl AiSessionDatabase {
                 Some((timestamp, message)) => {
                     db::query_as(
                         "SELECT timestamp, id, content, content_z FROM messages WHERE session = ? \
-                         AND role = ? AND (timestamp < ? OR (timestamp = ? AND id < ?)) ORDER BY \
-                         timestamp DESC, id DESC LIMIT 1",
+                         AND role = (SELECT id FROM interned WHERE value = ?) AND (timestamp < ? \
+                         OR (timestamp = ? AND id < ?)) ORDER BY timestamp DESC, id DESC LIMIT 1",
                     )
                     .bind(id)
                     .bind(&assistant)
@@ -1131,7 +871,14 @@ impl AiSessionDatabase {
         filter: &SessionFilter,
         limit: u32,
     ) -> Result<Vec<Session>, DbError> {
-        let (clause, binds) = Self::filter_clause(filter);
+        let (mut clause, mut binds) = Self::filter_clause(filter);
+        if !filter.roles.is_empty() {
+            let (roles, role_binds) = Self::roles_clause(&filter.roles)?;
+            clause.push_str(&format!(
+                " AND EXISTS (SELECT 1 FROM messages m WHERE m.session = s.id{roles})"
+            ));
+            binds.extend(role_binds);
+        }
         let limit_clause = if limit == 0 {
             ""
         } else {
@@ -1211,7 +958,48 @@ impl AiSessionDatabase {
             sql.push_str(" AND s.updated_at >= ?");
             binds.push(Bind::Int(Self::millis(since)));
         }
+        if filter.exclude_subagents {
+            // `subagent_like!`, for `s`.
+            sql.push_str(
+                " AND NOT (s.parent_session_id IS NOT NULL AND (s.parent_kind IS 0 OR \
+                 s.parent_kind IS NULL))",
+            );
+        }
         (sql, binds)
+    }
+
+    /// The SQL (`AND …`, over the message `m`) and binds keeping only messages from `roles`, as
+    /// [`MessageRole::of`] tells them from the stored role and [`ContentBlocks`]. Empty for no
+    /// roles.
+    fn roles_clause(roles: &[MessageRole]) -> Result<(String, Vec<Bind>), DbError> {
+        if roles.is_empty() {
+            return Ok((String::new(), Vec::new()));
+        }
+        let tool_output =
+            format!("(m.blocks != 0 AND (m.blocks & ~{}) = 0)", ContentBlocks::TOOL_OUTPUT);
+        let role_is = "m.role IS (SELECT id FROM interned WHERE value = ?)";
+        let mut binds = Vec::new();
+        let mut role = |r: Role| -> Result<&str, DbError> {
+            binds.push(Bind::Text(serde_json::to_string(&r)?));
+            Ok(role_is)
+        };
+        let mut any = Vec::new();
+        for kind in roles {
+            any.push(match kind {
+                MessageRole::User => format!("(NOT {tool_output} AND {})", role(Role::User)?),
+                MessageRole::Assistant => {
+                    format!("(NOT {tool_output} AND {})", role(Role::Assistant)?)
+                }
+                MessageRole::Tool => format!("({tool_output} OR {})", role(Role::Tool)?),
+                MessageRole::Harness => format!(
+                    "(NOT {tool_output} AND NOT {} AND NOT {} AND NOT {})",
+                    role(Role::User)?,
+                    role(Role::Assistant)?,
+                    role(Role::Tool)?
+                ),
+            });
+        }
+        Ok((format!(" AND ({})", any.join(" OR ")), binds))
     }
 
     /// A path as stored in `cwd`, without a trailing separator (`/`, or a Windows `\`).
@@ -1243,13 +1031,6 @@ impl AiSessionDatabase {
                 yield Self::message_from_row(row)?;
             }
         }
-    }
-
-    pub fn transcript(
-        &self,
-        session: &HarnessSession,
-    ) -> impl Stream<Item = Result<String, DbError>> + Send + 'static {
-        self.messages(session).map(|result| result.map(|msg| Self::render_transcript_chunk(&msg)))
     }
 
     /// Sessions matching `query` (its terms matching as `terms` says) and passing `filter`, most
@@ -1303,7 +1084,10 @@ impl AiSessionDatabase {
                 return;
             };
 
-            let (filter_clause, binds) = Self::filter_clause(&filter);
+            let (mut filter_clause, mut binds) = Self::filter_clause(&filter);
+            let (roles_clause, role_binds) = Self::roles_clause(&filter.roles)?;
+            filter_clause.push_str(&roles_clause);
+            binds.extend(role_binds);
             let (group_harness, group_session) = if filter.roots_only {
                 ("s.root_harness", "s.root_session_id")
             } else {
@@ -1405,70 +1189,6 @@ impl AiSessionDatabase {
                 };
             }
         }
-    }
-
-    pub async fn reindex(&self) -> Result<(), DbError> {
-        let pool = self.db.pool();
-        // messages_fts rowids are always a contiguous prefix of messages rowids: append writes the
-        // message and its FTS row in one tx, and this backfill (the only other writer, running
-        // under open() before the daemon serves) walks rowids ascending. So the highest indexed
-        // rowid alone determines coverage — gate on max(rowid) (O(log N)) rather than counting
-        // both tables. This also repopulates the index from scratch after a migration rebuilds
-        // messages_fts.
-        let mut watermark: i64 =
-            db::query_scalar("SELECT coalesce(max(rowid), 0) FROM messages_fts")
-                .fetch_one(pool)
-                .await?;
-        let last_message: i64 = db::query_scalar("SELECT coalesce(max(rowid), 0) FROM messages")
-            .fetch_one(pool)
-            .await?;
-        if watermark >= last_message {
-            return Ok(());
-        }
-
-        loop {
-            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-            let rows: Vec<ReindexRow> = db::query_as::<_, ReindexRow>(
-                "SELECT m.rowid AS rowid, m.id, m.harness, s.session_id, m.source_id, \
-                 m.parent_harness, m.parent_session_id, s.parent_kind, m.parent_source_id, \
-                 m.timestamp, m.role, m.content, m.content_z, m.cwd, m.git_branch, m.model, \
-                 m.usage_input, m.usage_output, m.usage_cache_read, m.usage_cache_write, \
-                 m.usage_reasoning, m.stop_reason, m.usage_present, m.turn_id, m.title_change, \
-                 m.host_id, s.title AS session_title FROM messages m JOIN sessions s ON s.id = \
-                 m.session WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?",
-            )
-            .bind(watermark)
-            .bind(REINDEX_CHUNK)
-            .fetch_all(&mut *tx)
-            .await?;
-
-            let Some(last) = rows.last() else {
-                break;
-            };
-            watermark = last.rowid;
-
-            for row in rows {
-                let rowid = row.rowid;
-                let title = row.session_title.unwrap_or_default();
-                let body = match Self::message_from_row(row.message) {
-                    Ok(msg) => Self::searchable_body(&msg),
-                    Err(err) => {
-                        warn!(?err, rowid, "failed to decode ai-session message; indexing empty");
-                        String::new()
-                    }
-                };
-                db::query(
-                    "INSERT OR REPLACE INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)",
-                )
-                .bind(rowid)
-                .bind(&title)
-                .bind(&body)
-                .execute(&mut *tx)
-                .await?;
-            }
-            tx.commit().await?;
-        }
-        Ok(())
     }
 
     /// The index of the first whitespace word where a query term matches the way the FTS index
@@ -1598,7 +1318,9 @@ impl AiSessionDatabase {
             return None;
         }
 
-        msg.content.iter().find_map(|content| match content {
+        // pi's continuation marker opens the prompt it rides on: the prompt is what was said.
+        let marker = usize::from(continuation::opens_with_marker(&msg.content));
+        msg.content[marker..].iter().find_map(|content| match content {
             Content::Text(text) => Some(Self::clip_summary(text)),
             _ => None,
         })
@@ -1651,10 +1373,21 @@ impl AiSessionDatabase {
                 out.push('\n');
                 Self::push_json_text(out, &tool.input);
             }
-            Content::ToolResult(result) => Self::push_json_text(out, &result.output),
             Content::Other(value) => Self::push_json_text(out, value),
-            // Activity metadata is not conversational text and adds no useful search terms.
-            Content::ReasoningSummary { .. } => {}
+            // The files a call changed are what a search for them looks for; their lines are
+            // tool output like any other.
+            Content::Patch(patch) => {
+                for file in &patch.files {
+                    for path in std::iter::once(&file.path).chain(&file.moved_to) {
+                        out.push_str(path);
+                        out.push('\n');
+                    }
+                }
+            }
+            // Tool output (with `ai.capture_tools`) is most of a session's bytes, and would grow
+            // the index as much, with files and logs rather than what was said or done. Activity
+            // metadata is not conversational text and adds no useful search terms.
+            Content::ToolResult(_) | Content::ReasoningSummary { .. } => {}
         }
     }
 
@@ -1691,24 +1424,12 @@ impl AiSessionDatabase {
         };
 
         [usage.input, usage.output, usage.cache_read, usage.cache_write, usage.reasoning]
-            .map(|n| i64::try_from(n.unwrap_or(0)).unwrap_or(i64::MAX))
+            .map(|n| Self::row_tokens(n.unwrap_or(0)))
     }
 
-    /// What decides a session's claim on a shared model call (see [`Self::attribute_call`]),
-    /// plus its title, read before and after an append.
-    async fn session_key(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        session_id: &str,
-    ) -> Result<Option<SessionKey>, DbError> {
-        Ok(db::query_as(
-            "SELECT started_at, parent_harness, parent_session_id, title FROM sessions WHERE \
-             harness = ? AND session_id = ?",
-        )
-        .bind(harness)
-        .bind(session_id)
-        .fetch_optional(conn)
-        .await?)
+    /// A count of a row's usage as stored: at most [`MAX_ROW_TOKENS`].
+    fn row_tokens(n: u64) -> i64 {
+        i64::try_from(n.min(MAX_ROW_TOKENS)).expect("MAX_ROW_TOKENS fits in i64")
     }
 
     /// Delete every session holding a row `host` captured, whole, for a reprojection that replays
@@ -1746,482 +1467,7 @@ impl AiSessionDatabase {
         host: HostId,
         spare: Option<HostId>,
     ) -> Result<Option<bool>, DbError> {
-        let spare = spare.map(Self::host_repr);
-        let host = Self::host_repr(host);
-        let tag = RecordTag::AiSession.as_str();
-        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
-
-        // The sessions going, as a JSON array of their row ids for `json_each`.
-        let going: String = db::query_scalar(
-            "SELECT json_group_array(id) FROM sessions WHERE host_id = ?1 OR id IN (SELECT \
-             session FROM messages WHERE host_id = ?1)",
-        )
-        .bind(&host)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        let mut turns: BTreeSet<(i64, String)> = db::query_as(
-            "SELECT DISTINCT m.harness, m.turn_id FROM messages m WHERE m.session IN (SELECT \
-             value FROM json_each(?)) AND m.turn_id IS NOT NULL AND m.usage_present = 1",
-        )
-        .bind(&going)
-        .fetch_all(&mut *tx)
-        .await?
-        .into_iter()
-        .collect();
-        // Every other host with a row in the sessions going: NULL for a row of unknown host.
-        let contributors: Vec<Option<String>> = db::query_scalar(
-            "SELECT DISTINCT m.host_id FROM messages m WHERE m.session IN (SELECT value FROM \
-             json_each(?1)) AND m.host_id IS NOT ?2",
-        )
-        .bind(&going)
-        .bind(&host)
-        .fetch_all(&mut *tx)
-        .await?;
-        if let Some(spare) = &spare
-            && (*spare == host
-                || contributors.iter().any(|c| c.as_ref().is_none_or(|c| c == spare)))
-        {
-            tx.rollback().await?;
-            return Ok(None);
-        }
-
-        // The sessions left below those going lose part of their ancestry.
-        Self::mark_descendants(&mut tx, &going).await?;
-        for sql in [
-            "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE session IN \
-             (SELECT value FROM json_each(?)))",
-            "DELETE FROM messages WHERE session IN (SELECT value FROM json_each(?))",
-            "DELETE FROM calls WHERE (harness, session_id) IN (SELECT harness, session_id FROM \
-             sessions WHERE id IN (SELECT value FROM json_each(?)))",
-            "DELETE FROM sessions WHERE id IN (SELECT value FROM json_each(?))",
-        ] {
-            db::query(sql).bind(&going).execute(&mut *tx).await?;
-        }
-        // Sessions left grouped under a root that went.
-        let orphaned: i64 = db::query_scalar(
-            "SELECT count(*) FROM sessions c WHERE NOT EXISTS (SELECT 1 FROM sessions r WHERE \
-             r.harness = c.root_harness AND r.session_id = c.root_session_id)",
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-
-        // Copies of a session that went link to the lowest-ranked original left, if any.
-        let stranded: Vec<(i64, String)> = db::query_as(
-            "SELECT harness, session_id FROM sessions s WHERE copy_of_session_id IS NOT NULL AND \
-             NOT EXISTS (SELECT 1 FROM sessions o WHERE o.harness = s.harness AND o.session_id = \
-             s.copy_of_session_id)",
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-        let mut relinked = false;
-        for (harness, session_id) in &stranded {
-            relinked |= Self::relink(&mut tx, *harness, session_id).await?;
-        }
-        if orphaned > 0 || relinked {
-            Self::regroup_all(&mut tx).await?;
-        }
-        turns.extend(Self::take_regrouped_calls(&mut tx).await?);
-        for (harness, turn) in &turns {
-            Self::attribute_call(&mut tx, *harness, turn).await?;
-        }
-
-        if contributors.iter().any(Option::is_none) {
-            db::query("DELETE FROM reproject_watermark WHERE tag = ?")
-                .bind(tag)
-                .execute(&mut *tx)
-                .await?;
-        } else {
-            for forgotten in contributors.iter().flatten().chain([&host]) {
-                db::query("DELETE FROM reproject_watermark WHERE host = ? AND tag = ?")
-                    .bind(forgotten)
-                    .bind(tag)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-        }
-        Self::bump_generation(&mut tx).await?;
-
-        tx.commit().await?;
-        Ok(Some(!contributors.is_empty()))
-    }
-
-    /// The content-derived calls (not [`linkable_turn`]) held by the sessions whose root changed
-    /// since this was last asked, which the `sessions_regrouped` trigger records wherever
-    /// sessions are regrouped, or whose ancestry [`Self::mark_descendants`] recorded as moved.
-    /// Such a call is counted once per group of its holders (see [`Self::attribute_call`]), so
-    /// each has to be attributed afresh. Forgets the sessions recorded.
-    async fn take_regrouped_calls(
-        conn: &mut SqliteConnection,
-    ) -> Result<Vec<(i64, String)>, DbError> {
-        let turns = db::query_as(concat!(
-            "SELECT DISTINCT m.harness, m.turn_id FROM regrouped r JOIN messages m ON m.session = \
-             r.session WHERE m.usage_present = 1 AND m.turn_id IS NOT NULL AND NOT ",
-            linkable_turn!()
-        ))
-        .fetch_all(&mut *conn)
-        .await?;
-        db::query("DELETE FROM regrouped").execute(conn).await?;
-        Ok(turns)
-    }
-
-    /// Record `sessions` (a JSON array of their row ids) and every session descending from them
-    /// by parent links for [`Self::take_regrouped_calls`]: their ancestry, which decides who in a
-    /// group owns a call shared there, moves when one of `sessions` learns its parent or goes,
-    /// even if no root does (a cycle closing under its least member, a copy learning a parent
-    /// in its own group).
-    async fn mark_descendants(conn: &mut SqliteConnection, sessions: &str) -> Result<(), DbError> {
-        db::query(
-            "WITH RECURSIVE down (id, harness, session_id) AS (SELECT id, harness, session_id \
-             FROM sessions WHERE id IN (SELECT value FROM json_each(?)) UNION SELECT s.id, \
-             s.harness, s.session_id FROM down d JOIN sessions s ON s.parent_harness = d.harness \
-             AND s.parent_session_id = d.session_id) INSERT OR IGNORE INTO regrouped (session) \
-             SELECT id FROM down",
-        )
-        .bind(sessions)
-        .execute(conn)
-        .await?;
-        Ok(())
-    }
-
-    /// Group every session afresh under its top-most stored ancestor, following the parent else
-    /// the copy link: however deep the chain, and with a cycle headed by its least member (by
-    /// harness, then id), whichever member a walk up entered it by.
-    async fn regroup_all(conn: &mut SqliteConnection) -> Result<(), DbError> {
-        db::query(
-            "WITH RECURSIVE up (harness, session_id, up_harness, up_session_id) AS (SELECT \
-             a.harness, a.session_id, p.harness, p.session_id FROM sessions a JOIN sessions p ON \
-             p.harness = CASE WHEN a.parent_session_id IS NULL THEN a.harness ELSE \
-             a.parent_harness END AND p.session_id = COALESCE(a.parent_session_id, \
-             a.copy_of_session_id)), chain (harness, session_id, anc_harness, anc_session_id, \
-             depth, path) AS (SELECT harness, session_id, harness, session_id, 0, \
-             json_array(harness || ':' || session_id) FROM sessions UNION ALL SELECT c.harness, \
-             c.session_id, u.up_harness, u.up_session_id, c.depth + 1, json_insert(c.path, \
-             '$[#]', u.up_harness || ':' || u.up_session_id) FROM chain c JOIN up u ON u.harness \
-             = c.anc_harness AND u.session_id = c.anc_session_id WHERE NOT EXISTS (SELECT 1 FROM \
-             json_each(c.path) v WHERE v.value = u.up_harness || ':' || u.up_session_id)), ends \
-             AS (SELECT harness, session_id, anc_harness, anc_session_id, max(depth) AS depth \
-             FROM chain GROUP BY harness, session_id), loops AS (SELECT e.harness, e.session_id, \
-             c.depth AS entered FROM ends e JOIN up u ON u.harness = e.anc_harness AND \
-             u.session_id = e.anc_session_id JOIN chain c ON c.harness = e.harness AND \
-             c.session_id = e.session_id AND c.anc_harness = u.up_harness AND c.anc_session_id = \
-             u.up_session_id), heads AS (SELECT l.harness, l.session_id, c.anc_harness, \
-             c.anc_session_id, row_number() OVER (PARTITION BY l.harness, l.session_id ORDER BY \
-             c.anc_harness, c.anc_session_id) AS n FROM loops l JOIN chain c ON c.harness = \
-             l.harness AND c.session_id = l.session_id AND c.depth >= l.entered), roots AS \
-             (SELECT e.harness, e.session_id, COALESCE(h.anc_harness, e.anc_harness) AS \
-             anc_harness, COALESCE(h.anc_session_id, e.anc_session_id) AS anc_session_id FROM \
-             ends e LEFT JOIN heads h ON h.harness = e.harness AND h.session_id = e.session_id \
-             AND h.n = 1) UPDATE sessions SET root_harness = roots.anc_harness, root_session_id = \
-             roots.anc_session_id FROM roots WHERE roots.harness = sessions.harness AND \
-             roots.session_id = sessions.session_id",
-        )
-        .execute(conn)
-        .await?;
-        Ok(())
-    }
-
-    /// For a row of `session` holding call `turn`, just stored: offer each other session holding
-    /// the call as the other's original. Each keeps the lowest-ranked original it is offered (see
-    /// the `incremental_sidecar` migration), so this only ever lowers a link, and while no session's start or
-    /// parent moves, the links end up the same whatever order the rows arrive in.
-    ///
-    /// A session linked for the first time was a root, and is placed like one learning its
-    /// parent. Returns whether an existing link moved instead, which needs
-    /// [`Self::regroup_all`].
-    async fn link_copies(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        session_id: &str,
-        turn: &str,
-    ) -> Result<bool, DbError> {
-        let others: Vec<String> = db::query_scalar(concat!(
-            "SELECT DISTINCT s.session_id FROM messages m JOIN sessions s ON s.id = m.session \
-             WHERE m.harness = ? AND m.turn_id = ? AND s.session_id <> ? AND ",
-            linkable_turn!()
-        ))
-        .bind(harness)
-        .bind(turn)
-        .bind(session_id)
-        .fetch_all(&mut *conn)
-        .await?;
-
-        let mut moved = false;
-        for other in &others {
-            for (copy, original) in [(session_id, other.as_str()), (other.as_str(), session_id)] {
-                let previous: Option<String> = db::query_scalar(
-                    "SELECT copy_of_session_id FROM sessions WHERE harness = ? AND session_id = ?",
-                )
-                .bind(harness)
-                .bind(copy)
-                .fetch_one(&mut *conn)
-                .await?;
-                // Only a parentless session links, only to a parentless one ranked below it, and
-                // only when that ranks below the original it has.
-                let linked = db::query(
-                    "UPDATE sessions SET copy_of_session_id = ?3 WHERE harness = ?1 AND \
-                     session_id = ?2 AND parent_session_id IS NULL AND EXISTS (SELECT 1 FROM \
-                     sessions o WHERE o.harness = ?1 AND o.session_id = ?3 AND \
-                     o.parent_session_id IS NULL AND (o.started_at, o.session_id) < \
-                     (sessions.started_at, sessions.session_id) AND NOT EXISTS (SELECT 1 FROM \
-                     sessions c WHERE c.harness = ?1 AND c.session_id = \
-                     sessions.copy_of_session_id AND (c.started_at, c.session_id) <= \
-                     (o.started_at, o.session_id)))",
-                )
-                .bind(harness)
-                .bind(copy)
-                .bind(original)
-                .execute(&mut *conn)
-                .await?;
-                if linked.rows_affected() == 0 {
-                    continue;
-                }
-                match previous {
-                    None => Self::regroup(&mut *conn, harness, copy).await?,
-                    Some(_) => moved = true,
-                }
-            }
-        }
-        Ok(moved)
-    }
-
-    /// Link `session` to its original afresh from every call it shares, as
-    /// [`Self::group_migrated`] does. Returns whether its link changed.
-    async fn relink(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        session_id: &str,
-    ) -> Result<bool, DbError> {
-        let (previous, parent): (Option<String>, Option<String>) = db::query_as(
-            "SELECT copy_of_session_id, parent_session_id FROM sessions WHERE harness = ? AND \
-             session_id = ?",
-        )
-        .bind(harness)
-        .bind(session_id)
-        .fetch_one(&mut *conn)
-        .await?;
-        let original: Option<String> = match parent {
-            Some(_) => None,
-            // CROSS JOIN keeps this order: the session's own rows, then who else holds each call.
-            None => {
-                db::query_scalar(concat!(
-                    "SELECT t.session_id FROM sessions s CROSS JOIN messages m ON m.session = \
-                     s.id CROSS JOIN messages o ON o.harness = m.harness AND o.turn_id = \
-                     m.turn_id AND o.session <> m.session CROSS JOIN sessions t ON t.id = \
-                     o.session WHERE s.harness = ? AND s.session_id = ? AND ",
-                    linkable_turn!(),
-                    " AND t.parent_session_id IS NULL AND (t.started_at, t.session_id) < \
-                     (s.started_at, s.session_id) ORDER BY t.started_at, t.session_id LIMIT 1"
-                ))
-                .bind(harness)
-                .bind(session_id)
-                .fetch_optional(&mut *conn)
-                .await?
-            }
-        };
-        if original == previous {
-            return Ok(false);
-        }
-        db::query(
-            "UPDATE sessions SET copy_of_session_id = ? WHERE harness = ? AND session_id = ?",
-        )
-        .bind(original)
-        .bind(harness)
-        .bind(session_id)
-        .execute(conn)
-        .await?;
-        Ok(true)
-    }
-
-    /// `session`'s start moved: it may now rank below sessions sharing its calls, or they below
-    /// it, so it and each of them is linked afresh. Returns whether any link changed.
-    async fn relink_sharers(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        session_id: &str,
-    ) -> Result<bool, DbError> {
-        let sharers: Vec<String> = db::query_scalar(concat!(
-            "SELECT DISTINCT t.session_id FROM messages m CROSS JOIN messages o ON o.harness = \
-             m.harness AND o.turn_id = m.turn_id AND o.session <> m.session CROSS JOIN sessions t \
-             ON t.id = o.session WHERE m.session = (SELECT id FROM sessions WHERE harness = ? AND \
-             session_id = ?) AND ",
-            linkable_turn!()
-        ))
-        .bind(harness)
-        .bind(session_id)
-        .fetch_all(&mut *conn)
-        .await?;
-        if sharers.is_empty() {
-            return Ok(false);
-        }
-
-        let mut changed = Self::relink(&mut *conn, harness, session_id).await?;
-        for sharer in &sharers {
-            changed |= Self::relink(&mut *conn, harness, sharer).await?;
-        }
-        Ok(changed)
-    }
-
-    /// `session` learned its parent: it groups by that now, and can no longer be anyone's
-    /// original, so its own link goes and the sessions linked to it are linked afresh. Returns
-    /// whether any link changed.
-    async fn unlink(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        session_id: &str,
-    ) -> Result<bool, DbError> {
-        let mut changed = Self::relink(&mut *conn, harness, session_id).await?;
-        let copies: Vec<String> = db::query_scalar(
-            "SELECT session_id FROM sessions WHERE harness = ? AND copy_of_session_id = ?",
-        )
-        .bind(harness)
-        .bind(session_id)
-        .fetch_all(&mut *conn)
-        .await?;
-        for copy in &copies {
-            changed |= Self::relink(&mut *conn, harness, copy).await?;
-        }
-        Ok(changed)
-    }
-
-    /// Record `host` on a stored row that has none, and work its session's host out again.
-    async fn backfill_host(
-        conn: &mut SqliteConnection,
-        session: i64,
-        source_id: &str,
-        host: &str,
-    ) -> Result<(), DbError> {
-        let filled = db::query(
-            "UPDATE messages SET host_id = ? WHERE session = ? AND source_id = ? AND host_id IS \
-             NULL",
-        )
-        .bind(host)
-        .bind(session)
-        .bind(source_id)
-        .execute(&mut *conn)
-        .await?
-        .rows_affected()
-            > 0;
-        if filled {
-            Self::refresh_session_host(conn, session).await?;
-        }
-        Ok(())
-    }
-
-    /// Set `session`'s host to its earliest row's: the one with the lowest timestamp, then the
-    /// lowest record id, among the rows whose host is known. A session with no such row keeps
-    /// whatever it has.
-    async fn refresh_session_host(
-        conn: &mut SqliteConnection,
-        session: i64,
-    ) -> Result<(), DbError> {
-        db::query(
-            "UPDATE sessions SET host_id = COALESCE((SELECT host_id FROM messages WHERE session = \
-             ?1 AND host_id IS NOT NULL ORDER BY timestamp, id LIMIT 1), host_id) WHERE id = ?1",
-        )
-        .bind(session)
-        .execute(conn)
-        .await?;
-        Ok(())
-    }
-
-    /// Place a session that just appeared, just learned its parent or was just linked to its
-    /// original (see [`Self::link_copies`]) in its group.
-    ///
-    /// Every session's root is its top-most stored ancestor, following parents else copy links.
-    /// A session is only placed when it is a root (it is new, or had neither), so it and
-    /// everything grouped under it move to its parent's root. Being new, it may also be the missing parent of sessions stored before it,
-    /// which were roots of their own: those groups move under it too. The result depends only on
-    /// the sessions stored, never on the order they arrived in.
-    async fn regroup(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        session_id: &str,
-    ) -> Result<(), DbError> {
-        let (parent_harness, parent_session_id, copy_of): (
-            Option<i64>,
-            Option<String>,
-            Option<String>,
-        ) = db::query_as(
-            "SELECT parent_harness, parent_session_id, copy_of_session_id FROM sessions WHERE \
-             harness = ? AND session_id = ?",
-        )
-        .bind(harness)
-        .bind(session_id)
-        .fetch_one(&mut *conn)
-        .await?;
-        // A copy, which names no parent, groups under its original.
-        let (parent_harness, parent_session_id) = match (parent_session_id, copy_of) {
-            (None, Some(original)) => (Some(harness), Some(original)),
-            (parent, _) => (parent_harness, parent),
-        };
-
-        let parent_root: Option<(i64, String)> = match (parent_harness, parent_session_id) {
-            (Some(parent_harness), Some(parent_session_id)) => {
-                db::query_as(
-                    "SELECT root_harness, root_session_id FROM sessions WHERE harness = ? AND \
-                     session_id = ? AND root_harness IS NOT NULL",
-                )
-                .bind(parent_harness)
-                .bind(parent_session_id)
-                .fetch_optional(&mut *conn)
-                .await?
-            }
-            _ => None,
-        };
-        // The link closes a cycle when the parent is grouped under this very session, or the
-        // root it is grouped under was waiting for this session as its own parent. A cycle has no
-        // top: it is headed by its least member whichever order its sessions arrived in, which
-        // `regroup_all` works out.
-        if let Some((root_harness, root_session_id)) = &parent_root {
-            let closes_cycle = (*root_harness, root_session_id.as_str()) == (harness, session_id)
-                || db::query_scalar::<_, i64>(
-                    "SELECT 1 FROM sessions WHERE harness = ?1 AND session_id = ?2 AND \
-                     ((parent_harness = ?3 AND parent_session_id = ?4) OR (parent_session_id IS \
-                     NULL AND harness = ?3 AND copy_of_session_id = ?4))",
-                )
-                .bind(*root_harness)
-                .bind(root_session_id)
-                .bind(harness)
-                .bind(session_id)
-                .fetch_optional(&mut *conn)
-                .await?
-                .is_some();
-            if closes_cycle {
-                return Self::regroup_all(conn).await;
-            }
-        }
-        // A parent that is not stored leaves the session a root.
-        let (root_harness, root_session_id) =
-            parent_root.unwrap_or_else(|| (harness, session_id.to_owned()));
-
-        if (root_harness, root_session_id.as_str()) != (harness, session_id) {
-            db::query(
-                "UPDATE sessions SET root_harness = ?, root_session_id = ? WHERE root_harness = ? \
-                 AND root_session_id = ?",
-            )
-            .bind(root_harness)
-            .bind(&root_session_id)
-            .bind(harness)
-            .bind(session_id)
-            .execute(&mut *conn)
-            .await?;
-        }
-
-        // Sessions stored before their parent (this one) arrived, still roots of their own.
-        db::query(
-            "UPDATE sessions SET root_harness = ?1, root_session_id = ?2 WHERE (root_harness, \
-             root_session_id) IN (SELECT harness, session_id FROM sessions WHERE parent_harness = \
-             ?3 AND parent_session_id = ?4 AND root_harness = harness AND root_session_id = \
-             session_id AND NOT (harness = ?1 AND session_id = ?2))",
-        )
-        .bind(root_harness)
-        .bind(&root_session_id)
-        .bind(harness)
-        .bind(session_id)
-        .execute(conn)
-        .await?;
-        Ok(())
+        self.write(move |conn| Self::forget_host_in(conn, host, spare)).await
     }
 
     fn host_repr(host: HostId) -> String {
@@ -2233,207 +1479,18 @@ impl AiSessionDatabase {
         host.and_then(|h| uuid::Uuid::parse_str(&h).ok()).map(HostId)
     }
 
-    /// Add `sign * tokens` to a session's usage totals.
-    async fn add_usage(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        session_id: &str,
-        tokens: Tokens,
-        sign: i64,
-    ) -> Result<(), DbError> {
-        let [input, output, cache_read, cache_write, reasoning] =
-            tokens.map(|n| n.saturating_mul(sign));
-        db::query(
-            "UPDATE sessions SET usage_input = usage_input + ?, usage_output = usage_output + ?, \
-             usage_cache_read = usage_cache_read + ?, usage_cache_write = usage_cache_write + ?, \
-             usage_reasoning = usage_reasoning + ? WHERE harness = ? AND session_id = ?",
-        )
-        .bind(input)
-        .bind(output)
-        .bind(cache_read)
-        .bind(cache_write)
-        .bind(reasoning)
-        .bind(harness)
-        .bind(session_id)
-        .execute(conn)
-        .await?;
-        Ok(())
-    }
-
-    /// Count model call `turn` once, whichever sessions its rows were copied into (forks,
-    /// subagent replays): its usage is the field-wise max over every row reporting it (streamed
-    /// rows grow), and it belongs to one session, the owner.
-    ///
-    /// The owner is the earliest-started claimant (ties broken by session id), ignoring any
-    /// claimant descended from another -- a fork's copies can carry the parent's own timestamps,
-    /// so start times alone may tie. That depends only on the rows and sessions stored, never on
-    /// the order they arrived in, so capture, import and a rebuild from records on any host all
-    /// agree; [`Self::append`] calls this again whenever a claimant's start or parent moves.
-    ///
-    /// Only a turn id the harness gave the call (see [`linkable_turn`]) is the same call wherever
-    /// it is held. One capture derived from the line's content can be shared by unrelated
-    /// sessions, so it is counted once per group: the claimants sharing a root (see
-    /// [`Self::regroup`], which follows parents, else copy links, and heads a cycle by its least
-    /// member) share one count, owned among them as above, and the `calls` row is scoped to that
-    /// root. Whenever a claimant's root or ancestry moves, the call is attributed again (see
-    /// [`Self::take_regrouped_calls`]).
-    async fn attribute_call(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        turn: &str,
-    ) -> Result<(), DbError> {
-        let claimants: Vec<Claimant> = db::query_as(
-            "SELECT s.session_id AS session_id, COALESCE(s.root_harness || ':' || \
-             s.root_session_id, s.harness || ':' || s.session_id) AS scope, s.started_at AS \
-             started_at, s.parent_harness AS parent_harness, s.parent_session_id AS \
-             parent_session_id, MAX(m.usage_input) AS usage_input, MAX(m.usage_output) AS \
-             usage_output, MAX(m.usage_cache_read) AS usage_cache_read, MAX(m.usage_cache_write) \
-             AS usage_cache_write, COALESCE(MAX(m.usage_reasoning), 0) AS usage_reasoning FROM \
-             messages m JOIN sessions s ON s.id = m.session WHERE m.harness = ? AND m.turn_id = ? \
-             AND m.usage_present = 1 GROUP BY m.session",
-        )
-        .bind(harness)
-        .bind(turn)
-        .fetch_all(&mut *conn)
-        .await?;
-
-        // Each scope the call is counted in, with the claimants counting toward it.
-        let mut scopes: BTreeMap<&str, Vec<&Claimant>> = BTreeMap::new();
-        let linkable = Self::is_linkable_turn(&mut *conn, harness, turn).await?;
-        for claimant in &claimants {
-            let scope = if linkable {
-                ""
-            } else {
-                claimant.scope.as_str()
-            };
-            scopes.entry(scope).or_default().push(claimant);
-        }
-
-        let mut calls = Vec::with_capacity(scopes.len());
-        for (scope, members) in scopes {
-            let tokens = members.iter().fold([0; 5], |acc: Tokens, c| {
-                let row = c.tokens();
-                std::array::from_fn(|i| acc[i].max(row[i]))
-            });
-            let ids: HashSet<&str> = members.iter().map(|c| c.session_id.as_str()).collect();
-            let mut eligible = Vec::with_capacity(members.len());
-            for claimant in &members {
-                if members.len() == 1
-                    || !Self::descends_from(&mut *conn, harness, claimant, &ids).await?
-                {
-                    eligible.push(*claimant);
-                }
-            }
-            // Only a parent cycle leaves nobody; fall back to the plain ranking.
-            if eligible.is_empty() {
-                eligible.extend(&members);
-            }
-            let Some(owner) = eligible
-                .into_iter()
-                .min_by(|a, b| (a.started_at, &a.session_id).cmp(&(b.started_at, &b.session_id)))
-            else {
-                continue;
-            };
-            calls.push(CallRow {
-                scope: scope.to_owned(),
-                session_id: owner.session_id.clone(),
-                usage_input: tokens[0],
-                usage_output: tokens[1],
-                usage_cache_read: tokens[2],
-                usage_cache_write: tokens[3],
-                usage_reasoning: tokens[4],
-            });
-        }
-
-        let previous: Vec<CallRow> = db::query_as(
-            "SELECT scope, session_id, usage_input, usage_output, usage_cache_read, \
-             usage_cache_write, usage_reasoning FROM calls WHERE harness = ? AND turn_id = ? \
-             ORDER BY scope",
-        )
-        .bind(harness)
-        .bind(turn)
-        .fetch_all(&mut *conn)
-        .await?;
-        if previous == calls {
-            return Ok(());
-        }
-        for call in &previous {
-            Self::add_usage(&mut *conn, harness, &call.session_id, call.tokens(), -1).await?;
-        }
-        db::query("DELETE FROM calls WHERE harness = ? AND turn_id = ?")
-            .bind(harness)
-            .bind(turn)
-            .execute(&mut *conn)
-            .await?;
-        for call in &calls {
-            Self::add_usage(&mut *conn, harness, &call.session_id, call.tokens(), 1).await?;
-            db::query(
-                "INSERT INTO calls (harness, turn_id, scope, session_id, usage_input, \
-                 usage_output, usage_cache_read, usage_cache_write, usage_reasoning) VALUES (?, \
-                 ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(harness)
-            .bind(turn)
-            .bind(&call.scope)
-            .bind(&call.session_id)
-            .bind(call.usage_input)
-            .bind(call.usage_output)
-            .bind(call.usage_cache_read)
-            .bind(call.usage_cache_write)
-            .bind(call.usage_reasoning)
-            .execute(&mut *conn)
-            .await?;
-        }
-        Ok(())
-    }
-
-    /// Whether `turn` is an id `harness` gave the model call: [`linkable_turn`], asked of it alone.
-    async fn is_linkable_turn(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        turn: &str,
-    ) -> Result<bool, DbError> {
-        Ok(db::query_scalar(concat!(
-            "SELECT EXISTS (SELECT 1 FROM (SELECT ? AS harness, ? AS turn_id) m WHERE ",
-            linkable_turn!(),
-            ")"
-        ))
-        .bind(harness)
-        .bind(turn)
-        .fetch_one(conn)
-        .await?)
-    }
-
-    /// Whether another of `claimants` is an ancestor of `claimant`, following stored parent
-    /// links within the harness.
-    async fn descends_from(
-        conn: &mut SqliteConnection,
-        harness: i64,
-        claimant: &Claimant,
-        claimants: &HashSet<&str>,
-    ) -> Result<bool, DbError> {
-        let mut seen = HashSet::from([claimant.session_id.clone()]);
-        let mut next = claimant.parent_of(harness);
-        while let Some(parent) = next {
-            if claimants.contains(parent.as_str()) {
-                return Ok(true);
-            }
-            if !seen.insert(parent.clone()) {
-                return Ok(false);
-            }
-            next = Self::session_key(&mut *conn, harness, &parent).await?.and_then(|key| {
-                key.parent_session_id.filter(|_| key.parent_harness == Some(harness))
-            });
-        }
-        Ok(false)
-    }
-
+    /// `ts` in milliseconds, held to [`Message::EARLIEST`] and [`Message::LATEST`].
     fn millis(ts: OffsetDateTime) -> i64 {
-        i64::try_from(ts.unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX)
+        i64::try_from(ts.unix_timestamp_nanos() / 1_000_000)
+            .expect("every OffsetDateTime fits in i64 milliseconds")
+            .clamp(EARLIEST_MILLIS, LATEST_MILLIS)
     }
 
-    fn time_from_millis(ms: i64) -> Result<OffsetDateTime, DbError> {
-        Ok(OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000)?)
+    /// The inverse of [`Self::millis`], held to the same range, so it never fails.
+    fn time_from_millis(ms: i64) -> OffsetDateTime {
+        let ms = ms.clamp(EARLIEST_MILLIS, LATEST_MILLIS);
+        OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000)
+            .expect("the range is representable")
     }
 
     fn harness_from_repr(n: i64) -> Result<HarnessKind, DbError> {
@@ -2494,7 +1551,7 @@ impl AiSessionDatabase {
             .parent(parent)
             .parent_kind(parent_kind)
             .parent_source_id(row.parent_source_id.map(SourceId::from))
-            .timestamp(Self::time_from_millis(row.timestamp)?)
+            .timestamp(Self::time_from_millis(row.timestamp))
             .role(role)
             .content(content)
             .cwd(row.cwd.map(PathBuf::from))
@@ -2514,35 +1571,6 @@ impl AiSessionDatabase {
             )
             .host(Self::host_from_repr(row.host_id))
             .build())
-    }
-
-    fn render_transcript_chunk(message: &Message) -> String {
-        let role = match &message.role {
-            Role::User => "user",
-            Role::Assistant => "assistant",
-            Role::System => "system",
-            Role::Tool => "tool",
-            Role::Other(other) => other.as_str(),
-        };
-
-        let body = message
-            .content
-            .iter()
-            .filter_map(|content| match content {
-                Content::Text(text) | Content::Reasoning(text) => Some(text.clone()),
-                Content::ReasoningSummary { tokens } => {
-                    Some(atuin_common::harnesstools::session::model::reasoning_label(
-                        tokens.or(message.usage.and_then(|u| u.reasoning)),
-                    ))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Trailing newline: chunks are concatenated verbatim by consumers, so the separator has
-        // to live in the chunk or every message would run together on one line.
-        format!("{role}: {body}\n")
     }
 
     const fn parent_kind_repr(kind: ParentKind) -> i64 {
@@ -2586,23 +1614,38 @@ impl AiSessionDatabase {
         let parent = Self::optional_session(row.parent_harness, row.parent_session_id)?;
         let root = Self::optional_session(row.root_harness, row.root_session_id)?
             .filter(|root| root.harness != harness || root.session.as_ref() != row.session_id);
-        let group_updated_at = row.group_updated_at.map(Self::time_from_millis).transpose()?;
+        let group_updated_at = row.group_updated_at.map(Self::time_from_millis);
         let copy_of = row.copy_of_session_id.map(|session| HarnessSession {
             harness,
             session: NativeSessionId::from(session),
         });
+        let handle = HarnessSession {
+            harness,
+            session: NativeSessionId::from(row.session_id),
+        };
+        let started_at = Self::time_from_millis(row.started_at);
+        let atuin_id = Uuid::from_slice(&row.atuin_id).map_err(|_| DbError::InvalidAtuinId)?.into();
+        // A link whose session is not stored yet (or has no stored id) resolves to nothing.
+        let linked = |bytes: Option<&[u8]>| {
+            bytes.and_then(|bytes| Uuid::from_slice(bytes).ok()).map(AtuinSessionId::from)
+        };
+        let parent_atuin_id = parent.as_ref().and(linked(row.parent_atuin_id.as_deref()));
+        let root_atuin_id = root.as_ref().and(linked(row.root_atuin_id.as_deref()));
+        let mut child_atuin_ids: Vec<AtuinSessionId> = row
+            .child_atuin_ids
+            .as_deref()
+            .map_or_else(Vec::new, |ids| ids.split(',').filter_map(|id| id.parse().ok()).collect());
+        // UUIDv7s order by time: oldest first.
+        child_atuin_ids.sort_unstable();
 
         Ok(Session::builder()
-            .handle(HarnessSession {
-                harness,
-                session: NativeSessionId::from(row.session_id),
-            })
+            .handle(handle)
             .parent(parent)
             .cwd(row.cwd.map(PathBuf::from))
             .git_branch(row.git_branch)
             .model(row.model)
-            .started_at(Self::time_from_millis(row.started_at)?)
-            .updated_at(Self::time_from_millis(row.updated_at)?)
+            .started_at(started_at)
+            .updated_at(Self::time_from_millis(row.updated_at))
             .message_count(u64::try_from(row.message_count).unwrap_or(0))
             .usage(Usage {
                 input: Some(u64::try_from(row.usage_input).unwrap_or(0)),
@@ -2621,6 +1664,10 @@ impl AiSessionDatabase {
             .copy_of(copy_of)
             .child_count(u64::try_from(row.child_count).unwrap_or(0))
             .group_updated_at(group_updated_at)
+            .atuin_id(atuin_id)
+            .parent_atuin_id(parent_atuin_id)
+            .root_atuin_id(root_atuin_id)
+            .child_atuin_ids(child_atuin_ids)
             .build())
     }
 }
@@ -2830,12 +1877,12 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{
-        AiSessionDatabase, Appended, COMPRESS_THRESHOLD, DbError, QueryTerms, SCHEMA_VERSION,
-        TitleSource, prefix_successor,
+        AiSessionDatabase, Appended, AtuinSessionId, COMPRESS_THRESHOLD, DbError, QueryTerms,
+        SCHEMA_VERSION, TitleSource, Uuid, prefix_successor,
     };
     use crate::ai_session::{
-        HarnessKind, HarnessSession, Message, NativeSessionId, SearchTerms, Session, SessionFilter,
-        SessionMatch, SourceId,
+        ContentBlocks, HarnessKind, HarnessSession, Message, MessageRole, NativeSessionId,
+        SearchTerms, Session, SessionFilter, SessionMatch, SourceId,
     };
 
     fn harness_filter(harness: HarnessKind) -> SessionFilter {
@@ -2874,48 +1921,6 @@ mod tests {
         assert_eq!(got[0].turn_id.as_deref(), Some("msg_01"));
     }
 
-    /// Upgrading keeps each message's rowid, which its contentless messages_fts row is keyed by.
-    #[rstest]
-    #[tokio::test]
-    async fn interning_sessions_keeps_the_search_index_aligned() {
-        let sqlite = atuin_common::db::sqlite::Sqlite::builder_in_memory().open().await.unwrap();
-        let pool = sqlite.pool();
-        sqlx::raw_sql(include_str!("migrations/0001_init.sql")).execute(pool).await.unwrap();
-        sqlx::raw_sql(
-            "INSERT INTO sessions (harness, session_id, started_at, updated_at) VALUES (1, 's', \
-             0, 0);
-            INSERT INTO messages (rowid, id, harness, session_id, source_id, timestamp, role, \
-             content)
-                VALUES (7, x'01', 1, 's', 'a', 0, '\"User\"', '[{\"Text\":\"hello\"}]');
-            INSERT INTO messages_fts (rowid, title, body) VALUES (7, '', 'hello');",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-
-        sqlx::raw_sql(include_str!("migrations/0002_intern_sessions.sql"))
-            .execute(pool)
-            .await
-            .unwrap();
-        for migration in [
-            include_str!("migrations/0003_last_reply.sql"),
-            include_str!("migrations/0004_parent_kind.sql"),
-            include_str!("migrations/0005_sessions_updated_at.sql"),
-            include_str!("migrations/0006_incremental_sidecar.sql"),
-        ] {
-            sqlx::raw_sql(migration).execute(pool).await.unwrap();
-        }
-
-        let db = AiSessionDatabase::from_sqlite(sqlite);
-        let hits: Vec<SessionMatch> = db
-            .search("hello", SearchTerms::Typed, &SessionFilter::default(), 0)
-            .try_collect()
-            .await
-            .unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].session.handle.session.as_ref(), "s");
-    }
-
     /// Rows that carry only usage, a title or session context are stored, but are no messages.
     #[rstest]
     #[tokio::test]
@@ -2949,28 +1954,21 @@ mod tests {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
         assert_eq!(db.checkpoint(&session).await.unwrap(), None);
-        db.set_checkpoint(&session, Checkpoint { at: 42, digest: 1 }).await.unwrap();
-        // A digest with its top bit set survives the signed column.
+        db.set_checkpoint(&session, Checkpoint {
+            at: 42,
+            digest: 1,
+            generation: 0,
+        })
+        .await
+        .unwrap();
+        // An offset and a digest with their top bits set survive the signed columns.
         let latest = Checkpoint {
-            at: 4096,
+            at: 1 << 63 | 4096,
             digest: u64::MAX - 1,
+            generation: 0,
         };
         db.set_checkpoint(&session, latest).await.unwrap();
         assert_eq!(db.checkpoint(&session).await.unwrap(), Some(latest));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn a_checkpoint_without_a_digest_reads_as_none() {
-        let db = AiSessionDatabase::in_memory().await.unwrap();
-        let session = sample_handle();
-        db::query("INSERT INTO checkpoints (harness, session_id, \"offset\") VALUES (?, ?, 42)")
-            .bind(session.harness as i64)
-            .bind(session.session.as_ref())
-            .execute(db.db.pool())
-            .await
-            .unwrap();
-        assert_eq!(db.checkpoint(&session).await.unwrap(), None);
     }
 
     #[rstest]
@@ -3326,20 +2324,6 @@ mod tests {
         ]);
     }
 
-    #[rstest]
-    #[tokio::test]
-    async fn transcript_separates_messages() {
-        let db = AiSessionDatabase::in_memory().await.unwrap();
-        let session = sample_handle();
-        for m in ordered_messages(&session) {
-            db.append(&m).await.unwrap();
-        }
-
-        let chunks: Vec<String> = db.transcript(&session).try_collect().await.unwrap();
-        assert!(chunks.iter().all(|c| c.ends_with('\n')), "each chunk must be newline-terminated");
-        assert_eq!(chunks.concat().lines().count(), 3, "messages must not run together");
-    }
-
     fn handle(harness: HarnessKind, id: &str) -> HarnessSession {
         HarnessSession {
             harness,
@@ -3413,7 +2397,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn search_matches_reasoning_tool_calls_results_and_metadata() {
+    async fn search_matches_reasoning_tool_calls_and_metadata() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
         let mut message = message_with(&session, 0, Role::Assistant, vec![
@@ -3440,7 +2424,6 @@ mod tests {
             "tradeoffs",             // reasoning
             "execute_shell_command", // tool name
             "nextest",               // tool input
-            "ENOSPC",                // tool result output
             "peculiar",              // Content::Other
             "atuin",                 // cwd
             "feat",                  // git branch
@@ -3449,6 +2432,41 @@ mod tests {
         ] {
             assert_eq!(search(&db, query).await.len(), 1, "query {query:?} should match");
         }
+        assert!(search(&db, "ENOSPC").await.is_empty(), "tool output is not indexed");
+    }
+
+    /// A session is found by the files its calls changed, a moved file by both its names; not
+    /// by the lines changed.
+    #[rstest]
+    #[tokio::test]
+    async fn search_matches_the_files_a_patch_changed() {
+        use atuin_common::harnesstools::session::{Change, FilePatch, Hunk, Patch};
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let moved = FilePatch {
+            path: "src/renamed_from.rs".to_owned(),
+            change: Change::Update,
+            moved_to: Some("src/renamed_to.rs".to_owned()),
+            hunks: vec![Hunk {
+                old_start: 1,
+                old_lines: 1,
+                new_start: 1,
+                new_lines: 1,
+                lines: vec!["-quokka".to_owned(), "+wombat".to_owned()],
+            }],
+        };
+        db.append(&message_with(&session, 0, Role::Tool, vec![Content::Patch(Patch {
+            call: ToolCallId::from("call-1".to_owned()),
+            files: vec![moved],
+        })]))
+        .await
+        .unwrap();
+
+        for query in ["renamed_from", "renamed_to"] {
+            assert_eq!(search(&db, query).await.len(), 1, "query {query:?} should match");
+        }
+        assert!(search(&db, "wombat").await.is_empty(), "changed lines are not indexed");
     }
 
     #[rstest]
@@ -3474,6 +2492,255 @@ mod tests {
             .unwrap();
         assert_eq!(only_codex.len(), 1);
         assert_eq!(only_codex[0].session.handle, codex);
+    }
+
+    /// One session per kind of message, each searchable by "needle", and who
+    /// [`MessageRole::of`] says it is from. Tool output itself is not indexed, so a tool-output
+    /// message is found by the path its patch changed.
+    fn messages_by_role() -> Vec<(Message, MessageRole)> {
+        let with = |id: &str, role: Role, content: Vec<Content>| {
+            let mut m = message_in(&handle(HarnessKind::ClaudeCode, id), 0, "");
+            m.role = role;
+            m.content = content;
+            m
+        };
+        let result = |error| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("c".to_owned()),
+                output: serde_json::json!("needle"),
+                error,
+            })
+        };
+        let patch = || {
+            use atuin_common::harnesstools::session::{Change, FilePatch, Patch};
+            Content::Patch(Patch {
+                call: ToolCallId::from("c".to_owned()),
+                files: vec![FilePatch {
+                    path: "needle.rs".to_owned(),
+                    change: Change::Update,
+                    moved_to: None,
+                    hunks: Vec::new(),
+                }],
+            })
+        };
+        let call = Content::ToolUse(ToolUse {
+            id: ToolCallId::from("c".to_owned()),
+            name: "Bash".to_owned(),
+            input: serde_json::json!({"command": "needle"}),
+        });
+        let text = || Content::Text("needle".to_owned());
+        vec![
+            (with("prompt", Role::User, vec![text()]), MessageRole::User),
+            (with("output", Role::User, vec![result(false), patch()]), MessageRole::Tool),
+            (with("failed", Role::Tool, vec![result(true), patch()]), MessageRole::Tool),
+            (with("mixed", Role::User, vec![text(), result(false)]), MessageRole::User),
+            (with("reply", Role::Assistant, vec![text()]), MessageRole::Assistant),
+            (with("call", Role::Assistant, vec![call]), MessageRole::Assistant),
+            (with("system", Role::System, vec![text()]), MessageRole::Harness),
+        ]
+    }
+
+    /// The stored blocks pick out the same messages [`MessageRole::of`] does from the decoded
+    /// content, so a search by role agrees with a read by role.
+    #[rstest]
+    #[case::user(&[MessageRole::User])]
+    #[case::assistant(&[MessageRole::Assistant])]
+    #[case::tool(&[MessageRole::Tool])]
+    #[case::harness(&[MessageRole::Harness])]
+    #[case::user_or_tool(&[MessageRole::User, MessageRole::Tool])]
+    #[tokio::test]
+    async fn search_matches_only_messages_from_the_roles_asked_for(#[case] roles: &[MessageRole]) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let messages = messages_by_role();
+        for (m, role) in &messages {
+            assert_eq!(MessageRole::of(&m.role, &m.content), *role, "{:?}", m.content);
+            db.append(m).await.unwrap();
+        }
+
+        let filter = SessionFilter {
+            roles: roles.to_vec(),
+            ..SessionFilter::default()
+        };
+        let found: Vec<SessionMatch> =
+            db.search("needle", SearchTerms::All, &filter, 0).try_collect().await.unwrap();
+
+        let mut found: Vec<_> = found.iter().map(|m| m.session.handle.session.as_ref()).collect();
+        found.sort_unstable();
+        let mut expected: Vec<_> = messages
+            .iter()
+            .filter(|(_, role)| roles.contains(role))
+            .map(|(m, _)| m.session.session.as_ref())
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(found, expected);
+    }
+
+    /// Every kind of block has a bit of its own. A new `Content` variant fails to compile here
+    /// until it is named, and then fails the test until it has a sample and a bit.
+    #[rstest]
+    fn every_kind_of_block_has_its_own_bit() {
+        const KINDS: [&str; 10] = [
+            "text",
+            "reasoning",
+            "tool use",
+            "tool result",
+            "patch",
+            "summary",
+            "error",
+            "other",
+            "reasoning summary",
+            "tool error",
+        ];
+        let kind = |c: &Content| match c {
+            Content::Text(_) => "text",
+            Content::Reasoning(_) => "reasoning",
+            Content::ToolUse(_) => "tool use",
+            Content::ToolResult(r) if r.error => "tool error",
+            Content::ToolResult(_) => "tool result",
+            Content::Patch(_) => "patch",
+            Content::Summary(_) => "summary",
+            Content::Error(_) => "error",
+            Content::Other(_) => "other",
+            Content::ReasoningSummary { .. } => "reasoning summary",
+        };
+        let result = |error| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("c".to_owned()),
+                output: serde_json::Value::Null,
+                error,
+            })
+        };
+        let samples = [
+            Content::Text(String::new()),
+            Content::Reasoning(String::new()),
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("c".to_owned()),
+                name: String::new(),
+                input: serde_json::Value::Null,
+            }),
+            result(false),
+            result(true),
+            Content::Patch(atuin_common::harnesstools::session::Patch {
+                call: ToolCallId::from("c".to_owned()),
+                files: Vec::new(),
+            }),
+            Content::Summary(String::new()),
+            Content::Error(String::new()),
+            Content::Other(serde_json::Value::Null),
+            Content::ReasoningSummary { tokens: None },
+        ];
+
+        let mut kinds: Vec<_> = samples.iter().map(kind).collect();
+        kinds.sort_unstable();
+        let mut expected = KINDS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(kinds, expected, "one sample of every kind");
+
+        let mut seen = 0;
+        for sample in &samples {
+            let ContentBlocks(bits) = ContentBlocks::of(std::slice::from_ref(sample));
+            // A failed tool result is a tool result too: only its error bit is its own.
+            let own = if kind(sample) == "tool error" {
+                bits & !ContentBlocks::TOOL_RESULT
+            } else {
+                bits
+            };
+            assert_eq!(own.count_ones(), 1, "{} has one bit of its own", kind(sample));
+            assert_eq!(seen & own, 0, "{} shares a bit", kind(sample));
+            seen |= own;
+        }
+    }
+
+    /// Without a query, a search (or listing) by role returns the sessions holding a message from
+    /// those roles, as a search with one would.
+    #[rstest]
+    #[case::user(&[MessageRole::User])]
+    #[case::tool(&[MessageRole::Tool])]
+    #[tokio::test]
+    async fn an_empty_search_by_role_returns_sessions_with_such_a_message(
+        #[case] roles: &[MessageRole],
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let messages = messages_by_role();
+        for (m, _) in &messages {
+            db.append(m).await.unwrap();
+        }
+        let filter = SessionFilter {
+            roles: roles.to_vec(),
+            ..SessionFilter::default()
+        };
+        let mut expected: Vec<_> = messages
+            .iter()
+            .filter(|(_, role)| roles.contains(role))
+            .map(|(m, _)| m.session.session.as_ref().to_owned())
+            .collect();
+        expected.sort_unstable();
+
+        let searched: Vec<SessionMatch> =
+            db.search("", SearchTerms::All, &filter, 0).try_collect().await.unwrap();
+        let mut searched: Vec<_> =
+            searched.iter().map(|m| m.session.handle.session.as_ref().to_owned()).collect();
+        searched.sort_unstable();
+        assert_eq!(searched, expected);
+
+        let mut listed: Vec<_> = db
+            .list_sessions(&filter)
+            .await
+            .unwrap()
+            .iter()
+            .map(|s| s.handle.session.as_ref().to_owned())
+            .collect();
+        listed.sort_unstable();
+        assert_eq!(listed, expected);
+    }
+
+    #[rstest]
+    fn content_blocks_tell_tool_output_as_the_content_does() {
+        for (m, _) in messages_by_role() {
+            let blocks = ContentBlocks::of(&m.content);
+            assert_eq!(
+                blocks.is_tool_output(),
+                atuin_common::harnesstools::session::is_tool_output(&m.content),
+                "{:?}",
+                m.content
+            );
+        }
+        assert!(!ContentBlocks::of(&[]).is_tool_output(), "an empty message is no tool output");
+    }
+
+    /// Migration 2 empties what migration 1 projected and clears the watermarks, so the next
+    /// reprojection rebuilds every row with its blocks; checkpoints, which say how far capture
+    /// read each transcript into the record store, stay.
+    #[rstest]
+    fn the_blocks_migration_empties_the_projection_for_a_rebuild() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("migrations/0001_init.sql")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
+                 VALUES (1, 1, 's', x'00', 0, 0);
+             INSERT INTO interned (id, value) VALUES (1, '\"User\"');
+             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
+                 VALUES (x'01', 1, 1, 'a', 0, 1, '[]');
+             INSERT INTO messages_fts (rowid, title, body) VALUES (1, '', 'needle');
+             INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', 't', 3, 'r');",
+        )
+        .unwrap();
+        let checkpoints: i64 =
+            conn.query_row("SELECT count(*) FROM checkpoints", [], |r| r.get(0)).unwrap();
+
+        conn.execute_batch(include_str!("migrations/0002_message_blocks.sql")).unwrap();
+
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(count("SELECT count(*) FROM sessions"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'needle'"), 0);
+        assert_eq!(count("SELECT count(*) FROM reproject_watermark"), 0);
+        assert_eq!(count("SELECT generation FROM projection_state"), 1);
+        assert_eq!(count("SELECT count(*) FROM checkpoints"), checkpoints);
+        assert_eq!(
+            count("SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'blocks'"),
+            1
+        );
     }
 
     fn reply_in(session: &HarnessSession, index: i64, text: &str) -> Message {
@@ -3502,13 +2769,9 @@ mod tests {
         let session = sample_handle();
         let parent = handle(HarnessKind::ClaudeCode, "parent");
         let mut first = message_in(&session, 0, "copied from the parent");
-        first.parent = Some(parent.clone());
+        first.parent = Some(parent);
         first.parent_kind = Some(ParentKind::Fork);
         db.append(&first).await.unwrap();
-        // A record from an older build carries the parent but not the kind: it must not erase it.
-        let mut older = message_in(&session, 1, "carried on");
-        older.parent = Some(parent);
-        db.append(&older).await.unwrap();
 
         let s = db.get_session(&session).await.unwrap().unwrap();
         assert_eq!(s.parent_kind, Some(ParentKind::Fork));
@@ -3862,48 +3125,57 @@ mod tests {
         assert!(!preview.contains("filler-000"), "the window must not span the whole body");
     }
 
+    /// A replayed page is appended only under the generation its replay read: one that outlives
+    /// a wipe (or any invalidation) must not land in the sidecar after it.
     #[rstest]
     #[tokio::test]
-    async fn reindex_backfills_messages_indexed_before_the_fts_row_existed() {
+    async fn a_page_appends_nothing_after_an_invalidation() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
-        let long: String = (0..64).map(|i| format!("chunk-{i:03}-buried ")).collect();
-        assert!(long.len() >= COMPRESS_THRESHOLD);
-        db.append(&message_in(&session, 0, &long)).await.unwrap();
-        db.append(&message_in(&session, 1, "plain buried token")).await.unwrap();
+        let page = |range: std::ops::Range<i64>| {
+            range
+                .map(|i| super::PreparedMessage::new(message_in(&session, i, "text")).unwrap())
+                .collect()
+        };
 
-        // Simulate a sidecar upgraded to the FTS migration with no index rows yet.
-        atuin_common::db::query("DELETE FROM messages_fts").execute(db.db.pool()).await.unwrap();
-        assert!(search(&db, "buried").await.is_empty());
+        let stale = db.projection_generation().await.unwrap();
+        db.reset().await.unwrap();
+        assert!(db.append_all(page(0..2), stale).await.unwrap().is_none());
+        let first = message_in(&session, 0, "text");
+        assert!(!db.contains_message(&first.session, &first.source_id).await.unwrap());
 
-        db.reindex().await.unwrap();
-        assert_eq!(search(&db, "buried").await.len(), 1);
-
-        // A second pass must not duplicate the index or change results.
-        db.reindex().await.unwrap();
-        assert_eq!(search(&db, "buried").await.len(), 1);
+        let current = db.projection_generation().await.unwrap();
+        assert!(db.append_all(page(0..2), current).await.unwrap().is_some());
+        assert!(db.contains_message(&first.session, &first.source_id).await.unwrap());
     }
 
+    /// Text interned by a page that failed is gone with the rest of it: a later row with the
+    /// same text stores it afresh rather than pointing at the id the failed page gave it.
     #[rstest]
     #[tokio::test]
-    async fn reindex_resumes_from_an_interrupted_backfill() {
+    async fn text_interned_by_a_failed_page_is_stored_again() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
-        db.append(&message_in(&session, 0, "alpha unique-a")).await.unwrap();
-        db.append(&message_in(&session, 1, "beta unique-b")).await.unwrap();
-        db.append(&message_in(&session, 2, "gamma unique-c")).await.unwrap();
-
-        atuin_common::db::query(
-            "DELETE FROM messages_fts WHERE rowid = (SELECT max(rowid) FROM messages_fts)",
+        let in_dir = |index| {
+            let mut msg = message_in(&session, index, "text");
+            msg.cwd = Some(std::path::PathBuf::from("/only/here"));
+            msg
+        };
+        db::query(
+            "CREATE TRIGGER fail_second BEFORE INSERT ON messages WHEN NEW.source_id = 'source-1' \
+             BEGIN SELECT RAISE(ABORT, 'fail'); END",
         )
         .execute(db.db.pool())
         .await
         .unwrap();
-        assert!(search(&db, "unique-c").await.is_empty(), "the highest-rowid row is unindexed");
-        assert_eq!(search(&db, "unique-a").await.len(), 1, "the prefix stays indexed");
+        let page = [0, 1].map(|i| super::PreparedMessage::new(in_dir(i)).unwrap());
+        let generation = db.projection_generation().await.unwrap();
+        db.append_all(page.into(), generation).await.expect_err("the trigger fails the page");
 
-        db.reindex().await.unwrap();
-        assert_eq!(search(&db, "unique-c").await.len(), 1, "reindex fills the suffix gap");
+        db.append(&in_dir(2)).await.unwrap();
+        let stored: Vec<Message> = db.messages(&session).try_collect().await.unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].cwd, Some(std::path::PathBuf::from("/only/here")));
     }
 
     #[rstest]
@@ -4275,11 +3547,19 @@ mod tests {
 
     // --- grouping -------------------------------------------------------------------------------
 
-    /// A row of session `id` with parent `parent`, at `seconds`, saying `text`.
+    /// A row of session `id` with parent `parent`, at `seconds`, saying `text`. Like Claude
+    /// Code's, an `agent-*` child is a subagent and any other a fork.
     fn tree_row(id: &str, parent: Option<&str>, seconds: i64, text: &str) -> Message {
         let mut m = message_in(&handle(HarnessKind::ClaudeCode, id), seconds, text);
         m.source_id = SourceId::from(format!("{id}-{seconds}"));
         m.parent = parent.map(|p| handle(HarnessKind::ClaudeCode, p));
+        m.parent_kind = m.parent.as_ref().map(|_| {
+            if id.starts_with("agent-") {
+                ParentKind::Subagent
+            } else {
+                ParentKind::Fork
+            }
+        });
         m
     }
 
@@ -4371,19 +3651,17 @@ mod tests {
 
     /// Sessions continued in other harnesses group under the session
     /// they continue, in whichever order their rows arrive (as a reprojection from the synced
-    /// records replays them), and are its continuations: by the kind capture recorded, else
-    /// (in records from before kinds were) because they name another harness's session.
+    /// records replays them), and are its continuations.
     #[rstest]
     #[tokio::test]
     async fn continuations_in_other_harnesses_group_under_the_original(
         #[values(false, true)] reversed: bool,
-        #[values(None, Some(ParentKind::Continuation))] kind: Option<ParentKind>,
     ) {
         let row = |harness, id: &str, parent: Option<(HarnessKind, &str)>, seconds| {
             let mut m = message_in(&handle(harness, id), seconds, "words");
             m.source_id = SourceId::from(format!("{id}-{seconds}"));
             m.parent = parent.map(|(h, p)| handle(h, p));
-            m.parent_kind = m.parent.as_ref().and(kind);
+            m.parent_kind = m.parent.as_ref().map(|_| ParentKind::Continuation);
             m
         };
         let mut rows = vec![
@@ -4405,8 +3683,7 @@ mod tests {
         for (harness, id) in [(HarnessKind::ClaudeCode, "in-claude"), (HarnessKind::Pi, "in-pi")] {
             let s = db.get_session(&handle(harness, id)).await.unwrap().unwrap();
             assert_eq!(s.group(), &original, "{id}");
-            assert_eq!(s.parent_kind, kind, "{id}");
-            assert_eq!(s.inferred_parent_kind(), Some(ParentKind::Continuation), "{id}");
+            assert_eq!(s.parent_kind, Some(ParentKind::Continuation), "{id}");
         }
         let children: Vec<String> = db
             .children(&original)
@@ -4440,9 +3717,7 @@ mod tests {
             ["a", "b", "c", "x"].map(|id| (id.to_owned(), "a".to_owned())).to_vec();
         assert_eq!(roots_of(&db).await, expected);
 
-        let mut conn = db.db.pool().acquire().await.unwrap();
-        AiSessionDatabase::regroup_all(&mut conn).await.unwrap();
-        drop(conn);
+        db.write(|conn| AiSessionDatabase::regroup_all(conn)).await.unwrap();
         assert_eq!(roots_of(&db).await, expected);
     }
 
@@ -4464,9 +3739,7 @@ mod tests {
         let one_group = |roots: Vec<(String, String)>| roots.iter().all(|(_, r)| r == "s000");
         assert!(one_group(roots_of(&db).await));
 
-        let mut conn = db.db.pool().acquire().await.unwrap();
-        AiSessionDatabase::regroup_all(&mut conn).await.unwrap();
-        drop(conn);
+        db.write(|conn| AiSessionDatabase::regroup_all(conn)).await.unwrap();
         assert!(one_group(roots_of(&db).await), "{:?}", roots_of(&db).await);
     }
 
@@ -4834,60 +4107,6 @@ mod tests {
         assert_eq!(output_in(&db, HarnessKind::ClaudeCode, "resumed").await, 3);
     }
 
-    /// Migrating links the copies stored before by the same rule as rows arriving later.
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_links_only_by_harness_given_turn_ids() {
-        let forms = turn_forms();
-        let db = sidecar_at(BEFORE_INCREMENTAL, &[]).await;
-        for (i, (harness, turn, _)) in forms.iter().enumerate() {
-            for (n, copy) in ["first", "second"].into_iter().enumerate() {
-                let id = format!("{copy}-{i}");
-                let at = i64::try_from(n).unwrap();
-                db::query(
-                    "INSERT INTO sessions (harness, session_id, started_at, updated_at) VALUES \
-                     (?, ?, ?, ?)",
-                )
-                .bind(*harness as i64)
-                .bind(&id)
-                .bind(at)
-                .bind(at)
-                .execute(db.db.pool())
-                .await
-                .unwrap();
-                db::query(
-                    "INSERT INTO messages (id, harness, session, source_id, timestamp, role, \
-                     content, turn_id) VALUES (randomblob(16), ?1, (SELECT id FROM sessions WHERE \
-                     harness = ?1 AND session_id = ?2), 'a1', ?3, '\"Assistant\"', '[]', ?4)",
-                )
-                .bind(*harness as i64)
-                .bind(&id)
-                .bind(at)
-                .bind(*turn)
-                .execute(db.db.pool())
-                .await
-                .unwrap();
-            }
-        }
-
-        db.migrate().await.unwrap();
-
-        for (i, (harness, turn, links)) in forms.into_iter().enumerate() {
-            let second = handle(harness, &format!("second-{i}"));
-            let second = db.get_session(&second).await.unwrap().unwrap();
-            let expected = links.then(|| handle(harness, &format!("first-{i}")));
-            assert_eq!(second.copy_of, expected, "{harness:?} {turn}");
-            assert_eq!(
-                second.group().session.as_ref(),
-                if links {
-                    format!("first-{i}")
-                } else {
-                    format!("second-{i}")
-                }
-            );
-        }
-    }
-
     /// One roots-only row for the lot, with the copies counted as its children and shown as
     /// forks (the copy's subagent is grouped under it too, but is no child a person carried on).
     #[rstest]
@@ -4996,9 +4215,9 @@ mod tests {
         ]);
     }
 
-    /// Where capture recorded how a child relates to its parent, that decides, whatever the
-    /// harness or id suggest: a Codex subagent is not counted in its root's group size, a Codex
-    /// fork is, and so is a Claude Code child named like a subagent that is a fork.
+    /// How capture recorded a child relates to its parent decides, whatever its harness or id: a
+    /// Codex subagent is not counted in its root's group size, a Codex fork is, and so is a
+    /// Claude Code child named like a subagent that is a fork.
     #[rstest]
     #[case::codex_subagent(HarnessKind::Codex, "t2", ParentKind::Subagent)]
     #[case::codex_fork(HarnessKind::Codex, "t2", ParentKind::Fork)]
@@ -5026,36 +4245,68 @@ mod tests {
         assert_eq!(groups[0].child_count, u64::from(kind != ParentKind::Subagent));
     }
 
-    /// Without a recorded kind, a group's size (counted in SQL) counts a child exactly when
-    /// [`Session::inferred_parent_kind`] makes it a fork or a continuation.
+    /// Excluding subagents drops their matches, alone and grouped under their root, and keeps
+    /// forks.
     #[rstest]
-    #[case::claude_subagent(HarnessKind::ClaudeCode, "agent-z", HarnessKind::ClaudeCode)]
-    #[case::claude_fork(HarnessKind::ClaudeCode, "sub", HarnessKind::ClaudeCode)]
-    #[case::pi_branch(HarnessKind::Pi, "sub", HarnessKind::Pi)]
-    #[case::codex_child(HarnessKind::Codex, "sub", HarnessKind::Codex)]
-    #[case::opencode_child(HarnessKind::Opencode, "ses_2", HarnessKind::Opencode)]
-    #[case::continued_elsewhere(HarnessKind::Codex, "agent-z", HarnessKind::ClaudeCode)]
+    #[case::flat(false)]
+    #[case::roots_only(true)]
     #[tokio::test]
-    async fn without_a_kind_the_group_size_agrees_with_the_inferred_kind(
-        #[case] harness: HarnessKind,
-        #[case] child: &str,
-        #[case] parent_harness: HarnessKind,
-    ) {
+    async fn search_can_leave_out_subagents(#[case] roots_only: bool) {
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        let root = handle(parent_harness, "root");
+        let root = handle(HarnessKind::ClaudeCode, "root");
         db.append(&message_in(&root, 0, "root words")).await.unwrap();
-        let mut m = message_in(&handle(harness, child), 1, "child words");
-        m.parent = Some(root);
+        for (id, kind) in [
+            ("sub", Some(ParentKind::Subagent)),
+            ("unknown", None),
+            ("fork", Some(ParentKind::Fork)),
+        ] {
+            let mut m = message_in(&handle(HarnessKind::ClaudeCode, id), 1, "shared keyword");
+            m.parent = Some(root.clone());
+            m.parent_kind = kind;
+            db.append(&m).await.unwrap();
+        }
+        let found = |exclude_subagents| {
+            let filter = SessionFilter {
+                roots_only,
+                exclude_subagents,
+                ..SessionFilter::default()
+            };
+            db.search("shared", SearchTerms::All, &filter, 0).try_collect::<Vec<_>>()
+        };
+
+        let all = found(false).await.unwrap();
+        let without = found(true).await.unwrap();
+
+        if roots_only {
+            assert_eq!(all.len(), 1);
+            assert_eq!(without.len(), 1);
+            let matched = without[0].matched.as_ref().map(|m| m.handle.session.as_ref());
+            assert_eq!(matched, Some("fork"), "the match is the fork's, not a subagent's");
+        } else {
+            assert_eq!(all.len(), 3);
+            let ids: Vec<_> = without.iter().map(|m| m.session.handle.session.as_ref()).collect();
+            assert_eq!(ids, ["fork"]);
+        }
+    }
+
+    /// A child of a kind this build does not know (a newer build's) is grouped under its root
+    /// but, like a subagent, not counted in its size.
+    #[rstest]
+    #[tokio::test]
+    async fn a_child_of_unknown_kind_is_not_counted() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let root = handle(HarnessKind::Codex, "root");
+        db.append(&message_in(&root, 0, "root words")).await.unwrap();
+        let mut m = message_in(&handle(HarnessKind::Codex, "child"), 1, "child words");
+        m.parent = Some(root.clone());
         db.append(&m).await.unwrap();
 
-        let stored = db.get_session(&handle(harness, child)).await.unwrap().unwrap();
-        let counted = matches!(
-            stored.inferred_parent_kind(),
-            Some(ParentKind::Fork | ParentKind::Continuation)
-        );
+        let stored = db.get_session(&handle(HarnessKind::Codex, "child")).await.unwrap().unwrap();
+        assert_eq!(stored.inferred_parent_kind(), None);
+        assert_eq!(stored.root, Some(root));
         let groups = db.list_sessions(&roots_only()).await.unwrap();
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].child_count, u64::from(counted));
+        assert_eq!(groups[0].child_count, 0);
     }
 
     /// A match in a nested child is its root's, snippet included.
@@ -5321,6 +4572,154 @@ mod tests {
     }
 
     #[rstest]
+    #[case::whole(32, 1)]
+    #[case::past_the_timestamp(16, 1)]
+    #[case::only_the_timestamp(12, 2)]
+    #[case::odd_length(9, 2)]
+    #[tokio::test]
+    async fn an_atuin_id_or_its_prefix_finds_a_session(#[case] len: usize, #[case] found: usize) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let wanted = handle(HarnessKind::ClaudeCode, "wanted");
+        // The same start, so the ids share their timestamp digits (the first 12).
+        let id = |n: u128| {
+            AtuinSessionId::from(Uuid::from_u128(
+                0x0199_6dc4_0800_7000_8000_0000_0000_0000 | n << 64,
+            ))
+        };
+        for (session, n) in [(&wanted, 1), (&handle(HarnessKind::Pi, "other"), 2)] {
+            let mut msg = message_in(session, 1_790_000_000, "words");
+            msg.atuin_id = Some(id(n));
+            db.append(&msg).await.unwrap();
+        }
+
+        let id = id(1);
+        let sessions = db.sessions_with_id_prefix(&id.to_string()[..len]).await.unwrap();
+        assert_eq!(sessions.len(), found);
+        assert!(sessions.iter().any(|s| s.handle == wanted));
+    }
+
+    #[rstest]
+    #[case::short(8, 1)]
+    #[case::shortest(6, 1)]
+    #[case::too_short(4, 0)]
+    #[tokio::test]
+    async fn the_end_of_an_atuin_id_finds_a_session(#[case] len: usize, #[case] found: usize) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let wanted = handle(HarnessKind::ClaudeCode, "wanted");
+        // The ids differ only in their last six digits, given in upper case.
+        let id = |n: u128| {
+            AtuinSessionId::from(Uuid::from_u128(0x0199_6dc4_0800_7000_8000_00ab_cd00_0000 | n))
+        };
+        for (session, n) in [(&wanted, 0x12_3456), (&handle(HarnessKind::Pi, "other"), 0x65_4321)] {
+            let mut msg = message_in(session, 1_790_000_000, "words");
+            msg.atuin_id = Some(id(n));
+            db.append(&msg).await.unwrap();
+        }
+
+        let hex = id(0x12_3456).to_string().to_uppercase();
+        let sessions = db.sessions_with_id_prefix(&hex[hex.len() - len..]).await.unwrap();
+        assert_eq!(sessions.len(), found);
+        assert!(sessions.iter().all(|s| s.handle == wanted));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rows_disagreeing_on_the_id_settle_on_the_smaller(
+        #[values(false, true)] reversed: bool,
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let mut rows = [message_in(&session, 0, "one"), message_in(&session, 1, "two")];
+        rows[0].atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(2)));
+        rows[1].atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(1)));
+        if reversed {
+            rows.reverse();
+        }
+        for row in &rows {
+            db.append(row).await.unwrap();
+        }
+
+        assert_eq!(
+            db.get_session(&session).await.unwrap().unwrap().atuin_id,
+            AtuinSessionId::from(Uuid::from_u128(1))
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_duplicate_row_settles_on_the_smaller_id() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let mut row = message_in(&session, 0, "one");
+        row.atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(2)));
+        db.append(&row).await.unwrap();
+        row.id = RecordId(atuin_common::utils::uuid_v7());
+        row.atuin_id = Some(AtuinSessionId::from(Uuid::from_u128(1)));
+
+        assert!(matches!(db.append(&row).await.unwrap(), Appended::Duplicate));
+        assert_eq!(
+            db.get_session(&session).await.unwrap().unwrap().atuin_id,
+            AtuinSessionId::from(Uuid::from_u128(1))
+        );
+    }
+
+    /// Links stay (harness, native id): their atuin ids are looked up when read, so a child
+    /// stored before its parent names the parent's id once the parent arrives.
+    #[rstest]
+    #[tokio::test]
+    async fn links_resolve_to_atuin_ids_when_read() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let (root, child, grandchild) = (
+            handle(HarnessKind::Codex, "root"),
+            handle(HarnessKind::Codex, "child"),
+            handle(HarnessKind::Codex, "grandchild"),
+        );
+        let id = |s: &HarnessSession| {
+            let n = ["root", "child", "grandchild"].iter().position(|n| *n == s.session.as_ref());
+            AtuinSessionId::from(Uuid::from_u128(n.unwrap() as u128 + 1))
+        };
+        let store = |session: &HarnessSession, parent: Option<&HarnessSession>, index| {
+            let mut m = message_in(session, index, "words");
+            m.parent = parent.cloned();
+            m.atuin_id = Some(id(session));
+            m
+        };
+
+        db.append(&store(&grandchild, Some(&child), 2)).await.unwrap();
+        let alone = db.get_session(&grandchild).await.unwrap().unwrap();
+        assert_eq!(
+            (alone.parent_atuin_id, alone.root_atuin_id),
+            (None, None),
+            "parent not stored yet"
+        );
+
+        db.append(&store(&child, Some(&root), 1)).await.unwrap();
+        db.append(&store(&root, None, 0)).await.unwrap();
+        let (r, c, g) = (
+            db.get_session(&root).await.unwrap().unwrap(),
+            db.get_session(&child).await.unwrap().unwrap(),
+            db.get_session(&grandchild).await.unwrap().unwrap(),
+        );
+        assert_eq!(
+            (r.parent_atuin_id, r.root_atuin_id, &r.child_atuin_ids),
+            (None, None, &vec![id(&child)])
+        );
+        assert_eq!(
+            (c.parent_atuin_id, c.root_atuin_id, &c.child_atuin_ids),
+            (Some(id(&root)), Some(id(&root)), &vec![id(&grandchild)])
+        );
+        assert_eq!(
+            (g.parent_atuin_id, g.root_atuin_id, g.child_atuin_ids.is_empty()),
+            (Some(id(&child)), Some(id(&root)), true)
+        );
+
+        // Lists resolve them the same way.
+        let listed = db.list_sessions(&SessionFilter::default()).await.unwrap();
+        let listed_child = listed.iter().find(|s| s.handle == child).unwrap();
+        assert_eq!(listed_child, &c);
+    }
+
+    #[rstest]
     #[case::ascii("ab", Some("ac"))]
     #[case::empty("", None)]
     #[case::last_code_point("a\u{10FFFF}", Some("b"))]
@@ -5410,10 +4809,14 @@ mod tests {
         for index in [0, 2, 3, 6] {
             corrupt(&db, &s, index).await;
         }
+        db::query("INSERT INTO interned (value) VALUES ('not json')")
+            .execute(db.db.pool())
+            .await
+            .unwrap();
         for index in [0, 6] {
             db::query(
-                "UPDATE messages SET role = 'not json' WHERE session = (SELECT id FROM sessions \
-                 WHERE session_id = ?) AND source_id = ?",
+                "UPDATE messages SET role = (SELECT id FROM interned WHERE value = 'not json') \
+                 WHERE session = (SELECT id FROM sessions WHERE session_id = ?) AND source_id = ?",
             )
             .bind(s.session.as_ref())
             .bind(format!("source-{index}"))
@@ -5464,11 +4867,11 @@ mod tests {
     async fn preview_parts_use_the_session_time_index() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         for sql in [
-            "SELECT content, content_z FROM messages WHERE session = 1 AND role = '\"User\"' \
-             ORDER BY timestamp, id LIMIT 1",
+            "SELECT content, content_z FROM messages WHERE session = 1 AND role = (SELECT id FROM \
+             interned WHERE value = '\"User\"') ORDER BY timestamp, id LIMIT 1",
             "SELECT timestamp, id, content, content_z FROM messages WHERE session = 1 AND role = \
-             '\"Assistant\"' AND (timestamp < 5 OR (timestamp = 5 AND id < x'00')) ORDER BY \
-             timestamp DESC, id DESC LIMIT 1",
+             (SELECT id FROM interned WHERE value = '\"Assistant\"') AND (timestamp < 5 OR \
+             (timestamp = 5 AND id < x'00')) ORDER BY timestamp DESC, id DESC LIMIT 1",
         ] {
             let plan: Vec<(i64, i64, i64, String)> =
                 db::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
@@ -5593,237 +4996,6 @@ mod tests {
         assert_eq!(newest, Some(SCHEMA_VERSION));
     }
 
-    /// A sidecar at `version`, holding `sessions`, (harness, id, parent) rows written as that
-    /// version stored them.
-    async fn sidecar_at(version: i64, sessions: &[(&str, Option<&str>)]) -> AiSessionDatabase {
-        let db = Sqlite::builder_in_memory().open().await.unwrap();
-        #[allow(clippy::disallowed_macros)]
-        let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
-        migrator.migrations =
-            migrator.migrations.iter().filter(|m| m.version <= version).cloned().collect();
-        migrator.run(db.pool()).await.unwrap();
-        for (i, (id, parent)) in sessions.iter().enumerate() {
-            db::query(
-                "INSERT INTO sessions (harness, session_id, parent_harness, parent_session_id, \
-                 started_at, updated_at) VALUES (1, ?, ?, ?, ?, ?)",
-            )
-            .bind(*id)
-            .bind(parent.map(|_| 1))
-            .bind(*parent)
-            .bind(i64::try_from(i).unwrap())
-            .bind(i64::try_from(i).unwrap())
-            .execute(db.pool())
-            .await
-            .unwrap();
-        }
-        AiSessionDatabase::from_sqlite(db)
-    }
-
-    /// The version before the `incremental_sidecar` migration: a released sidecar.
-    const BEFORE_INCREMENTAL: i64 = 5;
-
-    /// Store a row of `session` holding model call `turn` in a sidecar at
-    /// [`BEFORE_INCREMENTAL`], as that version stored them.
-    async fn old_row(db: &AiSessionDatabase, i: usize, session: &str, turn: &str) {
-        db::query(
-            "INSERT INTO messages (id, harness, session, source_id, timestamp, role, content, \
-             turn_id) VALUES (?, 1, (SELECT id FROM sessions WHERE harness = 1 AND session_id = \
-             ?), 'a1', ?, '\"Assistant\"', '[]', ?)",
-        )
-        .bind(vec![u8::try_from(i).unwrap(); 16])
-        .bind(session)
-        .bind(i64::try_from(i).unwrap())
-        .bind(turn)
-        .execute(db.db.pool())
-        .await
-        .unwrap();
-    }
-
-    /// Migrating groups the sessions already stored, and starts without reproject watermarks so
-    /// the next daemon start replays every record (filling in hosts).
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_groups_stored_sessions_and_forces_a_reproject() {
-        let db = sidecar_at(BEFORE_INCREMENTAL, &[
-            ("agent-b", Some("fork")),
-            ("fork", Some("root")),
-            ("root", None),
-            ("orphan", Some("ghost")),
-            ("a", Some("b")),
-            ("b", Some("a")),
-        ])
-        .await;
-
-        db.migrate().await.unwrap();
-
-        let roots = roots_of(&db).await;
-        let root_of = |id: &str| roots.iter().find(|(s, _)| s == id).unwrap().1.clone();
-        assert_eq!(root_of("agent-b"), "root");
-        assert_eq!(root_of("fork"), "root");
-        assert_eq!(root_of("root"), "root");
-        assert_eq!(root_of("orphan"), "orphan");
-        // A parent cycle has no top: its least member heads it.
-        assert_eq!(root_of("a"), "a");
-        assert_eq!(root_of("b"), "a");
-        let watermarks: i64 = db::query_scalar("SELECT count(*) FROM reproject_watermark")
-            .fetch_one(db.db.pool())
-            .await
-            .unwrap();
-        assert_eq!(watermarks, 0);
-
-        // Grouping carries on incrementally from the migrated state.
-        db.append(&tree_row("agent-c", Some("agent-b"), 50, "x")).await.unwrap();
-        assert_eq!(roots_of(&db).await.iter().find(|(s, _)| s == "agent-c").unwrap().1, "root");
-    }
-
-    /// Migrating groups a chain of any length under its top.
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_groups_a_deep_chain_under_its_top() {
-        let ids = chain_ids(100);
-        let sessions: Vec<_> = ids.iter().map(|(id, p)| (id.as_str(), p.as_deref())).collect();
-        let db = sidecar_at(BEFORE_INCREMENTAL, &sessions).await;
-
-        db.migrate().await.unwrap();
-
-        let roots = roots_of(&db).await;
-        assert!(roots.iter().all(|(_, root)| root == "s000"), "{roots:?}");
-    }
-
-    /// Migrating links the copies already stored to their originals from the calls they share,
-    /// and regroups them, from the rows alone.
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_links_stored_copies() {
-        let db = sidecar_at(BEFORE_INCREMENTAL, &[
-            ("original", None),
-            ("resumed", None),
-            ("agent-x", Some("resumed")),
-            ("zeta", None),
-        ])
-        .await;
-        for (i, (session, turn)) in
-            [("original", "msg_A"), ("resumed", "msg_A"), ("zeta", "msg_Z")].into_iter().enumerate()
-        {
-            old_row(&db, i, session, turn).await;
-        }
-
-        db.migrate().await.unwrap();
-
-        let links = copy_links(&db).await;
-        let link = |id: &str| links.iter().find(|(s, ..)| s == id).unwrap().clone();
-        assert_eq!(link("resumed").1, "original");
-        assert_eq!(link("resumed").2.as_deref(), Some("original"));
-        assert_eq!(link("agent-x").1, "original");
-        assert_eq!(link("zeta").1, "zeta");
-
-        // Linking carries on incrementally from the migrated state.
-        db.append(&claude_row("twice", None, "a1", 5, Some("msg_A"), 1)).await.unwrap();
-        let links = copy_links(&db).await;
-        assert_eq!(links.iter().find(|(s, ..)| s == "twice").unwrap().1, "original");
-    }
-
-    /// The version before the `session_scoped_calls` migration.
-    const BEFORE_SCOPED_CALLS: i64 = 6;
-
-    /// Migrating attributes the usage already stored afresh from the stored rows: unrelated
-    /// Codex sessions whose content-derived call the old rule merged into one get theirs back,
-    /// a call shared under a harness-given id still counts once, and rows outside any call
-    /// keep counting.
-    #[rstest]
-    #[tokio::test]
-    async fn migrating_recounts_stored_usage() {
-        let db = sidecar_at(BEFORE_SCOPED_CALLS, &[]).await;
-        let codex = HarnessKind::Codex as i64;
-        let claude = HarnessKind::ClaudeCode as i64;
-        let token_count = "token_count:12000.0.40.0.12040";
-        // (harness, session, started, output as the old rule attributed it)
-        let sessions = [
-            (codex, "first", 0, 10 + 4),
-            (codex, "second", 5, 0),
-            (claude, "original", 0, 20),
-            (claude, "resumed", 5, 0),
-        ];
-        for (harness, id, at, output) in sessions {
-            db::query(
-                "INSERT INTO sessions (harness, session_id, started_at, updated_at, usage_output, \
-                 root_harness, root_session_id) VALUES (?1, ?2, ?3, ?3, ?4, ?1, ?2)",
-            )
-            .bind(harness)
-            .bind(id)
-            .bind(at)
-            .bind(output)
-            .execute(db.db.pool())
-            .await
-            .unwrap();
-        }
-        // (harness, session, source, turn, output)
-        let rows = [
-            (codex, "first", "c1", Some(token_count), 10),
-            (codex, "first", "c2", None, 4),
-            (codex, "second", "c1", Some(token_count), 7),
-            (claude, "original", "a1", Some("msg_A"), 20),
-            (claude, "resumed", "a1", Some("msg_A"), 20),
-        ];
-        for (i, (harness, id, source, turn, output)) in rows.into_iter().enumerate() {
-            db::query(
-                "INSERT INTO messages (id, harness, session, source_id, timestamp, role, content, \
-                 turn_id, usage_output, usage_present) VALUES (?1, ?2, (SELECT id FROM sessions \
-                 WHERE harness = ?2 AND session_id = ?3), ?4, ?5, '\"Assistant\"', '[]', ?6, ?7, \
-                 1)",
-            )
-            .bind(vec![u8::try_from(i).unwrap(); 16])
-            .bind(harness)
-            .bind(id)
-            .bind(source)
-            .bind(i64::try_from(i).unwrap())
-            .bind(turn)
-            .bind(output)
-            .execute(db.db.pool())
-            .await
-            .unwrap();
-        }
-        for (harness, turn, owner, output) in
-            [(codex, token_count, "first", 10), (claude, "msg_A", "original", 20)]
-        {
-            db::query(
-                "INSERT INTO calls (harness, turn_id, session_id, usage_input, usage_output, \
-                 usage_cache_read, usage_cache_write, usage_reasoning) VALUES (?, ?, ?, 0, ?, 0, \
-                 0, 0)",
-            )
-            .bind(harness)
-            .bind(turn)
-            .bind(owner)
-            .bind(output)
-            .execute(db.db.pool())
-            .await
-            .unwrap();
-        }
-
-        db.migrate().await.unwrap();
-
-        let sessions = [
-            (HarnessKind::Codex, "first"),
-            (HarnessKind::Codex, "second"),
-            (HarnessKind::ClaudeCode, "original"),
-            (HarnessKind::ClaudeCode, "resumed"),
-        ];
-        let mut got = Vec::new();
-        for (harness, id) in sessions {
-            got.push(output_in(&db, harness, id).await);
-        }
-        assert_eq!(got, vec![14, 7, 20, 0]);
-
-        // Once: migrating again leaves the recount alone, and attribution carries on from it.
-        db.migrate().await.unwrap();
-        db.append(&usage_row(HarnessKind::Codex, "second", None, 6, token_count, 8)).await.unwrap();
-        let mut got = Vec::new();
-        for (harness, id) in sessions {
-            got.push(output_in(&db, harness, id).await);
-        }
-        assert_eq!(got, vec![14, 8, 20, 0]);
-    }
-
     // --- read-only open -------------------------------------------------------------------------
 
     #[fixture]
@@ -5861,8 +5033,7 @@ mod tests {
 
     #[rstest]
     #[case::uninitialized(None)]
-    #[case::outdated(Some(1))]
-    #[case::one_behind(Some(SCHEMA_VERSION - 1))]
+    #[case::outdated(Some(SCHEMA_VERSION - 1))]
     #[case::unknown(Some(99))]
     #[tokio::test]
     async fn a_read_only_open_refuses_another_schema(
@@ -5874,20 +5045,17 @@ mod tests {
             let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
             if let Some(version) = version {
                 #[allow(clippy::disallowed_macros)]
-                let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
-                migrator.migrations =
-                    migrator.migrations.iter().filter(|m| m.version <= version).cloned().collect();
-                migrator.run(db.pool()).await.unwrap();
-                if version > SCHEMA_VERSION {
-                    db::query(
-                        "INSERT INTO _sqlx_migrations (version, description, success, checksum, \
-                         execution_time) VALUES (?, 'future', 1, x'00', 0)",
-                    )
+                sqlx::migrate!("./src/ai_session/migrations").run(db.pool()).await.unwrap();
+                // One migration row, claiming `version`.
+                db::query("DELETE FROM _sqlx_migrations WHERE version > 1")
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+                db::query("UPDATE _sqlx_migrations SET version = ?")
                     .bind(version)
                     .execute(db.pool())
                     .await
                     .unwrap();
-                }
             }
             db.close().await;
         }
@@ -5908,16 +5076,15 @@ mod tests {
 
     // --- sidecars from other builds -------------------------------------------------------------
 
-    /// A sidecar a development build migrated with its own numbering: this build's first
-    /// migration, then others at versions this build uses for different ones.
+    /// A sidecar another build migrated past this one: this build's migration, then others it
+    /// does not know.
     async fn dev_build_sidecar(path: &Path) {
         let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
         #[allow(clippy::disallowed_macros)]
-        let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
-        migrator.migrations =
-            migrator.migrations.iter().filter(|m| m.version == 1).cloned().collect();
-        migrator.run(db.pool()).await.unwrap();
-        for (version, description) in [(2, "reproject watermark"), (3, "hosts and roots")] {
+        sqlx::migrate!("./src/ai_session/migrations").run(db.pool()).await.unwrap();
+        for (version, description) in
+            [(SCHEMA_VERSION + 1, "a newer table"), (SCHEMA_VERSION + 2, "another")]
+        {
             db::query(
                 "INSERT INTO _sqlx_migrations (version, description, success, checksum, \
                  execution_time) VALUES (?, ?, 1, x'00', 0)",
@@ -5929,8 +5096,8 @@ mod tests {
             .unwrap();
         }
         db::query(
-            "INSERT INTO sessions (harness, session_id, started_at, updated_at) VALUES (1, 'old', \
-             0, 0)",
+            "INSERT INTO sessions (harness, session_id, atuin_id, started_at, updated_at) VALUES \
+             (1, 'old', x'00', 0, 0)",
         )
         .execute(db.pool())
         .await
@@ -5960,40 +5127,6 @@ mod tests {
         assert_eq!(sessions, 1, "the sidecar was touched");
     }
 
-    /// A sidecar a released daemon left (every migration before `incremental_sidecar`) is
-    /// migrated in place, what it holds kept.
-    #[rstest]
-    #[tokio::test]
-    async fn a_sidecar_from_main_is_migrated_in_place(dir: tempfile::TempDir) {
-        let path = dir.path().join("sidecar.db");
-        {
-            let db = Sqlite::builder(path.as_os_str()).open().await.unwrap();
-            #[allow(clippy::disallowed_macros)]
-            let mut migrator = sqlx::migrate!("./src/ai_session/migrations");
-            migrator.migrations = migrator
-                .migrations
-                .iter()
-                .filter(|m| m.version <= BEFORE_INCREMENTAL)
-                .cloned()
-                .collect();
-            migrator.run(db.pool()).await.unwrap();
-            db::query(
-                "INSERT INTO sessions (harness, session_id, parent_harness, parent_session_id, \
-                 parent_kind, started_at, updated_at) VALUES (1, 'kept', 1, 'root', 1, 0, 0)",
-            )
-            .execute(db.pool())
-            .await
-            .unwrap();
-            db.close().await;
-        }
-
-        let db = AiSessionDatabase::open(&path).await.unwrap();
-        db.check_schema().await.unwrap();
-        let kept = db.get_session(&handle(HarnessKind::ClaudeCode, "kept")).await.unwrap().unwrap();
-        assert_eq!(kept.parent_kind, Some(ParentKind::Fork));
-        assert_eq!(kept.inferred_parent_kind(), Some(ParentKind::Fork));
-    }
-
     /// A newer build's sidecar is left alone: that build owns it, and this one reports it.
     #[rstest]
     #[tokio::test]
@@ -6020,5 +5153,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sessions, 1);
+    }
+
+    /// A timestamp past the years a date can name, appended or stored, is held to the range
+    /// rather than failing every read that meets it.
+    #[rstest]
+    #[case::appended(time::macros::datetime!(9999-12-31 23:59:59 -23:59), None)]
+    #[case::stored_late(OffsetDateTime::UNIX_EPOCH, Some(i64::MAX))]
+    #[case::stored_early(OffsetDateTime::UNIX_EPOCH, Some(i64::MIN))]
+    #[tokio::test]
+    async fn an_out_of_range_timestamp_reads_as_the_nearest_in_range(
+        #[case] timestamp: OffsetDateTime,
+        #[case] stored: Option<i64>,
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut odd = message_in(&sample_handle(), 0, "odd");
+        odd.timestamp = timestamp;
+        db.append(&odd).await.unwrap();
+        db.append(&three_sessions_oldest_first()[0]).await.unwrap();
+        if let Some(stored) = stored {
+            db::query("UPDATE messages SET timestamp = ?1 WHERE source_id = 'source-0'")
+                .bind(stored)
+                .execute(db.db.pool())
+                .await
+                .unwrap();
+            db::query("UPDATE sessions SET started_at = ?1, updated_at = ?1")
+                .bind(stored)
+                .execute(db.db.pool())
+                .await
+                .unwrap();
+        }
+
+        let sessions = db.list_sessions(&SessionFilter::default()).await.unwrap();
+        assert_eq!(sessions.len(), 2);
+        let messages: Vec<_> = db.messages(&sample_handle()).try_collect().await.unwrap();
+        let read = messages[0].timestamp;
+        assert!((Message::EARLIEST..=Message::LATEST).contains(&read), "{read}");
+        let found: Vec<_> = db
+            .search("odd", SearchTerms::All, &SessionFilter::default(), 0)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1);
+    }
+
+    /// Usage counts past any model call's are stored held to a bound, so a session's totals never
+    /// overflow.
+    #[rstest]
+    #[tokio::test]
+    async fn huge_usage_never_breaks_a_sessions_totals() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        for i in 0..3 {
+            let mut m = message_in(&s, i, "reply");
+            m.turn_id = Some(format!("msg_{i}"));
+            m.usage = Some(Usage {
+                input: Some(u64::MAX),
+                output: Some(u64::MAX),
+                cache_read: Some(u64::MAX),
+                cache_write: Some(u64::MAX),
+                reasoning: Some(u64::MAX),
+            });
+            db.append(&m).await.unwrap();
+        }
+        let session = db.get_session(&s).await.unwrap().unwrap();
+        assert_eq!(session.usage.input, Some(3 << 40));
+        assert_eq!(db.list_sessions(&SessionFilter::default()).await.unwrap().len(), 1);
     }
 }

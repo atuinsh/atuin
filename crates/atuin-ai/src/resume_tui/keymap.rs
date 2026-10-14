@@ -3,7 +3,11 @@
 //!
 //! The bindings mirror the history search's defaults wherever an action exists in both, so muscle
 //! memory carries over: ctrl-r cycles the filter, ctrl-o toggles Inspect, tab edits, enter follows
-//! `enter_accept`, and vim users get normal/insert modes.
+//! `enter_accept`, and vim users get normal/insert modes. Where a chosen session resumes (its own
+//! harness, forked, or continued in another) is asked by the chooser, which has keys of its own
+//! (see [`super::chooser`]). ctrl-x (vim normal `F`, Inspect `f`) opens it on the fork, and
+//! ctrl-t cycles the agent: neither is bound in the history search by default, and no key here
+//! needs alt.
 
 use std::collections::HashMap;
 
@@ -100,6 +104,8 @@ pub enum Action {
     ReturnCommand,
     /// Copy the resume command to the clipboard.
     Copy,
+    /// Ask where to resume the selected session, forking it selected.
+    Fork,
     ReturnOriginal,
     Exit,
     Redraw,
@@ -170,10 +176,11 @@ fn add_common(km: &mut Keymap, settings: &Settings) {
     km.bind(key("tab"), Action::ReturnCommand);
     km.bind(key("ctrl-y"), Action::Copy);
     km.bind(key("ctrl-r"), Action::CycleFilterMode);
-    km.bind(key("alt-a"), Action::CycleAgent);
+    km.bind(key("ctrl-t"), Action::CycleAgent);
     km.bind(key("ctrl-l"), Action::Redraw);
     km.bind(key("enter"), enter_action(settings));
     km.bind(key("ctrl-m"), enter_action(settings));
+    km.bind(key("ctrl-x"), Action::Fork);
     km.bind(key("up"), Action::SelectPrevious);
     km.bind(key("down"), Action::SelectNext);
     km.bind(key("pageup"), Action::ScrollPageUp);
@@ -259,6 +266,7 @@ pub fn vim_normal(settings: &Settings) -> Keymap {
     km.bind(key("A"), Action::VimEnterInsertAtEnd);
     km.bind(key("i"), Action::VimEnterInsert);
     km.bind(key("I"), Action::VimEnterInsertAtStart);
+    km.bind(key("F"), Action::Fork);
 
     km.bind(key("ctrl-u"), Action::ScrollHalfPageUp);
     km.bind(key("ctrl-d"), Action::ScrollHalfPageDown);
@@ -277,8 +285,8 @@ pub fn vim_insert(settings: &Settings) -> Keymap {
     km
 }
 
-/// The Inspect tab has no text input: esc goes back to the list, and vim users get j/k. `c`
-/// expands the grouped sessions; while it is, up/down (and page up/down, home/end) move in that
+/// The Inspect tab has no text input: esc goes back to the list, `f` forks, and vim users get
+/// j/k. `c` expands the grouped sessions; while it is, up/down (and page up/down, home/end) move in that
 /// list instead of between sessions, and esc or `c` collapses it.
 pub fn inspector(settings: &Settings) -> Keymap {
     let mut km = Keymap::default();
@@ -287,6 +295,7 @@ pub fn inspector(settings: &Settings) -> Keymap {
     km.bind(key("ctrl-["), Action::Exit);
     km.bind(key("q"), Action::Exit);
     km.bind(key("c"), Action::ToggleChildren);
+    km.bind(key("f"), Action::Fork);
     km.bind(key("home"), Action::ScrollToTop);
     km.bind(key("end"), Action::ScrollToBottom);
     if matches!(settings.keymap_mode, KeymapMode::VimNormal | KeymapMode::VimInsert) {
@@ -310,7 +319,6 @@ mod tests {
         let settings = Settings::utc();
         for km in [emacs(&settings), vim_normal(&settings), vim_insert(&settings)] {
             assert_eq!(resolve(&km, "ctrl-r"), Some(Action::CycleFilterMode));
-            assert_eq!(resolve(&km, "alt-a"), Some(Action::CycleAgent));
             assert_eq!(resolve(&km, "ctrl-y"), Some(Action::Copy));
             assert_eq!(resolve(&km, "ctrl-o"), Some(Action::ToggleTab));
             assert_eq!(resolve(&km, "tab"), Some(Action::ReturnCommand));
@@ -319,19 +327,20 @@ mod tests {
         }
     }
 
-    /// alt-a cycles the agent in every mode, Inspect and vim's both modes included, and is the
-    /// only key that does; alt-h no longer does anything.
+    /// ctrl-t cycles the agent in every mode, Inspect and vim's both modes included, and is the
+    /// only key that does; alt-a and alt-h no longer do anything.
     #[rstest]
     #[case(KeymapMode::Emacs)]
     #[case(KeymapMode::VimNormal)]
     #[case(KeymapMode::VimInsert)]
-    fn alt_a_cycles_the_agent_everywhere(#[case] mode: KeymapMode) {
+    fn ctrl_t_cycles_the_agent_everywhere(#[case] mode: KeymapMode) {
         let mut settings = Settings::utc();
         settings.keymap_mode = mode;
         let set = KeymapSet::defaults(&settings);
         for km in [set.for_mode(mode), &set.inspector] {
-            assert_eq!(resolve(km, "alt-a"), Some(Action::CycleAgent));
-            assert_eq!(km.resolve(&key("alt-a"), true), Some(Action::CycleAgent));
+            assert_eq!(resolve(km, "ctrl-t"), Some(Action::CycleAgent));
+            assert_eq!(km.resolve(&key("ctrl-t"), true), Some(Action::CycleAgent));
+            assert_eq!(resolve(km, "alt-a"), None);
             assert_eq!(resolve(km, "alt-h"), None);
             let cycling: Vec<_> =
                 km.bindings.iter().filter(|(_, b)| b.action == Action::CycleAgent).collect();
@@ -362,6 +371,21 @@ mod tests {
             assert_eq!(resolve(&km, "up"), Some(Action::SelectPrevious));
             assert_eq!(resolve(&km, "pagedown"), Some(Action::ScrollPageDown));
         }
+    }
+
+    /// ctrl-x forks everywhere; vim normal mode has `F` too, and Inspect (no text input) `f`.
+    /// alt-enter no longer does anything.
+    #[rstest]
+    fn fork_keys_are_free_and_shared() {
+        let settings = Settings::utc();
+        let modes = [emacs(&settings), vim_normal(&settings), vim_insert(&settings)];
+        for km in modes.iter().chain([&inspector(&settings)]) {
+            assert_eq!(resolve(km, "ctrl-x"), Some(Action::Fork));
+            assert_eq!(resolve(km, "alt-enter"), None);
+        }
+        assert_eq!(resolve(&vim_normal(&settings), "F"), Some(Action::Fork));
+        assert_eq!(resolve(&inspector(&settings), "f"), Some(Action::Fork));
+        assert_eq!(resolve(&emacs(&settings), "f"), None, "typed into the query");
     }
 
     #[rstest]

@@ -39,7 +39,7 @@ If the `atuin` binary isn't on your client's `PATH`, use the full path to the bi
 
 ### `atuin_history`
 
-Searches your shell history, using the same fuzzy matching as the search TUI. Each result includes the command, when and where it ran, its exit code, and its duration, along with a history ID that can be passed to `atuin_output`.
+Searches your shell history. Commands containing every search term come first, and the rest of the page is filled with fuzzy matches (the same matching as the search TUI), marked as such. Each result includes the command, when and where it ran, its exit code, and its duration, along with a history ID that can be passed to `atuin_output`.
 
 Searches can be narrowed down in a few ways:
 

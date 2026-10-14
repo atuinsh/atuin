@@ -145,6 +145,7 @@ mod tests {
         Line {
             end: 0,
             bytes: Bytes::from_static(text.as_bytes()),
+            generation: 0,
         }
     }
 

@@ -114,7 +114,12 @@ impl Pull {
 
         println!("Downloaded {} records", downloaded.len());
 
-        crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+        // On --force the daemon rebuilds the AI sessions from scratch after this.
+        if self.force {
+            crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+        } else {
+            crate::command::client::sync::build(settings, &store, db, &downloaded).await?;
+        }
 
         Ok(())
     }

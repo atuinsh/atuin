@@ -58,9 +58,15 @@ async fn test_start_end_history(#[future(awt)] env: TestEnv) {
 #[rstest]
 #[case::key("atuin key", false)]
 #[case::account_login("atuin account login -u me", false)]
+#[case::gh_token("gh auth token", false)]
+#[case::kubectl_secret("kubectl get secret db -o yaml", false)]
+#[case::printenv("printenv", false)]
+#[case::dotenv("cat .env", false)]
+#[case::aws_credentials("cat ~/.aws/credentials", false)]
+#[case::ssh_key("cat id_ed25519", false)]
 #[case::ordinary("echo hello", true)]
 #[tokio::test]
-async fn output_is_stored_only_for_commands_that_cannot_print_the_key(
+async fn output_is_stored_only_for_commands_that_cannot_print_a_credential(
     #[future(awt)] env: TestEnv,
     #[case] command: &str,
     #[case] stored: bool,
@@ -148,7 +154,7 @@ async fn disabling_output_on_a_live_daemon_stores_no_captures(
         ..CaptureLimits::default()
     });
     env.handle.apply_settings(settings.clone()).await;
-    settings.output = OutputCapture::Disabled;
+    settings.output = OutputCapture::default();
     env.handle.apply_settings(settings).await;
 
     let mut client = env.history_client().await;

@@ -608,7 +608,7 @@ pub fn draw_views(
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::theme::ThemeManager;
+    use atuin_client::theme::ThemeManagerOptions;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use rstest::{fixture, rstest};
@@ -694,7 +694,11 @@ mod tests {
         #[case] rows: u16,
     ) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManager::new(Some(true), Some(String::new()));
+        let mut themes = ThemeManagerOptions {
+            debug: true,
+            builtin_only: true,
+        }
+        .build();
         let theme = themes.load_theme("(none)", None);
         let mut browser = Browser::default();
         browser.prepare(&history, &Settings::utc(), theme);
@@ -719,7 +723,11 @@ mod tests {
         #[case] highlight: bool,
     ) {
         history.command = "echo héllo\0\ncat '\x1b[31m世界'".into();
-        let mut themes = ThemeManager::new(Some(true), Some(String::new()));
+        let mut themes = ThemeManagerOptions {
+            debug: true,
+            builtin_only: true,
+        }
+        .build();
         let theme = themes.load_theme("(none)", None);
         let text = command_text(&history, highlight, theme);
         assert_eq!(text.to_string(), "echo héllo^@\ncat '^[[31m世界'");
@@ -786,7 +794,11 @@ mod tests {
     ) {
         use ratatui::style::Color;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManager::new(Some(true), Some(String::new()));
+        let mut themes = ThemeManagerOptions {
+            debug: true,
+            builtin_only: true,
+        }
+        .build();
         let theme = themes.load_theme("(none)", None);
         let mut browser = Browser {
             view: View::Output,

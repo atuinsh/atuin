@@ -21,12 +21,12 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 
 ## Two sync protocols
 
-- **V1 (legacy)**: Syncs history entries directly. Being phased out. Toggleable via `sync_v1_enabled`.
+- **V1 (legacy)**: Syncs history entries directly. Removed.
 - **V2 (current)**: Record store abstraction. All data types (history, KV, aliases, vars, scripts) share the same sync infrastructure using tagged records. Envelope-encrypted with PASETO V4 and per-record CEKs.
 
 ## Encryption
 
-- **V1**: XSalsa20Poly1305 (secretbox). Key at `~/.local/share/atuin/key`.
+- **V1**: XSalsa20Poly1305 (secretbox). Key at `~/.atuin/data/key`.
 - **V2**: PASETO V4 Local (XChaCha20-Poly1305 + Blake2b). Envelope encryption: each record gets a random CEK wrapped with the master key. Record metadata (id, idx, version, tag, host) is authenticated as implicit assertions.
 
 ## Databases
@@ -34,6 +34,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - **Client**: SQLite everywhere. Separate DBs for history, record store, KV, scripts. All use sqlx + WAL mode.
 - **Server**: Postgres (primary) or SQLite. Auto-detected from URI prefix.
 - Migrations live alongside each crate. Never modify existing migrations, only add new ones.
+  - Exception: the AI session sidecar's migrations (`atuin-client/src/ai_session/migrations`) were squashed into one `0001_init.sql` before release, and the sidecar file was renamed (`ai_harness_sessions.db` → `ai_session_sidecar.db`) so no old sidecar meets the new history. Don't add back compatibility with the old migrations; from here on, add new ones as usual.
 
 ## Hot paths
 

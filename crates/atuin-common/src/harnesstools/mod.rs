@@ -4,8 +4,11 @@ use std::path::PathBuf;
 
 use enum_dispatch::enum_dispatch;
 
+pub mod access;
 pub mod ccode;
 pub mod codex;
+pub mod continuation;
+pub mod fork;
 mod json_hooks;
 pub mod note;
 pub mod opencode;
@@ -13,6 +16,7 @@ pub mod pi;
 pub mod rehydrate;
 pub mod resume;
 pub mod session;
+pub mod sync;
 
 use ccode::Ccode;
 use codex::Codex;

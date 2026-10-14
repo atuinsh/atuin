@@ -1,7 +1,7 @@
 //! Writing a harness-native transcript back out from captured messages, so a session recorded on
 //! another machine (or whose transcript was deleted) can be resumed here.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use time::OffsetDateTime;
@@ -39,6 +39,21 @@ pub struct RehydrateSession {
     pub model: Option<String>,
     pub started_at: OffsetDateTime,
     pub messages: Vec<RehydrateMessage>,
+    /// Set on a fork ([`crate::harnesstools::fork`]): the session it was forked from, which the
+    /// writer links it to the way its harness links a fork of its own.
+    pub fork_of: Option<ForkOf>,
+}
+
+/// The session a fork was forked from, as its writer names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForkOf {
+    /// Its native id.
+    pub id: String,
+    /// Its atuin id, where the link is text that can say it (opencode's marker).
+    pub atuin_id: Option<String>,
+    /// Its transcript on this machine: pi names a fork's parent by its file, and a Codex fork
+    /// continues the history the original's rollout continues (its `history_base`).
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -55,18 +70,19 @@ pub enum RehydrateError {
     Io(#[from] std::io::Error),
 }
 
-/// What a restored tool result says when capture kept no output (it keeps none now): the formats
-/// all want some output for a result, and an empty one would tell the model the tool printed
-/// nothing.
+/// What a restored tool result says when capture kept no output (`ai.capture_tools` off, a policy
+/// withheld it, or it was over the size limit): the formats all want some output for a result, and
+/// an empty one would tell the model the tool printed nothing.
 pub const UNCAPTURED_OUTPUT: &str = "(output not captured)";
 
 /// How a writer lays out the calls [`flatten_uncaptured_calls`] turns into notes.
 pub enum Flatten<'f> {
     /// Every run of assistant rows holding such a call (the rows between two the writer sends as
-    /// something else: a prompt, a result it keeps) is merged into the run's first row, its text
+    /// something else: a prompt, a result it keeps) is merged into the run's last row, its text
     /// and notes rendered as one text, so the run stays one assistant message once the results
-    /// between its rows are dropped. For formats that write every row under its source id, and
-    /// whose harnesses send consecutive assistant rows as separate messages (Claude Code, pi).
+    /// between its rows are dropped, and its tip keeps its id: what goes on from it elsewhere
+    /// follows the same row it does here. For formats that write every row under its source id,
+    /// and whose harnesses send consecutive assistant rows as separate messages (Claude Code, pi).
     Runs,
     /// Each call's note joins the text of the latest assistant row before it that `host` takes
     /// (given the host and the call's row), with nothing but reasoning, empty rows or other
@@ -80,7 +96,8 @@ pub enum Flatten<'f> {
     },
 }
 
-/// A tool call capture kept without its input: capture now syncs a call's name only.
+/// A tool call capture kept without its input (`ai.capture_tools` off, a policy withheld it, or it
+/// was over the size limit): only its name is synced.
 #[must_use]
 pub fn is_uncaptured(content: &Content) -> bool {
     matches!(content, Content::ToolUse(call) if call.input.is_null())
@@ -88,11 +105,11 @@ pub fn is_uncaptured(content: &Content) -> bool {
 
 /// `messages` with every tool call captured without its input turned into a note in the text of
 /// its assistant turn ([`tool_note`]: `[ran a shell command]`, the same one several times in a
-/// row counted, `×3`), and its result dropped.
+/// row counted, `×3`), and its result (and any patch of it) dropped.
 ///
 /// No harness's API takes a call without its input (Claude's `tool_use.input` must be an object,
 /// a Codex `function_call`'s `arguments` a JSON string, ...), and one made up would tell the model
-/// it called a tool on nothing. Calls kept with their input (older records) stay calls.
+/// it called a tool on nothing. Calls kept with their input stay calls.
 ///
 /// Rows keep their source ids: a row whose content changed reads back under its own id, which
 /// capture already holds, so re-capturing the transcript pushes nothing for it; a row merged away
@@ -103,6 +120,22 @@ pub fn flatten_uncaptured_calls(
     messages: &[RehydrateMessage],
     how: &Flatten<'_>,
 ) -> Vec<RehydrateMessage> {
+    flatten(messages, how).0
+}
+
+/// [`flatten_uncaptured_calls`] with [`Flatten::Runs`], and each row of a merged run before its
+/// last, by source id, with that last row's, which holds what the row said.
+#[must_use]
+pub fn merge_uncaptured_runs(
+    messages: &[RehydrateMessage],
+) -> (Vec<RehydrateMessage>, HashMap<String, String>) {
+    flatten(messages, &Flatten::Runs)
+}
+
+fn flatten(
+    messages: &[RehydrateMessage],
+    how: &Flatten<'_>,
+) -> (Vec<RehydrateMessage>, HashMap<String, String>) {
     let calls: HashSet<ToolCallId> = messages
         .iter()
         .filter(|m| m.role == Role::Assistant)
@@ -113,17 +146,22 @@ pub fn flatten_uncaptured_calls(
         })
         .collect();
     let mut rows = messages.to_vec();
+    let mut hosts = HashMap::new();
     if calls.is_empty() {
-        return rows;
+        return (rows, hosts);
     }
     for row in &mut rows {
-        row.content.retain(|c| !matches!(c, Content::ToolResult(r) if calls.contains(&r.call)));
+        row.content.retain(|c| match c {
+            Content::ToolResult(r) => !calls.contains(&r.call),
+            Content::Patch(p) => !calls.contains(&p.call),
+            _ => true,
+        });
     }
     match how {
-        Flatten::Runs => merge_runs(&mut rows),
+        Flatten::Runs => merge_runs(&mut rows, &mut hosts),
         Flatten::Notes { host, own } => join_notes(&mut rows, host, own),
     }
-    rows
+    (rows, hosts)
 }
 
 /// A piece of a flattened row: text or a note (rendered together), or content kept as it is.
@@ -173,7 +211,7 @@ fn failed(m: &RehydrateMessage) -> bool {
 }
 
 /// [`Flatten::Runs`].
-fn merge_runs(rows: &mut [RehydrateMessage]) {
+fn merge_runs(rows: &mut [RehydrateMessage], hosts: &mut HashMap<String, String>) {
     let mut at = 0;
     while at < rows.len() {
         if rows[at].role != Role::Assistant {
@@ -186,13 +224,13 @@ fn merge_runs(rows: &mut [RehydrateMessage]) {
             .map_or(rows.len(), |n| at + n);
         let run = &mut rows[at..end];
         if run.iter().any(|m| m.content.iter().any(is_uncaptured)) {
-            merge_run(run);
+            merge_run(run, hosts);
         }
         at = end;
     }
 }
 
-fn merge_run(run: &mut [RehydrateMessage]) {
+fn merge_run(run: &mut [RehydrateMessage], hosts: &mut HashMap<String, String>) {
     // A failed call's row stays where it is (the harnesses leave those out of what they send the
     // model), its calls flattened in place: merged, its error would fail the whole turn.
     for row in run.iter_mut().filter(|m| m.role == Role::Assistant && failed(m)) {
@@ -200,10 +238,9 @@ fn merge_run(run: &mut [RehydrateMessage]) {
     }
     let merged: Vec<usize> =
         (0..run.len()).filter(|&i| run[i].role == Role::Assistant && !failed(&run[i])).collect();
-    let (Some(&host), Some(&last)) = (merged.first(), merged.last()) else {
+    let Some(&host) = merged.last() else {
         return;
     };
-    let last_stop = run[last].stop_reason.clone();
     let mut all = Vec::new();
     for &i in &merged {
         // Neither writer keeps reasoning (capture keeps only that there was some): left in, it
@@ -211,14 +248,16 @@ fn merge_run(run: &mut [RehydrateMessage]) {
         let content = std::mem::take(&mut run[i].content);
         all.extend(pieces(content.into_iter().filter(|c| !is_reasoning(c)).collect()));
     }
+    for row in &run[..host] {
+        hosts.insert(row.source_id.clone(), run[host].source_id.clone());
+    }
     let host = &mut run[host];
     host.content = assemble(all);
     // The turn ends as its last row did, but not on a call it no longer makes.
     let calls = host.content.iter().any(|c| matches!(c, Content::ToolUse(_)));
-    host.stop_reason = match last_stop {
-        Some(StopReason::ToolUse) if !calls => Some(StopReason::EndTurn),
-        other => other,
-    };
+    if host.stop_reason == Some(StopReason::ToolUse) && !calls {
+        host.stop_reason = Some(StopReason::EndTurn);
+    }
 }
 
 /// [`Flatten::Notes`].
@@ -293,9 +332,103 @@ fn join_notes(
     }
 }
 
+/// The rows on a parent cycle (a corrupt transcript's), of rows by source id. A writer links
+/// such a row only to a line already written: linking along the cycle would close it.
+pub(crate) fn on_parent_cycles<'a>(
+    by_id: &HashMap<&'a str, &'a RehydrateMessage>,
+) -> HashSet<&'a str> {
+    let mut on_cycle = HashSet::new();
+    let mut done = HashSet::new();
+
+    for &start in by_id.keys() {
+        let mut walk = Vec::new();
+        let mut on_walk = HashMap::new();
+        let mut at = Some(start);
+        while let Some(id) = at.filter(|id| !done.contains(id)) {
+            if let Some(&from) = on_walk.get(id) {
+                on_cycle.extend(walk[from..].iter().copied());
+                break;
+            }
+
+            on_walk.insert(id, walk.len());
+            walk.push(id);
+            at = by_id.get(id).and_then(|r| r.parent_source_id.as_deref());
+        }
+        done.extend(walk);
+    }
+
+    on_cycle
+}
+
+/// Break any parent cycle left among `lines`, the JSON lines a writer wrote, each naming its own
+/// id under `id_key` and its parent under the first of `link_keys` holding one. Parents are
+/// resolved however the rows are ordered, so a corrupt cycle and clock skew can still close one;
+/// it is cut at its earliest line, re-pointed to the nearest line before it that doesn't lead
+/// back in, else made a root.
+pub(crate) fn break_line_cycles(lines: &mut [serde_json::Value], id_key: &str, link_keys: &[&str]) {
+    let link = |l: &serde_json::Value| link_keys.iter().copied().find(|k| l[*k].is_string());
+    let index: HashMap<&str, usize> =
+        lines.iter().enumerate().filter_map(|(i, l)| Some((l[id_key].as_str()?, i))).collect();
+    let mut parent: Vec<Option<usize>> =
+        lines.iter().map(|l| link(l).and_then(|k| index.get(l[k].as_str()?).copied())).collect();
+    let n = parent.len();
+
+    // 0: unseen, 1: on the walk in progress, 2: known to reach a root.
+    let mut state = vec![0_u8; n];
+    let mut walk = Vec::new();
+    let mut cuts = Vec::new();
+    for start in 0..n {
+        walk.clear();
+        let mut at = Some(start);
+        while let Some(i) = at {
+            match state[i] {
+                2 => break,
+                1 => {
+                    let from = walk.iter().position(|&w| w == i).expect("on the walk");
+                    let cycle = &walk[from..];
+                    let earliest = *cycle.iter().min().expect("non-empty");
+                    let leads_in = |mut at: Option<usize>| {
+                        for _ in 0..n {
+                            let Some(j) = at else {
+                                return false;
+                            };
+                            if cycle.contains(&j) {
+                                return true;
+                            }
+                            at = parent[j];
+                        }
+                        true
+                    };
+                    let to = (0..earliest).rev().find(|&j| !leads_in(Some(j)));
+
+                    parent[earliest] = to;
+                    cuts.push(earliest);
+                    break;
+                }
+                _ => {
+                    state[i] = 1;
+                    walk.push(i);
+                    at = parent[i];
+                }
+            }
+        }
+        for &i in &walk {
+            state[i] = 2;
+        }
+    }
+
+    for cut in cuts {
+        let to = parent[cut].map_or(serde_json::Value::Null, |j| lines[j][id_key].clone());
+        if let Some(key) = link(&lines[cut]) {
+            lines[cut][key] = to;
+        }
+    }
+}
+
 /// The field of a written line recording the synced rows its writer wrote no line for (merged
 /// into another by [`flatten_uncaptured_calls`], or with nothing the format can carry), each with
-/// the line it went into: `"atuinMerged": {"<row>": "<line>"}`, the line being the row's nearest
+/// the line it went into: `"atuinMerged": {"<row>": "<line>"}`, the line being the last of the
+/// row's merged run, which holds what it said ([`merge_uncaptured_runs`]), else the row's nearest
 /// written ancestor (Claude Code, pi; `""` for a row before any line, which a row hanging from it
 /// then hangs from too), or the written row before it (Codex, whose rows are placed by number).
 ///
@@ -336,15 +469,24 @@ pub(crate) mod testing {
     use super::*;
     use crate::harnesstools::session::{ToolResult, ToolUse};
 
-    /// `content` of a `role` row as capture syncs it (the daemon's `sanitize_message`): calls
-    /// without their input, results without their output, reasoning as a marker, text only of
-    /// what the user or the model said, nothing kept raw.
+    /// `content` of a `role` row as capture syncs it with `ai.capture_tools` off (the daemon's
+    /// `sanitize`): calls without their input, results without their output, no patches,
+    /// reasoning as a marker, text only of what the user or the model said, nothing kept raw.
     pub fn sanitize(role: &Role, content: &[Content]) -> Vec<Content> {
+        sanitize_as(role, content, false)
+    }
+
+    /// [`sanitize`], keeping tool inputs, outputs and patches when `tools` (`ai.capture_tools`
+    /// on, the default).
+    pub fn sanitize_as(role: &Role, content: &[Content], tools: bool) -> Vec<Content> {
         let conversation = matches!(role, Role::User | Role::Assistant);
         content
             .iter()
             .filter_map(|c| match c {
                 Content::Text(_) if conversation => Some(c.clone()),
+                Content::ToolUse(_) | Content::ToolResult(_) | Content::Patch(_) if tools => {
+                    Some(c.clone())
+                }
                 Content::ToolUse(call) => Some(Content::ToolUse(ToolUse {
                     input: serde_json::Value::Null,
                     ..call.clone()
@@ -357,15 +499,20 @@ pub(crate) mod testing {
                 Content::Summary(_) | Content::Error(_) | Content::ReasoningSummary { .. } => {
                     Some(c.clone())
                 }
-                Content::Text(_) | Content::Other(_) => None,
+                Content::Text(_) | Content::Other(_) | Content::Patch(_) => None,
             })
             .collect()
     }
 
     /// `rows` as capture syncs them (see [`sanitize`]).
-    pub fn synced(mut rows: Vec<RehydrateMessage>) -> Vec<RehydrateMessage> {
+    pub fn synced(rows: Vec<RehydrateMessage>) -> Vec<RehydrateMessage> {
+        synced_as(rows, false)
+    }
+
+    /// `rows` as capture syncs them, keeping tool payloads when `tools` (see [`sanitize_as`]).
+    pub fn synced_as(mut rows: Vec<RehydrateMessage>, tools: bool) -> Vec<RehydrateMessage> {
         for row in &mut rows {
-            row.content = sanitize(&row.role, &row.content);
+            row.content = sanitize_as(&row.role, &row.content, tools);
         }
         rows
     }

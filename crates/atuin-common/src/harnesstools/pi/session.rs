@@ -28,6 +28,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
+use crate::env::var_nonempty;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::pi::{Pi, agent_dir, expand_tilde};
 use crate::harnesstools::session::model::{
@@ -35,13 +36,12 @@ use crate::harnesstools::session::model::{
     ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
-    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
-    Sessions, WatchError, scan_sessions,
+    Checkpoint, FilePatch, Listener, Message, MessageError, Observable, Patch, RuntimeError,
+    Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
 use crate::sync::BlockingPool;
-use crate::utils::env_nonempty;
 
 /// How far into a file the header line is looked for, like pi's own bounded header scan
 /// (session-manager.ts `MAX_SESSION_HEADER_SCAN_BYTES`).
@@ -66,7 +66,7 @@ impl PiSessions {
 
 /// Where pi keeps sessions by default (see [`session_root`]).
 pub(crate) fn default_root() -> PathBuf {
-    session_root(&agent_dir(), env_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
+    session_root(&agent_dir(), var_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
 }
 
 /// The file of session `id` under `root`. Pi names it `<timestamp>_<id>.jsonl`, so a file so
@@ -105,7 +105,7 @@ fn custom_session_dir(agent_dir: &Path, env: Option<&std::ffi::OsStr>) -> Option
 /// `session-manager.ts` `getDefaultSessionDirPath`).
 pub(crate) fn new_session_dir(cwd: &Path) -> PathBuf {
     let agent_dir = agent_dir();
-    let env = env_nonempty("PI_CODING_AGENT_SESSION_DIR");
+    let env = var_nonempty("PI_CODING_AGENT_SESSION_DIR");
     custom_session_dir(&agent_dir, env.as_deref()).unwrap_or_else(|| {
         let cwd = cwd.to_string_lossy();
         let cwd = cwd.strip_prefix(['/', '\\']).unwrap_or(&cwd).replace(['/', '\\', ':'], "-");
@@ -286,6 +286,17 @@ impl Listener for PiListener {
     }
 }
 
+/// The file pi's `edit` tool changed, from the unified diff its result keeps (`details.patch`,
+/// headed by the file's path). Older pi kept only its own line-numbered diff (`details.diff`),
+/// which names no file: no patch is read from it.
+fn edit_patch(call: &ToolCallId, details: &serde_json::Value) -> Option<Patch> {
+    let files = FilePatch::from_diff(details["patch"].as_str()?);
+    (!files.is_empty()).then(|| Patch {
+        call: call.clone(),
+        files,
+    })
+}
+
 /// What the first line of a would-be session file says.
 #[derive(Debug, PartialEq, Eq)]
 enum Header {
@@ -393,23 +404,45 @@ impl PiSession {
     }
 }
 
+/// The file a header's `parentSession` names, for a line of a session file in `dir`; `None` for
+/// any other line.
+fn parent_file(message: &PiMessage, dir: Option<&Path>) -> Option<PathBuf> {
+    let parent = message.parent_session_path()?;
+    Some(match dir {
+        Some(dir) if Path::new(parent).is_relative() => dir.join(parent),
+        _ => PathBuf::from(parent),
+    })
+}
+
+/// The session id the header of the session file at `path` carries, if it can be read.
+fn header_id(path: &Path) -> Option<SessionId> {
+    match read_header(path) {
+        Ok(Header::Session { id }) => Some(SessionId::from(id)),
+        _ => None,
+    }
+}
+
+/// [`resolve_parent`], blocking: line `message` of a session file in `dir`, as capture reads it.
+pub(crate) fn resolve_parent_blocking(mut message: PiMessage, dir: Option<&Path>) -> PiMessage {
+    if let Some(id) = parent_file(&message, dir).and_then(|parent| header_id(&parent)) {
+        message.resolved_parent = Some(id);
+    }
+    message
+}
+
 /// Resolve a header's `parentSession` file path to the parent's session id by reading the
 /// parent's own header, so a custom-named parent (`pi --session <path>`) resolves too. Other
-/// lines pass through untouched.
+/// lines pass through untouched; a parent whose header can't be read is named by its file name.
 async fn resolve_parent(
     mut message: PiMessage,
     dir: Option<&Path>,
     pool: &BlockingPool,
 ) -> PiMessage {
-    let Some(parent) = message.parent_session_path() else {
+    let Some(parent) = parent_file(&message, dir) else {
         return message;
     };
-    let parent = match dir {
-        Some(dir) if Path::new(parent).is_relative() => dir.join(parent),
-        _ => PathBuf::from(parent),
-    };
-    if let Ok(Ok(Header::Session { id })) = pool.run(move || read_header(&parent)).await {
-        message.resolved_parent = Some(SessionId::from(id));
+    if let Ok(Some(id)) = pool.run(move || header_id(&parent)).await {
+        message.resolved_parent = Some(id);
     }
     message
 }
@@ -430,6 +463,8 @@ impl Session for PiSession {
                 Some(from) => self.start(from).await,
                 None => 0,
             };
+            // A checkpoint names a line's end, never 0: read from there, it no longer held.
+            let over = from.is_some() && start == 0;
             let dir = self.path.parent().map(Path::to_path_buf);
             let lines = FollowLines::new(PooledReadLines::new(
                 PathLineReader::at(&self.path, start),
@@ -444,7 +479,7 @@ impl Session for PiSession {
                 match item {
                     Ok((line, message)) => {
                         let message = resolve_parent(message, dir.as_deref(), &self.pool).await;
-                        yield Ok((Checkpoint::new(line.end, &line.bytes), message));
+                        yield Ok((Checkpoint::after(&line).started_over(over), message));
                     }
                     Err(err) => yield Err(MessageError::from(err)),
                 }
@@ -463,6 +498,11 @@ impl Session for PiSession {
                 let (dir, pool) = (dir.clone(), pool.clone());
                 async move { Ok(resolve_parent(message, dir.as_deref(), &pool).await) }
             })
+    }
+
+    async fn changed_after(mut self, since: std::time::SystemTime) -> Option<Self> {
+        modified_after(self.changes.as_mut(), since).await?;
+        Some(self)
     }
 }
 
@@ -662,13 +702,17 @@ impl Message for PiMessage {
             return Vec::new();
         };
         match self.message_role() {
-            Some("toolResult") => vec![Content::ToolResult(ToolResult {
-                call: ToolCallId::from(
-                    message["toolCallId"].as_str().unwrap_or_default().to_owned(),
-                ),
-                output: message["content"].clone(),
-                error: message["isError"].as_bool().unwrap_or(false),
-            })],
+            Some("toolResult") => {
+                let call =
+                    ToolCallId::from(message["toolCallId"].as_str().unwrap_or_default().to_owned());
+                let patch = edit_patch(&call, &message["details"]);
+                let result = Content::ToolResult(ToolResult {
+                    call,
+                    output: message["content"].clone(),
+                    error: message["isError"].as_bool().unwrap_or(false),
+                });
+                std::iter::once(result).chain(patch.map(Content::Patch)).collect()
+            }
             // A `!command` the user ran in pi's own shell, with what it printed; `!!command`
             // when the user kept it out of the model's context (messages.ts
             // `BashExecutionMessage.excludeFromContext`). It has no tool call of its own, so the
@@ -1112,7 +1156,7 @@ mod tests {
         let expected = expected
             .replace("<abs>", abs)
             .replace("<agent>", &agent.path().to_string_lossy())
-            .replace("<home>", &crate::utils::home_dir().to_string_lossy());
+            .replace("<home>", &crate::dirs::home_dir().to_string_lossy());
         assert_eq!(
             session_root(agent.path(), env.map(std::ffi::OsStr::new)),
             PathBuf::from(expected)
@@ -1885,5 +1929,43 @@ mod tests {
         let second =
             tokio::time::timeout(timeout, sessions.next()).await.unwrap().unwrap().unwrap();
         assert_eq!(second.id(), SessionId::from("0199aaaa".to_owned()));
+    }
+
+    /// An `edit`'s result keeps the file it changed and its diff, from the unified diff pi keeps
+    /// (`details.patch`); older pi's line-numbered diff alone (`details.diff`) names no file.
+    #[rstest]
+    #[case::patch(
+        serde_json::json!({"diff": " 1 a\n-2 b\n+2 c", "firstChangedLine": 2,
+            "patch": "--- src/a.ts\n+++ src/a.ts\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n"}),
+        true
+    )]
+    #[case::diff_only(serde_json::json!({"diff": " 1 a\n-2 b\n+2 c"}), false)]
+    #[case::no_details(serde_json::Value::Null, false)]
+    fn an_edits_result_keeps_its_patch(#[case] details: serde_json::Value, #[case] kept: bool) {
+        let line = serde_json::json!({"type": "message", "id": "r1", "parentId": "a1",
+            "timestamp": "2026-09-24T02:46:32.543Z", "message": {"role": "toolResult",
+                "toolCallId": "t1", "toolName": "edit", "isError": false, "details": details,
+                "content": [{"type": "text", "text": "Successfully replaced 1 block(s)."}]}});
+        let m: PiMessage = serde_json::from_value(line).unwrap();
+        let patch = m.content().into_iter().find_map(|c| match c {
+            Content::Patch(patch) => Some(patch),
+            _ => None,
+        });
+        let expected = kept.then(|| Patch {
+            call: ToolCallId::from("t1".to_owned()),
+            files: vec![FilePatch {
+                path: "src/a.ts".to_owned(),
+                change: crate::harnesstools::session::Change::Update,
+                moved_to: None,
+                hunks: vec![crate::harnesstools::session::Hunk {
+                    old_start: 1,
+                    old_lines: 2,
+                    new_start: 1,
+                    new_lines: 2,
+                    lines: vec![" a".into(), "-b".into(), "+c".into()],
+                }],
+            }],
+        });
+        assert_eq!(patch, expected);
     }
 }

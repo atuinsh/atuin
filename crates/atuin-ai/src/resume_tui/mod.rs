@@ -2,12 +2,15 @@
 //!
 //! A ratatui view built to look and behave like the history search (`atuin search -i`): the same
 //! header, tabs and `[ MODE ] >` input box, preview pane, `invert`/`style`/`inline_height`, enter
-//! vs tab accept, and emacs/vim keymaps ([`keymap`]).
+//! vs tab accept, and emacs/vim keymaps ([`keymap`]). Accepting a session asks where to resume
+//! it: in its own harness, or continued in another ([`chooser`]).
 //!
 //! It depends on two seams:
 //! - [`SessionSource`] lists, searches and previews sessions;
 //! - [`Resumer`] turns a session into a resume command, or says why it can't be resumed.
 
+pub mod catchup;
+pub mod chooser;
 pub mod clock;
 #[cfg(test)]
 pub mod fake;
@@ -18,6 +21,7 @@ pub mod query;
 pub mod rebuild;
 pub mod render;
 pub mod resumer;
+mod select;
 pub mod sidecar;
 pub mod source;
 pub mod state;
@@ -30,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use atuin_client::ai_session::HarnessSession;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
 use eyre::Result;
@@ -39,8 +43,12 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 pub use resumer::{ResumePlan, Resumer};
 pub use source::{SessionRow, SessionSource};
 
-use self::resumer::{NotResumable, Resume};
-use self::state::{CHILDREN, InputAction, PLAN, PREVIEW, Pending, RESTORE, State};
+use self::catchup::{Branch, CatchUp};
+use self::chooser::Destination;
+use self::resumer::{Continued, Forked, NotResumable, Resume, Switched};
+use self::state::{
+    CHILDREN, Continuing, InputAction, PLAN, PREVIEW, Pending, Picked, RESTORE, State, Writing,
+};
 use self::worker::{Request, Requests, Response};
 
 /// How often the picker redraws on its own.
@@ -67,10 +75,10 @@ pub struct ResumeContext {
 
 impl ResumeContext {
     /// The current directory, repository, branch and host.
-    pub async fn current() -> Result<Self> {
-        let ctx = atuin_client::database::query_context().await?;
+    pub async fn current(settings: &Settings) -> Result<Self> {
+        let ctx = atuin_client::database::query_context(settings).await?;
         // `$PWD` as it is set, which may end in a separator: rebuilt from its components, so a
-        // session restored here isn't written with `…/dir/` as its directory.
+        // session restored or continued here isn't written with `…/dir/` as its directory.
         let cwd: PathBuf = Path::new(&ctx.cwd).components().collect();
         let (git_root, branch) = checkout(&cwd);
         Ok(Self {
@@ -199,6 +207,24 @@ fn request_details(state: &mut State, requests: &Requests, settle: &mut Settle) 
     if state.tab_index == 1 {
         request_plan(state, requests, &row);
     }
+    request_flatten(state, requests);
+}
+
+/// While the chooser is open, read what continuing the session in another harness would flatten,
+/// if it isn't known yet.
+fn request_flatten(state: &mut State, requests: &Requests) {
+    let Some(chooser) = &state.chooser else {
+        return;
+    };
+    if chooser.targets.is_empty() {
+        return;
+    }
+    let session = chooser.row.handle.clone();
+    if state.flattened.contains_key(&session) || state.flattening.as_ref() == Some(&session) {
+        return;
+    }
+    requests.send(Request::Flatten(session.clone(), state.context.cwd.clone()));
+    state.flattening = Some(session);
 }
 
 fn request_plan(state: &mut State, requests: &Requests, row: &SessionRow) {
@@ -243,6 +269,7 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
         }
         Response::Plan(handle, plan) => {
             state.plans.insert(handle, plan);
+            state.settle_chooser();
         }
         Response::Restored(handle, plan) => {
             state.requested.remove(&(handle.clone(), RESTORE));
@@ -253,26 +280,137 @@ fn apply_response(state: &mut State, response: Response, requests: &Requests) {
         Response::Abandoned(handle) => {
             state.requested.remove(&(handle, RESTORE));
         }
+        Response::Flattened(handle, flattened) => {
+            state.flattened.insert(handle, flattened);
+            // A fork with nothing to fork isn't left selected.
+            state.settle_chooser();
+        }
+        // Handled by `finish_continuation` and `finish_fork`, which may end the picker, and by
+        // `caught_up`, which needs the resumer.
+        Response::Continued(..)
+        | Response::Forked(..)
+        | Response::Switched(..)
+        | Response::CaughtUp(..) => {}
     }
 }
 
 /// Apply a worker response, and finish the enter, tab or ctrl-y waiting on it, if it can now.
-fn respond(state: &mut State, response: Response, requests: &Requests) -> Option<Outcome> {
-    apply_response(state, response, requests);
-    let (handle, pending) = state.pending.clone()?;
-    if !state.plans.contains_key(&handle) {
+/// It finishes for the session it was pressed on, wherever (or whether) the list shows it now:
+/// a response, such as an idle refresh's results, never drops it (see [`moved_off_pending`]).
+fn respond(
+    state: &mut State,
+    response: Response,
+    resumer: &dyn Resumer,
+    requests: &Requests,
+) -> Option<Outcome> {
+    match response {
+        Response::CaughtUp(handle, result) => {
+            if caught_up(state, handle, result, resumer, requests) {
+                return None;
+            }
+        }
+        response => apply_response(state, response, requests),
+    }
+    let (row, pending) = state.pending.clone()?;
+    if !state.plans.contains_key(&row.handle) {
         return None;
     }
-    complete(state, pending, requests)
+    resume_original(state, &row, pending, resumer, requests)
 }
 
-/// Carry out `action` for the session acted on ([`State::target`]) once its plan is known,
-/// restoring the session from sync first when its transcript isn't here. `None` keeps the picker
-/// open (the plan or the restore is still coming, the session can't be resumed, or it was a copy).
-fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<Outcome> {
-    let row = state.target()?.clone();
+/// The copy here of session `handle` is caught up with sync (or catching up needs a choice, or
+/// failed): what's waiting on it resumes it as planned now, with what was written said once the
+/// picker is gone; or the chooser opens on the choice, saying why. Returns whether it opened.
+///
+/// When nothing waits on it any more (the user moved on), it is dropped: the plan stays one that
+/// catches the copy up first, so a later enter catches it up again, against sync as it is then.
+fn caught_up(
+    state: &mut State,
+    handle: HarnessSession,
+    result: Result<CatchUp, NotResumable>,
+    resumer: &dyn Resumer,
+    requests: &Requests,
+) -> bool {
+    state.requested.remove(&(handle.clone(), RESTORE));
+    let Some((row, action)) = state.pending.clone().filter(|(row, _)| row.handle == handle) else {
+        return false;
+    };
+    match result {
+        Ok(CatchUp::Ready { plan, status }) => {
+            state.note = status;
+            state.plans.insert(handle, Ok(Resume::ready(plan)));
+        }
+        Ok(CatchUp::Choice(held)) => {
+            state.pending = None;
+            let (targets, fork) = (resumer.continue_targets(&row), resumer.can_fork(&row));
+            state.open_choice(&row, held, targets, fork, action);
+            request_flatten(state, requests);
+            return true;
+        }
+        Err(why) => {
+            state.plans.insert(handle, Err(why));
+        }
+    }
+    false
+}
+
+/// Handle a user input, then drop an enter, tab or ctrl-y the user has moved on from: one whose
+/// session it moved the selection off ([`moved_off_pending`]), or any, and a continuation being
+/// written, when it changed the search ([`searched_again`]).
+fn handle_input(
+    state: &mut State,
+    settings: &Settings,
+    event: &crossterm::event::Event,
+    requests: &Requests,
+) -> InputAction {
+    let before = state.target().map(|r| r.handle.clone());
+    let searched = state.filter();
+    let action = state.handle_input(settings, event);
+    moved_off_pending(state, before.as_ref());
+    searched_again(state, &searched, requests);
+    action
+}
+
+/// After an input: when it changed the search (from `before`: the query, so its agent, model or
+/// branch filters, or the mode), new results may select another session, so whatever an enter,
+/// tab or ctrl-y still waits on (the original's plan or restore, or a continuation being
+/// written) is superseded, and its status line goes with it. A refresh or a search's results
+/// never change it.
+fn searched_again(state: &mut State, before: &source::SessionFilter, requests: &Requests) {
+    if (state.pending.is_some() || state.continuing.is_some()) && state.filter() != *before {
+        supersede(state, requests);
+        state.status = None;
+    }
+}
+
+/// After an input: when it moved the selection (from `before`) off the session an enter, tab or
+/// ctrl-y waits on, the user has moved on, so drop it. Only the user's input drops it: a refresh
+/// moving the list under the selection doesn't, and picking something else supersedes it anyway
+/// ([`supersede`]).
+fn moved_off_pending(state: &mut State, before: Option<&HarnessSession>) {
+    let now = state.target().map(|r| &r.handle);
+    if now != before
+        && let Some((row, _)) = &state.pending
+        && now != Some(&row.handle)
+    {
+        state.pending = None;
+        state.status = None;
+    }
+}
+
+/// Carry out `action` for `row` (the session acted on) once its plan is known, restoring the
+/// session from sync first when its transcript isn't here, and catching it up with sync when it
+/// is. `None` keeps the picker open (the plan, the restore or the catch-up is still coming, the
+/// session can't be resumed, or it was a copy).
+fn complete(
+    state: &mut State,
+    row: &SessionRow,
+    action: Pending,
+    requests: &Requests,
+) -> Option<Outcome> {
+    let row = row.clone();
     let Some(plan) = state.plans.get(&row.handle).cloned() else {
-        state.pending = Some((row.handle, action));
+        state.pending = Some((row, action));
         state.status = Some(("locating the session…".to_owned(), Meaning::Annotation));
         return None;
     };
@@ -298,7 +436,15 @@ fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<O
             }
             let note = restore.note.map(|n| format!(": {n}")).unwrap_or_default();
             state.status = Some((format!("restoring from sync…{note}"), Meaning::Annotation));
-            state.pending = Some((row.handle, action));
+            state.pending = Some((row, action));
+            return None;
+        }
+        (Ok(Resume { catch_up: true, .. }), action) => {
+            if state.requested.insert((row.handle.clone(), RESTORE)) {
+                requests.send(Request::CatchUp(Box::new(row.clone())));
+            }
+            state.status = Some(("catching up with sync…".to_owned(), Meaning::Annotation));
+            state.pending = Some((row, action));
             return None;
         }
         (Ok(resume), Pending::Resume) => Some(Outcome::Resume(resume.plan)),
@@ -308,41 +454,356 @@ fn complete(state: &mut State, action: Pending, requests: &Requests) -> Option<O
     outcome
 }
 
-/// Enter or tab on a session (or ctrl-y, which copies): resume it, once its plan is known. In
-/// Inspect with the forks expanded, that's the fork highlighted.
-fn accept(state: &mut State, action: Pending, requests: &Requests) -> Option<Outcome> {
+/// A new choice (an enter, tab, ctrl-y or ctrl-x on a session, or a line of the chooser
+/// picked) supersedes any older one still waiting: the original's plan or restore, whose answer
+/// then finishes nothing, and a continuation or fork, whose answer is then ignored and which the
+/// worker drops if it hasn't started writing it. One already being written is left to finish (see
+/// [`worker`]).
+fn supersede(state: &mut State, requests: &Requests) {
+    state.pending = None;
+    if state.continuing.take().is_some() {
+        requests.send(Request::CancelContinue);
+    }
+}
+
+/// Enter or tab on a session (or ctrl-y, which copies): ask where to resume it (the "Resume in"
+/// chooser, when `chooser` is on and another harness is installed to continue it in), or resume
+/// it in its own harness. In Inspect with the forks expanded, that's the fork highlighted.
+fn accept(
+    state: &mut State,
+    action: Pending,
+    resumer: &dyn Resumer,
+    requests: &Requests,
+    chooser: bool,
+) -> Option<Outcome> {
     let row = state.target()?.clone();
+    supersede(state, requests);
     // Asked for as an accept even if the plan was already asked for: one asked for while
     // browsing gives way to the next session's, and the picker would wait on it forever.
     if !state.plans.contains_key(&row.handle) {
         state.requested.insert((row.handle.clone(), PLAN));
-        requests.send(Request::Accept(Box::new(row)));
+        requests.send(Request::Accept(Box::new(row.clone())));
     }
-    complete(state, action, requests)
+    if chooser && action != Pending::Copy {
+        let targets = resumer.continue_targets(&row);
+        let fork = resumer.can_fork(&row);
+        if !targets.is_empty() || fork {
+            open_chooser(state, &row, targets, fork, action, requests);
+            return None;
+        }
+    }
+    resume_original(state, &row, action, resumer, requests)
+}
+
+/// Resume `row` in its own harness ([`complete`]). When that harness can't resume it here, the
+/// chooser opens instead (if another harness is installed), saying why and offering the others.
+fn resume_original(
+    state: &mut State,
+    row: &SessionRow,
+    action: Pending,
+    resumer: &dyn Resumer,
+    requests: &Requests,
+) -> Option<Outcome> {
+    let outcome = complete(state, row, action, requests);
+    if outcome.is_none()
+        && action != Pending::Copy
+        && state.pending.is_none()
+        && state.chooser.is_none()
+        && state.original_unavailable(&row.handle).is_some()
+    {
+        let targets = resumer.continue_targets(row);
+        let fork = resumer.can_fork(row);
+        if !targets.is_empty() || fork {
+            open_chooser(state, row, targets, fork, action, requests);
+            // The chooser's own line says why, dimmed.
+            state.status = None;
+        }
+    }
+    outcome
+}
+
+/// Open the chooser on `row` (the session acted on), and read what continuing it elsewhere
+/// would flatten, for the chooser to show.
+fn open_chooser(
+    state: &mut State,
+    row: &SessionRow,
+    targets: Vec<HarnessKind>,
+    fork: bool,
+    action: Pending,
+    requests: &Requests,
+) {
+    state.open_chooser(row, targets, fork, action);
+    request_flatten(state, requests);
+}
+
+/// ctrl-x (vim normal `F`, Inspect's `f`): the chooser on the session acted on, forking it
+/// selected, whether or not `resume_chooser` is on; enter in it then does what `action` (enter's)
+/// does.
+fn ask_fork(state: &mut State, action: Pending, resumer: &dyn Resumer, requests: &Requests) {
+    let Some(row) = state.target().cloned() else {
+        return;
+    };
+    if !resumer.can_fork(&row) {
+        let label = source::harness_label(row.handle.harness);
+        let why = format!("{label} sessions can't be forked here");
+        state.status = Some((why, Meaning::AlertError));
+        return;
+    }
+    supersede(state, requests);
+    request_plan(state, requests, &row);
+    open_chooser(state, &row, resumer.continue_targets(&row), true, action, requests);
+    state.select_fork();
+}
+
+/// A line of the chooser picked: resume the session it opened on in its own harness, or
+/// continue it in the line's. That session, not the list's selection, which an idle refresh may
+/// have moved since.
+fn pick(
+    state: &mut State,
+    picked: Picked,
+    resumer: &dyn Resumer,
+    requests: &Requests,
+) -> Option<Outcome> {
+    let Picked { row, line, action } = picked;
+    supersede(state, requests);
+    match line {
+        Destination::Original => return resume_original(state, &row, action, resumer, requests),
+        Destination::AsIs(plan) => return as_is(state, *plan, action),
+        Destination::Fork(branch) => start_fork(state, row, branch.map(|b| *b), action, requests),
+        Destination::Switch(branch) => start_switch(state, row, *branch, action, requests),
+        Destination::Continue(target) => start_continuation(state, row, target, action, requests),
+    }
+    None
+}
+
+/// Resume the copy here as it is, with `plan`, rather than catch it up: what `action` does with
+/// it. Copying copies the agent's own command.
+fn as_is(state: &mut State, plan: ResumePlan, action: Pending) -> Option<Outcome> {
+    match action {
+        Pending::Resume => Some(Outcome::Resume(plan)),
+        Pending::Edit => Some(Outcome::Edit(plan)),
+        Pending::Copy => {
+            copy(state, &resumer::shell_line(&plan));
+            None
+        }
+    }
+}
+
+/// Fork `row` (from `branch`'s head, when given), then carry out `action` (see [`finish_fork`]).
+/// Copying writes nothing: the command copied forks it when run.
+fn start_fork(
+    state: &mut State,
+    row: SessionRow,
+    branch: Option<Branch>,
+    action: Pending,
+    requests: &Requests,
+) {
+    if action == Pending::Copy {
+        let id = row.atuin_id;
+        let pick = branch.map(|b| format!(" --branch {}", resumer::quote(&b.selector)));
+        copy(state, &format!("atuin resume {id} --fork{}", pick.unwrap_or_default()));
+        return;
+    }
+    let status = match &branch {
+        Some(branch) => format!("forking from {}'s…", branch.host),
+        None => "forking…".to_owned(),
+    };
+    state.status = Some((status, Meaning::Annotation));
+    state.continued = state.continued.wrapping_add(1);
+    let id = state.continued;
+    let target = row.handle.harness;
+    state.continuing = Some(Continuing {
+        id,
+        target,
+        kind: Writing::Fork,
+        action,
+    });
+    let head = branch.map(|b| b.head.source_id);
+    requests.send(Request::Fork(Box::new(row), id, head));
+}
+
+/// Fork `id` is written (or failed): as [`finish_continuation`].
+fn finish_fork(
+    state: &mut State,
+    id: u64,
+    result: Result<Forked, NotResumable>,
+) -> Option<(Outcome, String)> {
+    let Continuing { action, .. } =
+        state.continuing.take_if(|c| c.id == id && c.kind == Writing::Fork)?;
+    match result {
+        Ok(forked) => {
+            let mut status = forked.status();
+            if let Some(note) = &forked.note {
+                status.push_str(&format!(" ({note})"));
+            }
+            Some(written(state, action, forked.plan, status))
+        }
+        Err(why) => {
+            state.status = Some((format!("can't fork: {why}"), Meaning::AlertError));
+            None
+        }
+    }
+}
+
+/// Switch the copy here of `row` to `branch`'s branch, then carry out `action` (see
+/// [`finish_switch`]). Copying writes nothing: the command copied switches it when run.
+fn start_switch(
+    state: &mut State,
+    row: SessionRow,
+    branch: Branch,
+    action: Pending,
+    requests: &Requests,
+) {
+    if action == Pending::Copy {
+        let id = row.atuin_id;
+        let pick = resumer::quote(&branch.selector);
+        copy(state, &format!("atuin resume {id} --switch --branch {pick}"));
+        return;
+    }
+    let status = format!("switching to {}'s…", branch.host);
+    state.status = Some((status, Meaning::Annotation));
+    state.continued = state.continued.wrapping_add(1);
+    let id = state.continued;
+    state.continuing = Some(Continuing {
+        id,
+        target: row.handle.harness,
+        kind: Writing::Switch,
+        action,
+    });
+    requests.send(Request::Switch(Box::new(row), id, branch.head.source_id));
+}
+
+/// Switch `id` is written (or was refused): as [`finish_continuation`].
+fn finish_switch(
+    state: &mut State,
+    id: u64,
+    result: Result<Switched, NotResumable>,
+) -> Option<(Outcome, String)> {
+    let Continuing { action, .. } =
+        state.continuing.take_if(|c| c.id == id && c.kind == Writing::Switch)?;
+    match result {
+        Ok(switched) => {
+            let status = switched.status();
+            Some(written(state, action, switched.plan, status))
+        }
+        Err(why) => {
+            let message = match why {
+                NotResumable::Switch(why) => format!("can't switch: {why}"),
+                why => format!("can't switch: {why}"),
+            };
+            state.status = Some((message, Meaning::AlertError));
+            None
+        }
+    }
+}
+
+/// A new session is written, ready to resume with `plan`: what `action` does with it, and the
+/// status line to leave behind.
+fn written(
+    state: &mut State,
+    action: Pending,
+    plan: ResumePlan,
+    status: String,
+) -> (Outcome, String) {
+    state.status = Some((status.clone(), Meaning::AlertInfo));
+    let outcome = match action {
+        Pending::Resume => Outcome::Resume(plan),
+        Pending::Edit | Pending::Copy => Outcome::Edit(plan),
+    };
+    (outcome, status)
+}
+
+/// Continue `row` in `target`, then carry out `action` (see [`finish_continuation`]). Copying
+/// writes nothing: the command copied continues it when run.
+fn start_continuation(
+    state: &mut State,
+    row: SessionRow,
+    target: HarnessKind,
+    action: Pending,
+    requests: &Requests,
+) {
+    if action == Pending::Copy {
+        let id = row.atuin_id;
+        let into = source::harness_arg(target).unwrap_or_default();
+        copy(state, &format!("atuin resume {id} --in {into}"));
+        return;
+    }
+    let flattened = state.flattened.get(&row.handle).and_then(|f| f.as_ref().ok());
+    let status = resumer::continuing(target, flattened);
+    state.status = Some((format!("{status}…"), Meaning::Annotation));
+    // Each request has its own id, so the answer to one a newer pick superseded (the same
+    // session, perhaps elsewhere, or to edit instead) isn't taken for the newer one's.
+    state.continued = state.continued.wrapping_add(1);
+    let id = state.continued;
+    state.continuing = Some(Continuing {
+        id,
+        target,
+        kind: Writing::Continuation,
+        action,
+    });
+    requests.send(Request::Continue(Box::new(row), target, id));
+}
+
+/// Continuation `id` is written (or failed): the outcome that resumes it, with the status line
+/// to leave behind, or `None` to stay open, saying why. An answer to any but the continuation
+/// waited on changes nothing.
+fn finish_continuation(
+    state: &mut State,
+    id: u64,
+    result: Result<Continued, NotResumable>,
+) -> Option<(Outcome, String)> {
+    let Continuing { target, action, .. } =
+        state.continuing.take_if(|c| c.id == id && c.kind == Writing::Continuation)?;
+    match result {
+        Ok(continued) => {
+            let mut status = continued.status();
+            if let Some(note) = &continued.note {
+                status.push_str(&format!(" ({note})"));
+            }
+            Some(written(state, action, continued.plan, status))
+        }
+        Err(why) => {
+            let message = match why {
+                NotResumable::Continue(..) => why.to_string(),
+                why => format!("can't continue in {}: {why}", source::harness_label(target)),
+            };
+            state.status = Some((message, Meaning::AlertError));
+            None
+        }
+    }
 }
 
 /// What ctrl-y copies to resume `row`, planned as `resume`, in its own harness. Copying writes
 /// nothing, so when running the harness's own command wouldn't do (the session has to be
-/// restored from sync first), it is `atuin ai resume <id>`, which does that when run.
+/// restored from sync, or caught up with it, first), it is `atuin resume <atuin id>`, which does
+/// that when run.
 fn resume_line(row: &SessionRow, resume: &Resume) -> String {
-    if resume.restore.is_none() {
+    if resume.restore.is_none() && !resume.catch_up {
         return resumer::shell_line(&resume.plan);
     }
-    format!("atuin ai resume {}", resumer::quote(row.handle.session.as_ref()))
+    format!("atuin resume {}", row.atuin_id)
 }
 
-/// Put `line` on the clipboard, saying so in the status row.
+/// Put `line` on the clipboard, saying so in the status row (its first line, when it has more).
 fn copy(state: &mut State, line: &str) {
+    let mut lines = line.lines();
+    let first = lines.next().unwrap_or_default();
+    let more = if lines.next().is_some() {
+        " …"
+    } else {
+        ""
+    };
     state.status = Some(match set_clipboard(line) {
-        Ok(()) => (format!("copied: {line}"), Meaning::AlertInfo),
+        Ok(()) => (format!("copied: {first}{more}"), Meaning::AlertInfo),
         Err(e) => (format!("copy failed: {e}"), Meaning::AlertError),
     });
 }
 
 impl Picker<'_> {
-    /// Run the picker until a session is chosen or it's cancelled.
+    /// Run the picker until a session is chosen or it's cancelled. Also returns what to tell the
+    /// user once it's gone: the status line of a session continued in another harness.
     #[allow(clippy::too_many_lines)]
-    pub async fn run(self) -> Result<Outcome> {
+    pub async fn run(self) -> Result<(Outcome, Option<String>)> {
         let settings = self.settings;
         let sessions = &settings.ai.sessions;
         let inline_height =
@@ -375,7 +836,9 @@ impl Picker<'_> {
         } else if !self.matches.is_empty() {
             state.pin_matches(self.matches);
         }
-        let (requests, mut responses) = worker::spawn(self.source, self.resumer);
+        let source = self.source.clone();
+        let (requests, mut responses) = worker::spawn(self.source, self.resumer.clone());
+        let resumer = self.resumer.as_ref();
         let mut rebuilding =
             rebuild::watch(Arc::new(rebuild::DaemonProbe::new(settings)), REBUILD_PROBE_EVERY);
         let mut probing = true;
@@ -385,6 +848,9 @@ impl Picker<'_> {
         }
         // Paint before the first search answers, so the picker shows up immediately.
         terminal.draw(|f| state.draw(f, settings, self.theme))?;
+        // The sessions as of the last idle refresh that came back, and the one in flight.
+        let mut searched = None;
+        let mut refreshing = None;
         send_search(&mut state, &requests);
 
         let mut events = terminal::Events::new();
@@ -395,6 +861,8 @@ impl Picker<'_> {
         let mut last_input = std::time::Instant::now();
         let mut last_refresh = std::time::Instant::now();
         let mut settle = Settle::default();
+        // What to tell the user once the picker is gone (a continuation's status line).
+        let mut note = None;
         let outcome = 'render: loop {
             request_details(&mut state, &requests, &mut settle);
             terminal.draw(|f| state.draw(f, settings, self.theme))?;
@@ -405,7 +873,7 @@ impl Picker<'_> {
                 event = events.next() => {
                     let Some(event) = event else { break Outcome::Cancelled };
                     last_input = std::time::Instant::now();
-                    let action = state.handle_input(settings, &event?);
+                    let action = handle_input(&mut state, settings, &event?, &requests);
                     let pending = match action {
                         InputAction::Continue => None,
                         // ctrl-l, or the terminal resized: start from a blank screen.
@@ -416,10 +884,35 @@ impl Picker<'_> {
                         InputAction::Resume => Some(Pending::Resume),
                         InputAction::ReturnCommand => Some(Pending::Edit),
                         InputAction::Copy => Some(Pending::Copy),
+                        InputAction::CopyText(text) => {
+                            copy(&mut state, &text);
+                            None
+                        }
+                        InputAction::Fork => {
+                            let enter = if settings.enter_accept {
+                                Pending::Resume
+                            } else {
+                                Pending::Edit
+                            };
+                            ask_fork(&mut state, enter, resumer, &requests);
+                            None
+                        }
+                        InputAction::Pick(picked) => {
+                            if let Some(outcome) = pick(&mut state, *picked, resumer, &requests) {
+                                break 'render outcome;
+                            }
+                            None
+                        }
                         InputAction::ReturnOriginal | InputAction::Exit => break Outcome::Cancelled,
                     };
                     if let Some(action) = pending
-                        && let Some(outcome) = accept(&mut state, action, &requests)
+                        && let Some(outcome) = accept(
+                            &mut state,
+                            action,
+                            resumer,
+                            &requests,
+                            sessions.resume_chooser,
+                        )
                     {
                         break 'render outcome;
                     }
@@ -431,11 +924,15 @@ impl Picker<'_> {
                 () = tokio::time::sleep_until(hold_ends.unwrap_or_else(Instant::now).into()),
                     if hold_ends.is_some() => {}
                 _ = tick.tick() => {
-                    // Not while typing or browsing: the list shouldn't move under the cursor.
+                    // Not while typing or browsing: the list shouldn't move under the cursor. Nor
+                    // when nothing has changed since.
                     if last_input.elapsed() >= REFRESH_IDLE
                         && last_refresh.elapsed() >= REFRESH_EVERY
+                        && let stamp = source.stamp()
+                        && (stamp.is_none() || stamp != searched)
                         && let Some((generation, mode, filter)) = state.refresh()
                     {
+                        refreshing = Some((generation, stamp));
                         last_refresh = std::time::Instant::now();
                         requests.send(Request::Search { generation, mode, filter });
                     }
@@ -461,17 +958,35 @@ impl Picker<'_> {
                         tracing::error!("the session picker's workers stopped");
                         break Outcome::Cancelled;
                     };
-                    if let Some(outcome) = respond(&mut state, response, &requests) {
+                    // A failed refresh is tried again, changes or not.
+                    if let Response::Results { generation, rows: Ok(_), .. } = &response
+                        && let Some((_, stamp)) = refreshing.take_if(|(g, _)| g == generation)
+                    {
+                        searched = stamp;
+                    }
+                    let finished = match response {
+                        Response::Continued(id, result) => {
+                            finish_continuation(&mut state, id, result)
+                        }
+                        Response::Forked(id, result) => finish_fork(&mut state, id, result),
+                        Response::Switched(id, result) => {
+                            finish_switch(&mut state, id, result)
+                        }
+                        response => {
+                            if let Some(outcome) =
+                                respond(&mut state, response, resumer, &requests)
+                            {
+                                note = state.note.take();
+                                break 'render outcome;
+                            }
+                            None
+                        }
+                    };
+                    if let Some((outcome, status)) = finished {
+                        note = Some(status);
                         break 'render outcome;
                     }
                 }
-            }
-            // The selection moved away from a pending action: drop it.
-            if let Some((handle, _)) = &state.pending
-                && state.target().is_none_or(|r| &r.handle != handle)
-            {
-                state.pending = None;
-                state.status = None;
             }
             send_search(&mut state, &requests);
         };
@@ -489,7 +1004,7 @@ impl Picker<'_> {
                 crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
             )?;
         }
-        Ok(outcome)
+        Ok((outcome, note))
     }
 }
 
@@ -498,19 +1013,27 @@ impl Picker<'_> {
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
 fn set_clipboard(s: &str) -> Result<()> {
-    let mut ctx = arboard::Clipboard::new()?;
-    ctx.set_text(s.to_owned())?;
-    // Read it back so the clipboard owner keeps it after we exit.
-    ctx.get_text()?;
-    Ok(())
+    // Over SSH the system clipboard is the remote machine's, if it has one: the terminal's is
+    // the one wanted.
+    if atuin_common::env::var_os("SSH_CONNECTION").is_some() {
+        return Ok(terminal::copy(s)?);
+    }
+    let system = || -> Result<()> {
+        let mut ctx = arboard::Clipboard::new()?;
+        ctx.set_text(s.to_owned())?;
+        // Read it back so the clipboard owner keeps it after we exit.
+        ctx.get_text()?;
+        Ok(())
+    };
+    system().or_else(|_| Ok(terminal::copy(s)?))
 }
 
 #[cfg(not(all(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
-fn set_clipboard(_s: &str) -> Result<()> {
-    eyre::bail!("this build has no clipboard support")
+fn set_clipboard(s: &str) -> Result<()> {
+    Ok(terminal::copy(s)?)
 }
 
 #[cfg(test)]

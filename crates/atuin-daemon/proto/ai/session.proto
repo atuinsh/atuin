@@ -25,15 +25,27 @@ message SessionFilter {
   bool roots_only = 7;
   // Active (updated) at or after this time.
   google.protobuf.Timestamp updated_since = 8;
+  // Leave out subagents (and children of unknown kind); with roots_only, their
+  // matches no longer count toward their root.
+  bool exclude_subagents = 9;
+  // Only sessions with a message from one of these roles (any, when empty); in
+  // a search, only such messages match.
+  repeated MessageRole roles = 10;
+}
+
+// Who a message is from: tool output is TOOL whatever its envelope role, and
+// whatever is neither the person, the model nor a tool was written by the
+// harness.
+enum MessageRole {
+  MESSAGE_ROLE_UNSPECIFIED = 0;
+  MESSAGE_ROLE_USER = 1;
+  MESSAGE_ROLE_ASSISTANT = 2;
+  MESSAGE_ROLE_TOOL = 3;
+  MESSAGE_ROLE_HARNESS = 4;
 }
 
 message ListSessionsRequest {
-  // Superseded by filter.harness, which wins when both are set.
-  optional ai.agent.HarnessKind harness = 1;
-  // Only sessions active at or after this time.
-  // Superseded by filter.updated_since, which wins when both are set.
-  google.protobuf.Timestamp updated_since = 2;
-  SessionFilter filter = 3;
+  SessionFilter filter = 1;
 }
 
 message GetSessionRequest {
@@ -49,32 +61,16 @@ message GetSessionEvent {
   }
 }
 
-message GetTranscriptRequest {
-  ai.agent.HarnessSession session = 1;
-}
-
-// One chunk of a rendered transcript. Concatenate `chunk`s in arrival order to
-// reconstruct the whole transcript.
-message GetTranscriptChunk {
-  string chunk = 1;
-}
-
 message SearchSessionsRequest {
   string query = 1;
   // Maximum number of distinct sessions to return, most-relevant first. 0 means
   // unbounded: every matching session is ranked and streamed. Ranking is eager
   // (the full match set is scored before the first result), so prefer a bound.
   uint32 limit = 2;
-  // Only search sessions from this harness. Absent searches every harness.
-  // Superseded by filter.harness, which wins when both are set.
-  optional ai.agent.HarnessKind harness = 3;
-  // Only match sessions whose directory is this one or beneath it. Absent searches everywhere.
-  // Superseded by filter.workspace, which wins when both are set.
-  optional string cwd = 4;
   // Match messages containing any of the query's terms, each as a prefix, instead of all of them
   // as whole words.
-  bool any_term = 5;
-  SessionFilter filter = 6;
+  bool any_term = 3;
+  SessionFilter filter = 4;
 }
 
 message SearchSessionsMatch {
@@ -146,6 +142,10 @@ message RebuildSessionsRequest {}
 
 message RebuildSessionsReply {}
 
+message ProjectSyncedRequest {}
+
+message ProjectSyncedReply {}
+
 message ImportSessionsEvent {
   oneof event {
     ImportSessionsProgress progress = 1;
@@ -162,9 +162,6 @@ service AiSession {
   // message in order. Streamed so a large session never has to fit in one
   // response.
   rpc GetSession(GetSessionRequest) returns (stream GetSessionEvent);
-
-  // Render one session as a plain-text transcript, streamed in chunks.
-  rpc GetTranscript(GetTranscriptRequest) returns (stream GetTranscriptChunk);
 
   // Full-text search sessions (every term as a whole word, or any term as a
   // prefix with any_term), streamed most-relevant-first (bm25 blended with
@@ -184,4 +181,10 @@ service AiSession {
   // the daemon starts). FAILED_PRECONDITION when the store failed to open or
   // recover at startup.
   rpc RebuildSessions(RebuildSessionsRequest) returns (RebuildSessionsReply);
+
+  // Project the records another process synced into the record store (`atuin
+  // sync`), as the daemon does those it syncs itself, once startup recovery is
+  // over. Returns once the projection is over; it runs to the end even if the
+  // caller stops waiting, and a failure is left in the daemon's log.
+  rpc ProjectSynced(ProjectSyncedRequest) returns (ProjectSyncedReply);
 }

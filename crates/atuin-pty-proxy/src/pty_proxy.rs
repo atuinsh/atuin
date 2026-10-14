@@ -112,13 +112,13 @@ fn detect_shell(cli_shell: Option<Shell>) -> Result<Shell, String> {
         return Ok(shell);
     }
 
-    if let Ok(shell) = std::env::var("ATUIN_SHELL")
+    if let Ok(shell) = atuin_common::env::var("ATUIN_SHELL")
         && let Some(shell) = shell_from_name(&shell)
     {
         return Ok(shell);
     }
 
-    if let Ok(shell) = std::env::var("SHELL")
+    if let Ok(shell) = atuin_common::env::var("SHELL")
         && let Some(shell) = shell_from_name(&shell)
     {
         return Ok(shell);
@@ -142,7 +142,7 @@ fn shell_from_name(name: &str) -> Option<Shell> {
 }
 
 fn env_flag(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
+    atuin_common::env::var(name).is_ok_and(|value| {
         matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
     })
 }

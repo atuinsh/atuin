@@ -60,6 +60,8 @@ serde_with = { workspace = true }
 shellexpand = { workspace = true }
 sql-builder = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+rusqlite = { workspace = true }
+parking_lot = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 tokio = { workspace = true }
@@ -85,7 +87,7 @@ palette = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 
-# packfile
+# packfiles, and ai-session record bodies
 zstd = { workspace = true }
 
 [dev-dependencies]

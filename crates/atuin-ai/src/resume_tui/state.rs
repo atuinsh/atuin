@@ -6,21 +6,25 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use atuin_client::ai_session::HarnessSession;
+use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::{AiSessionFilterMode as FilterMode, KeymapMode, Settings};
 use atuin_client::theme::Meaning;
 use atuin_client::tui::cursor::Cursor;
 use atuin_client::tui::key::{KeyCodeValue, KeyInput, SingleKey};
+use atuin_common::harnesstools::continuation::Flattened;
 use atuin_common::time::OffsetDateTimeExt as _;
 use atuin_domain::record::HostId;
-use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use time::OffsetDateTime;
 
+use super::chooser::{Chooser, Destination, ListAnchor};
 use super::keymap::{Action, Keymap, KeymapSet};
 use super::query::{self, ParsedQuery};
 use super::rebuild::Rebuilding;
 use super::resumer::{NotResumable, Resume};
+use super::select::Selection;
 use super::source::{SessionFilter, SessionPreview, SessionRow};
 use super::{ResumeContext, panel};
 
@@ -33,7 +37,8 @@ pub const LIVE_SECS: u64 = 120;
 pub const PREVIEW: u8 = 0;
 pub const CHILDREN: u8 = 1;
 pub const PLAN: u8 = 2;
-/// Restoring the session's transcript from sync, once an action is waiting on it.
+/// Restoring the session's transcript from sync, or catching its copy here up with sync, once an
+/// action is waiting on it.
 pub const RESTORE: u8 = 3;
 
 /// How many rows a search asks for.
@@ -72,6 +77,8 @@ pub struct PaneScroll {
     /// Where the pane was drawn this frame (screen coordinates, so an inline viewport's rows are
     /// as the mouse reports them), or `None` when it wasn't.
     pub area: Option<Rect>,
+    /// Where its text was drawn, without borders or scrollbar (what a drag selects).
+    pub text: Option<Rect>,
     /// How many lines of text it had room for.
     pub height: usize,
     /// The lines of the parts in full rendered so far.
@@ -108,7 +115,7 @@ impl PaneScroll {
 }
 
 /// What the event loop should do after an input event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputAction {
     Continue,
     Redraw,
@@ -118,8 +125,45 @@ pub enum InputAction {
     ReturnCommand,
     /// Copy the session's resume command, and stay open.
     Copy,
+    /// Copy text selected with the mouse.
+    CopyText(String),
+    /// A line of the chooser picked.
+    Pick(Box<Picked>),
+    /// Ask where to resume the session acted on, the fork selected.
+    Fork,
     ReturnOriginal,
     Exit,
+}
+
+/// A line of the chooser, picked: the session it opened on (not whatever the list has selected
+/// since: an idle refresh may have moved it), what the line does with it, then what the key
+/// asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picked {
+    pub row: SessionRow,
+    pub line: Destination,
+    pub action: Pending,
+}
+
+/// A continuation (or a fork, or a switch) asked of the worker, waiting to be written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Continuing {
+    /// Which request it is: only its own answer finishes it.
+    pub id: u64,
+    pub target: HarnessKind,
+    pub kind: Writing,
+    pub action: Pending,
+}
+
+/// What a [`Continuing`] writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Writing {
+    /// A new session of another harness.
+    Continuation,
+    /// A fork, in the session's own harness.
+    Fork,
+    /// The copy here, switched to another branch in place.
+    Switch,
 }
 
 /// An action waiting for the selected session's resume plan.
@@ -163,6 +207,8 @@ pub struct ListState {
 #[allow(clippy::struct_excessive_bools)]
 pub struct State {
     pub input: Cursor,
+    /// Whether the list is drawn top-down (index 0 at the top).
+    invert: bool,
     pub keymap_mode: KeymapMode,
     keymaps: KeymapSet,
     pending_vim_key: Option<char>,
@@ -214,8 +260,30 @@ pub struct State {
     /// Resume plans, fetched for the selected session only (planning may walk directories). A
     /// plan to restore the session from sync is replaced by the plain one once it is restored.
     pub plans: HashMap<HarnessSession, Result<Resume, NotResumable>>,
-    /// An enter/tab/ctrl-y waiting for its session's plan.
-    pub pending: Option<(HarnessSession, Pending)>,
+    /// An enter/tab/ctrl-y waiting for its session's plan (or restore), and the session it acts
+    /// on: that row, not whatever the list shows by the time the answer comes, which an idle
+    /// refresh may have moved or dropped meanwhile.
+    pub pending: Option<(SessionRow, Pending)>,
+    /// The "Resume in" chooser, while it's open.
+    pub chooser: Option<Chooser>,
+    /// Where the selected row was last drawn, for the chooser to open against.
+    pub list_anchor: Option<ListAnchor>,
+    /// What continuing each session elsewhere would flatten, once read (see
+    /// [`Request::Flatten`](super::worker::Request::Flatten)); `Err` when it can't be read.
+    pub flattened: HashMap<HarnessSession, Result<Flattened, String>>,
+    /// The last flattening asked of the worker (which keeps only the newest).
+    pub flattening: Option<HarnessSession>,
+    /// A continuation being written, and what to do once it is.
+    pub continuing: Option<Continuing>,
+    /// The last continuation's id.
+    pub continued: u64,
+    /// What catching the session being resumed up with sync wrote, to say once the picker is gone.
+    pub note: Option<String>,
+
+    /// Text being selected with the mouse.
+    pub selection: Option<Selection>,
+    /// The last frame drawn, which a selection copies from.
+    pub screen: Buffer,
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
@@ -223,6 +291,20 @@ pub struct State {
     /// status row while it has nothing else to say.
     pub rebuilding: Option<Rebuilding>,
     pub now: Box<dyn Fn() -> OffsetDateTime + Send>,
+}
+
+/// Drawn bottom-up (index 0 at the bottom), each root's forks go before it, last first, so they
+/// still read top-down beneath it.
+fn bottom_up(rows: &mut [SessionRow]) {
+    let mut start = 0;
+    while start < rows.len() {
+        let end = rows[start + 1..]
+            .iter()
+            .position(|r| r.tree.is_empty())
+            .map_or(rows.len(), |n| start + 1 + n);
+        rows[start..end].reverse();
+        start = end;
+    }
 }
 
 impl State {
@@ -233,6 +315,7 @@ impl State {
 
         let mut state = Self {
             input,
+            invert: settings.invert,
             keymap_mode: match settings.keymap_mode {
                 KeymapMode::Auto => KeymapMode::Emacs,
                 mode => mode,
@@ -261,6 +344,15 @@ impl State {
             pinned: None,
             plans: HashMap::new(),
             pending: None,
+            chooser: None,
+            list_anchor: None,
+            flattened: HashMap::new(),
+            flattening: None,
+            continuing: None,
+            continued: 0,
+            note: None,
+            selection: None,
+            screen: Buffer::empty(Rect::default()),
             status: None,
             rebuilding: None,
             now: if settings.prefers_reduced_motion {
@@ -399,6 +491,9 @@ impl State {
             self.widened = Some(Widened::NoMatches);
             return true;
         }
+        if !self.invert {
+            bottom_up(&mut rows);
+        }
         let selected = self.selected().map(|r| r.handle.clone());
         self.results = rows;
         self.applied = generation;
@@ -408,6 +503,7 @@ impl State {
         let index = selected
             .filter(|_| keep)
             .and_then(|h| self.results.iter().position(|r| r.handle == h))
+            .or_else(|| self.results.iter().position(|r| r.tree.is_empty()))
             .unwrap_or(0);
         self.list.selected = index;
         true
@@ -561,7 +657,7 @@ impl State {
     /// action supersedes what it asked for, so asking again would only do it twice.
     pub fn forget_unanswered(&mut self) {
         let selected = self.selected().map(|r| r.handle.clone());
-        let waiting = self.pending.as_ref().map(|(handle, _)| handle.clone());
+        let waiting = self.pending.as_ref().map(|(row, _)| row.handle.clone());
         self.requested.retain(|(handle, _)| {
             selected.as_ref() == Some(handle) || waiting.as_ref() == Some(handle)
         });
@@ -600,20 +696,52 @@ impl State {
         }
     }
 
-    /// The wheel over a preview scrolls it; anywhere else (the list, the input) it moves the
-    /// selection, as in the history search. The mouse reports screen positions, which is what
-    /// the panes' areas are, inline or not.
+    /// The scrolling pane drawn at `at`, if any.
+    fn pane_at(&self, at: Position) -> Option<Pane> {
+        PANES.into_iter().find(|p| self.scrolls[*p as usize].area.is_some_and(|a| a.contains(at)))
+    }
+
+    /// A drag selects text within the pane it starts in (the whole picker outside one's text), and
+    /// letting go copies it. The wheel over a preview scrolls it; anywhere else (the list, the
+    /// input) it moves the selection, as in the history search. The mouse reports screen
+    /// positions, which is what the panes' areas are, inline or not.
     fn handle_mouse_input(&mut self, settings: &Settings, event: MouseEvent) -> InputAction {
+        let at = Position::new(event.column, event.row);
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let area = self
+                    .pane_at(at)
+                    .and_then(|p| self.scrolls[p as usize].text)
+                    .unwrap_or(self.screen.area);
+                // Nothing to select in a pane squeezed to nothing, or before the first frame.
+                self.selection = (!area.is_empty()).then(|| Selection::new(area, at));
+                return InputAction::Continue;
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(selection) = &mut self.selection {
+                    selection.extend(at);
+                }
+                return InputAction::Continue;
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                return self
+                    .selection
+                    .take()
+                    .and_then(|s| s.text(&self.screen))
+                    .map_or(InputAction::Continue, InputAction::CopyText);
+            }
+            _ => {}
+        }
+        // The chooser is for the session it opened on.
+        if self.chooser.is_some() {
+            return InputAction::Continue;
+        }
         let down = match event.kind {
             MouseEventKind::ScrollDown => true,
             MouseEventKind::ScrollUp => false,
             _ => return InputAction::Continue,
         };
-        let at = Position::new(event.column, event.row);
-        let over = PANES
-            .into_iter()
-            .find(|p| self.scrolls[*p as usize].area.is_some_and(|a| a.contains(at)));
-        if let Some(pane) = over {
+        if let Some(pane) = self.pane_at(at) {
             let lines = isize::try_from(WHEEL_LINES).unwrap_or(1);
             self.scroll_pane(
                 pane,
@@ -653,6 +781,9 @@ impl State {
         let Some(single) = SingleKey::from_event(input) else {
             return InputAction::Continue;
         };
+        if self.chooser.is_some() {
+            return self.chooser_key(&single);
+        }
         let ctx = self.input.as_str().is_empty();
         let pending = self.pending_vim_key.take();
         let keymap = self.mode_keymap();
@@ -844,6 +975,7 @@ impl State {
             Action::Resume => return InputAction::Resume,
             Action::ReturnCommand => return InputAction::ReturnCommand,
             Action::Copy => return InputAction::Copy,
+            Action::Fork => return InputAction::Fork,
             Action::ReturnOriginal => return InputAction::ReturnOriginal,
             // Nothing to clear: every frame is drawn whole, and clearing the terminal first only
             // flashed it blank.
@@ -1197,7 +1329,7 @@ mod tests {
         // And the session an action waits on.
         let fork = rows(3)[2].handle.clone();
         state.requested.insert((fork.clone(), PLAN));
-        state.pending = Some((fork.clone(), Pending::Resume));
+        state.pending = Some((rows(3)[2].clone(), Pending::Resume));
         state.forget_unanswered();
         assert!(state.requested.contains(&(fork, PLAN)));
         assert_eq!(state.requested.len(), 2);
@@ -1214,21 +1346,23 @@ mod tests {
     }
 
     #[rstest]
-    fn alt_a_rewrites_the_input() {
+    fn ctrl_t_rewrites_the_input() {
         let mut state = state_in(fake::context());
         let s = settings();
         state.input = Cursor::from("flaky".to_owned());
-        let _ = state.handle_input(&s, &key(KeyCode::Char('a'), KeyModifiers::ALT));
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "flaky agent:claude-code");
-        let _ = state.handle_input(&s, &key(KeyCode::Char('a'), KeyModifiers::ALT));
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "flaky agent:codex");
         // The short form is cycled too, and comes back as the long one.
         state.input = Cursor::from("a:opencode flaky".to_owned());
-        let _ = state.handle_input(&s, &key(KeyCode::Char('a'), KeyModifiers::ALT));
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "agent:pi flaky");
-        // alt-h is unbound: it neither cycles nor types.
-        let _ = state.handle_input(&s, &key(KeyCode::Char('h'), KeyModifiers::ALT));
-        assert_eq!(state.input.as_str(), "agent:pi flaky");
+        // alt-a and alt-h are unbound: they neither cycle nor type.
+        for c in ['a', 'h'] {
+            let _ = state.handle_input(&s, &key(KeyCode::Char(c), KeyModifiers::ALT));
+            assert_eq!(state.input.as_str(), "agent:pi flaky");
+        }
     }
 
     #[rstest]
@@ -1307,5 +1441,21 @@ mod tests {
         assert_eq!(state.list.selected, 4, "gg jumps to the visual top");
         let _ = state.handle_input(&s, &key(KeyCode::Char('i'), KeyModifiers::NONE));
         assert_eq!(state.keymap_mode, KeymapMode::VimInsert);
+    }
+
+    /// Drawn bottom-up, each root's forks come before it, last first, so they read top-down
+    /// beneath it on screen.
+    #[rstest]
+    fn forks_sit_beneath_their_root_bottom_up() {
+        let row = |id: &str, tree: &str| {
+            let mut r = fake::row(HarnessKind::ClaudeCode, id, "t");
+            r.tree = tree.to_owned();
+            r
+        };
+        let mut rows =
+            vec![row("a", ""), row("a1", "├─ "), row("a2", "└─ "), row("b", ""), row("c", "")];
+        bottom_up(&mut rows);
+        let ids: Vec<String> = rows.iter().map(|r| r.handle.session.to_string()).collect();
+        assert_eq!(ids, ["a2", "a1", "a", "b", "c"]);
     }
 }

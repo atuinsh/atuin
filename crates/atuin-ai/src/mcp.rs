@@ -105,16 +105,18 @@ impl ServerHandler for AtuinMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let arguments = request.arguments.unwrap_or_default();
-        let peer = context.peer.peer_info();
+        // Stateless clients (protocol 2026-07-28, e.g. Claude Code) skip `initialize` and send
+        // their client info in each request's `_meta`.
+        let client = context.client_info();
         let caller = Caller {
-            client: peer.as_deref().map(|p| p.client_info.name.as_str()),
+            client: client.as_ref().map(|c| c.name.as_str()),
             own: &self.own_session,
         };
         // Bad arguments come back as a tool error, not a JSON-RPC one, so the model sees what was
         // wrong and can retry (MCP SEP-1303); many clients never show protocol errors to it.
         let outcome = match request.name.as_ref() {
             "atuin_history" => match AtuinHistoryToolCall::try_from(&Value::Object(arguments)) {
-                Ok(call) => call.execute(&self.db).await,
+                Ok(call) => call.execute(&self.db, &self.settings).await,
                 Err(e) => invalid_arguments(e),
             },
             "atuin_output" => match AtuinOutputToolCall::try_from(&Value::Object(arguments)) {
@@ -194,8 +196,9 @@ fn tool_definitions() -> Vec<Tool> {
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Fuzzy search query matched against past commands. \
-                    Prefer a few distinctive terms (e.g. 'ffmpeg av1'), not a \
+                "description": "Search query matched against past commands: commands \
+                    containing every term come first, then fuzzy matches (each term's \
+                    letters in order) fill the rest. Prefer a few distinctive terms (e.g. 'ffmpeg av1'), not a \
                     sentence; terms are AND-ed. An empty string returns the most \
                     recent commands. Supports fzf-style operators per \
                     space-separated term: ^prefix, suffix$, 'exact-substring, \
@@ -343,8 +346,10 @@ fn tool_definitions() -> Vec<Tool> {
              line of tool names. Messages are numbered; page with start (negative counts from the \
              end, e.g. -10 for how the session ended) and limit. Pages abridge long messages; \
              read one message (limit: 1) to see it in full; one over 20,000 characters comes in \
-             parts, each giving the offset to read the next from. Takes a session id or unique \
-             prefix from atuin_ai_session_list or atuin_ai_session_search, or 'latest'.",
+             parts, each giving the offset to read the next from. To find where something was \
+             said in a long session, pass query (only messages with every word) or roles \
+             (['user'] for what the person said) instead of paging through it. Takes a session id \
+             or unique prefix from atuin_ai_session_list or atuin_ai_session_search, or 'latest'.",
             schema_for_type::<AtuinAiSessionReadToolCall>(),
         )
         .annotate(ToolAnnotations::with_title("Read an AI agent session").read_only(true)),

@@ -1,5 +1,7 @@
 use atuin_client::settings::Settings;
-use eyre::{Context, Result};
+#[cfg(unix)]
+use eyre::Context;
+use eyre::Result;
 
 use crate::components::search::SearchGrpcService;
 use crate::daemon::DaemonHandle;

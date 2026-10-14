@@ -24,6 +24,7 @@ use ratatui::widgets::{
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
+use super::chooser::ListAnchor;
 use super::panel::{self, SPLIT_MIN_WIDTH};
 use super::query::{TokenKind, TokenState};
 use super::resumer::shell_line;
@@ -31,7 +32,7 @@ use super::source::{SessionRow, Snippet, harness_badge, harness_label};
 use super::state::{LIVE_SECS, ListState, Pane, SEARCH_LIMIT, State, TAB_TITLES};
 use super::{clock, markdown};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const TITLE: &str = concat!("Atuin v", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum Compactness {
@@ -152,8 +153,16 @@ pub(super) fn repo_name(row: &SessionRow) -> String {
         .unwrap_or_default()
 }
 
+/// Whether the session itself is running: its own newest message is recent.
 pub(super) fn is_live(now: OffsetDateTime, row: &SessionRow) -> bool {
-    now.saturating_duration_since(row.updated_at).as_secs() < LIVE_SECS
+    now.saturating_duration_since(row.active_at).as_secs() < LIVE_SECS
+}
+
+/// Whether a fork listed beneath the row is running, and not the row's own (a subagent doesn't
+/// count: it isn't listed).
+pub(super) fn is_fork_live(now: OffsetDateTime, row: &SessionRow) -> bool {
+    !is_live(now, row)
+        && row.forks_at.is_some_and(|at| now.saturating_duration_since(at).as_secs() < LIVE_SECS)
 }
 
 /// The branch a row shows: none when detached (`HEAD`).
@@ -379,6 +388,8 @@ impl SessionList<'_> {
                     let when = clock::When::of(self.now, row.updated_at, self.tz);
                     let (text, meaning) = if is_live(self.now, row) {
                         (format!("● {}", when.short()), Meaning::AlertInfo)
+                    } else if is_fork_live(self.now, row) {
+                        (format!("↳● {}", when.short()), Meaning::AlertInfo)
                     } else {
                         (when.short().to_owned(), Meaning::Guidance)
                     };
@@ -398,6 +409,8 @@ impl SessionList<'_> {
                         let base = style(theme, Meaning::Base);
                         (base, base.add_modifier(Modifier::BOLD))
                     };
+                    w.put(&row.tree, style(theme, Meaning::Annotation));
+                    let cw = cw.saturating_sub(row.tree.width());
                     let spans =
                         highlighted_line(&row.title.text, &row.title.highlights, cw, base, hl);
                     w.put_spans(&spans);
@@ -729,13 +742,13 @@ impl State {
         (lines, Some((row.handle.clone(), top, body)))
     }
 
-    /// Note how `pane` was drawn: for `session`, in `area` (what the mouse wheel scrolls), with
-    /// `height` lines of text showing `body`.
+    /// Note how `pane` was drawn: for `session`, in `area` (what the mouse wheel scrolls), its
+    /// text in `text` (what a drag selects), with `height` lines of text showing `body`.
     fn drawn(
         &mut self,
         pane: Pane,
         session: HarnessSession,
-        area: Rect,
+        (area, text): (Rect, Rect),
         height: usize,
         body: &Body,
     ) {
@@ -743,6 +756,7 @@ impl State {
         scroll.session = Some(session);
         scroll.offset = body.offset;
         scroll.area = Some(area);
+        scroll.text = Some(text);
         scroll.height = height;
         scroll.len = body.len;
         scroll.more = body.more;
@@ -781,11 +795,49 @@ impl State {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Where the selected row of the list in `area` is, for the chooser to open against.
+    fn anchor(&self, area: Rect, cells: &[(Column, u16)], invert: bool) -> Option<ListAnchor> {
+        if self.results.is_empty() || area.height == 0 {
+            return None;
+        }
+        let from_top = u16::try_from(self.list.selected.checked_sub(self.list.offset)?).ok()?;
+        let row = if invert {
+            area.top() + from_top
+        } else {
+            area.bottom().checked_sub(from_top + 1)?
+        };
+        // Past the indicator, and the columns before the badge.
+        let before: u16 = cells
+            .iter()
+            .take_while(|(c, _)| !matches!(c, Column::Harness | Column::Title))
+            .map(|(_, w)| w + 1)
+            .sum();
+        Some(ListAnchor {
+            list: area,
+            row,
+            badge_x: area.x + 3 + before,
+        })
+    }
+
     pub fn draw(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
+        self.draw_main(f, settings, theme);
+        if self.chooser.is_some() {
+            self.draw_chooser(f, settings, theme);
+        }
+        let buf = f.buffer_mut();
+        self.screen = buf.clone();
+        if let Some(selection) = &self.selection {
+            selection.highlight(buf);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn draw_main(&mut self, f: &mut Frame, settings: &Settings, theme: &Theme) {
         let area = f.area();
+        self.list_anchor = None;
         for scroll in &mut self.scrolls {
             scroll.area = None;
+            scroll.text = None;
         }
         f.render_widget(Clear, area);
         let compactness = to_compactness(area, settings);
@@ -883,11 +935,15 @@ impl State {
 
         let header_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(16), Constraint::Min(0), Constraint::Length(16)])
+            .constraints([
+                Constraint::Length(u16::try_from(TITLE.len()).unwrap_or(u16::MAX)),
+                Constraint::Min(0),
+                Constraint::Length(16),
+            ])
             .split(header_chunk);
         f.render_widget(
             Paragraph::new(Span::styled(
-                format!("Atuin v{VERSION}"),
+                TITLE,
                 style(theme, Meaning::Base).add_modifier(Modifier::BOLD),
             )),
             header_chunks[0],
@@ -988,6 +1044,7 @@ impl State {
             cells: &cells,
         };
         f.render_stateful_widget(list, list_area, &mut self.list);
+        self.list_anchor = self.anchor(list_area, &cells, invert);
 
         // A scrollbar on the right border (or the divider) once the list overflows.
         let visible = usize::from(list_area.height);
@@ -1075,7 +1132,8 @@ impl State {
                 height,
             };
             draw_scrollbar(f, track, &body, usize::from(height), theme);
-            self.drawn(Pane::Strip, session, preview_chunk, usize::from(height), &body);
+            let areas = (preview_chunk, strip);
+            self.drawn(Pane::Strip, session, areas, usize::from(height), &body);
         }
 
         // Join the divider to the box's top and bottom borders.
@@ -1245,9 +1303,9 @@ impl State {
         let tz = settings.timezone.0;
         let key = style(theme, Meaning::Annotation);
         let base = style(theme, Meaning::Base);
-        let width = usize::from(inner.width).saturating_sub(11);
+        let width = usize::from(inner.width).saturating_sub(12);
         let field = |name: &'static str, spans: Vec<Span<'static>>| {
-            let mut line = vec![Span::styled(format!(" {name:<10}"), key)];
+            let mut line = vec![Span::styled(format!(" {name:<11}"), key)];
             line.extend(spans);
             Line::from(line)
         };
@@ -1255,8 +1313,12 @@ impl State {
         let when = |ts: OffsetDateTime| format_when(ts, now, tz);
 
         let mut lines = vec![
-            field("Session", vec![
-                Span::styled(row.handle.session.to_string(), base.add_modifier(Modifier::BOLD)),
+            field("ID", vec![Span::styled(
+                row.atuin_id.to_string(),
+                base.add_modifier(Modifier::BOLD),
+            )]),
+            field("Harness ID", vec![
+                Span::styled(row.handle.session.to_string(), base),
                 Span::raw("  "),
                 Span::styled(
                     harness_label(row.handle.harness),
@@ -1286,6 +1348,11 @@ impl State {
                 let mut spans = text(when(row.updated_at));
                 if is_live(now, &row) {
                     spans.push(Span::styled("  ● live", style(theme, Meaning::AlertInfo)));
+                } else if is_fork_live(now, &row) {
+                    spans.push(Span::styled(
+                        "  ↳● a fork is live",
+                        style(theme, Meaning::AlertInfo),
+                    ));
                 }
                 spans
             }),
@@ -1350,7 +1417,12 @@ impl State {
             ..area
         };
         draw_scrollbar(f, track, &body, left, theme);
-        self.drawn(Pane::Inspect, row.handle.clone(), area, left, &body);
+        // All of it but the scrollbar's column, the metadata above the conversation included.
+        let text = Rect {
+            width: track.x.saturating_sub(inner.x),
+            ..inner
+        };
+        self.drawn(Pane::Inspect, row.handle.clone(), (area, text), left, &body);
     }
 
     /// The detail pane beside the list, in `pane`: the session previewed (see
@@ -1389,7 +1461,7 @@ impl State {
             height: text.height.saturating_sub(top),
         };
         draw_scrollbar(f, track, &body, left, theme);
-        self.drawn(Pane::Side, row.handle, pane, left, &body);
+        self.drawn(Pane::Side, row.handle, (pane, text), left, &body);
     }
 
     /// Inspect's list of the forks grouped under `row`, in at most `room` lines: a blank line, a
@@ -1512,6 +1584,21 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    /// A quiet root is marked for a running fork beneath it, not for a running subagent (grouped,
+    /// so newest in `updated_at`, but not listed).
+    #[rstest]
+    #[case::subagent(None, false)]
+    #[case::fork(Some(0), true)]
+    #[case::old_fork(Some(1), false)]
+    fn only_a_listed_fork_marks_its_root_live(#[case] fork_days: Option<i64>, #[case] live: bool) {
+        let now = crate::resume_tui::fake::now();
+        let mut row = crate::resume_tui::fake::row(HarnessKind::ClaudeCode, "a", "t");
+        row.active_at = now - time::Duration::days(1);
+        row.updated_at = now;
+        row.forks_at = fork_days.map(|d| now - time::Duration::days(d));
+        assert_eq!(is_fork_live(now, &row), live);
+    }
 
     /// The title takes the rest of the row, whatever the width: 80 columns is 76 inside the box,
     /// and a split 120 leaves the list 69.

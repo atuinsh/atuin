@@ -52,17 +52,17 @@ end
 /// Mirrors the lookup in [`shell::Shell::start`]: `ATUIN_E2E_FISH` overrides the binary, and a
 /// missing fish is a hard error only when `ATUIN_E2E_REQUIRE_SHELLS` is set.
 fn fish() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("ATUIN_E2E_FISH") {
+    if let Some(path) = atuin_common::env::var_os("ATUIN_E2E_FISH") {
         let path = PathBuf::from(path);
         assert!(path.is_file(), "ATUIN_E2E_FISH is not a file: {}", path.display());
         return Some(path);
     }
-    let found = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+    let found = std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
         .map(|dir| dir.join("fish"))
         .find(|path| path.is_file());
     if found.is_none() {
         assert!(
-            std::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(),
+            atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(),
             "missing fish for e2e_pty_proxy_init"
         );
         eprintln!("skipping e2e_pty_proxy_init: missing fish");

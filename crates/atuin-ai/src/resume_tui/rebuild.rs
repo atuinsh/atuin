@@ -21,20 +21,22 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 /// The daemon is rebuilding the session index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rebuilding {
-    /// Records replayed, and roughly how many there are to replay, when the daemon says.
-    pub progress: Option<(u64, u64)>,
+    /// Records replayed, and roughly how many there are to replay.
+    pub progress: (u64, u64),
 }
 
 impl Rebuilding {
     /// The picker's status line while it lasts.
     #[must_use]
     pub fn status(&self) -> String {
-        match self.progress {
-            Some((replayed, pending)) if pending > 0 => format!(
+        let (replayed, pending) = self.progress;
+        if pending > 0 {
+            format!(
                 "rebuilding the session index: {replayed} of {pending} records; results may be \
                  incomplete"
-            ),
-            _ => "rebuilding the session index; results may be incomplete".to_owned(),
+            )
+        } else {
+            "rebuilding the session index; results may be incomplete".to_owned()
         }
     }
 }
@@ -117,7 +119,7 @@ mod tests {
 
     fn at(replayed: u64, pending: u64) -> Rebuilding {
         Rebuilding {
-            progress: Some((replayed, pending)),
+            progress: (replayed, pending),
         }
     }
 
@@ -141,10 +143,6 @@ mod tests {
         "rebuilding the session index: 1200 of 5000 records; results may be incomplete"
     )]
     #[case::nothing_to_replay(at(0, 0), "rebuilding the session index; results may be incomplete")]
-    #[case::unknown(
-        Rebuilding { progress: None },
-        "rebuilding the session index; results may be incomplete"
-    )]
     fn the_status_says_how_far_it_has_got(#[case] rebuilding: Rebuilding, #[case] want: &str) {
         assert_eq!(rebuilding.status(), want);
     }

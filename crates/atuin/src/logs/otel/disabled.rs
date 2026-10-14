@@ -14,7 +14,7 @@ pub enum OtelCtx {}
 impl OtelCtx {
     /// Refuse to enable OpenTelemetry if it was requested, since it was compiled out.
     pub fn try_enable(_service_name: &'static str) -> Result<Option<Self>, OtelCtxEnableError> {
-        if std::env::var_os("ATUIN_OTEL").is_some() {
+        if atuin_common::env::var_os("ATUIN_OTEL").is_some() {
             return Err(OtelCtxEnableError::NotCompiled);
         }
         Ok(None)

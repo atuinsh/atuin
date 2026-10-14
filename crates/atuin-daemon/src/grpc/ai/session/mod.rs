@@ -3,7 +3,7 @@ pub mod pb;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use atuin_client::ai_session::SearchTerms;
+use atuin_client::ai_session::{SearchTerms, SessionFilter};
 use futures::StreamExt;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -13,12 +13,11 @@ use tonic::{Code, Request, Response, Status};
 use crate::grpc::ai::agent::pb as agent;
 use crate::grpc::ai::session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai::session::pb::{
-    GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    HarnessFilterRequest, ImportSessionsEvent, ImportSessionsProgress, ImportSessionsRequest,
-    ImportSessionsSummary, ListSessionsRequest, RebuildSessionsReply, RebuildSessionsRequest,
-    SearchSessionsMatch, SearchSessionsRequest, SessionFilterRequest, SessionRefRequest,
-    TailSessionsEvent, TailSessionsRequest, get_session_event, import_sessions_event,
-    tail_sessions_event,
+    GetSessionEvent, GetSessionRequest, HarnessFilterRequest, ImportSessionsEvent,
+    ImportSessionsProgress, ImportSessionsRequest, ImportSessionsSummary, ListSessionsRequest,
+    ProjectSyncedReply, ProjectSyncedRequest, RebuildSessionsReply, RebuildSessionsRequest,
+    SearchSessionsMatch, SearchSessionsRequest, SessionRefRequest, TailSessionsEvent,
+    TailSessionsRequest, get_session_event, import_sessions_event, tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
@@ -48,35 +47,30 @@ impl Service {
 }
 
 /// Metadata key marking the `Unavailable` status returned while startup recovery rebuilds AI
-/// sessions. A dropped connection is `Unavailable` too; the marker is what tells a client this one
-/// is worth waiting out.
+/// sessions, carrying how far the rebuild has got as `<replayed>/<to replay>` records. A dropped
+/// connection is `Unavailable` too; the marker is what tells a client this one is worth waiting
+/// out.
 const REBUILDING_METADATA: &str = "atuin-ai-sessions-rebuilding";
-
-/// Metadata key on the rebuilding status carrying how far the rebuild has got, as
-/// `<replayed>/<to replay>` records.
-const REBUILD_PROGRESS_METADATA: &str = "atuin-ai-sessions-rebuild-progress";
 
 fn rebuilding_status((replayed, pending): (u64, u64)) -> Status {
     let mut status = Status::unavailable(format!(
         "AI sessions are being rebuilt from the record store ({replayed} of {pending} records); \
          try again shortly"
     ));
-    let metadata = status.metadata_mut();
-    metadata.insert(REBUILDING_METADATA, MetadataValue::from_static("1"));
-    if let Ok(progress) = MetadataValue::try_from(format!("{replayed}/{pending}")) {
-        metadata.insert(REBUILD_PROGRESS_METADATA, progress);
-    }
+    let progress = MetadataValue::try_from(format!("{replayed}/{pending}"))
+        .expect("digits and a slash are valid metadata");
+    status.metadata_mut().insert(REBUILDING_METADATA, progress);
     status
 }
 
-/// How far the rebuild `status` reports has got: records replayed, and roughly how many there are
-/// to replay. `None` for any other status, or a daemon that does not say.
+/// How far the daemon has got rebuilding AI sessions after starting, when `status` says it still
+/// is: records replayed, and roughly how many there are to replay. `None` for any other status.
 #[must_use]
 pub fn rebuild_progress(status: &Status) -> Option<(u64, u64)> {
-    if !is_rebuilding(status) {
+    if status.code() != Code::Unavailable {
         return None;
     }
-    let value = status.metadata().get(REBUILD_PROGRESS_METADATA)?.to_str().ok()?;
+    let value = status.metadata().get(REBUILDING_METADATA)?.to_str().ok()?;
     let (replayed, pending) = value.split_once('/')?;
     Some((replayed.parse().ok()?, pending.parse().ok()?))
 }
@@ -84,15 +78,13 @@ pub fn rebuild_progress(status: &Status) -> Option<(u64, u64)> {
 /// Whether `status` says the daemon is still rebuilding AI sessions after starting.
 #[must_use]
 pub fn is_rebuilding(status: &Status) -> bool {
-    status.code() == Code::Unavailable && status.metadata().contains_key(REBUILDING_METADATA)
+    rebuild_progress(status).is_some()
 }
 
 #[tonic::async_trait]
 impl GrpcService for Service {
     type ListSessionsStream = Pin<Box<dyn Stream<Item = Result<agent::Session, Status>> + Send>>;
     type GetSessionStream = Pin<Box<dyn Stream<Item = Result<GetSessionEvent, Status>> + Send>>;
-    type GetTranscriptStream =
-        Pin<Box<dyn Stream<Item = Result<GetTranscriptChunk, Status>> + Send>>;
     type SearchSessionsStream =
         Pin<Box<dyn Stream<Item = Result<SearchSessionsMatch, Status>> + Send>>;
     type TailSessionsStream = Pin<Box<dyn Stream<Item = Result<TailSessionsEvent, Status>> + Send>>;
@@ -104,7 +96,7 @@ impl GrpcService for Service {
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<Self::ListSessionsStream>, Status> {
         self.ensure_recovered()?;
-        let filter = request.into_inner().filter()?;
+        let filter = SessionFilter::try_from(request.into_inner().filter.unwrap_or_default())?;
 
         let sessions = self
             .capture
@@ -151,40 +143,28 @@ impl GrpcService for Service {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    async fn get_transcript(
-        &self,
-        request: Request<GetTranscriptRequest>,
-    ) -> Result<Response<Self::GetTranscriptStream>, Status> {
-        self.ensure_recovered()?;
-        let handle = request.into_inner().session()?;
-
-        let chunks = self.capture.transcript(&handle).map(|chunk| {
-            chunk
-                .map(|chunk| GetTranscriptChunk { chunk })
-                .map_err(|e| Status::internal(e.to_string()))
-        });
-
-        Ok(Response::new(Box::pin(chunks)))
-    }
-
     async fn search_sessions(
         &self,
         request: Request<SearchSessionsRequest>,
     ) -> Result<Response<Self::SearchSessionsStream>, Status> {
         self.ensure_recovered()?;
-        let request = request.into_inner();
-        let filter = request.filter()?;
+        let SearchSessionsRequest {
+            query,
+            limit,
+            any_term,
+            filter,
+        } = request.into_inner();
+        let filter = SessionFilter::try_from(filter.unwrap_or_default())?;
 
-        let terms = if request.any_term {
+        let terms = if any_term {
             SearchTerms::Any
         } else {
             SearchTerms::All
         };
 
-        let stream =
-            self.capture.search(&request.query, terms, &filter, request.limit).map(|result| {
-                result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
-            });
+        let stream = self.capture.search(&query, terms, &filter, limit).map(|result| {
+            result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
+        });
 
         Ok(Response::new(Box::pin(stream)))
     }
@@ -249,6 +229,14 @@ impl GrpcService for Service {
                 Err(Status::internal(err.to_string()))
             }
         }
+    }
+
+    async fn project_synced(
+        &self,
+        _request: Request<ProjectSyncedRequest>,
+    ) -> Result<Response<ProjectSyncedReply>, Status> {
+        self.capture.project_synced().await;
+        Ok(Response::new(ProjectSyncedReply {}))
     }
 
     async fn import_sessions(
@@ -329,8 +317,6 @@ mod tests {
             .search_sessions(Request::new(SearchSessionsRequest {
                 query: "anything".to_owned(),
                 limit: 0,
-                harness: None,
-                cwd: None,
                 any_term: false,
                 filter: None,
             }))
@@ -351,10 +337,11 @@ mod tests {
             .search_sessions(Request::new(SearchSessionsRequest {
                 query: "x".to_owned(),
                 limit: 0,
-                harness: Some(9999),
-                cwd: None,
                 any_term: false,
-                filter: None,
+                filter: Some(pb::SessionFilter {
+                    harness: Some(9999),
+                    ..pb::SessionFilter::default()
+                }),
             }))
             .await;
 
@@ -366,19 +353,11 @@ mod tests {
     async fn reads_are_refused_until_recovery_finishes() {
         let (cap, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
         let svc = Service::new(Arc::new(cap));
-        let list = || {
-            svc.list_sessions(Request::new(ListSessionsRequest {
-                harness: None,
-                updated_since: None,
-                filter: None,
-            }))
-        };
+        let list = || svc.list_sessions(Request::new(ListSessionsRequest { filter: None }));
         let search = || {
             svc.search_sessions(Request::new(SearchSessionsRequest {
                 query: "x".to_owned(),
                 limit: 0,
-                harness: None,
-                cwd: None,
                 any_term: false,
                 filter: None,
             }))
@@ -404,13 +383,7 @@ mod tests {
         drop(state);
 
         assert!(
-            svc.list_sessions(Request::new(ListSessionsRequest {
-                harness: None,
-                updated_since: None,
-                filter: None,
-            }))
-            .await
-            .is_ok()
+            svc.list_sessions(Request::new(ListSessionsRequest { filter: None })).await.is_ok()
         );
     }
 

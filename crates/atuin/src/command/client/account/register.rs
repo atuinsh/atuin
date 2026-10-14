@@ -68,7 +68,7 @@ impl Cmd {
 
                 match response {
                     AuthResponse::Success { session, auth_type } => {
-                        let meta = Settings::meta_store().await?;
+                        let meta = settings.meta_store().await?;
                         let is_hub_token = auth_type.as_deref() == Some("hub")
                             || atuin_client::meta::is_hub_token(&session);
 
@@ -127,7 +127,7 @@ impl Cmd {
             )
             .await?;
 
-            let meta = Settings::meta_store().await?;
+            let meta = settings.meta_store().await?;
             meta.save_session(&session.session).await?;
 
             let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;

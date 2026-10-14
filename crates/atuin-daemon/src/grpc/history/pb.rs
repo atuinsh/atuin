@@ -225,7 +225,6 @@ impl From<CmdFinishError> for Status {
         match value {
             CmdFinishError::NotFound(_) => Self::not_found(value.to_string()),
             CmdFinishError::HistoryStoreFailed(_) => Self::internal(value.to_string()),
-            CmdFinishError::HistoryDbFailed(_) => Self::internal(value.to_string()),
         }
     }
 }
@@ -1014,7 +1013,6 @@ mod tests {
     #[rstest]
     #[case(CmdFinishError::NotFound(DomainHistoryId::from_bytes([0u8; 16])), Code::NotFound)]
     #[case(CmdFinishError::HistoryStoreFailed(eyre::eyre!("x")), Code::Internal)]
-    #[case(CmdFinishError::HistoryDbFailed(eyre::eyre!("x")), Code::Internal)]
     fn finish_error_status_codes(#[case] err: CmdFinishError, #[case] code: Code) {
         assert_eq!(Status::from(err).code(), code);
     }

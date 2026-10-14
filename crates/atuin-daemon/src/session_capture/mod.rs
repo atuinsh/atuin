@@ -3,29 +3,38 @@ mod engine;
 mod hooks;
 mod import;
 mod message_enricher;
+mod policy;
 mod recovery;
+mod tools;
 
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use atuin_client::ai_session::{
-    AiSessionDatabase, AiSessionStore, Appended, BuildError, DbError, HarnessKind, HarnessSession,
-    Message, PushError, ReprojectProgress, SearchTerms, Session, SessionFilter, SessionMatch,
+    AiSessionDatabase, AiSessionStore, Appended, AtuinSessionId, BuildError, CaptureMark, DbError,
+    HarnessKind, HarnessSession, Message, NewRow, PushError, ReprojectProgress, SearchTerms,
+    Session, SessionFilter, SessionMatch,
 };
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
-use atuin_common::harnesstools::session::{Content, Role};
+use atuin_common::harnesstools::session::{Content, Role, ToolCallId};
 use atuin_common::sync::BlockingPool;
 use atuin_domain::record::HostId;
 use engine::SessionCaptureEngine;
 use futures::{FutureExt, Stream, StreamExt};
 pub use import::ImportProgress;
 use import::SessionImporter;
+pub use policy::CapturePolicy;
+use policy::Verdict;
 use recovery::{Backoff, Coordinator, Msg};
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
+pub use tools::ToolCapture;
 
 const NOP_STORE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -85,6 +94,15 @@ pub(crate) struct Sink {
     /// The store's state: capture and import wait out a rebuild, and are refused while the store
     /// is unavailable (see `append`).
     state: watch::Receiver<StoreState>,
+    /// What [`sanitize`] keeps of tool calls, live and imported alike.
+    tools: ToolCapture,
+    /// What capture keeps beyond that: the user's filters, credential files, redaction.
+    policy: Arc<CapturePolicy>,
+    /// Calls seen running a command whose output may carry a credential, and not answered yet:
+    /// their results' output is never kept (see [`Self::withhold_unsafe_output`]).
+    unsafe_calls: Arc<parking_lot::Mutex<UnsafeCalls>>,
+    /// Where capture last moved this host's watermark (see [`AiSessionStore::advance_past_capture`]).
+    capture_mark: Arc<parking_lot::Mutex<Option<CaptureMark>>>,
     #[cfg(test)]
     hooks: Option<Arc<dyn hooks::Hooks>>,
 }
@@ -92,12 +110,13 @@ pub(crate) struct Sink {
 impl Sink {
     #[cfg(test)]
     pub(crate) fn new(records: AiSessionStore, sidecar: AiSessionDatabase) -> Self {
-        Self::with_state(records, sidecar, watch::channel(StoreState::Ready).1)
+        Self::with_state(records, sidecar, ToolCapture::Names, watch::channel(StoreState::Ready).1)
     }
 
     fn with_state(
         records: AiSessionStore,
         sidecar: AiSessionDatabase,
+        tools: ToolCapture,
         state: watch::Receiver<StoreState>,
     ) -> Self {
         let (tail, _) = broadcast::channel(128);
@@ -107,6 +126,10 @@ impl Sink {
             tail,
             pending_projection: Arc::default(),
             state,
+            tools,
+            policy: Arc::default(),
+            unsafe_calls: Arc::default(),
+            capture_mark: Arc::default(),
             #[cfg(test)]
             hooks: None,
         }
@@ -135,6 +158,12 @@ impl Sink {
         BroadcastStream::new(self.tail.subscribe())
     }
 
+    /// Whether capture keeps the patches of calls (see
+    /// [`MessageEnricher::keeping_patches`](message_enricher::MessageEnricher::keeping_patches)).
+    pub(crate) fn keeps_patches(&self) -> bool {
+        self.tools != ToolCapture::Names
+    }
+
     /// Persist and project `msg`, unless its logical message is already projected.
     ///
     /// Only while the store is [`StoreState::Ready`]: this waits out a rebuild, and refuses with
@@ -142,16 +171,13 @@ impl Sink {
     /// sidecar the dedup gate trusts may then be missing persisted messages.
     ///
     /// Cancel-safe: dropped while it waits for the store or its locks, it has written nothing;
-    /// once it has them, its dedup check, push and projection run to the end in a task of their
-    /// own, which dropping this does not stop. (Stopped between its push and its projection, the
-    /// record would be in the record store but neither projected nor pending, so the next
-    /// capture of the line would find it missing from the sidecar and push it again.)
-    pub(crate) async fn append(&self, mut msg: Message) -> Result<Appended, AppendError> {
-        // Apply capture policy before either persistence path or the live tail. Keep structural
-        // rows (even with no content) so parent links and usage accounting remain intact.
-        sanitize_message(&mut msg);
-        // Captured here, so on this host; a reproject reads the same from the record envelope.
-        msg.host = Some(self.records.host_id());
+    /// once it has them, the rest (capture policy, dedup check, push and projection) runs to the
+    /// end in a task of its own, which dropping this does not stop. (Stopped between its push and
+    /// its projection, the record would be in the record store but neither projected nor
+    /// pending, so the next capture of the line would find it missing from the sidecar and push
+    /// it again; stopped once policy forgot a credential command waiting for its output, the
+    /// output appended again would be kept.)
+    pub(crate) async fn append(&self, msg: Message) -> Result<Appended, AppendError> {
         let locks = self.lock_ready().await?;
         let sink = self.clone();
         // The locks go with the task: released when it ends, however it ends (a panic unwinding
@@ -168,12 +194,146 @@ impl Sink {
         }
     }
 
+    /// Apply [`CapturePolicy`] to `msg`'s tool calls (see [`Verdict`]): drop what a call that
+    /// history would ignore was given, and what one writing to a credential file wrote, and the
+    /// output of either, or of a call whose output may hold a credential (`atuin key`,
+    /// `gh auth token`, a read of `.env`), as shell output capture never stores it either; and,
+    /// in a directory `cwd_filter` matches, every call's.
+    ///
+    /// A result usually comes in a later line than its call, so the call is remembered until it
+    /// is answered: a session's lines come here in order, live and imported. One made before the
+    /// daemon (re)started is found among the session's stored rows, the first time the session
+    /// comes in, which capture's locks (held) make trustworthy; so is where the session runs. A stored call whose input
+    /// wasn't captured (made while `ai.capture_tools` was off, or dropped), or whose written
+    /// content was withheld, can't be checked, so its output is withheld too.
+    async fn withhold_unsafe_output(&self, msg: &mut Message) -> Result<(), AppendError> {
+        if self.tools == ToolCapture::Names {
+            return Ok(());
+        }
+        if !self.unsafe_calls.lock().warmed.contains(&msg.session) {
+            let mut unanswered = HashSet::new();
+            let mut cwd = None;
+            let mut stored = std::pin::pin!(self.sidecar.messages(&msg.session));
+            while let Some(stored) = stored.next().await {
+                let stored = stored?;
+                cwd = stored.cwd.or(cwd);
+                let ignored = cwd.as_deref().is_some_and(|cwd| self.policy.ignores_dir(cwd));
+                for block in stored.content {
+                    match block {
+                        Content::ToolUse(call)
+                            if call.input.is_null()
+                                || tools::is_withheld(&call.input)
+                                || ignored
+                                || self.policy.judge(&call, cwd.as_deref()) != Verdict::Keep =>
+                        {
+                            unanswered.insert(call.id);
+                        }
+                        Content::ToolResult(result) => {
+                            unanswered.remove(&result.call);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let mut calls = self.unsafe_calls.lock();
+            calls.warmed.insert(msg.session.clone());
+            calls.pending.extend(unanswered.into_iter().map(|id| (msg.session.clone(), id)));
+            if let Some(cwd) = cwd {
+                calls.cwds.insert(msg.session.clone(), cwd);
+            }
+        }
+        let mut calls = self.unsafe_calls.lock();
+        // Most rows don't say where the session runs (Codex says it in its context rows, Pi in
+        // its header): the last row that did does.
+        let cwd = match &msg.cwd {
+            Some(cwd) => {
+                calls.cwds.insert(msg.session.clone(), cwd.clone());
+                Some(cwd.clone())
+            }
+            None => calls.cwds.get(&msg.session).cloned(),
+        };
+        let ignored_dir = cwd.as_deref().is_some_and(|cwd| self.policy.ignores_dir(cwd));
+        // The calls whose results this row withholds: a patch of one is withheld too, whether it
+        // comes before the result (Codex) or after it, in the same row (the rest).
+        let mut withheld = HashSet::new();
+        for block in &mut msg.content {
+            match block {
+                Content::ToolUse(call) => {
+                    let verdict = if ignored_dir {
+                        Verdict::Drop
+                    } else {
+                        self.policy.judge(call, cwd.as_deref())
+                    };
+                    match verdict {
+                        Verdict::Keep => continue,
+                        Verdict::WithholdOutput => {}
+                        Verdict::WithholdWritten => tools::withhold_written(&mut call.input),
+                        Verdict::Drop => call.input = serde_json::Value::Null,
+                    }
+                    calls.pending.insert((msg.session.clone(), call.id.clone()));
+                }
+                Content::ToolResult(result) => {
+                    let pending = calls.pending.remove(&(msg.session.clone(), result.call.clone()));
+                    if pending || ignored_dir {
+                        result.output = serde_json::Value::Null;
+                        withheld.insert(result.call.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A patch shows what was written: none of a call whose output is withheld, and none
+        // touching a credential file, whatever the call said it did.
+        msg.content.retain(|block| match block {
+            Content::Patch(patch) => {
+                let call = (msg.session.clone(), patch.call.clone());
+                let unsafe_file = patch.files.iter().any(|file| {
+                    std::iter::once(&file.path)
+                        .chain(&file.moved_to)
+                        .any(|path| self.policy.protects(path, cwd.as_deref()))
+                });
+                !(ignored_dir
+                    || withheld.contains(&patch.call)
+                    || calls.pending.contains(&call)
+                    || unsafe_file)
+            }
+            _ => true,
+        });
+        drop(calls);
+        Ok(())
+    }
+
     /// [`Self::append`] holding capture's locks, with the store found ready under them.
     async fn append_locked(
         self,
         (mut pending, local): CaptureLocks,
-        msg: Message,
+        mut msg: Message,
     ) -> Result<Appended, AppendError> {
+        // Apply capture policy before either persistence path or the live tail. Keep structural
+        // rows (even with no content) so parent links and usage accounting remain intact.
+        // Under the locks, the sidecar holds every local row (see `withhold_unsafe_output`).
+        self.withhold_unsafe_output(&mut msg).await?;
+        let (tools, policy) = (self.tools, self.policy.clone());
+        let mut msg = if bulky(&msg) {
+            // Off the runtime's thread, which the daemon's every other request shares: shaping
+            // a large tool call can take a while.
+            tokio::task::spawn_blocking(move || {
+                sanitize(&mut msg, tools, &policy);
+                msg
+            })
+            .await
+            .map_err(|err| {
+                tracing::error!(?err, "sanitizing an ai-session message stopped unexpectedly");
+                AppendError::Aborted
+            })?
+        } else {
+            sanitize(&mut msg, tools, &policy);
+            msg
+        };
+        // Captured here, so on this host; a reproject reads the same from the record envelope.
+        msg.host = Some(self.records.host_id());
+        // As the sidecar would store it, so the record synced never names an instant past it.
+        msg.timestamp = msg.timestamp.clamp(Message::EARLIEST, Message::LATEST);
         self.repair(&mut pending).await?;
         // Dedup gate: if this logical message is already projected it is already in the record
         // store too, so there is nothing to do. Stable source ids (see MessageEnricher::source_id)
@@ -181,12 +341,24 @@ impl Sink {
         if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
             return Ok(Appended::Duplicate);
         }
+        // Under the locks the sidecar holds every local row, so this sees the session's id.
+        msg.atuin_id = Some(match self.sidecar.get_session(&msg.session).await? {
+            Some(session) => session.atuin_id,
+            None => AtuinSessionId::mint(msg.timestamp),
+        });
 
         // Pending from before the push: should the push fail, or this task panic, once the
         // record may be stored, the next capture's repair finds out whether it was, and projects
         // it if so (see `repair`). Nothing else stops this task between its push and its
         // projection.
         *pending = Some(msg.clone());
+        // Where the last capture moved the watermark, or else the generation, read before the
+        // push: an invalidation after it keeps the watermark from moving past it.
+        let last = *self.capture_mark.lock();
+        let known = match last {
+            Some(known) => known,
+            None => CaptureMark::Unknown(self.sidecar.projection_generation().await?),
+        };
         // Write the record store first: it is the synced source of truth and the sidecar is a
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
         // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
@@ -195,13 +367,20 @@ impl Sink {
         if self.hook(hooks::Point::CapturePushing).await == hooks::Fault::Panic {
             std::panic::panic_any(hooks::INJECTED_PANIC);
         }
-        self.records.push(&msg).await?;
+        let pushed = self.records.push(&msg).await?;
         #[cfg(test)]
         if self.hook(hooks::Point::CapturePushed).await == hooks::Fault::Panic {
             std::panic::panic_any(hooks::INJECTED_PANIC);
         }
         let appended = self.project_and_broadcast(&msg).await?;
         *pending = None;
+        // So a restart doesn't replay what capture projected since the last; one that doesn't
+        // move (a reprojection running, say) leaves it to the next.
+        let moved = self.records.advance_past_capture(&self.sidecar, known, pushed).await;
+        *self.capture_mark.lock() = moved.unwrap_or_else(|err| {
+            tracing::warn!(?err, "failed to move the ai-session watermark past a capture");
+            None
+        });
         drop(local);
         drop(pending);
         Ok(appended)
@@ -268,46 +447,118 @@ impl Sink {
         let started = self.sidecar.get_session(&msg.session).await?.is_none();
         let appended = self.sidecar.append(msg).await?;
         if self.tail.receiver_count() > 0 {
-            if let Some(session) = self.sidecar.get_session(&msg.session).await? {
-                let event = if started {
-                    SessionTailEvent::SessionStarted(session)
-                } else {
-                    SessionTailEvent::SessionUpdated(session)
-                };
-                let _ = self.tail.send(event);
-            }
-            let _ = self.tail.send(SessionTailEvent::Message(msg.clone()));
+            let session = self.sidecar.get_session(&msg.session).await?;
+            send(&self.tail, session, started, msg.clone());
         }
-
         Ok(appended)
     }
 }
 
-/// Retain conversation text and payload-free tool breadcrumbs, never execution payloads.
-/// Null payloads preserve the existing wire format without storing arguments or results.
-/// This only affects new captures; existing synced records are not rewritten.
-fn sanitize_message(msg: &mut Message) {
+/// Send `msg` to the tail, after its session as projected (started, if `msg` began it).
+fn send(
+    tail: &broadcast::Sender<SessionTailEvent>,
+    session: Option<Session>,
+    started: bool,
+    msg: Message,
+) {
+    if let Some(session) = session {
+        let event = if started {
+            SessionTailEvent::SessionStarted(session)
+        } else {
+            SessionTailEvent::SessionUpdated(session)
+        };
+        let _ = tail.send(event);
+    }
+    let _ = tail.send(SessionTailEvent::Message(msg));
+}
+
+/// The calls [`Sink::withhold_unsafe_output`] withholds the results of.
+#[derive(Default)]
+struct UnsafeCalls {
+    /// Calls running a credential command, not answered yet.
+    pending: HashSet<(HarnessSession, ToolCallId)>,
+    /// Sessions whose stored rows were looked through for such calls since the daemon started.
+    warmed: HashSet<HarnessSession>,
+    /// Where each session runs, as its last row to say did.
+    cwds: HashMap<HarnessSession, PathBuf>,
+}
+
+/// Whether `msg` holds enough text that [`sanitize`] may take a while: past [`BULKY`] bytes of it.
+/// Most rows hold far less, and handing each to a blocking thread costs more than sanitizing it:
+/// the thread's own allocator arena holds on to memory, tens of megabytes across a busy ingest.
+fn bulky(msg: &Message) -> bool {
+    fn size(value: &serde_json::Value, left: &mut usize) {
+        match value {
+            serde_json::Value::String(text) => *left = left.saturating_sub(text.len()),
+            serde_json::Value::Array(items) => items.iter().for_each(|item| size(item, left)),
+            serde_json::Value::Object(object) => {
+                object.iter().for_each(|(key, item)| {
+                    *left = left.saturating_sub(key.len());
+                    size(item, left);
+                });
+            }
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                *left = left.saturating_sub(8);
+            }
+        }
+    }
+    let mut left = BULKY;
+    for block in &msg.content {
+        match block {
+            Content::Text(text) | Content::Summary(text) | Content::Error(text) => {
+                left = left.saturating_sub(text.len());
+            }
+            Content::ToolUse(tool) => size(&tool.input, &mut left),
+            Content::ToolResult(result) => size(&result.output, &mut left),
+            Content::Patch(patch) => {
+                let lines = patch.files.iter().flat_map(|f| &f.hunks).flat_map(|h| &h.lines);
+                left = left.saturating_sub(lines.map(String::len).sum());
+            }
+            Content::Reasoning(_) | Content::ReasoningSummary { .. } | Content::Other(_) => {}
+        }
+        if left == 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// See [`bulky`].
+const BULKY: usize = 256 * 1024;
+
+/// Retain conversation text, and of tool calls what `tools` keeps: their inputs and outputs,
+/// unless `ai.capture_tools` is off, `policy` withholds them, or they are over the size limit
+/// (then null, which keeps the wire format without storing them). Reasoning is kept only as a
+/// marker; raw blocks, and text on roles other than user and assistant, are dropped. Text is
+/// redacted as `policy` does, and text that takes too long to redact is not kept.
+fn sanitize(msg: &mut Message, tools: ToolCapture, policy: &CapturePolicy) {
+    let redact = |text: &mut String| match policy.redact(text) {
+        Some(Cow::Borrowed(_)) => {}
+        Some(Cow::Owned(redacted)) => *text = redacted,
+        None => tools::NOT_REDACTED.clone_into(text),
+    };
     let conversation = matches!(msg.role, Role::User | Role::Assistant);
     msg.content.retain_mut(|block| match block {
         Content::Text(text) if conversation => {
-            *text = atuin_common::secrets::redact(text).into_owned();
+            redact(text);
             true
         }
         Content::ToolUse(tool) => {
-            tool.input = serde_json::Value::Null;
+            tools.apply(&mut tool.input, policy);
             true
         }
         Content::ToolResult(result) => {
-            result.output = serde_json::Value::Null;
+            tools.apply(&mut result.output, policy);
             true
         }
+        Content::Patch(patch) => tools.apply_patch(patch, policy),
         Content::Reasoning(_) => {
             *block = Content::ReasoningSummary { tokens: None };
             true
         }
         // Model-written summaries and failure reasons are conversation, whatever the role.
         Content::Summary(text) | Content::Error(text) => {
-            *text = atuin_common::secrets::redact(text).into_owned();
+            redact(text);
             true
         }
         Content::ReasoningSummary { .. } => true,
@@ -316,7 +567,7 @@ fn sanitize_message(msg: &mut Message) {
     // Both titles a row carries: the session's, and the one its own line set.
     let change = msg.title_change.as_mut().and_then(|change| change.text.as_mut());
     for title in msg.session_title.iter_mut().chain(change) {
-        *title = atuin_common::secrets::redact(title).into_owned();
+        redact(title);
     }
 }
 
@@ -341,6 +592,8 @@ pub struct Recovery {
     /// The coordinator's mailbox, for a series only it may forget. Weak: the sync worker does
     /// not keep the coordinator alive. None without a persistent store.
     coordinator: Option<mpsc::WeakUnboundedSender<Msg>>,
+    /// Capture's tail, which synced rows not projected before are sent to as well.
+    tail: broadcast::Sender<SessionTailEvent>,
 }
 
 impl Recovery {
@@ -354,8 +607,35 @@ impl Recovery {
     /// which capture dedups against, and never sets the store's state: a series whose forgetting
     /// would is handed to the coordinator, which holds capture off first, as for a rebuild. A
     /// reprojection that kept being invalidated is left to the next sync.
+    ///
+    /// Rows not projected before reach the tail, as captured ones do; rows already projected
+    /// (this host's own, coming back from the server) do not. Startup recovery and rebuilds
+    /// replay without sending anything, and so does this once a rebuild or a series forgotten
+    /// invalidates it.
     pub async fn project_synced(&self, records: &AiSessionStore, sidecar: &AiSessionDatabase) {
-        let host = match records.reproject_beside_capture(sidecar).await {
+        let tail = &self.tail;
+        let to_tail = |rows: Vec<NewRow>| async move {
+            if tail.receiver_count() == 0 {
+                return;
+            }
+            // Each session as the page left it, looked up once per page.
+            let mut sessions = HashMap::new();
+            for row in rows {
+                let handle = &row.message.session;
+                if !sessions.contains_key(handle) {
+                    let session = sidecar.get_session(handle).await.unwrap_or_else(|err| {
+                        tracing::warn!(?err, "failed to read a synced ai-session for the tail");
+                        None
+                    });
+                    sessions.insert(handle.clone(), session);
+                }
+                send(tail, sessions[handle].clone(), row.started, row.message);
+                // A page outgrows the tail's buffer: let subscribers read it, on the daemon's
+                // single thread too, as capture's per-row writes do.
+                tokio::task::yield_now().await;
+            }
+        };
+        let host = match records.reproject_beside_capture(sidecar, to_tail).await {
             Ok(_) => return,
             Err(BuildError::ForgetHeldOff(host)) => host,
             Err(BuildError::Incomplete) => {
@@ -393,6 +673,22 @@ impl Recovery {
     }
 }
 
+/// Keep what `start` returns while `enabled` is on, dropping it when turned off, until the
+/// sender is gone.
+async fn follow<T>(mut enabled: watch::Receiver<bool>, mut start: impl FnMut() -> T) {
+    let mut running = None;
+    loop {
+        let on = *enabled.borrow_and_update();
+        if on != running.is_some() {
+            tracing::info!(enabled = on, "ai-session capture");
+            running = on.then(&mut start);
+        }
+        if enabled.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
 pub struct AiHarnessSessionCapture {
     sink: Arc<Sink>,
     /// Runs the harness session file reads of capture and import.
@@ -403,6 +699,8 @@ pub struct AiHarnessSessionCapture {
     coordinator: Option<mpsc::UnboundedSender<Msg>>,
     /// How far the replay running has got.
     progress: ReprojectProgress,
+    /// Whether capture is enabled (`ai.capture_sessions`), followed once the store is ready.
+    capture: watch::Sender<bool>,
     /// The coordinator, and the capture engine once startup recovery succeeds; aborted on drop.
     background: Vec<JoinHandle<()>>,
 }
@@ -431,12 +729,16 @@ impl AiHarnessSessionCapture {
         records: AiSessionStore,
         sidecar: AiSessionDatabase,
         capture: bool,
+        tools: ToolCapture,
+        policy: CapturePolicy,
         pool: BlockingPool,
     ) -> Self {
         Self::open_with(
             records,
             sidecar,
             capture,
+            tools,
+            policy,
             pool,
             #[cfg(test)]
             None,
@@ -447,12 +749,14 @@ impl AiHarnessSessionCapture {
         records: AiSessionStore,
         sidecar: AiSessionDatabase,
         capture: bool,
+        tools: ToolCapture,
+        policy: CapturePolicy,
         pool: BlockingPool,
         #[cfg(test)] hooks: Option<Arc<dyn hooks::Hooks>>,
     ) -> Self {
         let (state_tx, state) = watch::channel(StoreState::Recovering);
-        #[cfg_attr(not(test), expect(unused_mut))]
-        let mut sink = Sink::with_state(records, sidecar, state.clone());
+        let mut sink = Sink::with_state(records, sidecar, tools, state.clone());
+        sink.policy = Arc::new(policy);
         #[cfg(test)]
         {
             sink.hooks = hooks;
@@ -471,19 +775,32 @@ impl AiHarnessSessionCapture {
         // listeners that copy new transcripts into the synced record store. It starts once the
         // store is first ready: never, if startup recovery failed, as rebuilds are refused then.
         // (Not on the first state after recovering: a rebuild could have left the store
-        // unavailable by the time this looks.)
+        // unavailable by the time this looks.) From then on it follows the setting
+        // ([`Self::set_capture`]), so turning it on or off takes effect without a restart.
+        // Stopping aborts the listeners mid-read, as a restart does: an append runs to the end on
+        // its own (see [`Sink::append`]), and the checkpoint never passes a line not stored, so
+        // turning capture back on reads again whatever was not. Rows a listener holds in memory
+        // for a transcript replaced under it ([`engine::Held`]) go with it, as on a restart.
+        // On from the start, capture starts from when the daemon did, not once the store is
+        // ready: a session written while it recovers is new (see [`SessionCaptureEngine::spawn`]).
+        let mut started = capture.then(SystemTime::now);
+        let (capture, enabled) = watch::channel(capture);
         let capturing = tokio::spawn({
             let sink = sink.clone();
             let pool = pool.clone();
             let mut state = state.clone();
             async move {
-                let ready = state.wait_for(|state| *state == StoreState::Ready).await.is_ok();
-                let _engine = if capture && ready {
-                    SessionCaptureEngine::spawn(&sink, &pool)
-                } else {
-                    SessionCaptureEngine::nop()
-                };
-                std::future::pending::<()>().await;
+                if state.wait_for(|state| *state == StoreState::Ready).await.is_ok() {
+                    // Turned off (or on again) meanwhile, it starts from when it next is on.
+                    if enabled.has_changed().unwrap_or(true) {
+                        started = None;
+                    }
+                    follow(enabled, || {
+                        let since = started.take().unwrap_or_else(SystemTime::now);
+                        SessionCaptureEngine::spawn(&sink, &pool, since)
+                    })
+                    .await;
+                }
             }
         });
 
@@ -493,6 +810,7 @@ impl AiHarnessSessionCapture {
             state,
             coordinator: Some(coordinator),
             progress,
+            capture,
             background: vec![coordinating, capturing],
         }
     }
@@ -522,7 +840,7 @@ impl AiHarnessSessionCapture {
         );
 
         Self {
-            sink: Arc::new(Sink::with_state(records, sidecar, state.clone())),
+            sink: Arc::new(Sink::with_state(records, sidecar, ToolCapture::Names, state.clone())),
             // Never runs anything: without a persistent store there is no capture or import.
             pool: BlockingPool::new(NonZeroUsize::MIN),
             state,
@@ -530,8 +848,15 @@ impl AiHarnessSessionCapture {
             // the test.
             coordinator: None,
             progress: ReprojectProgress::default(),
+            capture: watch::channel(false).0,
             background: Vec::new(),
         }
+    }
+
+    /// Turn capture on or off, as `ai.capture_sessions` is changed in a running daemon. Takes
+    /// effect once the store is first ready, as at startup; a nop facade never captures.
+    pub fn set_capture(&self, enabled: bool) {
+        self.capture.send_if_modified(|on| std::mem::replace(on, enabled) != enabled);
     }
 
     /// Rebuild the sidecar from the record store while serving, for the maintenance commands
@@ -558,12 +883,35 @@ impl AiHarnessSessionCapture {
         answer.await.unwrap_or(Err(RebuildError::Aborted))
     }
 
+    /// Project records another process synced into the record store (`atuin sync`), as the sync
+    /// worker does those it downloads ([`Recovery::project_synced`]), once startup recovery is
+    /// over. A nop facade has nothing to project.
+    ///
+    /// Runs to the end once asked for, even if the caller stops waiting (a client disconnecting):
+    /// what it downloaded is not downloaded again, so nothing would ask a second time. A failure
+    /// is logged, not returned: the next projection retries what this one left out.
+    pub async fn project_synced(&self) {
+        if self.coordinator.is_none() {
+            return;
+        }
+        let recovery = self.recovery();
+        let sink = self.sink.clone();
+        let projecting = tokio::spawn(async move {
+            recovery.finished().await;
+            recovery.project_synced(&sink.records, &sink.sidecar).await;
+        });
+        if let Err(err) = projecting.await {
+            tracing::error!(?err, "projecting synced ai-session records failed");
+        }
+    }
+
     /// A handle for waiting out startup recovery.
     #[must_use]
     pub fn recovery(&self) -> Recovery {
         Recovery {
             state: self.state.clone(),
             coordinator: self.coordinator.as_ref().map(mpsc::UnboundedSender::downgrade),
+            tail: self.sink.tail.clone(),
         }
     }
 
@@ -649,13 +997,6 @@ impl AiHarnessSessionCapture {
         self.sink.sidecar.messages(session)
     }
 
-    pub fn transcript(
-        &self,
-        session: &HarnessSession,
-    ) -> impl Stream<Item = Result<String, DbError>> + Send + 'static {
-        self.sink.sidecar.transcript(session)
-    }
-
     pub fn search(
         &self,
         query: &str,
@@ -679,6 +1020,7 @@ mod tests {
     use futures::StreamExt;
     use rstest::rstest;
     use time::OffsetDateTime;
+    use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
     use super::*;
 
@@ -707,6 +1049,96 @@ mod tests {
             .role(Role::User)
             .content(vec![Content::Text("hello".to_owned())])
             .build()
+    }
+
+    /// Turning `ai.capture_sessions` on or off in a running daemon starts or stops capture,
+    /// without a restart; setting it to what it already is leaves capture running as it was.
+    #[rstest]
+    #[tokio::test]
+    async fn capture_follows_the_setting() {
+        struct Running(mpsc::UnboundedSender<bool>);
+        impl Drop for Running {
+            fn drop(&mut self) {
+                let _ = self.0.send(false);
+            }
+        }
+
+        let (capture, enabled) = watch::channel(false);
+        let (tx, mut running) = mpsc::unbounded_channel();
+        let following = tokio::spawn(follow(enabled, move || {
+            tx.send(true).unwrap();
+            Running(tx.clone())
+        }));
+        let set = |on: bool| capture.send_if_modified(|was| std::mem::replace(was, on) != on);
+
+        set(true);
+        assert_eq!(running.recv().await, Some(true));
+        set(true);
+        set(false);
+        assert_eq!(running.recv().await, Some(false));
+        set(true);
+        assert_eq!(running.recv().await, Some(true));
+
+        // Gone with the facade's sender.
+        drop(capture);
+        following.await.unwrap();
+        assert_eq!(running.recv().await, Some(false));
+        assert_eq!(running.recv().await, None);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn every_row_of_a_session_carries_its_first_rows_id() {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sub = sink.subscribe();
+        let first = sample_message();
+        let mut earlier = sample_message();
+        earlier.id = RecordId(atuin_common::utils::uuid_v7());
+        earlier.source_id = SourceId::from("earlier".to_owned());
+        earlier.timestamp = first.timestamp - time::Duration::hours(1);
+
+        sink.append(first.clone()).await.unwrap();
+        sink.append(earlier).await.unwrap();
+
+        let fixed = sink.sidecar.get_session(&first.session).await.unwrap().unwrap().atuin_id;
+        let mut carried = Vec::new();
+        while carried.len() < 2 {
+            if let SessionTailEvent::Message(m) = sub.next().await.unwrap().unwrap() {
+                carried.push(m.atuin_id);
+            }
+        }
+        assert_eq!(carried, [Some(fixed), Some(fixed)]);
+        assert_eq!(uuid::Uuid::from(fixed).get_version(), Some(uuid::Version::SortRand));
+    }
+
+    /// A continuation (`atuin ai resume --in`) or a fork (`--fork`) is a new session: it gets an
+    /// atuin id of its own, not the one of the session it came from, whose rows keep theirs.
+    #[rstest]
+    #[case::continuation(atuin_common::harnesstools::session::ParentKind::Continuation)]
+    #[case::fork(atuin_common::harnesstools::session::ParentKind::Fork)]
+    #[tokio::test]
+    async fn a_continuation_gets_its_own_atuin_id(
+        #[case] kind: atuin_common::harnesstools::session::ParentKind,
+    ) {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let original = sample_message();
+        let mut continued = sample_message();
+        continued.id = RecordId(atuin_common::utils::uuid_v7());
+        continued.session = HarnessSession {
+            harness: HarnessKind::Pi,
+            session: NativeSessionId::from("continued".to_owned()),
+        };
+        continued.parent = Some(original.session.clone());
+        continued.parent_kind = Some(kind);
+
+        sink.append(original.clone()).await.unwrap();
+        sink.append(continued.clone()).await.unwrap();
+
+        let id_of =
+            async |handle| sink.sidecar.get_session(handle).await.unwrap().unwrap().atuin_id;
+        let (from, to) = (id_of(&original.session).await, id_of(&continued.session).await);
+        assert_ne!(from, to);
+        assert_eq!(uuid::Uuid::from(to).get_version(), Some(uuid::Version::SortRand));
     }
 
     #[rstest]
@@ -758,9 +1190,11 @@ mod tests {
             Content::Other(serde_json::json!({"attachment": "PRIVATE_ATTACHMENT"})),
         ];
         sink.append(msg.clone()).await.unwrap();
-        sanitize_message(&mut msg);
-        // Capture stamps the local host.
+        sanitize(&mut msg, ToolCapture::Names, &CapturePolicy::default());
+        // Capture stamps the local host, and the session's id.
         msg.host = Some(sink.records.host_id());
+        msg.atuin_id =
+            Some(sink.sidecar.get_session(&msg.session).await.unwrap().unwrap().atuin_id);
         assert_eq!(msg.content.len(), 4);
         assert_eq!(msg.content[3], Content::ReasoningSummary { tokens: None });
         assert_eq!(msg.content[0], Content::Text("AWS_SECRET_ACCESS_KEY=****".to_owned()));
@@ -784,8 +1218,9 @@ mod tests {
             sink.sidecar.get_session(&msg.session).await.unwrap().unwrap().title,
             msg.session_title,
         );
-        // The projection keeps titles on sessions rather than individual messages.
+        // The projection keeps titles and ids on sessions rather than individual messages.
         let title = msg.session_title.take();
+        msg.atuin_id = None;
         let mut messages = Box::pin(sink.sidecar.messages(&msg.session));
         assert_eq!(messages.next().await.unwrap().unwrap(), msg);
 
@@ -812,15 +1247,420 @@ mod tests {
         }
     }
 
+    /// With `ai.capture_tools`, a call's input and output reach the records, the sidecar and a
+    /// rebuild, secrets redacted. Its input is searchable; its output is not indexed.
     #[rstest]
-    #[case(None, "Reasoned")]
-    #[case(Some(185), "Reasoning · 185 tokens")]
-    #[case(Some(0), "Reasoning · 0 tokens")]
     #[tokio::test]
-    async fn reasoning_metadata_survives_storage_and_rendering(
-        #[case] tokens: Option<u64>,
-        #[case] label: &str,
-    ) {
+    async fn capture_with_tools_keeps_payloads() {
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.tools = ToolCapture::Payloads;
+        let mut msg = sample_message();
+        msg.role = Role::Assistant;
+        msg.content = vec![
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("call".to_owned()),
+                name: "Bash".to_owned(),
+                input: serde_json::json!({"command": "cargo test --package flubber"}),
+            }),
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("call".to_owned()),
+                output: serde_json::json!("AWS_SECRET_ACCESS_KEY=OUTSECRET\ntest wibble ... ok"),
+                error: false,
+            }),
+        ];
+        sink.append(msg.clone()).await.unwrap();
+
+        let want_output = serde_json::json!("AWS_SECRET_ACCESS_KEY=****\ntest wibble ... ok");
+        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        sink.records.build(&rebuilt).await.unwrap();
+        for db in [&sink.sidecar, &rebuilt] {
+            let mut messages = Box::pin(db.messages(&msg.session));
+            let stored = messages.next().await.unwrap().unwrap();
+            assert_eq!(stored.content[0], msg.content[0], "input kept as it was");
+            assert!(
+                matches!(&stored.content[1], Content::ToolResult(r) if r.output == want_output)
+            );
+        }
+
+        let search = |query| {
+            Box::pin(sink.sidecar.search(query, SearchTerms::Typed, &SessionFilter::default(), 10))
+        };
+        assert!(search("flubber").next().await.is_some(), "input is searchable");
+        assert!(search("wibble").next().await.is_none(), "output is not indexed");
+    }
+
+    /// The output of a call running `atuin key` (or `login`, ...) is never kept, answered in a
+    /// later line or the same one, while the call itself is, and so are other calls' outputs.
+    #[rstest]
+    #[tokio::test]
+    async fn credential_command_output_is_never_kept() {
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.tools = ToolCapture::Payloads;
+        let call = |id: &str, command: &str| {
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from(id.to_owned()),
+                name: "Bash".to_owned(),
+                input: serde_json::json!({ "command": command }),
+            })
+        };
+        let result = |id: &str| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from(id.to_owned()),
+                output: serde_json::json!("abandon ability able about above absent"),
+                error: false,
+            })
+        };
+        let row = |n: u32, role, content| {
+            let mut msg = sample_message();
+            msg.id = RecordId(atuin_common::utils::uuid_v7());
+            msg.source_id = SourceId::from(format!("line-{n}"));
+            msg.timestamp += time::Duration::seconds(n.into());
+            msg.role = role;
+            msg.content = content;
+            msg
+        };
+        let rows = [
+            row(1, Role::Assistant, vec![call("key", "atuin key"), call("ls", "ls")]),
+            row(2, Role::User, vec![result("key"), result("ls")]),
+            row(3, Role::Assistant, vec![call("login", "atuin login -u me"), result("login")]),
+        ];
+        for msg in &rows {
+            sink.append(msg.clone()).await.unwrap();
+        }
+
+        let mut messages = Box::pin(sink.sidecar.messages(&rows[0].session));
+        let mut outputs = Vec::new();
+        while let Some(stored) = messages.next().await {
+            for block in stored.unwrap().content {
+                match block {
+                    Content::ToolResult(r) => outputs.push((r.call.to_string(), r.output)),
+                    // `atuin login` is a command history doesn't keep (`secrets_filter`): nor
+                    // is what the call was given.
+                    Content::ToolUse(u) => {
+                        assert_eq!(u.input.is_null(), u.id.as_ref() == "login", "{u:?}");
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(outputs, [
+            ("key".to_owned(), serde_json::Value::Null),
+            ("ls".to_owned(), serde_json::json!("abandon ability able about above absent")),
+            ("login".to_owned(), serde_json::Value::Null),
+        ]);
+
+        // A call made before the daemon restarted is still withheld once answered after it.
+        sink.append(row(4, Role::Assistant, vec![call("again", "{ atuin key; }")])).await.unwrap();
+        let restarted = Sink::with_state(
+            sink.records.clone(),
+            sink.sidecar.clone(),
+            ToolCapture::Payloads,
+            watch::channel(StoreState::Ready).1,
+        );
+        restarted.append(row(5, Role::User, vec![result("again")])).await.unwrap();
+        assert_last_output_withheld(&sink.sidecar, &rows[0].session).await;
+
+        // As is one made while `ai.capture_tools` was off, whose input wasn't kept to check,
+        // answered after a restart that turned it on.
+        let names = Sink::with_state(
+            sink.records.clone(),
+            sink.sidecar.clone(),
+            ToolCapture::Names,
+            watch::channel(StoreState::Ready).1,
+        );
+        names.append(row(6, Role::Assistant, vec![call("off", "atuin key")])).await.unwrap();
+        let enabled = Sink::with_state(
+            sink.records.clone(),
+            sink.sidecar.clone(),
+            ToolCapture::Payloads,
+            watch::channel(StoreState::Ready).1,
+        );
+        enabled.append(row(7, Role::User, vec![result("off")])).await.unwrap();
+        assert_last_output_withheld(&sink.sidecar, &rows[0].session).await;
+
+        // And a Codex script that wrote a credential file, stored without what it wrote (which
+        // leaves no call to judge again).
+        let script = Content::ToolUse(ToolUse {
+            id: ToolCallId::from("script".to_owned()),
+            name: "exec".to_owned(),
+            input: serde_json::json!(
+                "await tools.apply_patch(\"*** Begin Patch\\n*** Add File: .env\\n+A=1\\n*** End \
+                 Patch\");"
+            ),
+        });
+        enabled.append(row(8, Role::Assistant, vec![script])).await.unwrap();
+        let again = Sink::with_state(
+            sink.records.clone(),
+            sink.sidecar.clone(),
+            ToolCapture::Payloads,
+            watch::channel(StoreState::Ready).1,
+        );
+        again.append(row(9, Role::User, vec![result("script")])).await.unwrap();
+        assert_last_output_withheld(&sink.sidecar, &rows[0].session).await;
+    }
+
+    /// An append dropped once policy has forgotten the credential command waiting for its output
+    /// still stores the row, its output withheld: appended again, the output is not kept.
+    #[rstest]
+    #[tokio::test]
+    async fn an_append_dropped_once_its_output_is_withheld_still_withholds_it() {
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.tools = ToolCapture::Payloads;
+        let row = |n: u32, role, content| {
+            let mut msg = sample_message();
+            msg.id = RecordId(atuin_common::utils::uuid_v7());
+            msg.source_id = SourceId::from(format!("line-{n}"));
+            msg.role = role;
+            msg.content = vec![content];
+            msg
+        };
+        let call = row(
+            1,
+            Role::Assistant,
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("key".to_owned()),
+                name: "Bash".to_owned(),
+                input: serde_json::json!({ "command": "atuin key" }),
+            }),
+        );
+        let answer = row(
+            2,
+            Role::User,
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("key".to_owned()),
+                output: serde_json::json!("abandon ability able about above absent"),
+                error: false,
+            }),
+        );
+        sink.append(call).await.unwrap();
+
+        let mut append = Box::pin(sink.append(answer.clone()));
+        while futures::poll!(&mut append).is_pending()
+            && !sink.unsafe_calls.lock().pending.is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+        drop(append);
+        sink.append(answer.clone()).await.unwrap();
+        assert_last_output_withheld(&sink.sidecar, &answer.session).await;
+    }
+
+    async fn assert_last_output_withheld(sidecar: &AiSessionDatabase, session: &HarnessSession) {
+        let mut messages = Box::pin(sidecar.messages(session));
+        let mut last = None;
+        while let Some(stored) = messages.next().await {
+            last = Some(stored.unwrap());
+        }
+        let last = last.unwrap();
+        assert!(
+            matches!(&last.content[..], [Content::ToolResult(r)] if r.output.is_null()),
+            "{last:?}"
+        );
+    }
+
+    /// A patch shows what a call wrote: it is kept with the call's output, and dropped where that
+    /// is withheld (a write to `.env`, before its result or beside it), where it touches a
+    /// credential file whatever the call said, and in a directory `cwd_filter` matches.
+    #[rstest]
+    #[tokio::test]
+    async fn a_patch_is_kept_out_with_what_its_call_wrote() {
+        use atuin_common::harnesstools::session::{Change, FilePatch, Hunk, Patch};
+
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.tools = ToolCapture::Payloads;
+        sink.policy = Arc::new(policy::tests::policy());
+        let call = |id: &str, name: &str, input: serde_json::Value| {
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from(id.to_owned()),
+                name: name.to_owned(),
+                input,
+            })
+        };
+        let result = |id: &str| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from(id.to_owned()),
+                output: serde_json::json!("done"),
+                error: false,
+            })
+        };
+        let patch = |id: &str, path: &str| {
+            Content::Patch(Patch {
+                call: ToolCallId::from(id.to_owned()),
+                files: vec![FilePatch {
+                    path: path.to_owned(),
+                    change: Change::Update,
+                    moved_to: None,
+                    hunks: vec![Hunk {
+                        old_start: 1,
+                        old_lines: 1,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec!["-A=0".to_owned(), "+A=violetmeadow".to_owned()],
+                    }],
+                }],
+            })
+        };
+        let row = |n: u32, role, cwd: Option<&str>, content| {
+            let mut msg = sample_message();
+            msg.id = RecordId(atuin_common::utils::uuid_v7());
+            msg.source_id = SourceId::from(format!("line-{n}"));
+            msg.timestamp += time::Duration::seconds(n.into());
+            msg.role = role;
+            msg.cwd = cwd.map(Into::into);
+            msg.content = content;
+            msg
+        };
+        let edit = |id: &str, path: &str| {
+            call(
+                id,
+                "Edit",
+                serde_json::json!({"file_path": path, "old_string": "A=0",
+                "new_string": "A=1"}),
+            )
+        };
+        let rows = [
+            row(1, Role::Assistant, Some("/w"), vec![
+                edit("src", "src/a.rs"),
+                edit("env", ".env"),
+                call(
+                    "codex",
+                    "apply_patch",
+                    serde_json::json!(
+                        "*** Begin Patch\n*** Update File: .env\n+A=1\n*** End Patch"
+                    ),
+                ),
+                edit("lies", "src/b.rs"),
+            ]),
+            row(2, Role::Tool, None, vec![result("src"), patch("src", "src/a.rs")]),
+            row(3, Role::Tool, None, vec![result("env"), patch("env", ".env")]),
+            // Codex keeps a patch on a row of its own, before the result.
+            row(4, Role::Tool, None, vec![patch("codex", ".env")]),
+            row(5, Role::Tool, None, vec![result("codex")]),
+            row(6, Role::Tool, None, vec![result("lies"), patch("lies", ".env")]),
+            row(7, Role::User, Some("/secret/project"), vec![]),
+            row(8, Role::Assistant, None, vec![edit("there", "src/c.rs")]),
+            row(9, Role::Tool, None, vec![result("there"), patch("there", "src/c.rs")]),
+        ];
+        for msg in &rows {
+            sink.append(msg.clone()).await.unwrap();
+        }
+
+        let mut messages = Box::pin(sink.sidecar.messages(&rows[0].session));
+        let mut patches = Vec::new();
+        while let Some(stored) = messages.next().await {
+            for block in stored.unwrap().content {
+                if let Content::Patch(patch) = block {
+                    patches.push(patch.call.to_string());
+                }
+            }
+        }
+        assert_eq!(patches, ["src"]);
+    }
+
+    /// What history and the credential files keep out, capture keeps out of a session: a read of
+    /// `.env` loses its output, a write to it what it wrote, a command history ignores all but
+    /// its name, and every call in a directory `cwd_filter` matches its input and output.
+    #[rstest]
+    #[tokio::test]
+    async fn the_users_filters_and_credential_files_are_kept_out() {
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.tools = ToolCapture::Payloads;
+        sink.policy = Arc::new(policy::tests::policy());
+        let call = |id: &str, name: &str, input: serde_json::Value| {
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from(id.to_owned()),
+                name: name.to_owned(),
+                input,
+            })
+        };
+        let result = |id: &str| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from(id.to_owned()),
+                output: serde_json::json!("abandon ability able about above absent"),
+                error: false,
+            })
+        };
+        let row = |n: u32, role, cwd: Option<&str>, content| {
+            let mut msg = sample_message();
+            msg.id = RecordId(atuin_common::utils::uuid_v7());
+            msg.source_id = SourceId::from(format!("line-{n}"));
+            msg.timestamp += time::Duration::seconds(n.into());
+            msg.role = role;
+            msg.cwd = cwd.map(Into::into);
+            msg.content = content;
+            msg
+        };
+        let ls = |id: &str| call(id, "Bash", serde_json::json!({"command": "ls"}));
+        let rows = [
+            row(1, Role::Assistant, Some("/w"), vec![
+                call("read", "Read", serde_json::json!({"file_path": ".env"})),
+                call("write", "Write", serde_json::json!({"file_path": ".env", "content": "A=1"})),
+                call("psql", "Bash", serde_json::json!({"command": "psql -c 'select 1'"})),
+                ls("ls"),
+            ]),
+            row(2, Role::User, Some("/w"), vec![
+                result("read"),
+                result("write"),
+                result("psql"),
+                result("ls"),
+            ]),
+            // Codex and Pi say where a session runs on a row of its own; its calls' rows don't.
+            row(3, Role::User, Some("/secret/project"), vec![]),
+            row(4, Role::Assistant, None, vec![ls("there")]),
+            row(5, Role::User, None, vec![result("there")]),
+        ];
+        for msg in &rows {
+            sink.append(msg.clone()).await.unwrap();
+        }
+        // Still so after a restart.
+        let mut restarted = Sink::with_state(
+            sink.records.clone(),
+            sink.sidecar.clone(),
+            ToolCapture::Payloads,
+            watch::channel(StoreState::Ready).1,
+        );
+        restarted.policy = sink.policy.clone();
+        restarted.append(row(6, Role::Assistant, None, vec![ls("again")])).await.unwrap();
+        restarted.append(row(7, Role::User, None, vec![result("again")])).await.unwrap();
+
+        let mut messages = Box::pin(sink.sidecar.messages(&rows[0].session));
+        let (mut inputs, mut outputs) = (Vec::new(), Vec::new());
+        while let Some(stored) = messages.next().await {
+            for block in stored.unwrap().content {
+                match block {
+                    Content::ToolUse(u) => inputs.push((u.id.to_string(), u.input)),
+                    Content::ToolResult(r) => {
+                        outputs.push((r.call.to_string(), !r.output.is_null()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let withheld = "[not captured: a file holding credentials]";
+        assert_eq!(inputs, [
+            ("read".to_owned(), serde_json::json!({"file_path": ".env"})),
+            ("write".to_owned(), serde_json::json!({"file_path": ".env", "content": withheld})),
+            ("psql".to_owned(), serde_json::Value::Null),
+            ("ls".to_owned(), serde_json::json!({"command": "ls"})),
+            ("there".to_owned(), serde_json::Value::Null),
+            ("again".to_owned(), serde_json::Value::Null),
+        ]);
+        assert_eq!(outputs, [
+            ("read".to_owned(), false),
+            ("write".to_owned(), false),
+            ("psql".to_owned(), false),
+            ("ls".to_owned(), true),
+            ("there".to_owned(), false),
+            ("again".to_owned(), false),
+        ]);
+    }
+
+    #[rstest]
+    #[case(None)]
+    #[case(Some(185))]
+    #[case(Some(0))]
+    #[tokio::test]
+    async fn reasoning_metadata_survives_storage(#[case] tokens: Option<u64>) {
         let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
         let mut msg = sample_message();
         msg.role = Role::Assistant;
@@ -838,8 +1678,6 @@ mod tests {
                 crate::grpc::ai::agent::pb::ReasoningSummary { tokens }
             ))
         );
-        let mut transcript = Box::pin(rebuilt.transcript(&msg.session));
-        assert_eq!(transcript.next().await.unwrap().unwrap(), format!("assistant: {label}\n"));
     }
 
     /// A row of model call `turn` reporting `output` tokens, `reasoning` of them thinking.
@@ -955,6 +1793,8 @@ mod tests {
             records.clone(),
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
         );
         assert!(!capture.ready().await);
@@ -970,6 +1810,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
         );
         assert!(capture.ready().await);
@@ -1012,11 +1854,138 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
         );
         // Capture and import hold on this, so the dedup gate sees every persisted message.
         assert!(capture.ready().await);
         assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
+    }
+
+    /// Records another process synced in are projected once asked for, even if the asker stops
+    /// waiting at once: they are not downloaded again, so nothing would ask a second time.
+    #[rstest]
+    #[tokio::test]
+    async fn synced_records_are_projected_though_the_asker_stops_waiting() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records.clone(),
+            sidecar.clone(),
+            false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        let msg = sample_message();
+        records.push(&msg).await.unwrap();
+
+        // Polled once, then dropped, as a client disconnecting does to its handler.
+        let _ = tokio::time::timeout(Duration::ZERO, capture.project_synced()).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the projection stopped with its asker");
+    }
+
+    /// Rows that arrive by sync reach the tail as captured ones do, once each: replaying records
+    /// already projected, this host's own among them, sends nothing.
+    #[rstest]
+    #[tokio::test]
+    async fn synced_rows_reach_the_tail_once() {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let key = Key::generate();
+        let records_of = |host| {
+            AiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build()
+        };
+        let records = records_of(HostId(atuin_common::utils::uuid_v7()));
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let capture = AiHarnessSessionCapture::open(
+            records,
+            sidecar.clone(),
+            false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        let mut sub = capture.subscribe();
+        capture.sink.append(message_of("local", "l1")).await.unwrap();
+        while sub.next().now_or_never().is_some() {}
+
+        // Downloaded from another host.
+        let other = records_of(HostId(atuin_common::utils::uuid_v7()));
+        let (first, second) = (message_of("synced", "s1"), message_of("synced", "s2"));
+        other.push(&first).await.unwrap();
+        other.push(&second).await.unwrap();
+        capture.project_synced().await;
+
+        let mut events = Vec::new();
+        while let Some(event) = sub.next().now_or_never() {
+            events.push(event.unwrap().unwrap());
+        }
+        let shown: Vec<_> = events
+            .iter()
+            .map(|event| match event {
+                SessionTailEvent::SessionStarted(s) => format!("started {}", s.handle.session),
+                SessionTailEvent::SessionUpdated(s) => format!("updated {}", s.handle.session),
+                SessionTailEvent::Message(m) => format!("message {}", m.source_id),
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            ["started synced", "message s1", "updated synced", "message s2"],
+            "synced rows reach the tail as captured ones do"
+        );
+
+        sidecar.clear_reproject_watermarks().await.unwrap();
+        capture.project_synced().await;
+        assert!(sub.next().now_or_never().is_none(), "known rows are not sent again");
+    }
+
+    /// A synced page of one session, far longer than the tail's buffer, reaches a subscriber
+    /// whole on the daemon's single thread.
+    #[rstest]
+    #[tokio::test]
+    async fn a_long_synced_session_reaches_the_tail_whole() {
+        let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
+        let key = Key::generate();
+        let records_of = |host| {
+            AiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build()
+        };
+        let capture = AiHarnessSessionCapture::open(
+            records_of(HostId(atuin_common::utils::uuid_v7())),
+            AiSessionDatabase::in_memory().await.unwrap(),
+            false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
+            BlockingPool::new(NonZeroUsize::MIN),
+        );
+        assert!(capture.ready().await);
+        let other = records_of(HostId(atuin_common::utils::uuid_v7()));
+        for n in 0..300 {
+            other.push(&message_of("synced", &format!("s{n}"))).await.unwrap();
+        }
+
+        let mut sub = capture.subscribe();
+        let tail = tokio::spawn(async move {
+            let mut messages = 0;
+            while messages < 300 {
+                if let SessionTailEvent::Message(_) = sub.next().await.unwrap()? {
+                    messages += 1;
+                }
+            }
+            Ok::<_, BroadcastStreamRecvError>(())
+        });
+        capture.project_synced().await;
+
+        let tailed = tokio::time::timeout(Duration::from_secs(5), tail).await.unwrap().unwrap();
+        assert_eq!(tailed, Ok(()), "the tail lagged behind a synced page");
     }
 
     /// A message of session `session`, from line `source`.
@@ -1026,6 +1995,36 @@ mod tests {
         msg.session.session = NativeSessionId::from(session.to_owned());
         msg.source_id = source.to_owned().into();
         msg
+    }
+
+    /// Capture moves the watermark past each record it projects, so a restart replays none of
+    /// them; a capture while a reprojection runs leaves it to the reprojection.
+    #[rstest]
+    #[tokio::test]
+    async fn capture_moves_the_watermark_past_what_it_projects() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        // Startup recovery, before capture starts.
+        records.reproject(&sidecar).await.unwrap();
+        let sink = Sink::new(records.clone(), sidecar.clone());
+        for source in ["a", "b"] {
+            sink.append(message_of("s1", source)).await.unwrap();
+        }
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 0);
+
+        let replaying = sidecar.lock_reprojection().await;
+        sink.append(message_of("s1", "c")).await.unwrap();
+        drop(replaying);
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 1);
+        sink.append(message_of("s1", "d")).await.unwrap();
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 0);
+
+        // An invalidation (watermarks cleared) after capture last moved it: not moved past it.
+        sidecar.clear_reproject_watermarks().await.unwrap();
+        sink.append(message_of("s1", "e")).await.unwrap();
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 5);
+        sink.append(message_of("s1", "f")).await.unwrap();
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 0);
     }
 
     /// A rebuild (after a purge deleted records) takes out what the deleted records projected and
@@ -1048,6 +2047,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
         );
         assert!(capture.ready().await);
@@ -1100,6 +2101,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
         );
         assert!(capture.ready().await);
@@ -1137,6 +2140,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
         );
         capture.rebuild().await.unwrap();
@@ -1221,6 +2226,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
             Some(gate.clone() as Arc<dyn hooks::Hooks>),
         );
@@ -1268,6 +2275,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
             Some(gate.clone() as Arc<dyn hooks::Hooks>),
         );
@@ -1310,6 +2319,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
             Some(gate.clone() as Arc<dyn hooks::Hooks>),
         );
@@ -1341,6 +2352,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
         );
         assert!(capture.ready().await);
@@ -1384,6 +2397,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
         );
         assert!(capture.ready().await);
@@ -1412,12 +2427,26 @@ mod tests {
         let enricher = MessageEnricher::new(HarnessKind::ClaudeCode);
         let handle = enricher.handle(&session);
         assert_eq!(handle, msg.session);
-        let checkpoint = Checkpoint { at: 40, digest: 7 };
+        let checkpoint = Checkpoint {
+            at: 40,
+            digest: 7,
+            generation: 0,
+        };
         let listener = tokio::spawn({
             let (sink, msg) = (capture.sink.clone(), msg.clone());
             async move {
                 let mut stuck = std::collections::HashSet::new();
-                capture_rows(&sink, &enricher, &mut stuck, &session, vec![msg], checkpoint).await;
+                let mut held = std::collections::HashMap::new();
+                capture_rows(
+                    &sink,
+                    &enricher,
+                    &mut stuck,
+                    &mut held,
+                    &session,
+                    vec![msg],
+                    checkpoint,
+                )
+                .await;
                 stuck
             }
         });
@@ -1518,6 +2547,8 @@ mod tests {
             records.clone(),
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
             Some(hooks.clone() as Arc<dyn hooks::Hooks>),
         );
@@ -1619,6 +2650,8 @@ mod tests {
             records,
             sidecar.clone(),
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
             Some(hooks.clone() as Arc<dyn hooks::Hooks>),
         );
@@ -1683,6 +2716,8 @@ mod tests {
             records,
             sidecar,
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
         );
         assert!(!capture.ready().await);
@@ -1705,6 +2740,8 @@ mod tests {
                 records.clone(),
                 sidecar.clone(),
                 false,
+                ToolCapture::Names,
+                CapturePolicy::default(),
                 BlockingPool::new(NonZeroUsize::MIN),
             )
         };
@@ -1741,6 +2778,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn split_and_interleaved_calls_count_reasoning_once() {
+        use futures::TryStreamExt;
         let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
         for (index, (turn, marker, output, reasoning)) in [
             ("a", true, 10, None),
@@ -1760,12 +2798,16 @@ mod tests {
             sink.append(msg).await.unwrap();
         }
         assert_eq!(charged(&sink.sidecar).await, (1049, 227));
-        let transcript: Vec<String> =
-            sink.sidecar.transcript(&sample_handle()).map(Result::unwrap).collect().await;
-        assert_eq!(transcript[..2], [
-            "assistant: Reasoned\n".to_owned(),
-            "assistant: Reasoning · 42 tokens\n".to_owned()
-        ]);
+        let markers: Vec<(Vec<Content>, Option<u64>)> = sink
+            .sidecar
+            .messages(&sample_handle())
+            .map(|msg| msg.map(|msg| (msg.content, msg.usage.and_then(|usage| usage.reasoning))))
+            .take(2)
+            .try_collect()
+            .await
+            .unwrap();
+        let marker = || vec![Content::ReasoningSummary { tokens: None }];
+        assert_eq!(markers, [(marker(), None), (marker(), Some(42))]);
     }
 
     #[rstest]
@@ -1806,7 +2848,7 @@ mod tests {
     fn non_conversation_text_is_omitted(#[case] role: Role) {
         let mut msg = sample_message();
         msg.role = role;
-        sanitize_message(&mut msg);
+        sanitize(&mut msg, ToolCapture::Names, &CapturePolicy::default());
         assert!(msg.content.is_empty());
     }
 
@@ -1821,7 +2863,7 @@ mod tests {
             Content::Summary("earlier: AWS_SECRET_ACCESS_KEY=SUMMARYSECRET".to_owned()),
             Content::Error("overloaded".to_owned()),
         ];
-        sanitize_message(&mut msg);
+        sanitize(&mut msg, ToolCapture::Names, &CapturePolicy::default());
         assert_eq!(msg.content, vec![
             Content::Summary("earlier: AWS_SECRET_ACCESS_KEY=****".to_owned()),
             Content::Error("overloaded".to_owned()),
@@ -1836,6 +2878,29 @@ mod tests {
 
         assert_eq!(sink.append(msg.clone()).await.unwrap(), Appended::New);
         assert_eq!(sink.append(msg).await.unwrap(), Appended::Duplicate);
+    }
+
+    /// A line naming an instant past the years a date can name is captured at the nearest one
+    /// stored, so the record synced never carries it.
+    #[rstest]
+    #[case::late(time::macros::datetime!(9999-12-31 23:59:59 -23:59), Message::LATEST)]
+    #[case::early(time::macros::datetime!(-9999-01-01 0:00 +23:59), Message::EARLIEST)]
+    #[tokio::test]
+    async fn capture_holds_a_timestamp_to_the_range_stored(
+        #[case] timestamp: OffsetDateTime,
+        #[case] want: OffsetDateTime,
+    ) {
+        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sub = sink.subscribe();
+        let mut msg = sample_message();
+        msg.timestamp = timestamp;
+        sink.append(msg).await.unwrap();
+
+        let _started = sub.next().await.unwrap().unwrap();
+        let SessionTailEvent::Message(pushed) = sub.next().await.unwrap().unwrap() else {
+            panic!("expected message");
+        };
+        assert_eq!(pushed.timestamp, want);
     }
 
     /// A restored transcript writes a call captured without its input back as a note in its
@@ -2297,6 +3362,8 @@ mod pipeline_tests {
             records,
             sidecar,
             false,
+            ToolCapture::Names,
+            CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
             hooks,
         );
@@ -2656,8 +3723,33 @@ mod pipeline_tests {
         }));
         let mut msg =
             MessageEnricher::new(HarnessKind::ClaudeCode).capture(&sid("s1"), &m).pop().unwrap();
-        sanitize_message(&mut msg);
+        sanitize(&mut msg, ToolCapture::Names, &CapturePolicy::default());
         assert!(!msg.content.is_empty(), "summary text retained");
+    }
+
+    /// A continuation's marker (`atuin ai resume --in`) is harness-injected text, which is not
+    /// synced; the link it makes is, as every row's parent, so it survives sync and reprojection.
+    #[rstest]
+    fn a_continuation_marker_is_dropped_but_its_parent_is_kept() {
+        use atuin_common::harnesstools::{AnyHarness, continuation};
+        let marker =
+            continuation::marker_text(AnyHarness::from_name("pi").unwrap(), "0199-orig", None);
+        let m = ccode(serde_json::json!({
+            "type": "user", "uuid": "c1", "isMeta": true, "timestamp": "2026-09-18T10:00:00.000Z",
+            "message": {"role": "user", "content": marker},
+        }));
+        let mut msg =
+            MessageEnricher::new(HarnessKind::ClaudeCode).capture(&sid("s1"), &m).pop().unwrap();
+        sanitize(&mut msg, ToolCapture::Names, &CapturePolicy::default());
+        assert!(msg.content.is_empty(), "{:?}", msg.content);
+        let parent = msg.parent.clone().expect("the marker names the parent");
+        assert_eq!(parent.harness, HarnessKind::Pi);
+        assert_eq!(parent.session.as_ref(), "0199-orig");
+        let record = atuin_client::ai_session::AiSessionRecord::Message(msg).serialize();
+        let version = atuin_client::ai_session::AiSessionRecord::VERSION;
+        let back =
+            atuin_client::ai_session::AiSessionRecord::deserialize(&record, &version).unwrap();
+        assert!(format!("{back:?}").contains("0199-orig"), "the record carries the parent");
     }
 
     /// Execution payloads that Claude Code records as user text (`<local-command-stdout>`) must
@@ -2671,7 +3763,7 @@ mod pipeline_tests {
         }));
         let mut msg =
             MessageEnricher::new(HarnessKind::ClaudeCode).capture(&sid("s1"), &m).pop().unwrap();
-        sanitize_message(&mut msg);
+        sanitize(&mut msg, ToolCapture::Names, &CapturePolicy::default());
         assert!(
             !format!("{:?}", msg.content).contains("PRIVATE_OUTPUT"),
             "command output is an execution payload"
@@ -2696,22 +3788,18 @@ mod pipeline_tests {
         assert_eq!(row.title.as_deref(), Some("Old work"));
     }
 
-    /// Serializes the tests that point `CODEX_HOME` somewhere: the variable is process-wide, and
-    /// a rehydrate that found it unset would write to the real `~/.codex`.
-    static CODEX_HOME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     /// Write `session` out as Codex would find it, under a temporary `CODEX_HOME`.
     async fn rehydrate_codex(
         session: &atuin_common::harnesstools::rehydrate::RehydrateSession,
         home: &std::path::Path,
     ) -> std::path::PathBuf {
-        let _env = CODEX_HOME.lock().await;
-        // SAFETY: no other thread of these tests reads or writes the environment meanwhile.
-        unsafe { std::env::set_var("CODEX_HOME", home) };
+        // The mock is thread-local. `rehydrate` reads `CODEX_HOME` before it first yields.
+        let env = atuin_common::env::MockEnv::install();
+        env.set("CODEX_HOME", home);
         let written = atuin_common::harnesstools::codex::rehydrate::rehydrate(session).await;
-        // SAFETY: as above.
-        unsafe { std::env::remove_var("CODEX_HOME") };
+        drop(env);
         let path = written.unwrap();
+        // Make sure we wrote to `CODEX_HOME` and not the real `~/.codex`.
         assert!(path.starts_with(home), "{} is outside the test's CODEX_HOME", path.display());
         path
     }
@@ -2776,5 +3864,184 @@ mod pipeline_tests {
         let outcomes = capture_all(&sink, &mut enricher, &sid(&id), &again).await;
         let new = outcomes.iter().filter(|o| **o == Appended::New).count();
         assert_eq!(new, 0, "re-capturing the rehydrated rollout pushed {new} records");
+    }
+
+    fn codex_item(id: &str, role: &str, text: &str, at: &str) -> serde_json::Value {
+        let kind = if role == "user" {
+            "input_text"
+        } else {
+            "output_text"
+        };
+        serde_json::json!({
+            "timestamp": at, "type": "response_item",
+            "payload": {"type": "message", "id": id, "role": role,
+                "content": [{"type": kind, "text": text}]},
+        })
+    }
+
+    /// A Codex session restored on a second host (written back out from its synced rows) and
+    /// continued there links its new rows onto the restored ones, even when capture restarts
+    /// in between and resumes the rollout past its checkpoint; the first host carrying on from
+    /// the same row as well leaves the session diverged, a head on each host.
+    #[rstest]
+    #[tokio::test]
+    async fn two_hosts_continuing_a_restored_codex_session_diverge(#[future] sink: Sink) {
+        use atuin_common::harnesstools::codex::session::CodexSession;
+        use atuin_common::harnesstools::session::{Checkpoint, Session as _};
+        use futures::TryStreamExt;
+
+        let a = sink.await;
+        let id = "01a0d147-e745-7ae2-a941-ce48e7888470";
+        let mut on_a = MessageEnricher::new(HarnessKind::Codex);
+        let started = [
+            codex(serde_json::json!({
+                "timestamp": "2026-09-24T03:00:00.000Z", "type": "session_meta",
+                "payload": {"id": id, "cwd": "/work"},
+            })),
+            codex(codex_item("msg_p1", "user", "hello", "2026-09-24T03:00:01.000Z")),
+            codex(codex_item("msg_r1", "assistant", "hi", "2026-09-24T03:00:02.000Z")),
+        ];
+        capture_all(&a, &mut on_a, &sid(id), &started).await;
+
+        // Host B restores the session from the synced rows.
+        let records = AiSessionStore::builder()
+            .store(SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap())
+            .host_id(HostId(atuin_common::utils::uuid_v7()))
+            .key(Key::generate())
+            .build();
+        let b = Sink::new(records, a.sidecar.clone());
+        let handle = handle(HarnessKind::Codex, id);
+        let session = a.sidecar.rehydrate_session(&handle, "/elsewhere".into()).await;
+        let home = tempfile::tempdir().unwrap();
+        let path = rehydrate_codex(&session.unwrap().unwrap(), home.path()).await;
+
+        // B captures the restored rollout, checkpointing as the engine does: past the last line
+        // that made a row.
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        let lines: Vec<(Checkpoint, _)> = CodexSession::open(sid(id), path.clone(), pool.clone())
+            .messages_from(None)
+            .try_collect()
+            .await
+            .unwrap();
+        let mut on_b = MessageEnricher::new(HarnessKind::Codex);
+        let mut checkpoint = None;
+        let mut last = None;
+        for (at, line) in lines {
+            for row in on_b.capture(&sid(id), &AnyMessage::from(line)) {
+                last = Some(row.source_id.clone());
+                checkpoint = Some(at);
+                assert_eq!(b.append(row).await.unwrap(), Appended::Duplicate);
+            }
+        }
+        assert_eq!(last.as_ref().map(AsRef::as_ref), Some("msg_r1"));
+
+        // Codex carries on in the restored rollout while capture is down; capture resumes it.
+        let more = [
+            codex_item("msg_b2", "user", "on b", "2026-09-25T00:00:00.000Z"),
+            codex_item("msg_b3", "assistant", "ok", "2026-09-25T00:00:01.000Z"),
+        ];
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        for line in &more {
+            std::io::Write::write_all(&mut file, format!("{line}\n").as_bytes()).unwrap();
+        }
+        let continued: Vec<_> = CodexSession::open(sid(id), path, pool)
+            .messages_from(checkpoint)
+            .map_ok(|(_, line)| AnyMessage::from(line))
+            .try_collect()
+            .await
+            .unwrap();
+        let mut on_b = resumed(&b, HarnessKind::Codex, &sid(id)).await;
+        let rows = capture_all(&b, &mut on_b, &sid(id), &continued).await;
+        assert_eq!(rows, [Appended::New, Appended::New]);
+
+        // A carries on from the same row.
+        let more_on_a = [codex(codex_item("msg_a2", "user", "on a", "2026-09-25T00:00:05.000Z"))];
+        capture_all(&a, &mut on_a, &sid(id), &more_on_a).await;
+
+        let parent = |row: &str| {
+            let sidecar = a.sidecar.clone();
+            let handle = handle.clone();
+            let row = row.to_owned();
+            async move {
+                let rows: Vec<Message> = sidecar.messages(&handle).try_collect().await.unwrap();
+                let row = rows.into_iter().find(|m| m.source_id.as_ref() == row).unwrap();
+                row.parent_source_id.map(String::from)
+            }
+        };
+        assert_eq!(parent("msg_r1").await.as_deref(), Some("msg_p1"));
+        assert_eq!(parent("msg_b2").await.as_deref(), Some("msg_r1"));
+        assert_eq!(parent("msg_b3").await.as_deref(), Some("msg_b2"));
+        assert_eq!(parent("msg_a2").await.as_deref(), Some("msg_r1"));
+
+        let analysis = a.sidecar.analyse(&handle).await.unwrap();
+        assert!(analysis.diverged());
+        let heads: Vec<&str> = analysis.heads().iter().map(|h| h.source_id.as_ref()).collect();
+        assert_eq!(heads, ["msg_a2", "msg_b3"]);
+        let path: Vec<String> = analysis
+            .path_to(&analysis.heads()[1].source_id)
+            .iter()
+            .map(|m| m.source_id.to_string())
+            .collect();
+        assert_eq!(path[path.len() - 3..], ["msg_r1", "msg_b2", "msg_b3"]);
+    }
+
+    /// Capture restarting past a Codex line with no id of its own (a `turn_context`, keyed on its
+    /// content) links the next row to that line's row, which the reader names the way capture
+    /// keyed it: the newest of identical lines.
+    #[rstest]
+    #[tokio::test]
+    async fn a_resumed_codex_read_links_past_a_content_keyed_row(#[future] sink: Sink) {
+        use atuin_common::harnesstools::codex::session::CodexSession;
+        use atuin_common::harnesstools::session::{Checkpoint, Session as _};
+        use futures::TryStreamExt;
+
+        let sink = sink.await;
+        let id = "01a0d147-e745-7ae2-a941-ce48e7888470";
+        let context = serde_json::json!({"timestamp": "2026-09-24T03:00:02.000Z",
+            "type": "turn_context", "payload": {"cwd": "/work", "model": "gpt-5"}});
+        let lines = [
+            serde_json::json!({"timestamp": "2026-09-24T03:00:00.000Z", "type": "session_meta",
+                "payload": {"id": id, "cwd": "/work"}}),
+            codex_item("msg_p1", "user", "hello", "2026-09-24T03:00:01.000Z"),
+            context.clone(),
+            context,
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("rollout-2026-09-24T03-00-00-{id}.jsonl"));
+        let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&path, body).unwrap();
+
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        let read: Vec<(Checkpoint, _)> = CodexSession::open(sid(id), path.clone(), pool.clone())
+            .messages_from(None)
+            .try_collect()
+            .await
+            .unwrap();
+        let mut enricher = MessageEnricher::new(HarnessKind::Codex);
+        let (mut checkpoint, mut last) = (None, None);
+        for (at, line) in read {
+            for row in enricher.capture(&sid(id), &AnyMessage::from(line)) {
+                last = Some(row.source_id.clone());
+                checkpoint = Some(at);
+                sink.append(row).await.unwrap();
+            }
+        }
+        let last = last.unwrap();
+        assert!(last.as_ref().starts_with("syn-") && last.as_ref().ends_with("-1"), "{last}");
+
+        let more = codex_item("msg_p2", "user", "again", "2026-09-24T03:00:03.000Z");
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, format!("{more}\n").as_bytes()).unwrap();
+        let continued: Vec<AnyMessage> = CodexSession::open(sid(id), path, pool)
+            .messages_from(checkpoint)
+            .map_ok(|(_, line)| AnyMessage::from(line))
+            .try_collect()
+            .await
+            .unwrap();
+        let mut enricher = resumed(&sink, HarnessKind::Codex, &sid(id)).await;
+        let rows: Vec<Message> =
+            continued.iter().flat_map(|m| enricher.capture(&sid(id), m)).collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].parent_source_id, Some(last));
     }
 }

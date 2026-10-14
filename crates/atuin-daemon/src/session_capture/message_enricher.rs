@@ -3,14 +3,14 @@ use std::collections::{BTreeMap, HashMap};
 use atuin_client::ai_session::{
     HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
+use atuin_common::harnesstools::continuation;
+pub(super) use atuin_common::harnesstools::session::synthetic::SYNTHETIC;
+use atuin_common::harnesstools::session::synthetic::{self, content_hash};
 use atuin_common::harnesstools::session::{
-    AnyMessage, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
+    AnyMessage, Content, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
 };
 use atuin_domain::record::RecordId;
 use time::OffsetDateTime;
-
-/// Prefix of a content-addressed [`SourceId`], for lines the harness gave no id.
-pub(super) const SYNTHETIC: &str = "syn-";
 
 /// Builds the canonical [`Message`] rows for one harness's lines, carrying the per-session
 /// bookkeeping (title, timestamps, parent, synthetic id ordinals) that a single line cannot
@@ -22,6 +22,8 @@ pub(super) const SYNTHETIC: &str = "syn-";
 pub struct MessageEnricher {
     harness: HarnessKind,
     sessions: HashMap<String, SessionState>,
+    /// Whether capture keeps the patches of calls (`ai.capture_tools`).
+    patches: bool,
 }
 
 impl MessageEnricher {
@@ -29,7 +31,17 @@ impl MessageEnricher {
         Self {
             harness,
             sessions: HashMap::new(),
+            patches: true,
         }
+    }
+
+    /// With `patches` false (capture keeps no patches), a line holding nothing but a call's patch
+    /// (Codex records one per applied patch) makes no row, rather than an empty one. Left out
+    /// here, not when appended: a Codex row is chained to the row before it, which must exist.
+    #[must_use]
+    pub fn keeping_patches(mut self, patches: bool) -> Self {
+        self.patches = patches;
+        self
     }
 
     pub fn handle(&self, session: &SessionId) -> HarnessSession {
@@ -60,9 +72,12 @@ impl MessageEnricher {
     ) {
         let mut occurrences = HashMap::new();
         for id in synthetic {
-            if let Some((hash, ordinal)) = parse_synthetic(id) {
+            // The last ordinal there is can't be counted past: no read made it, so it is malformed.
+            if let Some((hash, ordinal)) = parse_synthetic(id)
+                && let Some(after) = ordinal.checked_add(1)
+            {
                 let next = occurrences.entry(hash).or_insert(0);
-                *next = (*next).max(ordinal + 1);
+                *next = (*next).max(after);
             }
         }
         let mut replayed = BTreeMap::new();
@@ -78,10 +93,14 @@ impl MessageEnricher {
         self.sessions.insert(session.to_string(), SessionState {
             titles: replayed,
             last_ts: last.map(|m| m.timestamp),
-            parent: row.and_then(|r| r.parent.as_ref().map(|p| p.session.clone())),
+            parent: row.and_then(|r| r.parent.clone()),
             parent_kind: row.and_then(|r| r.parent_kind),
+            // What an earlier read settled on: a marker naming another parent was passed over
+            // for it, and one naming the same changes nothing.
+            native_parent: row.is_some_and(|r| r.parent.is_some()),
             occurrences,
             untimed: Vec::new(),
+            previous: None,
         });
     }
 
@@ -97,12 +116,50 @@ impl MessageEnricher {
         if let Some(change) = m.title() {
             apply(&mut state.titles, change);
         }
+        if let Some(follows) = m.follows() {
+            let follows = SourceId::from(String::from(follows));
+            state.previous = match parse_synthetic(&follows) {
+                // A line keyed on its content: the reader cannot know which of identical lines it
+                // is, and names the first; the newest row of that content captured is the one
+                // (none: the line made no row, and there is nothing to follow).
+                Some((hash, _)) => state
+                    .occurrences
+                    .get(&hash)
+                    .and_then(|n| n.checked_sub(1))
+                    .map(|n| synthetic_id(hash, n)),
+                None => Some(follows),
+            };
+        }
         if let Some(parent) = m.parent_session().filter(|p| p != session) {
-            state.parent = Some(NativeSessionId::from(parent.to_string()));
+            state.parent = Some(HarnessSession {
+                harness: handle.harness,
+                session: NativeSessionId::from(parent.to_string()),
+            });
             state.parent_kind = m.parent_kind();
+            state.native_parent = true;
+        }
+        // A session continued from another (`atuin ai resume --in`), maybe another harness's:
+        // its first line, which the harness wrote itself, names it. Unless the harness names a
+        // parent itself: a fork of a continuation (Claude Code `--fork-session`, Codex and
+        // opencode forks, Pi `/fork`) copies the marker with the rest, but forks the
+        // continuation, not the session the marker names. An opencode fork's marker
+        // (`atuin ai resume --fork`) stands for the link opencode can't write: it names the parent
+        // as a harness would, and a marker copied in after it doesn't replace it.
+        if !state.native_parent
+            && let Some((harness, parent, kind)) = continuation::linked_from_message(m)
+        {
+            let parent = HarnessSession {
+                harness: HarnessKind::from(&harness),
+                session: NativeSessionId::from(parent),
+            };
+            if parent != handle {
+                state.parent = Some(parent);
+                state.parent_kind = Some(kind);
+                state.native_parent = kind == ParentKind::Fork;
+            }
         }
 
-        let row = build(handle, session, m, state);
+        let row = build(handle, session, m, state, self.patches);
         let Some(ts) = state.last_ts else {
             state.untimed.extend(row);
             return Vec::new();
@@ -162,8 +219,12 @@ fn build(
     session: &SessionId,
     m: &AnyMessage,
     state: &mut SessionState,
+    patches: bool,
 ) -> Option<Message> {
     let content = m.content();
+    if !patches && !content.is_empty() && content.iter().all(|c| matches!(c, Content::Patch(_))) {
+        return None;
+    }
     let usage = m.usage();
     let stop_reason = m.stop_reason();
     let model = m.model();
@@ -187,19 +248,31 @@ fn build(
             let hash = content_hash(session, m);
             let ordinal = state.occurrences.entry(hash).or_insert(0);
             let id = synthetic_id(hash, *ordinal);
-            *ordinal += 1;
+            *ordinal = ordinal.saturating_add(1);
             id
         }
     };
-    let harness = handle.harness;
+    // Codex lines name no parent: each row follows the row captured before it, so the rows of
+    // two hosts continuing one rollout part where they did (see `AiSessionDatabase::analyse`).
+    // An applied patch's row hangs beside the line rather than on it, so the rows around it link
+    // the same whether it was captured or not (a rollout captured before patches were, read
+    // again): a branch's rows take it from the row it hangs from (`Analysis::rows_for`).
+    let patch_only = !content.is_empty() && content.iter().all(|c| matches!(c, Content::Patch(_)));
+    let parent_source_id = if handle.harness == HarnessKind::Codex && patch_only {
+        state.previous.clone()
+    } else if handle.harness == HarnessKind::Codex {
+        state.previous.replace(source_id.clone())
+    } else {
+        m.parent_id().map(|id| SourceId::from(String::from(id)))
+    };
     Some(
         Message::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(handle)
             .source_id(source_id)
-            .parent(state.parent.clone().map(|session| HarnessSession { harness, session }))
+            .parent(state.parent.clone())
             .parent_kind(state.parent_kind)
-            .parent_source_id(m.parent_id().map(|id| SourceId::from(String::from(id))))
+            .parent_source_id(parent_source_id)
             .turn_id(m.turn_id())
             .timestamp(state.last_ts.unwrap_or(OffsetDateTime::UNIX_EPOCH))
             .role(m.role())
@@ -224,42 +297,13 @@ fn apply(titles: &mut BTreeMap<TitleSource, String>, change: TitleChange) {
     };
 }
 
-/// A hash of everything a row takes from an id-less line, so lines that differ in any of it
-/// (two usage records written in one millisecond) never share an id.
-fn content_hash(session: &SessionId, m: &AnyMessage) -> u64 {
-    let canonical = serde_json::json!([
-        session.as_ref(),
-        m.timestamp().map(OffsetDateTime::unix_timestamp_nanos).map(|ns| ns.to_string()),
-        m.role(),
-        m.content(),
-        m.title(),
-        m.model(),
-        m.usage(),
-        m.stop_reason(),
-        m.cwd(),
-        m.git_branch(),
-        m.parent_id(),
-        m.parent_session(),
-        m.turn_id(),
-    ]);
-    xxhash_rust::xxh3::xxh3_64(canonical.to_string().as_bytes())
-}
-
-/// The first occurrence keeps the bare hash; the nth identical line after it is `-n`.
+/// A content-addressed source id (see [`synthetic::synthetic_id`]).
 fn synthetic_id(hash: u64, ordinal: u32) -> SourceId {
-    SourceId::from(match ordinal {
-        0 => format!("{SYNTHETIC}{hash:016x}"),
-        n => format!("{SYNTHETIC}{hash:016x}-{n}"),
-    })
+    SourceId::from(synthetic::synthetic_id(hash, ordinal))
 }
 
 fn parse_synthetic(id: &SourceId) -> Option<(u64, u32)> {
-    let rest = id.as_ref().strip_prefix(SYNTHETIC)?;
-    let (hash, ordinal) = match rest.split_once('-') {
-        Some((hash, n)) => (hash, n.parse().ok()?),
-        None => (rest, 0),
-    };
-    Some((u64::from_str_radix(hash, 16).ok()?, ordinal))
+    synthetic::parse_synthetic(id.as_ref())
 }
 
 /// What the capture pipeline carries from one line to the next, per native session id.
@@ -275,16 +319,25 @@ struct SessionState {
     /// Timestamp of the last line that had one. Lines without (Claude Code `ai-title` and
     /// friends) take it, so a replayed session is not stamped with capture time.
     last_ts: Option<OffsetDateTime>,
-    /// Session this one was spawned from, when it has one (subagents, forks).
-    parent: Option<NativeSessionId>,
-    /// How this session relates to [`Self::parent`], when the line naming it said.
+    /// Session this one was spawned from, when it has one (subagents, forks), or continues
+    /// (maybe another harness's).
+    parent: Option<HarnessSession>,
+    /// How this session relates to [`Self::parent`], when the line naming it said: always
+    /// [`ParentKind::Continuation`] for a continuation's marker.
     parent_kind: Option<ParentKind>,
+    /// Whether [`Self::parent`] is one the harness named (a fork's, a subagent's), which a
+    /// continuation's marker never replaces.
+    native_parent: bool,
     /// How many rows each content hash has produced, so identical id-less lines (the same
     /// prompt twice in one millisecond) get distinct, re-read-stable ids.
     occurrences: HashMap<u64, u32>,
     /// Rows from before the first timestamped line, waiting to take its timestamp: the session
     /// started no earlier, and capture time would make an old session look new.
     untimed: Vec<Message>,
+    /// The source id of the row captured last, which a Codex row names as its parent; what the
+    /// reader says a line [follows](HarnessMessage::follows) where capture has seen no row yet
+    /// (a read resumed past its checkpoint, a reverted thread's rollout).
+    previous: Option<SourceId>,
 }
 
 impl SessionState {
@@ -299,7 +352,7 @@ mod tests {
     use atuin_common::harnesstools::ccode::session::CcodeMessage;
     use atuin_common::harnesstools::codex::session::CodexMessage;
     use atuin_common::harnesstools::pi::session::PiMessage;
-    use atuin_common::harnesstools::session::{Content, Role};
+    use atuin_common::harnesstools::session::Role;
     use rstest::rstest;
 
     use super::*;
@@ -701,6 +754,83 @@ mod tests {
         assert_eq!(again[0].parent, None);
     }
 
+    /// A stored id that reads as content-keyed at the last ordinal there is (a native id made to
+    /// look like one: Claude Code takes any `uuid`) can't be counted past: it is passed over as
+    /// malformed, and capture goes on.
+    #[rstest]
+    fn a_stored_synthetic_id_at_the_last_ordinal_is_passed_over() {
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        let untimed = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Renamed"}));
+        let (hash, _) = parse_synthetic(&MessageEnricher::source_id(&session(), &untimed)).unwrap();
+        n.resume(&session(), None, &[], None, &[synthetic_id(hash, u32::MAX)]);
+
+        let rows = rows(&mut n, &session(), &[untimed.clone(), untimed]);
+        let ids: Vec<_> = rows.into_iter().map(|m| m.source_id).collect();
+        assert_eq!(ids, [synthetic_id(hash, 0), synthetic_id(hash, 1)]);
+    }
+
+    /// Codex lines name no parent: each row names the row captured before it, a content-keyed
+    /// one included, passing over lines capture keeps no row of.
+    #[rstest]
+    fn codex_rows_follow_the_row_captured_before() {
+        let at = "2026-09-24T03:00:00.000Z";
+        let lines = [
+            codex(&serde_json::json!({"timestamp": at, "type": "session_meta",
+                "payload": {"id": "s1", "cwd": "/work"}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "turn_context",
+                "payload": {"cwd": "/work", "model": "gpt-5"}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "event_msg",
+                "payload": {"type": "task_started"}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "response_item",
+                "payload": {"type": "message", "id": "msg_1", "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}]}})),
+        ];
+        let rows = rows(&mut MessageEnricher::new(HarnessKind::Codex), &session(), &lines);
+        let ids: Vec<&str> = rows.iter().map(|r| r.source_id.as_ref()).collect();
+        assert_eq!(ids.len(), 3, "{ids:?}");
+        assert!(ids[1].starts_with(SYNTHETIC));
+        let parents: Vec<Option<&str>> =
+            rows.iter().map(|r| r.parent_source_id.as_ref().map(AsRef::as_ref)).collect();
+        assert_eq!(parents, [None, Some(ids[0]), Some(ids[1])]);
+    }
+
+    /// An applied Codex patch is a row of its own, hanging from the row before it beside the
+    /// line, which goes on from that row as it would without it; with patches not kept it makes
+    /// no row.
+    #[rstest]
+    #[case::kept(true)]
+    #[case::not_kept(false)]
+    fn a_codex_patch_row_is_chained_or_left_out(#[case] kept: bool) {
+        let at = "2026-09-24T03:00:00.000Z";
+        let lines = [
+            codex(&serde_json::json!({"timestamp": at, "type": "response_item",
+                "payload": {"type": "custom_tool_call", "id": "ctc_1", "call_id": "call_1",
+                    "name": "apply_patch", "input": "*** Begin Patch\n*** End Patch"}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "event_msg",
+                "payload": {"type": "patch_apply_end", "call_id": "call_1", "stdout": "",
+                    "stderr": "", "success": true, "status": "completed",
+                    "changes": {"/w/a.rs": {"type": "add", "content": "a\n"}}}})),
+            codex(&serde_json::json!({"timestamp": at, "type": "response_item",
+                "payload": {"type": "custom_tool_call_output", "id": "ctco_1",
+                    "call_id": "call_1", "output": "Done"}})),
+        ];
+        let mut n = MessageEnricher::new(HarnessKind::Codex).keeping_patches(kept);
+        let rows = rows(&mut n, &session(), &lines);
+        let chain: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.source_id.as_ref(), r.parent_source_id.as_ref().map(AsRef::as_ref)))
+            .collect();
+        if kept {
+            assert_eq!(chain, [
+                ("ctc_1", None),
+                ("call_1#patch", Some("ctc_1")),
+                ("ctco_1", Some("ctc_1"))
+            ]);
+        } else {
+            assert_eq!(chain, [("ctc_1", None), ("ctco_1", Some("ctc_1"))]);
+        }
+    }
+
     /// Codex has no turn id: a bookkeeping line must not make the accounting line that follows
     /// look like a repeat, and every accounting line keeps its own usage.
     #[rstest]
@@ -767,6 +897,7 @@ mod tests {
 mod parser_contract {
     use atuin_common::harnesstools::ccode::session::CcodeMessage;
     use atuin_common::harnesstools::pi::session::PiMessage;
+    use atuin_common::harnesstools::session::Role;
     use rstest::rstest;
 
     use super::*;
@@ -875,5 +1006,179 @@ mod parser_contract {
             MessageEnricher::source_id(&s, &pi(&before)),
             MessageEnricher::source_id(&s, &pi(&after))
         );
+    }
+
+    // ---- Continuations (`atuin ai resume --in`) ----
+
+    const ORIGINAL: &str = "019a0d14-f276-77d3-b955-89d5b0151306";
+
+    fn marker() -> String {
+        use atuin_common::harnesstools::AnyHarness;
+        continuation::marker_text(
+            AnyHarness::from_name("codex").unwrap(),
+            ORIGINAL,
+            Some("019a0d14f27677d3b95589d5b0151306"),
+        )
+    }
+
+    /// The marker line each target's writer puts first (see `harnesstools::continuation`), then
+    /// a prompt. opencode's (a `synthetic` part) is read back the same way by atuin-common's
+    /// round-trip tests.
+    fn continued(harness: HarnessKind, prompt: &str) -> Vec<AnyMessage> {
+        let marker = marker();
+        match harness {
+            HarnessKind::ClaudeCode => vec![
+                ccode(&serde_json::json!({"type": "user", "uuid": "u0", "parentUuid": null,
+                    "sessionId": "new", "isMeta": true, "timestamp": "2026-09-27T10:00:00Z",
+                    "message": {"role": "user", "content": marker}})),
+                ccode(&serde_json::json!({"type": "user", "uuid": "u1", "parentUuid": "u0",
+                    "sessionId": "new", "timestamp": "2026-09-27T10:00:01Z",
+                    "message": {"role": "user", "content": prompt}})),
+            ],
+            HarnessKind::Pi => vec![
+                pi(&serde_json::json!({"type": "session", "version": 3, "id": "new",
+                    "timestamp": "2026-09-27T10:00:00Z", "cwd": "/w"})),
+                // pi's marker is the first block of the first prompt.
+                pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": null,
+                    "timestamp": "2026-09-27T10:00:01Z",
+                    "message": {"role": "user", "content": [
+                        {"type": "text", "text": marker}, {"type": "text", "text": prompt}]}})),
+                pi(&serde_json::json!({"type": "message", "id": "a2", "parentId": "a1",
+                    "timestamp": "2026-09-27T10:00:02Z",
+                    "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}})),
+            ],
+            _ => unreachable!("no other harness in these tests"),
+        }
+    }
+
+    /// A continuation's rows name the session it continues as their parent, of the harness it
+    /// was recorded in, and say they continue it; a marker the user typed is only text.
+    #[rstest]
+    #[case::claude(HarnessKind::ClaudeCode)]
+    #[case::pi(HarnessKind::Pi)]
+    fn a_continuation_names_the_session_it_continues(#[case] harness: HarnessKind) {
+        let new = SessionId::from("new".to_owned());
+        let mut n = MessageEnricher::new(harness);
+        let rows: Vec<Message> =
+            continued(harness, "go on").iter().flat_map(|m| n.capture(&new, m)).collect();
+        let parent = HarnessSession {
+            harness: HarnessKind::Codex,
+            session: NativeSessionId::from(ORIGINAL.to_owned()),
+        };
+        let prompt = rows.last().unwrap();
+        assert_eq!(prompt.role, Role::User);
+        assert_eq!(prompt.parent, Some(parent));
+        assert_eq!(prompt.parent_kind, Some(ParentKind::Continuation));
+
+        let mut n = MessageEnricher::new(harness);
+        let typed: Vec<Message> = continued(harness, &marker())
+            .iter()
+            .skip(harness_skip(harness))
+            .flat_map(|m| n.capture(&new, m))
+            .collect();
+        assert!(typed.iter().all(|m| m.parent.is_none()), "{typed:?}");
+    }
+
+    /// A fork of a continuation copies its marker along with the rest. The harness names the
+    /// continuation it forked as its parent, and that parent stands: the fork is not a
+    /// continuation of the session the marker names.
+    #[rstest]
+    #[case::claude(HarnessKind::ClaudeCode)]
+    #[case::codex(HarnessKind::Codex)]
+    #[case::pi(HarnessKind::Pi)]
+    fn a_fork_of_a_continuation_keeps_its_own_parent(#[case] harness: HarnessKind) {
+        const CONTINUATION: &str = "0199cccc-0000-7000-8000-000000000003";
+        fn codex(raw: &serde_json::Value) -> AnyMessage {
+            use atuin_common::harnesstools::codex::session::CodexMessage;
+            AnyMessage::Codex(serde_json::from_str::<CodexMessage>(&raw.to_string()).unwrap())
+        }
+        let marker = marker();
+        let lines = match harness {
+            // Every copied line names the session it was forked from.
+            HarnessKind::ClaudeCode => {
+                let forked = serde_json::json!({"sessionId": CONTINUATION, "messageUuid": "u0"});
+                vec![
+                    ccode(&serde_json::json!({"type": "user", "uuid": "u0", "parentUuid": null,
+                        "sessionId": "fork", "isMeta": true, "timestamp": "2026-09-27T10:00:00Z",
+                        "forkedFrom": forked, "message": {"role": "user", "content": marker}})),
+                    ccode(&serde_json::json!({"type": "user", "uuid": "u1", "parentUuid": "u0",
+                        "sessionId": "fork", "timestamp": "2026-09-27T10:00:01Z",
+                        "forkedFrom": forked, "message": {"role": "user", "content": "go on"}})),
+                ]
+            }
+            HarnessKind::Codex => vec![
+                codex(&serde_json::json!({"type": "session_meta",
+                    "timestamp": "2026-09-27T10:00:00Z",
+                    "payload": {"id": "fork", "forked_from_id": CONTINUATION}})),
+                codex(&serde_json::json!({"type": "response_item",
+                    "timestamp": "2026-09-27T10:00:00Z",
+                    "payload": {"type": "message", "role": "developer",
+                        "content": [{"type": "input_text", "text": marker}]}})),
+                codex(&serde_json::json!({"type": "response_item",
+                    "timestamp": "2026-09-27T10:00:01Z",
+                    "payload": {"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "go on"}]}})),
+            ],
+            HarnessKind::Pi => vec![
+                pi(&serde_json::json!({"type": "session", "version": 3, "id": "fork",
+                    "timestamp": "2026-09-27T10:00:00Z", "cwd": "/w",
+                    "parentSession": format!(
+                        "/home/u/.pi/agent/sessions/--w--/2026-09-27T09-00-00-000Z_{CONTINUATION}.jsonl")})),
+                pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": null,
+                    "timestamp": "2026-09-27T10:00:01Z",
+                    "message": {"role": "user", "content": [
+                        {"type": "text", "text": marker}, {"type": "text", "text": "go on"}]}})),
+            ],
+            _ => unreachable!("no other harness in these tests"),
+        };
+        let fork = SessionId::from("fork".to_owned());
+        let mut n = MessageEnricher::new(harness);
+        let rows: Vec<Message> = lines.iter().flat_map(|m| n.capture(&fork, m)).collect();
+        let parent = HarnessSession {
+            harness,
+            session: NativeSessionId::from(CONTINUATION.to_owned()),
+        };
+        assert!(!rows.is_empty());
+        for row in &rows {
+            assert_eq!(row.parent.as_ref(), Some(&parent), "{row:?}");
+            assert_eq!(row.parent_kind, Some(ParentKind::Fork), "{row:?}");
+        }
+    }
+
+    /// An opencode fork (`atuin ai resume --fork`) names its original in a fork marker, in text
+    /// opencode wrote itself (here a Claude Code `isMeta` line, read the same way): its rows are a
+    /// fork of the original, and a continuation's marker copied in after it doesn't move them.
+    #[rstest]
+    fn a_fork_marker_names_the_original_as_a_harness_would() {
+        use atuin_common::harnesstools::AnyHarness;
+        let opencode = AnyHarness::from_name("opencode").unwrap();
+        let forked = continuation::fork_marker_text(opencode, "ses_original", Some("01a0"));
+        let line = |uuid: &str, meta: bool, text: &str| {
+            ccode(&serde_json::json!({"type": "user", "uuid": uuid, "parentUuid": null,
+                "sessionId": "fork", "isMeta": meta, "timestamp": "2026-09-27T10:00:00Z",
+                "message": {"role": "user", "content": text}}))
+        };
+        let lines =
+            [line("u0", true, &forked), line("u1", true, &marker()), line("u2", false, "go")];
+        let fork = SessionId::from("fork".to_owned());
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        let rows: Vec<Message> = lines.iter().flat_map(|m| n.capture(&fork, m)).collect();
+        let parent = HarnessSession {
+            harness: HarnessKind::Opencode,
+            session: NativeSessionId::from("ses_original".to_owned()),
+        };
+        assert_eq!(rows.len(), 3);
+        for row in &rows {
+            assert_eq!(row.parent.as_ref(), Some(&parent), "{row:?}");
+            assert_eq!(row.parent_kind, Some(ParentKind::Fork), "{row:?}");
+        }
+    }
+
+    /// How many lines lead up to the marker (Pi's header).
+    fn harness_skip(harness: HarnessKind) -> usize {
+        match harness {
+            HarnessKind::Pi => 2,
+            _ => 1,
+        }
     }
 }

@@ -1,6 +1,7 @@
 //! Line reads of files that writers only append to.
 
 use std::borrow::Borrow;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::iter;
@@ -17,12 +18,32 @@ use crate::os::fs::FdIdentityExt;
 /// file.
 const READ_CHUNK_BYTES: u64 = 64 * 1024;
 
+/// The longest line a reader hands out. One longer is passed over, unread past what this holds,
+/// so a file of one huge or unterminated line can't hold that much memory (all of it, and
+/// several times that once parsed): no transcript line is near this, the largest being a
+/// prompt pasted whole or an image attached inline.
+const MAX_LINE_BYTES: usize = 32 * 1024 * 1024;
+
+/// The most buffer a reader keeps between lines: past it, the buffer a long line grew is let go.
+const RETAINED_BYTES: usize = 256 * 1024;
+
+/// How much of what precedes the read position a reader keeps, to tell a file rewritten in place
+/// from one appended to ([`ReadLinesError::Rewritten`]).
+const TAIL_BYTES: usize = 4 * 1024;
+
 /// A complete line, without its newline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Line {
     /// Byte offset just past the line's newline, which a reader made with `at` resumes from.
     pub end: u64,
     pub bytes: Bytes,
+    /// Which read of the file the line is from: 0 for the reader's first, one more each time it
+    /// started over from the file's first byte because the file was replaced or cut short
+    /// ([`ReadLinesError::Replaced`], [`ReadLinesError::Truncated`]). A consumer that keeps
+    /// state per position (what it has seen of the file) starts it over when this changes, which
+    /// [`end`](Self::end) alone can't tell it: the new file's first line may end past where the
+    /// old one was read to.
+    pub generation: u32,
 }
 
 impl Line {
@@ -52,6 +73,7 @@ impl Line {
             return Ok(Some(Self {
                 end,
                 bytes: Bytes::from(buf).slice(from..to),
+                generation: 0,
             }));
         }
     }
@@ -59,8 +81,8 @@ impl Line {
 
 /// Errors returned by [`ReadLines::lines`].
 ///
-/// `Truncated` and `Replaced` have already restarted the reader: the next call reads the file from
-/// its first byte.
+/// `Truncated`, `Replaced` and `Rewritten` have already restarted the reader: the next call reads
+/// the file from its first byte.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadLinesError {
     #[error(transparent)]
@@ -69,6 +91,10 @@ pub enum ReadLinesError {
     Truncated,
     #[error("the file was replaced; reading restarts from its start")]
     Replaced,
+    /// Written over in place, to the read position or past it: what precedes the position is no
+    /// longer what was read.
+    #[error("the file was rewritten; reading restarts from its start")]
+    Rewritten,
 }
 
 /// Reads the complete lines appended to a file, each once.
@@ -84,9 +110,9 @@ pub trait ReadLines {
 pub trait AsyncReadLines {
     /// The complete lines past the last one handed out, read as the stream is pulled.
     ///
-    /// The stream ends at the end of the file or after its first error; a truncated or replaced
-    /// file is read on from its start. Lines read but not yet yielded are dropped with the stream
-    /// and not read again.
+    /// The stream ends at the end of the file or after its first error; a file truncated,
+    /// replaced or rewritten in place is read on from its start. Lines read but not yet yielded
+    /// are dropped with the stream and not read again.
     fn lines(&mut self) -> impl Stream<Item = io::Result<Line>> + Send + '_;
 }
 
@@ -102,6 +128,13 @@ struct Cursor {
     /// The file `offset` belongs to; `None` before the first read, and always on platforms
     /// without file identities.
     identity: Option<FdIdentity>,
+    /// How many times the read started over from the file's start ([`Line::generation`]).
+    generation: u32,
+    /// The [`TAIL_BYTES`] before `offset` (fewer when `offset` is), as they were read; empty
+    /// until known.
+    tail: VecDeque<u8>,
+    /// Whether the line at `offset` is past [`MAX_LINE_BYTES`], and passed over up to its newline.
+    skipping: bool,
 }
 
 impl Cursor {
@@ -135,7 +168,8 @@ impl Cursor {
         }))
     }
 
-    /// Restart at byte 0 if `file` is not the file being read, or is shorter than what was read.
+    /// Restart at byte 0 if `file` is not the file being read, is shorter than what was read, or
+    /// no longer holds what was read just before the position.
     fn restart_unless_appended(&mut self, file: &File) -> Result<(), ReadLinesError> {
         let meta = file.metadata()?;
         #[cfg(unix)]
@@ -145,22 +179,62 @@ impl Cursor {
         #[cfg(not(any(unix, windows)))]
         let identity = None;
 
-        if self.identity.is_some() && self.identity != identity {
-            *self = Self {
-                identity,
-                ..Self::default()
-            };
-            return Err(ReadLinesError::Replaced);
+        let restart = if self.identity.is_some() && self.identity != identity {
+            ReadLinesError::Replaced
+        } else if meta.len() < self.position() {
+            ReadLinesError::Truncated
+        } else if !self.holds_tail(file)? {
+            // Written over in place to as long or longer (a harness migrating its transcript),
+            // where neither of the above can tell.
+            ReadLinesError::Rewritten
+        } else {
+            self.identity = identity;
+            return Ok(());
+        };
+        *self = Self {
+            identity,
+            generation: self.generation.wrapping_add(1),
+            ..Self::default()
+        };
+        Err(restart)
+    }
+
+    /// Whether `file`, at least as long as the position, still holds the [tail](Self::tail)
+    /// before the offset, and the start of `pending` after it; a tail not known yet is taken from
+    /// it.
+    fn holds_tail(&mut self, mut file: &File) -> io::Result<bool> {
+        let len = usize::try_from(self.offset.min(TAIL_BYTES as u64)).map_err(io::Error::other)?;
+        // And the start of the line read in part past it.
+        let ahead = self.pending.len().min(TAIL_BYTES);
+        if len + ahead == 0 {
+            return Ok(true);
         }
-        if meta.len() < self.position() {
-            *self = Self {
-                identity,
-                ..Self::default()
-            };
-            return Err(ReadLinesError::Truncated);
+        let mut found = vec![0; len + ahead];
+        file.seek(SeekFrom::Start(self.offset - len as u64))?;
+        file.read_exact(&mut found)?;
+        let (before, after) = found.split_at(len);
+        if after != &self.pending[..ahead] {
+            return Ok(false);
         }
-        self.identity = identity;
-        Ok(())
+        if self.tail.is_empty() {
+            self.tail = before.to_vec().into();
+            return Ok(true);
+        }
+        Ok(self.tail.make_contiguous() == before)
+    }
+
+    /// Keep the [tail](Self::tail) up to date with `consumed`, the bytes just handed out (or
+    /// passed over) up to `offset`.
+    fn keep_tail(&mut self, consumed: &[u8]) {
+        let from_start = self.offset == consumed.len() as u64;
+        if consumed.len() >= TAIL_BYTES {
+            self.tail.clear();
+            self.tail.extend(&consumed[consumed.len() - TAIL_BYTES..]);
+        } else if from_start || !self.tail.is_empty() {
+            self.tail.extend(consumed);
+            let excess = self.tail.len().saturating_sub(TAIL_BYTES);
+            self.tail.drain(..excess);
+        }
     }
 
     /// The next complete line, reading on from `file` as needed; `None` once it has none.
@@ -175,22 +249,63 @@ impl Cursor {
         }
     }
 
-    /// Hand out the first complete line in `pending`, if any, advancing `offset` past it.
+    /// Hand out the first complete line in `pending`, if any, advancing `offset` past it. A line
+    /// past [`MAX_LINE_BYTES`] is passed over, up to its newline.
     fn split_line(&mut self) -> Option<Line> {
-        let Some(newline) = memchr::memchr(b'\n', &self.pending[self.scanned..]) else {
-            self.scanned = self.pending.len();
-            return None;
-        };
+        loop {
+            let Some(newline) = memchr::memchr(b'\n', &self.pending[self.scanned..]) else {
+                self.scanned = self.pending.len();
+                if self.pending.len() > MAX_LINE_BYTES {
+                    self.skip_pending();
+                }
+                return None;
+            };
 
-        let len = self.scanned + newline + 1;
-        let mut bytes = self.pending.split_to(len).freeze();
-        bytes.truncate(len - 1);
+            let len = self.scanned + newline + 1;
+            let mut bytes = self.pending.split_to(len).freeze();
+            self.scanned = 0;
+            self.offset += u64::try_from(len).expect("a byte count fits u64");
+            self.keep_tail(&bytes);
+            // A line read whole leaves the buffer it grew to behind: let it go.
+            if self.pending.capacity() > RETAINED_BYTES {
+                self.pending = BytesMut::from(&self.pending[..]);
+            }
+            let skipping = std::mem::take(&mut self.skipping);
+            if skipping || len - 1 > MAX_LINE_BYTES {
+                if !skipping {
+                    self.warn_too_long();
+                }
+                continue;
+            }
+            bytes.truncate(len - 1);
+            return Some(Line {
+                end: self.offset,
+                bytes,
+                generation: self.generation,
+            });
+        }
+    }
+
+    /// Pass over `pending`, the start of a line past [`MAX_LINE_BYTES`], and the rest of it as it
+    /// is read, releasing the memory it held.
+    fn skip_pending(&mut self) {
+        if !self.skipping {
+            self.warn_too_long();
+        }
+        self.skipping = true;
+        self.offset += u64::try_from(self.pending.len()).expect("a byte count fits u64");
+        self.pending = BytesMut::new();
         self.scanned = 0;
-        self.offset += u64::try_from(len).expect("a byte count fits u64");
-        Some(Line {
-            end: self.offset,
-            bytes,
-        })
+        // The bytes passed over are not kept, so what precedes the offset is not known.
+        self.tail.clear();
+    }
+
+    fn warn_too_long(&self) {
+        tracing::warn!(
+            near = self.offset,
+            max = MAX_LINE_BYTES,
+            "passing over a line longer than a reader reads"
+        );
     }
 
     /// Read up to [`READ_CHUNK_BYTES`] past the position into `pending`, returning how many.
@@ -348,6 +463,7 @@ mod tests {
         OpenOptions::new().append(true).open(path).unwrap().write_all(bytes).unwrap();
     }
 
+    #[cfg(unix)]
     fn replace(path: &Path, contents: &[u8]) {
         let tmp = path.with_file_name("tmp");
         std::fs::write(&tmp, contents).unwrap();
@@ -358,6 +474,15 @@ mod tests {
         Line {
             end,
             bytes: Bytes::from_static(text.as_bytes()),
+            generation: 0,
+        }
+    }
+
+    /// `line`, read after the reader started over `n` times.
+    fn after_restarts(n: u32, line: Line) -> Line {
+        Line {
+            generation: n,
+            ..line
         }
     }
 
@@ -404,7 +529,7 @@ mod tests {
     fn a_reader_resumed_past_the_end_restarts(#[with(b"a\n")] file: TempFile) {
         let mut reader = PathLineReader::at(&file.path, 5);
         assert!(matches!(reader.lines(), Err(ReadLinesError::Truncated)));
-        assert_eq!(drain(reader.lines().unwrap()), [line(2, "a")]);
+        assert_eq!(drain(reader.lines().unwrap()), [after_restarts(1, line(2, "a"))]);
     }
 
     #[rstest]
@@ -415,7 +540,73 @@ mod tests {
         // Past the 3 bytes handed out, short of the 7 read.
         std::fs::write(&file.path, b"xyzab\n").unwrap();
         assert!(matches!(reader.lines(), Err(ReadLinesError::Truncated)));
-        assert_eq!(drain(reader.lines().unwrap()), [line(6, "xyzab")]);
+        assert_eq!(drain(reader.lines().unwrap()), [after_restarts(1, line(6, "xyzab"))]);
+    }
+
+    /// Written over in place (truncated and written again, as pi migrating a transcript does) to
+    /// as long as what was read or longer, which neither its identity nor its length tells.
+    #[rstest]
+    #[case::as_long(b"xx\nyyy\n", vec![line(3, "xx"), line(7, "yyy")])]
+    #[case::longer(b"x\nyy\nzzzz\n", vec![line(2, "x"), line(5, "yy"), line(10, "zzzz")])]
+    fn a_file_rewritten_in_place_restarts(
+        #[with(b"aa\nbbb\n")] file: TempFile,
+        #[case] rewritten: &[u8],
+        #[case] expected: Vec<Line>,
+        #[values(false, true)] resumed: bool,
+    ) {
+        let mut reader = if resumed {
+            // Resumed past the lines, what precedes the offset is taken from its first read.
+            PathLineReader::at(&file.path, 7)
+        } else {
+            PathLineReader::new(&file.path)
+        };
+        drain(reader.lines().unwrap());
+
+        std::fs::write(&file.path, rewritten).unwrap();
+        assert!(matches!(reader.lines(), Err(ReadLinesError::Rewritten)));
+        let expected: Vec<Line> = expected.into_iter().map(|l| after_restarts(1, l)).collect();
+        assert_eq!(drain(reader.lines().unwrap()), expected);
+    }
+
+    /// Written over in place past the lines read, where a line was read in part: the part read is
+    /// not joined to another line's end.
+    #[rstest]
+    fn a_line_read_in_part_rewritten_in_place_restarts(#[with(b"aa\nbbb")] file: TempFile) {
+        let mut reader = PathLineReader::new(&file.path);
+        assert_eq!(drain(reader.lines().unwrap()), [line(3, "aa")]);
+
+        std::fs::write(&file.path, b"aa\nxyz\n").unwrap();
+        assert!(matches!(reader.lines(), Err(ReadLinesError::Rewritten)));
+        let again = [after_restarts(1, line(3, "aa")), after_restarts(1, line(7, "xyz"))];
+        assert_eq!(drain(reader.lines().unwrap()), again);
+    }
+
+    /// Written over in place with what was read, and more: read on, as if appended to.
+    #[rstest]
+    fn a_file_rewritten_with_what_was_read_reads_on(#[with(b"aa\nbbb\n")] file: TempFile) {
+        let mut reader = PathLineReader::new(&file.path);
+        drain(reader.lines().unwrap());
+
+        std::fs::write(&file.path, b"aa\nbbb\ncc\n").unwrap();
+        assert_eq!(drain(reader.lines().unwrap()), [line(10, "cc")]);
+    }
+
+    /// A line past the longest read is passed over, the buffer it took let go, and the lines after
+    /// it read as ever; so is one never terminated.
+    #[rstest]
+    fn a_line_past_the_longest_is_passed_over() {
+        let long = vec![b'm'; MAX_LINE_BYTES + 1];
+        let file = file(&[&b"a\n"[..], &long, b"\nb\n"].concat());
+        let mut reader = PathLineReader::new(&file.path);
+        let end = 2 + long.len() as u64 + 1;
+        assert_eq!(drain(reader.lines().unwrap()), [line(2, "a"), line(end + 2, "b")]);
+
+        append(&file.path, &long);
+        assert_eq!(drain(reader.lines().unwrap()), []);
+        assert!(reader.cursor.pending.capacity() < MAX_LINE_BYTES, "the line is not held");
+        append(&file.path, b"\nc\n");
+        let end = end + 2 + long.len() as u64 + 1;
+        assert_eq!(drain(reader.lines().unwrap()), [line(end + 2, "c")]);
     }
 
     #[cfg(unix)]
@@ -427,7 +618,15 @@ mod tests {
         // Larger, so only the identity change can reveal the swap.
         replace(&file.path, b"x\ny\n");
         assert!(matches!(reader.lines(), Err(ReadLinesError::Replaced)));
-        assert_eq!(drain(reader.lines().unwrap()), [line(2, "x"), line(4, "y")]);
+        let again = [after_restarts(1, line(2, "x")), after_restarts(1, line(4, "y"))];
+        assert_eq!(drain(reader.lines().unwrap()), again);
+
+        // Each start over is a read of its own; lines appended after are of the same one.
+        replace(&file.path, b"z\n");
+        assert!(matches!(reader.lines(), Err(ReadLinesError::Replaced)));
+        append(&file.path, b"w\n");
+        let again = [after_restarts(2, line(2, "z")), after_restarts(2, line(4, "w"))];
+        assert_eq!(drain(reader.lines().unwrap()), again);
     }
 
     #[cfg(unix)]

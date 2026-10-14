@@ -1,5 +1,7 @@
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use atuin_common::os::unix::io::WriteAllExt;
 use atuin_common::os::unix::tty::TtyId;
@@ -20,6 +22,10 @@ use crate::screen::{self, Msg, SocketServer};
 /// * 1: Initial version. Expects OSC 133 escape sequences.
 /// * 2: Switched from OSC 133 to OSC 18188735.
 const PROTOCOL_VERSION: &str = "2";
+
+/// How often to update the socket's modification time so it doesn't get automatically deleted by
+/// temporary file cleaners.
+const SOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_mins(1);
 
 pub fn main(options: RuntimeOptions) {
     if let Err(e) = run(options) {
@@ -122,6 +128,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
 
     let socket_path = if let Some((server, path)) = server_and_path {
         server.spawn(msg_tx.clone());
+        spawn_socket_updater(path.to_path_buf());
         Some(path)
     } else {
         None
@@ -220,6 +227,21 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     let _ = terminal::disable_raw_mode();
     drop(socket_path); // delete the socket
     std::process::exit(process_exit_code(status.exit_code()));
+}
+
+/// Spawn a thread that periodically updates the socket's modification time so it doesn't get
+/// automatically deleted by temporary file cleaners.
+fn spawn_socket_updater(path: PathBuf) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(SOCKET_KEEPALIVE_INTERVAL);
+            if let Err(e) = atuin_common::os::unix::touch_file(&path)
+                && e.kind() == std::io::ErrorKind::NotFound
+            {
+                break;
+            }
+        }
+    })
 }
 
 fn spawn_resize_handler(

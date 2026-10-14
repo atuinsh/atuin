@@ -22,8 +22,8 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
   [Shell Integration](../guide/shell-integration.md).
 - **Key bindings** for ++ctrl+r++ and the ++up++ arrow, and ++question++ for
   [Atuin AI](../ai/introduction.md).
-- **Widgets** for `atuin ai resume` (zsh, bash and fish), unbound unless you ask
-  for them: see [Binding `atuin ai resume`](#binding-atuin-ai-resume).
+- **Widgets** for `atuin resume` (zsh, bash and fish), unbound unless you ask
+  for them: see [Binding `atuin resume`](#binding-atuin-resume).
 
 ## Flags
 
@@ -32,7 +32,7 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
 | `--disable-up-arrow` | Don't bind the ++up++ arrow key |
 | `--disable-ctrl-r` | Don't bind ++ctrl+r++ |
 | `--disable-ai` | Don't bind ++question++ to [Atuin AI](../ai/introduction.md) |
-| `--bind-ai-resume` | Bind ++ctrl+bracket-right++ to `atuin ai resume` (zsh, bash and fish; off by default) |
+| `--bind-ai-resume` | Bind ++ctrl+bracket-right++ to `atuin resume` (zsh, bash and fish; off by default) |
 
 For example, to keep ++ctrl+r++ but leave the up arrow alone:
 
@@ -40,9 +40,9 @@ For example, to keep ++ctrl+r++ but leave the up arrow alone:
 eval "$(atuin init zsh --disable-up-arrow)"
 ```
 
-## Binding `atuin ai resume`
+## Binding `atuin resume`
 
-`atuin init` defines widgets that open the [`atuin ai resume`](../ai/sessions.md)
+`atuin init` defines widgets that open the [`atuin resume`](../ai/sessions.md)
 picker at the prompt and put the command it picks into your shell, but binds no
 key to them by default. To bind ++ctrl+bracket-right++ in the emacs, vi-insert and
 vi-command keymaps, pass `--bind-ai-resume`:

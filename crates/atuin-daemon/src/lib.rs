@@ -20,6 +20,7 @@ pub mod daemon;
 pub mod events;
 pub mod grpc;
 pub(crate) mod history_journal;
+mod octavo;
 mod output_capture;
 pub mod pidfile;
 pub mod search;
@@ -38,6 +39,7 @@ pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
+pub use octavo::Octavo;
 pub use output_capture::{
     CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputLine, OutputMatch,
 };
@@ -272,7 +274,7 @@ pub async fn boot(
 
     let output_capture = match settings.output.limits() {
         Some(limits) => {
-            OutputCaptureEngine::open(Settings::command_capture_dir(), limits.max_disk_usage).await
+            OutputCaptureEngine::open(settings.command_capture_dir(), limits.max_disk_usage).await
         }
         None => OutputCaptureEngine::nop(),
     };
@@ -291,9 +293,9 @@ pub async fn boot(
 
     let handle = daemon.handle();
 
-    let host_id = Settings::host_id().await?;
+    let host_id = settings.host_id().await?;
 
-    let ai_session_db_path = atuin_client::ai_session::sidecar_path();
+    let ai_session_db_path = atuin_client::ai_session::sidecar_path(&settings);
     let ai_session_db = match AiSessionDatabase::open(&ai_session_db_path).await {
         Ok(db) => Some(db),
         Err(err) => {
@@ -322,6 +324,8 @@ pub async fn boot(
                 records,
                 db.clone(),
                 settings.ai.capture_sessions,
+                session_capture::ToolCapture::from_setting(settings.ai.capture_tools),
+                session_capture::CapturePolicy::from_settings(&settings),
                 blocking_pool.clone(),
             )
         }
@@ -337,15 +341,18 @@ pub async fn boot(
 
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
+    let outputs = output_capture.store();
     let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,
         handle.history_db().clone(),
         search_index,
         output_capture,
+        Octavo::open(&settings, handle.clone(), outputs).await,
     ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
-    let ai_session_service = AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture));
+    let ai_session_service =
+        AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture.clone()));
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
@@ -354,12 +361,14 @@ pub async fn boot(
     if let Ok(watcher) = global_settings_watcher() {
         let mut settings_rx = watcher.subscribe();
         let watcher_handle = handle.clone();
+        let ai_session_capture = ai_session_capture.clone();
         tokio::spawn(async move {
             tracing::info!("config file watcher started");
             while settings_rx.changed().await.is_ok() {
                 // Use the already-loaded settings from the watcher
                 // (avoids parsing the config file twice)
                 let new_settings = (*settings_rx.borrow()).clone();
+                ai_session_capture.set_capture(new_settings.ai.capture_sessions);
                 watcher_handle.apply_settings((*new_settings).clone()).await;
             }
             tracing::debug!("config file watcher stopped");

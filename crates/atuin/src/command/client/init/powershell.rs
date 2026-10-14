@@ -9,7 +9,7 @@ fn ps_bool(value: bool) -> &'static str {
 }
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
-    let (bind_ctrl_r, bind_up_arrow) = if std::env::var("ATUIN_NOBIND").is_ok() {
+    let (bind_ctrl_r, bind_up_arrow) = if atuin_common::env::var("ATUIN_NOBIND").is_ok() {
         (false, false)
     } else {
         (options.enable_ctrl_r, options.enable_up_arrow)

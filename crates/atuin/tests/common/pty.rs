@@ -217,6 +217,14 @@ impl PtyShell {
         });
     }
 
+    pub fn wait_for_line_editor(&self) {
+        self.wait_for_prompt();
+        self.send(b"#");
+        self.wait_for_line(&format!("{PROMPT} #"));
+        self.send(b"\x7f");
+        self.wait_for_prompt();
+    }
+
     pub fn send_ctrl_r(&self) {
         self.send(&[0x12]);
     }

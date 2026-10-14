@@ -11,6 +11,22 @@ reason = "panics on overflow; use atuin_common::time::DurationExt::try_new"
 path = "std::time::Duration::from_secs_f64"
 reason = "panics on NaN/negative/overflow; use Duration::try_from_secs_f64"
 
+[[disallowed-methods]]
+path = "std::env::var"
+reason = "use atuin_common::env::var, which can be mocked by tests"
+
+[[disallowed-methods]]
+path = "std::env::var_os"
+reason = "use atuin_common::env::var_os, which can be mocked by tests"
+
+[[disallowed-methods]]
+path = "std::env::set_var"
+reason = "unsound; in tests, use atuin_common::env::MockEnv"
+
+[[disallowed-methods]]
+path = "std::env::remove_var"
+reason = "unsound; in tests, use atuin_common::env::MockEnv"
+
 [[disallowed-types]]
 path = "std::sync::Mutex"
 reason = "use parking_lot::Mutex which is faster"

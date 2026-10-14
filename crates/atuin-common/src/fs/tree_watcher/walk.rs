@@ -52,6 +52,30 @@ impl WalkPoller {
         tracker.reconcile(walk);
     }
 
+    /// Walk the trees under `dirs` in the pool and observe everything in them, pruning nothing.
+    ///
+    /// For directories that just appeared: the backend starts watching one only once it has seen
+    /// it created, so whatever was written into it before then (a new file in a new directory,
+    /// the usual case) raises no event of its own, and would wait for the next full scan.
+    /// A directory inside another of `dirs` (`mkdir -p` reports each level) is walked once, with
+    /// the outermost.
+    pub async fn discover<F>(&self, mut dirs: Vec<Arc<Path>>, tracker: &mut FileTracker<F>)
+    where
+        F: Fn(&Path) -> bool,
+    {
+        if dirs.is_empty() || !self.recursive {
+            return;
+        }
+        // Sorted, a directory comes right after any other it is inside.
+        dirs.sort();
+        dirs.dedup_by(|inner, outer| inner.starts_with(&**outer));
+        let walks = self.pool.run(move || dirs.iter().map(|dir| Self::scan(dir, true)).collect());
+        let walks: Vec<WalkResult> = walks.await.unwrap_or_default();
+        for (path, fingerprint) in walks.into_iter().flat_map(|walk| walk.entries) {
+            tracker.observe_fingerprint(path, fingerprint);
+        }
+    }
+
     /// Walk `root` best-effort, returning every readable entry plus the set of directories that
     /// were fully read without error.
     fn scan(root: &Path, recursive: bool) -> WalkResult {

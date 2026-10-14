@@ -48,7 +48,7 @@ This will remove your account and all synchronized history from the server. Loca
 ## Key
 
 As all your data is encrypted, Atuin generates a key for you. It's stored in the
-Atuin data directory (`~/.local/share/atuin` on Linux).
+Atuin data directory (`~/.atuin/data` by default).
 
 You can also get this with
 

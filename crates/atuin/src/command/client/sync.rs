@@ -4,7 +4,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
-use atuin_domain::record::RecordTag;
+use atuin_domain::record::{RecordId, RecordTag};
 use clap::Subcommand;
 use easy_cast::Conv;
 use eyre::{Result, WrapErr};
@@ -13,6 +13,8 @@ use tracing::instrument;
 mod status;
 
 use crate::command::client::account;
+#[cfg(feature = "daemon")]
+use crate::command::client::daemon;
 use crate::i18n::fl;
 
 #[derive(Subcommand, Debug)]
@@ -49,7 +51,7 @@ impl Cmd {
         match self {
             Self::Sync { force } => run(&settings, force, db, store).await,
             Self::Login(l) => l.run(&settings, &store).await,
-            Self::Logout => account::logout::run().await,
+            Self::Logout => account::logout::run(&settings).await,
             Self::Register(r) => r.run(&settings, &store).await,
             Self::Status => status::run(&settings).await,
             Self::Key { base64 } => {
@@ -72,7 +74,7 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key")?;
 
-    let host_id = Settings::host_id().await?;
+    let host_id = settings.host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
 
     // Build the session once and reuse it for both sync passes below. It owns a clone of the store
@@ -94,7 +96,7 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
         .await
         .map_err(crate::print_error::format_sync_error)?;
 
-    crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+    build(settings, &store, db, &downloaded).await?;
 
     println!("{}", fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len()));
 
@@ -110,7 +112,7 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
 
         // Internally we use the global filter mode, so this context is ignored.
         // don't recurse or loop here.
-        history_store.init_store(db).await?;
+        history_store.init_store(db, settings).await?;
 
         println!("{}", fl!("sync-rerun"));
 
@@ -122,7 +124,7 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
             .await
             .map_err(crate::print_error::format_sync_error)?;
 
-        crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+        build(settings, &store, db, &downloaded).await?;
 
         println!("{}", fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len()));
     }
@@ -133,4 +135,26 @@ async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) 
     );
 
     Ok(())
+}
+
+/// [`crate::sync::build`], then have a running daemon project the AI sessions `downloaded` brought,
+/// even if building the other stores failed: it owns their index, and otherwise projects only what
+/// it syncs itself, or finds as it starts.
+pub(super) async fn build(
+    settings: &Settings,
+    store: &SqliteStore,
+    db: &Sqlite,
+    downloaded: &[RecordId],
+) -> Result<()> {
+    let built = crate::sync::build(settings, store, db, Some(downloaded)).await;
+
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled
+        && !downloaded.is_empty()
+        && let Err(e) = daemon::project_synced_ai_sessions(settings).await
+    {
+        eprintln!("Warning: failed to build ai sessions: {e}");
+    }
+
+    built
 }

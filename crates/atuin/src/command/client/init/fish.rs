@@ -43,7 +43,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
     print_tmux_config(options.tmux);
     println!("{}", crate::shell::FISH);
 
-    if std::env::var("ATUIN_NOBIND").is_err() {
+    if atuin_common::env::var("ATUIN_NOBIND").is_err() {
         println!("if string match -q '4.*' $version");
 
         // In fish 4.0 and above the option bind -k doesn't exist anymore,
