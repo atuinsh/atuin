@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::database::Sqlite;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -47,13 +49,18 @@ pub enum Cmd {
 
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn run(self, settings: Settings, db: &Sqlite, store: SqliteStore) -> Result<()> {
+    pub async fn run(
+        self,
+        settings: &Arc<Settings>,
+        db: &Sqlite,
+        store: SqliteStore,
+    ) -> Result<()> {
         match self {
-            Self::Sync { force } => run(&settings, force, db, store).await,
-            Self::Login(l) => l.run(&settings, &store).await,
-            Self::Logout => account::logout::run(&settings).await,
-            Self::Register(r) => r.run(&settings, &store).await,
-            Self::Status => status::run(&settings).await,
+            Self::Sync { force } => run(settings, force, db, store).await,
+            Self::Login(l) => l.run(settings, &store).await,
+            Self::Logout => account::logout::run(settings).await,
+            Self::Register(r) => r.run(settings, &store).await,
+            Self::Status => status::run(settings).await,
             Self::Key { base64 } => {
                 let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
                     .wrap_err(fl!("sync-key-load-failed"))?;
@@ -70,7 +77,7 @@ impl Cmd {
 }
 
 #[instrument(level = "trace", skip_all, fields(force), err)]
-async fn run(settings: &Settings, force: bool, db: &Sqlite, store: SqliteStore) -> Result<()> {
+async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteStore) -> Result<()> {
     let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
         .context("could not load encryption key")?;
 

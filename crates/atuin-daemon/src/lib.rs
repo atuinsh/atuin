@@ -264,7 +264,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
 /// This creates a daemon with the search component, spawns the background sync
 /// engine, starts the gRPC server with their services, and runs the event loop.
 pub async fn boot(
-    settings: Settings,
+    settings: Arc<Settings>,
     store: SqliteStore,
     history_db: HistoryDatabase,
 ) -> Result<()> {
@@ -369,7 +369,7 @@ pub async fn boot(
                 // (avoids parsing the config file twice)
                 let new_settings = (*settings_rx.borrow()).clone();
                 ai_session_capture.set_capture(new_settings.ai.capture_sessions);
-                watcher_handle.apply_settings((*new_settings).clone()).await;
+                watcher_handle.apply_settings(new_settings).await;
             }
             tracing::debug!("config file watcher stopped");
         });
@@ -389,7 +389,7 @@ pub async fn boot(
 
     // Start the gRPC server in the background
     server::run_grpc_server(
-        settings,
+        &settings,
         history_service,
         search_service.build(handle.clone()),
         ai_session_service,

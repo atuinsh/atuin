@@ -3,6 +3,7 @@ use std::io::ErrorKind;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
@@ -83,7 +84,7 @@ impl Cmd {
 
     pub async fn run(
         self,
-        settings: Settings,
+        settings: Arc<Settings>,
         store: SqliteStore,
         history_db: Sqlite,
     ) -> Result<()> {
@@ -713,7 +714,7 @@ fn uses_relative_paths(settings: &Settings) -> bool {
 }
 
 async fn run(
-    settings: Settings,
+    settings: Arc<Settings>,
     store: SqliteStore,
     history_db: Sqlite,
     force: bool,

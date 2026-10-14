@@ -1,4 +1,5 @@
 use std::io::{self, IsTerminal};
+use std::sync::Arc;
 
 use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -47,7 +48,7 @@ fn get_input<T: for<'a> From<&'a str>>() -> Result<Option<T>> {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Arc<Settings>, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
                 println!("{}", fl!("account-hub-authenticated"));
@@ -287,7 +288,7 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
 }
 
 async fn verify_key_against_remote(
-    settings: &Settings,
+    settings: &Arc<Settings>,
     store: &SqliteStore,
     interactive: bool,
 ) -> Result<()> {

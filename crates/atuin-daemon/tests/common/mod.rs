@@ -119,39 +119,12 @@ impl TestEnvBuilder {
 
     pub async fn build(self) -> TestEnv {
         let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("history.db");
-        let record_path = tmp.path().join("records.db");
-        let key_path = tmp.path().join("key");
-        let socket_path = tmp.path().join("test.sock");
+        let settings = Arc::new(TestEnv::settings_in(tmp.path()));
+        let socket_path =
+            settings.daemon.socket_path.clone().expect("the harness sets a socket path");
 
-        let settings: Settings = Settings::builder()
-            .expect("could not build settings builder")
-            .set_override("db_path", db_path.to_str().unwrap())
-            .unwrap()
-            .set_override("record_store_path", record_path.to_str().unwrap())
-            .unwrap()
-            .set_override("key_path", key_path.to_str().unwrap())
-            .unwrap()
-            .set_override("daemon.socket_path", socket_path.to_str().unwrap())
-            .unwrap()
-            .set_override("meta.db_path", tmp.path().join("meta.db").to_str().unwrap())
-            .unwrap()
-            // Prevent meta store from migrating files from the real data dir.
-            .set_override("data_dir", tmp.path().to_str().unwrap())
-            .unwrap()
-            // Unroutable on purpose: the capability warm-up must fail fast, not dial the internet.
-            .set_override("sync_address", "http://127.0.0.1:1")
-            .unwrap()
-            // The harness opens a real output store, as the daemon only does with capture on.
-            .set_override("output.enabled", true)
-            .unwrap()
-            .build()
-            .expect("could not build settings")
-            .try_deserialize()
-            .expect("could not deserialize settings");
-
-        let history_db = Sqlite::new(&db_path, self.db_timeout).await.unwrap();
-        let store = SqliteStore::new(&record_path, self.db_timeout).await.unwrap();
+        let history_db = Sqlite::new(&settings.db_path, self.db_timeout).await.unwrap();
+        let store = SqliteStore::new(&settings.record_store_path, self.db_timeout).await.unwrap();
 
         let output_capture =
             OutputCaptureEngine::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited).await;
@@ -246,7 +219,7 @@ impl TestEnvBuilder {
 
 pub struct TestEnv {
     pub tmp: TempDir,
-    pub settings: Settings,
+    pub settings: Arc<Settings>,
     pub history_db: Sqlite,
     pub store: SqliteStore,
     pub history_store: HistoryStore,
@@ -267,6 +240,41 @@ impl TestEnv {
             seed_rows: 0,
             seed: 0x5EED,
         }
+    }
+
+    /// The harness settings, built afresh as a config reload builds them: equal to the daemon's,
+    /// but not shared with it, so a test can change them and apply the result.
+    #[must_use]
+    pub fn reload_settings(&self) -> Settings {
+        Self::settings_in(self.tmp.path())
+    }
+
+    fn settings_in(dir: &Path) -> Settings {
+        Settings::builder()
+            .expect("could not build settings builder")
+            .set_override("db_path", dir.join("history.db").to_str().unwrap())
+            .unwrap()
+            .set_override("record_store_path", dir.join("records.db").to_str().unwrap())
+            .unwrap()
+            .set_override("key_path", dir.join("key").to_str().unwrap())
+            .unwrap()
+            .set_override("daemon.socket_path", dir.join("test.sock").to_str().unwrap())
+            .unwrap()
+            .set_override("meta.db_path", dir.join("meta.db").to_str().unwrap())
+            .unwrap()
+            // Prevent meta store from migrating files from the real data dir.
+            .set_override("data_dir", dir.to_str().unwrap())
+            .unwrap()
+            // Unroutable on purpose: the capability warm-up must fail fast, not dial the internet.
+            .set_override("sync_address", "http://127.0.0.1:1")
+            .unwrap()
+            // The harness opens a real output store, as the daemon only does with capture on.
+            .set_override("output.enabled", true)
+            .unwrap()
+            .build()
+            .expect("could not build settings")
+            .try_deserialize()
+            .expect("could not deserialize settings")
     }
 
     /// A fresh connection, like every shell hook makes. Retries briefly in case the server task

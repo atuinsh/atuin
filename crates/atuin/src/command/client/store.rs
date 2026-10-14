@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
@@ -114,7 +116,7 @@ impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(
         &self,
-        settings: &Settings,
+        settings: &Arc<Settings>,
         database: &Sqlite,
         store: SqliteStore,
     ) -> Result<()> {

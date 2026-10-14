@@ -1,5 +1,6 @@
 use std::fmt::{self, Display};
 use std::io::{self, IsTerminal, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::database::{Sqlite, current_context};
@@ -451,7 +452,7 @@ async fn handle_end(
     db: &Sqlite,
     store: SqliteStore,
     history_store: HistoryStore,
-    settings: &Settings,
+    settings: &Arc<Settings>,
     id: HistoryId,
     exit: i64,
     duration: Option<u64>,
@@ -565,7 +566,7 @@ pub(super) async fn start_history_entry(
 
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 pub(super) async fn end_history_entry(
-    settings: &Settings,
+    settings: &Arc<Settings>,
     id: HistoryId,
     exit: i64,
     duration: Option<u64>,
@@ -1114,7 +1115,7 @@ impl Cmd {
 
     #[allow(clippy::too_many_lines)]
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match self {
             Self::Start {
                 cmd_env,

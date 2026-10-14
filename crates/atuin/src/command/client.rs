@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::database::Sqlite;
 use atuin_client::logs::FromSettings;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -245,13 +247,13 @@ impl Cmd {
         // This is a pretty hot path, as it runs before and after every single command the user
         // runs
         match self {
-            Self::History(history) => return history.run(&settings).await,
-            Self::Hook(hook) => return hook.run(&settings).await,
+            Self::History(history) => return history.run(&Arc::new(settings)).await,
+            Self::Hook(hook) => return hook.run(&Arc::new(settings)).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
-            Self::Config(config) => return config.run(&settings).await,
+            Self::Config(config) => return config.run(&Arc::new(settings)).await,
             Self::InternalDecoy => {
                 eprintln!("error: this command is not meant to be accessed directly");
                 std::process::exit(1);
@@ -272,20 +274,20 @@ impl Cmd {
             Self::Setup => setup::run(&settings).await,
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
-            Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
+            Self::Search(search) => search.run(db, settings, sqlite_store, theme).await,
 
             #[cfg(feature = "daemon")]
             Self::Output(cmd) => cmd.run(&db, &settings, theme).await,
 
             #[cfg(feature = "sync")]
-            Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,
+            Self::Sync(sync) => sync.run(&Arc::new(settings), &db, sqlite_store).await,
 
             #[cfg(feature = "sync")]
-            Self::Account(account) => account.run(settings, sqlite_store).await,
+            Self::Account(account) => account.run(&Arc::new(settings), sqlite_store).await,
 
             Self::Kv(kv) => kv.run(&settings, &sqlite_store).await,
 
-            Self::Store(store) => store.run(&settings, &db, sqlite_store).await,
+            Self::Store(store) => store.run(&Arc::new(settings), &db, sqlite_store).await,
 
             Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
 
@@ -304,7 +306,7 @@ impl Cmd {
             Self::Wrapped { year } => wrapped::run(year, &db, &settings, sqlite_store, theme).await,
 
             #[cfg(feature = "daemon")]
-            Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
+            Self::Daemon(cmd) => cmd.run(Arc::new(settings), sqlite_store, db).await,
 
             Self::History(_)
             | Self::Hook(_)
@@ -354,11 +356,11 @@ impl Cmd {
                     daemon::ready_client(&settings).await?;
                 }
 
-                atuin_ai::commands::run(cli, &settings).await
+                atuin_ai::commands::run(cli, settings).await
             }
 
             #[cfg(feature = "ai")]
-            Self::Mcp => Box::pin(atuin_ai::mcp::run(&db, &settings)).await,
+            Self::Mcp => Box::pin(atuin_ai::mcp::run(&db, Arc::new(settings))).await,
         }
     }
 

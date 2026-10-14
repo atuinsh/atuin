@@ -16,7 +16,7 @@ pub enum ClientSource<'a> {
     FromClient(Client),
     /// Build from settings, fetching capabilities during `connect`, unless supplied here.
     FromSettings {
-        settings: &'a Settings,
+        settings: &'a Arc<Settings>,
         caps: Option<Arc<CapClient>>,
     },
 }

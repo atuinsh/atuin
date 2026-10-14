@@ -9,7 +9,7 @@
 //! daemon; output retrieval and output search talk to the daemon and return a
 //! tool error when it is not running.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
@@ -38,7 +38,7 @@ use crate::tools::{
 
 struct AtuinMcp {
     db: Sqlite,
-    settings: Settings,
+    settings: Arc<Settings>,
     own_session: OwnSession,
 }
 
@@ -171,10 +171,10 @@ fn invalid_arguments(err: impl std::fmt::Display) -> ToolOutcome {
 ///
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
-pub async fn run(db: &Sqlite, settings: &Settings) -> Result<()> {
+pub async fn run(db: &Sqlite, settings: Arc<Settings>) -> Result<()> {
     let server = AtuinMcp {
         db: db.clone(),
-        settings: settings.clone(),
+        settings,
         own_session: OwnSession::default(),
     }
     .serve(rmcp::transport::stdio())

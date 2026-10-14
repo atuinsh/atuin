@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
@@ -111,12 +112,12 @@ async fn output_command_filter_drops_output_but_keeps_history(
     #[case] stored: bool,
     #[values(false, true)] ended_before_capture: bool,
 ) {
-    let mut settings = env.settings.clone();
+    let mut settings = env.reload_settings();
     settings.output = OutputCapture::Enabled(CaptureLimits {
         command_filter: CommandFilter::from(RegexSet::new(["^cat "]).unwrap()),
         ..CaptureLimits::default()
     });
-    env.handle.apply_settings(settings).await;
+    env.handle.apply_settings(Arc::new(settings)).await;
 
     let mut client = env.history_client().await;
     let id: HistoryId =
@@ -148,14 +149,15 @@ async fn disabling_output_on_a_live_daemon_stores_no_captures(
     #[future(awt)] env: TestEnv,
     #[case] command: &str,
 ) {
-    let mut settings = env.settings.clone();
+    let mut settings = env.reload_settings();
     settings.output = OutputCapture::Enabled(CaptureLimits {
         command_filter: CommandFilter::from(RegexSet::new(["^cat "]).unwrap()),
         ..CaptureLimits::default()
     });
-    env.handle.apply_settings(settings.clone()).await;
+    env.handle.apply_settings(Arc::new(settings)).await;
+    let mut settings = env.reload_settings();
     settings.output = OutputCapture::default();
-    env.handle.apply_settings(settings).await;
+    env.handle.apply_settings(Arc::new(settings)).await;
 
     let mut client = env.history_client().await;
     let id: HistoryId =

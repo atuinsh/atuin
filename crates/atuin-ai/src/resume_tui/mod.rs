@@ -167,7 +167,7 @@ pub enum Outcome {
 }
 
 pub struct Picker<'a> {
-    pub settings: &'a Settings,
+    pub settings: &'a Arc<Settings>,
     pub theme: &'a Theme,
     pub source: Arc<dyn SessionSource>,
     pub resumer: Arc<dyn Resumer>,
@@ -869,8 +869,10 @@ impl Picker<'_> {
         let source = self.source.clone();
         let (requests, mut responses) = worker::spawn(self.source, self.resumer.clone());
         let resumer = self.resumer.as_ref();
-        let mut rebuilding =
-            rebuild::watch(Arc::new(rebuild::DaemonProbe::new(settings)), REBUILD_PROBE_EVERY);
+        let mut rebuilding = rebuild::watch(
+            Arc::new(rebuild::DaemonProbe::new(Arc::clone(settings))),
+            REBUILD_PROBE_EVERY,
+        );
         let mut probing = true;
 
         if inline_height > 0 {

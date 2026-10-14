@@ -1,4 +1,5 @@
 use std::num::NonZeroU64;
+use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -34,7 +35,12 @@ pub struct Pull {
 }
 
 impl Pull {
-    pub async fn run(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
+    pub async fn run(
+        &self,
+        settings: &Arc<Settings>,
+        store: SqliteStore,
+        db: &Sqlite,
+    ) -> Result<()> {
         if !self.force {
             return self.pull(settings, store, db).await;
         }
@@ -55,7 +61,7 @@ impl Pull {
         }
     }
 
-    async fn pull(&self, settings: &Settings, store: SqliteStore, db: &Sqlite) -> Result<()> {
+    async fn pull(&self, settings: &Arc<Settings>, store: SqliteStore, db: &Sqlite) -> Result<()> {
         // We can actually just use the existing diff/etc to push
         // 1. Diff
         // 2. Get operations

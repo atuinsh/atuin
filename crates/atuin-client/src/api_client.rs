@@ -286,8 +286,8 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
 
 /// Build the capability reader for a sync server.
 #[instrument(level = "trace", skip_all, err)]
-pub fn caps_client(settings: &Settings) -> Result<Arc<CapClient>> {
-    let auth_settings = Arc::new(settings.clone());
+pub fn caps_client(settings: &Arc<Settings>) -> Result<Arc<CapClient>> {
+    let auth_settings = Arc::clone(settings);
 
     let auth = AuthHeaderProvider::new(move || {
         let settings = auth_settings.clone();

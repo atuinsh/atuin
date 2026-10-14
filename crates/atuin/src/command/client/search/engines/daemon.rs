@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
@@ -70,15 +72,15 @@ impl LazyClient {
 
 pub struct Search {
     client: LazyClient,
-    settings: Settings,
+    settings: Arc<Settings>,
     query_id: u64,
 }
 
 impl Search {
-    pub fn new(settings: &Settings) -> Self {
+    pub fn new(settings: Arc<Settings>) -> Self {
         Search {
             client: LazyClient::default(),
-            settings: settings.clone(),
+            settings,
             query_id: 0,
         }
     }
@@ -287,7 +289,7 @@ mod tests {
     /// atom past frizbee's needle limit panicked in `Matcher::from_query`.
     #[rstest]
     fn long_query_does_not_panic_highlighting() {
-        let engine = Search::new(&Settings::default());
+        let engine = Search::new(Arc::new(Settings::default()));
         let long_query = "a".repeat(5000);
         let indices = engine.get_highlight_indices("echo hello", &long_query);
         assert!(indices.is_empty());
@@ -299,7 +301,7 @@ mod tests {
     /// e0 c1 h2 o3 ␣4 d5 é6 j8 à9; é and à are two bytes each).
     #[rstest]
     fn accented_command_highlights_unaccented_query() {
-        let engine = Search::new(&Settings::default());
+        let engine = Search::new(Arc::new(Settings::default()));
         let indices = engine.get_highlight_indices("echo déjà", "deja");
         assert_eq!(indices, vec![5, 6, 8, 9]);
     }
@@ -309,7 +311,7 @@ mod tests {
     /// is one byte shorter than the command wherever é shrank to e.
     #[rstest]
     fn multibyte_char_before_match_does_not_shift_highlight() {
-        let engine = Search::new(&Settings::default());
+        let engine = Search::new(Arc::new(Settings::default()));
         let indices = engine.get_highlight_indices("émacs test", "test");
         assert_eq!(indices, vec![7, 8, 9, 10]);
     }
@@ -319,7 +321,7 @@ mod tests {
     /// ␣6 g7 i8 t9).
     #[rstest]
     fn cjk_prefix_highlights_at_correct_bytes() {
-        let engine = Search::new(&Settings::default());
+        let engine = Search::new(Arc::new(Settings::default()));
         let indices = engine.get_highlight_indices("日本 git", "git");
         assert_eq!(indices, vec![7, 8, 9]);
     }

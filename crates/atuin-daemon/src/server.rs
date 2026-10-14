@@ -22,7 +22,7 @@ const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from
 #[cfg(unix)]
 #[allow(clippy::unused_async, reason = "needs to match the cfg(not(unix)) version")]
 pub async fn run_grpc_server(
-    settings: Settings,
+    settings: &Settings,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     ai_session_service: AiSessionServer<grpc::AiSessionService>,
@@ -152,7 +152,7 @@ pub async fn run_grpc_server(
 /// Run the gRPC server with the given services (Windows/TCP version).
 #[cfg(not(unix))]
 pub async fn run_grpc_server(
-    settings: Settings,
+    settings: &Settings,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     ai_session_service: AiSessionServer<grpc::AiSessionService>,

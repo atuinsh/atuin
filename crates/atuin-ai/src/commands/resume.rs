@@ -414,15 +414,15 @@ async fn direct_target(
     Ok(Some((row, note)))
 }
 
-pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
+pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
     startup("started");
-    let mut settings = settings.clone();
     if let Some(mode) = cmd.filter_mode {
         settings.ai.sessions.filter_mode = Some(mode);
     }
     if let Some(mode) = cmd.keymap_mode {
         settings.keymap_mode = mode;
     }
+    let settings = Arc::new(settings);
     let output = cmd.output();
     let query = cmd.query();
 

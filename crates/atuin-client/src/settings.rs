@@ -1050,7 +1050,7 @@ impl Default for Ui {
 
 #[allow(deprecated)]
 #[serde_as]
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Settings {
     pub data_dir: PathBuf,
     pub dialect: Dialect,

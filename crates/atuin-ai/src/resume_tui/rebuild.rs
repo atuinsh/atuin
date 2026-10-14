@@ -50,15 +50,13 @@ pub trait RebuildProbe: Send + Sync {
 
 /// Asks the daemon over its socket, without starting it, giving up after [`PROBE_TIMEOUT`].
 pub struct DaemonProbe {
-    settings: Settings,
+    settings: Arc<Settings>,
 }
 
 impl DaemonProbe {
     #[must_use]
-    pub fn new(settings: &Settings) -> Self {
-        Self {
-            settings: settings.clone(),
-        }
+    pub const fn new(settings: Arc<Settings>) -> Self {
+        Self { settings }
     }
 }
 
@@ -157,7 +155,7 @@ mod tests {
         settings.daemon.socket_path = Some(dir.path().join("nobody.sock"));
         settings.daemon.pidfile_path = dir.path().join("atuin-daemon.pid").to_string_lossy().into();
         let started = std::time::Instant::now();
-        assert_eq!(DaemonProbe::new(&settings).rebuilding().await, None);
+        assert_eq!(DaemonProbe::new(Arc::new(settings)).rebuilding().await, None);
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(!dir.path().join("nobody.sock").exists(), "no daemon was started");
     }

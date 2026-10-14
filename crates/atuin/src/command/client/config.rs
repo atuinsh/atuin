@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 #[cfg(feature = "octavo")]
 use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
@@ -43,7 +45,7 @@ pub enum Cmd {
 
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match self {
             Self::Get(get) => get.run(settings).await,
             Self::Set(set) => set.run(settings).await,
@@ -272,7 +274,7 @@ pub enum Feature {
 }
 
 impl EnableCmd {
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         #[cfg(all(feature = "ai", feature = "daemon"))]
         if self.feature == Feature::AiSessions {
             ai_sessions::enable(settings, &mut ai_sessions::Terminal::stdio()).await?;
@@ -393,7 +395,7 @@ impl OctavoOnboarding {
 /// Asks the user to enable Octavo, and whether to upload the history they already have; `None`
 /// if they decline.
 #[cfg(feature = "octavo")]
-async fn onboard_octavo(settings: &Settings) -> Result<Option<OctavoOnboarding>> {
+async fn onboard_octavo(settings: &Arc<Settings>) -> Result<Option<OctavoOnboarding>> {
     let login = match HubClient::new(settings)?.login(settings).await {
         Ok(login) => login,
         Err(HubCallError::NotLoggedIn) => eyre::bail!(fl!("config-enable-octavo-not-logged-in")),

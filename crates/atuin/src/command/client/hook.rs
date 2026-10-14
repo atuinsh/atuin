@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
@@ -40,7 +41,7 @@ pub struct Cmd {
 
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent).await,
             (None, Some(agent)) => handle(&agent, settings).await,
@@ -92,7 +93,7 @@ async fn install(agent_name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
+async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
     let harness = AnyHarness::from_name(agent_name)?;
 
     let mut input = String::new();

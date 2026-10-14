@@ -131,7 +131,7 @@ impl DirectUploader {
     /// that may pass, such as no network.
     async fn upload_or_queue(
         self: Arc<Self>,
-        settings: Settings,
+        settings: Arc<Settings>,
         token: HubToken,
         history: History,
         record_id: RecordId,
@@ -190,7 +190,7 @@ impl DirectUploader {
     ///
     /// That needs the token's user, known once the daemon has reached the hub since the login;
     /// until then a detached task asks the hub first.
-    async fn queue_for(self: &Arc<Self>, settings: Settings, token: HubToken, work: Queued) {
+    async fn queue_for(self: &Arc<Self>, settings: Arc<Settings>, token: HubToken, work: Queued) {
         match self.hub.user_of(&token, &settings).await {
             Ok(Some(user)) => self.enqueue(&user, work).await,
             Ok(None) => {
@@ -209,7 +209,7 @@ impl DirectUploader {
     /// Learns whose `token` is from the hub, then queues `work` for them.
     async fn learn_user_and_queue(
         self: Arc<Self>,
-        settings: Settings,
+        settings: Arc<Settings>,
         token: HubToken,
         work: Queued,
     ) {

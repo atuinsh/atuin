@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::database::{Context, DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::{FilterMode, SearchMode, Settings, Shells};
@@ -11,10 +13,10 @@ pub mod daemon;
 pub mod db;
 
 #[allow(unused)] // settings is only used if daemon feature is enabled
-pub fn engine(search_mode: SearchMode, settings: &Settings) -> AnySearchEngine {
+pub fn engine(search_mode: SearchMode, settings: &Arc<Settings>) -> AnySearchEngine {
     match search_mode {
         #[cfg(feature = "daemon")]
-        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(settings)).into(),
+        SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(Arc::clone(settings))).into(),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled

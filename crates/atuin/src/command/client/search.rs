@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::{IsTerminal as _, Write, stderr, stdout};
+use std::sync::Arc;
 
 use atuin_client::database::{OptFilters, Sqlite, current_context};
 use atuin_client::history::store::HistoryStore;
@@ -152,7 +153,7 @@ impl Cmd {
     pub async fn run(
         self,
         db: Sqlite,
-        settings: &mut Settings,
+        mut settings: Settings,
         store: SqliteStore,
         theme: &Theme,
     ) -> Result<()> {
@@ -211,6 +212,7 @@ impl Cmd {
             value => value,
         };
         settings.keymap_mode_shell = self.keymap_mode;
+        let settings = Arc::new(settings);
 
         let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
             .context("could not load or generate encryption key")?;
@@ -219,7 +221,7 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = interactive::history(&query, settings, db, &history_store, theme).await?;
+            let item = interactive::history(&query, &settings, db, &history_store, theme).await?;
 
             if let Some(result_file) = self.result_file {
                 let mut file = File::create(result_file)?;
@@ -258,7 +260,7 @@ impl Cmd {
                 dialect: settings.dialect,
             };
 
-            let mut entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
+            let mut entries = run_non_interactive(&settings, opt_filter, &query, &db).await?;
 
             if entries.is_empty() {
                 std::process::exit(1)
@@ -274,10 +276,10 @@ impl Cmd {
                         eprintln!("deleting {}", entry.id);
                     }
 
-                    super::history::delete_history_entries(settings, &history_store, &db, entries)
+                    super::history::delete_history_entries(&settings, &history_store, &db, entries)
                         .await?;
 
-                    entries = run_non_interactive(settings, opt_filter, &query, &db).await?;
+                    entries = run_non_interactive(&settings, opt_filter, &query, &db).await?;
                 }
             } else {
                 let format = self.format.as_deref().unwrap_or(settings.history_format.as_str());
@@ -335,7 +337,7 @@ async fn run_non_interactive(
 }
 
 #[instrument(level = "trace", skip_all, err)]
-pub async fn prepare_index(settings: &Settings) -> Result<()> {
+pub async fn prepare_index(settings: &Arc<Settings>) -> Result<()> {
     use engines::AnySearchEngine;
     #[cfg(feature = "daemon")]
     if let AnySearchEngine::Daemon(mut search) = engines::engine(settings.search_mode(), settings) {

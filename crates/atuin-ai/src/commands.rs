@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::logs::FromSettings;
 use atuin_client::settings::Settings;
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
@@ -73,14 +75,17 @@ impl Command {
     }
 }
 
-pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
+pub async fn run(command: Command, settings: Settings) -> eyre::Result<()> {
     match command {
         Command::Inline {
             command,
             hook,
             args,
             ..
-        } => inline::run(command, args.api_endpoint, args.api_token, settings, hook).await,
+        } => {
+            let settings = Arc::new(settings);
+            inline::run(command, args.api_endpoint, args.api_token, &settings, hook).await
+        }
         Command::Init { .. } => {
             // This is valid comment syntax in all the shells we support and thus a no-op: bash,
             // zsh, fish, nushell, xonsh, and powershell.
@@ -90,7 +95,7 @@ pub async fn run(command: Command, settings: &Settings) -> eyre::Result<()> {
             );
             Ok(())
         }
-        Command::Session(cmd) => session::run(cmd, settings).await,
+        Command::Session(cmd) => session::run(cmd, &settings).await,
         Command::Resume(cmd) => resume::run(cmd, settings).await,
     }
 }

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
@@ -191,7 +192,7 @@ impl Browser {
         &mut self,
         db: &Sqlite,
         selected: &History,
-        settings: &Settings,
+        settings: &Arc<Settings>,
     ) -> eyre::Result<(Option<HistoryId>, Option<HistoryId>)> {
         if self.view == View::Output {
             if self.output.poll(selected.id, settings).await {
@@ -620,7 +621,8 @@ mod tests {
 
     #[fixture]
     fn bindings() -> Bindings {
-        Bindings::new(&default_inspector_keymap(&Settings::utc()), &EvalContext {
+        let settings = Settings::utc();
+        Bindings::new(&default_inspector_keymap(&settings, &settings.keys), &EvalContext {
             cursor_position: 0,
             input_width: 0,
             input_byte_len: 0,
@@ -658,7 +660,7 @@ mod tests {
         neighbor.command = "pwd".into();
         db.save(&neighbor).await.unwrap();
         let mut browser = Browser::default();
-        let settings = Settings::utc();
+        let settings = Arc::new(Settings::utc());
         assert_eq!(
             browser.refresh(&db, &history, &settings).await.unwrap(),
             (Some(other_run.id), None)
