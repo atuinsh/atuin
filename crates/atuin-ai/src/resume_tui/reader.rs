@@ -416,6 +416,24 @@ mod tests {
         assert_eq!(tools_line(tools), "Read ×2 · Edit");
     }
 
+    #[rstest]
+    fn atuin_tool_calls_read_by_what_they_do() {
+        let mut t = TranscriptBuilder::default();
+        t.tool("mcp__atuin__atuin_history");
+        t.tool("atuin_atuin_history");
+        t.tool("atuin_history");
+        t.tool("mcp__atuin__atuin_ai_session_read");
+        t.tool("mcp__github__create_issue");
+        let transcript = t.finish();
+        let TranscriptEntry::Tools(tools) = &transcript.entries[0] else {
+            panic!("{transcript:?}");
+        };
+        assert_eq!(
+            tools_line(tools),
+            "🐢 atuin history ×3 · 🐢 atuin session read · mcp__github__create_issue"
+        );
+    }
+
     /// A transcript of a prompt (message 0), a run of tool calls (1 and 3, results between),
     /// a long reply (5), another prompt (6), and a reply that goes on to call a tool (7).
     fn transcript() -> Transcript {

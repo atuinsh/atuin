@@ -219,6 +219,8 @@ impl TranscriptBuilder {
     }
 
     pub fn tool(&mut self, name: &str) {
+        let name = tool_label(name);
+
         if let Some(TranscriptEntry::Tools(tools)) = self.transcript.entries.last_mut() {
             match tools.last_mut() {
                 Some((last, n)) if last == name => *n += 1,
@@ -231,6 +233,24 @@ impl TranscriptBuilder {
 
     pub fn finish(self) -> Transcript {
         self.transcript
+    }
+}
+
+/// How the reader names a tool call: atuin's own MCP tools by what they do, whichever way the
+/// harness prefixed them (`mcp__atuin__atuin_history`, OpenCode's `atuin_atuin_history`), and
+/// any other tool as the harness named it.
+fn tool_label(name: &str) -> &str {
+    let tool = name.rsplit("__").next().unwrap_or(name);
+    let tool = tool.strip_prefix("atuin_").filter(|t| t.starts_with("atuin_")).unwrap_or(tool);
+
+    match tool {
+        "atuin_history" => "🐢 atuin history",
+        "atuin_output" => "🐢 atuin output",
+        "atuin_output_search" => "🐢 atuin output search",
+        "atuin_ai_session_search" => "🐢 atuin session search",
+        "atuin_ai_session_list" => "🐢 atuin session list",
+        "atuin_ai_session_read" => "🐢 atuin session read",
+        _ => name,
     }
 }
 
