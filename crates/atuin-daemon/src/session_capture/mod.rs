@@ -16,9 +16,10 @@ use std::time::{Duration, SystemTime};
 
 use atuin_client::ai_session::{
     AiSessionDatabase, AiSessionStore, Appended, AtuinSessionId, BuildError, CaptureMark, DbError,
-    HarnessKind, HarnessSession, Message, NewRow, PushError, ReprojectProgress, SearchTerms,
-    Session, SessionFilter, SessionMatch,
+    HarnessKind, HarnessSession, Message, NewRow, PreparedMessage, PushError, ReprojectProgress,
+    SearchTerms, Session, SessionFilter, SessionMatch,
 };
+use atuin_client::record::decode::map_parallel;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
 use atuin_common::harnesstools::session::{Content, Role, ToolCallId};
@@ -78,7 +79,7 @@ pub enum RebuildError {
 /// not projected yet, and the sidecar's local projection lock. Owned, so a capture can hand them
 /// to the task that finishes it (see [`Sink::append`]).
 type CaptureLocks =
-    (tokio::sync::OwnedMutexGuard<Option<Message>>, tokio::sync::OwnedMutexGuard<()>);
+    (tokio::sync::OwnedMutexGuard<Arc<[Message]>>, tokio::sync::OwnedMutexGuard<()>);
 
 /// Cheap to clone: every clone shares the stores, the tail, the pending projection and the
 /// state.
@@ -87,10 +88,10 @@ pub(crate) struct Sink {
     records: AiSessionStore,
     sidecar: AiSessionDatabase,
     tail: broadcast::Sender<SessionTailEvent>,
-    // Serialize the dedup gate + persistence across live capture and import. At most one record
-    // can be waiting for projection (or, after a push that failed or panicked, for finding out
-    // whether it was stored); repair it before admitting another capture.
-    pending_projection: Arc<Mutex<Option<Message>>>,
+    // Serialize the dedup gate + persistence across live capture and import. At most one batch
+    // of records can be waiting for projection (or, after a push that failed or panicked, for
+    // finding out whether it was stored); repair it before admitting another capture.
+    pending_projection: Arc<Mutex<Arc<[Message]>>>,
     /// The store's state: capture and import wait out a rebuild, and are refused while the store
     /// is unavailable (see `append`).
     state: watch::Receiver<StoreState>,
@@ -178,11 +179,22 @@ impl Sink {
     /// it again; stopped once policy forgot a credential command waiting for its output, the
     /// output appended again would be kept.)
     pub(crate) async fn append(&self, msg: Message) -> Result<Appended, AppendError> {
+        let appended = self.append_all(vec![msg]).await?;
+        Ok(appended[0])
+    }
+
+    /// [`Self::append`] each of `msgs`, in order (each session's lines as they come): their
+    /// records pushed in one transaction and projected in another, as an import needs to be
+    /// quick. Returns what became of each.
+    pub(crate) async fn append_all(
+        &self,
+        msgs: Vec<Message>,
+    ) -> Result<Vec<Appended>, AppendError> {
         let locks = self.lock_ready().await?;
         let sink = self.clone();
         // The locks go with the task: released when it ends, however it ends (a panic unwinding
         // included, which leaves a tokio mutex usable).
-        let section = tokio::spawn(async move { sink.append_locked(locks, msg).await });
+        let section = tokio::spawn(async move { sink.append_locked(locks, msgs).await });
         match section.await {
             Ok(appended) => appended,
             // A panic: what it may have pushed is pending (see `append_locked`). Cancelled: the
@@ -194,9 +206,9 @@ impl Sink {
         }
     }
 
-    /// Apply [`CapturePolicy`] to `msg`'s tool calls (see [`Verdict`]): drop what a call that
-    /// history would ignore was given, and what one writing to a credential file wrote, and the
-    /// output of either, or of a call whose output may hold a credential (`atuin key`,
+    /// Apply [`CapturePolicy`] to the tool calls of `msgs` (see [`Verdict`]): drop what a call
+    /// that history would ignore was given, and what one writing to a credential file wrote, and
+    /// the output of either, or of a call whose output may hold a credential (`atuin key`,
     /// `gh auth token`, a read of `.env`), as shell output capture never stores it either; and,
     /// in a directory `cwd_filter` matches, every call's.
     ///
@@ -206,152 +218,228 @@ impl Sink {
     /// comes in, which capture's locks (held) make trustworthy; so is where the session runs. A stored call whose input
     /// wasn't captured (made while `ai.capture_tools` was off, or dropped), or whose written
     /// content was withheld, can't be checked, so its output is withheld too.
-    async fn withhold_unsafe_output(&self, msg: &mut Message) -> Result<(), AppendError> {
+    ///
+    /// Judging a call is the costly part (its input, whole files at times, is searched for
+    /// credential commands and files), so it is done across cores, off the runtime's thread;
+    /// what depends on the rows before (where a session runs, its unanswered calls) in order.
+    async fn withhold_unsafe_output(
+        &self,
+        msgs: Vec<Message>,
+    ) -> Result<Vec<Message>, AppendError> {
         if self.tools == ToolCapture::Names {
-            return Ok(());
+            return Ok(msgs);
         }
-        if !self.unsafe_calls.lock().warmed.contains(&msg.session) {
-            let mut unanswered = HashSet::new();
-            let mut cwd = None;
-            let mut stored = std::pin::pin!(self.sidecar.messages(&msg.session));
-            while let Some(stored) = stored.next().await {
-                let stored = stored?;
-                cwd = stored.cwd.or(cwd);
-                let ignored = cwd.as_deref().is_some_and(|cwd| self.policy.ignores_dir(cwd));
-                for block in stored.content {
-                    match block {
-                        Content::ToolUse(call)
-                            if call.input.is_null()
-                                || tools::is_withheld(&call.input)
-                                || ignored
-                                || self.policy.judge(&call, cwd.as_deref()) != Verdict::Keep =>
-                        {
-                            unanswered.insert(call.id);
-                        }
-                        Content::ToolResult(result) => {
-                            unanswered.remove(&result.call);
-                        }
-                        _ => {}
-                    }
-                }
+        let heavy = msgs.len() > 1 || msgs.iter().any(bulky);
+        let mut rows = Vec::with_capacity(msgs.len());
+        for msg in msgs {
+            if !self.unsafe_calls.lock().warmed.contains(&msg.session) {
+                self.warm_unsafe_calls(&msg.session).await?;
             }
             let mut calls = self.unsafe_calls.lock();
-            calls.warmed.insert(msg.session.clone());
-            calls.pending.extend(unanswered.into_iter().map(|id| (msg.session.clone(), id)));
-            if let Some(cwd) = cwd {
-                calls.cwds.insert(msg.session.clone(), cwd);
+            // Most rows don't say where the session runs (Codex says it in its context rows, Pi
+            // in its header): the last row that did does.
+            let cwd = match &msg.cwd {
+                Some(cwd) => {
+                    calls.cwds.insert(msg.session.clone(), cwd.clone());
+                    Some(cwd.clone())
+                }
+                None => calls.cwds.get(&msg.session).cloned(),
+            };
+            rows.push((msg, cwd));
+        }
+
+        let policy = self.policy.clone();
+        let judged = off_runtime(rows, heavy, move |(msg, cwd)| {
+            let ignored_dir = cwd.as_deref().is_some_and(|cwd| policy.ignores_dir(cwd));
+            let verdicts: Vec<_> = msg
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    Content::ToolUse(_) if ignored_dir => Some(Verdict::Drop),
+                    Content::ToolUse(call) => Some(policy.judge(call, cwd.as_deref())),
+                    _ => None,
+                })
+                .collect();
+            (msg, cwd, ignored_dir, verdicts)
+        })
+        .await;
+
+        let mut calls = self.unsafe_calls.lock();
+        let mut msgs = Vec::with_capacity(judged.len());
+        for (mut msg, cwd, ignored_dir, verdicts) in judged {
+            let mut verdicts = verdicts.into_iter();
+            // The calls whose results this row withholds: a patch of one is withheld too,
+            // whether it comes before the result (Codex) or after it, in the same row (the rest).
+            let mut withheld = HashSet::new();
+            for block in &mut msg.content {
+                match block {
+                    Content::ToolUse(call) => {
+                        match verdicts.next().unwrap_or(Verdict::Drop) {
+                            Verdict::Keep => continue,
+                            Verdict::WithholdOutput => {}
+                            Verdict::WithholdWritten => tools::withhold_written(&mut call.input),
+                            Verdict::Drop => call.input = serde_json::Value::Null,
+                        }
+                        calls.pending.insert((msg.session.clone(), call.id.clone()));
+                    }
+                    Content::ToolResult(result) => {
+                        let key = (msg.session.clone(), result.call.clone());
+                        if calls.pending.remove(&key) || ignored_dir {
+                            result.output = serde_json::Value::Null;
+                            withheld.insert(result.call.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // A patch shows what was written: none of a call whose output is withheld, and none
+            // touching a credential file, whatever the call said it did.
+            msg.content.retain(|block| match block {
+                Content::Patch(patch) => {
+                    let call = (msg.session.clone(), patch.call.clone());
+                    let unsafe_file = patch.files.iter().any(|file| {
+                        std::iter::once(&file.path)
+                            .chain(&file.moved_to)
+                            .any(|path| self.policy.protects(path, cwd.as_deref()))
+                    });
+                    !(ignored_dir
+                        || withheld.contains(&patch.call)
+                        || calls.pending.contains(&call)
+                        || unsafe_file)
+                }
+                _ => true,
+            });
+            msgs.push(msg);
+        }
+        drop(calls);
+        Ok(msgs)
+    }
+
+    /// Find the calls `session`'s stored rows made that a result must not be kept for, and are
+    /// not answered yet, and where it runs: for a session [`Self::withhold_unsafe_output`] sees
+    /// for the first time since the daemon started. A stored call whose input wasn't captured,
+    /// or whose written content was withheld, can't be checked, so it counts.
+    async fn warm_unsafe_calls(&self, session: &HarnessSession) -> Result<(), AppendError> {
+        let mut rows = Vec::new();
+        let mut cwd = None;
+        let mut stored = std::pin::pin!(self.sidecar.messages(session));
+        while let Some(stored) = stored.next().await {
+            let stored = stored?;
+            cwd = stored.cwd.clone().or(cwd);
+            rows.push((stored.content, cwd.clone()));
+        }
+
+        let policy = self.policy.clone();
+        let heavy = !rows.is_empty();
+        // Each call and whether it counts, each result: in order.
+        let judged = off_runtime(rows, heavy, move |(content, cwd)| {
+            let ignored = cwd.as_deref().is_some_and(|cwd| policy.ignores_dir(cwd));
+            content
+                .into_iter()
+                .filter_map(|block| match block {
+                    Content::ToolUse(call) => {
+                        let counts = call.input.is_null()
+                            || tools::is_withheld(&call.input)
+                            || ignored
+                            || policy.judge(&call, cwd.as_deref()) != Verdict::Keep;
+                        Some((call.id, Some(counts)))
+                    }
+                    Content::ToolResult(result) => Some((result.call, None)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .await;
+
+        let mut unanswered = HashSet::new();
+        for (id, call) in judged.into_iter().flatten() {
+            match call {
+                Some(true) => {
+                    unanswered.insert(id);
+                }
+                Some(false) => {}
+                None => {
+                    unanswered.remove(&id);
+                }
             }
         }
         let mut calls = self.unsafe_calls.lock();
-        // Most rows don't say where the session runs (Codex says it in its context rows, Pi in
-        // its header): the last row that did does.
-        let cwd = match &msg.cwd {
-            Some(cwd) => {
-                calls.cwds.insert(msg.session.clone(), cwd.clone());
-                Some(cwd.clone())
-            }
-            None => calls.cwds.get(&msg.session).cloned(),
-        };
-        let ignored_dir = cwd.as_deref().is_some_and(|cwd| self.policy.ignores_dir(cwd));
-        // The calls whose results this row withholds: a patch of one is withheld too, whether it
-        // comes before the result (Codex) or after it, in the same row (the rest).
-        let mut withheld = HashSet::new();
-        for block in &mut msg.content {
-            match block {
-                Content::ToolUse(call) => {
-                    let verdict = if ignored_dir {
-                        Verdict::Drop
-                    } else {
-                        self.policy.judge(call, cwd.as_deref())
-                    };
-                    match verdict {
-                        Verdict::Keep => continue,
-                        Verdict::WithholdOutput => {}
-                        Verdict::WithholdWritten => tools::withhold_written(&mut call.input),
-                        Verdict::Drop => call.input = serde_json::Value::Null,
-                    }
-                    calls.pending.insert((msg.session.clone(), call.id.clone()));
-                }
-                Content::ToolResult(result) => {
-                    let pending = calls.pending.remove(&(msg.session.clone(), result.call.clone()));
-                    if pending || ignored_dir {
-                        result.output = serde_json::Value::Null;
-                        withheld.insert(result.call.clone());
-                    }
-                }
-                _ => {}
-            }
+        calls.warmed.insert(session.clone());
+        calls.pending.extend(unanswered.into_iter().map(|id| (session.clone(), id)));
+        if let Some(cwd) = cwd {
+            calls.cwds.insert(session.clone(), cwd);
         }
-        // A patch shows what was written: none of a call whose output is withheld, and none
-        // touching a credential file, whatever the call said it did.
-        msg.content.retain(|block| match block {
-            Content::Patch(patch) => {
-                let call = (msg.session.clone(), patch.call.clone());
-                let unsafe_file = patch.files.iter().any(|file| {
-                    std::iter::once(&file.path)
-                        .chain(&file.moved_to)
-                        .any(|path| self.policy.protects(path, cwd.as_deref()))
-                });
-                !(ignored_dir
-                    || withheld.contains(&patch.call)
-                    || calls.pending.contains(&call)
-                    || unsafe_file)
-            }
-            _ => true,
-        });
         drop(calls);
         Ok(())
     }
 
-    /// [`Self::append`] holding capture's locks, with the store found ready under them.
+    /// [`Self::append_all`] holding capture's locks, with the store found ready under them.
     async fn append_locked(
         self,
         (mut pending, local): CaptureLocks,
-        mut msg: Message,
-    ) -> Result<Appended, AppendError> {
-        // Apply capture policy before either persistence path or the live tail. Keep structural
-        // rows (even with no content) so parent links and usage accounting remain intact.
-        // Under the locks, the sidecar holds every local row (see `withhold_unsafe_output`).
-        self.withhold_unsafe_output(&mut msg).await?;
-        let (tools, policy) = (self.tools, self.policy.clone());
-        let mut msg = if bulky(&msg) {
-            // Off the runtime's thread, which the daemon's every other request shares: shaping
-            // a large tool call can take a while.
-            tokio::task::spawn_blocking(move || {
-                sanitize(&mut msg, tools, &policy);
-                msg
-            })
-            .await
-            .map_err(|err| {
-                tracing::error!(?err, "sanitizing an ai-session message stopped unexpectedly");
-                AppendError::Aborted
-            })?
-        } else {
-            sanitize(&mut msg, tools, &policy);
-            msg
-        };
-        // Captured here, so on this host; a reproject reads the same from the record envelope.
-        msg.host = Some(self.records.host_id());
-        // As the sidecar would store it, so the record synced never names an instant past it.
-        msg.timestamp = msg.timestamp.clamp(Message::EARLIEST, Message::LATEST);
+        msgs: Vec<Message>,
+    ) -> Result<Vec<Appended>, AppendError> {
         self.repair(&mut pending).await?;
         // Dedup gate: if this logical message is already projected it is already in the record
         // store too, so there is nothing to do. Stable source ids (see MessageEnricher::source_id)
         // make this reliable across re-captures and keep the record store free of duplicates.
-        if self.sidecar.contains_message(&msg.session, &msg.source_id).await? {
-            return Ok(Appended::Duplicate);
+        let mut stored = HashMap::<_, Vec<_>>::new();
+        for msg in &msgs {
+            stored.entry(&msg.session).or_default().push(&msg.source_id);
         }
-        // Under the locks the sidecar holds every local row, so this sees the session's id.
-        msg.atuin_id = Some(match self.sidecar.get_session(&msg.session).await? {
-            Some(session) => session.atuin_id,
-            None => AtuinSessionId::mint(msg.timestamp),
-        });
+        let mut seen = HashSet::new();
+        for (session, source_ids) in stored {
+            for source_id in self.sidecar.stored_source_ids(session, &source_ids).await? {
+                seen.insert((session.clone(), source_id));
+            }
+        }
+        let mut appended = vec![Appended::Duplicate; msgs.len()];
+        let (positions, new): (Vec<_>, Vec<_>) = msgs
+            .into_iter()
+            .enumerate()
+            .filter(|(_, msg)| seen.insert((msg.session.clone(), msg.source_id.clone())))
+            .unzip();
+        if new.is_empty() {
+            return Ok(appended);
+        }
+
+        // Apply capture policy before either persistence path or the live tail. Keep structural
+        // rows (even with no content) so parent links and usage accounting remain intact.
+        // Under the locks, the sidecar holds every local row (see `withhold_unsafe_output`).
+        let new = self.withhold_unsafe_output(new).await?;
+        let (tools, policy) = (self.tools, self.policy.clone());
+        let heavy = new.len() > 1 || new.iter().any(bulky);
+        let mut new = off_runtime(new, heavy, move |mut msg| {
+            sanitize(&mut msg, tools, &policy);
+            msg
+        })
+        .await;
+        let mut ids = HashMap::new();
+        for msg in &mut new {
+            // Captured here, so on this host; a reproject reads the same from the record envelope.
+            msg.host = Some(self.records.host_id());
+            // As the sidecar would store it, so the record synced never names an instant past it.
+            msg.timestamp = msg.timestamp.clamp(Message::EARLIEST, Message::LATEST);
+            // Under the locks the sidecar holds every local row, so this sees the session's id.
+            let id = match ids.get(&msg.session) {
+                Some(&id) => id,
+                None => {
+                    let id = match self.sidecar.get_session(&msg.session).await? {
+                        Some(session) => session.atuin_id,
+                        None => AtuinSessionId::mint(msg.timestamp),
+                    };
+                    ids.insert(msg.session.clone(), id);
+                    id
+                }
+            };
+            msg.atuin_id = Some(id);
+        }
+        let new: Arc<[Message]> = new.into();
 
         // Pending from before the push: should the push fail, or this task panic, once the
-        // record may be stored, the next capture's repair finds out whether it was, and projects
-        // it if so (see `repair`). Nothing else stops this task between its push and its
-        // projection.
-        *pending = Some(msg.clone());
+        // records may be stored, the next capture's repair finds out which were, and projects
+        // them (see `repair`). Nothing else stops this task between its push and its projection.
+        *pending = Arc::clone(&new);
         // Where the last capture moved the watermark, or else the generation, read before the
         // push: an invalidation after it keeps the watermark from moving past it.
         let last = *self.capture_mark.lock();
@@ -367,20 +455,26 @@ impl Sink {
         if self.hook(hooks::Point::CapturePushing).await == hooks::Fault::Panic {
             std::panic::panic_any(hooks::INJECTED_PANIC);
         }
-        let pushed = self.records.push(&msg).await?;
+        let pushed = self.records.push_all(&new).await?;
         #[cfg(test)]
         if self.hook(hooks::Point::CapturePushed).await == hooks::Fault::Panic {
             std::panic::panic_any(hooks::INJECTED_PANIC);
         }
-        let appended = self.project_and_broadcast(&msg).await?;
-        *pending = None;
+        let count = new.len() as u64;
+        let projected = self.project_and_broadcast(&new).await?;
+        *pending = Arc::default();
+        for (i, msg) in positions.into_iter().zip(projected) {
+            appended[i] = msg;
+        }
         // So a restart doesn't replay what capture projected since the last; one that doesn't
         // move (a reprojection running, say) leaves it to the next.
-        let moved = self.records.advance_past_capture(&self.sidecar, known, pushed).await;
-        *self.capture_mark.lock() = moved.unwrap_or_else(|err| {
-            tracing::warn!(?err, "failed to move the ai-session watermark past a capture");
-            None
-        });
+        if let Some(pushed) = pushed {
+            let moved = self.records.advance_past_capture(&self.sidecar, known, pushed, count);
+            *self.capture_mark.lock() = moved.await.unwrap_or_else(|err| {
+                tracing::warn!(?err, "failed to move the ai-session watermark past a capture");
+                None
+            });
+        }
         drop(local);
         drop(pending);
         Ok(appended)
@@ -418,15 +512,17 @@ impl Sink {
         }
     }
 
-    /// Settle the record a capture was pushing when it failed or panicked, if any: projected if
-    /// the record store holds it, dropped if not. The sidecar then holds every record again.
-    async fn repair(&self, pending: &mut Option<Message>) -> Result<(), AppendError> {
-        if let Some(previous) = pending.as_ref() {
+    /// Settle the records a capture was pushing when it failed or panicked, if any: projected
+    /// if the record store holds them, dropped if not. The sidecar then holds every record again.
+    async fn repair(&self, pending: &mut Arc<[Message]>) -> Result<(), AppendError> {
+        let mut held = Vec::new();
+        for previous in pending.iter() {
             if self.records.holds(previous.id).await? {
-                self.project_and_broadcast(previous).await?;
+                held.push(previous.clone());
             }
-            *pending = None;
         }
+        self.project_and_broadcast(&held.into()).await?;
+        *pending = Arc::default();
         Ok(())
     }
 
@@ -443,14 +539,44 @@ impl Sink {
         }
     }
 
-    async fn project_and_broadcast(&self, msg: &Message) -> Result<Appended, AppendError> {
-        let started = self.sidecar.get_session(&msg.session).await?.is_none();
-        let appended = self.sidecar.append(msg).await?;
-        if self.tail.receiver_count() > 0 {
-            let session = self.sidecar.get_session(&msg.session).await?;
-            send(&self.tail, session, started, msg.clone());
+    /// Project `msgs` in one transaction, and send the new ones to the tail. Returns what became
+    /// of each.
+    async fn project_and_broadcast(
+        &self,
+        msgs: &Arc<[Message]>,
+    ) -> Result<Vec<Appended>, AppendError> {
+        if msgs.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(appended)
+        let all = Arc::clone(msgs);
+        let prepared =
+            map_parallel((0..msgs.len()).collect(), move |i| PreparedMessage::new(all[i].clone()));
+        let prepared: Vec<_> = prepared.await.into_iter().collect::<Result<_, _>>()?;
+        // An invalidation (`atuin store` rewriting the record store) only asks for a replay, which
+        // these rows survive: project them all the same.
+        let new = loop {
+            let generation = self.sidecar.projection_generation().await?;
+            if let Some(new) = self.sidecar.append_all(prepared.clone(), generation).await? {
+                break new;
+            }
+        };
+        let projected: HashSet<_> = new.iter().map(|row| row.message.id).collect();
+        if self.tail.receiver_count() > 0 {
+            for row in new {
+                let session = self.sidecar.get_session(&row.message.session).await?;
+                send(&self.tail, session, row.started, row.message);
+            }
+        }
+        Ok(msgs
+            .iter()
+            .map(|msg| {
+                if projected.contains(&msg.id) {
+                    Appended::New
+                } else {
+                    Appended::Duplicate
+                }
+            })
+            .collect())
     }
 }
 
@@ -481,6 +607,25 @@ struct UnsafeCalls {
     warmed: HashSet<HarnessSession>,
     /// Where each session runs, as its last row to say did.
     cwds: HashMap<HarnessSession, PathBuf>,
+}
+
+/// `f` on each of `items`, in order: when `heavy`, off the runtime's thread, which the daemon's
+/// every other request shares, and across cores; otherwise (one small row, say) here, as handing
+/// it to a blocking thread costs more than the work.
+async fn off_runtime<I, T>(
+    items: Vec<I>,
+    heavy: bool,
+    f: impl Fn(I) -> T + Send + Sync + 'static,
+) -> Vec<T>
+where
+    I: Send + 'static,
+    T: Send + 'static,
+{
+    if heavy {
+        map_parallel(items, f).await
+    } else {
+        items.into_iter().map(f).collect()
+    }
 }
 
 /// Whether `msg` holds enough text that [`sanitize`] may take a while: past [`BULKY`] bytes of it.
@@ -2025,6 +2170,28 @@ mod tests {
         assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 5);
         sink.append(message_of("s1", "f")).await.unwrap();
         assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 0);
+    }
+
+    /// A batch goes in whole: each row's outcome in its place (one stored before, or twice in the
+    /// batch, a duplicate), each record stored once, and the watermark moved past them all.
+    #[rstest]
+    #[tokio::test]
+    async fn a_batch_is_appended_whole() {
+        let records = mem_store().await;
+        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        records.reproject(&sidecar).await.unwrap();
+        let sink = Sink::new(records.clone(), sidecar.clone());
+        sink.append(message_of("s1", "a")).await.unwrap();
+
+        let batch = [("s1", "a"), ("s1", "b"), ("s2", "c"), ("s1", "b")];
+        let appended = sink.append_all(batch.map(|(s, source)| message_of(s, source)).into());
+        let appended = appended.await.unwrap();
+
+        use Appended::{Duplicate, New};
+        assert_eq!(appended, [Duplicate, New, New, Duplicate]);
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 0);
+        sidecar.clear_reproject_watermarks().await.unwrap();
+        assert_eq!(records.reproject(&sidecar).await.unwrap().replayed, 3);
     }
 
     /// A rebuild (after a purge deleted records) takes out what the deleted records projected and

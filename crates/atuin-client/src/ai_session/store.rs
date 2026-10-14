@@ -13,7 +13,7 @@ use crate::ai_session::Message;
 use crate::ai_session::database::{
     AiSessionDatabase, DbError, Generation, NewRow, PreparedMessage, Watermark,
 };
-use crate::record::decode::decode_parallel;
+use crate::record::decode::{decode_parallel, map_parallel};
 use crate::record::sqlite_store::SqliteStore;
 
 /// The zstd level of a v2 record's body: on captured messages, higher levels shrink them only a
@@ -176,11 +176,50 @@ impl AiSessionStore {
         }
     }
 
-    /// Move this host's watermark onto `pushed`, a record [`Self::push`] stored and the caller
-    /// has since projected, so the next reprojection (each startup's) doesn't replay what capture
-    /// projected as it went. Only when the watermark stands on the record just before it (still
-    /// the record it was, as a reprojection checks), no invalidation happened since `known`'s
-    /// generation, and no reprojection is running, which moves it itself.
+    /// [`Self::push`] each of `msgs`, in order and in one transaction: all of them or none.
+    /// Returns where the last was stored, `None` for none.
+    pub async fn push_all(&self, msgs: &Arc<[Message]>) -> Result<Option<Watermark>, PushError> {
+        let Some(last) = msgs.last() else {
+            return Ok(None);
+        };
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
+        let first = self.store.last(&series).await?.map_or(0, |r| r.idx + 1);
+        let (all, host, key) = (Arc::clone(msgs), Host::new(self.host_id), self.key.clone());
+        // Serializing and encrypting each is most of what pushing costs: across cores.
+        let records = map_parallel((0..msgs.len()).collect(), move |i| {
+            Record::builder()
+                .id(all[i].id)
+                .host(host.clone())
+                .version(AiSessionRecord::VERSION)
+                .tag(RecordTag::AiSession)
+                .idx(first + i as u64)
+                .data(DecryptedData(AiSessionRecord::Message(all[i].clone()).serialize()))
+                .build()
+                .encrypt(&key)
+        })
+        .await;
+        if self.store.push_batch_unique(records.iter()).await? {
+            let idx = first + msgs.len() as u64 - 1;
+            return Ok(Some(Watermark {
+                idx,
+                record_id: last.id,
+            }));
+        }
+        // A slot taken meanwhile, or a record stored already: one at a time, as `push` retries
+        // the one and takes the other as done.
+        let mut pushed = None;
+        for msg in msgs.iter() {
+            pushed = Some(self.push(msg).await?);
+        }
+        Ok(pushed)
+    }
+
+    /// Move this host's watermark onto `pushed`, the last of `count` records [`Self::push_all`]
+    /// stored and the caller has since projected, so the next reprojection (each startup's)
+    /// doesn't replay what capture projected as it went. Only when the watermark stands on the
+    /// record just before the first of them (still the record it was, as a reprojection checks),
+    /// no invalidation happened since `known`'s generation, and no reprojection is running, which
+    /// moves it itself.
     ///
     /// Returns where it moved it, for the next capture's `known`: one following on from it moves
     /// it with a single write. `None` if it didn't move it: the next capture reads the generation
@@ -190,6 +229,7 @@ impl AiSessionStore {
         db: &AiSessionDatabase,
         known: CaptureMark,
         pushed: Watermark,
+        count: u64,
     ) -> Result<Option<CaptureMark>, BuildError> {
         let Some(_running) = db.try_lock_reprojection() else {
             return Ok(None);
@@ -197,7 +237,7 @@ impl AiSessionStore {
         let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
         let (generation, from) = match known {
             CaptureMark::Moved { generation, mark } => {
-                if mark.idx + 1 != pushed.idx {
+                if mark.idx + count != pushed.idx {
                     return Ok(None);
                 }
                 (generation, Some(mark))
@@ -205,9 +245,9 @@ impl AiSessionStore {
             CaptureMark::Unknown(generation) => {
                 let from = db.reproject_watermarks().await?.remove(&series);
                 let follows = match from {
-                    None => pushed.idx == 0,
+                    None => pushed.idx + 1 == count,
                     Some(mark) => {
-                        mark.idx + 1 == pushed.idx
+                        mark.idx + count == pushed.idx
                             && self
                                 .store
                                 .idx(&series, mark.idx)

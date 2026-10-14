@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -587,6 +588,24 @@ impl AiSessionDatabase {
         .await?;
 
         Ok(found.is_some())
+    }
+
+    /// Which of `source_ids` the session holds: [`Self::contains_message`] for many at once.
+    pub async fn stored_source_ids(
+        &self,
+        session: &HarnessSession,
+        source_ids: &[&SourceId],
+    ) -> Result<HashSet<SourceId>, DbError> {
+        let ids: Vec<String> = db::query_scalar(
+            "SELECT source_id FROM messages WHERE session = (SELECT id FROM sessions WHERE \
+             harness = ? AND session_id = ?) AND source_id IN (SELECT value FROM json_each(?))",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .bind(serde_json::to_string(source_ids)?)
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(ids.into_iter().map(SourceId::from).collect())
     }
 
     /// Every title the session's lines set or cleared, oldest first: replayed, they give each

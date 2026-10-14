@@ -681,6 +681,8 @@ pub fn daemonize_current_process() -> Result<()> {
 
     Daemonize::new()
         .working_directory(working_directory)
+        // Keep the umask set at startup: daemonizing would loosen it to 027.
+        .umask(0o077)
         .start()
         .wrap_err("failed to daemonize process")?;
 

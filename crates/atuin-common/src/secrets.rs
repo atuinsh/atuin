@@ -526,8 +526,12 @@ macro_rules! executed {
 
 /// Commands whose output may hold a credential: Atuin's own, and other tools' that print a token,
 /// a password or a key, or the whole environment.
+///
+/// Their word boundaries are ASCII ones: a Unicode `\b` stops the fast engines at the first
+/// non-ASCII byte, and agents' tool calls (whole files, at times) are full of them. Commands are
+/// ASCII anyway.
 static OUTPUT_UNSAFE: LazyLock<RegexSet> = LazyLock::new(|| {
-    RegexSet::new([
+    let patterns = [
         executed!(r"key\b"),
         executed!(r"(?:account\s+)?login\b"),
         executed!(r"(?:account\s+)?register\b"),
@@ -563,8 +567,9 @@ static OUTPUT_UNSAFE: LazyLock<RegexSet> = LazyLock::new(|| {
         ran!(r"printenv\b"),
         // The environment, the shell's variables: alone, not running a command.
         ran!(r"(?:env|set|export\s+-p|declare\s+-[a-zA-Z]*[px])[ \t]*(?:\z|[;&|)\n])"),
-    ])
-    .expect("failed to build output-unsafe set")
+    ];
+    RegexSet::new(patterns.map(|p| p.replace(r"\b", r"(?-u:\b)")))
+        .expect("failed to build output-unsafe set")
 });
 
 /// Whether `command` runs one of the commands whose output may hold a credential (`atuin key`,
@@ -1655,6 +1660,9 @@ mod tests {
     #[case::git_credential("git credential fill", true)]
     #[case::wrapped("bash -lc 'gh auth token'", true)]
     #[case::mentioned("echo gh auth token", false)]
+    #[case::beside_non_ascii("echo 'café ☕'\natuin key", true)]
+    // ASCII word boundaries: a non-ASCII letter ends a word, which errs towards withholding.
+    #[case::non_ascii_suffix("atuin keyé", true)]
     fn commands_whose_output_may_hold_a_credential(#[case] command: &str, #[case] unsafe_: bool) {
         assert_eq!(output_unsafe(command), unsafe_);
     }
