@@ -47,6 +47,8 @@ pub enum Action {
     ReturnCd,
     // Commands — other
     Copy,
+    ApplyClipboard,
+    ApplyInput,
     Delete,
     DeleteAll,
     ReturnOriginal,
@@ -133,6 +135,8 @@ impl Action {
             "return-selection" => Ok(Action::ReturnSelection),
             "return-cd" => Ok(Action::ReturnCd),
             "copy" => Ok(Action::Copy),
+            "apply-clipboard" => Ok(Action::ApplyClipboard),
+            "apply-input" => Ok(Action::ApplyInput),
             "delete" => Ok(Action::Delete),
             "delete-all" => Ok(Action::DeleteAll),
             "return-original" => Ok(Action::ReturnOriginal),
@@ -206,6 +210,8 @@ impl Action {
             Action::AcceptCd => "accept-cd".to_string(),
             Action::ReturnCd => "return-cd".to_string(),
             Action::Copy => "copy".to_string(),
+            Action::ApplyClipboard => "apply-clipboard".to_string(),
+            Action::ApplyInput => "apply-input".to_string(),
             Action::Delete => "delete".to_string(),
             Action::DeleteAll => "delete-all".to_string(),
             Action::ReturnOriginal => "return-original".to_string(),
@@ -277,6 +283,8 @@ mod tests {
     #[case::return_selection_9("return-selection-9", Action::ReturnSelectionNth(9))]
     #[case::accept_cd("accept-cd", Action::AcceptCd)]
     #[case::return_cd("return-cd", Action::ReturnCd)]
+    #[case::apply_clipboard("apply-clipboard", Action::ApplyClipboard)]
+    #[case::apply_input("apply-input", Action::ApplyInput)]
     fn parse_action(#[case] input: &str, #[case] expected: Action) {
         assert_eq!(Action::from_str(input).unwrap(), expected);
     }
@@ -299,6 +307,8 @@ mod tests {
     #[case(Action::ReturnSelectionNth(3))]
     #[case(Action::AcceptCd)]
     #[case(Action::ReturnCd)]
+    #[case(Action::ApplyClipboard)]
+    #[case(Action::ApplyInput)]
     #[case(Action::VimSearchInsert)]
     #[case(Action::ScrollToScreenMiddle)]
     fn round_trip(#[case] action: Action) {
