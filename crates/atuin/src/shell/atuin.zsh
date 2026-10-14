@@ -188,6 +188,10 @@ __atuin_search_cmd() {
 
 _atuin_search() {
     emulate -L zsh
+    # Invalidate the display so the TUI starts from a clean line. This only
+    # clears via termcap - the prompt is not re-expanded, so no duplicate
+    # iTerm2 OSC 133 markers are emitted.
+    zle -I
 
     # swap stderr and stdout, so that the tui stuff works
     # TODO: not this
@@ -196,8 +200,8 @@ _atuin_search() {
     output=$(__atuin_search_cmd $*)
     __atuin_status=$?
 
-    # Redisplay without re-expanding the prompt. `zle -I`/`zle reset-prompt`
-    # would re-emit iTerm2's OSC 133 prompt markers (A/B), confusing the
+    # Redisplay without re-expanding the prompt. `zle reset-prompt` would
+    # re-emit iTerm2's OSC 133 prompt markers (A/B), confusing the
     # terminal's command tracking and breaking exit-status marks.
     zle -R
     # re-enable bracketed paste
@@ -246,13 +250,17 @@ _atuin_up_search_viins() {
 # the same protocol as the history search: `__atuin_accept__:` runs it.
 _atuin_ai_resume() {
     emulate -L zsh
+    # Invalidate the display so the TUI starts from a clean line. This only
+    # clears via termcap - the prompt is not re-expanded, so no duplicate
+    # iTerm2 OSC 133 markers are emitted.
+    zle -I
 
     local output __atuin_status
     output=$(ATUIN_SHELL=zsh ATUIN_QUERY=$BUFFER atuin ai resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-)
     __atuin_status=$?
 
-    # Redisplay without re-expanding the prompt. `zle -I`/`zle reset-prompt`
-    # would re-emit iTerm2's OSC 133 prompt markers (A/B), confusing the
+    # Redisplay without re-expanding the prompt. `zle reset-prompt` would
+    # re-emit iTerm2's OSC 133 prompt markers (A/B), confusing the
     # terminal's command tracking and breaking exit-status marks.
     zle -R
     # re-enable bracketed paste
