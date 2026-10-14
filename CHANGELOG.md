@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - *(ai)* Start the daemon before ai commands if autostart is enabled ([#4269](https://github.com/atuinsh/atuin/issues/4269))
 - *(ai)* Add MCP list cache fields and a since filter for session list ([#4294](https://github.com/atuinsh/atuin/issues/4294))
 - *(ai)* Only look up repos for this host's sessions in the resume picker ([#4400](https://github.com/atuinsh/atuin/issues/4400))
+- *(ai)* Fit the resume picker's title to the version so a prerelease isn't cut off ([#4406](https://github.com/atuinsh/atuin/issues/4406))
 - *(ai-session)* Read an unknown parent kind as None ([#4301](https://github.com/atuinsh/atuin/issues/4301))
 - *(ai-session)* Count content-derived calls once per session lineage ([#4314](https://github.com/atuinsh/atuin/issues/4314))
 - *(ai-session)* Keep compacted Claude and Pi sessions whole when restored from sync ([#4357](https://github.com/atuinsh/atuin/issues/4357))
@@ -17,6 +18,7 @@ All notable changes to this project will be documented in this file.
 - *(ai-session)* Harden capture, sync and resume across agents ([#4387](https://github.com/atuinsh/atuin/issues/4387))
 - *(ai-session)* Fix opencode 1.x resume capture, A→B→A catch-up, synced tail, and picker tty, keys and idle CPU ([#4398](https://github.com/atuinsh/atuin/issues/4398))
 - *(ai-session)* Switch inside a merged run past a failed call without losing the run's earlier text ([#4402](https://github.com/atuinsh/atuin/issues/4402))
+- *(build)* Drop atuin's implicit arboard feature so nix builds again ([#610](https://github.com/atuinsh/atuin/issues/610))
 - *(daemon)* Recover ai sessions in the background at boot ([#4293](https://github.com/atuinsh/atuin/issues/4293))
 - *(daemon)* Pick up ai.capture_sessions changes without a restart ([#4362](https://github.com/atuinsh/atuin/issues/4362))
 - *(daemon)* Run the daemonized daemon from / ([#4358](https://github.com/atuinsh/atuin/issues/4358))
@@ -67,6 +69,8 @@ All notable changes to this project will be documented in this file.
 - *(ai)* Add `atuin resume` as short for `atuin ai resume` ([#4382](https://github.com/atuinsh/atuin/issues/4382))
 - *(ai)* List forks as a tree under their root in the session picker, mark running forks, and name the provider in Codex rollouts ([#4399](https://github.com/atuinsh/atuin/issues/4399))
 - *(ai)* Show the atuin id as ID and the harness's own as Harness ID in the resume picker's Inspect tab ([#4401](https://github.com/atuinsh/atuin/issues/4401))
+- *(ai)* Session picker reader pane, two-line rows grouped by day, visible scopes, per-session actions and an in-list resume chooser ([#4383](https://github.com/atuinsh/atuin/issues/4383))
+- *(ai)* Show atuin's MCP tool calls as 🐢 atuin <tool> in the session reader ([#4411](https://github.com/atuinsh/atuin/issues/4411))
 - *(ai-session)* Faster sidecar rebuilds, session grouping, and one search API ([#4302](https://github.com/atuinsh/atuin/issues/4302))
 - *(ai-session)* Fast-forward a behind transcript to its synced head ([#4344](https://github.com/atuinsh/atuin/issues/4344))
 - *(ai-session)* Search by message role and without subagents, and know a stateless MCP caller's own session ([#4385](https://github.com/atuinsh/atuin/issues/4385))
@@ -88,6 +92,7 @@ All notable changes to this project will be documented in this file.
 - Automatically open login link ([#4351](https://github.com/atuinsh/atuin/issues/4351))
 - Send atuin register's login link to the hub's signup page ([#4353](https://github.com/atuinsh/atuin/issues/4353))
 - Config disable ([#4349](https://github.com/atuinsh/atuin/issues/4349))
+- Unify all data in `~/.atuin` (customizable with `ATUIN_HOME`) ([#4380](https://github.com/atuinsh/atuin/issues/4380))
 
 
 ### Miscellaneous Tasks
@@ -117,6 +122,7 @@ All notable changes to this project will be documented in this file.
 ### Performance
 
 - *(ai)* Make AI session rebuilds fast ([#4343](https://github.com/atuinsh/atuin/issues/4343))
+- *(ai-session)* Import existing sessions in batches, off the daemon's runtime ([#4408](https://github.com/atuinsh/atuin/issues/4408))
 - *(daemon)* Load the search index with a linear history scan ([#4347](https://github.com/atuinsh/atuin/issues/4347))
 - *(dotfiles)* Remove defunct bind feature detection for fish ([#2532](https://github.com/atuinsh/atuin/issues/2532))
 - Build the bundled SQLite with SQLITE_DEFAULT_MEMSTATUS=0 ([#4342](https://github.com/atuinsh/atuin/issues/4342))
@@ -137,10 +143,14 @@ All notable changes to this project will be documented in this file.
 - *(deps)* Bump async-trait from 0.1.89 to 0.1.92 ([#4338](https://github.com/atuinsh/atuin/issues/4338))
 - *(deps)* Bump mozilla-actions/sccache-action from 0.0.9 to 0.0.11 ([#4287](https://github.com/atuinsh/atuin/issues/4287))
 - *(deps)* Bump thiserror from 2.0.19 to 2.0.21 ([#4284](https://github.com/atuinsh/atuin/issues/4284))
+- *(deps)* Bump libc from 0.2.186 to 0.2.190 ([#4397](https://github.com/atuinsh/atuin/issues/4397))
+- *(deps)* Bump lukemathwalker/cargo-chef from `9a2089c` to `b4b459d` ([#4394](https://github.com/atuinsh/atuin/issues/4394))
+- *(deps)* Bump debian from bookworm-20260918-slim to bookworm-20261005-slim ([#4393](https://github.com/atuinsh/atuin/issues/4393))
 - Hold secrets in secrecy types ([#4237](https://github.com/atuinsh/atuin/issues/4237))
 - Improve `Shell::default_shell`; fixes hanging test under Nextest ([#4267](https://github.com/atuinsh/atuin/issues/4267))
 - Switch from `directories` to `dirs` ([#4306](https://github.com/atuinsh/atuin/issues/4306))
 - Clean up atuin-common crate features ([#4323](https://github.com/atuinsh/atuin/issues/4323))
+- Add `PathBufExt::joined` to avoid unnecessary cloning of `PathBuf`s ([#4409](https://github.com/atuinsh/atuin/issues/4409))
 
 
 ### Testing
