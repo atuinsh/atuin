@@ -82,7 +82,17 @@ bind -M insert ctrl-] _atuin_ai_resume
 
 Through the widget, the command it picks lands in your shell, as with the history search.
 
-Each row shows when the session was last active, its agent, its title and its message count (when there's room). `Ctrl`+`R` cycles which sessions are listed: those in the current repository (where the picker opens), all of them, this machine's, the current directory's, and the current branch's.
+Each session is two lines: its title (`untitled` when it has none), then, dimmed, when it was last active, its agent (`CC`, `CX`, `OC` or `PI`), where it ran (its repository, branch and, for a session recorded on another machine, that machine, by the end of its host id), and how many messages it has. Newest first, the sessions are grouped under a heading for each day, the top one staying in sight as you scroll; with search text they're ranked by relevance instead.
+
+```
+Today ──────────────────────────────────────────────
+  Add an interactive resume picker to atuin ai
+  ● now · CC · atuin · ai-resume · 142 msgs
+```
+
+The scopes are listed beside the query, the one shown highlighted: `all` sessions (where the picker opens), the current `repo`'s, its `branch`'s, the current `dir`'s, and this machine's (`host`). `Ctrl`+`R` moves to the next. `repo` and `branch` are left out outside a git repository, and `branch` on a detached `HEAD`.
+
+The help line says what the keys do to the selected session.
 
 Words in the query of the form `filter:value` narrow the search further, and show as chips in the input:
 
@@ -92,15 +102,17 @@ Words in the query of the form `filter:value` narrow the search further, and sho
 
 Put a `\` before a word to search for it as text instead (`\b:main`).
 
-The preview under the list starts with where the session ran, its repository, branch and, for a session recorded on another machine, that machine (by the end of its host id), and how many forks it has:
+The preview under the list starts with how many forks the session has, if any:
 
 ```
-       atuin · feat/ai-sessions · @3f9a12bc · 2 forks
+       2 forks
 first  …
 last   …
 ```
 
-At first the preview shows a line or two of the first prompt, the match and the last reply. Scroll it to read them in full, one after another: with the mouse wheel over it, or with `Shift`+`Down` and `Shift`+`Up` (a line) and `Shift`+`Page Down` and `Shift`+`Page Up` (a page). `Alt` works in place of `Shift`, for terminals that keep shift and the arrows for themselves. Scroll back to the top for the overview again. On a wide terminal the same goes for the pane beside the list, and in Inspect for the conversation. The wheel over the list moves the selection, as in the history search, and a scrollbar shows when there's more than fits.
+At first the preview shows a line or two of the first prompt, the match and the last reply. Scroll it to read them in full, one after another: with the mouse wheel over it, or with `Shift`+`Down` and `Shift`+`Up` (a line) and `Shift`+`Page Down` and `Shift`+`Page Up` (a page). `Alt` works in place of `Shift`, for terminals that keep shift and the arrows for themselves. Scroll back to the top for the overview again.
+
+On a wide terminal (120 columns or more) the pane beside the list, and Inspect, show the whole conversation instead: your prompts and the agent's replies under their headings, with each run of tool calls folded into a line (`⚙ Read ×3 · Edit`). With search text it opens at the message that matched, the query's words highlighted; otherwise at the start. It scrolls with the same keys. The wheel over the list moves the selection, as in the history search, and a scrollbar shows when there's more than fits.
 
 While the picker has the mouse, your terminal can't select text the usual way. Most terminals still select with `Shift` held while you drag (`Option` in iTerm2, `Fn` in macOS Terminal). To leave the mouse to the terminal (the top-level `no_mouse = true` does the same for both the picker and the history search):
 
@@ -112,21 +124,25 @@ mouse = false
 - Forks of a session (including Claude Code `--resume` copies, and continuations in another agent) are grouped under it. Inspect (`Ctrl`+`O`) lists them, and `C` there expands the list.
 - Subagents aren't listed at all, as they can't be resumed. A search that matches something a subagent said still finds the session it worked for, and `atuin resume <subagent-id>` resumes that session. Atuin records whether a child session is a subagent, a fork or a continuation as it captures it. Sessions captured by older versions don't say, and for Codex and opencode nearly all such children are subagents, so the picker treats them as such (they still resume by id).
 
-Once you choose a session, with `Enter` (or `Tab` to edit the command first), Atuin asks where to resume it:
+Once you choose a session, with `Enter` (or `Tab` to edit the command first), Atuin asks where to resume it, under the session in the list, the two in a border:
 
 ```
-╭ Resume in ──────────────────────────────────────────────────────────────────╮
-│ > 1 CC Claude Code  original                                                │
-│   2 CC Claude Code  fork: new session, same history                         │
-│   3 CX Codex        continue, 42 tool calls become notes, reasoning dropped │
-│   4 OC opencode     continue, 42 tool calls become notes, reasoning dropped │
-│ <enter>: resume  <tab>: edit  <esc>: back                                   │
-╰─────────────────────────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│  Add an interactive resume picker to atuin ai           │
+│  ● now · CC · atuin · ai-resume · 142 msgs              │
+│  > 1 Claude Code  resume                                │
+│    2 Claude Code  fork: new session, same history       │
+│  Continue in ──────────────────────────────────         │
+│    3 Codex                                              │
+│    4 opencode                                           │
+╰─────────────────────────────────────────────────────────╯
 ```
+
+The help line says what the keys do there: `Enter` resumes (or edits, opened with `Tab`), `Tab` edits the command first, and `Esc` goes back.
 
 - The session's own agent comes first and is already selected, so `Enter` `Enter` resumes it. If the session was recorded on another machine, or its transcript was deleted, Atuin writes the transcript back out from the synced messages before resuming it ("from sync").
 - Right under it, forking writes the session out as a new session of the same agent, with the same history, tool calls and all, and resumes that. The original is left as it is. The fork is linked to it the way the agent links its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Pi's `parentSession`; opencode gets a line it keeps from the model), so it's grouped under the original, with an Atuin id of its own. It keeps the original's title. Pi names the original by its file, so a Pi session that isn't on this machine is written out first. Forking is selected instead of the original when the original can't resume here, or its agent has it open on this machine. Copilot sessions, and sessions with no messages, can't be forked.
-- Every other agent installed on this machine follows. Picking one continues the session there as a new session: the conversation carries over, and so do the tool calls captured with their input and output (`capture_tools`), with what they returned. Each becomes the new agent's own tool where it has one that does the same (a shell command, reading, writing or editing a file, a search), and stays the tool it was otherwise: the agent reads it, it just can't call it again. Calls captured without their input, calls that never got a result, and web searches the model's provider ran itself become notes in the text, and reasoning is dropped. The line says how much. The new session opens with a note to the agent naming the session it continues, by its own agent's id and its Atuin id (in Pi, the note opens the first prompt, so you see it too). Agents that aren't installed aren't listed, and with nothing else to offer (no other agent installed, and a session that can't be forked) `Enter` resumes straight away.
+- Every other agent installed on this machine follows. Picking one continues the session there as a new session: the conversation carries over, and so do the tool calls captured with their input and output (`capture_tools`), with what they returned. Each becomes the new agent's own tool where it has one that does the same (a shell command, reading, writing or editing a file, a search), and stays the tool it was otherwise: the agent reads it, it just can't call it again. Calls captured without their input, calls that never got a result, and web searches the model's provider ran itself become notes in the text, and reasoning is dropped. The new session opens with a note to the agent naming the session it continues, by its own agent's id and its Atuin id (in Pi, the note opens the first prompt, so you see it too). Agents that aren't installed aren't listed, and with nothing else to offer (no other agent installed, and a session that can't be forked) `Enter` resumes straight away.
 - If the session's own agent can't resume it here (a Copilot session, an agent that isn't installed, or a session whose transcript is here but whose directory is gone, for an agent that needs it), its line is dimmed with the reason, and the next one is selected instead.
 
 A session keeps one id on every machine. When you resume one in its own agent and its transcript is on this machine, Atuin first catches it up with the synced messages:
@@ -163,10 +179,12 @@ The picker follows the history search's `style`, `invert`, `show_preview`, `max_
 
 ```
 [ai.sessions]
-## The filter the picker opens in: "workspace" (the default, widening to "global"
-## outside a git repository or when the workspace has no sessions), "global",
-## "host", "directory" or "branch". `--filter-mode` overrides it.
-filter_mode = "workspace"
+## The filter the picker opens in: "global" (the default), "workspace", "host",
+## "directory" or "branch". "workspace" and "branch" open in "global" outside a
+## git repository, "branch" opens in "workspace" on a detached HEAD, and
+## "workspace" opens in "global" when the workspace has no sessions at all.
+## `--filter-mode` overrides it.
+filter_mode = "global"
 
 ## Height of the inline picker; 0 for fullscreen. Defaults to the top-level
 ## inline_height. `--inline-height` overrides it.
