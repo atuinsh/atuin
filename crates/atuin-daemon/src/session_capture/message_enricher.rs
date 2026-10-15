@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 pub struct MessageEnricher {
     harness: HarnessKind,
     sessions: HashMap<String, SessionState>,
-    /// Whether capture keeps the patches of calls (`ai.capture_tools`).
+    /// Whether capture keeps the patches of calls (`threads.capture_tools`).
     patches: bool,
 }
 
@@ -138,12 +138,12 @@ impl MessageEnricher {
             state.parent_kind = m.parent_kind();
             state.native_parent = true;
         }
-        // A session continued from another (`atuin ai resume --in`), maybe another harness's:
+        // A session continued from another (`atuin threads resume --in`), maybe another harness's:
         // its first line, which the harness wrote itself, names it. Unless the harness names a
         // parent itself: a fork of a continuation (Claude Code `--fork-session`, Codex and
         // opencode forks, Pi `/fork`) copies the marker with the rest, but forks the
         // continuation, not the session the marker names. An opencode fork's marker
-        // (`atuin ai resume --fork`) stands for the link opencode can't write: it names the parent
+        // (`atuin threads resume --fork`) stands for the link opencode can't write: it names the parent
         // as a harness would, and a marker copied in after it doesn't replace it.
         if !state.native_parent
             && let Some((harness, parent, kind)) = continuation::linked_from_message(m)
@@ -1008,7 +1008,7 @@ mod parser_contract {
         );
     }
 
-    // ---- Continuations (`atuin ai resume --in`) ----
+    // ---- Continuations (`atuin threads resume --in`) ----
 
     const ORIGINAL: &str = "019a0d14-f276-77d3-b955-89d5b0151306";
 
@@ -1145,7 +1145,7 @@ mod parser_contract {
         }
     }
 
-    /// An opencode fork (`atuin ai resume --fork`) names its original in a fork marker, in text
+    /// An opencode fork (`atuin threads resume --fork`) names its original in a fork marker, in text
     /// opencode wrote itself (here a Claude Code `isMeta` line, read the same way): its rows are a
     /// fork of the original, and a continuation's marker copied in after it doesn't move them.
     #[rstest]

@@ -21,7 +21,7 @@ fn settings() -> Settings {
     s.show_preview = true;
     s.max_preview_height = 4;
     // The fixtures are laid out around the workspace filter.
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Workspace);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Workspace);
     s
 }
 
@@ -108,12 +108,12 @@ async fn full_frame_has_history_search_chrome() {
         lines[0].contains("enter resume… · tab edit command · ctrl-o inspect · esc exit"),
         "{out}"
     );
-    assert!(lines[0].trim_end().ends_with("sessions"), "{out}");
+    assert!(lines[0].trim_end().ends_with("threads"), "{out}");
     // No tab row: the list's box opens right under the header.
     assert!(!lines[1].contains("Search"), "{out}");
     assert!(lines[1].trim_start().starts_with('╭'), "list block opens the box: {out}");
     // A placeholder in the empty query.
-    assert!(out.contains("› search sessions…"), "{out}");
+    assert!(out.contains("› search threads…"), "{out}");
     // The scopes beside the query, the one listed highlighted.
     assert!(out.contains("ctrl-r  all  repo  branch  dir  host"), "{out}");
     assert!(out.lines().last().unwrap().trim_start().starts_with('╰'), "{out}");
@@ -128,14 +128,14 @@ async fn no_results_say_so() {
     let s = settings();
     let mut state = loaded(&s, "zzzqqq", 0).await;
     let out = text(&render(&mut state, &s, 140, 30));
-    assert!(out.contains(r#"No sessions match "zzzqqq" in this repo"#), "{out}");
+    assert!(out.contains(r#"No threads match "zzzqqq" in this repo"#), "{out}");
     assert!(out.contains("ctrl-r to change the scope · ctrl-u to clear the search"), "{out}");
     assert!(out.contains("Nothing to read"), "{out}");
 
     // Every session: only clearing the search finds more.
     state.mode = atuin_client::settings::AiSessionFilterMode::Global;
     let out = text(&render(&mut state, &s, 140, 30));
-    assert!(out.contains(r#"No sessions match "zzzqqq""#), "{out}");
+    assert!(out.contains(r#"No threads match "zzzqqq""#), "{out}");
     assert!(!out.contains("ctrl-r to"), "{out}");
     // In vim's normal mode, `dd` clears.
     let mut vim = settings();
@@ -164,7 +164,7 @@ async fn an_untitled_session_says_so() {
 async fn the_list_never_cuts_a_row_or_doubles_a_heading(#[values(false, true)] invert: bool) {
     let mut s = settings();
     s.invert = invert;
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     for height in 5..=30u16 {
         let mut state = loaded(&s, "", 0).await;
         for step in 0..state.results.len() {
@@ -286,7 +286,7 @@ async fn the_preview_says_what_forked_off_a_session() {
 #[tokio::test]
 async fn inspect_says_a_remote_session_is_restored() {
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "aarch64", 1).await;
     let out = text(&render(&mut state, &s, 120, 30));
     let line = out.lines().find(|l| l.contains("Resume     cd -- ")).unwrap();
@@ -418,7 +418,7 @@ async fn inspect_tab_shows_metadata_command_and_children() {
 #[tokio::test]
 async fn inspect_explains_unresumable_sessions() {
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "theme preview", 1).await;
     let out = text(&render(&mut state, &s, 100, 30));
     assert!(out.contains("not resumable: the session's directory is gone"), "{out}");
@@ -480,7 +480,7 @@ async fn opens_on_every_session() {
     ctx.git_root = Some("/home/ellie/src/empty".into());
     let source = FakeSource::new();
     let mut s = settings();
-    s.ai.sessions.filter_mode = None;
+    s.threads.filter_mode = None;
     let mut state = State::new(&s, ctx, "");
     state.now = Box::new(fake::now);
     while let Some((generation, filter)) = state.next_search() {
@@ -597,7 +597,7 @@ async fn a_long_session_opens_at_its_match_without_rendering_it_all() {
 #[tokio::test]
 async fn overflowing_lists_get_a_scrollbar() {
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "", 0).await;
     let buf = render(&mut state, &s, 100, 14);
     let right: String = (0..14).map(|y| buf[(98, y)].symbol().to_owned()).collect();
@@ -686,7 +686,7 @@ fn picked(
 
 fn chooser_settings() -> Settings {
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     s
 }
 
@@ -721,7 +721,7 @@ async fn the_chooser_opens_down_from_the_title(#[values(false, true)] invert: bo
 
     let mut s = settings();
     s.invert = invert;
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "", 0).await;
     state.list.selected = 5;
     let row = state.selected().unwrap().clone();
@@ -753,7 +753,7 @@ async fn growing_the_terminal_with_the_chooser_open_on_the_oldest(
 
     let mut s = settings();
     s.invert = invert;
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let mut state = loaded(&s, "", 0).await;
     state.list.selected = state.results.len() - 1;
     let row = state.selected().unwrap().clone();
@@ -771,9 +771,9 @@ async fn growing_the_terminal_with_the_chooser_open_on_the_oldest(
 #[tokio::test]
 async fn chips_alone_matching_nothing_say_so() {
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let out = frame(&s, "b:no-such-branch ", 0, 100, 30).await;
-    assert!(out.contains("No sessions match the filters"), "{out}");
+    assert!(out.contains("No threads match the filters"), "{out}");
     assert!(out.contains("ctrl-u to clear the search"), "{out}");
 }
 
@@ -782,7 +782,7 @@ async fn chips_alone_matching_nothing_say_so() {
 #[tokio::test]
 async fn an_empty_scope_has_no_search_to_clear() {
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Branch);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Branch);
     let mut state = loaded(&s, "", 0).await;
     state.context.branch = Some("no-such-branch".to_owned());
     while let Some((generation, filter)) = state.next_search() {
@@ -790,7 +790,7 @@ async fn an_empty_scope_has_no_search_to_clear() {
         state.apply_results(generation, rows);
     }
     let out = text(&render(&mut state, &s, 100, 30));
-    assert!(out.contains("No sessions on this branch"), "{out}");
+    assert!(out.contains("No threads on this branch"), "{out}");
     assert!(!out.contains("to clear the search"), "{out}");
 }
 
@@ -799,7 +799,7 @@ async fn an_empty_scope_has_no_search_to_clear() {
 #[tokio::test]
 async fn a_long_query_keeps_the_scope_in_sight() {
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let query = "flaky ".repeat(30);
     let buf = render(&mut loaded(&s, &query, 0).await, &s, 100, 30);
     assert_eq!(current_scope(&buf), "all", "{}", text(&buf));
@@ -1227,7 +1227,7 @@ async fn a_session_with_nothing_to_fork_never_picks_the_fork(#[values(false, tru
     let mut row = state.chooser.as_ref().unwrap().row.clone();
     let out = text(&render(&mut state, &s, 100, 30));
     if empty {
-        assert!(out.contains("  2 Claude Code  fork: the session has no messages"), "{out}");
+        assert!(out.contains("  2 Claude Code  fork: the thread has no messages"), "{out}");
     } else {
         assert!(out.contains("  2 Claude Code  fork: new session, same history"), "{out}");
     }
@@ -1273,7 +1273,7 @@ async fn ctrl_x_opens_the_chooser_on_the_fork() {
     use super::{ask_fork, worker};
 
     let mut s = settings();
-    s.ai.sessions.resume_chooser = false;
+    s.threads.resume_chooser = false;
     let resumer = Arc::new(FakeResumer::default());
     let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
     let mut state = loaded(&s, "", 0).await;
@@ -1336,7 +1336,7 @@ async fn the_chooser_opens_when_there_is_a_choice() {
     use super::{Outcome, accept, worker};
 
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let resumer = Arc::new(FakeResumer::default());
     let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
 
@@ -1382,7 +1382,7 @@ async fn a_session_from_another_machine_is_restored_first() {
     use super::{Outcome, accept, apply_response, resume_line, worker};
 
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let resumer = Arc::new(FakeResumer::default());
     let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
 
@@ -1426,7 +1426,7 @@ async fn a_refresh_does_not_drop_a_waiting_resume(#[case] query: &str, #[case] h
     use super::{Outcome, accept, respond, worker};
 
     let mut s = settings();
-    s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+    s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     let resumer = Arc::new(FakeResumer::default());
     let (requests, _responses) = worker::spawn(Arc::new(FakeSource::new()), resumer.clone());
     let mut state = loaded(&s, query, 0).await;
@@ -2206,7 +2206,7 @@ async fn enter_and_tab_in_the_expanded_forks_resume_the_fork() {
 async fn rows_fit_every_width(#[values(false, true)] global: bool) {
     let mut s = settings();
     if global {
-        s.ai.sessions.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
+        s.threads.filter_mode = Some(atuin_client::settings::AiSessionFilterMode::Global);
     }
     let mut state = loaded(&s, "", 0).await;
     let title = state.selected().unwrap().title.text.clone();
@@ -2238,7 +2238,7 @@ async fn a_capped_list_says_so() {
     state.results =
         (0..SEARCH_LIMIT).map(|i| fake::row(HarnessKind::Codex, &format!("s{i}"), "t")).collect();
     let out = text(&render(&mut state, &s, 100, 30));
-    assert!(out.lines().next().unwrap().ends_with("500+ sessions"), "{out}");
+    assert!(out.lines().next().unwrap().ends_with("500+ threads"), "{out}");
 }
 
 /// A session used in the last [`LIVE_SECS`](super::state::LIVE_SECS) says so, and what resuming
@@ -2624,7 +2624,7 @@ async fn a_rebuild_in_progress_is_said_in_the_status_row() {
         progress: (1200, 5000),
     });
     let out = text(&render(&mut state, &s, 100, 30));
-    let line = "rebuilding the session index: 1200 of 5000 records; results may be incomplete";
+    let line = "rebuilding the threads index: 1200 of 5000 records; results may be incomplete";
     assert!(out.lines().last().unwrap().contains(line), "{out}");
     assert!(out.contains("Add an interactive resume picker"), "the list still shows: {out}");
     let selected = state.list.selected;

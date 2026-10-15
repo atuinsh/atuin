@@ -1,5 +1,5 @@
 //! AI coding-agent sessions, end to end: captured from each agent's own transcripts by the daemon,
-//! synced between machines, and resumed with `atuin ai resume` -- restored, caught up, forked,
+//! synced between machines, and resumed with `atuin threads resume` -- restored, caught up, forked,
 //! switched or continued in another agent -- by the real binary, against transcripts written the
 //! way each agent writes them.
 //!
@@ -47,7 +47,7 @@ fn project() -> TempDir {
 
 /// Whether `query` finds session `id` in `machine`'s search.
 fn finds(machine: &Machine, query: &str, id: &str) -> bool {
-    let found = machine.run(&["ai", "session", "search", query, "--style", "json"]);
+    let found = machine.run(&["threads", "search", query, "--style", "json"]);
     let found: serde_json::Value = serde_json::from_str(&found).unwrap();
     found.as_array().unwrap().iter().any(|m| m["session"]["session_id"] == id)
 }
@@ -68,8 +68,8 @@ fn capture_keeps_the_conversation_and_tool_calls(
     #[values(Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi)] agent: Agent,
     #[values(true, false)] capture_tools: bool,
 ) {
-    let ai = format!("capture_sessions = true\ncapture_tools = {capture_tools}\n");
-    let mut machine = Machine::with_config("", &ai);
+    let threads = format!("capture = true\ncapture_tools = {capture_tools}\n");
+    let mut machine = Machine::with_config("", &threads);
     machine.start_daemon();
     let secret = format!("ghp_{}{}", &word()[1..], "abcd");
     let mut turns = vec![Turn::new(), Turn::new()];
@@ -124,7 +124,7 @@ fn capture_keeps_the_conversation_and_tool_calls(
 fn capture_applies_the_history_and_output_filters_to_agent_commands(project: TempDir) {
     let top =
         "history_filter = [\"^echo dropped-\"]\n[output]\ncommand_filter = [\"^echo quiet-\"]\n";
-    let mut machine = Machine::with_config(top, "capture_sessions = true\n");
+    let mut machine = Machine::with_config(top, "capture = true\n");
     machine.start_daemon();
     let mut turns = vec![Turn::new(), Turn::new(), Turn::new()];
     turns[0].command = format!("echo dropped-{}", word());
@@ -189,11 +189,11 @@ fn a_renamed_session_is_listed_under_its_new_title(machine: Machine, project: Te
 
 /// Turning capture on in the config takes effect in the running daemon, which captures the
 /// sessions the agents work in from then on. One they wrote while it was off is history, left
-/// alone until the agent goes on with it, and then captured whole; or until `atuin ai session
+/// alone until the agent goes on with it, and then captured whole; or until `atuin threads
 /// import` brings it in.
 #[rstest]
 fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
-    let mut machine = Machine::with_config("", "capture_sessions = false\n");
+    let mut machine = Machine::with_config("", "capture = false\n");
     machine.start_daemon();
     let old: Vec<Turn> = (0..2).map(|_| Turn::new()).collect();
     let resumed = Transcript::create(machine.home(), Agent::Claude, project.path(), &old[..1]);
@@ -204,9 +204,7 @@ fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
     assert_eq!(machine.sessions(), Vec::<serde_json::Value>::new(), "captured while off");
 
     let config = machine.env.config_file();
-    let on = std::fs::read_to_string(&config)
-        .unwrap()
-        .replace("capture_sessions = false", "capture_sessions = true");
+    let on = std::fs::read_to_string(&config).unwrap().replace("capture = false", "capture = true");
     std::fs::write(&config, on).unwrap();
     // Longer than the daemon takes to see the config change.
     std::thread::sleep(std::time::Duration::from_secs(3));
@@ -218,11 +216,11 @@ fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
     machine.wait_until_said(&resumed.id, &said(&old));
     assert_eq!(machine.session(&untouched.id), None, "history captured unasked");
 
-    machine.run(&["ai", "session", "import"]);
+    machine.run(&["threads", "import"]);
     machine.wait_until_said(&untouched.id, &said(&idle));
 }
 
-/// The command `atuin ai resume --print` prints to resume `transcript` in its own agent, from
+/// The command `atuin threads resume --print` prints to resume `transcript` in its own agent, from
 /// `cwd`.
 fn resume_line(transcript: &Transcript, cwd: &Path) -> String {
     let id = transcript.id.as_str();
@@ -269,10 +267,10 @@ fn the_picker_needs_a_terminal(machine: Machine, #[case] args: &[&str]) {
 }
 
 const NEEDS_A_TERMINAL: &str = "Error: the picker needs a terminal; to resume without one, name \
-                                the session: `atuin ai resume <id>` (`atuin ai session list` \
+                                the thread: `atuin threads resume <id>` (`atuin threads list` \
                                 lists them)";
 
-/// Nor with only stdout on a terminal, and that not its own (`setsid -w atuin ai resume
+/// Nor with only stdout on a terminal, and that not its own (`setsid -w atuin threads resume
 /// </dev/null` in a terminal): there's no terminal to read keys from.
 #[rstest]
 fn the_picker_needs_a_terminal_to_read_keys_from(machine: Machine) {
@@ -286,7 +284,7 @@ fn the_picker_needs_a_terminal_to_read_keys_from(machine: Machine) {
     unlockpt(&pty).unwrap();
     let name = ptsname(&pty, Vec::new()).unwrap();
     let terminal = rustix::fs::open(name.as_c_str(), OFlags::RDWR | OFlags::NOCTTY, Mode::empty());
-    let mut command = machine.atuin(&["ai", "resume"]);
+    let mut command = machine.atuin(&["threads", "resume"]);
     command.current_dir(machine.home()).stdin(Stdio::null()).stdout(terminal.unwrap());
     // SAFETY: `setsid` is async-signal-safe and touches no memory of this process.
     unsafe {
@@ -362,7 +360,7 @@ fn restored(agent: Agent) -> Restored {
         .unwrap_or_else(|| panic!("nothing restored: {stdout} {stderr}"));
     assert_eq!(stdout.trim(), resume_line(&restored, project.path()), "{stderr}");
     // Where it ran is here too, and the status says what was written all the same.
-    assert!(stderr.contains("atuin: restored the session from sync\n"), "{stderr}");
+    assert!(stderr.contains("atuin: restored the thread from sync\n"), "{stderr}");
     assert!(!stderr.lines().any(|line| line.contains("locked")), "{stderr}");
     Restored {
         _server: server,
@@ -417,7 +415,7 @@ fn a_session_from_another_machine_restores_as_the_same_session(
 #[rstest]
 fn a_session_synced_by_hand_is_listed_at_once(project: TempDir) {
     let server = SyncServer::start();
-    let (there, here) = Machine::pair_syncing(&server, 0, "capture_sessions = true\n");
+    let (there, here) = Machine::pair_syncing(&server, 0, "capture = true\n");
     let turns = [Turn::new()];
     let original = Transcript::create(there.home(), Agent::Claude, project.path(), &turns);
     there.wait_until_said(&original.id, &said(&turns));
@@ -475,7 +473,7 @@ fn a_session_gone_on_with_elsewhere_catches_up_where_it_came_from(
 ) {
     let server = SyncServer::start();
     let (there, here) =
-        Machine::pair_syncing(&server, 1, "capture_sessions = true\ncapture_tools = false\n");
+        Machine::pair_syncing(&server, 1, "capture = true\ncapture_tools = false\n");
     let mut turns = vec![Turn::new()];
     let original = Transcript::create(there.home(), agent, project.path(), &turns);
     here.wait_until_said(&original.id, &said(&turns));
@@ -708,9 +706,9 @@ fn rebuilding_the_index_reproduces_it(machine: Machine, project: TempDir) {
         ids.iter().map(|id| machine.show(id)).collect()
     };
     let before = index(&machine);
-    let out = machine.run(&["store", "rebuild", "ai-session"]);
+    let out = machine.run(&["store", "rebuild", "threads"]);
     assert!(out.contains("rebuilding"), "{out}");
-    // `ai session` commands wait for the rebuild.
+    // `threads` commands wait for the rebuild.
     assert_eq!(index(&machine), before);
 }
 

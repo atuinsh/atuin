@@ -71,7 +71,7 @@ pub(crate) fn render(parts: &[Part]) -> String {
 /// | Pi | `bash`, `edit`, `write`, `read`, `grep`, `find`, `ls` | as Claude Code's (`path`) |
 /// | any | anything else | ``called `<name>` <compact arguments>`` |
 ///
-/// Without the input (`ai.capture_tools` off, or withheld), each says only what was done: `ran a
+/// Without the input (`threads.capture_tools` off, or withheld), each says only what was done: `ran a
 /// shell command`, `edited a file`, `wrote a file`, `read a file`, `applied a patch`, `searched
 /// the files`, `listed files`, `handed work to a subagent`, `fetched a web page`, `searched the
 /// web`; and anything else ``called `<name>` ``. Inputs are cut to their first line and
@@ -95,7 +95,7 @@ pub fn tool_note(name: &str, input: &Value) -> String {
         })
     };
     let path = || field(&["file_path", "filePath", "path", "notebook_path", "file"]);
-    // What was done, on what when the input says (unless `ai.capture_tools` is off or a policy
+    // What was done, on what when the input says (unless `threads.capture_tools` is off or a policy
     // withheld it), else only what.
     let on = |what: Option<String>, detailed: &dyn Fn(&str) -> String, bare: &str| {
         Some(what.map_or_else(|| bare.to_owned(), |w| detailed(&w)))

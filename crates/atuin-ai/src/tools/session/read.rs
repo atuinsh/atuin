@@ -1,4 +1,4 @@
-//! `atuin_ai_session_read`: page through one captured AI-agent session's transcript.
+//! `atuin_threads_read`: page through one captured AI-agent session's transcript.
 
 use std::fmt::Write as _;
 use std::ops::Range;
@@ -48,16 +48,16 @@ const LABELS: [&str; 3] = [SUMMARY_LABEL, MODEL_ERROR_LABEL, TOOL_ERROR_MARK];
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct AtuinAiSessionReadToolCall {
+pub struct AtuinThreadsReadToolCall {
     /// The session to read: a full session id or atuin id, or a unique prefix of one, as returned by
-    /// atuin_ai_session_list or atuin_ai_session_search. 'latest' reads the most recent session
+    /// atuin_threads_list or atuin_threads_search. 'latest' reads the most recent session
     /// before this one.
     pub session_id: NonBlankString,
     /// Message number to start from (0-based). Negative values count back from the end over
     /// messages with content, so -10 shows the last ten things said. To see a search hit in
     /// context, start a few messages before its message number. Numbers count every row the
     /// harness recorded, including ones with nothing to read, so they run past the message count
-    /// atuin_ai_session_list gives; to reach the end, use a negative start.
+    /// atuin_threads_list gives; to reach the end, use a negative start.
     #[serde(default)]
     pub start: i64,
     /// Maximum number of messages to show. Long messages and harness-injected context are
@@ -173,10 +173,10 @@ impl Filter {
         let describe = self.describe();
         let Range { start, end } = page;
         let Some(last) = kept.len().checked_sub(1) else {
-            let _ = writeln!(out, "[The session has no messages.]");
+            let _ = writeln!(out, "[The thread has no messages.]");
             return;
         };
-        let span = format!("the session runs #0–#{last}");
+        let span = format!("the thread runs #0–#{last}");
         if n == 0 {
             let _ = writeln!(out, "[No messages from #{start} on match {describe}; {span}.]");
             return;
@@ -318,7 +318,7 @@ fn without_markup(body: &str) -> String {
     out
 }
 
-impl AtuinAiSessionReadToolCall {
+impl AtuinThreadsReadToolCall {
     fn filter(&self) -> Filter {
         Filter::new(self.query.as_deref(), self.roles.as_deref())
     }
@@ -332,7 +332,7 @@ impl AtuinAiSessionReadToolCall {
         let selector = self.session_id.trim();
         let sessions = match super::list_sessions(&mut client, None, None).await {
             Ok(sessions) => sessions,
-            Err(e) => return ToolOutcome::Error(format!("Listing AI sessions failed: {e}")),
+            Err(e) => return ToolOutcome::Error(format!("Listing threads failed: {e}")),
         };
         // `latest` means the last session a person ran before this one: not the caller's own
         // live session, and not a subagent fragment.
@@ -346,7 +346,7 @@ impl AtuinAiSessionReadToolCall {
             Ok(handle) => handle,
             Err(e @ SelectError::NotFound(_)) => {
                 return ToolOutcome::Error(format!(
-                    "{e}. Find one with atuin_ai_session_list or atuin_ai_session_search."
+                    "{e}. Find one with atuin_threads_list or atuin_threads_search."
                 ));
             }
             Err(e) => return ToolOutcome::Error(e.to_string()),
@@ -364,7 +364,7 @@ impl AtuinAiSessionReadToolCall {
         });
         let (session, messages, complete) = match read_session(&mut client, handle, page).await {
             Ok(read) => read,
-            Err(e) => return ToolOutcome::Error(format!("Reading the AI session failed: {e}")),
+            Err(e) => return ToolOutcome::Error(format!("Reading the thread failed: {e}")),
         };
         ToolOutcome::Success(self.render(
             &session,
@@ -519,7 +519,7 @@ impl AtuinAiSessionReadToolCall {
     }
 }
 
-impl AtuinAiSessionReadToolCall {
+impl AtuinThreadsReadToolCall {
     /// The part of a single message's rendered `body` starting at `offset`, saying where the
     /// next part starts when there is more.
     fn window(&self, body: &str) -> String {
@@ -876,7 +876,7 @@ mod tests {
 
     use super::*;
 
-    fn call(args: Value) -> AtuinAiSessionReadToolCall {
+    fn call(args: Value) -> AtuinThreadsReadToolCall {
         serde_json::from_value(args).unwrap()
     }
 
@@ -1132,7 +1132,7 @@ mod tests {
         assert!(!out.contains("#5 ") && !out.contains("#0 "), "{out}");
         assert!(
             out.contains(
-                "[1 message matching query \"called records\" from #0; the session runs #0–#6.]"
+                "[1 message matching query \"called records\" from #0; the thread runs #0–#6.]"
             ),
             "{out}"
         );
@@ -1170,7 +1170,7 @@ mod tests {
         let none = render(json!({"session_id": "abc", "query": "planetscale"}), &conversation());
         assert!(
             none.contains(
-                "[No messages from #0 on match query \"planetscale\"; the session runs #0–#6.]"
+                "[No messages from #0 on match query \"planetscale\"; the thread runs #0–#6.]"
             ),
             "{none}"
         );
@@ -1283,7 +1283,7 @@ mod tests {
     #[rstest]
     fn a_filtered_read_of_an_empty_session_says_so() {
         let out = render(json!({"session_id": "abc", "roles": ["user"]}), &[]);
-        assert!(out.contains("[The session has no messages.]"), "{out}");
+        assert!(out.contains("[The thread has no messages.]"), "{out}");
         assert!(!out.contains("#0"), "{out}");
     }
 
@@ -1316,7 +1316,7 @@ mod tests {
     #[rstest]
     fn rejects_an_unknown_role() {
         let args = json!({"session_id": "abc", "roles": ["robot"]});
-        assert!(serde_json::from_value::<AtuinAiSessionReadToolCall>(args).is_err());
+        assert!(serde_json::from_value::<AtuinThreadsReadToolCall>(args).is_err());
     }
 
     #[rstest]

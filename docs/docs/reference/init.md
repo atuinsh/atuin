@@ -42,7 +42,7 @@ eval "$(atuin init zsh --disable-up-arrow)"
 
 ## Binding `atuin resume`
 
-`atuin init` defines widgets that open the [`atuin resume`](../ai/sessions.md)
+`atuin init` defines widgets that open the [`atuin resume`](../ai/threads.md)
 picker at the prompt and put the command it picks into your shell, but binds no
 key to them by default. To bind ++ctrl+bracket-right++ in the emacs, vi-insert and
 vi-command keymaps, pass `--bind-ai-resume`:

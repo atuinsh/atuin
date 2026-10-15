@@ -70,7 +70,7 @@ pub enum RehydrateError {
     Io(#[from] std::io::Error),
 }
 
-/// What a restored tool result says when capture kept no output (`ai.capture_tools` off, a policy
+/// What a restored tool result says when capture kept no output (`threads.capture_tools` off, a policy
 /// withheld it, or it was over the size limit): the formats all want some output for a result, and
 /// an empty one would tell the model the tool printed nothing.
 pub const UNCAPTURED_OUTPUT: &str = "(output not captured)";
@@ -96,7 +96,7 @@ pub enum Flatten<'f> {
     },
 }
 
-/// A tool call capture kept without its input (`ai.capture_tools` off, a policy withheld it, or it
+/// A tool call capture kept without its input (`threads.capture_tools` off, a policy withheld it, or it
 /// was over the size limit): only its name is synced.
 #[must_use]
 pub fn is_uncaptured(content: &Content) -> bool {
@@ -469,14 +469,14 @@ pub(crate) mod testing {
     use super::*;
     use crate::harnesstools::session::{ToolResult, ToolUse};
 
-    /// `content` of a `role` row as capture syncs it with `ai.capture_tools` off (the daemon's
+    /// `content` of a `role` row as capture syncs it with `threads.capture_tools` off (the daemon's
     /// `sanitize`): calls without their input, results without their output, no patches,
     /// reasoning as a marker, text only of what the user or the model said, nothing kept raw.
     pub fn sanitize(role: &Role, content: &[Content]) -> Vec<Content> {
         sanitize_as(role, content, false)
     }
 
-    /// [`sanitize`], keeping tool inputs, outputs and patches when `tools` (`ai.capture_tools`
+    /// [`sanitize`], keeping tool inputs, outputs and patches when `tools` (`threads.capture_tools`
     /// on, the default).
     pub fn sanitize_as(role: &Role, content: &[Content], tools: bool) -> Vec<Content> {
         let conversation = matches!(role, Role::User | Role::Assistant);

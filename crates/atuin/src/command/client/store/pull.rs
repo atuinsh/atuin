@@ -49,7 +49,7 @@ impl Pull {
         println!("Clearing local store");
         store.delete_all().await?;
         let pulled = self.pull(settings, store, db).await;
-        // Records only this machine had are gone, and the ai session index must forget what
+        // Records only this machine had are gone, and the threads index must forget what
         // they projected: rebuilt from what the store holds now, however far the pull got.
         let reset = super::reset_ai_sessions_after(settings).await;
         match (pulled, reset) {

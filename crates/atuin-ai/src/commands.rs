@@ -11,7 +11,7 @@ pub(crate) mod resume;
 pub(crate) mod session;
 
 pub use resume::Cmd as ResumeCmd;
-pub use session::import_all;
+pub use session::{Cmd as ThreadsCmd, import_all};
 
 #[derive(Args, Debug)]
 pub struct AiArgs {
@@ -51,11 +51,23 @@ pub enum Command {
         _shell: Option<std::ffi::OsString>,
     },
 
-    /// Browse AI sessions captured by the daemon
-    Session(session::Cmd),
+    /// `atuin threads`, as it was called before.
+    #[command(subcommand, name = "session", hide = true)]
+    Threads(session::Cmd),
 
-    /// Pick a captured AI coding-agent session and resume it
+    /// `atuin threads resume`, as it was called before.
+    #[command(hide = true)]
     Resume(resume::Cmd),
+}
+
+/// `atuin threads resume` is `atuin ai resume`, so it is set up and run in one place.
+impl From<session::Cmd> for Command {
+    fn from(cmd: session::Cmd) -> Self {
+        match cmd {
+            session::Cmd::Resume(cmd) => Self::Resume(cmd),
+            cmd => Self::Threads(cmd),
+        }
+    }
 }
 
 impl Command {
@@ -70,7 +82,7 @@ impl Command {
                 file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
                 stderr: None,
             }),
-            Self::Init { .. } | Self::Session(_) => None,
+            Self::Init { .. } | Self::Threads(_) => None,
         }
     }
 }
@@ -95,7 +107,7 @@ pub async fn run(command: Command, settings: Settings) -> eyre::Result<()> {
             );
             Ok(())
         }
-        Command::Session(cmd) => session::run(cmd, &settings).await,
+        Command::Threads(cmd) => session::run(cmd, settings).await,
         Command::Resume(cmd) => resume::run(cmd, settings).await,
     }
 }

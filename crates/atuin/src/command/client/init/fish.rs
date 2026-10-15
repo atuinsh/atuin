@@ -29,7 +29,7 @@ fn print_bindings(
     }
 }
 
-/// ctrl-] opens `atuin ai resume`, in the default and insert modes.
+/// ctrl-] opens `atuin threads resume`, in the default and insert modes.
 fn print_ai_resume_bindings(indent: &str, options: &StaticInitOptions<'_>, key: &str) {
     if cfg!(feature = "ai") && options.enable_ai_resume {
         println!("{indent}bind {key} _atuin_ai_resume");

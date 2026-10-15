@@ -160,7 +160,7 @@ pub(super) async fn build(
         && !downloaded.is_empty()
         && let Err(e) = daemon::project_synced_ai_sessions(settings).await
     {
-        eprintln!("Warning: failed to build ai sessions: {e}");
+        eprintln!("Warning: failed to build threads: {e}");
     }
 
     built

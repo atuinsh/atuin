@@ -58,18 +58,18 @@ pub enum AiSessionRecord {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
-    #[error("empty ai-session record")]
+    #[error("empty thread record")]
     Empty,
-    #[error("unknown ai-session record kind {0}")]
+    #[error("unknown thread record kind {0}")]
     UnknownKind(u8),
-    #[error("unknown ai-session record version {}", .0.as_str())]
+    #[error("unknown thread record version {}", .0.as_str())]
     UnknownVersion(RecordVersion),
     /// Only written by builds from before records stored the session's id.
-    #[error("ai-session record version {} is no longer read", .0.as_str())]
+    #[error("thread record version {} is no longer read", .0.as_str())]
     Retired(RecordVersion),
-    #[error("failed to decode ai-session record body: {0}")]
+    #[error("failed to decode thread record body: {0}")]
     Body(#[from] rmp_serde::decode::Error),
-    #[error("failed to decompress ai-session record body: {0}")]
+    #[error("failed to decompress thread record body: {0}")]
     Decompress(#[source] std::io::Error),
 }
 
@@ -87,13 +87,13 @@ pub enum BuildError {
     Db(#[from] DbError),
     /// Invalidations kept landing in the middle of it: after `REPROJECT_PASSES` passes the
     /// sidecar may still be missing records. The next reprojection replays what this one left.
-    #[error("the ai-session projection kept being invalidated, and is incomplete")]
+    #[error("the threads projection kept being invalidated, and is incomplete")]
     Incomplete,
     /// Only [`AiSessionStore::reproject_beside_capture`]: the host's series was rewritten or
     /// deleted under its watermark, and forgetting what it projected would delete rows of this
     /// host, which capture dedups against. Nothing was forgotten: the caller must have it
     /// forgotten with capture held off, then replay.
-    #[error("the ai-session records of host {0} were rewritten under capture")]
+    #[error("the thread records of host {0} were rewritten under capture")]
     ForgetHeldOff(HostId),
 }
 

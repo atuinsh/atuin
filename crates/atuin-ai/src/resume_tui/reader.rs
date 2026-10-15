@@ -422,6 +422,7 @@ mod tests {
         t.tool("mcp__atuin__atuin_history");
         t.tool("atuin_atuin_history");
         t.tool("atuin_history");
+        t.tool("mcp__atuin__atuin_threads_read");
         t.tool("mcp__atuin__atuin_ai_session_read");
         t.tool("mcp__github__create_issue");
         let transcript = t.finish();
@@ -430,7 +431,7 @@ mod tests {
         };
         assert_eq!(
             tools_line(tools),
-            "🐢 atuin history ×3 · 🐢 atuin session read · mcp__github__create_issue"
+            "🐢 atuin history ×3 · 🐢 atuin threads read ×2 · mcp__github__create_issue"
         );
     }
 

@@ -2,7 +2,7 @@
 //!
 //! Plans come from the harness tools ([`atuin_common::harnesstools::resume`]); this layer adds
 //! what only the picker knows: whether the session's transcript is on this machine, where to
-//! resume one that isn't, and the user's `[ai.sessions.resume]` templates. Planning may walk the
+//! resume one that isn't, and the user's `[threads.resume]` templates. Planning may walk the
 //! harness's session directories, so the picker asks only for the selected session, never per
 //! row.
 //!
@@ -369,8 +369,8 @@ pub trait Machine: Send + Sync {
 /// where it does, when that isn't where it ran.
 fn restored(restore: &Restore) -> String {
     match &restore.note {
-        Some(note) => format!("restored the session from sync; {note}"),
-        None => "restored the session from sync".to_owned(),
+        Some(note) => format!("restored the thread from sync; {note}"),
+        None => "restored the thread from sync".to_owned(),
     }
 }
 
@@ -450,7 +450,7 @@ pub fn switched_dir(settings: &Settings) -> PathBuf {
 
 impl HarnessResumer {
     pub fn new(context: ResumeContext, settings: &Settings) -> Self {
-        let templates = settings.ai.sessions.resume.clone();
+        let templates = settings.threads.resume.clone();
         Self::on(context, templates, ThisMachine, switched_dir(settings))
     }
 

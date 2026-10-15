@@ -49,7 +49,7 @@ pub struct SessionCaptureEngine {
 impl SessionCaptureEngine {
     /// Capture every harness's sessions from `since` on: one with nothing stored yet only once
     /// it changes after, then whole. The rest, sessions nobody touches since, are history, which
-    /// is `atuin ai session import`'s to bring in.
+    /// is `atuin threads import`'s to bring in.
     pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool, since: SystemTime) -> Self {
         let mut listeners = Vec::new();
 
@@ -256,7 +256,7 @@ async fn capture(
 }
 
 /// The read of `session` started over from the beginning of its transcript, which was replaced
-/// in place (`atuin ai resume` switching it to another branch writes a new file over it) or cut
+/// in place (`atuin threads resume` switching it to another branch writes a new file over it) or cut
 /// short: the line reader reads a file whose identity changed, or that shrank below what it had
 /// read, again from its first byte, under the same stream, and says so on every line it reads
 /// after ([`Checkpoint::generation`]).
@@ -988,7 +988,7 @@ mod tests {
     }
 
     /// A captured transcript replaced in place (written out again along another branch, as
-    /// `atuin ai resume` switching it does: a new file renamed over it, its title line kept) is
+    /// `atuin threads resume` switching it does: a new file renamed over it, its title line kept) is
     /// read again from its start while it is followed: the rows already stored are not stored
     /// again (not even its title line, which capture keys on its content and counts), none is
     /// lost, the new branch's rows are stored, and the checkpoint is the new file's end, not a

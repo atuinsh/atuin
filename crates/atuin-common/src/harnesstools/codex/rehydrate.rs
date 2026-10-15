@@ -46,7 +46,7 @@
 //!   API by `id`, which a store-less request cannot resolve. The model's earlier reasoning is not
 //!   something it needs to continue, so these items are left out, and re-capture has no row to
 //!   compare them with.
-//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it). A
 //!   `function_call`'s `arguments` must be a string of JSON, a `custom_tool_call`'s `input` a
 //!   string, a `local_shell_call`'s `action` an object: Codex cannot read the line back, let alone

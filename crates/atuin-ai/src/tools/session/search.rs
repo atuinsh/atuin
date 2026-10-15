@@ -1,4 +1,4 @@
-//! `atuin_ai_session_search`: full-text search across captured AI-agent session transcripts.
+//! `atuin_threads_search`: full-text search across captured AI-agent session transcripts.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -27,7 +27,7 @@ const NOTE_SCAN: u32 = 100;
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct AtuinAiSessionSearchToolCall {
+pub struct AtuinThreadsSearchToolCall {
     /// Words to look for across captured AI-agent session transcripts (what the user and agent
     /// wrote, the names of tools used, and session titles), case-insensitive. Sessions with a
     /// message containing every word rank first; if there are none, sessions matching any of the
@@ -57,7 +57,7 @@ pub struct AtuinAiSessionSearchToolCall {
     pub roles: Option<Vec<RoleArg>>,
 }
 
-impl AtuinAiSessionSearchToolCall {
+impl AtuinThreadsSearchToolCall {
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
         self.run(settings, caller).await.map_or_else(|outcome| outcome, ToolOutcome::Success)
     }
@@ -132,19 +132,19 @@ impl AtuinAiSessionSearchToolCall {
             let query = self.query.trim();
             return Ok(if only_own {
                 format!(
-                    "The only captured AI session{scope} matching {query:?} is this one (the \
-                     session calling this tool).{note}"
+                    "The only captured thread{scope} matching {query:?} is this one (the thread \
+                     calling this tool).{note}"
                 )
             } else if !any_term {
                 format!(
-                    "No captured AI session{scope} has a message containing every word of \
+                    "No captured thread{scope} has a message containing every word of \
                      {query:?}.{note}"
                 )
             } else {
                 format!(
-                    "No captured AI sessions{scope} matched any word of {query:?}, even as a \
-                     prefix.{note} Try other words, or atuin_ai_session_list to browse sessions \
-                     by recency and directory."
+                    "No captured threads{scope} matched any word of {query:?}, even as a \
+                     prefix.{note} Try other words, or atuin_threads_list to browse threads by \
+                     recency and directory."
                 )
             });
         }
@@ -154,7 +154,7 @@ impl AtuinAiSessionSearchToolCall {
         if any_term {
             let _ = writeln!(
                 out,
-                "No single message contained every word, so these sessions match some of them (as \
+                "No single message contained every word, so these threads match some of them (as \
                  prefixes); check the match lines for relevance.\n"
             );
         }
@@ -166,9 +166,9 @@ impl AtuinAiSessionSearchToolCall {
         }
         let _ = write!(
             out,
-            "\nRead around a match with atuin_ai_session_read, e.g. start a few messages before \
-             the matched message number. Each session shows only its best match; to find every \
-             mention in one, read it with query."
+            "\nRead around a match with atuin_threads_read, e.g. start a few messages before the \
+             matched message number. Each thread shows only its best match; to find every mention \
+             in one, read it with query."
         );
         Ok(out)
     }
@@ -204,11 +204,11 @@ async fn search(
     client
         .search_sessions(query, terms, &filter, limit)
         .await
-        .map_err(|e| ToolOutcome::Error(format!("AI session search failed: {e}")))?
+        .map_err(|e| ToolOutcome::Error(format!("Thread search failed: {e}")))?
         .map(|hit| {
-            hit.map_err(|e| format!("AI session search failed: {e}")).and_then(|hit| {
+            hit.map_err(|e| format!("Thread search failed: {e}")).and_then(|hit| {
                 SessionMatch::try_from(hit)
-                    .map_err(|e| format!("AI session search returned a malformed result: {e}"))
+                    .map_err(|e| format!("Thread search returned a malformed result: {e}"))
             })
         })
         .try_collect()
@@ -256,7 +256,7 @@ mod tests {
     #[case::clamped_low(json!({"query": "x", "limit": 0}), 1)]
     #[case::null_limit(json!({"query": "x", "limit": null}), 5)]
     fn parses_query_and_clamps_limit(#[case] input: serde_json::Value, #[case] limit: u32) {
-        let call: AtuinAiSessionSearchToolCall = serde_json::from_value(input).unwrap();
+        let call: AtuinThreadsSearchToolCall = serde_json::from_value(input).unwrap();
         assert_eq!(call.limit.get(), limit);
         assert!(!call.include_subagents);
     }
@@ -268,7 +268,7 @@ mod tests {
     #[case::unknown_harness(json!({"query": "x", "harness": "emacs"}))]
     #[case::uncapturable_harness(json!({"query": "x", "harness": "copilot"}))]
     fn rejects_invalid_input(#[case] input: serde_json::Value) {
-        assert!(serde_json::from_value::<AtuinAiSessionSearchToolCall>(input).is_err());
+        assert!(serde_json::from_value::<AtuinThreadsSearchToolCall>(input).is_err());
     }
 
     #[rstest]
@@ -278,7 +278,7 @@ mod tests {
     #[case::pi("pi", HarnessKind::Pi)]
     fn parses_each_harness(#[case] name: &str, #[case] expected: HarnessKind) {
         let input = json!({"query": "x", "harness": name});
-        let call: AtuinAiSessionSearchToolCall = serde_json::from_value(input).unwrap();
+        let call: AtuinThreadsSearchToolCall = serde_json::from_value(input).unwrap();
         assert_eq!(HarnessKind::from(call.harness.unwrap()), expected);
     }
 

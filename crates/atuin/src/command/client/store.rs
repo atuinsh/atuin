@@ -62,7 +62,7 @@ pub enum Cmd {
 /// has already happened.
 pub async fn invalidate_ai_sessions(settings: &Settings) {
     if let Err(err) = atuin_client::ai_session::invalidate_sidecar(settings).await {
-        eprintln!("Failed to schedule a rebuild of the ai session index: {err}");
+        eprintln!("Failed to schedule a rebuild of the threads index: {err}");
     }
 }
 
@@ -84,18 +84,18 @@ pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
     {
         if !settings.daemon.enabled {
             eyre::bail!(
-                "AI sessions need the daemon: enable it (`enabled = true` under `[daemon]` in the \
-                 config) to rebuild the AI session index"
+                "Threads need the daemon: enable it (`enabled = true` under `[daemon]` in the \
+                 config) to rebuild the threads index"
             );
         }
         daemon::rebuild_ai_sessions(settings)
             .await
-            .wrap_err("the daemon could not rebuild the AI session index")
+            .wrap_err("the daemon could not rebuild the threads index")
     }
     #[cfg(not(feature = "daemon"))]
     {
         let _ = settings;
-        eyre::bail!("AI sessions need the daemon, which this build of atuin does not include");
+        eyre::bail!("Threads need the daemon, which this build of atuin does not include");
     }
 }
 
@@ -107,8 +107,8 @@ pub async fn reset_ai_sessions_after(settings: &Settings) -> Result<()> {
         return Ok(());
     }
     reset_ai_sessions(settings).await.wrap_err(
-        "the records changed, but the AI session index was not rebuilt and still lists what they \
-         held: run `atuin store rebuild ai-session` once the daemon is enabled and running",
+        "the records changed, but the threads index was not rebuilt and still lists what they \
+         held: run `atuin store rebuild threads` once the daemon is enabled and running",
     )
 }
 

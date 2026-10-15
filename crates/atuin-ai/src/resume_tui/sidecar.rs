@@ -36,9 +36,9 @@ pub struct SidecarSource {
 impl SidecarSource {
     /// Open the sidecar at `path`.
     pub async fn open(path: &Path, context: &ResumeContext) -> Result<Self> {
-        let db = AiSessionDatabase::open_read_only(path).await.wrap_err_with(|| {
-            format!("could not open the AI session database {}", path.display())
-        })?;
+        let db = AiSessionDatabase::open_read_only(path)
+            .await
+            .wrap_err_with(|| format!("could not open the threads database {}", path.display()))?;
         let mut wal = OsString::from(path);
         wal.push("-wal");
         Ok(Self {
@@ -224,7 +224,7 @@ impl SessionSource for SidecarSource {
         self.db
             .rehydrate_session(session, cwd.to_owned())
             .await?
-            .ok_or_else(|| eyre::eyre!("the session isn't in the AI session database"))
+            .ok_or_else(|| eyre::eyre!("the thread isn't in the threads database"))
     }
 
     async fn analyse(&self, session: &HarnessSession) -> Result<Option<Analysis>> {
@@ -468,7 +468,7 @@ mod tests {
     #[tokio::test]
     async fn the_stamp_moves_only_when_the_database_is_written() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ai_session_sidecar.db");
+        let path = dir.path().join("threads.db");
         let writer = AiSessionDatabase::open(&path).await.unwrap();
         writer.append(&message("root", None, Role::User, "first", 0)).await.unwrap();
         let source = SidecarSource::open(&path, &context()).await.unwrap();

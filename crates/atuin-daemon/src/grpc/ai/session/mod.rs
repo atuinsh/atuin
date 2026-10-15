@@ -54,8 +54,8 @@ const REBUILDING_METADATA: &str = "atuin-ai-sessions-rebuilding";
 
 fn rebuilding_status((replayed, pending): (u64, u64)) -> Status {
     let mut status = Status::unavailable(format!(
-        "AI sessions are being rebuilt from the record store ({replayed} of {pending} records); \
-         try again shortly"
+        "Threads are being rebuilt from the record store ({replayed} of {pending} records); try \
+         again shortly"
     ));
     let progress = MetadataValue::try_from(format!("{replayed}/{pending}"))
         .expect("digits and a slash are valid metadata");
@@ -248,7 +248,7 @@ impl GrpcService for Service {
         // the caller sees it is unavailable.
         if !self.capture.is_available() {
             return Err(Status::failed_precondition(
-                "AI session capture is unavailable: the session store failed to open or recover",
+                "Thread capture is unavailable: the threads store failed to open or recover",
             ));
         }
 

@@ -198,35 +198,35 @@ pub enum Appended {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
-    #[error("failed to open the ai-session sqlite database: {0}")]
+    #[error("failed to open the threads sqlite database: {0}")]
     Open(#[from] SqliteOpenOrCreateError),
-    #[error("failed to run ai-session sqlite migrations: {0}")]
+    #[error("failed to run threads sqlite migrations: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
-    #[error("ai-session sqlite query failed: {0}")]
+    #[error("threads sqlite query failed: {0}")]
     Query(#[from] sqlx::Error),
-    #[error("ai-session sqlite write failed: {0}")]
+    #[error("threads sqlite write failed: {0}")]
     Write(#[from] rusqlite::Error),
-    #[error("the ai-session sqlite write was cancelled")]
+    #[error("the threads sqlite write was cancelled")]
     WriterCancelled,
-    #[error("the ai-session sqlite database is open read-only")]
+    #[error("the threads sqlite database is open read-only")]
     ReadOnly,
-    #[error("failed to serialize ai-session message: {0}")]
+    #[error("failed to serialize thread message: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("failed to compress ai-session message content: {0}")]
+    #[error("failed to compress thread message content: {0}")]
     Compress(std::io::Error),
-    #[error("unknown ai-session harness discriminant {0}")]
+    #[error("unknown thread harness discriminant {0}")]
     UnknownHarness(i64),
-    #[error("failed to decompress ai-session message content: {0}")]
+    #[error("failed to decompress thread message content: {0}")]
     Decompress(std::io::Error),
-    #[error("stored ai-session content is not valid utf-8")]
+    #[error("stored thread content is not valid utf-8")]
     InvalidContentEncoding,
-    #[error("stored ai-session record id is not a valid uuid")]
+    #[error("stored thread record id is not a valid uuid")]
     InvalidRecordId,
-    #[error("stored ai-session atuin id is missing or not a valid uuid")]
+    #[error("stored thread atuin id is missing or not a valid uuid")]
     InvalidAtuinId,
     /// No daemon has created the sidecar yet.
     #[error(
-        "the AI session database has not been created yet: start the atuin daemon (`atuin daemon \
+        "the threads database has not been created yet: start the atuin daemon (`atuin daemon \
          start`) and try again"
     )]
     Uninitialized {
@@ -235,7 +235,7 @@ pub enum DbError {
     /// The sidecar is at an older schema than this build reads: the daemon that owns it is an
     /// older atuin still running since an upgrade, or is migrating it right now.
     #[error(
-        "the AI session database is at schema version {found}, older than the version {expected} \
+        "the threads database is at schema version {found}, older than the version {expected} \
          this atuin reads: the atuin daemon upgrades it when it starts. If atuin was just \
          updated, restart the daemon (`atuin daemon restart`); if the daemon is starting, try \
          again in a moment"
@@ -249,7 +249,7 @@ pub enum DbError {
     /// failed part way. The sidecar is a projection of the record store, so deleting it is safe:
     /// the daemon rebuilds it from the records when it next starts.
     #[error(
-        "the AI session database at {} cannot be migrated ({source}). It is rebuilt from the \
+        "the threads database at {} cannot be migrated ({source}). It is rebuilt from the \
          record store, so to start it over, stop the daemon (`atuin daemon stop`), delete that \
          file with its -wal and -shm files, and start the daemon again",
         path.display()
@@ -260,7 +260,7 @@ pub enum DbError {
     },
     /// The sidecar is at a newer schema than this build reads: a newer atuin's daemon owns it.
     #[error(
-        "the AI session database is at schema version {found}, newer than the version {expected} \
+        "the threads database is at schema version {found}, newer than the version {expected} \
          this atuin reads: the atuin daemon is newer than this atuin. Update atuin, or check that \
          the shell and the daemon run the same atuin binary"
     )]
@@ -1451,7 +1451,7 @@ impl AiSessionDatabase {
                     }
                 }
             }
-            // Tool output (with `ai.capture_tools`) is most of a session's bytes, and would grow
+            // Tool output (with `threads.capture_tools`) is most of a session's bytes, and would grow
             // the index as much, with files and logs rather than what was said or done. Activity
             // metadata is not conversational text and adds no useful search terms.
             Content::ToolResult(_) | Content::ReasoningSummary { .. } => {}
@@ -3439,7 +3439,7 @@ mod tests {
     }
 
     /// A search's title and snippet carry the spans of what the query matched, which the gRPC
-    /// API and `atuin ai session search --format json` pass on.
+    /// API and `atuin threads search --format json` pass on.
     #[rstest]
     #[case::all(
         SearchTerms::All,

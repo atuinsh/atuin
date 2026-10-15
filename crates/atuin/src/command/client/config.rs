@@ -269,14 +269,14 @@ pub enum Feature {
     #[value(help = fl!("value-config-feature-octavo"))]
     Octavo,
     #[cfg(all(feature = "ai", feature = "daemon"))]
-    #[value(help = fl!("value-config-feature-ai-sessions"))]
-    AiSessions,
+    #[value(help = fl!("value-config-feature-threads"), alias = "ai-sessions")]
+    Threads,
 }
 
 impl EnableCmd {
     pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         #[cfg(all(feature = "ai", feature = "daemon"))]
-        if self.feature == Feature::AiSessions {
+        if self.feature == Feature::Threads {
             ai_sessions::enable(settings, &mut ai_sessions::Terminal::stdio()).await?;
             return Ok(());
         }
@@ -352,8 +352,8 @@ impl EnableCmd {
             #[cfg(feature = "octavo")]
             Feature::Octavo => set_deep_key(&mut doc, "octavo.enabled", Value::from(true))?,
             #[cfg(all(feature = "ai", feature = "daemon"))]
-            Feature::AiSessions => {
-                set_deep_key(&mut doc, "ai.capture_sessions", Value::from(true))?;
+            Feature::Threads => {
+                set_deep_key(&mut doc, "threads.capture", Value::from(true))?;
             }
         }
 
@@ -477,7 +477,7 @@ impl DisableCmd {
             Feature::Octavo => restart_autostarted_daemon(settings).await,
             // The daemon notices the change itself, and the shell doesn't care.
             #[cfg(feature = "ai")]
-            Feature::AiSessions => return Ok(()),
+            Feature::Threads => return Ok(()),
         }
 
         println!("Restart your shell for the change to take effect.");
@@ -502,8 +502,8 @@ impl DisableCmd {
             #[cfg(feature = "octavo")]
             Feature::Octavo => set_deep_key(&mut doc, "octavo.enabled", Value::from(false))?,
             #[cfg(all(feature = "ai", feature = "daemon"))]
-            Feature::AiSessions => {
-                set_deep_key(&mut doc, "ai.capture_sessions", Value::from(false))?;
+            Feature::Threads => {
+                set_deep_key(&mut doc, "threads.capture", Value::from(false))?;
             }
         }
 
@@ -847,20 +847,20 @@ mod tests {
     )]
     #[cfg_attr(
         all(feature = "ai", feature = "daemon"),
-        case::ai_sessions(
-            Feature::AiSessions,
+        case::threads(
+            Feature::Threads,
             "",
             false,
-            "[daemon]\nenabled = true\nautostart = true\n\n[ai]\ncapture_sessions = true\n"
+            "[daemon]\nenabled = true\nautostart = true\n\n[threads]\ncapture = true\n"
         )
     )]
     #[cfg_attr(
         all(feature = "ai", feature = "daemon"),
-        case::ai_sessions_with_daemon_already_enabled(
-            Feature::AiSessions,
+        case::threads_with_daemon_already_enabled(
+            Feature::Threads,
             "[daemon]\nenabled = true\nautostart = false\n",
             true,
-            "[daemon]\nenabled = true\nautostart = false\n\n[ai]\ncapture_sessions = true\n"
+            "[daemon]\nenabled = true\nautostart = false\n\n[threads]\ncapture = true\n"
         )
     )]
     fn enable_writes(
@@ -881,10 +881,10 @@ mod tests {
     #[case::output_capture(Feature::OutputCapture, "", "[output]\nenabled = false\n")]
     #[cfg_attr(
         all(feature = "ai", feature = "daemon"),
-        case::ai_sessions(
-            Feature::AiSessions,
-            "[daemon]\nenabled = true\n\n[ai]\ncapture_sessions = true\n",
-            "[daemon]\nenabled = true\n\n[ai]\ncapture_sessions = false\n"
+        case::threads(
+            Feature::Threads,
+            "[daemon]\nenabled = true\n\n[threads]\ncapture = true\n",
+            "[daemon]\nenabled = true\n\n[threads]\ncapture = false\n"
         )
     )]
     #[case::daemon_search(

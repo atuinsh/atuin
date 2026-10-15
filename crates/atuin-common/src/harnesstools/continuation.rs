@@ -11,14 +11,14 @@
 //! The conversation, and the work done in it:
 //!
 //! - What the user said, and what the model answered.
-//! - **Tool calls, as calls.** A call captured with its input and its result (`ai.capture_tools`)
+//! - **Tool calls, as calls.** A call captured with its input and its result (`threads.capture_tools`)
 //!   is carried over as a call of the target, with its result: as the target's own tool where it
 //!   has one that does the same (a shell command, a file read, written or edited, a search: see
 //!   `tools`), else as the tool it was. A model reads a call to a tool it doesn't have like any
 //!   other; it just can't make it again.
 //! - **Other calls, as notes**: a short line of text in the assistant's turn saying what was
 //!   called (see [`tool_note`]): `[ran a shell command]`, ``[edited `src/store.rs`]``. That is a
-//!   call captured without its input (`ai.capture_tools` off, or a policy withheld it), one with no
+//!   call captured without its input (`threads.capture_tools` off, or a policy withheld it), one with no
 //!   result (interrupted, or a Codex web search), and one the model's provider ran itself (a
 //!   Claude Code web search), whose result only that provider reads.
 //! - Summaries (compactions, abandoned branches), as text of the user's turn. A compaction

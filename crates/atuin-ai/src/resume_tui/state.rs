@@ -43,7 +43,7 @@ pub const RESTORE: u8 = 3;
 pub const TRANSCRIPT: u8 = 4;
 
 /// The status while an empty workspace falls back to every session.
-const FELL_BACK: &str = "no sessions in this repo yet: showing all of them";
+const FELL_BACK: &str = "no threads in this repo yet: showing all of them";
 
 /// How many sessions' transcripts are kept read: the reader shows one at a time, and a long
 /// session's is large.
@@ -339,7 +339,7 @@ pub struct State {
 
     /// A one-line message in the status row (copied, can't resume, search failed).
     pub status: Option<(String, Meaning)>,
-    /// The daemon is rebuilding the session index, so results may be incomplete: said in the
+    /// The daemon is rebuilding the threads index, so results may be incomplete: said in the
     /// status row while it has nothing else to say.
     pub rebuilding: Option<Rebuilding>,
     pub now: Box<dyn Fn() -> OffsetDateTime + Send>,
@@ -361,7 +361,7 @@ fn bottom_up(rows: &mut [SessionRow]) {
 
 impl State {
     pub fn new(settings: &Settings, context: ResumeContext, query: &str) -> Self {
-        let sessions = &settings.ai.sessions;
+        let sessions = &settings.threads;
         let mut input = Cursor::from(query.to_owned());
         input.end();
 
@@ -776,7 +776,7 @@ impl State {
     /// several agents have): they come first, the first selected, until the query changes.
     pub fn pin_matches(&mut self, rows: Vec<SessionRow>) {
         self.status = Some((
-            format!("{} names {} sessions: pick one", self.input.as_str().trim(), rows.len()),
+            format!("{} names {} threads: pick one", self.input.as_str().trim(), rows.len()),
             Meaning::AlertInfo,
         ));
         self.pin_rows(rows);
@@ -1183,7 +1183,7 @@ mod tests {
     /// detached `HEAD`, or outside one.
     fn opened(configured: Option<FilterMode>, repo: bool, branch: bool) -> State {
         let mut settings = settings();
-        settings.ai.sessions.filter_mode = configured;
+        settings.threads.filter_mode = configured;
         let mut ctx = fake::context();
         if !repo {
             ctx.git_root = None;
@@ -1238,7 +1238,7 @@ mod tests {
     #[case::an_agent("a:pi")]
     fn a_narrowed_workspace_stays_workspace(#[case] query: &str) {
         let mut settings = settings();
-        settings.ai.sessions.filter_mode = Some(FilterMode::Workspace);
+        settings.threads.filter_mode = Some(FilterMode::Workspace);
         let mut state = State::new(&settings, fake::context(), query);
         let (generation, _) = state.next_search().unwrap();
         state.apply_results(generation, Vec::new());
@@ -1398,7 +1398,7 @@ mod tests {
         assert_eq!(state.results, vec![claude.clone(), pi.clone()]);
         assert_eq!(state.selected(), Some(&claude));
         assert!(
-            state.status.as_ref().is_some_and(|(s, _)| s == "7aaabc31 names 2 sessions: pick one")
+            state.status.as_ref().is_some_and(|(s, _)| s == "7aaabc31 names 2 threads: pick one")
         );
         // Nothing is planned for them up front: either may be resumable.
         assert!(state.plans.is_empty());

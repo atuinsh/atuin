@@ -37,7 +37,7 @@ impl Agent {
         }
     }
 
-    /// Its executable, and the name `atuin ai resume --in` takes.
+    /// Its executable, and the name `atuin threads resume --in` takes.
     pub fn program(self) -> &'static str {
         match self {
             Self::Claude => "claude",

@@ -323,25 +323,38 @@ enter_accept = true
 ##   commands that have no recorded shell
 # shells = "auto"
 
-[ai.sessions]
-## Settings for `atuin ai resume`, the picker over captured AI coding-agent sessions.
+[threads]
+## Threads are your AI coding agents' sessions (Claude Code, Codex, opencode and Pi),
+## captured by the daemon so you can search and resume them, here or on another machine.
+## These were `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`, which are
+## still read when not set here.
+
+## Capture threads into the encrypted record store, and sync them like your history.
+## `atuin config enable threads` turns this on, with the daemon it needs.
+# capture = false
+
+## Also capture what each tool call was given and returned (commands and their output,
+## files read and written), with secrets redacted. Off keeps only each tool's name.
+# capture_tools = true
+
+## The rest are settings for `atuin threads resume`, the picker over captured threads.
 ## It follows the history search's style, invert, show_preview, max_preview_height,
 ## enter_accept, keymap_mode and theme settings.
 
 ## The filter the picker opens in. Unset: "global". "workspace" and "branch" open
 ## in "global" outside a git repository, "branch" opens in "workspace" on a
 ## detached HEAD, and "workspace" opens in "global" when the workspace has no
-## sessions at all. ctrl-r cycles through global, workspace, branch, directory and
+## threads at all. ctrl-r cycles through global, workspace, branch, directory and
 ## host.
 # filter_mode = "global"
 
 ## Height of the inline picker. Defaults to the top-level inline_height.
 # inline_height = 40
 
-## Ask where to resume a session once it's chosen: in its own agent (the default
+## Ask where to resume a thread once it's chosen: in its own agent (the default
 ## choice, so enter-enter resumes it), or continued in another agent installed here.
 ## When false, enter and tab resume in its own agent straight away; the chooser still
-## opens for a session that can't be resumed there.
+## opens for a thread that can't be resumed there.
 # resume_chooser = true
 
 ## Take the mouse: the wheel scrolls the preview under it, or moves the selection over the
@@ -355,7 +368,7 @@ enter_accept = true
 ## Don't pass them through another shell either (e.g. `sh -c "cd {cwd} && ..."`): that
 ## shell would split and expand them, so a directory with a space or `;` in it breaks the
 ## command or runs part of it as a separate one.
-# [ai.sessions.resume]
+# [threads.resume]
 # claude = "claude --resume {id}"
 # codex = "codex resume {id}"
 # opencode = "opencode --session {id}"

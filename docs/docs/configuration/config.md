@@ -436,7 +436,7 @@ history_filter = [
 A filtered command's output isn't captured either. To keep a command in history
 but not its output, use [`command_filter`](#command_filter) in `[output]`. The
 filter applies to the commands your AI agents run too: a matching call is
-[captured](../ai/sessions.md#whats-captured) with its tool's name only.
+[captured](../ai/threads.md#whats-captured) with its tool's name only.
 
 ### `cwd_filter`
 
@@ -454,7 +454,7 @@ This supports regular expressions, so you can hide pretty much whatever you want
 
 After updating that parameter, you can run [the prune command](../reference/prune.md) to remove old history entries that match the new filters.
 
-An [AI session](../ai/sessions.md#whats-captured) captured in a matching
+A [thread](../ai/threads.md#whats-captured) captured in a matching
 directory keeps only the names of the tools its agent called there.
 
 ### `store_failed`
@@ -498,7 +498,7 @@ For the exact expressions, see
 [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-common/src/secrets.rs).
 
 The same patterns are applied to captured command output, and to
-[AI sessions](../ai/sessions.md#whats-captured). A command whose own text is
+[threads](../ai/threads.md#whats-captured). A command whose own text is
 clean can still print a credential, so recognised values in the captured
 output are replaced with `****` before storage. Only the value is replaced; the
 variable name or flag beside it stays. Output is also checked for credentials
@@ -1214,7 +1214,7 @@ environment (`printenv`, `env`); and commands that name a
 
 The filter also applies to the commands your AI agents run, whether or not
 output capture is enabled: a matching call is
-[captured](../ai/sessions.md#whats-captured) without its output.
+[captured](../ai/threads.md#whats-captured) without its output.
 
 ### `sync`
 
@@ -1228,7 +1228,7 @@ set to.
 
 Settings under `[security]` add to Atuin's built-in rules for keeping
 credentials out of what it stores: captured command output and
-[AI sessions](../ai/sessions.md#whats-captured). For which setting to reach for,
+[threads](../ai/threads.md#whats-captured). For which setting to reach for,
 see [Keeping Secrets Out of Atuin](../guide/excluding-commands.md).
 
 ```toml

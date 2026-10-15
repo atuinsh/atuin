@@ -1654,7 +1654,7 @@ impl State {
             } else if row.handle.harness.harness().is_none() {
                 // Nothing atuin can resume or continue it in (a Copilot session).
                 "can't resume here".to_owned()
-            } else if settings.ai.sessions.resume_chooser {
+            } else if settings.threads.resume_chooser {
                 // Enter asks where.
                 "resume…".to_owned()
             } else {
@@ -1710,8 +1710,8 @@ impl State {
     fn build_stats(&self, theme: &Theme) -> Paragraph<'static> {
         let text = match self.result_count() {
             None => String::new(),
-            Some(n) if n == "1" => "1 session".to_owned(),
-            Some(n) => format!("{n} sessions"),
+            Some(n) if n == "1" => "1 thread".to_owned(),
+            Some(n) => format!("{n} threads"),
         };
         Paragraph::new(text).style(style(theme, Meaning::Annotation)).alignment(Alignment::Right)
     }
@@ -1779,7 +1779,7 @@ impl State {
         };
         let room = st.inner_width.saturating_sub(borders);
         let width = |spans: &[Span<'_>]| spans.iter().map(|s| s.content.width()).sum::<usize>();
-        let placeholder = "search sessions…";
+        let placeholder = "search threads…";
         let typed = usize::from(prefix_width) + input.width();
         let with_placeholder = typed
             + if input.is_empty() {
@@ -1824,7 +1824,7 @@ impl State {
         (input_block(Paragraph::new(Line::from(spans)), st), cut)
     }
 
-    /// What the list says with nothing to show, in its middle: `No sessions match "flaky" in
+    /// What the list says with nothing to show, in its middle: `No threads match "flaky" in
     /// this repo`, and what to do about it.
     fn no_results(&self, theme: &Theme) -> Paragraph<'static> {
         let muted = style(theme, Meaning::Annotation);
@@ -1838,10 +1838,10 @@ impl State {
             FilterMode::Host => " on this machine",
         };
         let what = match (query.is_empty(), self.applied_chips) {
-            (true, false) => format!("No sessions{place}"),
-            (true, true) => format!("No sessions match the filters{place}"),
-            (false, false) => format!("No sessions match \"{query}\"{place}"),
-            (false, true) => format!("No sessions match \"{query}\" and the filters{place}"),
+            (true, false) => format!("No threads{place}"),
+            (true, true) => format!("No threads match the filters{place}"),
+            (false, false) => format!("No threads match \"{query}\"{place}"),
+            (false, true) => format!("No threads match \"{query}\" and the filters{place}"),
         };
         let mut hints = Vec::new();
         // ctrl-r goes through the scopes in turn (some narrower), so it changes the scope rather

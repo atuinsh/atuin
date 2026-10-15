@@ -247,9 +247,10 @@ fn tool_label(name: &str) -> &str {
         "atuin_history" => "🐢 atuin history",
         "atuin_output" => "🐢 atuin output",
         "atuin_output_search" => "🐢 atuin output search",
-        "atuin_ai_session_search" => "🐢 atuin session search",
-        "atuin_ai_session_list" => "🐢 atuin session list",
-        "atuin_ai_session_read" => "🐢 atuin session read",
+        // As they were named before threads.
+        "atuin_threads_search" | "atuin_ai_session_search" => "🐢 atuin threads search",
+        "atuin_threads_list" | "atuin_ai_session_list" => "🐢 atuin threads list",
+        "atuin_threads_read" | "atuin_ai_session_read" => "🐢 atuin threads read",
         _ => name,
     }
 }
@@ -262,7 +263,7 @@ pub trait SessionSource: Send + Sync {
     /// root's.
     async fn search(&self, filter: &SessionFilter) -> eyre::Result<Vec<SessionRow>>;
 
-    /// Every session whose id is `id` or starts with it, across harnesses (for `atuin ai resume
+    /// Every session whose id is `id` or starts with it, across harnesses (for `atuin threads resume
     /// <id>`).
     async fn find_by_id(&self, id: &str) -> eyre::Result<Vec<SessionRow>>;
 
@@ -334,7 +335,7 @@ pub fn harness_badge(harness: HarnessKind) -> &'static str {
     }
 }
 
-/// The harness as `atuin ai resume --in` names it; `None` for one that can't be continued in.
+/// The harness as `atuin threads resume --in` names it; `None` for one that can't be continued in.
 pub fn harness_arg(harness: HarnessKind) -> Option<&'static str> {
     match harness {
         HarnessKind::ClaudeCode => Some("claude"),

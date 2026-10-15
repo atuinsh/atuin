@@ -925,7 +925,7 @@ async fn catch_up_in(
 /// it isn't here, resumed as it is when it is at the head, the rows it lacks appended when it is
 /// behind; anything else is a choice, with nothing written.
 #[rstest]
-#[case::not_here(None, None, false, "/restored/s.jsonl restored the session from sync", &[])]
+#[case::not_here(None, None, false, "/restored/s.jsonl restored the thread from sync", &[])]
 #[case::at_the_head(Some((&["a", "b", "c", "d"][..], "d")), None, false, "/t/s.jsonl", &[])]
 #[case::behind(
     Some((&["a", "b"][..], "b")),
@@ -1113,7 +1113,7 @@ fn synced_with_a_title(diverged: bool) -> Vec<atuin_client::ai_session::Message>
 }
 
 /// A session with no copy here is restored along the head named, else, when it diverged, along
-/// its newest head (whether `atuin ai resume` catches it up or the picker restores it), with the
+/// its newest head (whether `atuin threads resume` catches it up or the picker restores it), with the
 /// rows off the tree that go with it; one that went one way is restored from every row synced of
 /// it, as before.
 #[rstest]
@@ -1276,7 +1276,7 @@ async fn a_copy_gone_since_it_was_located_is_restored(dirs: Dirs) {
     machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
     let written = machine.written.clone();
     let caught = catch_up(&dirs, machine, false).await;
-    assert_eq!(caught, ("/restored/s.jsonl restored the session from sync".to_owned(), vec![]));
+    assert_eq!(caught, ("/restored/s.jsonl restored the thread from sync".to_owned(), vec![]));
     assert_eq!(written.lock().len(), 1);
 }
 

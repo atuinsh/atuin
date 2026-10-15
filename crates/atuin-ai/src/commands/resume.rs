@@ -1,4 +1,4 @@
-//! `atuin ai resume [QUERY]`: pick a captured AI coding-agent session and resume it.
+//! `atuin threads resume [QUERY]`: pick a captured AI coding-agent session and resume it.
 //!
 //! - A QUERY that is a session id (or a unique prefix of one) resumes it directly, no picker.
 //!   From the shell widget, `enter_accept` decides whether it runs or lands on the command line;
@@ -17,7 +17,7 @@
 //!   that went on separately on several machines is continued along one branch, which `--branch`
 //!   must name: without it, it fails listing them (the picker takes the newest, saying so). In the
 //!   picker, accepting a session asks where to resume it: its own harness first, then the others
-//!   installed here (see [`crate::resume_tui::chooser`]; `[ai.sessions] resume_chooser = false`
+//!   installed here (see [`crate::resume_tui::chooser`]; `[threads] resume_chooser = false`
 //!   skips that).
 //! - A session whose transcript is here is caught up with sync first (see
 //!   [`crate::resume_tui::catchup`]): when it went on on another machine, the messages this copy
@@ -83,7 +83,7 @@ fn title_line(title: &str) -> String {
 
 #[derive(Args, Debug)]
 pub struct Cmd {
-    /// Search text, or a session id (or unique id prefix) to resume without the picker.
+    /// Search text, or a thread id (or unique id prefix) to resume without the picker.
     #[arg(value_name = "QUERY")]
     query: Vec<String>,
 
@@ -91,25 +91,25 @@ pub struct Cmd {
     #[arg(long)]
     print: bool,
 
-    /// Continue the session QUERY names (by id, or a unique id prefix) in another agent: it is
+    /// Continue the thread QUERY names (by id, or a unique id prefix) in another agent: it is
     /// written out as a new session there, tool calls carried over as its own where it has a like
     /// tool (notes where they weren't captured whole), and resumed. One that went on separately on
     /// several machines needs `--branch`.
     #[arg(long = "in", value_enum, value_name = "HARNESS")]
     continue_in: Option<ContinueIn>,
 
-    /// Fork the session QUERY names (by id, or a unique id prefix): it is written out as a new
+    /// Fork the thread QUERY names (by id, or a unique id prefix): it is written out as a new
     /// session of the same agent, with the same history, and resumed. The original is left as
     /// it is.
     #[arg(long, conflicts_with = "continue_in")]
     fork: bool,
 
-    /// Resume this machine's copy of the session QUERY names as it is, without catching it up
+    /// Resume this machine's copy of the thread QUERY names as it is, without catching it up
     /// with sync.
     #[arg(long, conflicts_with_all = ["fork", "continue_in"])]
     as_is: bool,
 
-    /// Switch this machine's copy of the session QUERY names to another branch (the one
+    /// Switch this machine's copy of the thread QUERY names to another branch (the one
     /// `--branch` names, else the only one it can be switched to), in place, and resume it: the
     /// history it shares with that branch is kept as it is, and the branch's messages since are
     /// appended from sync. The branch it was on stays in atuin, for `--fork` to bring back, and
@@ -118,7 +118,7 @@ pub struct Cmd {
     #[arg(long, conflicts_with_all = ["fork", "continue_in", "as_is"])]
     switch: bool,
 
-    /// The branch of the session QUERY names to catch up to, to switch to with `--switch`, to
+    /// The branch of the thread QUERY names to catch up to, to switch to with `--switch`, to
     /// fork from with `--fork`, or to continue with `--in`: `this`, `@<host id>`, or the start of
     /// its head's id. The newest by default; `--in`, and `--switch` with several branches to
     /// switch to, need it named.
@@ -263,7 +263,7 @@ fn picker_has_a_terminal() -> bool {
 /// on a line of its own, with its harness, when it last changed (in `offset`) and its title.
 fn ambiguous_note(query: &str, found: &[SessionRow], offset: time::UtcOffset) -> String {
     let note = format!(
-        "{query} names {} sessions; run `atuin ai resume {query}` on a terminal to pick one:",
+        "{query} names {} threads; run `atuin threads resume {query}` on a terminal to pick one:",
         found.len()
     );
     note + &listing(found, offset)
@@ -298,9 +298,9 @@ fn be_more_specific(
 ) -> String {
     let query = query.escape_non_printable();
     match found.len() {
-        0 => format!("`{flag}` resumes the session an id names: no session has the id \"{query}\""),
+        0 => format!("`{flag}` resumes the thread an id names: no thread has the id \"{query}\""),
         n => format!(
-            "`{flag}` resumes the session an id names: {query} names {n} sessions; be more \
+            "`{flag}` resumes the thread an id names: {query} names {n} threads; be more \
              specific:{}",
             listing(found, offset)
         ),
@@ -417,7 +417,7 @@ async fn direct_target(
 pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
     startup("started");
     if let Some(mode) = cmd.filter_mode {
-        settings.ai.sessions.filter_mode = Some(mode);
+        settings.threads.filter_mode = Some(mode);
     }
     if let Some(mode) = cmd.keymap_mode {
         settings.keymap_mode = mode;
@@ -428,13 +428,13 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
 
     let context = ResumeContext::current(&settings).await?;
     startup("context read");
-    let path = settings.ai_session_sidecar_path();
+    let path = atuin_client::ai_session::sidecar_path(&settings);
     // The daemon makes it the first time it runs with sessions on.
     if !path.exists() {
-        if settings.ai.capture_sessions {
-            bail!("no AI sessions here yet: the Atuin daemon hasn't recorded any");
+        if settings.threads.capture {
+            bail!("no threads here yet: the Atuin daemon hasn't recorded any");
         }
-        bail!("no AI sessions here yet: turn them on with `atuin config enable ai-sessions`");
+        bail!("no threads here yet: turn them on with `atuin config enable threads`");
     }
     let source: Arc<dyn SessionSource> = Arc::new(SidecarSource::open(&path, &context).await?);
     startup("session database open");
@@ -501,8 +501,8 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
     startup("query checked");
     if !picker_has_a_terminal() {
         bail!(
-            "the picker needs a terminal; to resume without one, name the session: `atuin ai \
-             resume <id>` (`atuin ai session list` lists them)"
+            "the picker needs a terminal; to resume without one, name the thread: `atuin threads \
+             resume <id>` (`atuin threads list` lists them)"
         );
     }
     let mut themes = ThemeManager::from_settings(&settings.theme);
@@ -528,7 +528,7 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
     finish(outcome, output)
 }
 
-/// How `atuin ai resume <id>` resumes the session in its own agent.
+/// How `atuin threads resume <id>` resumes the session in its own agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Direct {
     /// Caught up with sync first.
@@ -539,7 +539,7 @@ enum Direct {
     Switch,
 }
 
-/// `atuin ai resume <id>`: the plan resuming `row` in its own agent, caught up with sync first
+/// `atuin threads resume <id>`: the plan resuming `row` in its own agent, caught up with sync first
 /// (`how`: or as it is, or switched) to the head `branch` names, and what to say of it; inside,
 /// why it can't resume here. A choice to make (see [`Held`]) is an error saying how to make it.
 async fn direct_plan(
@@ -613,7 +613,7 @@ fn choice_note(row: &SessionRow, held: &Held, here: &str) -> String {
             format!(" --branch {}", quote(&branch.selector).escape_non_printable())
         };
         note.push_str(&format!(
-            ", `atuin ai resume {id} --fork{pick}` forks it from {}'s branch",
+            ", `atuin threads resume {id} --fork{pick}` forks it from {}'s branch",
             branch.host
         ));
     }
@@ -628,7 +628,7 @@ fn choice_note(row: &SessionRow, held: &Held, here: &str) -> String {
             format!(" --branch {}", quote(&branch.selector).escape_non_printable())
         };
         note.push_str(&format!(
-            ", `atuin ai resume {id} --switch{pick}` switches this copy to {}'s branch",
+            ", `atuin threads resume {id} --switch{pick}` switches this copy to {}'s branch",
             branch.host
         ));
     }
@@ -643,7 +643,7 @@ fn choice_note(row: &SessionRow, held: &Held, here: &str) -> String {
     note
 }
 
-/// `atuin ai resume <id> --in <harness>`: write the session `query` names out as a new session
+/// `atuin threads resume <id> --in <harness>`: write the session `query` names out as a new session
 /// of `into`, along the branch `branch` names, and the plan that resumes it, with the status line
 /// saying what was flattened. A session that went on separately on several machines needs one
 /// named: it is an error listing them. A session of `into` already is resumed, as without
@@ -657,7 +657,7 @@ async fn continue_plan(
     here: &str,
 ) -> Result<(ResumePlan, String)> {
     let Some((row, redirected)) = direct_target(source, query).await? else {
-        bail!("`--in` continues the session an id names: no single session has the id {query:?}");
+        bail!("`--in` continues the thread an id names: no single thread has the id {query:?}");
     };
     let kind = row.handle.harness;
     if into.kind() == kind {
@@ -704,7 +704,7 @@ async fn continue_plan(
     Ok((continued.plan, status))
 }
 
-/// `atuin ai resume <id> --fork`: write the session `query` names out as a fork of it, and the
+/// `atuin threads resume <id> --fork`: write the session `query` names out as a fork of it, and the
 /// plan that resumes that, with the status line saying so.
 async fn fork_plan(
     source: &dyn SessionSource,
@@ -714,7 +714,7 @@ async fn fork_plan(
     here: &str,
 ) -> Result<(ResumePlan, String)> {
     let Some((row, redirected)) = direct_target(source, query).await? else {
-        bail!("`--fork` forks the session an id names: no single session has the id {query:?}");
+        bail!("`--fork` forks the thread an id names: no single thread has the id {query:?}");
     };
     let head = match branch {
         Some(selector) => Some(pick_head(source, &row, selector, here).await?),
@@ -735,7 +735,7 @@ async fn fork_plan(
     Ok((forked.plan, status))
 }
 
-/// What a session named by id does without the picker. Standalone, `atuin ai resume <id>` resumes
+/// What a session named by id does without the picker. Standalone, `atuin threads resume <id>` resumes
 /// it. The widget passes whatever is on the command line, so there it follows `enter_accept` like
 /// the picker's enter: without it, the command lands on the command line to be checked first.
 fn direct_outcome(plan: ResumePlan, output: Output, enter_accept: bool) -> Outcome {
@@ -895,8 +895,8 @@ mod tests {
         assert_eq!(
             ambiguous_note("7aaabc31", &[claude, pi], time::UtcOffset::UTC),
             [
-                "7aaabc31 names 2 sessions; run `atuin ai resume 7aaabc31` on a terminal to pick \
-                 one:",
+                "7aaabc31 names 2 threads; run `atuin threads resume 7aaabc31` on a terminal to \
+                 pick one:",
                 "  Claude Code  2026-09-27 14:03  fix the flaky test  (7aaabc31-1631)",
                 "  Pi           2026-09-26 09:12  plan the dotfiles sync  (7aaabc31-1631)",
             ]
@@ -921,7 +921,7 @@ mod tests {
         let source = FakeSource::from_rows(vec![root.clone(), other, subagent.clone()]);
 
         let err = ambiguous_matches(&source, "01a11e4", false).await.unwrap_err().to_string();
-        assert!(err.starts_with("01a11e4 names 2 sessions"), "{err}");
+        assert!(err.starts_with("01a11e4 names 2 threads"), "{err}");
         assert!(!err.contains("01a11e4e"), "{err}");
         let err = no_single_session_for(&source, "01a11e4", Some("--as-is")).await.unwrap_err();
         assert!(!err.to_string().contains("01a11e4e"), "{err}");
@@ -955,7 +955,7 @@ mod tests {
         assert_eq!(
             be_more_specific("--branch", "7aaabc31", &[claude, pi], time::UtcOffset::UTC),
             [
-                "`--branch` resumes the session an id names: 7aaabc31 names 2 sessions; be more \
+                "`--branch` resumes the thread an id names: 7aaabc31 names 2 threads; be more \
                  specific:",
                 "  Claude Code  2026-09-27 14:03  fix the flaky test  (7aaabc31-1631)",
                 "  Pi           2026-09-26 09:12  plan the dotfiles sync  (7aaabc31-1631)",
@@ -964,7 +964,7 @@ mod tests {
         );
         assert_eq!(
             be_more_specific("--as-is", "flaky", &[], time::UtcOffset::UTC),
-            "`--as-is` resumes the session an id names: no session has the id \"flaky\""
+            "`--as-is` resumes the thread an id names: no thread has the id \"flaky\""
         );
 
         let source = FakeSource::new();
@@ -976,7 +976,7 @@ mod tests {
             assert!(err.contains("be more specific"), "{err}");
             assert!(err.contains("ses_4b8e2f1a9c3d7e6f"), "{err}");
             let err = no_single_session_for(&source, "flaky", Some(flag)).await.unwrap_err();
-            assert!(err.to_string().contains("no session has the id"), "{err}");
+            assert!(err.to_string().contains("no thread has the id"), "{err}");
         }
         // Without them, the picker opens on the matches.
         assert!(no_single_session_for(&source, ambiguous, None).await.is_ok());
@@ -1026,7 +1026,7 @@ mod tests {
         let err = ambiguous_matches(&source, "ses_4b8e2f1a9c3d7e", false).await.unwrap_err();
         let err = err.to_string();
         assert!(
-            err.starts_with(&format!("ses_4b8e2f1a9c3d7e names {} sessions", ids.len())),
+            err.starts_with(&format!("ses_4b8e2f1a9c3d7e names {} threads", ids.len())),
             "{err}"
         );
         assert!(ids.iter().all(|id| err.contains(id)), "{err}");
@@ -1141,7 +1141,7 @@ mod tests {
         assert_eq!(matches!(outcome, Outcome::Resume(_)), runs, "{outcome:?}");
     }
 
-    /// `atuin ai resume <id> --in <harness>` continues the session the id names, and plans
+    /// `atuin threads resume <id> --in <harness>` continues the session the id names, and plans
     /// resuming the new session; a query that names no single session is an error.
     #[rstest]
     #[tokio::test]
@@ -1166,7 +1166,7 @@ mod tests {
             continue_plan(&source, &resumer, "fix flaky", ContinueIn::Pi, None, fake::THIS_HOST_ID)
                 .await
                 .unwrap_err();
-        assert!(err.to_string().contains("no single session has the id"), "{err}");
+        assert!(err.to_string().contains("no single thread has the id"), "{err}");
 
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "opencode"]).unwrap();
         assert_eq!(cli.cmd.continue_in, Some(ContinueIn::Opencode));
@@ -1237,7 +1237,7 @@ mod tests {
         assert!(resumer.continues.lock().is_empty());
     }
 
-    /// `atuin ai resume <id> --fork` forks the session the id names and plans resuming the fork,
+    /// `atuin threads resume <id> --fork` forks the session the id names and plans resuming the fork,
     /// with `--print` too; it can't go with `--in`.
     #[rstest]
     #[tokio::test]
@@ -1252,7 +1252,7 @@ mod tests {
 
         let err =
             fork_plan(&source, &resumer, "fix flaky", None, fake::THIS_HOST_ID).await.unwrap_err();
-        assert!(err.to_string().contains("no single session has the id"), "{err}");
+        assert!(err.to_string().contains("no single thread has the id"), "{err}");
 
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--fork", "--print"]).unwrap();
         assert!(cli.cmd.fork);
@@ -1268,7 +1268,7 @@ mod tests {
         (FakeSource::new().with_synced(&row.handle, rows), row)
     }
 
-    /// `atuin ai resume <id>` catches the session's copy here up with sync first, saying what it
+    /// `atuin threads resume <id>` catches the session's copy here up with sync first, saying what it
     /// wrote. A choice to make fails, saying why and naming the flags that make it; `--as-is`
     /// resumes the copy as it is, and `--branch` names no branch the session hasn't got.
     #[rstest]
@@ -1307,8 +1307,8 @@ mod tests {
         let id = row.handle.session.as_ref();
         let want = format!(
             "Claude Code is running this session here: `--as-is` resumes this copy as it is, \
-             `atuin ai resume {id} --fork` forks it from this machine's branch; `--branch` picks \
-             another:\n  y  this machine · "
+             `atuin threads resume {id} --fork` forks it from this machine's branch; `--branch` \
+             picks another:\n  y  this machine · "
         );
         assert!(err.starts_with(&want), "{err}");
         assert!(err.contains("\n  d  @00000002 · "), "{err}");
@@ -1411,20 +1411,23 @@ mod tests {
         };
         let note = choice_note(&row, &held, here);
         let id = row.handle.session.as_ref();
-        let want =
-            format!(", `atuin ai resume {id} --switch` switches this copy to @00000002's branch");
+        let want = format!(
+            ", `atuin threads resume {id} --switch` switches this copy to @00000002's branch"
+        );
         assert!(note.contains(&want), "{note}");
         // Of several, `--switch` takes none: the newest is named.
         held.branches[0].switch = true;
         let note = choice_note(&row, &held, here);
-        let want = format!(", `atuin ai resume {id} --switch --branch y` switches this copy to");
+        let want =
+            format!(", `atuin threads resume {id} --switch --branch y` switches this copy to");
         assert!(note.contains(&want), "{note}");
         // With a branch named (`--branch`), the switch it offers is to that one, as the fork.
         held.chosen = 1;
         let note = choice_note(&row, &held, here);
-        let want = format!(", `atuin ai resume {id} --switch --branch d` switches this copy to");
+        let want =
+            format!(", `atuin threads resume {id} --switch --branch d` switches this copy to");
         assert!(note.contains(&want), "{note}");
-        assert!(note.contains(&format!("`atuin ai resume {id} --fork --branch d`")), "{note}");
+        assert!(note.contains(&format!("`atuin threads resume {id} --fork --branch d`")), "{note}");
     }
 
     #[rstest]

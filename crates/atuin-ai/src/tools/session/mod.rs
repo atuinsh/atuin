@@ -1,5 +1,5 @@
-//! MCP tools over AI-agent sessions captured by the daemon: `atuin_ai_session_list`,
-//! `atuin_ai_session_search`, and `atuin_ai_session_read`.
+//! MCP tools over AI-agent sessions captured by the daemon: `atuin_threads_list`,
+//! `atuin_threads_search`, and `atuin_threads_read`.
 
 pub mod caller;
 pub mod list;
@@ -23,8 +23,8 @@ use crate::tools::ToolOutcome;
 async fn connect(settings: &Settings) -> Result<AiClient, ToolOutcome> {
     AiClient::from_settings(settings).await.map_err(|e| {
         ToolOutcome::Error(format!(
-            "AI sessions are unavailable: could not connect to the Atuin daemon ({e}). Shell \
-             history search still works."
+            "Threads are unavailable: could not connect to the Atuin daemon ({e}). Shell history \
+             search still works."
         ))
     })
 }

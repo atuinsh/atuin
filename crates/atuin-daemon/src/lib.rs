@@ -295,17 +295,28 @@ pub async fn boot(
 
     let host_id = settings.host_id().await?;
 
+    // A rename that failed midway can leave the WAL apart from its database, so open neither.
+    let migrated = atuin_client::ai_session::migrate_sidecar_name(&settings);
     let ai_session_db_path = atuin_client::ai_session::sidecar_path(&settings);
-    let ai_session_db = match AiSessionDatabase::open(&ai_session_db_path).await {
-        Ok(db) => Some(db),
+    let ai_session_db = match migrated {
         Err(err) => {
             tracing::error!(
                 ?err,
-                path = ?ai_session_db_path,
-                "failed to open the ai-session sidecar; ai-session capture is disabled"
+                "failed to rename ai_session_sidecar.db to threads.db; capture is disabled"
             );
             None
         }
+        Ok(()) => match AiSessionDatabase::open(&ai_session_db_path).await {
+            Ok(db) => Some(db),
+            Err(err) => {
+                tracing::error!(
+                    ?err,
+                    path = ?ai_session_db_path,
+                    "failed to open the ai-session sidecar; ai-session capture is disabled"
+                );
+                None
+            }
+        },
     };
     let ai_session_capture = Arc::new(match &ai_session_db {
         Some(db) => {
@@ -323,8 +334,8 @@ pub async fn boot(
             AiHarnessSessionCapture::open(
                 records,
                 db.clone(),
-                settings.ai.capture_sessions,
-                session_capture::ToolCapture::from_setting(settings.ai.capture_tools),
+                settings.threads.capture,
+                session_capture::ToolCapture::from_setting(settings.threads.capture_tools),
                 session_capture::CapturePolicy::from_settings(&settings),
                 blocking_pool.clone(),
             )
@@ -368,7 +379,7 @@ pub async fn boot(
                 // Use the already-loaded settings from the watcher
                 // (avoids parsing the config file twice)
                 let new_settings = (*settings_rx.borrow()).clone();
-                ai_session_capture.set_capture(new_settings.ai.capture_sessions);
+                ai_session_capture.set_capture(new_settings.threads.capture);
                 watcher_handle.apply_settings(new_settings).await;
             }
             tracing::debug!("config file watcher stopped");

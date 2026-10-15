@@ -54,10 +54,10 @@ pub enum AppendError {
     Push(#[from] PushError),
     /// The store is unavailable (its recovery or a rebuild failed): its sidecar may be missing
     /// persisted messages, so the dedup gate cannot be trusted and nothing is written.
-    #[error("the AI session store is unavailable")]
+    #[error("the threads store is unavailable")]
     Unavailable,
     /// The append panicked, or the runtime is shutting down.
-    #[error("the AI session capture stopped unexpectedly")]
+    #[error("thread capture stopped unexpectedly")]
     Aborted,
 }
 
@@ -66,12 +66,12 @@ pub enum RebuildError {
     /// Opening or recovering the store failed at startup: there is nothing to rebuild with until
     /// the daemon restarts, which rebuilds anyway. (A store that recovered but whose rebuild then
     /// failed can be rebuilt again.)
-    #[error("the AI session store is unavailable: it failed to open or recover at startup")]
+    #[error("the threads store is unavailable: it failed to open or recover at startup")]
     Unavailable,
     #[error(transparent)]
     Sidecar(#[from] DbError),
     /// The rebuild panicked, or the runtime is shutting down.
-    #[error("the AI session rebuild stopped unexpectedly")]
+    #[error("the threads rebuild stopped unexpectedly")]
     Aborted,
 }
 
@@ -216,7 +216,7 @@ impl Sink {
     /// is answered: a session's lines come here in order, live and imported. One made before the
     /// daemon (re)started is found among the session's stored rows, the first time the session
     /// comes in, which capture's locks (held) make trustworthy; so is where the session runs. A stored call whose input
-    /// wasn't captured (made while `ai.capture_tools` was off, or dropped), or whose written
+    /// wasn't captured (made while `threads.capture_tools` was off, or dropped), or whose written
     /// content was withheld, can't be checked, so its output is withheld too.
     ///
     /// Judging a call is the costly part (its input, whole files at times, is searched for
@@ -672,7 +672,7 @@ fn bulky(msg: &Message) -> bool {
 const BULKY: usize = 256 * 1024;
 
 /// Retain conversation text, and of tool calls what `tools` keeps: their inputs and outputs,
-/// unless `ai.capture_tools` is off, `policy` withholds them, or they are over the size limit
+/// unless `threads.capture_tools` is off, `policy` withholds them, or they are over the size limit
 /// (then null, which keeps the wire format without storing them). Reasoning is kept only as a
 /// marker; raw blocks, and text on roles other than user and assistant, are dropped. Text is
 /// redacted as `policy` does, and text that takes too long to redact is not kept.
@@ -844,7 +844,7 @@ pub struct AiHarnessSessionCapture {
     coordinator: Option<mpsc::UnboundedSender<Msg>>,
     /// How far the replay running has got.
     progress: ReprojectProgress,
-    /// Whether capture is enabled (`ai.capture_sessions`), followed once the store is ready.
+    /// Whether capture is enabled (`threads.capture`), followed once the store is ready.
     capture: watch::Sender<bool>,
     /// The coordinator, and the capture engine once startup recovery succeeds; aborted on drop.
     background: Vec<JoinHandle<()>>,
@@ -998,7 +998,7 @@ impl AiHarnessSessionCapture {
         }
     }
 
-    /// Turn capture on or off, as `ai.capture_sessions` is changed in a running daemon. Takes
+    /// Turn capture on or off, as `threads.capture` is changed in a running daemon. Takes
     /// effect once the store is first ready, as at startup; a nop facade never captures.
     pub fn set_capture(&self, enabled: bool) {
         self.capture.send_if_modified(|on| std::mem::replace(on, enabled) != enabled);
@@ -1196,7 +1196,7 @@ mod tests {
             .build()
     }
 
-    /// Turning `ai.capture_sessions` on or off in a running daemon starts or stops capture,
+    /// Turning `threads.capture` on or off in a running daemon starts or stops capture,
     /// without a restart; setting it to what it already is leaves capture running as it was.
     #[rstest]
     #[tokio::test]
@@ -1256,7 +1256,7 @@ mod tests {
         assert_eq!(uuid::Uuid::from(fixed).get_version(), Some(uuid::Version::SortRand));
     }
 
-    /// A continuation (`atuin ai resume --in`) or a fork (`--fork`) is a new session: it gets an
+    /// A continuation (`atuin threads resume --in`) or a fork (`--fork`) is a new session: it gets an
     /// atuin id of its own, not the one of the session it came from, whose rows keep theirs.
     #[rstest]
     #[case::continuation(atuin_common::harnesstools::session::ParentKind::Continuation)]
@@ -1392,7 +1392,7 @@ mod tests {
         }
     }
 
-    /// With `ai.capture_tools`, a call's input and output reach the records, the sidecar and a
+    /// With `threads.capture_tools`, a call's input and output reach the records, the sidecar and a
     /// rebuild, secrets redacted. Its input is searchable; its output is not indexed.
     #[rstest]
     #[tokio::test]
@@ -1505,7 +1505,7 @@ mod tests {
         restarted.append(row(5, Role::User, vec![result("again")])).await.unwrap();
         assert_last_output_withheld(&sink.sidecar, &rows[0].session).await;
 
-        // As is one made while `ai.capture_tools` was off, whose input wasn't kept to check,
+        // As is one made while `threads.capture_tools` was off, whose input wasn't kept to check,
         // answered after a restart that turned it on.
         let names = Sink::with_state(
             sink.records.clone(),
@@ -3895,7 +3895,7 @@ mod pipeline_tests {
         assert!(!msg.content.is_empty(), "summary text retained");
     }
 
-    /// A continuation's marker (`atuin ai resume --in`) is harness-injected text, which is not
+    /// A continuation's marker (`atuin threads resume --in`) is harness-injected text, which is not
     /// synced; the link it makes is, as every row's parent, so it survives sync and reprojection.
     #[rstest]
     fn a_continuation_marker_is_dropped_but_its_parent_is_kept() {

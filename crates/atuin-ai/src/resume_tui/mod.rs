@@ -1,4 +1,4 @@
-//! `atuin ai resume`: an interactive picker over captured AI coding-agent sessions.
+//! `atuin threads resume`: an interactive picker over captured AI coding-agent sessions.
 //!
 //! A ratatui view that behaves like the history search (`atuin search -i`): its input box,
 //! `invert`/`style`/`inline_height`, enter vs tab accept, and emacs/vim keymaps ([`keymap`]). Its
@@ -65,10 +65,10 @@ const REFRESH_IDLE: std::time::Duration = std::time::Duration::from_secs(2);
 const SETTLE: Duration = Duration::from_millis(60);
 /// The most frames left out in a row while input waits, so a flood of it still shows.
 const MAX_SKIPPED: u32 = 8;
-/// How often the picker asks the daemon whether it is rebuilding the session index.
+/// How often the picker asks the daemon whether it is rebuilding the threads index.
 const REBUILD_PROBE_EVERY: Duration = Duration::from_secs(2);
 
-/// When `atuin ai resume` started, for [`startup`]'s timings.
+/// When `atuin threads resume` started, for [`startup`]'s timings.
 static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 /// Note in the log how long after starting the picker got to `step` (the first call starts the
@@ -173,7 +173,7 @@ pub struct Picker<'a> {
     pub resumer: Arc<dyn Resumer>,
     pub context: ResumeContext,
     pub query: String,
-    /// Overrides `[ai.sessions] inline_height` and the top-level `inline_height`.
+    /// Overrides `[threads] inline_height` and the top-level `inline_height`.
     pub inline_height: Option<u16>,
     /// A session the query named by id that can't be resumed: open on it, showing why.
     pub preselect: Option<(SessionRow, NotResumable)>,
@@ -441,7 +441,7 @@ fn complete(
     let row = row.clone();
     let Some(plan) = state.plans.get(&row.handle).cloned() else {
         state.pending = Some((row, action));
-        state.status = Some(("locating the session…".to_owned(), Meaning::Annotation));
+        state.status = Some(("locating the thread…".to_owned(), Meaning::Annotation));
         return None;
     };
     let outcome = match (plan, action) {
@@ -835,7 +835,7 @@ impl Picker<'_> {
     #[allow(clippy::too_many_lines)]
     pub async fn run(self) -> Result<(Outcome, Option<String>)> {
         let settings = self.settings;
-        let sessions = &settings.ai.sessions;
+        let sessions = &settings.threads;
         let inline_height =
             self.inline_height.or(sessions.inline_height).unwrap_or(settings.inline_height);
         // Fullscreen when the inline viewport doesn't fit, or stdout is captured (inline needs

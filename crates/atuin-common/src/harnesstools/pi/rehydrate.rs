@@ -17,7 +17,7 @@
 //!   content and are skipped, so pi starts on its configured thinking level; the model is named
 //!   by each assistant turn, its provider guessed from the model's name, and pi falls back to its
 //!   default model when it can't use it. A system-role text entry is skipped too.
-//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it): pi-ai sends a `toolCall` without `arguments` as an empty input to Anthropic and as
 //!   `"null"` to OpenAI, a call on nothing either way, so each becomes a note in its turn's text
 //!   (`[ran a shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its

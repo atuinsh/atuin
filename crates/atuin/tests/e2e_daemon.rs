@@ -222,7 +222,7 @@ async fn stale_ai_session_index(env: &FreshEnv) -> PathBuf {
     use atuin_common::harnesstools::session::{Content, Role};
 
     std::fs::create_dir_all(env.data_dir()).unwrap();
-    let path = env.data_dir().joined("ai_session_sidecar.db");
+    let path = env.data_dir().joined("threads.db");
     let db = AiSessionDatabase::open(&path).await.unwrap();
     let msg = Message::builder()
         .id(atuin_domain::record::RecordId(atuin_common::utils::uuid_v7()))
@@ -290,10 +290,10 @@ async fn ai_session_rebuild_without_the_daemon_fails_and_touches_nothing(
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "{stderr}");
     if !enabled {
-        assert!(stderr.contains("AI sessions need the daemon"), "{stderr}");
+        assert!(stderr.contains("Threads need the daemon"), "{stderr}");
     }
     if purge {
-        assert!(stderr.contains("atuin store rebuild ai-session"), "{stderr}");
+        assert!(stderr.contains("atuin store rebuild threads"), "{stderr}");
     }
     assert!(!daemon.env.socket().exists(), "the daemon should not have been started");
     assert_eq!(indexed_sessions(&index).await, 1, "the index was touched");

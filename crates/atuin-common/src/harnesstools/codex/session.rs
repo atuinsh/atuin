@@ -57,7 +57,7 @@ pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
     })
 }
 
-/// The `session_meta` field in which a fork atuin wrote (`atuin ai resume`) names the session it
+/// The `session_meta` field in which a fork atuin wrote (`atuin threads resume`) names the session it
 /// was forked from when that is a segment of a thread (`<thread>_<rollout>`, see
 /// [`session_id_of`]): `forked_from_id`, which Codex reads as a thread id, can only name the
 /// thread. Codex's reader leaves fields it doesn't know be (`SessionMeta` denies none).

@@ -71,7 +71,7 @@
 //!   (`packages/schema/src/session-event.ts`) is still moving.
 //! - **What the event log does not hold**: a session's messages from before its log began --
 //!   opencode's log is younger than its sessions, one of its migrations empties it, and its
-//!   `import` (which `atuin ai resume` writes a session with) writes none -- are read from
+//!   `import` (which `atuin threads resume` writes a session with) writes none -- are read from
 //!   opencode's `session`/`message`/`part` projection, ahead of the log: by [`Session::read`], and
 //!   by the live tail when it takes a session up with no checkpoint in it. [`Sessions::existing`]
 //!   lists the sessions only the projection holds (see `Backlog`).
@@ -4921,7 +4921,7 @@ mod tests {
         }
 
         /// The live tail delivers what the projection holds of a session ahead of its log, as a
-        /// one-shot read does: a session `opencode import` wrote (`atuin ai resume --in
+        /// one-shot read does: a session `opencode import` wrote (`atuin threads resume --in
         /// opencode`) has no log of its history, nor of the marker naming its parent. A restart
         /// from a checkpoint in the backlog delivers the backlog again, for the consumer to keep
         /// the first of each id; one from a checkpoint in the log resumes in the log.

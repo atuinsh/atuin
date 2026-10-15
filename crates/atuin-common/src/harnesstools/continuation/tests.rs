@@ -73,7 +73,7 @@ fn session_of(id: &str, messages: Vec<RehydrateMessage>) -> RehydrateSession {
     }
 }
 
-/// A real session recorded by `source`, as capture holds it (with `ai.capture_tools` on).
+/// A real session recorded by `source`, as capture holds it (with `threads.capture_tools` on).
 pub async fn recorded(source: AnyHarness) -> RehydrateSession {
     let mut session = read(source).await;
     session.messages = testing::synced_as(session.messages, true);
@@ -885,7 +885,7 @@ fn layout(s: &RehydrateSession) -> Vec<String> {
         .collect()
 }
 
-/// Calls captured with their input and output (`ai.capture_tools`) are carried over as calls, in
+/// Calls captured with their input and output (`threads.capture_tools`) are carried over as calls, in
 /// the rows the target writes them in, as the target's own tools where it has them.
 #[rstest]
 #[case::claude(CLAUDE, &[

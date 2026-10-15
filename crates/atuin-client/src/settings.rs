@@ -30,7 +30,6 @@ use url::Url;
 
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
-pub mod ai_sessions;
 pub mod daemon;
 pub mod disk_usage_limit;
 mod kv;
@@ -39,15 +38,16 @@ pub mod output;
 mod scripts;
 pub mod security;
 pub mod shells;
+pub mod threads;
 pub mod watcher;
 
-pub use ai_sessions::{AiSessionFilterMode, AiSessionResume, AiSessions};
 pub use daemon::Daemon;
 pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
 use output::OutputCaptureConfig;
 pub use output::{CaptureLimits, CommandFilter, OutputCapture};
 pub use security::Security;
 pub use shells::Shells;
+pub use threads::{AiSessionFilterMode, AiSessionResume, Threads};
 
 /// Default sync address for Atuin's hosted service, parsed once.
 pub static DEFAULT_SYNC_URL: LazyLock<Url> =
@@ -712,30 +712,6 @@ pub struct Ai {
 
     /// Whether the AI TUI surfaces feature tips. `None` = enabled.
     pub tips: Option<bool>,
-
-    /// Whether the daemon captures live AI harness sessions (Claude Code, Codex, ...) into the
-    /// synced record store. Off by default: capture copies the conversation (what was said, and
-    /// the tools called, see [`Self::capture_tools`]) into the encrypted store used by sync, so
-    /// it is strictly opt-in.
-    #[serde(default)]
-    pub capture_sessions: bool,
-
-    /// With [`Self::capture_sessions`], also capture what each tool call was given and what it
-    /// returned (commands and their output, files read and written), so a resumed session has
-    /// them too. On by default, with secrets redacted and each payload held to 64 KiB; off keeps
-    /// only each tool's name.
-    #[serde(default = "Ai::default_capture_tools")]
-    pub capture_tools: bool,
-
-    /// The `atuin ai resume` session picker (`[ai.sessions]`).
-    #[serde(default)]
-    pub sessions: AiSessions,
-}
-
-impl Ai {
-    const fn default_capture_tools() -> bool {
-        true
-    }
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -1185,6 +1161,9 @@ pub struct Settings {
     pub ai: Ai,
 
     #[serde(default)]
+    pub threads: Threads,
+
+    #[serde(default)]
     pub security: Security,
 }
 
@@ -1233,11 +1212,11 @@ impl Settings {
         self.data_dir.join("output-capture")
     }
 
-    /// The AI harness session sidecar database, under the [data dir](Self::data_dir). The daemon
-    /// owns and writes it; other readers open it read-only (`AiSessionDatabase::open_read_only`).
+    /// The threads sidecar database, under the [data dir](Self::data_dir). The daemon owns and
+    /// writes it; other readers open it read-only (`AiSessionDatabase::open_read_only`).
     #[must_use]
-    pub fn ai_session_sidecar_path(&self) -> PathBuf {
-        self.data_dir.join("ai_session_sidecar.db")
+    pub fn threads_db_path(&self) -> PathBuf {
+        self.data_dir.join("threads.db")
     }
 
     #[must_use]
@@ -1634,8 +1613,6 @@ impl Settings {
             .set_default("ai.db_path", ai_sessions_path.to_str())?
             .set_default("ai.session_continue_minutes", 60)?
             .set_default("ai.send_cwd", false)?
-            .set_default("ai.capture_sessions", false)?
-            .set_default("ai.capture_tools", true)?
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
@@ -1768,7 +1745,47 @@ impl Settings {
                 .unwrap_or_else(|_| panic!("failed to set absolute path override for {key}"))
         });
 
-        config_builder.build().map_err(Into::into)
+        Ok(Self::with_legacy_threads(config_builder.build()?)?)
+    }
+
+    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`: read them
+    /// as `threads.capture`, `threads.capture_tools` and `threads.*`, for any key `[threads]`
+    /// doesn't set itself. The defaults are set here, under them, so they never hide a legacy
+    /// value.
+    fn with_legacy_threads(config: Config) -> Result<Config, config::ConfigError> {
+        fn leaves(prefix: String, value: config::Value, out: &mut Vec<(String, config::Value)>) {
+            match value.kind {
+                config::ValueKind::Table(table) => {
+                    for (key, value) in table {
+                        leaves(format!("{prefix}.{key}"), value, out);
+                    }
+                }
+                _ => out.push((prefix, value)),
+            }
+        }
+
+        let mut legacy = Vec::new();
+        for (old, new) in [
+            ("ai.capture_sessions", "threads.capture"),
+            ("ai.capture_tools", "threads.capture_tools"),
+            ("ai.sessions", "threads"),
+        ] {
+            if let Ok(value) = config.get::<config::Value>(old) {
+                leaves(new.to_string(), value, &mut legacy);
+            }
+        }
+        legacy.retain(|(key, _)| config.get::<config::Value>(key).is_err());
+
+        legacy
+            .into_iter()
+            .try_fold(
+                Config::builder()
+                    .set_default("threads.capture", false)?
+                    .set_default("threads.capture_tools", true)?
+                    .add_source(config),
+                |builder, (key, value)| builder.set_override(key, value),
+            )?
+            .build()
     }
 
     /// Look up a single config value by dotted key (e.g. `"daemon.sync_frequency"`).
@@ -1890,9 +1907,11 @@ impl Settings {
 
     /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
     pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
-        let config = Self::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())?
-            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
-            .build()?;
+        let config = Self::with_legacy_threads(
+            Self::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())?
+                .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+                .build()?,
+        )?;
 
         let settings: Self = config.try_deserialize()?;
         if let Some(dir) = settings.data_dir.to_str() {
@@ -2178,13 +2197,58 @@ mod tests {
 
     /// Deserialize a TOML string into a [`Settings`] object.
     fn parse_settings(toml: &str) -> Settings {
-        Settings::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())
+        let config = Settings::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())
             .expect("could not build settings builder")
             .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
             .build()
-            .expect("could not build config")
+            .expect("could not build config");
+        Settings::with_legacy_threads(config)
+            .expect("could not read legacy threads settings")
             .try_deserialize()
             .expect("could not deserialize config")
+    }
+
+    #[rstest]
+    fn threads_default_off_with_tools() {
+        let settings = parse_settings("");
+        assert!(!settings.threads.capture);
+        assert!(settings.threads.capture_tools);
+        assert!(settings.threads.resume_chooser);
+    }
+
+    #[rstest]
+    fn legacy_ai_session_settings_are_read_as_threads() {
+        let settings = parse_settings(
+            "[ai]\ncapture_sessions = true\ncapture_tools = \
+             false\n\n[ai.sessions]\nresume_chooser = false\n\n[ai.sessions.resume]\npi = \"pi \
+             --session {id}\"\n",
+        );
+        assert!(settings.threads.capture);
+        assert!(!settings.threads.capture_tools);
+        assert!(!settings.threads.resume_chooser);
+        assert_eq!(settings.threads.resume.pi.as_deref(), Some("pi --session {id}"));
+    }
+
+    #[rstest]
+    fn threads_settings_win_over_legacy_ones() {
+        let settings = parse_settings(
+            "[ai]\ncapture_sessions = true\n\n[ai.sessions]\ninline_height = 10\nmouse = \
+             false\n\n[ai.sessions.resume]\nclaude = \"old\"\npi = \"old\"\n\n[threads]\ncapture \
+             = false\ninline_height = 20\n\n[threads.resume]\npi = \"new\"\n",
+        );
+        assert!(!settings.threads.capture);
+        assert_eq!(settings.threads.inline_height, Some(20));
+        assert_eq!(settings.threads.mouse, Some(false));
+        assert_eq!(settings.threads.resume.claude.as_deref(), Some("old"));
+        assert_eq!(settings.threads.resume.pi.as_deref(), Some("new"));
+    }
+
+    /// `atuin config get --resolved` shows the defaults, as it did for `ai.capture_sessions`.
+    #[rstest]
+    fn threads_defaults_resolve() {
+        let config = Settings::with_legacy_threads(config::Config::default()).unwrap();
+        assert!(!config.get_bool("threads.capture").unwrap());
+        assert!(config.get_bool("threads.capture_tools").unwrap());
     }
 
     #[rstest]

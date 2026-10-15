@@ -36,7 +36,7 @@
 //!
 //! # What is not the same
 //!
-//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it) are not written as tool parts: opencode would send the model a call on no input
 //!   (`{"input": null}`, the object its state needs) with an output it never had. Each becomes a
 //!   text part under the call's own part id, reading as a

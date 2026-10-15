@@ -189,7 +189,7 @@ function _atuin_search
     commandline -f repaint
 end
 
-# `atuin ai resume`: pick a captured AI coding-agent session. The result uses
+# `atuin threads resume`: pick a captured AI coding-agent session. The result uses
 # the same protocol as the history search: `__atuin_accept__:` runs it.
 function _atuin_ai_resume
     set -l keymap_mode
@@ -205,7 +205,7 @@ function _atuin_ai_resume
             set keymap_mode emacs
     end
 
-    set -l ATUIN_H (ATUIN_SHELL=fish ATUIN_QUERY=(commandline -b) atuin ai resume --shell-widget --keymap-mode=$keymap_mode $argv 3>&1 1>&2 2>&3 3>&- | string collect)
+    set -l ATUIN_H (ATUIN_SHELL=fish ATUIN_QUERY=(commandline -b) atuin threads resume --shell-widget --keymap-mode=$keymap_mode $argv 3>&1 1>&2 2>&3 3>&- | string collect)
     set -l ATUIN_STATUS $pipestatus[1]
 
     if test "$ATUIN_STATUS" -ne 0

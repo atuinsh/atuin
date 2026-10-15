@@ -15,7 +15,7 @@
 //!   result as an ordinary tool call and result, losing the block types the API needs to replay
 //!   them, and a bare `tool_use` with no `tool_result` after it is invalid. Both are dropped
 //!   (one captured without its input becomes a note, as below).
-//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it): the API rejects a `tool_use` whose `input` is not an object, so each becomes a note in its turn's
 //!   text (`[ran a shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its `tool_result` is dropped.
 //!   The run of assistant lines the dropped results stood between is merged into its last line,

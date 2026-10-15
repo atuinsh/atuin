@@ -326,7 +326,7 @@ impl State {
                 Choice {
                     harness: session.harness,
                     detail: "fork".to_owned(),
-                    unavailable: Some("the session has no messages".to_owned()),
+                    unavailable: Some("the thread has no messages".to_owned()),
                 }
             } else {
                 Choice {

@@ -1,4 +1,4 @@
-//! What capture keeps of a tool call's input and output (`ai.capture_tools`).
+//! What capture keeps of a tool call's input and output (`threads.capture_tools`).
 
 use std::ops::Range;
 use std::sync::LazyLock;

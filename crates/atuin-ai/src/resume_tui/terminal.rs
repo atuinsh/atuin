@@ -88,7 +88,7 @@ impl Drop for Events {
     }
 }
 
-/// Stdout, or `/dev/tty` when stdout is captured (`cmd=$(atuin ai resume)`).
+/// Stdout, or `/dev/tty` when stdout is captured (`cmd=$(atuin threads resume)`).
 enum Writer {
     Stdout(io::Stdout),
     #[cfg(unix)]

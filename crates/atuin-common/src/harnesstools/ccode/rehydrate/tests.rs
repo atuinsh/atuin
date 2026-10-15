@@ -205,7 +205,7 @@ pub fn assert_the_api_takes(lines: &[serde_json::Value]) {
     }
 }
 
-/// What capture syncs with `ai.capture_tools` keeps every call's input and output: written back,
+/// What capture syncs with `threads.capture_tools` keeps every call's input and output: written back,
 /// each is a call and its result again, which the API takes. (Not session2: its call ids were
 /// redacted alike, so its results can't be told apart.)
 #[rstest]

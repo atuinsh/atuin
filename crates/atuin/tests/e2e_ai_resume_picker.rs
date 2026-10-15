@@ -1,4 +1,4 @@
-//! `atuin ai resume`'s picker on a terminal: choosing a session, and where to resume it, runs the
+//! `atuin threads resume`'s picker on a terminal: choosing a session, and where to resume it, runs the
 //! agent on it -- straight from the picker, and through each shell's widget, with and without
 //! `enter_accept`.
 
@@ -47,10 +47,10 @@ fn two_sessions(machine: &mut Machine, project: &Path) -> (Transcript, Turn) {
 /// header.
 fn pick(pty: &PtyShell, turn: &Turn) {
     let word = turn.prompt.split(' ').next_back().unwrap();
-    pty.wait_for("2 sessions");
+    pty.wait_for("2 threads");
     pty.send_str(word);
     pty.wait_for_screen("only the session searched for", |s| {
-        s.contains(" 1 session") && s.contains(word)
+        s.contains(" 1 thread") && s.contains(word)
     });
     pty.send_enter();
     pty.wait_for("esc back");
@@ -77,13 +77,13 @@ fn line_for(pty: &PtyShell, agent: Agent) -> char {
 #[case::another_agent(Some(Agent::Codex))]
 fn the_picker_resumes_the_session_chosen(#[case] into: Option<Agent>) {
     let project = shared_dir();
-    let mut machine = Machine::with_config("enter_accept = true\n", "capture_sessions = true\n");
+    let mut machine = Machine::with_config("enter_accept = true\n", "capture = true\n");
     let (session, turn) = two_sessions(&mut machine, project.path());
 
     let vars = BTreeMap::from([("PATH".to_owned(), machine.path_var())]);
     let pty = PtyShell::spawn(
         Path::new(env!("CARGO_BIN_EXE_atuin")),
-        &["ai".to_owned(), "resume".to_owned()],
+        &["threads".to_owned(), "resume".to_owned()],
         &machine.env,
         &vars,
     );
@@ -113,7 +113,7 @@ fn the_shell_widget_resumes_the_session_chosen(
     };
     let project = shared_dir();
     let top = format!("enter_accept = {enter_accept}\n");
-    let mut machine = Machine::with_config(&top, "capture_sessions = true\n");
+    let mut machine = Machine::with_config(&top, "capture = true\n");
     let (session, turn) = two_sessions(&mut machine, project.path());
 
     let vars = BTreeMap::from([("PATH".to_owned(), machine.path_var())]);

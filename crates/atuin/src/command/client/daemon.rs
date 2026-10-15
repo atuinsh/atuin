@@ -554,7 +554,7 @@ pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
         Ok(Err(err)) if is_legacy_daemon_error(&err) => Ok(()),
         Ok(projected) => projected,
         Err(_) => {
-            eprintln!("Indexing AI sessions in the background");
+            eprintln!("Indexing threads in the background");
             Ok(())
         }
     }

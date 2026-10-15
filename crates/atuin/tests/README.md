@@ -16,7 +16,7 @@ macOS, with Homebrew Bash on macOS.
 - `e2e_ai_sessions`: AI agent sessions captured from each agent's transcripts,
   synced between two machines through an in-process sync server, and resumed:
   restored, caught up, forked, switched, or continued in another agent.
-- `e2e_ai_resume_picker`: `atuin ai resume`'s picker and chooser on a PTY, and
+- `e2e_ai_resume_picker`: `atuin threads resume`'s picker and chooser on a PTY, and
   through each shell's widget.
 
 The AI session tests write transcripts the way Claude Code, Codex, opencode and
