@@ -36,15 +36,17 @@ impl SyncSessionInit<'_> {
         let client = match self.client_source {
             ClientSource::FromClient(client) => client,
             ClientSource::FromSettings { settings, caps } => {
-                let auth = settings
-                    .sync_auth_token()
-                    .await
-                    .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+                let auth = settings.sync_auth_token().await.map_err(|e| {
+                    SyncError::RemoteRequestError {
+                        msg: format!("{e:#}"),
+                    }
+                })?;
 
                 let caps = match caps {
                     Some(caps) => caps,
-                    None => caps_client(settings)
-                        .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?,
+                    None => caps_client(settings).map_err(|e| SyncError::OperationalError {
+                        msg: format!("{e:#}"),
+                    })?,
                 };
 
                 Client::new(
@@ -55,7 +57,9 @@ impl SyncSessionInit<'_> {
                     &settings.extra_headers,
                     caps,
                 )
-                .map_err(|e| SyncError::OperationalError { msg: e.to_string() })?
+                .map_err(|e| SyncError::OperationalError {
+                    msg: format!("{e:#}"),
+                })?
             }
         };
 

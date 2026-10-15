@@ -224,7 +224,13 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
             }
         }
     } else {
-        bail!("Server not reporting its version: it is either too old or unhealthy");
+        let mut url = response.url().clone();
+        url.set_query(None);
+        bail!(
+            "{url} did not respond like an Atuin sync server: its response has no \
+             {ATUIN_HEADER_VERSION} header. Check that `sync_address` points at your sync server; \
+             if it does, the server is too old or unhealthy"
+        );
     }?;
 
     // If the client is newer than the server
@@ -276,8 +282,8 @@ async fn handle_resp_error(resp: Response) -> Result<Response> {
         }
 
         bail!(
-            "There was an error with the atuin sync service at {url}, Status \
-             {status:?}.\nResponse body: {body}\nIf the problem persists, contact the host"
+            "There was an error with the atuin sync service at {url}, Status {status}.\nResponse \
+             body: {body}\nIf the problem persists, contact the host"
         );
     }
 
@@ -489,6 +495,10 @@ impl Client {
 
         let resp = self.client.get(url).send().await?;
         let resp = handle_resp_error(resp).await?;
+
+        if !ensure_version(&resp)? {
+            bail!("could not fetch account status due to version mismatch");
+        }
 
         let status = resp.json::<MeResponse>().await?;
 
@@ -828,6 +838,43 @@ mod tests {
         let err = handle_resp_error(resp).await.unwrap_err();
 
         assert!(!format!("{err:#}").contains("sekrit"), "{err:#}");
+    }
+
+    /// A `sync_address` pointing at a website or a proxy's placeholder page gets a 2xx that isn't
+    /// JSON; that has to read as a wrong address, not a decode error.
+    #[rstest]
+    #[case::empty_body("")]
+    #[case::website("<!doctype html><html><body>Welcome to nginx!</body></html>")]
+    #[tokio::test]
+    async fn me_names_a_server_that_is_not_atuin(#[case] body: &str) {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let addr: Url = server.uri().parse().unwrap();
+        let caps = caps_client_anonymous(&addr, &HashMap::new()).unwrap();
+        let client = Client::new(
+            addr.clone(),
+            &AuthToken::Token("t".into()),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            &HashMap::new(),
+            caps,
+        )
+        .unwrap();
+        let err = client.me().await.unwrap_err().to_string();
+
+        assert!(
+            err.starts_with(&format!("{addr}api/v0/me did not respond like an Atuin")),
+            "{err}"
+        );
+        assert!(err.contains("`sync_address`"), "{err}");
     }
 
     #[rstest]
