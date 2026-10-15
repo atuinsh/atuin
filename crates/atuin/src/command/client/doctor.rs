@@ -388,7 +388,7 @@ impl DoctorDump {
     }
 }
 
-fn checks(info: &DoctorDump) {
+fn checks(info: &DoctorDump, settings: &Settings) {
     println!(); // spacing
     //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
@@ -423,6 +423,10 @@ fn checks(info: &DoctorDump) {
         let warning = super::info::shadowed_config_warning(&legacy, &active);
         println!("{}", format!("[Config] {warning}").bold().red());
     }
+    if let Some(legacy) = atuin_common::dirs::shadowed_legacy_data_dir(&settings.data_dir) {
+        let warning = super::info::shadowed_data_dir_warning(&legacy, &settings.data_dir);
+        println!("{}", format!("[Data] {warning}").bold().red());
+    }
 
     // Shell
     if info.shell.name == "bash" {
@@ -445,7 +449,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
     println!("Checking for diagnostics");
     let dump = DoctorDump::new(settings).await;
 
-    checks(&dump);
+    checks(&dump, settings);
 
     let dump = serde_json::to_string_pretty(&dump)?;
 
