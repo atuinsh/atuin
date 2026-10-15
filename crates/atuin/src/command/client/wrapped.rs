@@ -137,9 +137,12 @@ impl WrappedStats {
             }
 
             // Track hourly distribution
-            let local_time = entry
-                .timestamp
-                .to_offset(time::UtcOffset::current_local_offset().unwrap_or(settings.timezone.0));
+            let local_time =
+                entry
+                    .timestamp
+                    .to_offset(time::UtcOffset::current_local_offset().unwrap_or_else(|_| {
+                        settings.timezone.offset_at(OffsetDateTime::now_utc())
+                    }));
             let hour = format!("{:02}:00", local_time.time().hour());
             *hours.entry(hour).or_default() += 1;
         }
@@ -286,7 +289,8 @@ pub async fn run(
     _store: SqliteStore,
     theme: &Theme,
 ) -> Result<()> {
-    let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
+    let now_instant = OffsetDateTime::now_utc();
+    let now = now_instant.to_offset(settings.timezone.offset_at(now_instant));
     let month = now.month();
 
     // If we're in December, then wrapped is for the current year. If not, it's for the previous year
