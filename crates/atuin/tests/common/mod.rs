@@ -56,8 +56,6 @@ impl FreshEnv {
             ("ATUIN_AUTO_SYNC".into(), "false".into()),
             ("ATUIN_LOCAL_TIMEOUT".into(), LOCAL_TIMEOUT.as_secs().to_string()),
             ("ATUIN_DAEMON__SOCKET_PATH".into(), self.socket().display().to_string()),
-            // launchd agents are per account, and tests share the account.
-            ("ATUIN_DAEMON__LAUNCHD".into(), "false".into()),
             // ble.sh requires a user name.
             ("USER".into(), atuin_common::env::var("USER").unwrap_or_else(|_| "e2e".into())),
             ("LOGNAME".into(), atuin_common::env::var("LOGNAME").unwrap_or_else(|_| "e2e".into())),

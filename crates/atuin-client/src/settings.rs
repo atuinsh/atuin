@@ -1592,7 +1592,6 @@ impl Settings {
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.autostart", false)?
-            .set_default("daemon.launchd", true)?
             .set_default("daemon.socket_path", None::<String>)?
             .set_default("daemon.pidfile_path", pidfile_path.to_str())?
             .set_default("daemon.systemd_socket", false)?

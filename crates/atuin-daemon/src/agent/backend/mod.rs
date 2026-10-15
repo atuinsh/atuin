@@ -182,7 +182,7 @@ impl AnyBackend {
         // Without `autostart`, something else manages the daemon (`brew services`, home-manager),
         // and an agent of our own beside theirs would fight theirs for the pidfile at every login.
         #[cfg(target_os = "macos")]
-        if settings.daemon.autostart && settings.daemon.launchd && Launchd::is_available() {
+        if settings.daemon.autostart && Launchd::is_available() {
             return Launchd::new(settings).into();
         }
 

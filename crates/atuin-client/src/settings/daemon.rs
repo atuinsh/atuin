@@ -31,10 +31,6 @@ pub struct Daemon {
     /// Automatically start and manage a local daemon when needed.
     pub autostart: bool,
 
-    /// On macOS, run the daemon `autostart` starts as a launchd agent, when the user has a
-    /// graphical login.
-    pub launchd: bool,
-
     /// The daemon will handle sync on an interval. How often to sync, in seconds. `0` disables
     /// periodic sync.
     #[serde_as(as = "AsDisableableDuration<Seconds>")]
@@ -59,7 +55,6 @@ impl Default for Daemon {
         Self {
             enabled: false,
             autostart: false,
-            launchd: true,
             sync_frequency: Some(DEFAULT_SYNC_FREQUENCY),
             socket_path: None,
             pidfile_path: "".to_string(),
