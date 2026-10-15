@@ -41,6 +41,7 @@ xxhash-rust = { workspace = true }
 [features]
 # Feature-gated axum integration for the server-side capability handlers (`caps::axum`).
 axum = ["dep:axum"]
+octavo = []
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

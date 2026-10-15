@@ -30,7 +30,7 @@ use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
 use atuin_daemon::{
-    Daemon, DaemonEvent, DaemonHandle, HistoryJournal, Octavo, OutputCaptureEngine, SearchComponent,
+    Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCaptureEngine, SearchComponent,
 };
 use atuin_domain::record::{CmdOrigin, HostId, RecordTag};
 use corpus::{HistoryGen, Seeded};
@@ -166,7 +166,6 @@ impl TestEnvBuilder {
             history_db.clone(),
             index.clone(),
             output_capture,
-            Octavo::nop(),
         ));
         let history_service =
             HistoryServer::new(HistoryService::new(journal.clone(), handle.clone()));

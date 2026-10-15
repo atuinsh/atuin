@@ -66,6 +66,8 @@ commit_preprocessors = [
 ]
 # regex for parsing and grouping commits
 commit_parsers = [
+  # Octavo is compiled out of releases until it ships.
+  { message = "^\\w+\\(octavo\\)", skip = true },
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Bug Fixes" },
   { message = "^doc", group = "Documentation" },

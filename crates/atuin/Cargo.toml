@@ -48,14 +48,21 @@ default = [
     "daemon",
     "ai",
     "pty-proxy",
-    "octavo",
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
-octavo = ["sync", "daemon", "atuin-daemon/octavo", "dep:atuin-octavo"]
+# Not a default feature until Octavo ships; release artifacts build without it.
+octavo = [
+    "sync",
+    "daemon",
+    "atuin-client/octavo",
+    "atuin-daemon/octavo",
+    "atuin-domain/octavo",
+    "dep:atuin-octavo",
+]
 hex = ["pty-proxy"]
 clipboard = ["dep:arboard", "atuin-ai?/clipboard"]
 check-update = ["atuin-client/check-update"]

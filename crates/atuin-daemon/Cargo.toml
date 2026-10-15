@@ -12,7 +12,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-octavo = ["dep:atuin-octavo"]
+octavo = ["dep:atuin-octavo", "atuin-client/octavo"]
 
 [dependencies]
 async-stream = { workspace = true }

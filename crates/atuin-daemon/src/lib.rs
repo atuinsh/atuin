@@ -20,6 +20,7 @@ pub mod daemon;
 pub mod events;
 pub mod grpc;
 pub(crate) mod history_journal;
+#[cfg(feature = "octavo")]
 mod octavo;
 mod output_capture;
 pub mod pidfile;
@@ -39,7 +40,6 @@ pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
     GetCmdInFlightError, HistoryJournal, RegisterOutputError,
 };
-pub use octavo::Octavo;
 pub use output_capture::{
     CaptureError, DeleteOutputError, GetOutputError, OutputCaptureEngine, OutputLine, OutputMatch,
 };
@@ -352,15 +352,19 @@ pub async fn boot(
 
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
+    #[cfg(feature = "octavo")]
     let outputs = output_capture.store();
-    let journal = Arc::new(HistoryJournal::new(
+    let journal = HistoryJournal::new(
         handle.caps().clone(),
         history_store,
         handle.history_db().clone(),
         search_index,
         output_capture,
-        Octavo::open(&settings, handle.clone(), outputs).await,
-    ));
+    );
+    #[cfg(feature = "octavo")]
+    let journal =
+        journal.with_octavo(octavo::Octavo::open(&settings, handle.clone(), outputs).await);
+    let journal = Arc::new(journal);
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
     let ai_session_service =
         AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture.clone()));

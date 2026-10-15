@@ -538,6 +538,7 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
+#[cfg(feature = "octavo")]
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Octavo {
     pub enabled: bool,
@@ -1130,6 +1131,7 @@ pub struct Settings {
     #[serde(default)]
     pub output: OutputCapture,
 
+    #[cfg(feature = "octavo")]
     #[serde(default)]
     pub octavo: Octavo,
 
@@ -1219,6 +1221,7 @@ impl Settings {
         self.data_dir.join("threads.db")
     }
 
+    #[cfg(feature = "octavo")]
     #[must_use]
     pub fn octavo_queue_path(&self) -> PathBuf {
         self.data_dir.join("octavo.db")
@@ -1527,7 +1530,7 @@ impl Settings {
 
         let output = OutputCaptureConfig::default();
 
-        Ok(Config::builder()
+        let builder = Config::builder()
             .set_default("history_format", "{time}\t{command}\t{duration}")?
             .set_default("data_dir", data_dir.to_str())?
             .set_default("db_path", db_path.to_str())?
@@ -1634,9 +1637,13 @@ impl Settings {
                 atuin_common::env::var_os("NO_MOTION").is_some(),
             )?
             .set_default("no_mouse", false)?
-            .set_default("pty_proxy.enabled", false)?
+            .set_default("pty_proxy.enabled", false)?;
+        #[cfg(feature = "octavo")]
+        let builder = builder
             .set_default("octavo.enabled", false)?
-            .set_default("octavo.upload_output", false)?
+            .set_default("octavo.upload_output", false)?;
+
+        Ok(builder
             .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
     }
 
