@@ -43,13 +43,14 @@ ATUIN_OPEN_REGISTRATION=true
 ATUIN_DB_URI="postgres://user:password@hostname/database"
 ```
 
-| Parameter           | Description                                                     |
-| ------------------- | --------------------------------------------------------------- |
-| `db_uri`            | A valid database URI, for saving history (required, no default) |
-| `host`              | The host to listen on (default: 127.0.0.1)                      |
-| `port`              | The TCP port to listen on (default: 8888)                       |
-| `open_registration` | If `true`, accept new user registrations (default: false)       |
-| `path`              | A path to prepend to all routes of the server (default: empty)  |
+| Parameter           | Description                                                                |
+| ------------------- | -------------------------------------------------------------------------- |
+| `db_uri`            | A valid database URI, for saving history (required, no default)            |
+| `db_password_file`  | A file holding the database password, kept out of `db_uri` (default: none) |
+| `host`              | The host to listen on (default: 127.0.0.1)                                 |
+| `port`              | The TCP port to listen on (default: 8888)                                  |
+| `open_registration` | If `true`, accept new user registrations (default: false)                  |
+| `path`              | A path to prepend to all routes of the server (default: empty)             |
 
 ## Database
 
@@ -96,6 +97,24 @@ ATUIN_DB_URI="mysql://user:password@hostname/database"
 Support
 
 MySQL is currently considered a tier-two database meaning that, although we support it, issues are deprioritized in favor of tier-one databases -- PostgreSQL and SQLite.
+
+### Keeping the password in a file
+
+Instead of writing the password into `db_uri`, you can keep it in a file, such as a [Docker](https://docs.atuin.sh/self-hosting/docker/#keeping-the-password-in-a-secret) or [Kubernetes](https://docs.atuin.sh/self-hosting/kubernetes/#keeping-the-password-in-a-secret) secret, and point `db_password_file` at it:
+
+```
+db_uri="postgres://user@hostname/database"
+db_password_file="/run/secrets/atuin_db_password"
+```
+
+Or with environment variables:
+
+```
+ATUIN_DB_URI="postgres://user@hostname/database"
+ATUIN_DB_PASSWORD_FILE="/run/secrets/atuin_db_password"
+```
+
+Trailing newlines in the file are ignored, and the rest is used as-is, so unlike a password in `db_uri` it doesn't need escaping. `db_uri` must name the host, and must not contain a password as well. This works with PostgreSQL and MySQL; SQLite has no password.
 
 ## TLS
 
