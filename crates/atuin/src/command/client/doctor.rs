@@ -418,6 +418,12 @@ fn checks(info: &DoctorDump) {
 
     info.atuin.setting_paths.verify();
 
+    if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
+        let active = atuin_common::dirs::config_path("config.toml");
+        let warning = super::info::shadowed_config_warning(&legacy, &active);
+        println!("{}", format!("[Config] {warning}").bold().red());
+    }
+
     // Shell
     if info.shell.name == "bash" {
         if !info.shell.plugins.iter().any(|p| p == "blesh" || p == "bash-preexec") {

@@ -1701,6 +1701,11 @@ impl Settings {
                 config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
             config_builder.add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
         } else {
+            let config_file = atuin_common::dirs::new_config_path();
+            if let Some(config_dir) = config_file.parent() {
+                create_dir_all(config_dir)
+                    .wrap_err_with(|| format!("could not create dir {config_dir:?}"))?;
+            }
             let mut file = File::create(config_file).wrap_err("could not create config file")?;
             file.write_all(EXAMPLE_CONFIG.as_bytes())
                 .wrap_err("could not write default config file")?;

@@ -29,6 +29,20 @@ pub fn run(settings: &Settings) {
     let print_out = format!("{config_paths}\n\n{env_vars}\n{general_info}");
 
     println!("{print_out}");
+
+    if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
+        println!("\n{}", shadowed_config_warning(&legacy, &config_file));
+    }
+}
+
+/// Atuin reads `active`, so the settings in `legacy` do nothing.
+pub fn shadowed_config_warning(legacy: &std::path::Path, active: &std::path::Path) -> String {
+    format!(
+        "Warning: {} is ignored, because {} exists and Atuin reads that instead. Move your \
+         settings into it, or delete it to go back to the old one.",
+        legacy.display(),
+        active.display()
+    )
 }
 
 fn fmt_env(name: &str) -> impl std::fmt::Display {
