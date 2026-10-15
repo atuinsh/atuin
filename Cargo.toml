@@ -106,7 +106,6 @@ palette = { version = "0.7", features = ["serializing"] }
 parking_lot = "0.12"
 percent-encoding = "2"
 portable-pty = "0.9"
-# Writes the daemon's launchd agent; already in the tree through service-manager.
 plist = { version = "1", default-features = false }
 pretty_assertions = "1"
 proptest = "1"
