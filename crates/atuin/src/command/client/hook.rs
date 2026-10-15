@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use atuin_client::history::{AuthorKind, HistoryId};
+use atuin_client::history::{AuthorKind, HistoryId, probe_author};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError, codex};
 use atuin_common::path::PathBufExt as _;
@@ -53,6 +53,10 @@ impl Cmd {
             }
         }
     }
+}
+
+fn resolve_author(harness_name: &str) -> String {
+    probe_author().unwrap_or_else(|| harness_name.to_string())
 }
 
 fn id_file_path(tool_use_id: &str) -> PathBuf {
@@ -109,10 +113,11 @@ async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
             intent,
             tool_use_id,
         }) => {
+            let author = resolve_author(harness.name());
             if let Some(history_id) = history::start_history_entry(
                 settings,
                 &command,
-                Some(harness.name()),
+                Some(&author),
                 Some(AuthorKind::Agent),
                 intent.as_deref(),
             )
@@ -175,6 +180,20 @@ mod tests {
             (Some(Action::Install { agent }), None) => assert_eq!(agent, agent_name),
             other => panic!("unexpected parsed command: {other:?}"),
         }
+    }
+
+    /// `ATUIN_HISTORY_AUTHOR` takes priority over the harness name; unset or blank falls back.
+    #[rstest]
+    #[case::unset(None, "claude-code")]
+    #[case::set(Some("my-agent"), "my-agent")]
+    #[case::blank(Some("   "), "claude-code")]
+    fn resolve_author_prefers_env(#[case] env_author: Option<&str>, #[case] expected: &str) {
+        let env = atuin_common::env::MockEnv::install();
+        if let Some(value) = env_author {
+            env.set("ATUIN_HISTORY_AUTHOR", value);
+        }
+
+        assert_eq!(resolve_author("claude-code"), expected);
     }
 
     /// A harness whose author is missing from `KNOWN_AGENTS` would be installable
