@@ -41,9 +41,60 @@ Please file an issue or reach out on the forum if you encounter any problems!
 
 EOF
 
+ATUIN_BIN="$HOME/.atuin/bin/atuin"
+
 __atuin_install_binary(){
   install_script=$(curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh)
-  echo "$install_script" | sh
+
+  if echo "$install_script" | sh; then
+    return 0
+  fi
+
+  # The release installer unpacks the binary first, then adds it to PATH for
+  # every shell it knows about - including fish, whose conf.d it creates
+  # unconditionally. If any of that fails (an unwritable ~/.config, say) it
+  # aborts, even though atuin itself is already installed. Carry on when the
+  # binary made it, so the rest of setup still runs.
+  if [ -x "$ATUIN_BIN" ]; then
+    echo ""
+    echo "The installer could not add Atuin to your PATH (see the error above),"
+    echo "but the atuin binary installed fine, so setup will continue."
+    echo ""
+    echo "If 'atuin' is not found in a new shell, add this to your shell config:"
+    echo ""
+    # Use of single quotes around $HOME is intentional here
+    # shellcheck disable=SC2016
+    echo '  export PATH="$HOME/.atuin/bin:$PATH"'
+    echo ""
+    return 0
+  fi
+
+  echo ""
+  echo "Failed to install the atuin binary - see the error above."
+  exit 1
+}
+
+# Append a shell init snippet to a config file, unless it is already there.
+# A config file we cannot write is a warning, not a fatal error: the user may
+# not even use that shell, and the rest of the setup still works.
+__atuin_add_shell_init(){
+  config_file="$1"
+  marker="$2"
+  snippet="$3"
+
+  if [ -e "$config_file" ] && grep -qF "$marker" "$config_file"; then
+    return 0
+  fi
+
+  if printf '%s' "$snippet" >> "$config_file" 2>/dev/null; then
+    return 0
+  fi
+
+  echo ""
+  echo "Could not write to $config_file"
+  echo "To enable Atuin in that shell, add the following to it yourself:"
+  printf '%s' "$snippet"
+  echo ""
 }
 
 if ! command -v curl > /dev/null; then
@@ -56,24 +107,33 @@ __atuin_install_binary
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-if ! grep -q "atuin init zsh" "${ZDOTDIR:-$HOME}/.zshrc"; then
-  printf '\neval "$(atuin init zsh)"\n' >> "${ZDOTDIR:-$HOME}/.zshrc"
-fi
+__atuin_add_shell_init \
+  "${ZDOTDIR:-$HOME}/.zshrc" \
+  "atuin init zsh" \
+  '
+eval "$(atuin init zsh)"
+'
 
 # Use of single quotes around $() is intentional here
 # shellcheck disable=SC2016
-
-if ! grep -q "atuin init bash" "$HOME/.bashrc"; then
-  echo 'eval "$(atuin init bash)"' >> "$HOME/.bashrc"
-fi
+__atuin_add_shell_init \
+  "$HOME/.bashrc" \
+  "atuin init bash" \
+  '
+eval "$(atuin init bash)"
+'
 
 if [ -f "$HOME/.config/fish/config.fish" ]; then
-  if ! grep -q "atuin init fish" "$HOME/.config/fish/config.fish"; then
-    printf '\nif status is-interactive\n    atuin init fish | source\nend\n' >> "$HOME/.config/fish/config.fish"
-  fi
+  # shellcheck disable=SC2016
+  __atuin_add_shell_init \
+    "$HOME/.config/fish/config.fish" \
+    "atuin init fish" \
+    '
+if status is-interactive
+    atuin init fish | source
+end
+'
 fi
-
-ATUIN_BIN="$HOME/.atuin/bin/atuin"
 
 __atuin_install_agent_hook(){
   agent="$1"
