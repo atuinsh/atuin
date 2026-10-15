@@ -100,7 +100,7 @@ notify = "8"
 notify-debouncer-full = "0.7"
 num-traits = "0.2"
 opentelemetry = "0.32"
-opentelemetry-otlp = "0.32"
+opentelemetry-otlp = "0.33"
 opentelemetry_sdk = "0.32"
 palette = { version = "0.7", features = ["serializing"] }
 parking_lot = "0.12"
