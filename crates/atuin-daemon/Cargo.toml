@@ -60,7 +60,6 @@ uuid = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }
 
-# Runs the daemon as a launchd agent.
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = { workspace = true }
 service-manager = { workspace = true }
