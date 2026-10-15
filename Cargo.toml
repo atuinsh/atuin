@@ -104,6 +104,7 @@ opentelemetry-otlp = "0.32"
 opentelemetry_sdk = "0.32"
 palette = { version = "0.7", features = ["serializing"] }
 parking_lot = "0.12"
+percent-encoding = "2"
 portable-pty = "0.9"
 pretty_assertions = "1"
 proptest = "1"

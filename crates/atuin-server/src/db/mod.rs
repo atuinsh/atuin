@@ -58,8 +58,11 @@ pub mod models;
 mod postgres;
 pub use postgres::Postgres;
 mod sqlite;
+use std::io;
+use std::path::PathBuf;
+
 use async_trait::async_trait;
-use atuin_common::db::OwnedDbUrl;
+use atuin_common::db::{DbUrl, MysqlDbUrl, OwnedDbUrl, PostgresDbUrl};
 use atuin_domain::record::{EncryptedData, Record, RecordIdx, RecordSeriesKey, RecordStatus};
 use easy_cast::Conv;
 use secrecy::{ExposeSecret, SecretString};
@@ -98,6 +101,61 @@ pub type DbResult<T> = Result<T, DbError>;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DbSettings {
     pub db_uri: OwnedDbUrl,
+
+    /// A file holding the password for `db_uri`.
+    pub db_password_file: Option<PathBuf>,
+}
+
+impl DbSettings {
+    /// Get the URL to connect to: `db_uri`, with the password from `db_password_file` if one is set.
+    ///
+    /// # Errors
+    /// [`DbPasswordError::AlsoInUri`] if `db_uri` holds a password too, since one would silently
+    /// win over the other.
+    pub fn connect_url(&self) -> Result<OwnedDbUrl, DbPasswordError> {
+        let Some(path) = &self.db_password_file else {
+            return Ok(self.db_uri.clone());
+        };
+
+        let mut db_uri = self.db_uri.clone();
+        let url = match &mut db_uri {
+            DbUrl::Postgres(PostgresDbUrl(url)) | DbUrl::Mysql(MysqlDbUrl(url)) => url,
+            DbUrl::Sqlite(_) => return Err(DbPasswordError::Sqlite),
+        };
+        if url.password().is_some() {
+            return Err(DbPasswordError::AlsoInUri);
+        }
+
+        let contents = fs_err::read_to_string(path).map_err(DbPasswordError::Read)?;
+        let password = contents.trim_end_matches(['\r', '\n']);
+        if password.is_empty() {
+            return Err(DbPasswordError::Empty);
+        }
+
+        // `set_password` escapes everything sqlx would decode except `%` itself, so without this
+        // `x%41y` would reach the database as `xAy`.
+        url.set_password(Some(&password.replace('%', "%25")))
+            .map_err(|()| DbPasswordError::NoHost)?;
+
+        Ok(db_uri)
+    }
+}
+
+/// Errors returned by [`DbSettings::connect_url`].
+#[derive(Debug, thiserror::Error)]
+pub enum DbPasswordError {
+    #[error("failed to read db_password_file")]
+    Read(#[source] io::Error),
+    #[error("db_uri already holds a password; remove it from db_uri or unset db_password_file")]
+    AlsoInUri,
+    #[error(
+        "db_uri names no host to attach db_password_file's password to; add the host to db_uri"
+    )]
+    NoHost,
+    #[error("SQLite databases take no password; unset db_password_file")]
+    Sqlite,
+    #[error("db_password_file is empty")]
+    Empty,
 }
 
 /// The SQL a backend runs, written in its placeholder dialect.
@@ -482,5 +540,100 @@ where
 
     async fn status(&self, user: &User) -> DbResult<RecordStatus> {
         Database::status(self, user).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::discriminant;
+
+    use percent_encoding::percent_decode_str;
+    use proptest::prelude::*;
+    use rstest::rstest;
+    use tempfile::NamedTempFile;
+
+    use super::*;
+
+    /// A password file holding `contents`, removed on drop.
+    fn password_file(contents: &str) -> NamedTempFile {
+        let file = NamedTempFile::new().unwrap();
+        fs_err::write(file.path(), contents).unwrap();
+        file
+    }
+
+    fn settings(db_uri: &str, password_file: &NamedTempFile) -> DbSettings {
+        DbSettings {
+            db_uri: db_uri.parse().unwrap(),
+            db_password_file: Some(password_file.path().to_owned()),
+        }
+    }
+
+    /// Decode the password in `db_uri` the way sqlx does.
+    fn sqlx_password(db_uri: &OwnedDbUrl) -> Option<String> {
+        let (DbUrl::Postgres(PostgresDbUrl(url)) | DbUrl::Mysql(MysqlDbUrl(url))) = db_uri else {
+            return None;
+        };
+        url.password().map(|password| percent_decode_str(password).decode_utf8().unwrap().into())
+    }
+
+    #[rstest]
+    #[case::bare("hunter2", "hunter2")]
+    #[case::trailing_newline("hunter2\n", "hunter2")]
+    #[case::trailing_crlf("hunter2\r\n", "hunter2")]
+    #[case::spaces_kept(" hunter 2 \n", " hunter 2 ")]
+    #[case::percent_escape_kept("x%41y\n", "x%41y")]
+    fn password_is_the_file_without_trailing_newlines(
+        #[values("postgres://atuin@db/atuin", "mysql://atuin@db/atuin")] db_uri: &str,
+        #[case] contents: &str,
+        #[case] expected: &str,
+    ) {
+        let file = password_file(contents);
+        let url = settings(db_uri, &file).connect_url().unwrap();
+        assert_eq!(sqlx_password(&url).as_deref(), Some(expected));
+    }
+
+    proptest! {
+        #[rstest]
+        fn any_password_survives_the_url(password in "(?s)(%[0-9A-Fa-f]{2}|.)*[^\r\n]") {
+            let file = password_file(&password);
+            let url = settings("postgres://atuin@db/atuin", &file).connect_url().unwrap();
+            prop_assert_eq!(sqlx_password(&url), Some(password));
+        }
+    }
+
+    #[rstest]
+    #[case::password_in_postgres_uri_too(
+        "postgres://atuin:pw@db/atuin",
+        "pw",
+        DbPasswordError::AlsoInUri
+    )]
+    #[case::password_in_mysql_uri_too(
+        "mysql://atuin:pw@db/atuin",
+        "pw",
+        DbPasswordError::AlsoInUri
+    )]
+    #[case::no_host("postgres://", "pw", DbPasswordError::NoHost)]
+    #[case::no_host_with_database("postgres:///atuin", "pw", DbPasswordError::NoHost)]
+    #[case::sqlite("sqlite:///config/atuin.db", "pw", DbPasswordError::Sqlite)]
+    #[case::empty("postgres://atuin@db/atuin", "", DbPasswordError::Empty)]
+    #[case::only_a_newline("postgres://atuin@db/atuin", "\n", DbPasswordError::Empty)]
+    fn unusable_settings_are_rejected(
+        #[case] db_uri: &str,
+        #[case] contents: &str,
+        #[case] expected: DbPasswordError,
+    ) {
+        let file = password_file(contents);
+        let err = settings(db_uri, &file).connect_url().unwrap_err();
+        assert_eq!(discriminant(&err), discriminant(&expected), "{err}");
+    }
+
+    #[rstest]
+    fn missing_password_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = DbSettings {
+            db_uri: "postgres://atuin@db/atuin".parse().unwrap(),
+            db_password_file: Some(dir.path().join("missing")),
+        };
+        assert!(matches!(settings.connect_url(), Err(DbPasswordError::Read(_))));
     }
 }

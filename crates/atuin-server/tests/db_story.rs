@@ -30,6 +30,7 @@ fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
 
     Ok(DbSettings {
         db_uri: db_uri.parse()?,
+        db_password_file: None,
     })
 }
 

@@ -45,6 +45,7 @@ impl SyncServer {
                 db_uri: format!("sqlite://{}", dir.path().join("server.db").display())
                     .parse()
                     .unwrap(),
+                db_password_file: None,
             },
             metrics: atuin_server::settings::Metrics::default(),
             fake_version: None,
