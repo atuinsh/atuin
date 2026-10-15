@@ -2253,11 +2253,16 @@ pub async fn history(
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
             let cmd = if app.tab_index == 1 {
-                inspecting.map(|entry| entry.command).unwrap_or_default()
+                inspecting.map(|entry| entry.command)
+            } else if index < results.len() {
+                Some(results.swap_remove(index).command)
             } else {
-                results.swap_remove(index).command
+                // No results, e.g. the query matches nothing.
+                None
             };
-            if let Err(e) = set_clipboard(cmd) {
+            if let Some(cmd) = cmd
+                && let Err(e) = set_clipboard(cmd)
+            {
                 tracing::warn!(?e, "failed to copy to clipboard");
             }
             Ok(String::new())
