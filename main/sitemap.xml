@@ -41,10 +41,6 @@
          <lastmod>2026-10-15</lastmod>
     </url>
     <url>
-         <loc>https://docs.atuin.sh/main/ai/sessions/</loc>
-         <lastmod>2026-10-15</lastmod>
-    </url>
-    <url>
          <loc>https://docs.atuin.sh/main/ai/settings/</loc>
          <lastmod>2026-10-15</lastmod>
     </url>
@@ -54,6 +50,10 @@
     </url>
     <url>
          <loc>https://docs.atuin.sh/main/ai/slash-commands/</loc>
+         <lastmod>2026-10-15</lastmod>
+    </url>
+    <url>
+         <loc>https://docs.atuin.sh/main/ai/threads/</loc>
          <lastmod>2026-10-15</lastmod>
     </url>
     <url>

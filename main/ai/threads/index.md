@@ -1,21 +1,21 @@
-# Agent sessions
+# Threads
 
-To turn them on, run:
+A thread is an AI coding agent's session as Atuin captured it. To turn capture on, run:
 
 ```
-atuin config enable ai-sessions
+atuin threads enable
 ```
 
-That sets `capture_sessions = true` under `[ai]`, turns on the daemon if it isn't already, and offers to import the sessions your agents already have. `atuin resume` offers the same each time it runs while they're off, and `atuin config disable ai-sessions` turns them off again.
+That's short for `atuin config enable threads`. It sets `capture = true` under `[threads]`, turns on the daemon if it isn't already, and offers to import the sessions your agents already have. `atuin resume` offers the same each time it runs while capture is off, and `atuin config disable threads` turns it off again.
 
-With `capture_sessions = true` under `[ai]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) into the encrypted record store, and syncs them like your history. `atuin ai session` lists, shows, searches and follows them.
+With `capture = true` under `[threads]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) as threads into the encrypted record store, and syncs them like your history. `atuin threads` lists, shows, searches and follows them.
 
-The daemon keeps a local search index of these sessions beside the record store, and brings it up to date as sessions are captured, synced in from your other machines, or imported.
+The daemon keeps a local search index of these threads beside the record store, and brings it up to date as threads are captured, synced in from your other machines, or imported.
 
 Capture starts from when you turn it on: a session your agents already had then is left alone until you go on with it, and then it's captured whole. To bring in the rest too, import them:
 
 ```
-atuin ai session import
+atuin threads import
 ```
 
 That imports every session the agents have on this machine (or just one agent's, with `--harness`), and running it again imports only what's new.
@@ -24,7 +24,7 @@ That imports every session the agents have on this machine (or just one agent's,
 
 Capture keeps the conversation (what you and the agent said) and its tool calls: each call's input and output (the commands run and what they printed, the files read and written). A session resumed from them, on this machine or another, has its tool calls back as they were, and so does a session continued in another agent (see [Resuming](#resuming)). Reasoning is kept only as a marker that the model reasoned.
 
-When an agent edits a file, capture also keeps the diff the agent recorded for the edit (Claude Code, Codex, opencode and pi each keep one), so a resumed session shows its edits as the agent showed them, and `atuin ai session show` prints them. A diff names its file and the lines changed, with a few lines around them, not the whole file. Search covers the names of the files a session changed.
+When an agent edits a file, capture also keeps the diff the agent recorded for the edit (Claude Code, Codex, opencode and pi each keep one), so a resumed session shows its edits as the agent showed them, and `atuin threads show` prints them. A diff names its file and the lines changed, with a few lines around them, not the whole file. Search covers the names of the files a session changed.
 
 Secrets Atuin recognises are replaced with `****`, in the conversation and the tool calls alike: the [same patterns](https://docs.atuin.sh/configuration/config/#secrets_filter) as for captured command output, and your own [`redact_patterns`](https://docs.atuin.sh/configuration/config/#redact_patterns). Images are left out, and the input or output of a single call is clipped to 64 KiB, keeping its start and its end. An edit's diff past 64 KiB keeps only the files it changed. Search covers a call's input, but not its output.
 
@@ -37,29 +37,29 @@ The rules that keep things out of your history and your captured output apply to
 
 Text that can't be redacted quickly isn't kept. To keep more out, see [Keeping Secrets Out of Atuin](https://docs.atuin.sh/guide/excluding-commands/index.md).
 
-Tool calls can be a lot of your codebase, not just your conversations. To keep only the name of each tool called (and whether the call failed), and no diffs, set `capture_tools = false` under `[ai]`:
+Tool calls can be a lot of your codebase, not just your conversations. To keep only the name of each tool called (and whether the call failed), and no diffs, set `capture_tools = false` under `[threads]`:
 
 ```
-[ai]
-capture_sessions = true
+[threads]
+capture = true
 capture_tools = false
 ```
 
-These settings, and the filters above, apply to sessions captured or imported after the daemon restarts. Sessions already captured keep what they had.
+These settings, and the filters above, apply to threads captured or imported after the daemon restarts. Threads already captured keep what they had.
 
 ## Searching
 
 ```
-atuin ai session search "flaky test"
+atuin threads search "flaky test"
 ```
 
-- Each word of the query matches a whole word: `atuin ai session search "migration"` finds sessions mentioning migration, but `"migr"` doesn't. The `atuin resume` picker searches as you type, so there the last word also matches as a prefix once it's at least two characters long.
-- An empty query (`atuin ai session search ""`) lists the newest sessions first, rather than returning nothing.
+- Each word of the query matches a whole word: `atuin threads search "migration"` finds threads mentioning migration, but `"migr"` doesn't. The `atuin resume` picker searches as you type, so there the last word also matches as a prefix once it's at least two characters long.
+- An empty query (`atuin threads search ""`) lists the newest threads first, rather than returning nothing.
 - `--harness` limits the search to one agent.
 
 ## Resuming
 
-`atuin resume` (or a key you bind to it, see [Binding `atuin resume`](https://docs.atuin.sh/reference/init/#binding-atuin-resume)) opens a picker over your sessions. It works like the history search: type to search, `Ctrl`+`O` inspects the selected session, and `Esc` leaves. `atuin ai resume` is the same command, under its longer name.
+`atuin resume` (or a key you bind to it, see [Binding `atuin resume`](https://docs.atuin.sh/reference/init/#binding-atuin-resume)) opens a picker over your threads. It works like the history search: type to search, `Ctrl`+`O` inspects the selected thread, and `Esc` leaves. `atuin threads resume` is the same command, under its longer name.
 
 No key opens it by default. To open it with `Ctrl`+`]` (which replaces the shell's own character search on that key), pass `--bind-ai-resume` to `atuin init`; or bind the widget to a key of your choice after the `atuin init` line:
 
@@ -82,7 +82,7 @@ bind -M insert ctrl-] _atuin_ai_resume
 
 Through the widget, the command it picks lands in your shell, as with the history search.
 
-Each session is two lines: its title (`untitled` when it has none), then, dimmed, when it was last active, its agent (`CC`, `CX`, `OC` or `PI`), where it ran (its repository, branch and, for a session recorded on another machine, that machine, by the end of its host id), and how many messages it has. Newest first, the sessions are grouped under a heading for each day, the top one staying in sight as you scroll; with search text they're ranked by relevance instead.
+Each thread is two lines: its title (`untitled` when it has none), then, dimmed, when it was last active, its agent (`CC`, `CX`, `OC` or `PI`), where it ran (its repository, branch and, for a thread recorded on another machine, that machine, by the end of its host id), and how many messages it has. Newest first, the threads are grouped under a heading for each day, the top one staying in sight as you scroll; with search text they're ranked by relevance instead.
 
 ```
 Today ──────────────────────────────────────────────
@@ -90,15 +90,15 @@ Today ────────────────────────�
   ● now · CC · atuin · ai-resume · 142 msgs
 ```
 
-The scopes are listed beside the query, the one shown highlighted: `all` sessions (where the picker opens), the current `repo`'s, its `branch`'s, the current `dir`'s, and this machine's (`host`). `Ctrl`+`R` moves to the next. `repo` and `branch` are left out outside a git repository, and `branch` on a detached `HEAD`.
+The scopes are listed beside the query, the one shown highlighted: `all` threads (where the picker opens), the current `repo`'s, its `branch`'s, the current `dir`'s, and this machine's (`host`). `Ctrl`+`R` moves to the next. `repo` and `branch` are left out outside a git repository, and `branch` on a detached `HEAD`.
 
-The help line says what the keys do to the selected session.
+The help line says what the keys do to the selected thread.
 
 Words in the query of the form `filter:value` narrow the search further, and show as chips in the input:
 
-- `agent:<name>` (or `a:<name>` for short): only that agent's sessions, with `claude-code` (or `claude`, `cc`), `codex` (`cx`), `opencode` (`oc`) or `pi`. `Ctrl`+`T` cycles through them in turn, and back to all agents.
-- `m:<model>`: only sessions whose model contains this, as in `m:opus`.
-- `b:<branch>`: only sessions on this git branch.
+- `agent:<name>` (or `a:<name>` for short): only that agent's threads, with `claude-code` (or `claude`, `cc`), `codex` (`cx`), `opencode` (`oc`) or `pi`. `Ctrl`+`T` cycles through them in turn, and back to all agents.
+- `m:<model>`: only threads whose model contains this, as in `m:opus`.
+- `b:<branch>`: only threads on this git branch.
 
 Put a `\` before a word to search for it as text instead (`\b:main`).
 
@@ -117,14 +117,14 @@ On a wide terminal (120 columns or more) the pane beside the list, and Inspect, 
 While the picker has the mouse, your terminal can't select text the usual way. Most terminals still select with `Shift` held while you drag (`Option` in iTerm2, `Fn` in macOS Terminal). To leave the mouse to the terminal (the top-level `no_mouse = true` does the same for both the picker and the history search):
 
 ```
-[ai.sessions]
+[threads]
 mouse = false
 ```
 
 - Forks of a session (including Claude Code `--resume` copies, and continuations in another agent) are grouped under it. Inspect (`Ctrl`+`O`) lists them, and `C` there expands the list.
 - Subagents aren't listed at all, as they can't be resumed. A search that matches something a subagent said still finds the session it worked for, and `atuin resume <subagent-id>` resumes that session. Atuin records whether a child session is a subagent, a fork or a continuation as it captures it. Sessions captured by older versions don't say, and for Codex and opencode nearly all such children are subagents, so the picker treats them as such (they still resume by id).
 
-Once you choose a session, with `Enter` (or `Tab` to edit the command first), Atuin asks where to resume it, under the session in the list, the two in a border:
+Once you choose a thread, with `Enter` (or `Tab` to edit the command first), Atuin asks where to resume it, under the thread in the list, the two in a border:
 
 ```
 ╭─────────────────────────────────────────────────────────╮
@@ -163,7 +163,7 @@ In the chooser, `Up` / `Down` (or `K` / `J`) move, `F` moves to the fork, a digi
 To resume in the session's own agent straight away, without the chooser:
 
 ```
-[ai.sessions]
+[threads]
 resume_chooser = false
 ```
 
@@ -171,18 +171,18 @@ The chooser still opens for a session its own agent can't resume.
 
 From the command line, `atuin resume <id>` resumes a session in its own agent directly (an id prefix works too), writing it out from sync first when it isn't on this machine, and `atuin resume <id> --in codex` continues it in another (`claude`, `codex`, `opencode` or `pi`). `atuin resume <id> --fork` forks it. It catches the session up with sync as the picker does, and fails when that needs a choice, saying which: `--as-is` resumes this copy unchanged, `--switch` switches it to another branch, and `--fork` forks it from its newest branch. `--branch` picks the branch to catch up to, to switch to, to fork from, or to continue with `--in`: `this`, `@<host id>`, or the start of the id the error lists. A session that went different ways on several machines needs `--branch` with `--in`, and with `--switch` when more than one branch could be switched to; without it, Atuin lists the branches to choose from. `--as-is`, `--switch` and `--branch` need an id that names a single session: when it names several, Atuin lists them and asks you to be more specific. `--print` prints the command instead of running it.
 
-The id can be the agent's own, or the session's Atuin id, which Inspect and the MCP session tools show. An Atuin id is a UUIDv7, written as 32 hex digits like a history id. It's fixed when Atuin first records the session, and is the same for every agent and on every machine. Its first 12 digits are when the session started, so a prefix needs more digits than that to name a single session.
+The id can be the agent's own, or the thread's Atuin id, which Inspect and the MCP threads tools show. An Atuin id is a UUIDv7, written as 32 hex digits like a history id. It's fixed when Atuin first records the session, and is the same for every agent and on every machine. Its first 12 digits are when the session started, so a prefix needs more digits than that to name a single session.
 
 ## Settings
 
-The picker follows the history search's `style`, `invert`, `show_preview`, `max_preview_height`, `enter_accept`, `keymap_mode` and theme settings. Its own go under `[ai.sessions]`:
+The picker follows the history search's `style`, `invert`, `show_preview`, `max_preview_height`, `enter_accept`, `keymap_mode` and theme settings. Its own go under `[threads]`:
 
 ```
-[ai.sessions]
+[threads]
 ## The filter the picker opens in: "global" (the default), "workspace", "host",
 ## "directory" or "branch". "workspace" and "branch" open in "global" outside a
 ## git repository, "branch" opens in "workspace" on a detached HEAD, and
-## "workspace" opens in "global" when the workspace has no sessions at all.
+## "workspace" opens in "global" when the workspace has no threads at all.
 ## `--filter-mode` overrides it.
 filter_mode = "global"
 
@@ -194,28 +194,30 @@ inline_height = 40
 mouse = true
 ```
 
-To resume an agent's sessions with a command of your own in place of the built-in one, give a template per agent under `[ai.sessions.resume]` (`claude`, `codex`, `opencode` or `pi`). It runs after `cd -- <cwd> &&`, with these substituted:
+To resume an agent's sessions with a command of your own in place of the built-in one, give a template per agent under `[threads.resume]` (`claude`, `codex`, `opencode` or `pi`). It runs after `cd -- <cwd> &&`, with these substituted:
 
 - `{id}`: the agent's own id for the session;
 - `{path}`: the session's transcript on this machine (for a session written back out from sync, the one Atuin wrote);
 - `{cwd}`: the directory the session worked in.
 
 ```
-[ai.sessions.resume]
+[threads.resume]
 claude = "claude --resume {id} --model opus"
 pi = "pi --session {path}"
 ```
 
 Each value is substituted within its word, unquoted, so don't quote them, and don't pass them through another shell (`sh -c "..."`), which would split and expand them. The program is looked up on `PATH` only: shell aliases, functions and `~/` aren't expanded, so give a full path for a program that isn't on `PATH`.
 
+Before `[threads]`, these settings were `capture_sessions` and `capture_tools` under `[ai]`, and the picker's under `[ai.sessions]`. Those still work for any setting `[threads]` doesn't set, as do the old `atuin ai session` and `atuin ai resume` commands.
+
 ## Rebuilding the index
 
 The index is derived entirely from the record store. If it ever looks wrong or incomplete, rebuild it:
 
 ```
-atuin store rebuild ai-session
+atuin store rebuild threads
 ```
 
-The daemon deletes the index and replays every session record into it in the background (`atuin ai session` waits for it meanwhile), so this needs the daemon enabled. `atuin resume` doesn't wait: it stays usable, and its status row says how far the rebuild has got, as its results may be incomplete until it finishes. `atuin store purge` and `atuin store pull --force` do the same after deleting records, and commands that re-encrypt the records (`atuin store rekey`, `atuin login`) have the daemon replay them the next time it starts.
+The daemon deletes the index and replays every thread record into it in the background (`atuin threads` waits for it meanwhile), so this needs the daemon enabled. `atuin resume` doesn't wait: it stays usable, and its status row says how far the rebuild has got, as its results may be incomplete until it finishes. `atuin store purge` and `atuin store pull --force` do the same after deleting records, and commands that re-encrypt the records (`atuin store rekey`, `atuin login`) have the daemon replay them the next time it starts.
 
-If `atuin resume` reports that the session database is at an older schema version, the running daemon is an older Atuin than the command: restart it (`atuin daemon restart`) so it upgrades the database. If it reports that the session database was made by another build of Atuin (a development build, say), the daemon deletes it and rebuilds it from the record store when it starts: restart it (`atuin daemon restart`), and sessions reappear as the rebuild replays them.
+If `atuin resume` reports that the threads database is at an older schema version, the running daemon is an older Atuin than the command: restart it (`atuin daemon restart`) so it upgrades the database. If it reports that the threads database was made by another build of Atuin (a development build, say), the daemon deletes it and rebuilds it from the record store when it starts: restart it (`atuin daemon restart`), and threads reappear as the rebuild replays them.

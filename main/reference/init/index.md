@@ -35,7 +35,7 @@ eval "$(atuin init zsh --disable-up-arrow)"
 
 ## Binding `atuin resume`
 
-`atuin init` defines widgets that open the [`atuin resume`](https://docs.atuin.sh/ai/sessions/index.md) picker at the prompt and put the command it picks into your shell, but binds no key to them by default. To bind `Ctrl`+`]` in the emacs, vi-insert and vi-command keymaps, pass `--bind-ai-resume`:
+`atuin init` defines widgets that open the [`atuin resume`](https://docs.atuin.sh/ai/threads/index.md) picker at the prompt and put the command it picks into your shell, but binds no key to them by default. To bind `Ctrl`+`]` in the emacs, vi-insert and vi-command keymaps, pass `--bind-ai-resume`:
 
 ```
 eval "$(atuin init zsh --bind-ai-resume)"

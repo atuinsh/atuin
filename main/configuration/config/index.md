@@ -384,7 +384,7 @@ history_filter = [
 ]
 ```
 
-A filtered command's output isn't captured either. To keep a command in history but not its output, use [`command_filter`](#command_filter) in `[output]`. The filter applies to the commands your AI agents run too: a matching call is [captured](https://docs.atuin.sh/ai/sessions/#whats-captured) with its tool's name only.
+A filtered command's output isn't captured either. To keep a command in history but not its output, use [`command_filter`](#command_filter) in `[output]`. The filter applies to the commands your AI agents run too: a matching call is [captured](https://docs.atuin.sh/ai/threads/#whats-captured) with its tool's name only.
 
 ### `cwd_filter`
 
@@ -402,7 +402,7 @@ This supports regular expressions, so you can hide pretty much whatever you want
 
 After updating that parameter, you can run [the prune command](https://docs.atuin.sh/reference/prune/index.md) to remove old history entries that match the new filters.
 
-An [AI session](https://docs.atuin.sh/ai/sessions/#whats-captured) captured in a matching directory keeps only the names of the tools its agent called there.
+A [thread](https://docs.atuin.sh/ai/threads/#whats-captured) captured in a matching directory keeps only the names of the tools its agent called there.
 
 ### `store_failed`
 
@@ -441,7 +441,7 @@ Matches each command against a set of built-in regular expressions, and refuses 
 
 Many of these come from the rules of [gitleaks](https://github.com/gitleaks/gitleaks). For the exact expressions, see [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-common/src/secrets.rs).
 
-The same patterns are applied to captured command output, and to [AI sessions](https://docs.atuin.sh/ai/sessions/#whats-captured). A command whose own text is clean can still print a credential, so recognised values in the captured output are replaced with `****` before storage. Only the value is replaced; the variable name or flag beside it stays. Output is also checked for credentials recognised by where they sit, which never keep a command out of history:
+The same patterns are applied to captured command output, and to [threads](https://docs.atuin.sh/ai/threads/#whats-captured). A command whose own text is clean can still print a credential, so recognised values in the captured output are replaced with `****` before storage. Only the value is replaced; the variable name or flag beside it stays. Output is also checked for credentials recognised by where they sit, which never keep a command out of history:
 
 - private keys (`-----BEGIN ... PRIVATE KEY-----`), JSON web tokens, `Authorization` headers and bearer tokens, and `curl -u user:password`
 - the password in a web address or connection string (`postgres://app:pw@db`, `password=...`)
@@ -1049,7 +1049,7 @@ The filter applies to output captured after the daemon picks up the change; it d
 
 Some commands' output is never stored, whatever this filter says, because it can hold a credential: Atuin's own `atuin key`, `atuin login`, `atuin register` and `atuin account change-password`; commands that print a token or a password, such as `gh auth token`, `gcloud auth print-access-token`, `aws configure get`, `kubectl get secret`, `vault kv get`, `op read`, `pass show` and `security find-generic-password -w`; commands that print the environment (`printenv`, `env`); and commands that name a [sensitive file](#sensitive_files), such as `cat .env`.
 
-The filter also applies to the commands your AI agents run, whether or not output capture is enabled: a matching call is [captured](https://docs.atuin.sh/ai/sessions/#whats-captured) without its output.
+The filter also applies to the commands your AI agents run, whether or not output capture is enabled: a matching call is [captured](https://docs.atuin.sh/ai/threads/#whats-captured) without its output.
 
 ### `sync`
 
@@ -1059,7 +1059,7 @@ Reserved for syncing captured output between machines, which isn't implemented y
 
 ## Security
 
-Settings under `[security]` add to Atuin's built-in rules for keeping credentials out of what it stores: captured command output and [AI sessions](https://docs.atuin.sh/ai/sessions/#whats-captured). For which setting to reach for, see [Keeping Secrets Out of Atuin](https://docs.atuin.sh/guide/excluding-commands/index.md).
+Settings under `[security]` add to Atuin's built-in rules for keeping credentials out of what it stores: captured command output and [threads](https://docs.atuin.sh/ai/threads/#whats-captured). For which setting to reach for, see [Keeping Secrets Out of Atuin](https://docs.atuin.sh/guide/excluding-commands/index.md).
 
 ```
 [security]
