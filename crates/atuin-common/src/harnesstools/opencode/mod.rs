@@ -20,6 +20,15 @@ impl Opencode {
     }
 }
 
+/// opencode's global config directory. It is XDG-compliant: `$XDG_CONFIG_HOME/opencode`, falling
+/// back to `~/.config/opencode`.
+pub(crate) fn config_dir() -> PathBuf {
+    var_nonempty("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().joined(".config"))
+        .joined("opencode")
+}
+
 /// The plugin for opencode 1.x, whose loaders (up to 1.3) call every export of a plugin file.
 const PLUGIN_1: &str = include_str!("../../../res/harnesstools/opencode/atuin.ts");
 /// The plugin for opencode 2, which loads a default export's `id` and `setup`.
@@ -44,13 +53,7 @@ impl Harness for Opencode {
         const PLUGIN_NAME: &str = "atuin.ts";
         let plugin = plugin_for(rehydrate::major_version(Path::new("opencode")).await.ok());
 
-        // Opencode is XDG-compliant: plugins live under $XDG_CONFIG_HOME/opencode,
-        // falling back to ~/.config/opencode.
-        let plugins_dir = var_nonempty("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home_dir().joined(".config"))
-            .joined("opencode")
-            .joined("plugins");
+        let plugins_dir = config_dir().joined("plugins");
 
         tokio::fs::create_dir_all(&plugins_dir).await?;
 

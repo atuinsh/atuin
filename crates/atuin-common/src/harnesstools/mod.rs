@@ -10,6 +10,7 @@ pub mod codex;
 pub mod continuation;
 pub mod fork;
 mod json_hooks;
+pub mod mcp;
 pub mod note;
 pub mod opencode;
 pub mod pi;

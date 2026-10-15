@@ -35,6 +35,8 @@ mod info;
 mod init;
 mod internal;
 mod kv;
+#[cfg(feature = "ai")]
+mod mcp;
 #[cfg(feature = "daemon")]
 mod output;
 mod scripts;
@@ -126,7 +128,7 @@ pub enum Cmd {
 
     #[cfg(feature = "ai")]
     #[command(about = fl!("cmd-mcp"))]
-    Mcp,
+    Mcp(mcp::Cmd),
 
     #[command(about = fl!("cmd-wrapped"))]
     Wrapped {
@@ -376,7 +378,7 @@ impl Cmd {
             }
 
             #[cfg(feature = "ai")]
-            Self::Mcp => Box::pin(atuin_ai::mcp::run(&db, Arc::new(settings))).await,
+            Self::Mcp(cmd) => cmd.run(&db, settings).await,
         }
     }
 
