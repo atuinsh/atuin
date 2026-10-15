@@ -13,6 +13,9 @@ pub struct Cmd {
 
     #[arg(long, conflicts_with = "check", help = fl!("arg-update-version"))]
     version: Option<String>,
+
+    #[arg(long, conflicts_with = "version", help = fl!("arg-update-prerelease"))]
+    prerelease: bool,
 }
 
 impl Cmd {
@@ -48,7 +51,13 @@ impl Cmd {
             );
         }
 
-        let request = match (&self.version, settings.update_channel) {
+        let update_channel = if self.prerelease {
+            UpdateChannel::Nightly
+        } else {
+            settings.update_channel
+        };
+
+        let request = match (&self.version, update_channel) {
             (Some(version), _) => {
                 UpdateRequest::SpecificVersion(version.trim_start_matches('v').to_string())
             }
@@ -57,7 +66,7 @@ impl Cmd {
         };
         updater.configure_version_specifier(request);
 
-        let channel = match settings.update_channel {
+        let channel = match update_channel {
             UpdateChannel::Stable => "stable",
             UpdateChannel::Nightly => "nightly",
         };
