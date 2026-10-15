@@ -89,10 +89,10 @@ pkg install atuin
 Atuin is installable from github-releases directly:
 
 ```
-# line 1: `atuin` binary as command, from github release, only look at .tar.gz files, use the `atuin` file from the extracted archive
+# line 1: `atuin` binary as command, from github release, only look at .tar.gz files (excluding server), use the `atuin` file from the extracted archive
 # line 2: setup at clone(create init.zsh, completion)
 # line 3: pull behavior same as clone, source init.zsh
-zinit ice as"command" from"gh-r" bpick"atuin-*.tar.gz" mv"atuin*/atuin -> atuin" \
+zinit ice as"command" from"gh-r" bpick"atuin-*.tar.gz~*server*" mv"atuin*/atuin -> atuin" \
     atclone"./atuin init zsh > init.zsh; ./atuin gen-completions --shell zsh > _atuin" \
     atpull"%atclone" src"init.zsh"
 zinit light atuinsh/atuin
