@@ -1,0 +1,22 @@
+name: Publish Binary Cache
+
+# Builds this flake's aarch64-darwin outputs (atuin, with the ATUIN_HISTORY_AUTHOR
+# hook change) and pushes the signed NARs to ghcr.io/<owner>/<repo>/nix-cache,
+# until the change lands upstream. The build logic lives once in pplanel/nixcache
+# as a reusable workflow; this is just the thin caller.
+
+on:
+  push:
+    branches: [feat/hook-author-env]
+    tags: ["v*"]
+    paths-ignore: ["docs/**", "*.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    uses: pplanel/nixcache/.github/workflows/publish-cache.yml@main
+    secrets: inherit
