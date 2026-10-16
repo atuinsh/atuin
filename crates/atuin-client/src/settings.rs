@@ -1643,8 +1643,22 @@ impl Settings {
             .set_default("octavo.enabled", false)?
             .set_default("octavo.upload_output", false)?;
 
-        Ok(builder
-            .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__")))
+        Ok(builder.add_source(Self::environment()))
+    }
+
+    /// The `ATUIN_*` environment variables, as a config source.
+    fn environment() -> Environment {
+        Environment::with_prefix("atuin").prefix_separator("_").separator("__")
+    }
+
+    /// Layers a config file over `builder`, with `env` on top of it again so that environment
+    /// variables override the file.
+    fn add_config_file(
+        builder: ConfigBuilder<DefaultState>,
+        file: impl config::Source + Send + Sync + 'static,
+        env: Environment,
+    ) -> ConfigBuilder<DefaultState> {
+        builder.add_source(file).add_source(env)
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
@@ -1678,7 +1692,7 @@ impl Settings {
 
             let partial_config = Config::builder()
                 .add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
-                .add_source(Environment::with_prefix("atuin").prefix_separator("_").separator("__"))
+                .add_source(Self::environment())
                 .build()
                 .ok();
 
@@ -1706,7 +1720,11 @@ impl Settings {
         let config_builder = if config_file.exists() {
             let config_file_str =
                 config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
-            config_builder.add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
+            Self::add_config_file(
+                config_builder,
+                ConfigFile::new(config_file_str, FileFormat::Toml),
+                Self::environment(),
+            )
         } else {
             // Use `create_new` to avoid overwriting the file if it just got created in between our
             // existence check and now.
@@ -2185,6 +2203,28 @@ mod tests {
             .try_deserialize()
             .unwrap();
         assert_eq!(settings.data_dir, Path::new(expected));
+    }
+
+    #[rstest]
+    #[case::env_overrides_the_file(Some("true"), true)]
+    #[case::file_without_env(None, false)]
+    fn environment_overrides_the_config_file(#[case] env: Option<&str>, #[case] expected: bool) {
+        let env = Settings::environment().source(Some(
+            env.map(|value| ("ATUIN_ENTER_ACCEPT".to_string(), value.to_string()))
+                .into_iter()
+                .collect(),
+        ));
+        let builder = Settings::builder_with_data_dir(Path::new("/default/data")).unwrap();
+        let settings: Settings = Settings::add_config_file(
+            builder,
+            ConfigFile::from_str("enter_accept = false\n", FileFormat::Toml),
+            env,
+        )
+        .build()
+        .unwrap()
+        .try_deserialize()
+        .unwrap();
+        assert_eq!(settings.enter_accept, expected);
     }
 
     #[rstest]
