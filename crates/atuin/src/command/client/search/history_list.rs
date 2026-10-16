@@ -13,7 +13,7 @@ use ratatui::backend::FromCrossterm;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::style;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, StatefulWidget, Widget};
 use time::{OffsetDateTime, UtcOffset};
 
@@ -36,8 +36,10 @@ pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
     inverted: bool,
-    /// Apply an alternative highlighting to the selected row
+    /// Apply the Vim Normal reverse-video style to the selected row.
     alternate_highlight: bool,
+    /// Paint a configured background across the selected row without reversing its text colors.
+    selected_row_background: Option<Color>,
     now: &'a dyn Fn() -> OffsetDateTime,
     /// Offset absolute timestamps are rendered in
     tz: UtcOffset,
@@ -102,6 +104,7 @@ impl StatefulWidget for HistoryList<'_> {
             state,
             inverted: self.inverted,
             alternate_highlight: self.alternate_highlight,
+            selected_row_background: self.selected_row_background,
             now: &self.now,
             tz: self.tz,
             indicator: self.indicator,
@@ -113,6 +116,9 @@ impl StatefulWidget for HistoryList<'_> {
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
+            if s.is_selected_row() {
+                s.paint_selected_row_background();
+            }
             s.render_row(item);
 
             // reset line
@@ -128,6 +134,7 @@ impl<'a> HistoryList<'a> {
         history: &'a [History],
         inverted: bool,
         alternate_highlight: bool,
+        selected_row_background: Option<Color>,
         now: &'a dyn Fn() -> OffsetDateTime,
         tz: UtcOffset,
         indicator: &'a str,
@@ -142,6 +149,7 @@ impl<'a> HistoryList<'a> {
             block: None,
             inverted,
             alternate_highlight,
+            selected_row_background,
             now,
             tz,
             indicator,
@@ -182,6 +190,7 @@ struct DrawState<'a> {
     state: &'a ListState,
     inverted: bool,
     alternate_highlight: bool,
+    selected_row_background: Option<Color>,
     now: &'a dyn Fn() -> OffsetDateTime,
     /// Offset absolute timestamps are rendered in
     tz: UtcOffset,
@@ -301,7 +310,8 @@ impl DrawState<'_> {
         let mut style = self.theme.as_style(Meaning::Base);
         let mut row_highlighted = false;
         if !self.alternate_highlight
-            && (usize::conv(self.y) + self.state.offset == self.state.selected)
+            && self.selected_row_background.is_none()
+            && self.is_selected_row()
         {
             row_highlighted = true;
             // if not applying alternative highlighting to the whole row, color the command
@@ -420,6 +430,27 @@ impl DrawState<'_> {
         self.draw(&display, Style::from_crossterm(style));
     }
 
+    fn is_selected_row(&self) -> bool {
+        usize::conv(self.y) + self.state.offset == self.state.selected
+    }
+
+    fn paint_selected_row_background(&mut self) {
+        let Some(background) = self.selected_row_background else {
+            return;
+        };
+        let y = if self.inverted {
+            self.list_area.top() + self.y
+        } else {
+            self.list_area.bottom() - self.y - 1
+        };
+
+        // Paint the full row first so the background also reaches empty cells after short commands.
+        self.buf.set_style(
+            Rect::new(self.list_area.left(), y, self.list_area.width, 1),
+            Style::default().bg(background),
+        );
+    }
+
     fn draw(&mut self, s: &str, mut style: Style) {
         let cx = self.list_area.left() + self.x;
 
@@ -429,10 +460,13 @@ impl DrawState<'_> {
             self.list_area.bottom() - self.y - 1
         };
 
-        if self.alternate_highlight
-            && (usize::conv(self.y) + self.state.offset == self.state.selected)
-        {
-            style = style.add_modifier(Modifier::REVERSED);
+        if self.is_selected_row() {
+            if let Some(background) = self.selected_row_background {
+                // An explicit background replaces reverse video, which would swap foregrounds too.
+                style = style.bg(background);
+            } else if self.alternate_highlight {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
         }
 
         let w = usize::conv(self.list_area.width - self.x);
