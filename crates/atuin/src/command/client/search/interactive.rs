@@ -1749,6 +1749,19 @@ impl Drop for Stdout {
             tracing::error!(?e, "Failed to disable mouse capture");
         }
 
+        // We stopped reading input when the search ended, but the terminal reports mouse motion
+        // until it reads the mode change above, and the line editor takes what is left as typed
+        // text (`35;12;1M`). The terminal answers queries in order, so reading up to its answer
+        // to one reads every report sent before it. crossterm asks on stdout, so only when that is
+        // the terminal.
+        #[cfg(unix)]
+        if !self.no_mouse
+            && matches!(self.writer, TerminalWriter::Stdout(_))
+            && let Err(e) = ratatui::crossterm::cursor::position()
+        {
+            tracing::error!(?e, "Failed to read mouse reports still in flight");
+        }
+
         if let Err(e) = execute!(self.writer, event::DisableBracketedPaste) {
             tracing::error!(?e, "Failed to disable bracketed paste");
         }

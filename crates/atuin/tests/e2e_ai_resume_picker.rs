@@ -101,6 +101,28 @@ fn the_picker_resumes_the_session_chosen(#[case] into: Option<Agent>) {
     pty.wait_for(&ran(into, &format!("resume {id}"), project.path()));
 }
 
+/// Mouse motion the terminal reports while the picker closes is read by the picker, not left for
+/// the line editor to take as typed text (`35;12;1M`).
+#[rstest]
+fn mouse_motion_as_the_picker_closes_stays_off_the_command_line(
+    #[files("tests/shells/*.toml")] setup: PathBuf,
+) {
+    let Some(setup) = shell::Setup::find(&setup) else {
+        return;
+    };
+    let mut machine = Machine::new();
+    machine.start_daemon();
+
+    let vars = BTreeMap::from([("PATH".to_owned(), machine.path_var())]);
+    let (pty, _) = setup.spawn(&machine.env, vars, "--bind-ai-resume");
+    // ctrl-]
+    pty.send(b"\x1d");
+    pty.wait_for("0 threads");
+    pty.send(&[0x03]);
+    assert!(pty.move_mouse() > 0, "the picker stopped tracking the mouse before it moved");
+    pty.wait_for_line_editor();
+}
+
 /// Through the shell widget, the session chosen resumes in the shell: run at once with
 /// `enter_accept`, else left on the command line to run.
 #[rstest]
