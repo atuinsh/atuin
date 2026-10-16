@@ -70,8 +70,13 @@ async fn written(
             (rows_of(&lines), links(&session.id, &lines))
         }
         AnyHarness::Pi(_) => {
-            let path =
-                pi::rehydrate::rehydrate_into(root, &root.join("sessions"), session).unwrap();
+            let path = pi::rehydrate::rehydrate_into(
+                pi::Flavour::Pi,
+                root,
+                &root.join("sessions"),
+                session,
+            )
+            .unwrap();
             let lines: Vec<_> =
                 PiSession::open(id, path, pool()).read().try_collect().await.unwrap();
             (rows_of(&lines), links(&session.id, &lines))

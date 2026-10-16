@@ -30,7 +30,7 @@ use typed_builder::TypedBuilder;
 
 use crate::env::var_nonempty;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
-use crate::harnesstools::pi::{Pi, agent_dir, expand_tilde};
+use crate::harnesstools::pi::{Flavour, Pi, expand_tilde};
 use crate::harnesstools::session::model::{
     Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
     ToolResult, ToolUse, Usage,
@@ -52,6 +52,8 @@ const MAX_HEADER_BYTES: u64 = 1024 * 1024;
 pub struct PiSessions {
     #[builder(default, setter(strip_option, into))]
     root: Option<PathBuf>,
+    #[builder(default = Flavour::Pi)]
+    flavour: Flavour,
     /// Runs every file read of the sessions this finds.
     pool: BlockingPool,
 }
@@ -61,13 +63,24 @@ impl PiSessions {
         if let Some(root) = &self.root {
             return root.clone();
         }
-        default_root()
+        default_root(self.flavour)
+    }
+
+    /// The flavour whose files alone are this one's under `root`: its own, when the other keeps
+    /// its sessions there too (`PI_CODING_AGENT_DIR` or `PI_CODING_AGENT_SESSION_DIR` set), so a
+    /// session isn't captured as both.
+    fn only(&self, root: &Path) -> Option<Flavour> {
+        let other = match self.flavour {
+            Flavour::Pi => Flavour::Omp,
+            Flavour::Omp => Flavour::Pi,
+        };
+        (self.root.is_none() && default_root(other) == root).then_some(self.flavour)
     }
 }
 
-/// Where pi keeps sessions by default (see [`session_root`]).
-pub(crate) fn default_root() -> PathBuf {
-    session_root(&agent_dir(), var_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
+/// Where `flavour` keeps sessions by default (see [`session_root`]).
+pub(crate) fn default_root(flavour: Flavour) -> PathBuf {
+    session_root(&flavour.agent_dir(), var_nonempty("PI_CODING_AGENT_SESSION_DIR").as_deref())
 }
 
 /// The file of session `id` under `root`. Pi names it `<timestamp>_<id>.jsonl`, so a file so
@@ -104,8 +117,8 @@ fn custom_session_dir(agent_dir: &Path, env: Option<&std::ffi::OsStr>) -> Option
 /// Where pi puts a new session started in `cwd`: the chosen session directory itself, else
 /// `<agent dir>/sessions/--<cwd with separators as dashes>--` (pi-mono coding-agent
 /// `session-manager.ts` `getDefaultSessionDirPath`).
-pub(crate) fn new_session_dir(cwd: &Path) -> PathBuf {
-    let agent_dir = agent_dir();
+pub(crate) fn new_session_dir(flavour: Flavour, cwd: &Path) -> PathBuf {
+    let agent_dir = flavour.agent_dir();
     let env = var_nonempty("PI_CODING_AGENT_SESSION_DIR");
     custom_session_dir(&agent_dir, env.as_deref()).unwrap_or_else(|| {
         let cwd = cwd.to_string_lossy();
@@ -134,6 +147,7 @@ impl Sessions for PiSessions {
             return Err(RuntimeError::NotFound(root));
         }
         Ok(PiListener {
+            only: self.only(&root),
             root,
             pool: self.pool.clone(),
         })
@@ -147,13 +161,13 @@ impl Sessions for PiSessions {
         if !root.is_dir() {
             return Err(RuntimeError::NotFound(root));
         }
-        let pool = self.pool.clone();
+        let (pool, only) = (self.pool.clone(), self.only(&root));
         Ok(async_stream::stream! {
             let sessions_pool = pool.clone();
             let scan = pool
                 .run(move || {
                     scan_sessions(root, |path, is_file| {
-                        PiListener::open_session(path, is_file, &sessions_pool)
+                        PiListener::open_session(path, is_file, &sessions_pool, only)
                     })
                 })
                 .await;
@@ -173,7 +187,7 @@ impl Observable for Pi {
     type Sessions = PiSessions;
 
     fn sessions(&self, pool: BlockingPool) -> PiSessions {
-        PiSessions::builder().pool(pool).build()
+        PiSessions::builder().pool(pool).flavour(self.flavour()).build()
     }
 }
 
@@ -181,6 +195,8 @@ impl Observable for Pi {
 pub struct PiListener {
     root: PathBuf,
     pool: BlockingPool,
+    /// See [`PiSessions::only`].
+    only: Option<Flavour>,
 }
 
 impl PiListener {
@@ -202,11 +218,16 @@ impl PiListener {
     ///
     /// Reads the file's first line for the session id. `None` too while that line is still
     /// being written: the listener waits for the file to change before trying again.
-    fn open_session(path: &Path, is_file: bool, pool: &BlockingPool) -> Option<PiSession> {
+    fn open_session(
+        path: &Path,
+        is_file: bool,
+        pool: &BlockingPool,
+        only: Option<Flavour>,
+    ) -> Option<PiSession> {
         if !is_file || !Self::is_session_file(path) {
             return None;
         }
-        let id = Self::session_id(read_header(path).ok()?)?;
+        let id = Self::session_id(header_for(path, only).ok()?)?;
         Some(PiSession::open(id, path.to_path_buf(), pool.clone()))
     }
 
@@ -220,11 +241,12 @@ impl PiListener {
         path: PathBuf,
         mut stat: watch::Receiver<FileStat>,
         pool: BlockingPool,
+        only: Option<Flavour>,
     ) -> Option<PiSession> {
         loop {
             stat.borrow_and_update();
             let at = path.clone();
-            match pool.run(move || read_header(&at)).await.ok()? {
+            match pool.run(move || header_for(&at, only)).await.ok()? {
                 Ok(Header::Pending) => {}
                 Ok(header) => {
                     return Some(PiSession {
@@ -251,8 +273,7 @@ impl Listener for PiListener {
     type Session = PiSession;
 
     fn watch(self) -> impl Stream<Item = Result<PiSession, WatchError>> + Send + 'static {
-        let root = self.root;
-        let pool = self.pool;
+        let (root, pool, only) = (self.root, self.pool, self.only);
         async_stream::stream! {
             let files = TreeWatcher::builder().filter(Self::is_session_file).watch(&root);
             let mut files = match files {
@@ -270,7 +291,7 @@ impl Listener for PiListener {
                     file = files.next(), if !files_done => match file {
                         Some(file) => {
                             let (path, stat) = file.into_parts();
-                            let session = Self::await_session(path.to_path_buf(), stat, pool.clone());
+                            let session = Self::await_session(path.to_path_buf(), stat, pool.clone(), only);
                             pending.push(session);
                         }
                         None => files_done = true,
@@ -313,7 +334,8 @@ enum Header {
 
 /// Read the header of the session file at `path`: its first entry, bounded by
 /// [`MAX_HEADER_BYTES`]. As in pi's `readSessionHeader`, blank and malformed lines before it are
-/// skipped, and a final line without a newline counts once it parses.
+/// skipped, and a final line without a newline counts once it parses. So is omp's `title` slot,
+/// the line it keeps before the header to rewrite in place (omp `session-title-slot.ts`).
 fn read_header(path: &Path) -> io::Result<Header> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file.take(MAX_HEADER_BYTES));
@@ -331,6 +353,9 @@ fn read_header(path: &Path) -> io::Result<Header> {
             return Ok(Header::Pending);
         }
         let entry = match crate::json::js::from_slice::<serde_json::Value>(&line) {
+            Ok(entry) if terminated && entry.get("type").is_some_and(|kind| kind == "title") => {
+                continue;
+            }
             Ok(entry) => entry,
             Err(_) if terminated => continue,
             // A half-written line: wait for the rest.
@@ -343,6 +368,27 @@ fn read_header(path: &Path) -> io::Result<Header> {
             _ => Header::Other,
         });
     }
+}
+
+/// [`read_header`], taking a session of the other flavour for no session when `only` says whose
+/// files to take: omp's start with their title slot, pi's never do.
+fn header_for(path: &Path, only: Option<Flavour>) -> io::Result<Header> {
+    let header = read_header(path)?;
+    let Some(flavour) = only else {
+        return Ok(header);
+    };
+    if !matches!(header, Header::Session { .. }) {
+        return Ok(header);
+    }
+    let mut first = Vec::new();
+    BufReader::new(File::open(path)?.take(MAX_HEADER_BYTES)).read_until(b'\n', &mut first)?;
+    let titled = crate::json::js::from_slice::<serde_json::Value>(&first)
+        .is_ok_and(|entry| entry["type"] == "title");
+    Ok(if titled == (flavour == Flavour::Omp) {
+        header
+    } else {
+        Header::Other
+    })
 }
 
 /// The session id pi's own file naming (`<timestamp>_<id>.jsonl`, session-manager.ts
@@ -560,6 +606,11 @@ struct PiEntry {
     model: Option<String>,
     /// On `session_info`: a name the user gave the session.
     name: Option<String>,
+    /// On omp's `title_change`: the session's new title.
+    title: Option<serde_json::Value>,
+    /// On omp's `title_change`: who set it, `user` or `auto`. Values, not strings: other
+    /// entries may use these names for something else, which must not fail the line.
+    source: Option<serde_json::Value>,
     /// On the `session` header: the file of the session this one was forked from.
     parent_session: Option<String>,
     /// On a v1 `session` header: what `parentSession` was called then.
@@ -765,6 +816,11 @@ impl Message for PiMessage {
         }
     }
 
+    /// An assistant turn's provider, which pi and omp restore a session's model by.
+    fn provider(&self) -> Option<String> {
+        self.message_str("provider").map(str::to_owned)
+    }
+
     fn model(&self) -> Option<String> {
         // Assistant turns name their model (the one the provider reports first); a
         // `model_change` line or v1 header names it at the top, a `usage` entry as `model`.
@@ -827,11 +883,23 @@ impl Message for PiMessage {
     /// A `session_info` name, trimmed as pi reads it (session-manager.ts `getSessionName`). A
     /// blank name clears pi's title, which a line cannot express here: it assigns none.
     /// The session's name; a blank one clears it, as pi's `getSessionName` reads it.
+    /// Or omp's `title_change`, named by the user or generated.
     fn title(&self) -> Option<TitleChange> {
-        if self.entry.kind != "session_info" {
-            return None;
+        match self.entry.kind.as_str() {
+            "session_info" => Some(TitleChange::new(
+                TitleSource::Named,
+                self.entry.name.as_deref().unwrap_or_default(),
+            )),
+            "title_change" => {
+                let source = match self.entry.source.as_ref().and_then(serde_json::Value::as_str) {
+                    Some("user") => TitleSource::Named,
+                    _ => TitleSource::Generated,
+                };
+                let title = self.entry.title.as_ref().and_then(serde_json::Value::as_str);
+                Some(TitleChange::new(source, title.unwrap_or_default()))
+            }
+            _ => None,
         }
-        Some(TitleChange::new(TitleSource::Named, self.entry.name.as_deref().unwrap_or_default()))
     }
 
     /// One model call, identified by what a fork's verbatim copy keeps: the entry's id and
@@ -1322,6 +1390,32 @@ mod tests {
         assert_eq!(got.len(), 2);
     }
 
+    /// pi and omp sharing a session directory each take only their own sessions there: omp's
+    /// start with a title slot.
+    #[rstest]
+    #[tokio::test]
+    async fn a_shared_session_dir_is_split_by_flavour(
+        #[values(Flavour::Pi, Flavour::Omp)] flavour: Flavour,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = crate::env::mock::MockEnv::install();
+        env.set("HOME", dir.path());
+        env.set("PI_CODING_AGENT_SESSION_DIR", dir.path());
+        let header = |id: &str| serde_json::json!({"type": "session", "id": id}).to_string() + "\n";
+        std::fs::write(dir.path().join("1_p.jsonl"), header("p")).unwrap();
+        let slot = r#"{"type":"title","v":1,"title":""}"#.to_owned() + "\n";
+        std::fs::write(dir.path().join("2_o.jsonl"), slot + &header("o")).unwrap();
+
+        let sessions = PiSessions::builder().flavour(flavour).pool(pool()).build();
+        let ids: Vec<String> =
+            sessions.existing().unwrap().map(|s| s.unwrap().id().into()).collect().await;
+        let want = match flavour {
+            Flavour::Pi => "p",
+            Flavour::Omp => "o",
+        };
+        assert_eq!(ids, vec![want.to_owned()]);
+    }
+
     #[rstest]
     #[tokio::test]
     async fn existing_finds_every_session_file_under_root() {
@@ -1640,6 +1734,23 @@ mod tests {
         assert_eq!(m.title().and_then(|t| t.text).as_deref(), title);
     }
 
+    /// omp's `title_change`: a title the user set is named, one omp generated is generated.
+    #[rstest]
+    #[case::user("user", " my title ", TitleSource::Named, Some("my title"))]
+    #[case::auto("auto", "Fix the build", TitleSource::Generated, Some("Fix the build"))]
+    #[case::blank("auto", "  ", TitleSource::Generated, None)]
+    fn omp_title_changes_are_titles(
+        #[case] source: &str,
+        #[case] title: &str,
+        #[case] want_source: TitleSource,
+        #[case] want: Option<&str>,
+    ) {
+        let m = pi(&serde_json::json!({"type": "title_change", "id": "t1", "parentId": "a1",
+            "timestamp": "2026-10-16T18:38:04Z", "title": title, "source": source}));
+        let change = m.title().unwrap();
+        assert_eq!((change.source, change.text.as_deref()), (want_source, want));
+    }
+
     /// `pi --session <path>` keeps any explicit file name (session-manager.ts `_setSessionFile`,
     /// "preserve explicit path"), so the file stem is not the session id; the header's `id` is.
     #[rstest]
@@ -1733,6 +1844,15 @@ mod tests {
         Header::Other
     )]
     #[case::event_log(b"{\"type\":\"agent_start\"}\n".as_slice(), Header::Other)]
+    #[case::after_omp_title_slot(
+        b"{\"type\":\"title\",\"v\":1,\"title\":\"\",\"pad\":\"  \"}\n{\"type\":\"session\",\"id\":\"s1\"}\n"
+            .as_slice(),
+        Header::Session { id: "s1".to_owned() }
+    )]
+    #[case::omp_title_slot_alone(
+        b"{\"type\":\"title\",\"v\":1,\"title\":\"\"}\n".as_slice(),
+        Header::Pending
+    )]
     fn reads_the_header_line(#[case] body: &[u8], #[case] expected: Header) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.jsonl");

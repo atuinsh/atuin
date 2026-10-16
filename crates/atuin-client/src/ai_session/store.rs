@@ -9,10 +9,10 @@ use atuin_domain::record::{
 use tracing::{debug, warn};
 use typed_builder::TypedBuilder;
 
-use crate::ai_session::Message;
 use crate::ai_session::database::{
     AiSessionDatabase, DbError, Generation, NewRow, PreparedMessage, Watermark,
 };
+use crate::ai_session::{HarnessKind, Message};
 use crate::record::decode::{decode_parallel, map_parallel};
 use crate::record::sqlite_store::SqliteStore;
 
@@ -105,6 +105,25 @@ impl AiSessionRecord {
     /// (named msgpack, without [`Message::atuin_id`]) is no longer read.
     pub const VERSION: RecordVersion = RecordVersion::V2;
 
+    /// The version this record is written as: [`Self::VERSION`], or v3 (the same body) for a
+    /// message naming a harness v2 readers don't know (omp), or with a field they don't
+    /// ([`Message::provider`]). Those can't decode it, and skip what they can't decode for good;
+    /// a version they don't know they hold until they're upgraded.
+    #[must_use]
+    pub fn version(&self) -> RecordVersion {
+        match self {
+            Self::Message(msg) => {
+                let mut harnesses = std::iter::once(msg.session.harness)
+                    .chain(msg.parent.as_ref().map(|p| p.harness));
+                if harnesses.any(|h| h == HarnessKind::Omp) || msg.provider.is_some() {
+                    RecordVersion::V3
+                } else {
+                    Self::VERSION
+                }
+            }
+        }
+    }
+
     /// A kind byte, then the zstd-compressed positional msgpack body.
     #[must_use]
     pub fn serialize(&self) -> Vec<u8> {
@@ -130,7 +149,7 @@ impl AiSessionRecord {
         match version {
             RecordVersion::V0 => Err(DecodeError::Retired(RecordVersion::V0)),
             RecordVersion::V1 => Ok(Self::Message(rmp_serde::from_slice(body)?)),
-            RecordVersion::V2 => {
+            RecordVersion::V2 | RecordVersion::V3 => {
                 let body = zstd::stream::decode_all(body).map_err(DecodeError::Decompress)?;
                 Ok(Self::Message(rmp_serde::from_slice(&body)?))
             }
@@ -155,7 +174,8 @@ impl AiSessionStore {
     pub async fn push(&self, msg: &Message) -> Result<Watermark, PushError> {
         let id = msg.id;
 
-        let bytes = AiSessionRecord::Message(msg.clone()).serialize();
+        let record = AiSessionRecord::Message(msg.clone());
+        let (bytes, version) = (record.serialize(), record.version());
         let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
 
         loop {
@@ -164,7 +184,7 @@ impl AiSessionStore {
             let record = Record::builder()
                 .id(id)
                 .host(Host::new(self.host_id))
-                .version(AiSessionRecord::VERSION)
+                .version(version.clone())
                 .tag(RecordTag::AiSession)
                 .idx(idx)
                 .data(DecryptedData(bytes.clone()))
@@ -187,13 +207,14 @@ impl AiSessionStore {
         let (all, host, key) = (Arc::clone(msgs), Host::new(self.host_id), self.key.clone());
         // Serializing and encrypting each is most of what pushing costs: across cores.
         let records = map_parallel((0..msgs.len()).collect(), move |i| {
+            let record = AiSessionRecord::Message(all[i].clone());
             Record::builder()
                 .id(all[i].id)
                 .host(host.clone())
-                .version(AiSessionRecord::VERSION)
+                .version(record.version())
                 .tag(RecordTag::AiSession)
                 .idx(first + i as u64)
-                .data(DecryptedData(AiSessionRecord::Message(all[i].clone()).serialize()))
+                .data(DecryptedData(record.serialize()))
                 .build()
                 .encrypt(&key)
         })

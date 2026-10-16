@@ -28,9 +28,11 @@ use atuin_daemon::client::{HistoryClient, SearchClient, SearchParams};
 use atuin_daemon::grpc::HistoryService;
 use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
+use atuin_daemon::grpc::versioning::StrictVersionInterceptor;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
+use atuin_daemon::server::STRICT_VERSION_LAYER;
 use atuin_daemon::{
-    Daemon, DaemonEvent, DaemonHandle, HistoryJournal, Octavo, OutputCaptureEngine, SearchComponent,
+    Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCaptureEngine, SearchComponent,
 };
 use atuin_domain::record::{CmdOrigin, HostId, RecordTag};
 use corpus::{HistoryGen, Seeded};
@@ -40,6 +42,7 @@ use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{RwLock, oneshot};
 use tokio_stream::wrappers::UnixListenerStream;
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 use tower::service_fn;
 use uuid::Uuid;
@@ -166,7 +169,6 @@ impl TestEnvBuilder {
             history_db.clone(),
             index.clone(),
             output_capture,
-            Octavo::nop(),
         ));
         let history_service =
             HistoryServer::new(HistoryService::new(journal.clone(), handle.clone()));
@@ -180,6 +182,7 @@ impl TestEnvBuilder {
         tokio::spawn(async move {
             let mut rx = server_handle.subscribe();
             Server::builder()
+                .layer(STRICT_VERSION_LAYER)
                 .add_service(history_service)
                 .add_service(search_service)
                 .serve_with_incoming_shutdown(incoming, async move {
@@ -298,20 +301,27 @@ impl TestEnv {
     }
 
     /// The prost-generated client, for sending hand-built (possibly malformed) messages.
-    pub async fn raw_history_client(&self) -> pb::history_client::HistoryClient<Channel> {
+    pub async fn raw_history_client(
+        &self,
+    ) -> pb::history_client::HistoryClient<InterceptedService<Channel, StrictVersionInterceptor>>
+    {
+        pb::history_client::HistoryClient::with_interceptor(
+            self.channel().await,
+            StrictVersionInterceptor,
+        )
+    }
+
+    /// A connection that stamps no build on its requests.
+    pub async fn channel(&self) -> Channel {
         let path = self.socket_path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")
-                .unwrap()
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .unwrap();
-        pb::history_client::HistoryClient::new(channel)
+        Endpoint::try_from("http://atuin_local_daemon:0")
+            .unwrap()
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let path = path.clone();
+                async move { Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?)) }
+            }))
+            .await
+            .unwrap()
     }
 
     /// Start and end `cmd` through the RPCs, the way a shell does.

@@ -20,6 +20,8 @@ pub struct RehydrateMessage {
     pub role: Role,
     pub content: Vec<Content>,
     pub model: Option<String>,
+    /// Who served `model`, when capture knows.
+    pub provider: Option<String>,
     pub usage: Option<Usage>,
     pub stop_reason: Option<StopReason>,
     pub turn_id: Option<String>,

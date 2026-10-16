@@ -68,6 +68,8 @@ struct Draft {
     created: i64,
     completed: i64,
     model: Option<String>,
+    /// Who served `model`, when capture knows.
+    provider: Option<String>,
     /// A prompt's or injected text's paragraphs; a compaction's summary.
     text: Vec<String>,
     /// An assistant's content (`text` and `tool` items).
@@ -92,6 +94,7 @@ impl Draft {
             created: at,
             completed: at,
             model: row.model.clone(),
+            provider: row.provider.clone(),
             text: Vec::new(),
             content: Vec::new(),
             tokens: None,
@@ -186,6 +189,9 @@ pub fn export(session: &RehydrateSession) -> Value {
         draft.completed = draft.completed.max(millis(row.timestamp));
         if draft.model.is_none() {
             draft.model.clone_from(&row.model);
+        }
+        if draft.provider.is_none() {
+            draft.provider.clone_from(&row.provider);
         }
         draft.sources.push(row.source_id.clone());
         draft.sources.append(&mut unwritten);
@@ -420,14 +426,18 @@ fn draft_created(draft: &Draft) -> i64 {
     }
 }
 
-/// The provider and model an assistant message ran on: its turn's, else what its rows say (a
-/// model with no provider is taken for opencode's own).
+/// The provider and model an assistant message ran on: its turn's, else what its rows say. A
+/// model is kept whole when its provider was captured (OpenRouter's `anthropic/claude-sonnet-4`),
+/// else names its provider before a `/`, else is opencode's own.
 fn provider_model(draft: &Draft) -> (String, String) {
     if let Some(Turn::Call {
         provider, model, ..
     }) = draft.turn.as_deref().and_then(Turn::of)
     {
         return (provider.to_owned(), model.to_owned());
+    }
+    if let (Some(provider), Some(model)) = (&draft.provider, &draft.model) {
+        return (provider.clone(), model.clone());
     }
     match draft.model.as_deref().map(|model| model.split_once('/').unwrap_or(("opencode", model))) {
         Some((provider, model)) => (provider.to_owned(), model.to_owned()),

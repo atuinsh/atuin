@@ -10,11 +10,32 @@ use crate::path::PathBufExt as _;
 pub mod rehydrate;
 pub mod session;
 
-/// Pi's config directory: `PI_CODING_AGENT_DIR`, else `~/.pi/agent` (pi-mono
-/// `packages/coding-agent/src/config.ts` `getAgentDir`).
-fn agent_dir() -> PathBuf {
-    var_nonempty("PI_CODING_AGENT_DIR")
-        .map_or_else(|| home_dir().joined(".pi").joined("agent"), |dir| expand_tilde(&dir))
+/// Which pi: pi itself, or oh-my-pi (`omp`), a fork that keeps pi's session format in a
+/// directory of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavour {
+    Pi,
+    Omp,
+}
+
+impl Flavour {
+    /// The command that runs it, which is also its name.
+    #[must_use]
+    pub const fn binary(self) -> &'static str {
+        match self {
+            Self::Pi => "pi",
+            Self::Omp => "omp",
+        }
+    }
+
+    /// Its config directory: `PI_CODING_AGENT_DIR` (both read it), else `~/.pi/agent` (pi-mono
+    /// `packages/coding-agent/src/config.ts` `getAgentDir`) or `~/.omp/agent`.
+    pub(crate) fn agent_dir(self) -> PathBuf {
+        var_nonempty("PI_CODING_AGENT_DIR").map_or_else(
+            || home_dir().joined(format!(".{}", self.binary())).joined("agent"),
+            |dir| expand_tilde(&dir),
+        )
+    }
 }
 
 /// Expand a leading `~` the way pi does for its path settings and variables (pi-mono
@@ -34,19 +55,28 @@ fn expand_tilde(path: &std::ffi::OsStr) -> PathBuf {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Pi;
+#[derive(Debug, Clone, Copy)]
+pub struct Pi {
+    flavour: Flavour,
+}
 
 impl Pi {
+    pub const PI: Self = Self {
+        flavour: Flavour::Pi,
+    };
+    pub const OMP: Self = Self {
+        flavour: Flavour::Omp,
+    };
+
     #[must_use]
-    pub fn new() -> Self {
-        Self {}
+    pub const fn flavour(self) -> Flavour {
+        self.flavour
     }
 }
 
 impl Harness for Pi {
     fn name(&self) -> &'static str {
-        "pi"
+        self.flavour.binary()
     }
 
     /// Install the hooks on the current active user's machine
@@ -54,21 +84,26 @@ impl Harness for Pi {
         const PLUGIN_SOURCE: &str = include_str!("../../../res/harnesstools/pi/atuin.ts");
         const PLUGIN_NAME: &str = "atuin.ts";
 
-        let extensions_dir = agent_dir().joined("extensions");
+        let extensions_dir = self.flavour.agent_dir().joined("extensions");
 
         tokio::fs::create_dir_all(&extensions_dir).await?;
 
         let extension_path = extensions_dir.joined(PLUGIN_NAME);
+        // Commands are recorded with the harness's own name as their author.
+        let source = PLUGIN_SOURCE.replace(
+            r#"const ATUIN_AUTHOR = "pi";"#,
+            &format!(r#"const ATUIN_AUTHOR = "{}";"#, self.flavour.binary()),
+        );
 
         let already_installed = tokio::fs::read_to_string(&extension_path)
             .await
-            .is_ok_and(|existing| existing == PLUGIN_SOURCE);
+            .is_ok_and(|existing| existing == source);
 
         if already_installed {
             return Err(InstallHookError::AlreadyInstalled);
         }
 
-        tokio::fs::write(&extension_path, PLUGIN_SOURCE).await?;
+        tokio::fs::write(&extension_path, source).await?;
 
         Ok(extension_path)
     }
@@ -82,15 +117,15 @@ impl Harness for Pi {
             Some(path) => (CwdRequirement::Preferred, resume::path_arg(path)?),
             None => (CwdRequirement::Required, target.id.clone()),
         };
-        Ok(resume::plan(target, cwd, "pi", ["--session".to_owned(), session]))
+        Ok(resume::plan(target, cwd, self.flavour.binary(), ["--session".to_owned(), session]))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
-        let (root, id) = (session::default_root(), id.to_owned());
+        let (root, id) = (session::default_root(self.flavour), id.to_owned());
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
     async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(session).await
+        rehydrate::rehydrate(self.flavour, session).await
     }
 }

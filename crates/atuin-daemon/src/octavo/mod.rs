@@ -16,7 +16,6 @@ pub struct Octavo {
 }
 
 impl Octavo {
-    #[cfg(feature = "octavo")]
     pub async fn open(
         settings: &Settings,
         handle: DaemonHandle,
@@ -37,16 +36,6 @@ impl Octavo {
                 Self::nop()
             }
         }
-    }
-
-    #[cfg(not(feature = "octavo"))]
-    #[allow(clippy::unused_async)]
-    pub async fn open(
-        _settings: &Settings,
-        _handle: DaemonHandle,
-        _outputs: Arc<OutputStore>,
-    ) -> Self {
-        Self::nop()
     }
 
     #[must_use]

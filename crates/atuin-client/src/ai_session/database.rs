@@ -13,7 +13,7 @@ use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{
     Checkpoint, Content, ParentKind, Role, TitleChange, TitleSource, Usage,
 };
-use atuin_common::string::TruncateCharsExt;
+use atuin_common::string::StrExt as _;
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId};
 use futures::{Stream, TryStreamExt};
@@ -42,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -108,7 +108,8 @@ macro_rules! message_columns {
          AS git_branch, (SELECT value FROM interned WHERE id = m.model) AS model, m.usage_input, \
          m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
          m.stop_reason, m.usage_present, m.turn_id, m.title_change, (SELECT value FROM interned \
-         WHERE id = m.host) AS host_id"
+         WHERE id = m.host) AS host_id, (SELECT value FROM interned WHERE id = m.provider) AS \
+         provider"
     };
 }
 
@@ -331,6 +332,7 @@ struct MessageRow {
     turn_id: Option<String>,
     title_change: Option<String>,
     host_id: Option<String>,
+    provider: Option<String>,
 }
 
 /// Input, output, cache read, cache write, reasoning: the `usage_*` columns in order.
@@ -1568,6 +1570,7 @@ impl AiSessionDatabase {
             3 => Ok(HarnessKind::Copilot),
             4 => Ok(HarnessKind::Opencode),
             5 => Ok(HarnessKind::Pi),
+            6 => Ok(HarnessKind::Omp),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
@@ -1624,6 +1627,7 @@ impl AiSessionDatabase {
             .cwd(row.cwd.map(PathBuf::from))
             .git_branch(row.git_branch)
             .model(row.model)
+            .provider(row.provider)
             .usage((row.usage_present != 0).then(|| Usage {
                 input: Some(u64::try_from(row.usage_input).unwrap_or(0)),
                 output: Some(u64::try_from(row.usage_output).unwrap_or(0)),
@@ -1986,6 +1990,40 @@ mod tests {
         assert_eq!(s.message_count, 1);
         let got: Vec<_> = db.messages(&m.session).try_collect().await.unwrap();
         assert_eq!(got[0].turn_id.as_deref(), Some("msg_01"));
+    }
+
+    /// A row's provider is stored and read back, and a row without one has none.
+    #[rstest]
+    #[tokio::test]
+    async fn a_rows_provider_is_kept(#[values(None, Some("openai-codex"))] provider: Option<&str>) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut m = sample_message();
+        m.provider = provider.map(str::to_owned);
+        db.append(&m).await.unwrap();
+
+        let got: Vec<_> = db.messages(&m.session).try_collect().await.unwrap();
+        assert_eq!(got[0].provider.as_deref(), provider);
+    }
+
+    /// Migration 3 adds the provider column to a projection already there, keeping its rows.
+    #[rstest]
+    fn the_provider_migration_keeps_the_projection() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("migrations/0001_init.sql")).unwrap();
+        conn.execute_batch(include_str!("migrations/0002_message_blocks.sql")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
+                 VALUES (1, 1, 's', x'00', 0, 0);
+             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
+                 VALUES (x'01', 1, 1, 'a', 0, 1, '[]');",
+        )
+        .unwrap();
+
+        conn.execute_batch(include_str!("migrations/0003_message_provider.sql")).unwrap();
+
+        let provider: Option<i64> =
+            conn.query_row("SELECT provider FROM messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(provider, None);
     }
 
     /// Rows that carry only usage, a title or session context are stored, but are no messages.

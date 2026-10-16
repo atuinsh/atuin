@@ -149,6 +149,7 @@ enum ContinueIn {
     Codex,
     Opencode,
     Pi,
+    Omp,
 }
 
 impl ContinueIn {
@@ -158,6 +159,7 @@ impl ContinueIn {
             Self::Codex => HarnessKind::Codex,
             Self::Opencode => HarnessKind::Opencode,
             Self::Pi => HarnessKind::Pi,
+            Self::Omp => HarnessKind::Omp,
         }
     }
 }

@@ -330,6 +330,7 @@ pub fn harness_badge(harness: HarnessKind) -> &'static str {
         HarnessKind::Codex => "CX",
         HarnessKind::Opencode => "OC",
         HarnessKind::Pi => "PI",
+        HarnessKind::Omp => "OM",
         HarnessKind::Copilot => "CP",
         HarnessKind::Unknown => "??",
     }
@@ -342,6 +343,7 @@ pub fn harness_arg(harness: HarnessKind) -> Option<&'static str> {
         HarnessKind::Codex => Some("codex"),
         HarnessKind::Opencode => Some("opencode"),
         HarnessKind::Pi => Some("pi"),
+        HarnessKind::Omp => Some("omp"),
         HarnessKind::Copilot | HarnessKind::Unknown => None,
     }
 }
@@ -353,6 +355,7 @@ pub fn harness_label(harness: HarnessKind) -> &'static str {
         HarnessKind::Codex => "Codex",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "Pi",
+        HarnessKind::Omp => "omp",
         HarnessKind::Copilot => "Copilot",
         HarnessKind::Unknown => "unknown",
     }

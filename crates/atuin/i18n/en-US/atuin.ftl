@@ -386,6 +386,7 @@ arg-key-base64 = Switch to base64 output of the key
 cmd-status = Display the sync status
 arg-update-check = Check whether an update is available without installing it
 arg-update-version = Update (or roll back) to a specific version, e.g. "18.9.0" or "18.9.0-nightly.1", instead of the channel's latest release
+arg-update-prerelease = Update to the latest prerelease, as if `update_channel = "nightly"` were set
 cmd-pty-proxy = PTY proxy for atuin
 cmd-uuid = Generate a UUID
 cmd-gen-completions = Generate shell completions

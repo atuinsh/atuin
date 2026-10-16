@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
+use atuin_common::harnesstools::pi::Flavour;
 use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use atuin_common::harnesstools::session::{
     Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
@@ -23,6 +24,7 @@ pub enum HarnessKind {
     Copilot = 3,
     Opencode = 4,
     Pi = 5,
+    Omp = 6,
 }
 
 impl From<&AnyHarness> for HarnessKind {
@@ -31,7 +33,10 @@ impl From<&AnyHarness> for HarnessKind {
             AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
             AnyHarness::Codex(_) => Self::Codex,
             AnyHarness::Opencode(_) => Self::Opencode,
-            AnyHarness::Pi(_) => Self::Pi,
+            AnyHarness::Pi(pi) => match pi.flavour() {
+                Flavour::Pi => Self::Pi,
+                Flavour::Omp => Self::Omp,
+            },
         }
     }
 }
@@ -46,7 +51,8 @@ impl HarnessKind {
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
-            Self::Pi => Some(AnyHarness::Pi(pi::Pi)),
+            Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
+            Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
             Self::Copilot | Self::Unknown => None,
         }
     }
@@ -222,6 +228,15 @@ pub struct Message {
     #[builder(default)]
     #[serde(skip)]
     pub host: Option<HostId>,
+    /// Who served [`Self::model`] (`openai-codex`, say), for the harnesses that reopen a session
+    /// on a model by provider and model (pi, omp, opencode). Last, and left out when `None`, so a
+    /// record without one is still the v2 layout; one with it is v3 (see
+    /// [`AiSessionRecord::version`]).
+    ///
+    /// [`AiSessionRecord::version`]: super::AiSessionRecord::version
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 impl Message {
@@ -259,6 +274,7 @@ impl From<Message> for RehydrateMessage {
             role: m.role,
             content: m.content,
             model: m.model,
+            provider: m.provider,
             usage: m.usage,
             stop_reason: m.stop_reason,
             turn_id: m.turn_id,
@@ -611,6 +627,22 @@ mod tests {
         assert_eq!(hex(&body), V1_LAYOUT);
     }
 
+    /// A record written before [`Message::provider`] reads back without one.
+    #[rstest]
+    fn a_v2_record_reads_without_a_provider() {
+        let bytes: Vec<u8> = (0..V1_LAYOUT.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&V1_LAYOUT[i..i + 2], 16).unwrap())
+            .collect();
+        let (kind, body) = bytes.split_first().unwrap();
+        let mut record = vec![*kind];
+        record.extend(zstd::bulk::compress(body, 0).unwrap());
+
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record, &RecordVersion::V2).unwrap();
+        assert_eq!(read, record_message());
+    }
+
     #[rstest]
     fn a_v0_record_is_no_longer_read() {
         let record = AiSessionRecord::Message(record_message()).serialize();
@@ -618,10 +650,39 @@ mod tests {
         assert!(matches!(err, DecodeError::Retired(RecordVersion::V0)));
     }
 
+    /// A message v2 readers can't decode (naming omp, or with a provider) is written as v3, and
+    /// reads back.
+    #[rstest]
+    #[case::pi(HarnessKind::Pi, None, None, RecordVersion::V2)]
+    #[case::omp(HarnessKind::Omp, None, None, RecordVersion::V3)]
+    #[case::continued_from_omp(HarnessKind::Pi, Some(HarnessKind::Omp), None, RecordVersion::V3)]
+    #[case::with_a_provider(HarnessKind::Omp, None, Some("openai-codex"), RecordVersion::V3)]
+    fn omp_messages_are_v3(
+        #[case] harness: HarnessKind,
+        #[case] parent: Option<HarnessKind>,
+        #[case] provider: Option<&str>,
+        #[case] want: RecordVersion,
+    ) {
+        let handle = |harness| HarnessSession {
+            harness,
+            session: NativeSessionId::from("s".to_owned()),
+        };
+        let mut msg = record_message();
+        msg.session = handle(harness);
+        msg.parent = parent.map(handle);
+        msg.provider = provider.map(str::to_owned);
+        let record = AiSessionRecord::Message(msg.clone());
+
+        assert_eq!(record.version(), want);
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record.serialize(), &want).unwrap();
+        assert_eq!(read, msg);
+    }
+
     #[rstest]
     fn an_unknown_version_is_refused() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        let version = RecordVersion::Other("v3".to_owned());
+        let version = RecordVersion::Other("v4".to_owned());
         let err = AiSessionRecord::deserialize(&record, &version).unwrap_err();
         assert!(matches!(err, DecodeError::UnknownVersion(v) if v == version));
     }

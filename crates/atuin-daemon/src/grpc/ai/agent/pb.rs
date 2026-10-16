@@ -234,6 +234,7 @@ impl From<DomainMessage> for Message {
             role_label,
             stop_reason_label,
             host_id: value.host.map(host_repr),
+            provider: value.provider,
         }
     }
 }
@@ -312,6 +313,7 @@ impl TryFrom<Message> for DomainMessage {
             turn_id: None,
             atuin_id: None,
             host: host_from_repr(value.host_id)?,
+            provider: value.provider,
         })
     }
 }
@@ -418,6 +420,7 @@ mod tests {
             Just(HarnessKind::Copilot),
             Just(HarnessKind::Opencode),
             Just(HarnessKind::Pi),
+            Just(HarnessKind::Omp),
         ]
     }
 
@@ -564,12 +567,13 @@ mod tests {
             prop::option::of(arb_stop_reason()),
             arb_parent_kind(),
             prop::option::of(arb_host()),
+            prop::option::of("[a-z-]{1,12}"),
         );
         (handles, body, outcome).prop_map(
             |(
                 (id, session, source_id, parent, parent_source_id),
                 (timestamp, role, content, cwd, git_branch, model),
-                (usage, stop_reason, parent_kind, host),
+                (usage, stop_reason, parent_kind, host, provider),
             )| DomainMessage {
                 id: RecordId(uuid::Uuid::from_u128(id)),
                 session,
@@ -591,6 +595,7 @@ mod tests {
                 turn_id: None,
                 atuin_id: None,
                 host,
+                provider,
             },
         )
     }

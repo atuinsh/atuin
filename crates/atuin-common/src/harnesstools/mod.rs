@@ -148,7 +148,13 @@ impl AnyHarness {
     /// Every known harness.
     #[must_use]
     pub fn all() -> &'static [Self] {
-        &[Self::ClaudeCode(Ccode), Self::Codex(Codex), Self::Opencode(Opencode), Self::Pi(Pi)]
+        &[
+            Self::ClaudeCode(Ccode),
+            Self::Codex(Codex),
+            Self::Opencode(Opencode),
+            Self::Pi(Pi::PI),
+            Self::Pi(Pi::OMP),
+        ]
     }
 
     /// The harness's sessions, whose file reads all run in `pool`.

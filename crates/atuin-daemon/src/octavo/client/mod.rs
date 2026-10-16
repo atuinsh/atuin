@@ -1,8 +1,6 @@
-#[cfg(feature = "octavo")]
 mod active;
 mod nop;
 
-#[cfg(feature = "octavo")]
 pub use active::ActiveOctavoClient;
 use atuin_client::history::{History, HistoryId};
 use atuin_domain::record::RecordId;
@@ -20,7 +18,6 @@ pub trait OctavoClient {
 #[enum_dispatch(OctavoClient)]
 #[derive(Debug)]
 pub enum AnyOctavoClient {
-    #[cfg(feature = "octavo")]
     Active(ActiveOctavoClient),
     Nop(NopOctavoClient),
 }

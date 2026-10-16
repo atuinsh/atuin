@@ -228,6 +228,7 @@ fn build(
     let usage = m.usage();
     let stop_reason = m.stop_reason();
     let model = m.model();
+    let provider = m.provider();
     let cwd = m.cwd();
     let git_branch = m.git_branch();
     if m.id().is_none()
@@ -278,6 +279,7 @@ fn build(
             .role(m.role())
             .content(content)
             .model(model)
+            .provider(provider)
             .usage(usage)
             .stop_reason(stop_reason)
             .cwd(cwd)
@@ -422,6 +424,19 @@ mod tests {
     fn synthetic_ids_parse_back(#[case] ordinal: u32) {
         let id = synthetic_id(0x00ab_cdef_0123_4567, ordinal);
         assert_eq!(parse_synthetic(&id), Some((0x00ab_cdef_0123_4567, ordinal)));
+    }
+
+    /// A row keeps the provider its line names.
+    #[rstest]
+    fn rows_keep_their_provider(#[values(HarnessKind::Pi, HarnessKind::Omp)] harness: HarnessKind) {
+        let raw = serde_json::json!({
+            "type": "message", "id": "a1", "timestamp": "2026-10-16T18:39:48.190Z",
+            "message": {"role": "assistant", "content": "hi", "provider": "openai-codex",
+                "model": "gpt-5.6-luna"},
+        });
+        let line = AnyMessage::from(serde_json::from_value::<PiMessage>(raw).unwrap());
+        let msg = one(harness, &line).unwrap();
+        assert_eq!(msg.provider.as_deref(), Some("openai-codex"));
     }
 
     #[rstest]

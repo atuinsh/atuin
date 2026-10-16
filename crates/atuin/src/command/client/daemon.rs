@@ -15,8 +15,8 @@ use atuin_common::futures::Backoff;
 use atuin_daemon::client::{
     DaemonClientErrorKind, FromSettingsError, HistoryClient, classify_error,
 };
+use atuin_daemon::grpc::versioning::{BUILD_STR, VersionMatchError};
 use atuin_daemon::pidfile::{self, PidfileGuard};
-use atuin_daemon::{PROTOCOL_VERSION, VERSION};
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonix::Daemonize;
@@ -115,42 +115,44 @@ enum Probe {
     MissingConfig(eyre::Report),
 }
 
+/// What to do with a daemon of another build.
 #[derive(Debug, PartialEq, Eq)]
 enum Compat {
-    Ready,
     Outdated,
     Newer,
 }
 
-fn daemon_compat(version: &str, protocol: u32) -> Compat {
-    if version == VERSION && protocol == PROTOCOL_VERSION {
-        return Compat::Ready;
-    }
+fn daemon_compat(mismatch: &VersionMatchError) -> Compat {
+    let (theirs, ours) = match mismatch {
+        VersionMatchError::Mismatched { theirs, ours } => (theirs, ours),
+        // A daemon from before builds were exchanged acts on requests of any shape, so it is always
+        // replaced, and it can't be newer than a client that sends its build. Nor can a build that
+        // isn't ASCII be ordered.
+        VersionMatchError::Unannounced | VersionMatchError::Malformed { .. } => {
+            return Compat::Outdated;
+        }
+    };
 
     // Only replace an older daemon: with two atuin versions installed, restarting on any mismatch
-    // has each one restart the daemon out from under the other on every command.
+    // has each one restart the daemon out from under the other on every command. Two commits of one
+    // version can't be ordered, so the daemon is replaced.
     let newer = matches!(
-        (semver::Version::parse(version), semver::Version::parse(VERSION)),
-        (Ok(daemon), Ok(ours)) if daemon > ours
+        (semver::Version::parse(theirs), semver::Version::parse(ours)),
+        (Ok(daemon), Ok(ours)) if daemon.cmp_precedence(&ours).is_gt()
     );
-
-    match (newer, protocol == PROTOCOL_VERSION) {
-        (false, _) => Compat::Outdated,
-        (true, true) => Compat::Ready,
-        (true, false) => Compat::Newer,
+    if newer {
+        Compat::Newer
+    } else {
+        Compat::Outdated
     }
 }
 
-fn daemon_mismatch_message(version: &str, protocol: u32) -> String {
-    if daemon_compat(version, protocol) == Compat::Newer {
-        format!(
-            "daemon {version} is newer than this client ({VERSION}) and speaks protocol \
-             {protocol}, expected {PROTOCOL_VERSION}; leaving it running"
-        )
-    } else if protocol == PROTOCOL_VERSION {
-        format!("daemon is out of date: expected {VERSION}, got {version}")
-    } else {
-        format!("daemon protocol mismatch: expected {PROTOCOL_VERSION}, got {protocol}")
+fn daemon_mismatch_message(mismatch: &VersionMatchError) -> String {
+    match daemon_compat(mismatch) {
+        Compat::Newer => {
+            format!("daemon is newer than this client; leaving it running: {mismatch}")
+        }
+        Compat::Outdated => format!("daemon is out of date: {mismatch}"),
     }
 }
 
@@ -164,6 +166,7 @@ pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
         DaemonClientErrorKind::Connect
             | DaemonClientErrorKind::Unavailable
             | DaemonClientErrorKind::Unimplemented
+            | DaemonClientErrorKind::BuildMismatch
     )
 }
 
@@ -193,16 +196,18 @@ async fn probe(settings: &Settings) -> Probe {
         Err(FromSettingsError::CreateClient(err)) => return Probe::Unreachable(err),
     };
 
-    match client.status().await {
-        Ok(status) => {
-            let message = || daemon_mismatch_message(&status.version, status.protocol);
-            match daemon_compat(&status.version, status.protocol) {
-                Compat::Ready => Probe::Ready(client),
-                Compat::Outdated => Probe::NeedsRestart(message()),
-                Compat::Newer => Probe::Incompatible(message()),
-            }
-        }
-        Err(err) => Probe::Unreachable(err),
+    let version = match client.check_daemon_version().await {
+        Ok(version) => version,
+        Err(err) => return Probe::Unreachable(err),
+    };
+    let Err(mismatch) = version else {
+        return Probe::Ready(client);
+    };
+
+    let message = daemon_mismatch_message(&mismatch);
+    match daemon_compat(&mismatch) {
+        Compat::Outdated => Probe::NeedsRestart(message),
+        Compat::Newer => Probe::Incompatible(message),
     }
 }
 
@@ -400,22 +405,8 @@ async fn restart_daemon(settings: &Settings) -> Result<HistoryClient> {
     Ok(connect_client(settings).await?)
 }
 
-fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) -> Result<()> {
-    if daemon_compat(version, protocol) == Compat::Ready {
-        return Ok(());
-    }
-
-    let message = daemon_mismatch_message(version, protocol);
-    if settings.daemon.autostart {
-        bail!("{message}");
-    }
-
-    bail!("{message}. Enable `daemon.autostart = true` or restart the daemon manually");
-}
-
 /// Acquire a [`HistoryClient`] connected to a daemon we expect to understand us, probing over the
-/// wire-stable Status RPC first and restarting the daemon if it is absent or version/protocol
-/// skewed.
+/// wire-stable Status RPC first and restarting the daemon if it is absent or another build.
 ///
 /// TODO(markovejnovic): This is egregious slop, but not worse than the original solution. I want to
 ///                      remove this in a future PR: <https://github.com/atuinsh/atuin/pull/4002>
@@ -438,46 +429,29 @@ pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
     restart_daemon(settings).await
 }
 
-/// Send a request to the daemon, first ensuring (via [`ready_client`]) that it is running and
-/// speaks our version.
+/// Send a request to the daemon, first ensuring (via [`ready_client`]) that it is running and is
+/// our build.
 async fn try_with_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
 where
     F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
-    R: atuin_daemon::grpc::VersionedReply,
 {
-    let client = ready_client(settings).await?;
-    send_checked(settings, client, send_request).await
+    let mut client = ready_client(settings).await?;
+    send_request(&mut client).await
 }
 
-/// Send a request to an already-running daemon that speaks our version.
+/// Send a request to an already-running daemon of our build.
 ///
 /// This function never starts or restarts the daemon.
 async fn try_without_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
 where
     F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
-    R: atuin_daemon::grpc::VersionedReply,
 {
-    let client = match probe(settings).await {
+    let mut client = match probe(settings).await {
         Probe::Ready(client) => client,
         Probe::NeedsRestart(reason) | Probe::Incompatible(reason) => bail!(reason),
         Probe::Unreachable(err) | Probe::MissingConfig(err) => return Err(err),
     };
-    send_checked(settings, client, send_request).await
-}
-
-/// Send a message to the daemon and ensure the response is [compatible](ensure_reply_compatible).
-async fn send_checked<F, R>(
-    settings: &Settings,
-    mut client: HistoryClient,
-    send_request: F,
-) -> Result<R>
-where
-    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
-    R: atuin_daemon::grpc::VersionedReply,
-{
-    let resp = send_request(&mut client).await?;
-    ensure_reply_compatible(settings, resp.version(), resp.protocol())?;
-    Ok(resp)
+    send_request(&mut client).await
 }
 
 /// How long `history start` waits on the daemon. It runs synchronously before every command, and a
@@ -576,7 +550,8 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
             println!("Daemon running");
             println!("  PID:      {}", status.pid);
             println!("  Version:  {}", status.version);
-            println!("  Protocol: {}", status.protocol);
+            // `probe` found the daemon to be our build.
+            println!("  Build:    {BUILD_STR}");
             println!("  Healthy:  {}", status.healthy);
             #[cfg(unix)]
             println!("  Socket:   {}", socket_path.display());
@@ -852,28 +827,38 @@ mod tests {
         assert!(!uses_relative_paths(&settings));
     }
 
-    #[rstest]
-    #[case::matches(VERSION, PROTOCOL_VERSION, Compat::Ready)]
-    #[case::older("0.0.0", PROTOCOL_VERSION, Compat::Outdated)]
-    #[case::older_protocol("0.0.0", 999, Compat::Outdated)]
-    #[case::same_version_other_protocol(VERSION, 999, Compat::Outdated)]
-    #[case::newer("999.0.0", PROTOCOL_VERSION, Compat::Ready)]
-    #[case::newer_protocol("999.0.0", 999, Compat::Newer)]
-    #[case::unparsable("dev", PROTOCOL_VERSION, Compat::Outdated)]
-    fn daemon_compat_cases(#[case] version: &str, #[case] protocol: u32, #[case] expected: Compat) {
-        assert_eq!(daemon_compat(version, protocol), expected);
+    /// The check's report of a daemon of build `theirs`.
+    fn mismatched(theirs: &str) -> VersionMatchError {
+        VersionMatchError::Mismatched {
+            theirs: theirs.to_owned(),
+            ours: BUILD_STR,
+        }
     }
 
     #[rstest]
-    #[case::out_of_date("0.0.0", PROTOCOL_VERSION, vec!["out of date", "0.0.0", VERSION])]
-    #[case::protocol_mismatch(VERSION, 999, vec!["protocol mismatch"])]
-    #[case::newer("999.0.0", 999, vec!["newer", "999.0.0", "leaving it running"])]
+    #[case::older(mismatched("0.0.0"), Compat::Outdated)]
+    #[case::newer(mismatched("999.0.0"), Compat::Newer)]
+    // `zzz` sorts after any SHA, so this daemon would look newer if commits were ordered.
+    #[case::other_commit_of_ours(
+        mismatched(&format!("{}+zzz", atuin_daemon::VERSION)),
+        Compat::Outdated
+    )]
+    #[case::unparsable(mismatched("dev"), Compat::Outdated)]
+    #[case::malformed(VersionMatchError::Malformed { theirs: vec![0xff] }, Compat::Outdated)]
+    #[case::predates_builds(VersionMatchError::Unannounced, Compat::Outdated)]
+    fn daemon_compat_cases(#[case] mismatch: VersionMatchError, #[case] expected: Compat) {
+        assert_eq!(daemon_compat(&mismatch), expected);
+    }
+
+    #[rstest]
+    #[case::out_of_date(mismatched("0.0.0"), vec!["out of date", "0.0.0", BUILD_STR])]
+    #[case::predates_builds(VersionMatchError::Unannounced, vec!["out of date", "x-atuin-build"])]
+    #[case::newer(mismatched("999.0.0"), vec!["newer", "999.0.0", "leaving it running"])]
     fn daemon_mismatch_message_cases(
-        #[case] version: &str,
-        #[case] protocol: u32,
+        #[case] mismatch: VersionMatchError,
         #[case] needles: Vec<&str>,
     ) {
-        let msg = daemon_mismatch_message(version, protocol);
+        let msg = daemon_mismatch_message(&mismatch);
         for needle in needles {
             assert!(msg.contains(needle), "got: {msg}");
         }

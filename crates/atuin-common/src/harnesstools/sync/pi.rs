@@ -28,15 +28,15 @@ use super::{
     capture_key, check_segment, continuing_from, descends, jsonl_lines, kept_lines, modified, past,
     replace_jsonl, require_idle, resumes_from, switched_to, with_merged,
 };
-use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::rehydrate::{self, Continuing};
 use crate::harnesstools::pi::session::{PiMessage, default_root, locate, resolve_parent_blocking};
+use crate::harnesstools::pi::{Flavour, Pi};
 use crate::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use crate::harnesstools::session::SessionId;
 
 impl SessionSync for Pi {
     async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
-        let (root, id) = (default_root(), id.to_owned());
+        let (root, id) = (default_root(self.flavour()), id.to_owned());
         blocking(move || match locate(&root, &id) {
             Some(path) => Ok(Some(File::read(&path)?.tip(&path))),
             None => Ok(None),
@@ -45,7 +45,8 @@ impl SessionSync for Pi {
     }
 
     async fn is_live(&self, id: &str, cwd: Option<&Path>) -> Liveness {
-        let (root, id, cwd) = (default_root(), id.to_owned(), cwd.map(Path::to_path_buf));
+        let flavour = self.flavour();
+        let (root, id, cwd) = (default_root(flavour), id.to_owned(), cwd.map(Path::to_path_buf));
         blocking_liveness(move || {
             let file = locate(&root, &id);
             let seen = Seen {
@@ -53,7 +54,7 @@ impl SessionSync for Pi {
                 changing: file.as_deref().is_some_and(|f| changed_lately(modified(f))),
                 names: names(&id, file.as_deref()),
             };
-            liveness(&Processes::here(), &seen)
+            liveness(flavour, &Processes::here(), &seen)
         })
         .await
     }
@@ -65,8 +66,10 @@ impl SessionSync for Pi {
         lines: &[RehydrateMessage],
         options: &AppendOptions<'_>,
     ) -> Result<AppendOutcome, SyncError> {
-        let seen = appending(base, id, options.cwd);
-        require_idle(blocking_liveness(move || liveness(&Processes::here(), &seen)).await)?;
+        let (seen, flavour) = (appending(base, id, options.cwd), self.flavour());
+        require_idle(
+            blocking_liveness(move || liveness(flavour, &Processes::here(), &seen)).await,
+        )?;
         let (base, lines) = (base.clone(), lines.to_vec());
         let taken = options.taken_ids.cloned();
         blocking(move || append_to(&base, &lines, taken.as_ref())).await
@@ -80,18 +83,20 @@ impl SessionSync for Pi {
         options: &AppendOptions<'_>,
         backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError> {
-        let seen = appending(base, id, options.cwd);
-        require_idle(blocking_liveness(move || liveness(&Processes::here(), &seen)).await)?;
+        let (seen, flavour) = (appending(base, id, options.cwd), self.flavour());
+        require_idle(
+            blocking_liveness(move || liveness(flavour, &Processes::here(), &seen)).await,
+        )?;
         let (base, branch, backups) = (base.clone(), branch.to_vec(), backups.to_path_buf());
         let taken = options.taken_ids.cloned();
         blocking(move || replace_to(&base, &branch, taken.as_ref(), &backups)).await
     }
 }
 
-/// Whether a pi process may be writing the session `seen`: [`Liveness::Unknown`] while any that
-/// may be runs ([`agent_running`]).
-pub(super) fn liveness(procs: &Processes, seen: &Seen) -> Liveness {
-    agent_running(procs, "pi", &["pi-coding-agent"], seen)
+/// Whether a `flavour` process may be writing the session `seen`: [`Liveness::Unknown`] while
+/// any that may be runs ([`agent_running`]). Both are packaged as `pi-coding-agent`.
+pub(super) fn liveness(flavour: Flavour, procs: &Processes, seen: &Seen) -> Liveness {
+    agent_running(procs, flavour.binary(), &["pi-coding-agent"], seen)
 }
 
 /// Session `id`, as [`SessionSync::append`] to the file `base` read takes it, last seen working

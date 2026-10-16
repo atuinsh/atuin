@@ -69,7 +69,13 @@ Resolved:
 ### `atuin config set <key> <value>`
 
 Set a configuration value in your `config.toml`. The file's existing
-formatting and comments are preserved.
+formatting and comments are preserved.[^1]
+
+[^1]: If your config doesn't already contain the key, Atuin searches for an
+intelligent place to insert it. If your config has a commented-out assignment
+of the key like `# style = "compact"`, Atuin may uncomment the example and
+update the value, or insert a new assignment nearby, depending on whether it's
+safe to replace the comment.
 
 ```shell
 $ atuin config set search_mode fuzzy

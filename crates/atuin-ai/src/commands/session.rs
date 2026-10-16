@@ -110,6 +110,7 @@ pub enum HarnessArg {
     Codex,
     Opencode,
     Pi,
+    Omp,
 }
 
 impl From<HarnessArg> for HarnessKind {
@@ -119,6 +120,7 @@ impl From<HarnessArg> for HarnessKind {
             HarnessArg::Codex => Self::Codex,
             HarnessArg::Opencode => Self::Opencode,
             HarnessArg::Pi => Self::Pi,
+            HarnessArg::Omp => Self::Omp,
         }
     }
 }
@@ -971,6 +973,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
         HarnessKind::Copilot => Ansi::Blue,
         HarnessKind::Opencode => Ansi::Cyan,
         HarnessKind::Pi => Ansi::Yellow,
+        HarnessKind::Omp => Ansi::Red,
         HarnessKind::Unknown => Ansi::Dim,
     }
 }
@@ -1037,9 +1040,10 @@ fn parse_harness(value: &str) -> Result<HarnessKind, String> {
         "codex" => Ok(HarnessKind::Codex),
         "opencode" => Ok(HarnessKind::Opencode),
         "pi" => Ok(HarnessKind::Pi),
-        other => {
-            Err(format!("unknown harness `{other}` (expected claude-code, codex, opencode, or pi)"))
-        }
+        "omp" => Ok(HarnessKind::Omp),
+        other => Err(format!(
+            "unknown harness `{other}` (expected claude-code, codex, opencode, pi, or omp)"
+        )),
     }
 }
 
@@ -1053,6 +1057,7 @@ pub fn harness_name(harness: HarnessKind) -> &'static str {
         HarnessKind::Copilot => "copilot",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "pi",
+        HarnessKind::Omp => "omp",
         HarnessKind::Unknown => "unknown",
     }
 }
@@ -1395,6 +1400,7 @@ mod tests {
     #[case("codex", HarnessKind::Codex)]
     #[case("opencode", HarnessKind::Opencode)]
     #[case("pi", HarnessKind::Pi)]
+    #[case("omp", HarnessKind::Omp)]
     fn parse_harness_maps_names(#[case] input: &str, #[case] want: HarnessKind) {
         assert_eq!(parse_harness(input).unwrap(), want);
     }

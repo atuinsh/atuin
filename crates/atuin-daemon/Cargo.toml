@@ -12,7 +12,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-octavo = ["dep:atuin-octavo"]
+octavo = ["dep:atuin-octavo", "atuin-client/octavo"]
 
 [dependencies]
 async-stream = { workspace = true }
@@ -31,6 +31,7 @@ eyre = { workspace = true }
 fjall = { workspace = true }
 frizbee = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 hyper-util = { workspace = true }
 itertools = { workspace = true }
 lasso = { workspace = true }

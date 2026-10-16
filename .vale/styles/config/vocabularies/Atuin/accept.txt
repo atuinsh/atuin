@@ -90,6 +90,7 @@ tmux
 toolchain
 tooltips
 Traefik
+uncomment
 unhighlighted
 unstyled
 walkthrough

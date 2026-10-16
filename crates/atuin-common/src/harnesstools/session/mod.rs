@@ -78,6 +78,10 @@ pub trait Message: Send + 'static {
     fn model(&self) -> Option<String> {
         None
     }
+    /// Who served [`Self::model`].
+    fn provider(&self) -> Option<String> {
+        None
+    }
     fn usage(&self) -> Option<Usage> {
         None
     }

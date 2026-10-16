@@ -7,7 +7,7 @@ use atuin_client::ai_session::{HarnessSession, Message, MessageRole, Session};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::{Content, is_tool_output};
 use atuin_common::range::Clamped;
-use atuin_common::string::{NonBlankString, TruncateCharsExt};
+use atuin_common::string::{NonBlankString, StrExt as _};
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::get_session_event::Event;

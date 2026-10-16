@@ -144,6 +144,7 @@ fn prompt(id: &str, at: i64) -> RehydrateMessage {
         role: Role::User,
         content: vec![Content::Text("from the other machine".to_owned())],
         model: None,
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,

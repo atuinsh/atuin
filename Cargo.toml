@@ -4,7 +4,7 @@ members = ["crates/*"]
 exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.24.0-beta.2"
+version = "18.24.0"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
 rust-version = "1.95.0"
 license = "MIT"
@@ -13,18 +13,18 @@ repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
-atuin-ai = { path = "crates/atuin-ai", version = "18.24.0-beta.2", default-features = false }
-atuin-client = { path = "crates/atuin-client", version = "18.24.0-beta.2" }
-atuin-common = { path = "crates/atuin-common", version = "18.24.0-beta.2" }
-atuin-daemon = { path = "crates/atuin-daemon", version = "18.24.0-beta.2", default-features = false }
-atuin-domain = { path = "crates/atuin-domain", version = "18.24.0-beta.2" }
-atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.24.0-beta.2" }
-atuin-history = { path = "crates/atuin-history", version = "18.24.0-beta.2" }
-atuin-kv = { path = "crates/atuin-kv", version = "18.24.0-beta.2" }
-atuin-octavo = { path = "crates/atuin-octavo", version = "18.24.0-beta.2" }
-atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.24.0-beta.2", default-features = false }
-atuin-scripts = { path = "crates/atuin-scripts", version = "18.24.0-beta.2" }
-atuin-server = { path = "crates/atuin-server", version = "18.24.0-beta.2" }
+atuin-ai = { path = "crates/atuin-ai", version = "18.24.0", default-features = false }
+atuin-client = { path = "crates/atuin-client", version = "18.24.0" }
+atuin-common = { path = "crates/atuin-common", version = "18.24.0" }
+atuin-daemon = { path = "crates/atuin-daemon", version = "18.24.0", default-features = false }
+atuin-domain = { path = "crates/atuin-domain", version = "18.24.0" }
+atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.24.0" }
+atuin-history = { path = "crates/atuin-history", version = "18.24.0" }
+atuin-kv = { path = "crates/atuin-kv", version = "18.24.0" }
+atuin-octavo = { path = "crates/atuin-octavo", version = "18.24.0" }
+atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.24.0", default-features = false }
+atuin-scripts = { path = "crates/atuin-scripts", version = "18.24.0" }
+atuin-server = { path = "crates/atuin-server", version = "18.24.0" }
 atuin-vt100 = "0.19"
 
 ansi-to-tui = { version = "8", default-features = false }
@@ -104,6 +104,7 @@ opentelemetry-otlp = "0.32"
 opentelemetry_sdk = "0.32"
 palette = { version = "0.7", features = ["serializing"] }
 parking_lot = "0.12"
+percent-encoding = "2"
 portable-pty = "0.9"
 pretty_assertions = "1"
 proptest = "1"

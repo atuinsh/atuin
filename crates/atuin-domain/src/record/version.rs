@@ -24,6 +24,8 @@ pub enum RecordVersion {
     V1,
     #[strum(serialize = "v2")]
     V2,
+    #[strum(serialize = "v3")]
+    V3,
     /// Any version string without a dedicated variant.
     #[strum(default, transparent)]
     Other(String),

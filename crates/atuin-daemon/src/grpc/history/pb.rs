@@ -475,15 +475,6 @@ invalid_argument_errors!(
     GetOutputRequestParseError,
 );
 
-versioned_messages!(
-    StartHistoryReply,
-    EndHistoryReply,
-    CancelHistoryReply,
-    DeleteHistoryReply,
-    RebuildHistoryReply,
-    CompactStoreReply,
-);
-
 internal_errors!(GetOutputError);
 
 #[cfg(test)]
