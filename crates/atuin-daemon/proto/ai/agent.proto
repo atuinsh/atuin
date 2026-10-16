@@ -13,6 +13,7 @@ enum HarnessKind {
   HARNESS_KIND_COPILOT = 3;
   HARNESS_KIND_OPENCODE = 4;
   HARNESS_KIND_PI = 5;
+  HARNESS_KIND_OMP = 6;
 }
 
 enum Role {
@@ -173,6 +174,8 @@ message Message {
   optional ParentKind parent_kind = 16;
   // The host that captured the message (a hyphenated host id), when known.
   optional string host_id = 17;
+  // Who served `model`, when the harness says (pi, omp, opencode).
+  optional string provider = 18;
 }
 
 message Session {

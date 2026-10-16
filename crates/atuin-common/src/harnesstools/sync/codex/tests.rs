@@ -55,6 +55,7 @@ async fn synced(path: &Path) -> Vec<RehydrateMessage> {
             role: m.role(),
             content: m.content(),
             model: m.model(),
+            provider: None,
             usage: m.usage(),
             stop_reason: m.stop_reason(),
             turn_id: m.turn_id(),

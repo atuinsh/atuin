@@ -58,6 +58,7 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use super::note::{Part, clip, render, tool_note};
+use super::pi::Flavour;
 use super::rehydrate::{RehydrateMessage, RehydrateSession};
 use super::resume::is_plain_name;
 use super::{AnyHarness, Harness as _, opencode};
@@ -141,7 +142,10 @@ fn label(harness: AnyHarness) -> &'static str {
         AnyHarness::ClaudeCode(_) => "Claude Code",
         AnyHarness::Codex(_) => "Codex",
         AnyHarness::Opencode(_) => "opencode",
-        AnyHarness::Pi(_) => "Pi",
+        AnyHarness::Pi(pi) => match pi.flavour() {
+            Flavour::Pi => "Pi",
+            Flavour::Omp => "omp",
+        },
     }
 }
 
@@ -413,6 +417,7 @@ impl Rows {
             role,
             content,
             model: None,
+            provider: None,
             usage: None,
             stop_reason: stop,
             turn_id: self.step.clone(),

@@ -422,6 +422,8 @@ struct Draft {
     created: i64,
     completed: i64,
     model: Option<String>,
+    /// Who served `model`, when capture knows.
+    provider: Option<String>,
     cwd: Option<PathBuf>,
     summary: bool,
     error: Option<Value>,
@@ -441,6 +443,7 @@ impl Draft {
             created: at,
             completed: at,
             model: row.model.clone(),
+            provider: row.provider.clone(),
             cwd: row.cwd.clone(),
             summary: false,
             error: None,
@@ -541,6 +544,9 @@ pub(crate) fn export_minting(session: &RehydrateSession) -> (Value, HashSet<Stri
         draft.completed = draft.completed.max(millis(row.timestamp));
         if draft.model.is_none() {
             draft.model.clone_from(&row.model);
+        }
+        if draft.provider.is_none() {
+            draft.provider.clone_from(&row.provider);
         }
         if draft.cwd.is_none() {
             draft.cwd.clone_from(&row.cwd);
@@ -789,7 +795,8 @@ fn draft_created(draft: &Draft) -> i64 {
 }
 
 /// The provider and model an assistant message ran on: its turn's, else what its rows or the
-/// session say (a model with no provider is taken for opencode's own).
+/// session say. A model is kept whole when its provider was captured (OpenRouter's
+/// `anthropic/claude-sonnet-4`), else names its provider before a `/`, else is opencode's own.
 fn provider_model(session: &RehydrateSession, draft: &Draft) -> Option<(String, String)> {
     if let Some(Turn::Call {
         provider, model, ..
@@ -798,6 +805,9 @@ fn provider_model(session: &RehydrateSession, draft: &Draft) -> Option<(String, 
         return Some((provider.to_owned(), model.to_owned()));
     }
     let model = draft.model.clone().or_else(|| session.model.clone())?;
+    if let Some(provider) = &draft.provider {
+        return Some((provider.clone(), model));
+    }
     Some(match model.split_once('/') {
         Some((provider, model)) => (provider.to_owned(), model.to_owned()),
         None => ("opencode".to_owned(), model),
@@ -1207,6 +1217,7 @@ pub(crate) mod tests {
                     role: m.role(),
                     content: m.content(),
                     model: m.model(),
+                    provider: m.provider(),
                     usage: m.usage(),
                     stop_reason: m.stop_reason(),
                     turn_id: m.turn_id(),
@@ -1361,6 +1372,7 @@ pub(crate) mod tests {
             role,
             content,
             model: None,
+            provider: None,
             usage: None,
             stop_reason: None,
             turn_id: None,
@@ -1490,6 +1502,27 @@ pub(crate) mod tests {
         assert_eq!(assistant["time"]["created"], 1_790_217_606_979_i64);
         assert_eq!(assistant["finish"], "tool-calls");
         assert_eq!(exported["messages"][0]["info"]["model"]["providerID"], "openai");
+    }
+
+    /// A reply whose turn names no model is written on the provider capture kept, its model
+    /// whole, else on the one its model names.
+    #[rstest]
+    #[case::captured_routed(Some("openrouter"), ("openrouter", "anthropic/claude-sonnet-4"))]
+    #[case::named(None, ("anthropic", "claude-sonnet-4"))]
+    fn a_reply_is_written_on_its_provider(
+        #[case] provider: Option<&str>,
+        #[case] want: (&str, &str),
+    ) {
+        let mut reply =
+            row("prt_a1", 1_790_217_608, Role::Assistant, vec![Content::Text("hi".to_owned())]);
+        reply.model = Some("anthropic/claude-sonnet-4".to_owned());
+        reply.provider = provider.map(str::to_owned);
+        let exported = export(&session(SES, None, vec![reply]));
+        let info = &exported["messages"][0]["info"];
+        assert_eq!(
+            (info["providerID"].as_str(), info["modelID"].as_str()),
+            (Some(want.0), Some(want.1))
+        );
     }
 
     /// Checks an export as strictly as the APIs behind opencode check what it sends from it:

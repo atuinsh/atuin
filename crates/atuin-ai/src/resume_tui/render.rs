@@ -328,7 +328,7 @@ pub(super) fn harness_style(theme: &Theme, harness: HarnessKind) -> Style {
         HarnessKind::ClaudeCode => Meaning::AlertWarn,
         HarnessKind::Codex => Meaning::AlertInfo,
         HarnessKind::Opencode => Meaning::Guidance,
-        HarnessKind::Pi => Meaning::Important,
+        HarnessKind::Pi | HarnessKind::Omp => Meaning::Important,
         HarnessKind::Copilot | HarnessKind::Unknown => Meaning::Annotation,
     };
     style(theme, meaning).add_modifier(Modifier::BOLD)

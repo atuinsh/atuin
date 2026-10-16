@@ -6,6 +6,7 @@ use std::process::Stdio;
 
 use serde_json::{Value, json};
 
+use super::pi::Flavour;
 use super::{AnyHarness, opencode};
 use crate::path::PathBufExt as _;
 
@@ -21,8 +22,8 @@ pub enum InstallMcpError {
     #[error("could not parse {} as JSON", .0.display())]
     Json(PathBuf, #[source] serde_json::Error),
 
-    #[error("{} has an unexpected shape: `mcp` is not an object", .0.display())]
-    Malformed(PathBuf),
+    #[error("{} has an unexpected shape: `{}` is not an object", .0.display(), .1)]
+    Malformed(PathBuf, &'static str),
 
     #[error("could not save the config")]
     Replace(
@@ -65,7 +66,15 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
         AnyHarness::Opencode(_) => {
             install_opencode(&opencode::config_dir().joined("opencode.json"), atuin).await
         }
-        AnyHarness::Pi(_) => run("pi", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
+        AnyHarness::Pi(pi) => match pi.flavour() {
+            Flavour::Pi => run("pi", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
+            // omp has no `mcp add`: its own `/mcp add` writes this file.
+            Flavour::Omp => {
+                let path = Flavour::Omp.agent_dir().joined("mcp.json");
+                let server = json!({"command": atuin, "args": ["mcp"]});
+                add_to_config(&path, json!({}), "mcpServers", server).await
+            }
+        },
     }
 }
 
@@ -113,6 +122,19 @@ async fn run(program: &'static str, args: &[&str]) -> Result<(), InstallMcpError
 
 /// Add the server to the opencode config at `path`, keeping the rest of it.
 async fn install_opencode(path: &Path, atuin: &str) -> Result<(), InstallMcpError> {
+    let server = json!({"type": "local", "command": [atuin, "mcp"], "enabled": true});
+    let new = json!({"$schema": "https://opencode.ai/config.json"});
+    add_to_config(path, new, "mcp", server).await
+}
+
+/// Add `server` as `atuin` to the `key` object of the JSON config at `path`, `new` when there is
+/// none yet.
+async fn add_to_config(
+    path: &Path,
+    new: Value,
+    key: &'static str,
+    server: Value,
+) -> Result<(), InstallMcpError> {
     // A config linked from a dotfiles repo is saved there, keeping the link.
     let path = &tokio::fs::canonicalize(path).await.unwrap_or_else(|_| path.to_owned());
     let read = match tokio::fs::read(path).await {
@@ -123,15 +145,12 @@ async fn install_opencode(path: &Path, atuin: &str) -> Result<(), InstallMcpErro
     let mut root: Value = match &read {
         Some(read) => serde_json::from_slice(read)
             .map_err(|err| InstallMcpError::Json(path.to_owned(), err))?,
-        None => json!({"$schema": "https://opencode.ai/config.json"}),
+        None => new,
     };
     root.as_object_mut()
-        .and_then(|root| root.entry("mcp").or_insert_with(|| json!({})).as_object_mut())
-        .ok_or_else(|| InstallMcpError::Malformed(path.to_owned()))?
-        .insert(
-            "atuin".to_owned(),
-            json!({"type": "local", "command": [atuin, "mcp"], "enabled": true}),
-        );
+        .and_then(|root| root.entry(key).or_insert_with(|| json!({})).as_object_mut())
+        .ok_or_else(|| InstallMcpError::Malformed(path.to_owned(), key))?
+        .insert("atuin".to_owned(), server);
 
     let text = serde_json::to_string_pretty(&root)
         .map_err(|err| InstallMcpError::Json(path.to_owned(), err))?

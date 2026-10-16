@@ -104,7 +104,9 @@ enum Model {
 impl Model {
     const fn of(harness: HarnessKind) -> Self {
         match harness {
-            HarnessKind::ClaudeCode | HarnessKind::Pi => Self::Tree { chained: false },
+            HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp => {
+                Self::Tree { chained: false }
+            }
             HarnessKind::Codex => Self::Tree { chained: true },
             HarnessKind::Opencode => Self::Interleaving,
             HarnessKind::Copilot | HarnessKind::Unknown => Self::Linear,

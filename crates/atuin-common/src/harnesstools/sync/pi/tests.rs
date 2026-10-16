@@ -43,6 +43,7 @@ fn row(id: &str, parent: &str, role: Role) -> RehydrateMessage {
         role,
         content: vec![Content::Text(format!("said {id}"))],
         model: Some("m".to_owned()),
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,
@@ -176,7 +177,7 @@ fn what_is_no_clean_fast_forward_is_refused(
 #[case::none(b"bash\0".as_slice(), Liveness::NotLive)]
 fn any_pi_running_may_be_writing(dir: TempDir, #[case] cmdline: &[u8], #[case] expected: Liveness) {
     let procs = procs(dir.path(), &[Fake::running(9, cmdline, "1")]);
-    assert_eq!(liveness(&procs, &Seen::default()), expected);
+    assert_eq!(liveness(Flavour::Pi, &procs, &Seen::default()), expected);
 }
 
 /// pi hides its command line behind its name: which session a pi works on is told only by where
@@ -193,7 +194,7 @@ fn a_pi_is_told_apart_by_where_it_works(
         cwd: Some(dir.path().join(works_in)),
         ..live::entry(9, "pi", &["pi"], 1)
     }]);
-    assert_eq!(liveness(&procs, &live::cwd(Some(dir.path().join("proj")))), expected);
+    assert_eq!(liveness(Flavour::Pi, &procs, &live::cwd(Some(dir.path().join("proj")))), expected);
 }
 
 /// A pi working elsewhere may have the session open from there (`pi --session <file>`): it counts
@@ -228,7 +229,7 @@ fn a_pi_elsewhere_counts_when_named_or_writing(
         ..live::entry(9, "pi", cmd, 1)
     }]);
     let seen = appending(&base, "5e55e55e-0000-4000-8000-000000000002", Some(&proj));
-    assert_eq!(liveness(&procs, &seen), expected);
+    assert_eq!(liveness(Flavour::Pi, &procs, &seen), expected);
 }
 
 /// A session file that went its own way here after sharing a turn with a tool call in it:

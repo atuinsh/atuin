@@ -799,6 +799,7 @@ impl Reader {
                     role: Role::Assistant,
                     turn: Some(id.clone()),
                     model: data["model"]["id"].as_str().map(str::to_owned),
+                    provider: data["model"]["providerID"].as_str().map(str::to_owned),
                     ..MessageInfo::unknown()
                 };
                 self.infos.insert(&id, info);
@@ -1033,6 +1034,8 @@ struct MessageInfo {
     parent: Option<String>,
     /// `modelID`, of an assistant message.
     model: Option<String>,
+    /// `providerID`, of an assistant message.
+    provider: Option<String>,
     /// `path.cwd`, of an assistant message.
     cwd: Option<String>,
     /// A compaction summary (`summary: true`), whose text stands in for the conversation before
@@ -1047,6 +1050,7 @@ impl MessageInfo {
             turn: None,
             parent: None,
             model: None,
+            provider: None,
             cwd: None,
             summary: false,
         }
@@ -1068,6 +1072,7 @@ impl MessageInfo {
             turn: Some(Self::turn_of(id, info)),
             parent: text(&info["parentID"]),
             model: text(&info["modelID"]),
+            provider: text(&info["providerID"]),
             cwd: text(&info["path"]["cwd"]),
             summary: info["summary"].as_bool().unwrap_or_default(),
         })
@@ -2512,6 +2517,10 @@ impl Message for OpencodeMessage {
 
     fn model(&self) -> Option<String> {
         self.assistant()?.model.clone()
+    }
+
+    fn provider(&self) -> Option<String> {
+        self.assistant()?.provider.clone()
     }
 
     /// A step's usage, from its `step-finish` part: one per model call, which is what opencode
@@ -4295,6 +4304,7 @@ mod tests {
             let reply = find(&messages, "prt_a1");
             assert_eq!(reply.role(), Role::Assistant);
             assert_eq!(reply.model().as_deref(), Some("claude-sonnet-4"));
+            assert_eq!(reply.provider().as_deref(), Some("anthropic"));
             assert_eq!(reply.cwd(), Some(PathBuf::from("/work/proj/sub")));
             assert_eq!(reply.parent_id(), Some(MessageId::from("msg_u1".to_owned())));
             assert_eq!(reply.turn_id().as_deref(), Some("1700000001000:anthropic/claude-sonnet-4"));

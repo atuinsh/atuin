@@ -405,6 +405,7 @@ fn prompt(id: &str, parent: Option<&str>) -> RehydrateMessage {
         role: Role::User,
         content: vec![Content::Text(format!("said {id}"))],
         model: None,
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,
@@ -478,6 +479,44 @@ fn the_session_ended_as_its_last_turn_did(#[case] stop: Option<StopReason>, #[ca
     assert_eq!(written["info"]["outcome"], want);
 }
 
+/// A call whose turn names no model is written on the provider capture kept, else on the one its
+/// model names, else on opencode's own.
+#[rstest]
+#[case::captured("big-pickle", Some("anthropic"), ("anthropic", "big-pickle"))]
+#[case::captured_routed(
+    "anthropic/claude-sonnet-4",
+    Some("openrouter"),
+    ("openrouter", "anthropic/claude-sonnet-4")
+)]
+#[case::named("mock/big-pickle", None, ("mock", "big-pickle"))]
+#[case::neither("big-pickle", None, ("opencode", "big-pickle"))]
+fn a_call_is_written_on_its_provider(
+    #[case] model: &str,
+    #[case] provider: Option<&str>,
+    #[case] want: (&str, &str),
+) {
+    let row = RehydrateMessage {
+        source_id: "prt_1".to_owned(),
+        parent_source_id: None,
+        timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        role: Role::Assistant,
+        content: vec![Content::Text("hi".to_owned())],
+        model: Some(model.to_owned()),
+        provider: provider.map(str::to_owned),
+        usage: Some(Usage::default()),
+        stop_reason: None,
+        turn_id: None,
+        cwd: None,
+        git_branch: None,
+    };
+    let written = export(&session(SES, None, vec![row]));
+    let written = &written["messages"][0]["model"];
+    assert_eq!(
+        (written["providerID"].as_str(), written["id"].as_str()),
+        (Some(want.0), Some(want.1))
+    );
+}
+
 /// A model call capture kept no result of is written failed, as opencode 2 ends a call it was
 /// stopped in: import keeps only ended calls.
 #[rstest]
@@ -493,6 +532,7 @@ fn a_call_without_a_result_is_written_aborted() {
             input: json!({"command": "sleep 100"}),
         })],
         model: Some("opencode/big-pickle".to_owned()),
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,

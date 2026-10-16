@@ -114,7 +114,7 @@ pub fn classify(
     }
     let path = analysis.path_to(head);
     let shared = path.iter().zip(&mine).take_while(|(a, b)| a.source_id == b.source_id).count();
-    let linked = matches!(harness, HarnessKind::ClaudeCode | HarnessKind::Pi);
+    let linked = matches!(harness, HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp);
     let twig = linked && !mine[shared..].iter().any(|m| carries_conversation(m));
     let rest = &path[shared..];
     let holds_none = !rest.iter().any(|m| tip.known_source_ids.contains(m.source_id.as_ref()));

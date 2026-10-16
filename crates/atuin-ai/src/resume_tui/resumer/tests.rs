@@ -548,6 +548,7 @@ impl SessionSource for Worked {
             role,
             content,
             model: None,
+            provider: None,
             usage: None,
             stop_reason: None,
             turn_id: None,
@@ -667,7 +668,11 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     };
     let resumer = resumer(&dirs, &machine);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
-    assert_eq!(resumer.continue_targets(&session), [HarnessKind::Codex, HarnessKind::Pi]);
+    assert_eq!(resumer.continue_targets(&session), [
+        HarnessKind::Codex,
+        HarnessKind::Pi,
+        HarnessKind::Omp
+    ]);
 
     let err =
         resumer.continue_in(&Worked, &session, HarnessKind::Opencode, None).await.unwrap_err();

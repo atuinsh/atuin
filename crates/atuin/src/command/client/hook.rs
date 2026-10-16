@@ -64,6 +64,7 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
 fn reload_hint(harness_name: &str) -> Option<&'static str> {
     match harness_name {
         "pi" => Some("Reload pi with `/reload` or restart pi."),
+        "omp" => Some("Reload omp with `/reload` or restart omp."),
         "opencode" => Some("Restart opencode to load the plugin."),
         _ => None,
     }
