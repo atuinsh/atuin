@@ -21,9 +21,10 @@ use tokio::net::TcpStream;
 #[cfg(unix)]
 use tokio::net::UnixStream;
 use tonic::Code;
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
-use tracing::{Level, instrument, span};
+use tracing::{Level, instrument, span, warn};
 
 use crate::grpc::ai::agent::pb::Session as AiSession;
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
@@ -41,6 +42,7 @@ use crate::grpc::history::pb::{
     StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
     TailHistoryRequest,
 };
+use crate::grpc::versioning::{StrictVersionInterceptor, VersionMatchError, VersionedExt as _};
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
@@ -182,8 +184,12 @@ pub enum FromSettingsError {
     CreateClient(#[from] eyre::Report),
 }
 
+/// A connection to the daemon that stamps every request with this client's
+/// [`BUILD_STR`](crate::grpc::versioning::BUILD_STR).
+type DaemonChannel = InterceptedService<Channel, StrictVersionInterceptor>;
+
 pub struct HistoryClient {
-    client: HistoryServiceClient<Channel>,
+    client: HistoryServiceClient<DaemonChannel>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -191,6 +197,8 @@ pub enum DaemonClientErrorKind {
     Connect,
     Unavailable,
     Unimplemented,
+    /// The daemon is another build and refused the call.
+    BuildMismatch,
     OtherGrpc,
     NonGrpc,
 }
@@ -203,6 +211,17 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
         }
 
         if let Some(status) = cause.downcast_ref::<tonic::Status>() {
+            // A status with no build isn't a refusal: tonic makes one up when a call never reaches
+            // the daemon, and a daemon from before builds were exchanged sends none.
+            if let Err(
+                mismatch @ (VersionMatchError::Mismatched { .. }
+                | VersionMatchError::Malformed { .. }),
+            ) = status.check_version()
+            {
+                warn!(err = ?mismatch, "daemon version mismatch");
+                return DaemonClientErrorKind::BuildMismatch;
+            }
+
             return match status.code() {
                 Code::Unavailable => DaemonClientErrorKind::Unavailable,
                 Code::Unimplemented => DaemonClientErrorKind::Unimplemented,
@@ -238,7 +257,7 @@ impl HistoryClient {
                     )
                 })?;
 
-        let client = HistoryServiceClient::new(channel);
+        let client = HistoryServiceClient::with_interceptor(channel, StrictVersionInterceptor);
 
         Ok(Self { client })
     }
@@ -260,7 +279,7 @@ impl HistoryClient {
                 )
             })?;
 
-        let client = HistoryServiceClient::new(channel);
+        let client = HistoryServiceClient::with_interceptor(channel, StrictVersionInterceptor);
 
         Ok(HistoryClient { client })
     }
@@ -352,6 +371,21 @@ impl HistoryClient {
         Ok(self.client.status(StatusRequest {}).await?.into_inner())
     }
 
+    /// Checks the daemon's build against ours. `Err` means the daemon couldn't be asked.
+    ///
+    /// A daemon of another build refuses `Status`, stamping the refusal with its build. One from
+    /// before builds were exchanged answers, unstamped.
+    pub async fn check_daemon_version(&mut self) -> Result<Result<(), VersionMatchError>> {
+        match self.client.status(StatusRequest {}).await {
+            Ok(response) => Ok(response.check_version()),
+            Err(status) => match status.check_version() {
+                // Not a refusal: the daemon is our build and failed, or the call never reached it.
+                Ok(()) | Err(VersionMatchError::Unannounced) => Err(status.into()),
+                mismatch => Ok(mismatch),
+            },
+        }
+    }
+
     pub async fn tail_history(&mut self) -> Result<tonic::Streaming<TailHistoryReply>> {
         Ok(self.client.tail_history(TailHistoryRequest {}).await?.into_inner())
     }
@@ -433,7 +467,7 @@ impl From<SearchParams> for SearchRequest {
 }
 
 pub struct SearchClient {
-    client: SearchServiceClient<Channel>,
+    client: SearchServiceClient<DaemonChannel>,
 }
 
 impl SearchClient {
@@ -457,7 +491,7 @@ impl SearchClient {
                     )
                 })?;
 
-        let client = SearchServiceClient::new(channel);
+        let client = SearchServiceClient::with_interceptor(channel, StrictVersionInterceptor);
 
         Ok(Self { client })
     }
@@ -479,7 +513,7 @@ impl SearchClient {
                 )
             })?;
 
-        let client = SearchServiceClient::new(channel);
+        let client = SearchServiceClient::with_interceptor(channel, StrictVersionInterceptor);
 
         Ok(SearchClient { client })
     }
@@ -580,15 +614,16 @@ const REBUILD_POLL_MAX: std::time::Duration = std::time::Duration::from_secs(5);
 /// way [`HistoryClient`] and [`SearchClient`] do, returning the raw protobuf messages so callers can
 /// render them however they like.
 pub struct AiClient {
-    client: AiSessionServiceClient<Channel>,
+    client: AiSessionServiceClient<DaemonChannel>,
 }
 
 impl AiClient {
     /// The stub over `channel`, taking messages of any size: a message the daemon streams holds
     /// one captured message, as big as the prompt or reply in it, past tonic's default 4 MiB.
     /// The daemon is local and trusted (the server encodes any size by default).
-    fn service(channel: Channel) -> AiSessionServiceClient<Channel> {
-        AiSessionServiceClient::new(channel).max_decoding_message_size(usize::MAX)
+    fn service(channel: Channel) -> AiSessionServiceClient<DaemonChannel> {
+        AiSessionServiceClient::with_interceptor(channel, StrictVersionInterceptor)
+            .max_decoding_message_size(usize::MAX)
     }
 
     #[cfg(unix)]
@@ -779,6 +814,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::grpc::versioning::{BUILD_HEADER_KEY, BUILD_STR};
     use crate::pidfile::PidfileGuard;
 
     /// Settings for a client whose daemon socket is configured at `socket_path`.
@@ -968,6 +1004,25 @@ mod tests {
                 assert_eq!(in_use, path);
             }
         }
+    }
+
+    /// Services return `FAILED_PRECONDITION` for their own reasons too: a refusal is known by the
+    /// other build on it.
+    #[rstest]
+    #[case::other_build(Some("0.0.0"), DaemonClientErrorKind::BuildMismatch)]
+    #[case::our_build(Some(BUILD_STR), DaemonClientErrorKind::OtherGrpc)]
+    #[case::no_build(None, DaemonClientErrorKind::OtherGrpc)]
+    fn a_refusal_is_known_by_its_build(
+        #[case] build: Option<&'static str>,
+        #[case] expected: DaemonClientErrorKind,
+    ) {
+        let mut status = tonic::Status::failed_precondition("refused");
+        if let Some(build) = build {
+            status
+                .metadata_mut()
+                .insert(BUILD_HEADER_KEY, tonic::metadata::MetadataValue::from_static(build));
+        }
+        assert_eq!(classify_error(&status.into()), expected);
     }
 }
 

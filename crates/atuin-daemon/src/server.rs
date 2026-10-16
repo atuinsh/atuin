@@ -8,12 +8,18 @@ use crate::daemon::DaemonHandle;
 use crate::grpc;
 use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
+use crate::grpc::versioning::StrictVersionLayer;
 use crate::search::search_server::SearchServer;
 
 /// How often to update the socket's modification time so it doesn't get automatically deleted by
 /// temporary file cleaners.
 #[cfg(unix)]
 const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// The layer that ensures that all RPCs, except History/Shutdown (which we need in order to restart
+/// the daemon), are the same between the client and the server version.
+pub const STRICT_VERSION_LAYER: StrictVersionLayer =
+    StrictVersionLayer::new(&["/history.History/Shutdown"]);
 
 /// Run the gRPC server with the given services.
 ///
@@ -136,6 +142,7 @@ pub async fn run_grpc_server(
         use tonic::transport::Server;
 
         if let Err(e) = Server::builder()
+            .layer(STRICT_VERSION_LAYER)
             .add_service(history_service)
             .add_service(search_service)
             .add_service(ai_session_service)
@@ -187,6 +194,7 @@ pub async fn run_grpc_server(
     // Spawn the server in the background
     tokio::spawn(async move {
         if let Err(e) = Server::builder()
+            .layer(STRICT_VERSION_LAYER)
             .add_service(history_service)
             .add_service(search_service)
             .add_service(ai_session_service)

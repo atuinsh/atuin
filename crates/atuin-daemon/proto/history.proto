@@ -47,21 +47,14 @@ message CancelHistoryRequest {
 
 message StartHistoryReply {
   common.HistoryId id = 1;
-  string version = 2;
-  uint32 protocol = 3;
 }
 
 message EndHistoryReply {
   common.RecordId record_id = 1;
   uint64 record_idx = 2;
-  string version = 3;
-  uint32 protocol = 4;
 }
 
-message CancelHistoryReply {
-  string version = 1;
-  uint32 protocol = 2;
-}
+message CancelHistoryReply {}
 
 // One chunk of a client-streamed delete.
 message DeleteHistoryRequest {
@@ -71,25 +64,18 @@ message DeleteHistoryRequest {
 message DeleteHistoryReply {
   // Number of entries processed for deletion.
   uint64 deleted = 1;
-  string version = 2;
-  uint32 protocol = 3;
 }
 
 // The daemon rebuilds the history db from the record store and reloads its search index.
 message RebuildHistoryRequest {}
 
-message RebuildHistoryReply {
-  string version = 1;
-  uint32 protocol = 2;
-}
+message RebuildHistoryReply {}
 
 // The daemon rewrites record store rows into the compact on-disk encoding and vacuums.
 message CompactStoreRequest {}
 
 message CompactStoreReply {
   uint64 rewritten = 1;
-  string version = 2;
-  uint32 protocol = 3;
 }
 
 // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
@@ -100,7 +86,6 @@ message StatusReply {
   bool healthy = 1;
   string version = 2;
   uint32 pid = 3;
-  uint32 protocol = 4;
 }
 
 // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.

@@ -565,6 +565,7 @@ dependencies = [
  "fjall",
  "frizbee",
  "futures",
+ "http",
  "hyper-util",
  "itertools 0.15.0",
  "lasso",

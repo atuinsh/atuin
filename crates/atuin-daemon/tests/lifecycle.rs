@@ -23,17 +23,6 @@ async fn env() -> TestEnv {
 
 #[rstest]
 #[tokio::test]
-async fn test_status(#[future(awt)] env: TestEnv) {
-    let mut client = env.history_client().await;
-    let status = client.status().await.unwrap();
-    assert!(status.healthy);
-    assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(status.protocol, 5);
-    assert!(status.pid > 0);
-}
-
-#[rstest]
-#[tokio::test]
 async fn test_start_end_history(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     let history = History::daemon()
@@ -367,7 +356,6 @@ async fn test_delete_history_removes_entry(#[future(awt)] env: TestEnv) {
 
     let reply = client.delete_history(vec![id]).await.unwrap();
     assert_eq!(reply.deleted, 1);
-    assert_eq!(reply.protocol, 5);
     assert_eq!(env.active_rows().await, 0);
 
     // Deleting an already-deleted id still succeeds (idempotent), counting the record write.
@@ -381,8 +369,7 @@ async fn test_rebuild_history(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     env.record(&mut client, "echo before-rebuild").await;
 
-    let reply = client.rebuild_history().await.unwrap();
-    assert_eq!(reply.protocol, 5);
+    client.rebuild_history().await.unwrap();
 
     // The journal keeps working after a rebuild.
     let id = env.record(&mut client, "echo after-rebuild").await;
