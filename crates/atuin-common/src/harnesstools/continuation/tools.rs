@@ -7,7 +7,9 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use crate::harnesstools::access::script;
@@ -404,9 +406,12 @@ pub(super) fn carry(
     cwd: &Path,
     ids: &mut CallIds,
 ) -> (ToolUse, ToolResult) {
-    // A Codex script making one call is carried as that call, when the target has its tool.
-    let scripted = script_call(&call.name, &call.input)
-        .and_then(|inner| Canonical::parse(&inner.name, &inner.input, ran_in)?.render(target, cwd));
+    // A Codex script that is one call is carried as that call, when the target has its tool.
+    let printed = script_call(&call.name, &call.input).and_then(|inner| {
+        let rendered = Canonical::parse(&inner.name, &inner.input, ran_in)?.render(target, cwd)?;
+        Some((rendered, script_output(result)?))
+    });
+    let (scripted, printed) = printed.unzip();
     let translated = scripted.clone().or_else(|| {
         Canonical::parse(&call.name, &call.input, ran_in)
             .and_then(|canonical| canonical.render(target, cwd))
@@ -428,7 +433,7 @@ pub(super) fn carry(
         name,
         input: input_for(target, input),
     };
-    let (output, error) = match scripted.and_then(|_| script_output(result)) {
+    let (output, error) = match printed {
         Some((output, failed)) => (output, result.error || failed),
         None => (output_text(result), result.error),
     };
@@ -440,12 +445,20 @@ pub(super) fn carry(
     (call, result)
 }
 
-/// The one call a Codex `exec` script makes, when it was read whole (see [`script`]).
+/// A Codex `exec` script that is nothing but one call, as Codex writes one for a single tool
+/// call: `await tools.<name>(...)`, its result maybe passed to `text(...)`, and nothing else.
+static ONE_CALL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)^\s*(?:text\(\s*)?await\s+tools\.\w+\(.*\)\s*\)?\s*;?\s*$")
+        .expect("a valid regex")
+});
+
+/// The call a Codex `exec` script is, when it is one and read whole (see [`script`]). One call
+/// in a loop or among other code reads as one call too, but isn't run once.
 fn script_call(name: &str, input: &Value) -> Option<script::Call> {
     let Value::String(text) = input else {
         return None;
     };
-    if name != "exec" || object(input).is_some() {
+    if name != "exec" || object(input).is_some() || !ONE_CALL.is_match(text) {
         return None;
     }
     let script = script::calls(text);
@@ -512,6 +525,21 @@ mod tests {
         "await tools.exec_command({cmd:\"a\"}); await tools.exec_command({cmd:\"b\"});",
         r#"{"exit_code":0,"output":"b"}"#,
         ("exec", json!({"input": "await tools.exec_command({cmd:\"a\"}); await tools.exec_command({cmd:\"b\"});"}), Value::Null, false)
+    )]
+    #[case::in_a_loop(
+        "for (let i = 0; i < 3; i++) { text(await tools.exec_command({cmd:\"npm test\"})); }",
+        r#"{"exit_code":0,"output":"ok"}"#,
+        ("exec", json!({"input": "for (let i = 0; i < 3; i++) { text(await tools.exec_command({cmd:\"npm test\"})); }"}), Value::Null, false)
+    )]
+    #[case::among_other_code(
+        "const r = await tools.exec_command({cmd:\"ls\"}); text(r.output.slice(0, 10));",
+        r#"{"exit_code":0,"output":"ok"}"#,
+        ("exec", json!({"input": "const r = await tools.exec_command({cmd:\"ls\"}); text(r.output.slice(0, 10));"}), Value::Null, false)
+    )]
+    #[case::output_not_one_result(
+        "text(await tools.exec_command({cmd:\"echo hi\"}));",
+        "hi",
+        ("exec", json!({"input": "text(await tools.exec_command({cmd:\"echo hi\"}));"}), Value::Null, false)
     )]
     #[case::not_read_whole(
         "const c = pick(); await tools.exec_command({cmd: c});",
