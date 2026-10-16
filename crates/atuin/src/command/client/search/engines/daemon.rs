@@ -3,7 +3,7 @@ use std::sync::Arc;
 use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
-use atuin_common::string::NormalizeDiacriticsExt;
+use atuin_common::string::StrExt as _;
 use atuin_daemon::client::{FromSettingsError, SearchClient, SearchParams};
 use atuin_daemon::search::truncate_query;
 use easy_cast::Conv;

@@ -2071,12 +2071,53 @@ mod tests {
         assert_eq!(settings.default_filter_mode(git_root), expected);
     }
 
+    /// The example config writes out the headers of tables whose keys are all commented out, so
+    /// that `atuin config set` can uncomment their keys beneath them. Those empty tables must
+    /// resolve the same as leaving them out.
+    #[rstest]
+    fn example_config_empty_tables_change_nothing() -> Result<()> {
+        let resolve = |toml: &str| -> Result<serde_json::Value> {
+            let settings: Settings =
+                Settings::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())?
+                    .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+                    .build()?
+                    .try_deserialize()?;
+            Ok(serde_json::to_value(settings)?)
+        };
+
+        let example = Settings::example_config();
+        let lines: Vec<&str> = example.lines().collect();
+        let is_header = |line: &str| line.starts_with('[');
+        let mut emptied = 0;
+        let without_empty_tables: String = lines
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let empty = is_header(line)
+                    && lines[i + 1..]
+                        .iter()
+                        .take_while(|line| !is_header(line))
+                        .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#'));
+                if empty {
+                    emptied += 1;
+                    format!("# {line}\n")
+                } else {
+                    format!("{line}\n")
+                }
+            })
+            .collect();
+
+        assert!(emptied >= 3, "expected the example config to have empty tables");
+        assert_eq!(resolve(example)?, resolve(&without_empty_tables)?);
+        Ok(())
+    }
+
     #[rstest]
     fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
         use std::path::PathBuf;
 
         let custom_dir = PathBuf::from("/custom/data/dir");
-        let builder = super::Settings::builder_with_data_dir(&custom_dir)?;
+        let builder = Settings::builder_with_data_dir(&custom_dir)?;
         let config = builder.build()?;
 
         let data_dir: String = config.get("data_dir")?;

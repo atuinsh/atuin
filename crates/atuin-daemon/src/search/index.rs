@@ -32,7 +32,7 @@ use uuid::Uuid;
 #[error("failed to load history from the database: {0}")]
 pub struct LoadFromDbError(eyre::Report);
 
-use atuin_common::string::NormalizeDiacriticsExt;
+use atuin_common::string::StrExt;
 
 /// Pre-computed frecency data for O(1) lookup.
 #[derive(Debug, Clone, Default)]
@@ -274,8 +274,7 @@ type FrecencyMap = Arc<Vec<u32>>;
 struct HaystackEntry {
     /// The original text of the entry.
     pub original: Arc<str>,
-    /// The [normalized](NormalizeDiacriticsExt::normalize_diacritics) version of the text, with
-    /// diacritics removed.
+    /// The [normalized](StrExt::normalize_diacritics) version of the text, with diacritics removed.
     pub normalized: Arc<str>,
 }
 

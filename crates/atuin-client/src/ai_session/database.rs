@@ -13,7 +13,7 @@ use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{
     Checkpoint, Content, ParentKind, Role, TitleChange, TitleSource, Usage,
 };
-use atuin_common::string::TruncateCharsExt;
+use atuin_common::string::StrExt as _;
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId};
 use futures::{Stream, TryStreamExt};

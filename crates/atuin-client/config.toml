@@ -227,19 +227,19 @@ enter_accept = true
 # ]
 
 [keys]
-# Defaults to true. If disabled, using the up/down key won't exit the TUI when scrolled past the first/last entry.
+## Defaults to true. If disabled, using the up/down key won't exit the TUI when scrolled past the first/last entry.
 # scroll_exits = true
 
-# Defaults to true. The left arrow key will exit the TUI when scrolling before the first character
+## Defaults to true. The left arrow key will exit the TUI when scrolling before the first character
 # exit_past_line_start = true
 
-# Defaults to true. The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
+## Defaults to true. The right arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
 # accept_past_line_end = true
 
-# Defaults to false. The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
+## Defaults to false. The left arrow key performs the same functionality as Tab and copies the selected line to the command line to be modified.
 # accept_past_line_start = false
 
-# Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
+## Defaults to false. The backspace key performs the same functionality as Tab and copies the selected line to the command line to be modified when at the start of the line.
 # accept_with_backspace = false
 
 [preview]
@@ -280,7 +280,7 @@ enter_accept = true
 ## The port that should be used for TCP on non unix systems
 # tcp_port = 8889
 
-# [pty_proxy]
+[pty_proxy]
 ## If enabled, `atuin init` will first re-exec your shell inside `atuin pty-proxy`,
 ## so you don't need a separate `eval "$(atuin pty-proxy init)"` line in your shell
 ## config. Supported for bash, zsh, fish and nu on unix platforms.
@@ -290,7 +290,7 @@ enter_accept = true
 ## starts once.
 # enabled = false
 
-# [theme]
+[theme]
 ## Color theme to use for rendering in the terminal.
 ## There are some built-in themes, including the base theme ("default"),
 ## "autumn" and "marine". You can add your own themes to `~/.atuin/themes/` as
@@ -298,7 +298,7 @@ enter_accept = true
 ## AlertError, Annotation, Base, Guidance, Important, and the string values as
 ## lowercase entries from this list:
 ##    https://ogeon.github.io/docs/palette/master/palette/named/index.html
-## If you provide a custom theme file, it should be  called "NAME.toml" and the theme below
+## If you provide a custom theme file, it should be called "NAME.toml" and the theme below
 ## should be the stem, i.e. `theme = "NAME"` for your chosen NAME.
 # name = "autumn"
 
@@ -368,7 +368,7 @@ enter_accept = true
 ## Don't pass them through another shell either (e.g. `sh -c "cd {cwd} && ..."`): that
 ## shell would split and expand them, so a directory with a space or `;` in it breaks the
 ## command or runs part of it as a separate one.
-# [threads.resume]
+[threads.resume]
 # claude = "claude --resume {id}"
 # codex = "codex resume {id}"
 # opencode = "opencode --session {id}"
