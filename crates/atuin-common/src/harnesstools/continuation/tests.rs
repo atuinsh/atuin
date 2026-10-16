@@ -385,6 +385,7 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
         AnyHarness::Pi(_) => {
             let path = pi::rehydrate::rehydrate_into(
                 pi::Flavour::Pi,
+                None,
                 root,
                 &root.join("sessions"),
                 session,
