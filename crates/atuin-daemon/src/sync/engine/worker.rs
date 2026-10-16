@@ -211,7 +211,7 @@ impl Worker {
             .connect()
             .await?;
         let (uploaded_count, downloaded_records) =
-            session.keyed(self.handle.encryption_key()).sync().await?;
+            session.keyed(&self.handle.encryption_key().get()).sync().await?;
 
         tracing::info!(
             uploaded = uploaded_count,

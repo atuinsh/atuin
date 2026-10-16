@@ -560,6 +560,16 @@ pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
     }
 }
 
+/// Have the daemon reload the key file, so it encrypts under the key just saved there. With no
+/// daemon running there is nothing to do: one started later reads the file.
+pub async fn reload_key(settings: &Settings) -> Result<()> {
+    if matches!(probe(settings).await, Probe::Unreachable(_) | Probe::MissingConfig(_)) {
+        return Ok(());
+    }
+    try_with_restart(settings, async |client| client.reload_key().await).await?;
+    Ok(())
+}
+
 pub async fn compact_store(settings: &Settings) -> Result<u64> {
     let reply = try_with_restart(settings, async |client| client.compact_store().await).await?;
     Ok(reply.rewritten)

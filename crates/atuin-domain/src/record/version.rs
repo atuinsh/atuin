@@ -24,6 +24,10 @@ pub enum RecordVersion {
     V1,
     #[strum(serialize = "v2")]
     V2,
+    /// A record `atuin store purge` emptied because no key here could read it. It keeps its place
+    /// in the series, so the series still uploads; every reader skips it.
+    #[strum(serialize = "purged")]
+    Purged,
     /// Any version string without a dedicated variant.
     #[strum(default, transparent)]
     Other(String),

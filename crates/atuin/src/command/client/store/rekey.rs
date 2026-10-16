@@ -27,11 +27,8 @@ impl Rekey {
         let current_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
             .context("could not load encryption key")?;
 
-        store.re_encrypt(&current_key, &key).await?;
-        super::invalidate_ai_sessions(settings).await;
-
-        println!("Store rewritten. Saving new key");
-        key.overwrite_path(&settings.key_path)?;
+        super::replace_key(settings, &store, &current_key, &key).await?;
+        println!("Store rewritten and new key saved");
 
         Ok(())
     }

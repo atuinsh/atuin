@@ -126,6 +126,7 @@ impl KvStore {
                         KvRecord::deserialize(&decrypted.data, &decrypted.version)
                     })
                 }
+                RecordVersion::Purged => continue,
                 ref version => Err(eyre!("unknown kv version {version:?}")),
             };
 

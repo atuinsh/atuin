@@ -5,6 +5,7 @@ use std::array::TryFromSliceError;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::{
@@ -419,6 +420,28 @@ impl Key {
     }
 }
 
+/// A [`Key`] that can be replaced while in use: every clone sees the replacement.
+#[derive(Clone, derive_more::Debug)]
+#[debug("paseto_v4::SharedKey(*******)")]
+pub struct SharedKey(Arc<parking_lot::RwLock<Key>>);
+
+impl SharedKey {
+    #[must_use]
+    pub fn get(&self) -> Key {
+        self.0.read().clone()
+    }
+
+    pub fn set(&self, key: Key) {
+        *self.0.write() = key;
+    }
+}
+
+impl From<Key> for SharedKey {
+    fn from(key: Key) -> Self {
+        Self(Arc::new(parking_lot::RwLock::new(key)))
+    }
+}
+
 impl Drop for Key {
     fn drop(&mut self) {
         self.0.zeroize();
@@ -509,6 +532,11 @@ mod cek {
             })?)
         }
 
+        /// The id of the key that wrapped the CEK in `encrypted_json`.
+        pub fn key_id(encrypted_json: &str) -> Result<PaserkV4KeyId, serde_json::Error> {
+            Ok(serde_json::from_str::<Self>(encrypted_json)?.kid)
+        }
+
         /// Decrypt a serialized `&str` into the CEK key held under it.
         pub fn decrypt(encrypted_json: &str, key: &Key) -> Result<Key, DecryptionError> {
             let Self { kid, wpk } = serde_json::from_str(encrypted_json)?;
@@ -544,6 +572,15 @@ pub struct EncryptedData {
     /// On the wire as `content_encryption_key` for the same backwards-compatibility reason.
     #[serde(rename = "content_encryption_key", alias = "cek")]
     pub cek: String,
+}
+
+impl EncryptedData {
+    /// Whether the key with id `key_id` wrapped the content key, read from the envelope without
+    /// decrypting.
+    #[must_use]
+    pub fn is_wrapped_by(&self, key_id: &PaserkV4KeyId) -> bool {
+        cek::Json::key_id(&self.cek).is_ok_and(|kid| &kid == key_id)
+    }
 }
 
 /// [`EncryptedData`] in its storage form.

@@ -343,6 +343,7 @@ impl VarStore {
                         VarRecord::deserialize(&decrypted.data, &RecordVersion::V0)
                     })
                 }
+                RecordVersion::Purged => continue,
                 ref version => Err(eyre!("unknown version {version:?}")),
             };
 

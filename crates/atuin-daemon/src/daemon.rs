@@ -39,8 +39,8 @@ pub struct DaemonState {
     // Configuration (mutable - can be reloaded)
     settings: RwLock<Arc<Settings>>,
 
-    // Encryption key (immutable - derived at startup)
-    encryption_key: paseto_v4::Key,
+    // Encryption key (loaded at startup, replaced by the ReloadKey RPC)
+    encryption_key: paseto_v4::SharedKey,
 
     // Database handles
     history_db: HistoryDatabase,
@@ -134,7 +134,7 @@ impl DaemonHandle {
 
     /// Get the encryption key.
     #[must_use]
-    pub fn encryption_key(&self) -> &paseto_v4::Key {
+    pub fn encryption_key(&self) -> &paseto_v4::SharedKey {
         &self.state.encryption_key
     }
 
@@ -447,7 +447,8 @@ impl DaemonBuilder {
 
         // Load encryption key
         let encryption_key = paseto_v4::Key::try_load_or_generate(&self.settings.key_path)
-            .context("could not load encryption key")?;
+            .context("could not load encryption key")?
+            .into();
 
         // Create the event bus
         let (event_tx, _) = broadcast::channel(64);

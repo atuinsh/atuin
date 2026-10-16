@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
+use atuin_common::encryption::paseto_v4;
 use atuin_common::time::OffsetDateTimeExt;
 use easy_cast::Cast;
 use futures::StreamExt;
@@ -22,8 +23,9 @@ use crate::grpc::history::pb::{
     DeleteHistoryReply, DeleteHistoryRequest, DeleteHistoryStreamExt, EndHistoryReply,
     EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, RebuildHistoryReply,
     RebuildHistoryRequest, RegisterCommandOutputRequest, RegisterCommandOutputResponse,
-    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
-    StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
+    ReloadKeyReply, ReloadKeyRequest, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
+    TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 
@@ -148,6 +150,22 @@ impl GrpcService for Service {
         self.journal.rebuild(&search_settings).await?;
 
         Ok(Response::new(RebuildHistoryReply {
+            version: crate::VERSION.to_string(),
+            protocol: crate::PROTOCOL_VERSION,
+        }))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn reload_key(
+        &self,
+        _request: Request<ReloadKeyRequest>,
+    ) -> Result<Response<ReloadKeyReply>, Status> {
+        let key_path = self.daemon_handle.settings().await.key_path.clone();
+        let key = paseto_v4::Key::try_load_from_path(&key_path)
+            .map_err(|e| Status::internal(format!("failed to load the encryption key: {e}")))?;
+        self.daemon_handle.encryption_key().set(key);
+
+        Ok(Response::new(ReloadKeyReply {
             version: crate::VERSION.to_string(),
             protocol: crate::PROTOCOL_VERSION,
         }))

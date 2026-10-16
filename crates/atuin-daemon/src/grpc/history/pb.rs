@@ -482,6 +482,7 @@ versioned_messages!(
     DeleteHistoryReply,
     RebuildHistoryReply,
     CompactStoreReply,
+    ReloadKeyReply,
 );
 
 internal_errors!(GetOutputError);

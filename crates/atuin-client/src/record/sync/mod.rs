@@ -341,6 +341,7 @@ impl Keyed<'_> {
         let first_missing_remote = remote.map_or(0, |n| n + 1);
         let expected = local + 1 - first_missing_remote;
         let mut progress = 0;
+        let key_id = self.key.key_id();
 
         let pb = ProgressBar::new(expected);
         pb.set_style(
@@ -363,7 +364,7 @@ impl Keyed<'_> {
         );
 
         while progress < expected {
-            let page = store
+            let mut page = store
                 .next(series, first_missing_remote + progress, page_size)
                 .await
                 .map_err(|e| {
@@ -373,6 +374,23 @@ impl Keyed<'_> {
                         msg: format!("{e:#}"),
                     }
                 })?;
+
+            // A record under another key would reach the server, where nothing can read it. Stop
+            // this series before it, and let the rest of the sync go on.
+            let foreign = page
+                .iter()
+                .position(|r| !series.tag.is_plaintext() && !r.data.is_wrapped_by(&key_id));
+            if let Some(i) = foreign {
+                warn!(
+                    "record {} is encrypted with a different key from this machine's, so it and \
+                     everything after it in {}/{} are not uploaded. Run `atuin store purge` to \
+                     empty it",
+                    page[i].id.as_hyphenated(),
+                    series.host_id.0.as_simple(),
+                    series.tag
+                );
+                page.truncate(i);
+            }
 
             if page.is_empty() {
                 break;
@@ -424,6 +442,10 @@ impl Keyed<'_> {
 
             progress += u64::conv(page.len());
             pb.set_position(progress);
+
+            if foreign.is_some() {
+                break;
+            }
         }
 
         pb.finish_with_message("Uploaded records");
@@ -1372,6 +1394,58 @@ mod packfile_sync_tests {
         assert_eq!(u64::conv(returned.len()), count);
     }
 
+    /// A record under another key is not uploaded, nor is anything after it: no machine could read
+    /// it. What comes before it still is.
+    #[rstest]
+    #[case::own_key(false, 3)]
+    #[case::foreign_key(true, 2)]
+    #[tokio::test]
+    async fn sync_upload_refuses_a_record_under_another_key(
+        key: paseto_v4::Key,
+        #[future] server: MockServer,
+        #[case] foreign: bool,
+        #[case] uploaded: u64,
+    ) {
+        let host = HostId(uuid_v7());
+        let store = memory_store().await;
+        seed_history(&store, host, &key, 2).await;
+        let last_key = if foreign {
+            paseto_v4::Key::from([8u8; 32])
+        } else {
+            key.clone()
+        };
+        let last = Record::builder()
+            .host(Host::new(host))
+            .version("v1".into())
+            .tag(RecordTag::History)
+            .idx(2)
+            .data(DecryptedData(b"cmd 2".to_vec()))
+            .build()
+            .encrypt(&last_key);
+        store.push(&last).await.unwrap();
+
+        let server = server.await;
+        Mock::given(method("POST"))
+            .and(path("/api/v0/record"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = build_session(mock_client(&server.uri().parse().unwrap()), store)
+            .await
+            .with_page_size(NonZeroU64::new(10).unwrap())
+            .keyed(&key)
+            .sync_upload(&RecordSeriesKey::new(host, RecordTag::History), 2, None)
+            .await;
+
+        let requests = server.received_requests().await.unwrap();
+        let post = requests.iter().find(|r| r.method == wiremock::http::Method::POST).unwrap();
+        let posted: Vec<serde_json::Value> = post.body_json().unwrap();
+        assert_eq!(result.unwrap(), uploaded);
+        assert_eq!(posted.len(), usize::conv(uploaded));
+    }
+
     /// Build `num_packs` contiguous packfiles of `per` history records each for a single host,
     /// returning every manifest paired with the blob a server would serve, plus all covered history
     /// ids in idx order.
@@ -1618,6 +1692,7 @@ mod packfile_sync_tests {
             .unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
     async fn upload_packfiles_transfers_every_item() {
         // Two items each drive create -> put -> confirm exactly once (asserted via `.expect(2)`), so

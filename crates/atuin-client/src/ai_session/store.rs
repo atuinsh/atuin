@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use atuin_common::encryption::paseto_v4::{EncryptedData, Key};
+use atuin_common::encryption::paseto_v4::{EncryptedData, Key, SharedKey};
 use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
@@ -34,7 +34,8 @@ const REPROJECT_PASSES: usize = 4;
 pub struct AiSessionStore {
     store: SqliteStore,
     host_id: HostId,
-    key: Key,
+    #[builder(setter(into))]
+    key: SharedKey,
 }
 
 /// What capture knows of this host's watermark before it pushes a record, for
@@ -134,6 +135,7 @@ impl AiSessionRecord {
                 let body = zstd::stream::decode_all(body).map_err(DecodeError::Decompress)?;
                 Ok(Self::Message(rmp_serde::from_slice(&body)?))
             }
+            RecordVersion::Purged => Err(DecodeError::Retired(RecordVersion::Purged)),
             other @ RecordVersion::Other(_) => Err(DecodeError::UnknownVersion(other.clone())),
         }
     }
@@ -170,7 +172,7 @@ impl AiSessionStore {
                 .data(DecryptedData(bytes.clone()))
                 .build();
 
-            if self.store.push_unique(&record.encrypt(&self.key)).await? {
+            if self.store.push_unique(&record.encrypt(&self.key.get())).await? {
                 return Ok(Watermark { idx, record_id: id });
             }
         }
@@ -184,7 +186,7 @@ impl AiSessionStore {
         };
         let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
         let first = self.store.last(&series).await?.map_or(0, |r| r.idx + 1);
-        let (all, host, key) = (Arc::clone(msgs), Host::new(self.host_id), self.key.clone());
+        let (all, host, key) = (Arc::clone(msgs), Host::new(self.host_id), self.key.get());
         // Serializing and encrypting each is most of what pushing costs: across cores.
         let records = map_parallel((0..msgs.len()).collect(), move |i| {
             Record::builder()
@@ -398,7 +400,7 @@ impl AiSessionStore {
         appended: &mut impl FnMut(Vec<NewRow>) -> F,
     ) -> Result<Reprojected, BuildError> {
         let _running = db.lock_reprojection().await;
-        if db.check_projection_key(&self.key.key_id().to_string()).await? {
+        if db.check_projection_key(&self.key.get().key_id().to_string()).await? {
             // Also the first time, on a fresh sidecar or one from before key tracking.
             tracing::info!("ai-session watermarks were not made with this key: replaying all");
         }
@@ -675,7 +677,7 @@ impl AiSessionStore {
         from: RecordIdx,
     ) -> Result<Vec<(RecordIdx, RecordId, Result<Projected, DbError>)>, BuildError> {
         let records = self.store.next(series, from, REPROJECT_PAGE).await?;
-        let key = self.key.clone();
+        let key = self.key.get();
         Ok(decode_parallel(records, move |record| {
             (record.idx, record.id, Self::decode(&key, &record))
         })
@@ -1057,7 +1059,7 @@ mod tests {
         assert_eq!(count(&db, &sample_handle()).await, Some(3));
     }
 
-    /// `atuin store purge` deletes the records the key cannot decrypt, projected earlier under
+    /// `atuin store purge` empties the records the key cannot decrypt, projected earlier under
     /// the key they were made with. Resetting the sidecar and reprojecting leaves no trace of
     /// them in listings or search, and keeps the rest.
     #[rstest]

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
 use atuin_domain::record::RecordSeriesKey;
 use clap::Subcommand;
@@ -54,6 +55,50 @@ pub enum Cmd {
     #[command(about = fl!("cmd-store-pull"))]
     #[cfg(feature = "sync")]
     Pull(pull::Pull),
+}
+
+/// Save `new` as the key and re-encrypt the store from `current` to it.
+///
+/// The key is saved, and a running daemon reloads it, before re-encrypting: from then on nothing
+/// writes records under `current`, which nothing could read once the key file changes.
+pub async fn replace_key(
+    settings: &Settings,
+    store: &SqliteStore,
+    current: &paseto_v4::Key,
+    new: &paseto_v4::Key,
+) -> Result<()> {
+    let reload = async || -> Result<()> {
+        #[cfg(feature = "daemon")]
+        if settings.daemon.enabled {
+            daemon::reload_key(settings)
+                .await
+                .wrap_err("the daemon could not reload the encryption key")?;
+        }
+        Ok(())
+    };
+    // For when nothing is under `new` yet, so the old key still reads the whole store.
+    let restore = |e: eyre::Report| match current.overwrite_path(&settings.key_path) {
+        Ok(()) => e,
+        Err(restore) => e.wrap_err(format!("and the old key could not be put back: {restore}")),
+    };
+
+    new.overwrite_path(&settings.key_path)?;
+    if let Err(e) = reload().await {
+        return Err(restore(e));
+    }
+
+    if let Err(e) = store.re_encrypt(current, new).await {
+        // Rolled back. What the daemon wrote under `new` meanwhile is lost to the old key.
+        let e = restore(e);
+        let _ = reload().await;
+        return Err(e);
+    }
+    // A push the daemon began before reloading can land after that pass read the store, still
+    // under `current`.
+    store.re_encrypt(current, new).await?;
+
+    invalidate_ai_sessions(settings).await;
+    Ok(())
 }
 
 /// Have the daemon reproject the ai-session sidecar in full on its next start, after a command

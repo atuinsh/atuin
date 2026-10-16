@@ -10,8 +10,8 @@ use atuin_common::db;
 use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{
-    Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
-    RecordVersion,
+    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus,
+    RecordTag, RecordVersion,
 };
 use easy_cast::Conv;
 use eyre::{Result, eyre};
@@ -136,28 +136,19 @@ impl SqliteStore {
         Ok(())
     }
 
-    async fn save_raw(
+    /// Overwrite a record's version and payload in place, keeping its place in its series.
+    async fn rewrite(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        r: &Record<paseto_v4::EncryptedData>,
+        record: &Record<paseto_v4::EncryptedData>,
     ) -> Result<()> {
-        let (data, cek) = stored_columns(r)?;
-
-        // In sqlite, we are "limited" to i64. But that is still fine, until 2262.
-        db::query(
-            "insert or ignore into store(id, idx, host, tag, timestamp, version, data, cek)
-                values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        )
-        .bind(r.id.as_hyphenated().to_string())
-        .bind(i64::conv(r.idx))
-        .bind(r.host.id.as_hyphenated().to_string())
-        .bind(r.tag.as_str())
-        .bind(i64::conv(r.timestamp))
-        .bind(r.version.as_str())
-        .bind(data)
-        .bind(cek)
-        .execute(&mut **tx)
-        .await?;
-
+        let (data, cek) = stored_columns(record)?;
+        db::query("update store set version = ?1, data = ?2, cek = ?3 where id = ?4")
+            .bind(record.version.as_str())
+            .bind(data)
+            .bind(cek)
+            .bind(record.id.as_hyphenated().to_string())
+            .execute(&mut **tx)
+            .await?;
         Ok(())
     }
 
@@ -597,36 +588,27 @@ impl SqliteStore {
         // 2. The user has encountered some sort of issue, and runs a maintenance command that
         //    invokes this
         let all = self.load_all().await?;
+        let new_id = new_key.key_id();
 
-        let re_encrypted = all
+        // Records already under `new_key` were pushed after the daemon picked it up. Records
+        // under neither key are unreadable already, and left for `atuin store purge`.
+        let re_encrypted: Vec<_> = all
             .into_iter()
-            .map(|record| {
-                if record.tag.is_plaintext() {
-                    return Ok(record);
+            .filter(|record| !record.tag.is_plaintext() && !record.data.is_wrapped_by(&new_id))
+            .filter_map(|record| match paseto_v4::reencrypt_sync(&record.data, old_key, new_key) {
+                Ok(data) => Some(record.with_data(data)),
+                Err(e) => {
+                    warn!("leaving record {} as it is: {e}", record.id.as_hyphenated());
+                    None
                 }
-
-                let data = paseto_v4::reencrypt_sync(&record.data, old_key, new_key)?;
-                Ok(record.with_data(data))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect();
 
-        // next up, we delete all the old data and reinsert the new stuff
-        // do it in one transaction, so if anything fails we rollback OK
-
+        // Rewritten in place, in one transaction, so records pushed meanwhile are kept.
         let mut tx = self.sqlite.pool().begin().await?;
-
-        let res = db::query("delete from store").execute(&mut *tx).await?;
-
-        let rows = res.rows_affected();
-        debug!("deleted {rows} rows");
-
-        // don't call push_batch, as it will start its own transaction
-        // call the underlying save_raw
-
-        for record in re_encrypted {
-            Self::save_raw(&mut tx, &record).await?;
+        for record in &re_encrypted {
+            Self::rewrite(&mut tx, record).await?;
         }
-
         tx.commit().await?;
 
         Ok(())
@@ -646,26 +628,24 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// Verify that every record in this store can be decrypted with the current key
-    /// Someday maybe also check each tag/record can be deserialized, but not for now.
+    /// Empty every record `key` cannot decrypt, rewriting it under `key` as
+    /// [`RecordVersion::Purged`]. It keeps its place in its series, so the series still uploads.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn purge(&self, key: &paseto_v4::Key) -> Result<()> {
         let all = self.load_all().await?;
 
-        for record in &all {
-            if record.tag.is_plaintext() {
+        let mut tx = self.sqlite.pool().begin().await?;
+        for record in all {
+            if record.tag.is_plaintext() || record.decrypt(key).is_ok() {
                 continue;
             }
 
-            match record.clone().decrypt(key) {
-                Ok(_) => {}
-                Err(_) => {
-                    println!("Failed to decrypt {}, deleting", record.id.as_hyphenated());
-
-                    self.delete(record.id).await?;
-                }
-            }
+            println!("Failed to decrypt {}, purging it", record.id.as_hyphenated());
+            let mut purged = record.with_data_clone(DecryptedData(Vec::new()));
+            purged.version = RecordVersion::Purged;
+            Self::rewrite(&mut tx, &purged.encrypt(key)).await?;
         }
+        tx.commit().await?;
 
         Ok(())
     }
@@ -897,6 +877,61 @@ mod tests {
                 .unwrap(),
             10
         );
+    }
+
+    /// Records the daemon pushed under the new key, once it reloaded it, are kept as they are.
+    #[rstest]
+    #[tokio::test]
+    async fn re_encrypt_keeps_records_already_under_the_new_key(#[future(awt)] store: SqliteStore) {
+        let (key, new_key) = (paseto_v4::Key::generate(), paseto_v4::Key::generate());
+        let host = HostId(uuid_v7());
+        let record = |idx, key| {
+            Record::builder()
+                .host(Host::new(host))
+                .version(RecordVersion::V1)
+                .tag(RecordTag::History)
+                .idx(idx)
+                .data(DecryptedData(b"cmd".to_vec()))
+                .build()
+                .encrypt(key)
+        };
+        let (old, new) = (record(0, &key), record(1, &new_key));
+        store.push(&old).await.unwrap();
+        store.push(&new).await.unwrap();
+
+        store.re_encrypt(&key, &new_key).await.unwrap();
+
+        assert_eq!(store.get(new.id).await.unwrap(), new, "already under the new key");
+        store.get(old.id).await.unwrap().decrypt(&new_key).expect("old record was rekeyed");
+        assert_eq!(store.len_all().await.unwrap(), 2);
+    }
+
+    /// A record no key here can read is emptied in place, not deleted, so its series has no gap.
+    #[rstest]
+    #[tokio::test]
+    async fn purge_empties_unreadable_records_in_place(#[future(awt)] store: SqliteStore) {
+        let (key, lost) = (paseto_v4::Key::generate(), paseto_v4::Key::generate());
+        let host = HostId(uuid_v7());
+        let series = RecordSeriesKey::new(host, RecordTag::History);
+        for (idx, k) in [(0, &key), (1, &lost), (2, &key)] {
+            let record = Record::builder()
+                .host(Host::new(host))
+                .version(RecordVersion::V1)
+                .tag(RecordTag::History)
+                .idx(idx)
+                .data(DecryptedData(b"cmd".to_vec()))
+                .build()
+                .encrypt(k);
+            store.push(&record).await.unwrap();
+        }
+
+        store.purge(&key).await.unwrap();
+
+        let all = store.next(&series, 0, 10).await.unwrap();
+        assert_eq!(all.iter().map(|r| r.idx).collect::<Vec<_>>(), [0, 1, 2], "no gap");
+        assert_eq!(all[1].version, RecordVersion::Purged);
+        assert!(all[1].decrypt(&key).unwrap().data.0.is_empty());
+        store.verify(&key).await.unwrap();
     }
 
     #[rstest]

@@ -26,7 +26,7 @@ use crate::settings::Settings;
 pub struct HistoryStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: paseto_v4::Key,
+    pub encryption_key: paseto_v4::SharedKey,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, strum_macros::EnumDiscriminants)]
@@ -177,11 +177,15 @@ const DECODE_CONCURRENCY: usize = 4;
 
 impl HistoryStore {
     #[must_use]
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
+    pub fn new(
+        store: SqliteStore,
+        host_id: HostId,
+        encryption_key: impl Into<paseto_v4::SharedKey>,
+    ) -> Self {
         Self {
             store,
             host_id,
-            encryption_key,
+            encryption_key: encryption_key.into(),
         }
     }
 
@@ -206,7 +210,7 @@ impl HistoryStore {
 
             let id = record.id;
 
-            if self.store.push_unique(&record.encrypt(&self.encryption_key)).await? {
+            if self.store.push_unique(&record.encrypt(&self.encryption_key.get())).await? {
                 return Ok((id, idx));
             }
         }
@@ -242,7 +246,7 @@ impl HistoryStore {
                             .build()
                     })
                     .collect();
-                let encrypted = encrypt_records(unencrypted, &self.encryption_key).await?;
+                let encrypted = encrypt_records(unencrypted, &self.encryption_key.get()).await?;
 
                 if self.store.push_batch_unique(encrypted.iter()).await? {
                     ids.extend(encrypted.into_iter().map(|r| r.id));
@@ -312,16 +316,18 @@ impl HistoryStore {
         for record in records {
             let id = record.id;
             let version = record.version.clone();
+            if version == RecordVersion::Purged {
+                continue;
+            }
 
             // A record we can't decrypt or decode must not block the rest of the store -
             // skip it, and load everything else.
-            let hist =
-                match Version::from_name(version.as_str()) {
-                    Some(_) => record.decrypt(&self.encryption_key).map_err(Into::into).and_then(
-                        |decrypted| HistoryRecord::deserialize(&decrypted.data, version.as_str()),
-                    ),
-                    None => Err(eyre!("unknown history version {version:?}")),
-                };
+            let hist = match Version::from_name(version.as_str()) {
+                Some(_) => record.decrypt(&self.encryption_key.get()).map_err(Into::into).and_then(
+                    |decrypted| HistoryRecord::deserialize(&decrypted.data, version.as_str()),
+                ),
+                None => Err(eyre!("unknown history version {version:?}")),
+            };
 
             match hist {
                 Ok(hist) => ret.push(hist),
@@ -450,13 +456,15 @@ impl HistoryStore {
 
         let version = record.version.clone();
 
+        if version == RecordVersion::Purged {
+            return None;
+        }
+
         // Skip records we can't decrypt or decode, rather than failing the entire build.
         let record = match Version::from_name(version.as_str()) {
-            Some(_) => {
-                record.decrypt(&self.encryption_key).map_err(Into::into).and_then(|decrypted| {
-                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                })
-            }
+            Some(_) => record.decrypt(&self.encryption_key.get()).map_err(Into::into).and_then(
+                |decrypted| HistoryRecord::deserialize(&decrypted.data, version.as_str()),
+            ),
             None => Err(eyre!("unknown history version {version:?}")),
         };
 
@@ -590,7 +598,11 @@ mod tests {
     async fn stores() -> (SqliteStore, HostId, HistoryStore) {
         let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let host_id = HostId(atuin_common::utils::uuid_v7());
-        let history_store = HistoryStore::new(store.clone(), host_id, [0u8; 32].into());
+        let history_store = HistoryStore::new(
+            store.clone(),
+            host_id,
+            atuin_common::encryption::paseto_v4::Key::from([0u8; 32]),
+        );
         (store, host_id, history_store)
     }
 

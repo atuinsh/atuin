@@ -500,7 +500,7 @@ async fn handle_end(
                 .build()
                 .connect()
                 .await?;
-            let (_, downloaded) = session.keyed(&history_store.encryption_key).sync().await?;
+            let (_, downloaded) = session.keyed(&history_store.encryption_key.get()).sync().await?;
             settings.save_sync_time().await?;
 
             crate::sync::build(settings, &store, db, Some(&downloaded)).await?;

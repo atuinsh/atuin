@@ -83,6 +83,14 @@ message RebuildHistoryReply {
   uint32 protocol = 2;
 }
 
+// The daemon reloads the encryption key from the key file.
+message ReloadKeyRequest {}
+
+message ReloadKeyReply {
+  string version = 1;
+  uint32 protocol = 2;
+}
+
 // The daemon rewrites record store rows into the compact on-disk encoding and vacuums.
 message CompactStoreRequest {}
 
@@ -256,6 +264,8 @@ service History {
   rpc RebuildHistory(RebuildHistoryRequest) returns (RebuildHistoryReply);
 
   rpc CompactStore(CompactStoreRequest) returns (CompactStoreReply);
+
+  rpc ReloadKey(ReloadKeyRequest) returns (ReloadKeyReply);
 
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
 

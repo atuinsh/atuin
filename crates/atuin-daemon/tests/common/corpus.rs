@@ -255,7 +255,7 @@ pub async fn seed_record_store(history_store: &HistoryStore, histories: &[Histor
                 .data(bytes)
                 .build();
             idx += 1;
-            records.push(record.encrypt(&history_store.encryption_key));
+            records.push(record.encrypt(&history_store.encryption_key.get()));
         }
         history_store.store.push_batch(records.iter()).await.expect("seeding record store");
     }
