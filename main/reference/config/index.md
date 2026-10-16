@@ -63,7 +63,7 @@ Resolved:
 
 ### `atuin config set <key> <value>`
 
-Set a configuration value in your `config.toml`. The file's existing formatting and comments are preserved.
+Set a configuration value in your `config.toml`. The file's existing formatting and comments are preserved.[1](#fn:1)
 
 ```
 $ atuin config set search_mode fuzzy
@@ -148,3 +148,7 @@ socket_path = "/tmp/atuin_daemon.sock"
 pidfile_path = "/tmp/atuin_daemon.pid"
 autostart = false
 ```
+
+______________________________________________________________________
+
+1. If your config doesn't already contain the key, Atuin searches for an intelligent place to insert it. If your config has a commented-out assignment of the key like `# style = "compact"`, Atuin may uncomment the example and update the value, or insert a new assignment nearby, depending on whether it's safe to replace the comment. [↩](#fnref:1 "Jump back to footnote 1 in the text")
