@@ -68,15 +68,18 @@ pub async fn rehydrate(
     let session = session.clone();
     tokio::task::spawn_blocking(move || {
         let dir = new_session_dir(flavour, &session.cwd);
-        rehydrate_into(flavour, &default_root(flavour), &dir, &session)
+        let model = flavour.default_model();
+        rehydrate_into(flavour, model.as_deref(), &default_root(flavour), &dir, &session)
     })
     .await
     .map_err(|e| RehydrateError::Other(e.to_string()))?
 }
 
-/// [`rehydrate`], looking for an existing copy under `root` and writing into `dir`.
+/// [`rehydrate`], looking for an existing copy under `root` and writing into `dir`, and
+/// starting on `model` (`provider/id`) when none of its replies names one (see [`transcript`]).
 pub(crate) fn rehydrate_into(
     flavour: Flavour,
+    model: Option<&str>,
     root: &Path,
     dir: &Path,
     session: &RehydrateSession,
@@ -96,7 +99,7 @@ pub(crate) fn rehydrate_into(
     // pi's own name: the start time with `:` and `.` made file-safe, then the id.
     let started = timestamp(session.started_at).replace([':', '.'], "-");
     let path = dir.join(format!("{started}_{}.jsonl", session.id));
-    let mut body = transcript(session);
+    let mut body = transcript(session, model);
     if flavour == Flavour::Omp {
         body.insert_str(0, &title_slot(session.started_at));
     }
@@ -134,7 +137,11 @@ fn millis(at: OffsetDateTime) -> i64 {
     i64::try_from(at.unix_timestamp_nanos() / 1_000_000).unwrap_or_default()
 }
 
-fn transcript(session: &RehydrateSession) -> String {
+/// The session file for `session`. A session none of whose replies names a model (a
+/// continuation of another harness's: see [`crate::harnesstools::continuation`]) ends on a
+/// `model_change` to `model`, in omp's form, when given: omp otherwise restores the model its
+/// replies name, `undefined/undefined`, and refuses the session without a UI to warn in.
+fn transcript(session: &RehydrateSession, model: Option<&str>) -> String {
     let mut header = json!({
         "type": "session",
         "version": VERSION,
@@ -146,9 +153,20 @@ fn transcript(session: &RehydrateSession) -> String {
     if let Some(path) = session.fork_of.as_ref().and_then(|of| of.path.as_ref()) {
         header["parentSession"] = json!(path);
     }
+    let mut lines = lines(session, &Continuing::default(), true);
+    let named = lines.iter().any(|l| l["type"] == "message" && !l["message"]["model"].is_null());
+    if let Some(model) = model.filter(|_| !named) {
+        lines.push(json!({
+            "type": "model_change",
+            "id": format!("atuin-{}", crate::utils::uuid_v7().as_simple()),
+            "parentId": lines.last().map(|l| l["id"].clone()),
+            "timestamp": timestamp(session.started_at),
+            "model": model,
+        }));
+    }
     let mut out = header.to_string();
     out.push('\n');
-    for line in lines(session, &Continuing::default(), true) {
+    for line in lines {
         out.push_str(&line.to_string());
         out.push('\n');
     }

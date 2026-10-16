@@ -10,6 +10,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
+use crate::harnesstools::access::script;
 use crate::harnesstools::note::command_line;
 use crate::harnesstools::rehydrate::UNCAPTURED_OUTPUT;
 use crate::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
@@ -403,31 +404,66 @@ pub(super) fn carry(
     cwd: &Path,
     ids: &mut CallIds,
 ) -> (ToolUse, ToolResult) {
-    let (name, input) = Canonical::parse(&call.name, &call.input, ran_in)
-        .and_then(|canonical| canonical.render(target, cwd))
-        .map_or_else(
-            || {
-                let name = if native(target, &call.name) {
-                    format!("{}_{}", source.name(), call.name)
-                } else {
-                    call.name.clone()
-                };
-                (api_name(&name, "tool"), call.input.clone())
-            },
-            |(name, input)| (name.to_owned(), input),
-        );
+    // A Codex script making one call is carried as that call, when the target has its tool.
+    let scripted = script_call(&call.name, &call.input)
+        .and_then(|inner| Canonical::parse(&inner.name, &inner.input, ran_in)?.render(target, cwd));
+    let translated = scripted.clone().or_else(|| {
+        Canonical::parse(&call.name, &call.input, ran_in)
+            .and_then(|canonical| canonical.render(target, cwd))
+    });
+    let (name, input) = translated.map_or_else(
+        || {
+            let name = if native(target, &call.name) {
+                format!("{}_{}", source.name(), call.name)
+            } else {
+                call.name.clone()
+            };
+            (api_name(&name, "tool"), call.input.clone())
+        },
+        |(name, input)| (name.to_owned(), input),
+    );
     let id = ids.mint(&call.id);
     let call = ToolUse {
         id: id.clone(),
         name,
         input: input_for(target, input),
     };
+    let (output, error) = match scripted.and_then(|_| script_output(result)) {
+        Some((output, failed)) => (output, result.error || failed),
+        None => (output_text(result), result.error),
+    };
     let result = ToolResult {
         call: id,
-        output: Value::String(output_text(result)),
-        error: result.error,
+        output: Value::String(output),
+        error,
     };
     (call, result)
+}
+
+/// The one call a Codex `exec` script makes, when it was read whole (see [`script`]).
+fn script_call(name: &str, input: &Value) -> Option<script::Call> {
+    let Value::String(text) = input else {
+        return None;
+    };
+    if name != "exec" || object(input).is_some() {
+        return None;
+    }
+    let script = script::calls(text);
+    match <[script::Call; 1]>::try_from(script.calls) {
+        Ok([call]) if script.whole => Some(call),
+        _ => None,
+    }
+}
+
+/// What a Codex script's one shell call printed, and whether it failed, from the script's
+/// result: `Script completed`, its wall time, then `Output:` and the call's own result as JSON
+/// (`{"exit_code": 0, "output": "..."}`). `None` for a result not of that shape.
+fn script_output(result: &ToolResult) -> Option<(String, bool)> {
+    let text = result.output_text()?;
+    let (_, printed) = text.split_once("Output:")?;
+    let inner: Value = serde_json::from_str(printed.trim()).ok()?;
+    let output = inner["output"].as_str()?.to_owned();
+    Some((output, inner["exit_code"].as_i64().is_some_and(|code| code != 0)))
 }
 
 #[cfg(test)]
@@ -457,6 +493,70 @@ mod tests {
         let (ran_in, cwd) = (Path::new("/work"), Path::new("/here"));
         let (call, _) = carry(source, target, &call, &result, ran_in, cwd, &mut CallIds::default());
         (call.name, call.input)
+    }
+
+    /// A Codex script making one call it reads whole is carried as that call, its result as
+    /// what that call printed and whether it failed; any other script stays the `exec` it was.
+    #[rstest]
+    #[case::one_shell_call(
+        "text(await tools.exec_command({cmd:\"echo hi\"}));\n",
+        r#"{"chunk_id":"a","exit_code":0,"output":"hi\n"}"#,
+        ("Bash", json!({"command": "echo hi"}), json!("hi\n"), false)
+    )]
+    #[case::a_failed_call(
+        "text(await tools.exec_command({cmd:\"false\",workdir:\"/work\"}));",
+        r#"{"exit_code":1,"output":""}"#,
+        ("Bash", json!({"command": "false"}), json!(""), true)
+    )]
+    #[case::two_calls(
+        "await tools.exec_command({cmd:\"a\"}); await tools.exec_command({cmd:\"b\"});",
+        r#"{"exit_code":0,"output":"b"}"#,
+        ("exec", json!({"input": "await tools.exec_command({cmd:\"a\"}); await tools.exec_command({cmd:\"b\"});"}), Value::Null, false)
+    )]
+    #[case::not_read_whole(
+        "const c = pick(); await tools.exec_command({cmd: c});",
+        r#"{"exit_code":0,"output":"x"}"#,
+        ("exec", json!({"input": "const c = pick(); await tools.exec_command({cmd: c});"}), Value::Null, false)
+    )]
+    fn a_codex_script_is_carried_as_its_call(
+        #[case] script: &str,
+        #[case] printed: &str,
+        #[case] want: (&str, Value, Value, bool),
+    ) {
+        let call = ToolUse {
+            id: ToolCallId::from("call_1".to_owned()),
+            name: "exec".to_owned(),
+            input: json!(script),
+        };
+        let output = json!([
+            {"type": "input_text", "text": "Script completed\nWall time 0.4 seconds\nOutput:\n"},
+            {"type": "input_text", "text": printed},
+        ]);
+        let result = ToolResult {
+            call: call.id.clone(),
+            output: output.clone(),
+            error: false,
+        };
+        let (ran_in, cwd) = (Path::new("/work"), Path::new("/here"));
+        let (call, result) =
+            carry(CODEX, CLAUDE, &call, &result, ran_in, cwd, &mut CallIds::default());
+        let (name, input, output_want, error) = want;
+        assert_eq!((call.name.as_str(), &call.input), (name, &input));
+        // A script kept as it was keeps its whole result.
+        let output_want = if output_want.is_null() {
+            json!(
+                ToolResult {
+                    call: call.id,
+                    output,
+                    error: false
+                }
+                .output_text()
+                .unwrap()
+            )
+        } else {
+            output_want
+        };
+        assert_eq!((result.output, result.error), (output_want, error));
     }
 
     #[rstest]
