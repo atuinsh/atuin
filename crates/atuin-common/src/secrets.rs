@@ -17,10 +17,11 @@
 //!   is nothing in it to take out.
 //!
 //! Patterns come in two kinds. The credential formats (`SECRET_PATTERNS`, and the services' in
-//! `vendors`) are what both see. The credentials recognised by where they sit (in `structural`: a
-//! URL's password, a private key's armour, a value assigned to `DB_PASSWORD`) are only redacted,
-//! so they never keep a command out of history; nor is a value of theirs that is plainly a
-//! stand-in (`${TOKEN}`, `<password>`). A [`Redactor`] also takes the user's own patterns.
+//! `vendors`, along with HashiCorp's tokens where its tools take them) are what both see. The
+//! credentials recognised by where they sit (in `structural`: a URL's password, a private key's
+//! armour, a value assigned to `DB_PASSWORD`) are only redacted, so they never keep a command out
+//! of history; nor is a value of theirs that is plainly a stand-in (`${TOKEN}`, `<password>`). A
+//! [`Redactor`] also takes the user's own patterns.
 //!
 //! Both are best-effort. [`redact`] in particular is applied to rendered terminal output, where a
 //! credential can be broken up by SGR escape sequences, which will not match. (A soft wrap at the
@@ -861,6 +862,10 @@ mod tests {
         "-k",
         "--password=",
         "--key",
+        "NOMAD_TOKEN",
+        "set -x VAULT_TOKEN",
+        "consul -token",
+        "X-Vault-Token",
     ];
     const GLUE: &[&str] = &[
         "=", ": ", " := ", " => ", " == ", "\"", "'", "]", "[", " ", "  ", "\t", "\n", "****", "*",
@@ -1572,6 +1577,57 @@ mod tests {
     fn redacted_but_not_kept_out_of_history(#[case] input: &str) {
         assert!(!contains_secret(input), "{input:?} should not drop a command");
         assert!(matches!(redact(input), Cow::Owned(_)), "{input:?} should be redacted");
+    }
+
+    /// A HashiCorp token has no format to recognise, so a command is kept out of history by where
+    /// the token sits, and only when a literal sits there: a reference holds no token.
+    #[rstest]
+    #[case::prefixed("CONSUL_HTTP_TOKEN=00000000-0000-0000-0000-000000000000 consul members", true)]
+    #[case::spaced_out("$env:VAULT_TOKEN = \"s.Kq3vX9ZbT2mLwR8yNc4pHd7J\"", true)]
+    #[case::fish(
+        "set --global --export CONSUL_HTTP_TOKEN 00000000-0000-0000-0000-000000000000",
+        true
+    )]
+    #[case::flag_after_a_pipe(
+        "true | consul kv get -token \"00000000-0000-0000-0000-000000000000\" a",
+        true
+    )]
+    #[case::flag_on_a_continued_line(
+        "consul members \\\n  -token=00000000-0000-0000-0000-000000000000",
+        true
+    )]
+    #[case::flag_opening_a_continued_line(
+        "nomad job status \\\n-token 00000000-0000-0000-0000-000000000000 web",
+        true
+    )]
+    #[case::header(
+        "curl -H \"X-Consul-Token: 00000000-0000-0000-0000-000000000000\" :8500/v1/agent/members",
+        true
+    )]
+    #[case::header_without_a_blank(
+        "http :8200/v1/sys/health X-Vault-Token:s.Kq3vX9ZbT2mLwR8yNc4pHd7J",
+        true
+    )]
+    #[case::substituted("export NOMAD_TOKEN=$(vault read -field=secret_id nomad/creds/dev)", false)]
+    #[case::referenced("export VAULT_TOKEN=\"${VAULT_TOKEN:-}\"", false)]
+    #[case::fish_substituted("set -gx NOMAD_TOKEN (cat ~/.nomad-token)", false)]
+    #[case::fish_erased("set -e NOMAD_TOKEN", false)]
+    #[case::flag_referenced("nomad job status -token=$NOMAD_TOKEN", false)]
+    #[case::header_substituted(
+        "curl -H \"X-Vault-Token: $(cat token)\" :8200/v1/sys/health",
+        false
+    )]
+    #[case::token_file_flag("consul members -token-file=/etc/consul.d/token", false)]
+    #[case::token_file_variable("export CONSUL_HTTP_TOKEN_FILE=/etc/consul.d/token", false)]
+    #[case::mentioned("grep NOMAD_TOKEN config.hcl", false)]
+    #[case::subcommand("nomad acl token self", false)]
+    #[case::too_short_to_be_a_token("VAULT_TOKEN=root vault status", false)]
+    #[case::flag_of_another_command("consul members; gh -token abcdef123456", false)]
+    fn hashicorp_tokens_are_recognised_where_they_sit(
+        #[case] command: &str,
+        #[case] recognised: bool,
+    ) {
+        assert_eq!(contains_secret(command), recognised, "{command:?}");
     }
 
     /// The table-driven tests and the planted-credential properties only cover a pattern if it

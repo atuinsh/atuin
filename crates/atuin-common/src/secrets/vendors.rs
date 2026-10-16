@@ -7,6 +7,11 @@
 //! (`secrets_filter`), not only what is redacted, so a new one needs a prefix that real text
 //! doesn't begin with.
 //!
+//! A Nomad or Consul token has no format at all: it is a bare UUID. HashiCorp's tokens are
+//! recognised where its tools take them instead -- a variable, a flag, a header, whose name is the
+//! prefix -- and only as a literal of six characters or more: a reference (`$NOMAD_TOKEN`,
+//! `$(cat token)`) or a stand-in (`x`) holds none.
+//!
 //! Every test value is a made-up credential of the right shape, split with `concat!` so this
 //! file holds no contiguous token GitHub push protection would take for a real one.
 
@@ -411,6 +416,76 @@ pub(super) static VENDOR_PATTERNS: &[Pattern] = &[
             Test {
                 input: concat!("hvs.", "WIkfExSAvat6V4v4uTj9lBXaEijBVOFMuiIrSRPjZrheQxPQsONnUJZ3OhA58j4wTTarlEyBhJAu7XJ4Z7QO0SYzLWXRN1d"),
                 redacted: REDACTED,
+            },
+        ],
+    },
+    // Set in the environment, or in fish with `set`, whose separator is a blank.
+    Pattern {
+        name: "HashiCorp token variable",
+        regex: concat!(
+            r"(?-u:\b)(?:(?:NOMAD_TOKEN|CONSUL_HTTP_TOKEN|VAULT_TOKEN)[ \t]*=[ \t]*",
+            r"|set(?:[ \t]+-[A-Za-z-]+)*[ \t]+(?:NOMAD_TOKEN|CONSUL_HTTP_TOKEN|VAULT_TOKEN)[ \t]+)",
+            r#"["']?(?<secret>[A-Za-z0-9][A-Za-z0-9._-]{5,})"#
+        ),
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "export NOMAD_TOKEN=3f9b2c7e-81d4-4a6f-b0e5-9c2d7a1e4b68",
+                redacted: "export NOMAD_TOKEN=****",
+            },
+            Test {
+                input: "env CONSUL_HTTP_TOKEN=3f9b2c7e-81d4-4a6f-b0e5-9c2d7a1e4b68 consul members",
+                redacted: "env CONSUL_HTTP_TOKEN=**** consul members",
+            },
+            Test {
+                input: concat!("export VAULT_TOKEN=\"s.", "Kq3vX9ZbT2mLwR8yNc4pHd7J\""),
+                redacted: "export VAULT_TOKEN=****",
+            },
+            Test {
+                input: "set -gx NOMAD_TOKEN 3f9b2c7e-81d4-4a6f-b0e5-9c2d7a1e4b68",
+                redacted: "set -gx NOMAD_TOKEN ****",
+            },
+        ],
+    },
+    // Vault's CLI has no `-token` flag. The flag may follow on a continued line (`\` and a
+    // newline), which the shell joins.
+    Pattern {
+        name: "Nomad or Consul token flag",
+        regex: concat!(
+            r"(?-u:\b)(?:nomad|consul)(?-u:\b)(?:[^\n;&|]|\\\r?\n)*?\s--?token(?:=|[ \t]+)",
+            r#"["']?(?<secret>[A-Za-z0-9][A-Za-z0-9._-]{5,})"#
+        ),
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "nomad job status -token=3f9b2c7e-81d4-4a6f-b0e5-9c2d7a1e4b68",
+                redacted: "nomad job status -token=****",
+            },
+            Test {
+                input: "consul members -token 3f9b2c7e-81d4-4a6f-b0e5-9c2d7a1e4b68",
+                redacted: "consul members -token ****",
+            },
+        ],
+    },
+    Pattern {
+        name: "HashiCorp token header",
+        regex: concat!(
+            r#"(?i-u:\bx-(?:nomad|consul|vault)-token)["']?[ \t]*:[ \t]*"#,
+            r#"["']?(?<secret>[A-Za-z0-9][A-Za-z0-9._-]{5,})"#
+        ),
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "curl -H \"X-Nomad-Token: 3f9b2c7e-81d4-4a6f-b0e5-9c2d7a1e4b68\" \
+                        http://127.0.0.1:4646/v1/jobs",
+                redacted: "curl -H \"X-Nomad-Token: ****\" http://127.0.0.1:4646/v1/jobs",
+            },
+            Test {
+                input: concat!("curl -H 'x-vault-token: s.", "Kq3vX9ZbT2mLwR8yNc4pHd7J' :8200"),
+                redacted: "curl -H 'x-vault-token: ****' :8200",
             },
         ],
     },

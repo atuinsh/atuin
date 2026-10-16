@@ -489,6 +489,7 @@ to save it if any of them match. The patterns currently cover:
 | Slack | Bot, user, app and config tokens, and webhook URLs |
 | Stripe | Live, test and restricted keys |
 | Package registries | npm, PyPI, RubyGems, Clojars, Docker Hub and Artifactory tokens |
+| HashiCorp | Commands setting `NOMAD_TOKEN`, `CONSUL_HTTP_TOKEN` or `VAULT_TOKEN`, passing `-token` to `nomad` or `consul`, or sending an `X-Nomad-Token`, `X-Consul-Token` or `X-Vault-Token` header, each with the token itself rather than a reference like `$NOMAD_TOKEN` |
 | Infrastructure | DigitalOcean, Terraform Cloud, HashiCorp Vault, Fly.io, Heroku, Cloudflare origin CA, Databricks, PlanetScale, Supabase, Tailscale, Dynatrace, Grafana, Sentry, Doppler and OpenShift tokens |
 | Other services | Netlify, Pulumi, Atlassian, Linear, Notion, Postman, Shopify, SendGrid, Brevo, Square, EasyPost, Duffel, Frame.io, ReadMe, Prefect, Infracost and Telegram tokens, Discord and Microsoft Teams webhooks, 1Password service account tokens and age secret keys |
 | Atuin | `atuin login`, which takes your password and encryption key as arguments |
