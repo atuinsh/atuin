@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.24.1
+
+### Bug Fixes
+
+- *(daemon)* Verify daemon version in HTTP headers ([#4431](https://github.com/atuinsh/atuin/issues/4431))
+
+
+### Features
+
+- *(ai-session)* Support omp threads and keep reply providers for resume ([#4441](https://github.com/atuinsh/atuin/issues/4441))
+- *(config)* Insert new keys where they're documented ([#4432](https://github.com/atuinsh/atuin/issues/4432))
+
+
 ## 18.24.0
 
 ### Bug Fixes
