@@ -2,7 +2,7 @@
 
 Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving AI agents like Claude Code, Codex, opencode, pi and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](https://docs.atuin.sh/guide/output-capture/index.md) set up — read what they printed, or search that output for something it remembers seeing.
 
-The server exposes the same history tools that [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) uses, plus output search and search over your [agent sessions](https://docs.atuin.sh/ai/mcp/sessions.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
+The server exposes the same history tools that [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) uses, plus output search and search over your agent [threads](https://docs.atuin.sh/ai/threads/index.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
 
 ## Quick start
 
@@ -14,11 +14,11 @@ atuin mcp install claude-code   # or: codex, opencode, pi
 
 Then restart the agent. That's it: it can now search your shell history.
 
-To let it read and search what your commands printed, and your past [sessions](https://docs.atuin.sh/ai/mcp/sessions.md) with other agents, turn those on too (each also sets up the [daemon](https://docs.atuin.sh/reference/daemon/index.md) they need):
+To let it read and search what your commands printed, and your past [threads](https://docs.atuin.sh/ai/threads/index.md) with other agents, turn those on too (each also sets up the [daemon](https://docs.atuin.sh/reference/daemon/index.md) they need):
 
 ```
 atuin config enable output-capture
-atuin config enable ai-sessions
+atuin config enable threads
 ```
 
 To check it worked, ask the agent *"What's the last command I ran that failed?"*
@@ -196,11 +196,11 @@ Each result gives the command and its history metadata, followed by the output l
 
 Like `atuin_output`, this needs output capture set up and the daemon running.
 
-### `atuin_ai_session_search`, `atuin_ai_session_list` and `atuin_ai_session_read`
+### `atuin_threads_search`, `atuin_threads_list` and `atuin_threads_read`
 
-Search, list and read your [agent sessions](https://docs.atuin.sh/ai/mcp/sessions.md): the sessions of your coding agents (Claude Code, Codex, opencode and pi) that Atuin has captured. An agent can pick up where another left off, or check what was decided last time, without you explaining it again.
+Search, list and read your [threads](https://docs.atuin.sh/ai/threads/index.md): the sessions of your coding agents (Claude Code, Codex, opencode and pi) that Atuin has captured. An agent can pick up where another left off, or check what was decided last time, without you explaining it again.
 
-These need session capture turned on with `atuin config enable ai-sessions`.
+These need thread capture turned on with `atuin config enable threads`.
 
 Session scope
 
