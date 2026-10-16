@@ -16,8 +16,7 @@ use crate::agent::backend::{
     AGENT_ARGS, AgentHandle, AgentTracker, Backend, FindError, SpawnError, StopError, Subproc,
 };
 
-/// Represents a backend that runs atuin-daemon as a launchd agent in the user's `gui/<uid>`
-/// domain.
+/// Represents a backend that runs atuin-daemon as a in the user's `gui/<uid>` domain.
 pub struct Launchd {
     tracker: AgentTracker,
     manager: LaunchdServiceManager,
@@ -66,22 +65,21 @@ impl Launchd {
         };
 
         let manager = self.manager.clone();
-        Self::blocking(move || manager.install(ctx)).await
+        tokio::task::spawn_blocking(move || manager.install(ctx))
+            .await
+            .expect("installing the launchd agent shouldn't panic")
     }
 
     /// Stop the agent and remove it, so that launchd doesn't start it again at the next login.
     async fn uninstall(&self) -> io::Result<()> {
-        let ctx = ServiceUninstallCtx {
-            label: Self::label(),
-        };
-
         let manager = self.manager.clone();
-        Self::blocking(move || manager.uninstall(ctx)).await
-    }
-
-    /// Run `op`, which waits on launchctl, off the async runtime.
-    async fn blocking(op: impl FnOnce() -> io::Result<()> + Send + 'static) -> io::Result<()> {
-        tokio::task::spawn_blocking(op).await.map_err(io::Error::other)?
+        tokio::task::spawn_blocking(move || {
+            manager.uninstall(ServiceUninstallCtx {
+                label: Self::label(),
+            })
+        })
+        .await
+        .expect("uninstalling the launchd agent shouldn't panic")
     }
 }
 
