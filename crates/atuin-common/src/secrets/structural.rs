@@ -27,7 +27,7 @@ macro_rules! env_secret_name {
     () => {
         concat!(
             word_start!(),
-            r"[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|_PWD|API_?KEY|APIKEY|PRIVATE_KEY|ACCESS_KEY|SECRET_KEY|CREDENTIALS?|AUTH)S?(?-u:\b)"
+            r"[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|_PWD|API_?KEY|APIKEY|PRIVATE_KEY|ACCESS_KEY|SECRET_KEY|CREDENTIALS?|AUTH)S?(?-u:\b)"
         )
     };
 }
@@ -36,7 +36,7 @@ macro_rules! env_secret_name {
 /// `db.password`). Not `auth` alone (`"auth": "required"`) nor `tokens` (`max_tokens`).
 macro_rules! code_secret_name {
     () => {
-        r"(?i-u:[\w.-]*?(?:passw(?:or)?d|secret|api[_-]?key|private[_-]?key|access[_-]?key|(?:auth|access|refresh|bearer|id|session)[_-]?token|token))"
+        r"(?i-u:[\w.-]*?(?:passw(?:or)?d|passphrase|secret|api[_-]?key|private[_-]?key|access[_-]?key|(?:auth|access|refresh|bearer|id|session)[_-]?token|token))"
     };
 }
 
@@ -230,6 +230,10 @@ pub(super) static NAMED_PATTERNS: &[Pattern] = &[
                 input: "ADMIN_PASSWORD=Violetmeadow",
                 redacted: "ADMIN_PASSWORD=****",
             },
+            Test {
+                input: "PRIVATE_KEY_PASSPHRASE=hunter2xyz",
+                redacted: "PRIVATE_KEY_PASSPHRASE=****",
+            },
             // A reference, not a value.
             Test {
                 input: "OPENAI_API_KEY=${OPENAI_API_KEY}",
@@ -257,6 +261,10 @@ pub(super) static NAMED_PATTERNS: &[Pattern] = &[
             Test {
                 input: "const apiKey = 'live-9f8e7d6c';",
                 redacted: "const apiKey = ****;",
+            },
+            Test {
+                input: r#"{"private_key_passphrase": "a8f3kq0z7x1m"}"#,
+                redacted: r#"{"private_key_passphrase": ****}"#,
             },
             Test {
                 input: r#"{"password": "<password>"}"#,
@@ -313,6 +321,10 @@ pub(super) static NAMED_PATTERNS: &[Pattern] = &[
             Test {
                 input: "\nspring.datasource.password=s3cret!\n",
                 redacted: "\nspring.datasource.password=****\n",
+            },
+            Test {
+                input: "\n  private_key_passphrase: hunter2xyz\n",
+                redacted: "\n  private_key_passphrase: ****\n",
             },
             // A struct's field, not a setting.
             Test {
