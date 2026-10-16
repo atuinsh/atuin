@@ -183,7 +183,7 @@ url = { version = "2", features = ["serde"] }
 # Explicitly 1.6 is necessary because the v7 UUID was only added then.
 uuid = { version = "1.6", features = ["v4", "v7", "serde"] }
 whoami = "2"
-windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Foundation", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security"] }
 wiremock = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 # held at 0.11: 0.12 pulls hashlink 0.12 (a 2nd copy vs sqlx's 0.11) + an encoding_rs/multiversion subtree
