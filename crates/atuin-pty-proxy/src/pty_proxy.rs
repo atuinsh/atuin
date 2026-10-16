@@ -169,7 +169,10 @@ pub fn init_script(shell: Shell) -> &'static str {
 /// pick the wrong installation when the user has, for instance, both `/usr/bin/bash` and
 /// `/opt/homebrew/bin/bash`).
 const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]] &&
-  [[ -z ${__atuin_pty_proxy_owns_tty-} ]]
+  [[ -z ${__atuin_pty_proxy_owns_tty-} ]] &&
+  # Don't re-exec shells started with a command (`bash -ic cmd`, `zsh -ic cmd`): the
+  # re-exec would drop the command and leave the user at a prompt instead.
+  [[ -z ${BASH_EXECUTION_STRING-} ]] && [[ -z ${ZSH_EXECUTION_STRING-} ]]
 then
   __atuin_pty_proxy_owns_tty=0
 
@@ -334,6 +337,14 @@ mod tests {
 
         let nu = init_script(Shell::Nu);
         assert!(nu.contains("mut pty_proxy_args = [--shell $nu.current-exe]"));
+    }
+
+    #[rstest]
+    fn bash_zsh_init_skips_shells_started_with_a_command() {
+        // `bash -ic cmd` and `zsh -ic cmd` are interactive, but re-execing them would drop `cmd`.
+        let posix = init_script(Shell::Bash);
+        assert!(posix.contains("[[ -z ${BASH_EXECUTION_STRING-} ]]"));
+        assert!(posix.contains("[[ -z ${ZSH_EXECUTION_STRING-} ]]"));
     }
 
     #[rstest]
