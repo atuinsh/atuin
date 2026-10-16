@@ -14,6 +14,7 @@ use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
 use crate::session_capture::AiHarnessSessionCapture;
 
+pub mod agent;
 pub mod client;
 pub mod components;
 pub mod daemon;

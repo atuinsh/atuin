@@ -258,6 +258,9 @@ enter_accept = true
 ## Not compatible with `systemd_socket = true`.
 # autostart = false
 
+## On macOS, run the daemon autostart starts as a launchd agent, if you're logged in graphically.
+# launchd = true
+
 ## How often the daemon should sync in seconds
 # sync_frequency = 300
 

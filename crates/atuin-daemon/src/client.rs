@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
-use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::settings::{Daemon, FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
 use easy_cast::Conv;
@@ -98,10 +98,10 @@ impl SocketPathError {
 /// If the daemon is running and has recorded its socket path in the pidfile, this function returns
 /// that. Otherwise:
 ///
-/// * If `ATUIN_HOME` is unset (the default), [`settings.daemon.existing_socket_path()`][0] is
-///   returned, which will check for existing sockets in legacy locations.
+/// * If `ATUIN_HOME` is unset (the default), [`daemon.existing_socket_path()`][0] is returned,
+///   which will check for existing sockets in legacy locations.
 ///
-/// * If `ATUIN_HOME` is set, [`settings.daemon.preferred_socket_path()`][1] is returned, which does
+/// * If `ATUIN_HOME` is set, [`daemon.preferred_socket_path()`][1] is returned, which does
 ///   not check for legacy sockets, as Atuin stopped using them before `ATUIN_HOME` was introduced.
 ///   In addition, an error is returned if that socket already exists: Atuin started storing the
 ///   socket path in the pidfile before `ATUIN_HOME`, so if an existing socket isn't in our pidfile,
@@ -115,15 +115,15 @@ impl SocketPathError {
 /// [1]: atuin_client::settings::Daemon::preferred_socket_path
 /// [2]: atuin_client::settings::Daemon::systemd_socket
 #[cfg(unix)]
-pub fn socket_path(settings: &Settings) -> Result<PathBuf, SocketPathError> {
+pub fn socket_path(daemon: &Daemon) -> Result<PathBuf, SocketPathError> {
     use crate::pidfile::{self, PidfileInfo};
 
-    let existing_socket_path = || settings.daemon.existing_socket_path().into_owned();
-    if settings.daemon.systemd_socket {
+    let existing_socket_path = || daemon.existing_socket_path().into_owned();
+    if daemon.systemd_socket {
         return Ok(existing_socket_path());
     }
 
-    let pidfile_path: &Path = settings.daemon.pidfile_path.as_ref();
+    let pidfile_path: &Path = daemon.pidfile_path.as_ref();
     let socket_path = PidfileInfo::read(pidfile_path).and_then(|info| info.socket_path);
 
     if !atuin_common::dirs::atuin_home_is_set() {
@@ -143,7 +143,7 @@ pub fn socket_path(settings: &Settings) -> Result<PathBuf, SocketPathError> {
     // path in the pidfile before `ATUIN_HOME` was introduced, so an existing socket is almost
     // certainly that of another program, potentially another daemon running with a different value
     // of `ATUIN_HOME`, which is conceptually a separate profile that we should not connect to.
-    let path = settings.daemon.preferred_socket_path().into_owned();
+    let path = daemon.preferred_socket_path().into_owned();
 
     // Avoid connecting to an existing, in-use socket. We match on `Ok(true)` rather than
     // `Ok(true) | Err(_)` because an error doesn't necessarily mean the socket is in use (e.g.,
@@ -152,7 +152,7 @@ pub fn socket_path(settings: &Settings) -> Result<PathBuf, SocketPathError> {
     if path.exists() && matches!(atuin_common::os::unix::socket_in_use(&path), Ok(true)) {
         return Err(SocketPathError::InUse {
             path,
-            user_defined: settings.daemon.socket_path.is_some(),
+            user_defined: daemon.socket_path.is_some(),
         });
     }
     Ok(path)
@@ -182,6 +182,49 @@ pub enum FromSettingsError {
     SocketPath(#[from] SocketPathError),
     #[error(transparent)]
     CreateClient(#[from] eyre::Report),
+}
+
+/// Where the daemon listens for clients.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::From)]
+pub enum DaemonAddress {
+    #[cfg(unix)]
+    #[display("{}", _0.display())]
+    Socket(PathBuf),
+    /// TCP on `127.0.0.1`, at this port.
+    #[cfg(not(unix))]
+    #[display("127.0.0.1:{_0}")]
+    Tcp(u64),
+}
+
+impl DaemonAddress {
+    /// Where the daemon `daemon` configures listens: see [`socket_path`].
+    pub fn of(daemon: &Daemon) -> Result<Self, AddressError> {
+        #[cfg(unix)]
+        {
+            Ok(Self::Socket(socket_path(daemon)?))
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self::Tcp(daemon.tcp_port))
+        }
+    }
+}
+
+/// Errors from finding where the daemon listens. Over TCP, there are none.
+#[derive(Debug, thiserror::Error)]
+pub enum AddressError {
+    #[cfg(unix)]
+    #[error(transparent)]
+    SocketPath(#[from] SocketPathError),
+}
+
+/// Errors from connecting to the daemon.
+#[derive(Debug, thiserror::Error)]
+#[error("failed to connect to local atuin daemon at {address}. Is it running?")]
+pub struct ConnectError {
+    address: DaemonAddress,
+    #[source]
+    source: tonic::transport::Error,
 }
 
 /// A connection to the daemon that stamps every request with this client's
@@ -235,61 +278,44 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
 
 // Wrap the grpc client
 impl HistoryClient {
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        use eyre::Context;
-
-        let log_path = path.clone();
-        let channel =
+    pub async fn new(address: impl Into<DaemonAddress>) -> Result<Self, ConnectError> {
+        let address = address.into();
+        let connector_address = address.clone();
+        let channel = async {
             Endpoint::try_from("http://atuin_local_daemon:0")?
                 .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
+                    let address = connector_address.clone();
 
                     async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                        match address {
+                            #[cfg(unix)]
+                            DaemonAddress::Socket(socket) => {
+                                UnixStream::connect(socket).await.map(TokioIo::new)
+                            }
+                            #[cfg(not(unix))]
+                            DaemonAddress::Tcp(port) => {
+                                TcpStream::connect(format!("127.0.0.1:{port}"))
+                                    .await
+                                    .map(TokioIo::new)
+                            }
+                        }
                     }
                 }))
                 .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
+        };
+        let channel = channel.await.map_err(|source| ConnectError { address, source })?;
 
         let client = HistoryServiceClient::with_interceptor(channel, StrictVersionInterceptor);
 
         Ok(Self { client })
     }
 
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        let client = HistoryServiceClient::with_interceptor(channel, StrictVersionInterceptor);
-
-        Ok(HistoryClient { client })
-    }
-
     pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
         #[cfg(unix)]
-        let address = socket_path(settings)?;
+        let address = socket_path(&settings.daemon)?;
         #[cfg(not(unix))]
         let address = settings.daemon.tcp_port;
-        Self::new(address).await.map_err(Into::into)
+        Self::new(address).await.map_err(|err| FromSettingsError::CreateClient(err.into()))
     }
 
     pub async fn start_history(&mut self, h: History) -> Result<StartHistoryReply> {
@@ -367,7 +393,7 @@ impl HistoryClient {
         Ok(self.client.compact_store(CompactStoreRequest {}).await?.into_inner())
     }
 
-    pub async fn status(&mut self) -> Result<StatusReply> {
+    pub async fn status(&mut self) -> Result<StatusReply, tonic::Status> {
         Ok(self.client.status(StatusRequest {}).await?.into_inner())
     }
 
@@ -375,12 +401,14 @@ impl HistoryClient {
     ///
     /// A daemon of another build refuses `Status`, stamping the refusal with its build. One from
     /// before builds were exchanged answers, unstamped.
-    pub async fn check_daemon_version(&mut self) -> Result<Result<(), VersionMatchError>> {
+    pub async fn check_daemon_version(
+        &mut self,
+    ) -> Result<Result<(), VersionMatchError>, tonic::Status> {
         match self.client.status(StatusRequest {}).await {
             Ok(response) => Ok(response.check_version()),
             Err(status) => match status.check_version() {
                 // Not a refusal: the daemon is our build and failed, or the call never reached it.
-                Ok(()) | Err(VersionMatchError::Unannounced) => Err(status.into()),
+                Ok(()) | Err(VersionMatchError::Unannounced) => Err(status),
                 mismatch => Ok(mismatch),
             },
         }
@@ -390,7 +418,7 @@ impl HistoryClient {
         Ok(self.client.tail_history(TailHistoryRequest {}).await?.into_inner())
     }
 
-    pub async fn shutdown(&mut self) -> Result<bool> {
+    pub async fn shutdown(&mut self) -> Result<bool, tonic::Status> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
     }
@@ -520,7 +548,7 @@ impl SearchClient {
 
     pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
         #[cfg(unix)]
-        let address = socket_path(settings)?;
+        let address = socket_path(&settings.daemon)?;
         #[cfg(not(unix))]
         let address = settings.daemon.tcp_port;
         Self::new(address).await.map_err(Into::into)
@@ -675,7 +703,7 @@ impl AiClient {
 
     pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
         #[cfg(unix)]
-        let address = socket_path(settings)?;
+        let address = socket_path(&settings.daemon)?;
         #[cfg(not(unix))]
         let address = settings.daemon.tcp_port;
         Self::new(address).await.map_err(Into::into)
@@ -847,7 +875,7 @@ mod tests {
         drop(PidfileGuard::acquire(&old.daemon).unwrap());
 
         let new = settings(&pidfile, &dir.path().join("new.sock"), client_systemd_socket);
-        assert_eq!(socket_path(&new).unwrap(), dir.path().join(expected));
+        assert_eq!(socket_path(&new.daemon).unwrap(), dir.path().join(expected));
     }
 
     #[rstest]
@@ -858,7 +886,7 @@ mod tests {
             &dir.path().join("a.sock"),
             systemd_socket,
         );
-        assert_eq!(socket_path(&settings).unwrap(), dir.path().join("a.sock"));
+        assert_eq!(socket_path(&settings.daemon).unwrap(), dir.path().join("a.sock"));
     }
 
     /// A mock environment with `HOME` and `TMPDIR` in `dir`, and `ATUIN_HOME` too if
@@ -920,11 +948,11 @@ mod tests {
         // Nothing's there yet, so it's free for this profile's daemon. (Without `ATUIN_HOME`, the
         // client would also fall back to sockets elsewhere, like the real `/tmp/atuin-$UID`.)
         if atuin_home_set {
-            assert_eq!(socket_path(&settings).unwrap(), path);
+            assert_eq!(socket_path(&settings.daemon).unwrap(), path);
         }
 
         let _listener = listen(&path);
-        let result = socket_path(&settings);
+        let result = socket_path(&settings.daemon);
         if !atuin_home_set {
             assert_eq!(result.unwrap(), path);
             return;
@@ -957,7 +985,7 @@ mod tests {
 
         drop(listen(&path));
         assert!(path.exists(), "the stale socket should be left behind");
-        assert_eq!(socket_path(&settings).unwrap(), path);
+        assert_eq!(socket_path(&settings.daemon).unwrap(), path);
     }
 
     /// With `ATUIN_HOME` set, the socket the pidfile names is used while its daemon is running,
@@ -973,7 +1001,7 @@ mod tests {
 
         let client = settings(&pidfile, &dir.path().join("other.sock"), false);
         let _listener = listen(&dir.path().join("other.sock"));
-        assert_eq!(socket_path(&client).unwrap(), dir.path().join("daemon.sock"));
+        assert_eq!(socket_path(&client.daemon).unwrap(), dir.path().join("daemon.sock"));
     }
 
     /// With `ATUIN_HOME` set, a socket recorded by a daemon that has since exited isn't trusted:
@@ -994,7 +1022,7 @@ mod tests {
         let client = settings_in(dir.path(), true);
         let path = preferred_path(dir.path(), true);
         let _listener = live.then(|| listen(&path));
-        match socket_path(&client) {
+        match socket_path(&client.daemon) {
             Ok(found) => {
                 assert!(!live, "a live socket at {} was accepted", path.display());
                 assert_eq!(found, path);

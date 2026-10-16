@@ -1056,6 +1056,23 @@ If a legacy experimental daemon is already running, restart it manually once bef
 autostart = false
 ```
 
+### `launchd`
+
+Default: `true`
+
+macOS only. When [`autostart`](#autostart) starts the daemon, run it as a launchd agent, which
+macOS starts again when you log in. Atuin installs the agent at
+`~/Library/LaunchAgents/sh.atuin.daemon.plist`, and macOS tells you it added a background item the
+first time.
+
+This needs a graphical login, so over SSH to a Mac nobody is logged in to, Atuin starts the daemon
+itself as it does elsewhere. It does the same if launchd won't run the agent. Set this to `false` to
+always have Atuin start the daemon itself.
+
+```toml
+launchd = true
+```
+
 ### `sync_frequency`
 
 Default: `5m`
