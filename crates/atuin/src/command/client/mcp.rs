@@ -38,8 +38,8 @@ async fn install(agent: &str) -> Result<()> {
     mcp::install(harness).await?;
     eprintln!("Restart {} to load it.", harness.name());
     eprintln!(
-        "To let it search command output and agent sessions too, run `atuin config enable \
-         output-capture` and `atuin config enable ai-sessions`."
+        "To let it search command output and agent threads too, run `atuin config enable \
+         output-capture` and `atuin config enable threads`."
     );
     Ok(())
 }
