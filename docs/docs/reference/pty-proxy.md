@@ -45,6 +45,19 @@ Output capture needs **both** pty-proxy and the daemon running. Nothing is
 captured by default. See [Capturing Command Output](../guide/output-capture.md)
 for setup, retention limits, and privacy.
 
+## Window titles
+
+Terminals that name the program running in them, in a tab or a window title,
+would only ever find pty-proxy there. So pty-proxy titles the terminal after
+the program in the foreground instead: `vim` while you edit, and your shell at
+the prompt.
+
+A title your shell or a program sets itself wins:
+
+- If your shell sets the title, pty-proxy leaves titling to your shell.
+- If a program sets the title, pty-proxy leaves it alone until the program
+  exits or moves to the background.
+
 ## Initialization
 
 The simplest way to enable pty-proxy is via your Atuin config (`~/.atuin/config.toml`) — no extra shell config needed:

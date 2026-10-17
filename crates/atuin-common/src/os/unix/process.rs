@@ -1,5 +1,6 @@
 //! Utilities for operating on processes.
 
+use std::ffi::OsString;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -91,6 +92,24 @@ pub fn cwd(pid: Pid) -> Option<PathBuf> {
     }
 }
 
+/// Get the file name of the executable a process is running.
+///
+/// This is the name the process was exec'd as, so a process that rewrites its `argv[0]` keeps it.
+#[must_use]
+pub fn name(pid: Pid) -> Option<OsString> {
+    let pid = sysinfo::Pid::from_u32(u32::try_from(pid.as_raw_pid()).ok()?);
+    let mut system = sysinfo::System::new();
+    if system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        true,
+        sysinfo::ProcessRefreshKind::nothing(),
+    ) == 0
+    {
+        return None;
+    }
+    Some(system.process(pid)?.name().to_owned())
+}
+
 /// Implementation of [`cwd`] that works on all Unix-like systems.
 ///
 /// Linux has a specific, more efficient implementation.
@@ -170,6 +189,20 @@ mod tests {
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(found.as_deref(), Some(expected.as_path()));
+    }
+
+    #[rstest]
+    fn names_a_process_by_its_executable_rather_than_its_argv0() {
+        use std::os::unix::process::CommandExt;
+
+        let mut child = Command::new("sleep").arg0("renamed").arg("30").spawn().unwrap();
+        let pid = Pid::from_raw(child.id().cast_signed()).unwrap();
+
+        let found = name(pid);
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(found.as_deref(), Some(std::ffi::OsStr::new("sleep")));
     }
 
     #[rstest]

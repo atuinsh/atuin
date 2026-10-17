@@ -1,9 +1,8 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use atuin_common::os::unix::io::WriteAllExt;
 use atuin_common::os::unix::tty::TtyId;
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -12,6 +11,7 @@ use crate::cwd_updater::CwdUpdater;
 use crate::debug::{MarkerDebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg, SocketServer};
+use crate::title::{Foreground, TerminalOutput, TitleUpdater};
 
 /// The current version of the pty-proxy protocol.
 ///
@@ -169,12 +169,16 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     // Update this process's CWD to match the child's CWD. This is necessary to enable programs like
     // tmux to track the child's CWD.
     let cwd_updater = CwdUpdater::new(pair.master.as_ref(), child_pid);
+    // Terminals that name the program running in them would otherwise name the proxy.
+    let output = Arc::new(TerminalOutput::new(
+        rustix::stdio::stdout(),
+        Foreground::new(pair.master.as_ref(), child_pid),
+    ));
+    let title_updater = TitleUpdater::new(Arc::clone(&output));
     spawn_resize_handler(pair.master, msg_tx.clone())?;
     terminal::enable_raw_mode()?;
 
     let stdout_thread = std::thread::spawn(move || {
-        let stdout = rustix::stdio::stdout();
-
         let mut highlighter = options.debug_markers.then(MarkerDebugHighlighter::new);
         let mut buf = [0u8; 8192];
 
@@ -185,6 +189,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
                     let raw_data = &buf[..n];
                     let _ = msg_tx.send(Msg::Data(raw_data.to_vec()));
                     cwd_updater.update();
+                    title_updater.update();
 
                     let highlighted;
                     let data: &[u8] = if let Some(highlighter) = &mut highlighter {
@@ -194,7 +199,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
                         raw_data
                     };
 
-                    if stdout.write_all_retrying(data).is_err() {
+                    if output.forward(data).is_err() {
                         break;
                     }
                 }
@@ -202,7 +207,7 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         }
 
         if highlighter.is_some() {
-            let _ = stdout.write_all_retrying(RESET);
+            let _ = output.forward(RESET);
         }
     });
 
