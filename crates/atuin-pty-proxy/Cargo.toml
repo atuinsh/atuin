@@ -22,6 +22,7 @@ atuin-vt100 = { workspace = true }
 crossterm = { workspace = true }
 libc = { workspace = true }
 memchr = { workspace = true }
+parking_lot = { workspace = true }
 portable-pty = { workspace = true }
 rustix = { workspace = true }
 signal-hook = { workspace = true }
@@ -29,11 +30,16 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true }
-parking_lot = { workspace = true }
 proptest = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
+# The parser atuin-vt100 is built on, as the reference the escape tracker is checked against.
+vte = { workspace = true }
+
+[[bench]]
+name = "escape_tracker"
+harness = false
 
 [[bench]]
 name = "markers"

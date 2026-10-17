@@ -23,7 +23,7 @@ const MIN_UPDATE_DELAY: Duration = Duration::from_millis(100);
 const MAX_UPDATE_DELAY: Duration = Duration::from_secs(1);
 
 /// Get an [`OwnedFd`] from a [`MasterPty`].
-fn pty_parent_fd(parent: &dyn MasterPty) -> Option<OwnedFd> {
+pub fn pty_parent_fd(parent: &dyn MasterPty) -> Option<OwnedFd> {
     let raw_fd = parent.as_raw_fd()?;
     // SAFETY: `parent` owns the underlying FD, and it cannot be dropped while this function runs
     // because we hold a reference to it.
@@ -48,7 +48,7 @@ fn pty_cwd(parent: Option<BorrowedFd<'_>>, child: Option<Pid>) -> Option<PathBuf
 ///
 /// TODO(taylordotfish): Remove this once <https://github.com/bytecodealliance/rustix/issues/1678>
 /// is fixed.
-fn tcgetpgrp(terminal: BorrowedFd<'_>) -> Option<Pid> {
+pub fn tcgetpgrp(terminal: BorrowedFd<'_>) -> Option<Pid> {
     // SAFETY: The FD we pass is guaranteed to be valid because it came from a `BorrowedFd` that
     // exists at least for the life of the call.
     let pid = unsafe { libc::tcgetpgrp(terminal.as_raw_fd()) };

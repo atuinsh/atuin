@@ -5,6 +5,8 @@ mod cwd_updater;
 #[cfg(unix)]
 mod debug;
 #[cfg(unix)]
+mod escape_tracker;
+#[cfg(unix)]
 mod markers;
 #[cfg(unix)]
 mod pty_proxy;
@@ -12,6 +14,8 @@ mod pty_proxy;
 mod runtime;
 #[cfg(unix)]
 mod screen;
+#[cfg(unix)]
+mod title;
 
 #[cfg(unix)]
 pub use capture::{CaptureConfig, CommandCapture, CommandCaptureSink};
