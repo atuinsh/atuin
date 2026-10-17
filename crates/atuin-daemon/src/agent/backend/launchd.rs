@@ -3,7 +3,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use atuin_client::settings::Settings;
+use atuin_client::settings::{Daemon as DaemonSettings, Settings};
 use plist::{Dictionary, Value};
 use service_manager::{
     LaunchdServiceManager, RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceManager,
@@ -12,13 +12,15 @@ use service_manager::{
 use tracing::warn;
 
 use crate::agent::AgentWorkingDir;
-use crate::agent::backend::{
-    AGENT_ARGS, AgentHandle, AgentTracker, Backend, FindError, SpawnError, StopError, Subproc,
-};
+use crate::agent::backend::{AGENT_ARGS, AgentHandle, Backend, SpawnError, StopError, Subproc};
+use crate::client::DaemonAddress;
 
-/// Represents a backend that runs atuin-daemon as a in the user's `gui/<uid>` domain.
+/// Represents a backend that runs atuin-daemon as a launchd agent in the user's `gui/<uid>`
+/// domain.
 pub struct Launchd {
-    tracker: AgentTracker,
+    daemon: DaemonSettings,
+    /// Runs the agent when launchd won't.
+    fallback: Subproc,
     manager: LaunchdServiceManager,
     working_dir: AgentWorkingDir,
 }
@@ -26,7 +28,8 @@ pub struct Launchd {
 impl Launchd {
     pub fn new(settings: &Settings) -> Self {
         Self {
-            tracker: AgentTracker::new(settings),
+            daemon: settings.daemon.clone(),
+            fallback: Subproc::new(settings),
             manager: LaunchdServiceManager::user(),
             working_dir: AgentWorkingDir::for_settings(settings),
         }
@@ -84,33 +87,26 @@ impl Launchd {
 }
 
 impl Backend for Launchd {
-    async fn spawn(&self) -> Result<AgentHandle, SpawnError> {
-        // An agent that was just asked to shut down holds the pidfile until it exits, and one
-        // launched before then would find the pidfile taken and exit itself.
-        self.tracker.exited().await?;
+    fn address(&self) -> DaemonAddress {
+        DaemonAddress::configured(&self.daemon)
+    }
 
+    async fn launch(&self) -> Result<(), SpawnError> {
         // launchd refuses the agent when the user has turned it off in Login Items. Start it the
         // way clients always have, rather than not at all.
         if let Err(err) = self.install().await {
             warn!(%err, "could not run the daemon as a launchd agent; starting it directly");
-            Subproc::launch()?;
+            self.fallback.launch().await?;
         }
-
-        self.tracker.answering().await
+        Ok(())
     }
 
-    async fn find(&self) -> Result<Option<AgentHandle>, FindError> {
-        self.tracker.find().await
-    }
-
-    async fn force_stop(&self, handle: AgentHandle) -> Result<(), StopError> {
+    async fn stop(&self, agent: &AgentHandle) -> Result<(), StopError> {
         // Once removed, launchd can't start the agent again as it exits.
         self.uninstall().await.map_err(StopError::Launchd)?;
 
         // An older client, or `atuin daemon start`, may have started the agent outside launchd.
-        handle.request_shutdown().await;
-
-        self.tracker.exited().await?;
+        agent.request_shutdown().await;
         Ok(())
     }
 }

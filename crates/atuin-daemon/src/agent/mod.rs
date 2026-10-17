@@ -31,7 +31,9 @@ use crate::grpc::versioning::OtherBuild;
 pub struct ActiveAgent {
     backend: AnyBackend,
     handle: AgentHandle,
+    pidfile: Pidfile,
     startup: StartupLock,
+    timeout: LifecycleTimeout,
 }
 
 /// Errors returned by [`ActiveAgent::find`], [`ActiveAgent::spawn`] and
@@ -70,58 +72,72 @@ impl ActiveAgent {
     /// Creates a new agent if one is not already running, and replaces one older than this client.
     pub async fn find_or_spawn(settings: &Settings) -> Result<Self, AgentFindError> {
         let backend = AnyBackend::new(settings);
+        let pidfile = Pidfile::new(&settings.daemon);
+        let timeout = LifecycleTimeout::from(settings);
         let startup = StartupLock::new(settings);
         let _held = startup.acquire().await?;
 
-        if let Some(found) = backend.find().await? {
+        if let Some(found) = AgentHandle::find(&settings.daemon).await? {
             match found.ensure_our_build() {
                 Ok(()) => {
                     return Ok(Self {
                         backend,
                         handle: found,
+                        pidfile,
                         startup,
+                        timeout,
                     });
                 }
-                Err(OtherBuild::Outdated(_)) => backend.force_stop(found).await?,
+                Err(OtherBuild::Outdated(_)) => {
+                    backend.stop(&found).await?;
+                    pidfile.released(timeout).await.map_err(StopError::from)?;
+                }
                 Err(newer @ OtherBuild::Newer(_)) => return Err(newer.into()),
             }
         }
 
-        let handle = backend.spawn().await?;
+        let handle = Self::launch(&backend, &pidfile, timeout).await?;
         handle.ensure_our_build()?;
         Ok(Self {
             backend,
             handle,
+            pidfile,
             startup,
+            timeout,
         })
     }
 
     /// Try to find the active agent, if one exists, whatever its version.
     pub async fn find(settings: &Settings) -> Result<Option<Self>, AgentFindError> {
-        let backend = AnyBackend::new(settings);
-        let Some(handle) = backend.find().await? else {
+        let Some(handle) = AgentHandle::find(&settings.daemon).await? else {
             return Ok(None);
         };
 
         Ok(Some(Self {
-            backend,
+            backend: AnyBackend::new(settings),
             handle,
+            pidfile: Pidfile::new(&settings.daemon),
             startup: StartupLock::new(settings),
+            timeout: LifecycleTimeout::from(settings),
         }))
     }
 
     /// Create a new agent, assuming one does not already exist.
     pub async fn spawn(settings: &Settings) -> Result<Self, AgentFindError> {
         let backend = AnyBackend::new(settings);
+        let pidfile = Pidfile::new(&settings.daemon);
+        let timeout = LifecycleTimeout::from(settings);
         let startup = StartupLock::new(settings);
         let _held = startup.acquire().await?;
 
-        let handle = backend.spawn().await?;
+        let handle = Self::launch(&backend, &pidfile, timeout).await?;
         handle.ensure_our_build()?;
         Ok(Self {
             backend,
             handle,
+            pidfile,
             startup,
+            timeout,
         })
     }
 
@@ -139,16 +155,36 @@ impl ActiveAgent {
 
         // Another client may have replaced the agent since this one was found, in which case this
         // stops its replacement instead. That costs the replacement a restart, not correctness.
-        self.backend.force_stop(self.handle).await?;
+        self.halt().await?;
 
-        let handle = self.backend.spawn().await?;
+        let handle = Self::launch(&self.backend, &self.pidfile, self.timeout).await?;
         handle.ensure_our_build()?;
         Ok(Self { handle, ..self })
     }
 
     /// Stop the agent, returning once it has exited.
     pub async fn stop(self) -> Result<(), StopError> {
-        self.backend.force_stop(self.handle).await
+        self.halt().await
+    }
+
+    /// Equivalent to [`Self::stop`], but keeps `self` to launch the next agent with.
+    async fn halt(&self) -> Result<(), StopError> {
+        self.backend.stop(&self.handle).await?;
+        self.pidfile.released(self.timeout).await?;
+        Ok(())
+    }
+
+    /// Launch an agent through `backend` once the last one has exited, and wait for it to answer.
+    async fn launch(
+        backend: &AnyBackend,
+        pidfile: &Pidfile,
+        timeout: LifecycleTimeout,
+    ) -> Result<AgentHandle, SpawnError> {
+        // An agent that was just asked to shut down holds the pidfile until it exits, and one
+        // launched before then would find the pidfile taken and exit itself.
+        pidfile.released(timeout).await?;
+        backend.launch().await?;
+        AgentHandle::answering(&backend.address(), timeout).await
     }
 }
 

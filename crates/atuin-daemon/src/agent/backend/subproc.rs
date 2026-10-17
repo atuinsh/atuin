@@ -2,28 +2,32 @@ use std::process::{Command, Stdio};
 
 use atuin_client::settings::Settings;
 
-use crate::agent::backend::{
-    AGENT_ARGS, AgentHandle, AgentTracker, Backend, FindError, SpawnError, StopError,
-};
+use crate::agent::backend::{AGENT_ARGS, AgentHandle, Backend, SpawnError, StopError};
+use crate::client::DaemonAddress;
 
 /// Represents a backend that manages atuin-daemon as a background task by forking a user's regular
 /// `atuin` process.
 ///
 /// The agent is `<this executable> daemon start --daemonize`, so only the `atuin` binary can spawn
-/// one.
+/// one. It binds its socket itself.
 pub struct Subproc {
-    tracker: AgentTracker,
+    address: DaemonAddress,
 }
 
 impl Subproc {
     pub fn new(settings: &Settings) -> Self {
         Self {
-            tracker: AgentTracker::new(settings),
+            address: DaemonAddress::configured(&settings.daemon),
         }
     }
+}
 
-    /// Start the agent process in the background, without waiting for it to answer.
-    pub(super) fn launch() -> Result<(), SpawnError> {
+impl Backend for Subproc {
+    fn address(&self) -> DaemonAddress {
+        self.address.clone()
+    }
+
+    async fn launch(&self) -> Result<(), SpawnError> {
         let exe = std::env::current_exe().map_err(SpawnError::Exe)?;
 
         let mut agent = Command::new(exe);
@@ -36,24 +40,9 @@ impl Subproc {
         agent.spawn().map_err(SpawnError::Launch)?;
         Ok(())
     }
-}
 
-impl Backend for Subproc {
-    async fn spawn(&self) -> Result<AgentHandle, SpawnError> {
-        // An agent that was just asked to shut down holds the pidfile until it exits, and one
-        // launched before then would find the pidfile taken and exit itself.
-        self.tracker.exited().await?;
-        Self::launch()?;
-        self.tracker.answering().await
-    }
-
-    async fn find(&self) -> Result<Option<AgentHandle>, FindError> {
-        self.tracker.find().await
-    }
-
-    async fn force_stop(&self, handle: AgentHandle) -> Result<(), StopError> {
-        handle.request_shutdown().await;
-        self.tracker.exited().await?;
+    async fn stop(&self, agent: &AgentHandle) -> Result<(), StopError> {
+        agent.request_shutdown().await;
         Ok(())
     }
 }

@@ -208,6 +208,19 @@ impl DaemonAddress {
             Ok(Self::Tcp(daemon.tcp_port))
         }
     }
+
+    /// Where a daemon started with `daemon` listens, whichever daemon is running now.
+    #[must_use]
+    pub fn configured(daemon: &Daemon) -> Self {
+        #[cfg(unix)]
+        {
+            Self::Socket(daemon.socket_path().into_owned())
+        }
+        #[cfg(not(unix))]
+        {
+            Self::Tcp(daemon.tcp_port)
+        }
+    }
 }
 
 /// Errors from finding where the daemon listens. Over TCP, there are none.

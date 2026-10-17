@@ -17,7 +17,7 @@ pub use subproc::Subproc;
 use tonic::Code;
 
 use crate::HistoryClient;
-use crate::agent::{LifecycleTimeout, Pidfile, PidfileWaitError};
+use crate::agent::{LifecycleTimeout, PidfileWaitError};
 use crate::client::{AddressError, DaemonAddress};
 use crate::grpc::versioning::OtherBuild;
 
@@ -33,6 +33,54 @@ pub struct AgentHandle {
 }
 
 impl AgentHandle {
+    /// How often to check whether a just-launched agent answers yet.
+    const READY_POLL: Duration = Duration::from_millis(40);
+
+    /// The agent `daemon` configures, if one is running, whatever its build and whatever started
+    /// it.
+    pub(super) async fn find(daemon: &DaemonSettings) -> Result<Option<Self>, FindError> {
+        Self::at(DaemonAddress::of(daemon)?).await
+    }
+
+    /// The agent answering at `address`, if any, whatever its build.
+    async fn at(address: DaemonAddress) -> Result<Option<Self>, FindError> {
+        // Failing to connect means nothing listens there.
+        let Ok(mut client) = HistoryClient::new(address.clone()).await else {
+            return Ok(None);
+        };
+
+        match client.check_daemon_version().await {
+            Ok(build) => Ok(Some(Self {
+                address,
+                build: build.map_err(OtherBuild::from),
+            })),
+            Err(status) if status.code() == Code::Unavailable => Ok(None),
+            Err(status) if status.code() == Code::Unimplemented => Err(FindError::Legacy),
+            Err(status) => Err(FindError::Status(Box::new(status))),
+        }
+    }
+
+    /// Wait for a just-launched agent to answer at `address`.
+    pub(super) async fn answering(
+        address: &DaemonAddress,
+        timeout: LifecycleTimeout,
+    ) -> Result<Self, SpawnError> {
+        let timeout = timeout.get();
+        Backoff::Constant(Self::READY_POLL)
+            .retry(
+                || async move {
+                    match Self::at(address.clone()).await {
+                        Ok(Some(handle)) => ControlFlow::Break(Ok(handle)),
+                        Ok(None) => ControlFlow::Continue(()),
+                        Err(err) => ControlFlow::Break(Err(err.into())),
+                    }
+                },
+                timeout,
+            )
+            .await
+            .unwrap_or_else(|()| Err(SpawnError::NotReady(timeout)))
+    }
+
     pub const fn address(&self) -> &DaemonAddress {
         &self.address
     }
@@ -51,69 +99,6 @@ impl AgentHandle {
             return;
         };
         let _ = client.shutdown().await;
-    }
-}
-
-/// Follows the agent through the socket it listens on and the pidfile it holds, whichever backend
-/// runs it.
-struct AgentTracker {
-    daemon: DaemonSettings,
-    pidfile: Pidfile,
-    timeout: LifecycleTimeout,
-}
-
-impl AgentTracker {
-    /// How often to check whether a just-started agent answers yet.
-    const READY_POLL: Duration = Duration::from_millis(40);
-
-    fn new(settings: &Settings) -> Self {
-        Self {
-            daemon: settings.daemon.clone(),
-            pidfile: Pidfile::new(&settings.daemon),
-            timeout: LifecycleTimeout::from(settings),
-        }
-    }
-
-    /// The agent answering at its address, if any, whatever its build.
-    async fn find(&self) -> Result<Option<AgentHandle>, FindError> {
-        let address = DaemonAddress::of(&self.daemon)?;
-        // Failing to connect means nothing listens there.
-        let Ok(mut client) = HistoryClient::new(address.clone()).await else {
-            return Ok(None);
-        };
-
-        match client.check_daemon_version().await {
-            Ok(build) => Ok(Some(AgentHandle {
-                address,
-                build: build.map_err(OtherBuild::from),
-            })),
-            Err(status) if status.code() == Code::Unavailable => Ok(None),
-            Err(status) if status.code() == Code::Unimplemented => Err(FindError::Legacy),
-            Err(status) => Err(FindError::Status(Box::new(status))),
-        }
-    }
-
-    /// Wait for a just-started agent to answer.
-    async fn answering(&self) -> Result<AgentHandle, SpawnError> {
-        let timeout = self.timeout.get();
-        Backoff::Constant(Self::READY_POLL)
-            .retry(
-                || async move {
-                    match self.find().await {
-                        Ok(Some(handle)) => ControlFlow::Break(Ok(handle)),
-                        Ok(None) => ControlFlow::Continue(()),
-                        Err(err) => ControlFlow::Break(Err(err.into())),
-                    }
-                },
-                timeout,
-            )
-            .await
-            .unwrap_or_else(|()| Err(SpawnError::NotReady(timeout)))
-    }
-
-    /// Wait for the agent to exit, which it has once it releases the pidfile.
-    async fn exited(&self) -> Result<(), PidfileWaitError> {
-        self.pidfile.released(self.timeout).await
     }
 }
 
@@ -153,20 +138,20 @@ pub enum StopError {
     Launchd(io::Error),
 }
 
+/// How an agent is started and stopped, and where it listens.
+///
+/// Waiting for one to exit or answer is the same whatever runs it, and is left to the caller.
 #[enum_dispatch]
 #[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait Backend {
-    /// Spawn an agent.
-    async fn spawn(&self) -> Result<AgentHandle, SpawnError>;
+    /// Where the agents this backend launches listen.
+    fn address(&self) -> DaemonAddress;
 
-    /// Try to find an active agent.
-    ///
-    /// This needs to guarantee that the returned agent is running and reachable, but does not need
-    /// to guarantee that the agent is up-to-date.
-    async fn find(&self) -> Result<Option<AgentHandle>, FindError>;
+    /// Start an agent, without waiting for it to answer.
+    async fn launch(&self) -> Result<(), SpawnError>;
 
-    /// Try to forcefully stop the given agent.
-    async fn force_stop(&self, handle: AgentHandle) -> Result<(), StopError>;
+    /// Ask `agent` to stop, without waiting for it to exit.
+    async fn stop(&self, agent: &AgentHandle) -> Result<(), StopError>;
 }
 
 #[enum_dispatch(Backend)]
