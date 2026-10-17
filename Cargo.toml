@@ -106,6 +106,7 @@ palette = { version = "0.7", features = ["serializing"] }
 parking_lot = "0.12"
 percent-encoding = "2"
 portable-pty = "0.9"
+plist = { version = "1", default-features = false }
 pretty_assertions = "1"
 proptest = "1"
 prost = "0.14"
@@ -139,6 +140,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_regex = "1"
 serde_with = "3"
+# TODO(markovejnovic): A path dependency on the unpublished fork of service-manager, which keeps
+#                      atuin from publishing to crates.io. Swap it for the published fork.
+service-manager = { path = "../service-manager-rs", default-features = false }
 sha2 = "0.10"
 shellexpand = "3"
 shlex = "2"

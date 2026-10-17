@@ -14,6 +14,7 @@ use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
 use crate::session_capture::AiHarnessSessionCapture;
 
+pub mod agent;
 pub mod client;
 pub mod components;
 pub mod daemon;
@@ -54,11 +55,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Boot the daemon using the new component-based architecture.
 ///
 /// This creates a daemon with the search component, spawns the background sync
-/// engine, starts the gRPC server with their services, and runs the event loop.
+/// engine, starts the gRPC server with their services on `socket`, and runs the event loop.
 pub async fn boot(
     settings: Arc<Settings>,
     store: SqliteStore,
     history_db: HistoryDatabase,
+    socket: server::SocketSource,
 ) -> Result<()> {
     // Create the components
     let search_component = SearchComponent::new();
@@ -197,6 +199,7 @@ pub async fn boot(
     // Start the gRPC server in the background
     server::run_grpc_server(
         &settings,
+        socket,
         history_service,
         search_service.build(handle.clone()),
         ai_session_service,

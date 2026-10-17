@@ -41,6 +41,7 @@ prost-types = { workspace = true }
 regex = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
@@ -58,6 +59,10 @@ uuid = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = { workspace = true }
+service-manager = { workspace = true }
 
 [dev-dependencies]
 atuin-common = { workspace = true, features = ["test-utils"] }

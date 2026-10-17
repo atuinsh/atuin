@@ -180,6 +180,41 @@ pub enum VersionMatchError {
     },
 }
 
+/// A daemon of another build, by what a client does with it.
+#[derive(Debug, Clone, Error)]
+pub enum OtherBuild {
+    /// An older build, or one that can't be ordered against ours, which a client replaces.
+    #[error("daemon is out of date: {0}")]
+    Outdated(VersionMatchError),
+    /// A newer build, which a client leaves running: with two atuin versions installed, replacing
+    /// a daemon of any other build has each one restart it out from under the other on every
+    /// command.
+    #[error("daemon is newer than this client; leaving it running: {0}")]
+    Newer(VersionMatchError),
+}
+
+impl From<VersionMatchError> for OtherBuild {
+    fn from(mismatch: VersionMatchError) -> Self {
+        let newer = match &mismatch {
+            // Two commits of one version can't be ordered, so the daemon is replaced.
+            VersionMatchError::Mismatched { theirs, ours } => matches!(
+                (semver::Version::parse(theirs), semver::Version::parse(ours)),
+                (Ok(daemon), Ok(ours)) if daemon.cmp_precedence(&ours).is_gt()
+            ),
+            // A daemon from before builds were exchanged acts on requests of any shape, so it is
+            // always replaced, and it can't be newer than a client that sends its build. Nor can a
+            // build that isn't ASCII be ordered.
+            VersionMatchError::Unannounced | VersionMatchError::Malformed { .. } => false,
+        };
+
+        if newer {
+            Self::Newer(mismatch)
+        } else {
+            Self::Outdated(mismatch)
+        }
+    }
+}
+
 /// Checks the build a peer announced on a reply or a refusal.
 pub trait VersionedExt {
     /// Check whether the version of the peer matches the expected version.
@@ -306,5 +341,46 @@ where
             None => format!("daemon is build {BUILD_STR}, client sent no build"),
         };
         Either::Left(ready(Ok(Self::stamp(Status::failed_precondition(refusal).into_http()))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// The check's report of a daemon of build `theirs`.
+    fn mismatched(theirs: &str) -> VersionMatchError {
+        VersionMatchError::Mismatched {
+            theirs: theirs.to_owned(),
+            ours: BUILD_STR,
+        }
+    }
+
+    #[rstest]
+    #[case::older(mismatched("0.0.0"), false)]
+    #[case::newer(mismatched("999.0.0"), true)]
+    // `zzz` sorts after any SHA, so this daemon would look newer if commits were ordered.
+    #[case::other_commit_of_ours(mismatched(&format!("{}+zzz", crate::VERSION)), false)]
+    #[case::unparsable(mismatched("dev"), false)]
+    #[case::malformed(VersionMatchError::Malformed { theirs: vec![0xff] }, false)]
+    #[case::predates_builds(VersionMatchError::Unannounced, false)]
+    fn only_a_newer_build_is_left_running(
+        #[case] mismatch: VersionMatchError,
+        #[case] newer: bool,
+    ) {
+        assert_eq!(matches!(OtherBuild::from(mismatch), OtherBuild::Newer(_)), newer);
+    }
+
+    #[rstest]
+    #[case::out_of_date(mismatched("0.0.0"), vec!["out of date", "0.0.0", BUILD_STR])]
+    #[case::predates_builds(VersionMatchError::Unannounced, vec!["out of date", "x-atuin-build"])]
+    #[case::newer(mismatched("999.0.0"), vec!["newer", "999.0.0", "leaving it running"])]
+    fn other_build_message_cases(#[case] mismatch: VersionMatchError, #[case] needles: Vec<&str>) {
+        let msg = OtherBuild::from(mismatch).to_string();
+        for needle in needles {
+            assert!(msg.contains(needle), "got: {msg}");
+        }
     }
 }
