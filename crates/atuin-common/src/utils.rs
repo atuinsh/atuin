@@ -6,8 +6,6 @@ use getrandom::fill;
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox, SecretString};
 use uuid::Uuid;
 
-use crate::path::PathBufExt as _;
-
 /// Generate N random bytes, using a cryptographically secure source
 #[must_use]
 pub fn crypto_random_bytes<const N: usize>() -> SecretBox<[u8; N]> {
@@ -36,13 +34,8 @@ pub fn uuid_v7() -> Uuid {
 }
 
 #[must_use]
-pub fn uuid_v4() -> String {
-    Uuid::new_v4().as_simple().to_string()
-}
-
-#[must_use]
-pub fn has_git_dir(path: &str) -> bool {
-    PathBuf::from(path).joined(".git").exists()
+pub fn has_git_dir(path: &Path) -> bool {
+    path.join(".git").exists()
 }
 
 // in a git worktree, .git is a file containing "gitdir: <path>" pointing
@@ -84,7 +77,7 @@ fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
 // A linked worktree resolves to its main repository, so that all of a repository's worktrees
 // share a workspace. [`git_checkout_root`] stops at the worktree instead.
 #[must_use]
-pub fn in_git_repo(path: &str) -> Option<PathBuf> {
+pub fn in_git_repo(path: &Path) -> Option<PathBuf> {
     let root = git_checkout_root(path)?;
     // if .git is a file (worktree), resolve to the main repo root
     Some(resolve_git_worktree(&root).unwrap_or(root))
@@ -94,10 +87,10 @@ pub fn in_git_repo(path: &str) -> Option<PathBuf> {
 /// entry. Unlike [`in_git_repo`], a linked worktree's root is the worktree's own, not its main
 /// repository's: the directory its files are checked out in, and whose `HEAD` is its branch.
 #[must_use]
-pub fn git_checkout_root(path: &str) -> Option<PathBuf> {
+pub fn git_checkout_root(path: &Path) -> Option<PathBuf> {
     let mut gitdir = PathBuf::from(path);
 
-    while gitdir.parent().is_some() && !has_git_dir(gitdir.to_str().unwrap()) {
+    while gitdir.parent().is_some() && !has_git_dir(&gitdir) {
         gitdir.pop();
     }
 
@@ -106,14 +99,11 @@ pub fn git_checkout_root(path: &str) -> Option<PathBuf> {
 }
 
 #[must_use]
-pub fn get_current_dir() -> String {
+pub fn get_current_dir() -> PathBuf {
     // Prefer PWD environment variable over cwd if available to better support symbolic links
     match crate::env::var("PWD") {
-        Ok(v) => v,
-        Err(_) => match env::current_dir() {
-            Ok(dir) => dir.display().to_string(),
-            Err(_) => String::from(""),
-        },
+        Ok(v) => v.into(),
+        Err(_) => env::current_dir().unwrap_or_default(),
     }
 }
 
@@ -176,6 +166,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::path::PathBufExt as _;
 
     #[cfg(not(windows))]
     #[rstest]
@@ -187,7 +178,7 @@ mod tests {
         std::fs::create_dir_all(&subdir).unwrap();
         std::fs::create_dir_all(tmp.join(".git")).unwrap();
 
-        let result = in_git_repo(subdir.to_str().unwrap());
+        let result = in_git_repo(&subdir);
         assert_eq!(result, Some(tmp.clone()));
 
         std::fs::remove_dir_all(&tmp).unwrap();
@@ -217,7 +208,7 @@ mod tests {
         .unwrap();
 
         // should resolve to the main repo root, not the worktree root
-        let result = in_git_repo(worktree_subdir.to_str().unwrap());
+        let result = in_git_repo(&worktree_subdir);
         assert_eq!(result, Some(main_repo));
 
         std::fs::remove_dir_all(&tmp).unwrap();
@@ -250,10 +241,10 @@ mod tests {
         let deep = worktree.join("src").joined("deep");
         std::fs::create_dir_all(&deep).unwrap();
 
-        assert_eq!(git_checkout_root(deep.to_str().unwrap()), Some(worktree));
-        assert_eq!(git_checkout_root(main.to_str().unwrap()), Some(main.clone()));
+        assert_eq!(git_checkout_root(&deep), Some(worktree));
+        assert_eq!(git_checkout_root(&main), Some(main.clone()));
         // Through the `.git` file, whose path may be resolved (on macOS, /var is /private/var).
-        let repo = |path: &Path| in_git_repo(path.to_str()?).map(|p| p.canonicalize().unwrap());
+        let repo = |path: &Path| in_git_repo(path).map(|p| p.canonicalize().unwrap());
         assert_eq!(repo(&deep), Some(main.canonicalize().unwrap()));
         assert_eq!(repo(&main), Some(main.canonicalize().unwrap()));
     }
