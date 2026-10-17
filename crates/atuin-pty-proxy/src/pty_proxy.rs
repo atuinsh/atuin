@@ -229,7 +229,7 @@ const FISH_INIT: &str = r#"if status is-interactive; and test -t 1
         end
     end
 
-    if test "$__atuin_pty_proxy_owns_tty" = 1; and not set -q ATUIN_PTY_PROXY_FAILED
+    if test "$__atuin_pty_proxy_owns_tty" != 1; and not set -q ATUIN_PTY_PROXY_FAILED
         set __atuin_pty_proxy_args --shell (status fish-path)
         if status is-login
             set -a __atuin_pty_proxy_args --shell -l
@@ -258,7 +258,7 @@ const NU_INIT: &str = r#"if (is-terminal --stdin) and (is-terminal --stdout) {
         ) }
     }
 
-    if $env.__atuin_pty_proxy.owns_tty and 'ATUIN_PTY_PROXY_FAILED' not-in $env {
+    if not $env.__atuin_pty_proxy.owns_tty and 'ATUIN_PTY_PROXY_FAILED' not-in $env {
         mut pty_proxy_args = [--shell $nu.current-exe]
         if $nu.is-login {
             $pty_proxy_args = ($pty_proxy_args ++ [--shell -l])
