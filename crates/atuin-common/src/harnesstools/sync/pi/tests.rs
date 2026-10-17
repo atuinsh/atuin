@@ -426,7 +426,7 @@ fn content_row(id: &str, role: Role, content: Vec<Content>) -> RehydrateMessage 
 
 /// A branch holds the rows beside the tree that go with it (pi's prompts from before ids, titles:
 /// keyed on their content, with no parent): the switch passes over
-/// those before where the branch leaves the copy, writes those after it it hasn't got (each
+/// those before where the branch leaves the copy, writes those after it hasn't got (each
 /// hanging from the entry before it, as a restore writes them; metadata merged into it), and pi
 /// resumes from the last of them.
 #[rstest]
