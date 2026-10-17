@@ -66,19 +66,23 @@ impl AgentHandle {
         timeout: LifecycleTimeout,
     ) -> Result<Self, SpawnError> {
         let timeout = timeout.get();
-        Backoff::Constant(Self::READY_POLL)
-            .retry(
-                || async move {
-                    match Self::at(address.clone()).await {
-                        Ok(Some(handle)) => ControlFlow::Break(Ok(handle)),
-                        Ok(None) => ControlFlow::Continue(()),
-                        Err(err) => ControlFlow::Break(Err(err.into())),
-                    }
-                },
-                timeout,
-            )
-            .await
-            .unwrap_or_else(|()| Err(SpawnError::NotReady(timeout)))
+        let poll = Backoff::Constant(Self::READY_POLL).retry(
+            || async move {
+                match Self::at(address.clone()).await {
+                    Ok(Some(handle)) => ControlFlow::Break(Ok(handle)),
+                    Ok(None) => ControlFlow::Continue(()),
+                    Err(err) => ControlFlow::Break(Err(err.into())),
+                }
+            },
+            timeout,
+        );
+
+        // `retry` doesn't bound its first poll, which waits on the agent to boot when launchd holds
+        // its socket: the connection is accepted at once.
+        match tokio::time::timeout(timeout, poll).await {
+            Ok(Ok(answered)) => answered,
+            Ok(Err(())) | Err(_) => Err(SpawnError::NotReady(timeout)),
+        }
     }
 
     pub const fn address(&self) -> &DaemonAddress {

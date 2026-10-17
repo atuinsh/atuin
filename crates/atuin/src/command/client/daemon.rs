@@ -16,6 +16,7 @@ use atuin_daemon::client::{
 };
 use atuin_daemon::grpc::versioning::{BUILD_STR, OtherBuild};
 use atuin_daemon::pidfile::{self, PidfileGuard};
+use atuin_daemon::server::SocketSource;
 use clap::Subcommand;
 #[cfg(unix)]
 use daemonix::Daemonize;
@@ -48,6 +49,11 @@ pub enum SubCmd {
 
         #[arg(long, help = fl!("arg-daemon-start-force"))]
         force: bool,
+
+        // Passed by the launchd agent's plist: launchd holds the daemon's socket.
+        #[cfg(target_os = "macos")]
+        #[arg(long, hide = true)]
+        launchd: bool,
     },
 
     #[command(about = fl!("cmd-daemon-status"))]
@@ -90,9 +96,17 @@ impl Cmd {
         match self.subcmd {
             None => {
                 eprintln!("Warning: `atuin daemon` is deprecated, use `atuin daemon start`");
-                run(settings, store, history_db, false).await
+                run(settings, store, history_db, false, SocketSource::Configured).await
             }
-            Some(SubCmd::Start { force, .. }) => run(settings, store, history_db, force).await,
+            #[cfg(target_os = "macos")]
+            Some(SubCmd::Start {
+                force,
+                launchd: true,
+                ..
+            }) => run(settings, store, history_db, force, SocketSource::Launchd).await,
+            Some(SubCmd::Start { force, .. }) => {
+                run(settings, store, history_db, force, SocketSource::Configured).await
+            }
             Some(SubCmd::Status) => status_cmd(&settings).await,
             Some(SubCmd::Stop) => stop_cmd(&settings).await,
             Some(SubCmd::Restart) => restart_cmd(&settings, false).await,
@@ -484,6 +498,7 @@ async fn run(
     store: SqliteStore,
     history_db: Sqlite,
     force: bool,
+    socket: SocketSource,
 ) -> Result<()> {
     if force {
         force_cleanup(&settings).await;
@@ -495,7 +510,7 @@ async fn run(
     #[cfg(unix)]
     remove_stale_socket_if_present(&settings)?;
 
-    atuin_daemon::boot(settings, store, history_db).await?;
+    atuin_daemon::boot(settings, store, history_db, socket).await?;
 
     Ok(())
 }

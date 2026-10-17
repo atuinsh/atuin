@@ -1,9 +1,11 @@
-use std::ffi::OsString;
+use std::ffi::{CStr, OsString};
 use std::io;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
+use atuin_common::os::macos::launchd;
 use plist::{Dictionary, Value};
 use service_manager::{
     LaunchdServiceManager, RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceManager,
@@ -17,6 +19,10 @@ use crate::client::DaemonAddress;
 
 /// Represents a backend that runs atuin-daemon as a launchd agent in the user's `gui/<uid>`
 /// domain.
+///
+/// launchd holds the agent's socket at `daemon.socket_path`, where the daemon would bind it
+/// itself, so clients find it as they find any other. It keeps listening between agents, and
+/// starts the next one for the next client.
 pub struct Launchd {
     daemon: DaemonSettings,
     /// Runs the agent when launchd won't.
@@ -26,6 +32,12 @@ pub struct Launchd {
 }
 
 impl Launchd {
+    /// The name of the agent's socket among the `Sockets` in its plist.
+    const SOCKET: &CStr = c"atuin";
+
+    /// The flag that tells `atuin daemon start` that launchd holds its socket.
+    const FLAG: &str = "--launchd";
+
     pub fn new(settings: &Settings) -> Self {
         Self {
             daemon: settings.daemon.clone(),
@@ -42,6 +54,13 @@ impl Launchd {
             .is_ok_and(|console| console.uid() == atuin_common::os::unix::uid())
     }
 
+    /// Take the socket launchd holds for the agent, which only the agent launchd started can.
+    pub fn activate_socket() -> Result<UnixListener, launchd::ActivateError> {
+        // A socket at a path has the one descriptor.
+        let fd = launchd::CheckedInSocket::activate(Self::SOCKET)?.into_iter().next();
+        Ok(UnixListener::from(fd.expect("an activated socket has a descriptor")))
+    }
+
     /// The agent's label, `sh.atuin.daemon`.
     fn label() -> ServiceLabel {
         ServiceLabel {
@@ -53,7 +72,11 @@ impl Launchd {
 
     /// Install the agent, replacing any copy of it that is loaded, and so have launchd start it.
     async fn install(&self) -> io::Result<()> {
-        let plist = AgentPlist::for_this_client(self.working_dir)?;
+        let socket = self.daemon.socket_path();
+        // Without its directory, launchd loads the agent but can't place the socket.
+        socket.create_default_dir_if_needed().map_err(io::Error::other)?;
+
+        let plist = AgentPlist::for_this_client(self.working_dir, socket.into_owned())?;
         let ctx = ServiceInstallCtx {
             label: Self::label(),
             contents: Some(plist.to_xml()?),
@@ -84,6 +107,23 @@ impl Launchd {
         .await
         .expect("uninstalling the launchd agent shouldn't panic")
     }
+
+    /// Remove the socket's file that launchd leaves behind, once nothing listens on it.
+    ///
+    /// An agent started outside launchd still listens on it until it exits, and removes it itself.
+    fn remove_stale_socket(&self) {
+        let socket = self.daemon.socket_path();
+        let path = socket.as_path();
+        let stale = matches!(atuin_common::os::unix::socket_in_use(path), Ok(false))
+            // `socket_in_use` is `Ok(false)` for a regular file at a misconfigured path too.
+            && std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_socket());
+        if stale
+            && let Err(err) = std::fs::remove_file(path)
+            && err.kind() != io::ErrorKind::NotFound
+        {
+            warn!(%err, path = %path.display(), "could not remove the launchd agent's socket");
+        }
+    }
 }
 
 impl Backend for Launchd {
@@ -102,11 +142,14 @@ impl Backend for Launchd {
     }
 
     async fn stop(&self, agent: &AgentHandle) -> Result<(), StopError> {
-        // Once removed, launchd can't start the agent again as it exits.
+        // Once removed, launchd neither restarts the agent as it exits nor starts another for the
+        // next client.
         self.uninstall().await.map_err(StopError::Launchd)?;
 
         // An older client, or `atuin daemon start`, may have started the agent outside launchd.
         agent.request_shutdown().await;
+
+        self.remove_stale_socket();
         Ok(())
     }
 }
@@ -115,6 +158,8 @@ impl Backend for Launchd {
 struct AgentPlist {
     exe: PathBuf,
     working_dir: PathBuf,
+    /// Where launchd holds the agent's socket.
+    socket: PathBuf,
     /// The variables of this client's environment that the agent inherits.
     environment: Vec<(String, String)>,
 }
@@ -124,10 +169,13 @@ impl AgentPlist {
     /// `5s` deadline to shut down.
     const EXIT_TIMEOUT_SECS: i64 = 10;
 
-    fn for_this_client(working_dir: AgentWorkingDir) -> io::Result<Self> {
+    fn for_this_client(working_dir: AgentWorkingDir, socket: PathBuf) -> io::Result<Self> {
+        let working_dir = working_dir.resolve()?;
         Ok(Self {
             exe: std::env::current_exe()?,
-            working_dir: working_dir.resolve()?,
+            // launchd binds the socket from its own working directory, not the agent's.
+            socket: working_dir.join(socket),
+            working_dir,
             environment: std::env::vars().filter(|(name, _)| Self::is_inherited(name)).collect(),
         })
     }
@@ -148,13 +196,24 @@ impl AgentPlist {
             })
         };
 
-        let program_arguments =
-            std::iter::once(path(&self.exe)?).chain(AGENT_ARGS.map(Value::from)).collect();
+        let program_arguments = std::iter::once(path(&self.exe)?)
+            .chain(AGENT_ARGS.map(Value::from))
+            .chain([Value::from(Launchd::FLAG)])
+            .collect();
         let environment = self
             .environment
             .iter()
             .map(|(name, value)| (name.clone(), Value::from(value.as_str())))
             .collect();
+        let socket = Dictionary::from_iter([
+            ("SockPathName".to_owned(), path(&self.socket)?),
+            // Only the user may connect, as to a socket the daemon binds under its `077` umask.
+            ("SockPathMode".to_owned(), Value::from(0o600_i64)),
+        ]);
+        let sockets = Dictionary::from_iter([(
+            Launchd::SOCKET.to_string_lossy().into_owned(),
+            Value::Dictionary(socket),
+        )]);
         let keep_alive = Dictionary::from_iter([("Crashed".to_owned(), Value::Boolean(true))]);
 
         let plist = Dictionary::from_iter([
@@ -162,6 +221,7 @@ impl AgentPlist {
             ("ProgramArguments".to_owned(), Value::Array(program_arguments)),
             ("EnvironmentVariables".to_owned(), Value::Dictionary(environment)),
             ("WorkingDirectory".to_owned(), path(&self.working_dir)?),
+            ("Sockets".to_owned(), Value::Dictionary(sockets)),
             ("RunAtLoad".to_owned(), Value::Boolean(true)),
             // Restart an agent that crashed, but not one that exited, as an agent does when it
             // finds another holding the pidfile: launchd would restart that one every
@@ -204,6 +264,7 @@ mod tests {
         let plist = AgentPlist {
             exe: PathBuf::from(std::ffi::OsStr::from_bytes(b"/opt/\xffatuin")),
             working_dir: PathBuf::from("/"),
+            socket: PathBuf::from("/tmp/atuin.sock"),
             environment: Vec::new(),
         };
         assert_eq!(plist.to_xml().unwrap_err().kind(), io::ErrorKind::InvalidData);

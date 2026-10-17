@@ -20,6 +20,8 @@ use std::time::Duration;
 
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
 use atuin_common::fs::lock::{LockError, LockMode, LockOptions};
+#[cfg(target_os = "macos")]
+pub(crate) use backend::Launchd;
 pub use backend::{FindError, SpawnError, StopError};
 
 use crate::agent::backend::{AgentHandle, AnyBackend, Backend};
@@ -181,7 +183,8 @@ impl ActiveAgent {
         timeout: LifecycleTimeout,
     ) -> Result<AgentHandle, SpawnError> {
         // An agent that was just asked to shut down holds the pidfile until it exits, and one
-        // launched before then would find the pidfile taken and exit itself.
+        // launched before then would find the pidfile taken and exit itself. Under launchd, the new
+        // agent's socket would also replace the one the last agent still answers on.
         pidfile.released(timeout).await?;
         backend.launch().await?;
         AgentHandle::answering(&backend.address(), timeout).await
