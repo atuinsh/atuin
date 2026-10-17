@@ -9,6 +9,7 @@ use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use easy_cast::{CastFloat, Conv};
+use futures::stream::BoxStream;
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
@@ -948,6 +949,20 @@ impl Sqlite {
             .await
     }
 
+    /// Every run of this exact command, newest id first (the order [`Self::all_paged`] reads them
+    /// in), streamed so that a command run a million times is never held in memory at once.
+    #[must_use = "the stream reads nothing until polled"]
+    pub fn command_runs<'a>(&'a self, command: &'a str) -> BoxStream<'a, Result<History>> {
+        let query = format!(
+            "select {HISTORY_COLUMNS} from history
+             where command = ?1 and deleted_at is null
+             order by id desc"
+        );
+        db::query_as::<_, History>(sqlx::AssertSqlSafe(query))
+            .bind(command)
+            .fetch(self.sqlite.pool())
+    }
+
     #[instrument(level = "trace", skip_all, err)]
     pub async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
         debug!("listing history");
@@ -1343,6 +1358,7 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 mod test {
     use std::time::{Duration, Instant};
 
+    use futures::TryStreamExt;
     use rstest::{fixture, rstest};
     use time::format_description::well_known::Rfc3339;
 
@@ -2229,6 +2245,33 @@ mod test {
         // Should return None immediately
         let page = paged.next().await.unwrap();
         assert!(page.is_none());
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_command_runs(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        for cmd in ["cargo build", "cargo test", "cargo build", "cargo build"] {
+            new_history_item(&db, cmd).await.unwrap();
+        }
+
+        let runs: Vec<_> = db.command_runs("cargo build").try_collect().await.unwrap();
+        assert_eq!(runs.len(), 3);
+        assert!(runs.iter().all(|h| h.command == "cargo build"));
+        assert!(runs.is_sorted_by(|a, b| a.id > b.id), "newest id first");
+
+        let prefix: Vec<_> = db.command_runs("cargo").try_collect().await.unwrap();
+        assert!(prefix.is_empty(), "exact match only");
+
+        // Tombstones written by older versions are not runs
+        let mut legacy = runs[0].clone();
+        legacy.deleted_at = Some(OffsetDateTime::now_utc());
+        db.update(&legacy).await.unwrap();
+        let runs: Vec<_> = db.command_runs("cargo build").try_collect().await.unwrap();
+        assert_eq!(runs.len(), 2);
     }
 
     #[rstest]
