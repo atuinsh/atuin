@@ -71,14 +71,25 @@ pub fn template_variables(script: &Script) -> Result<HashSet<String>> {
     Ok(template.undeclared_variables(true))
 }
 
+fn is_env_split_string_option(option: &str) -> bool {
+    // Only flags without arguments can precede S in a short-option cluster.
+    // An S in the value of -u, -C, or -a is not a split-string option.
+    option.starts_with("--split-string=")
+        || option
+            .strip_prefix('-')
+            .is_some_and(|flags| flags.trim_start_matches(['i', 'v', '0']).starts_with('S'))
+}
+
 /// Execute a script interactively, allowing for ongoing stdin/stdout interaction
 pub async fn execute_script_interactive(
     script: String,
     shebang: String,
 ) -> Result<ScriptSession, Box<dyn std::error::Error + Send + Sync>> {
     // Create a temporary file for the script
-    let temp_file = NamedTempFile::new()?;
-    let temp_path = temp_file.path().to_path_buf();
+    // Close the writable handle before exec to avoid ETXTBSY on Linux, while
+    // keeping the path alive until the child exits.
+    let temp_file = NamedTempFile::new()?.into_temp_path();
+    let temp_path = temp_file.to_path_buf();
 
     debug!("creating temp file at {}", temp_path.display());
 
@@ -86,8 +97,9 @@ pub async fn execute_script_interactive(
     let interpreter = if shebang.is_empty() {
         "/usr/bin/env bash".to_string()
     } else {
-        shebang.trim_start_matches("#!").trim().to_string()
+        shebang.trim_start_matches("#!").lines().next().unwrap_or_default().trim().to_string()
     };
+    let parts: Vec<&str> = interpreter.split_whitespace().collect();
 
     // Write script content to the temp file, including the shebang
     let full_script_content = build_executable_script(&script, &shebang);
@@ -101,7 +113,7 @@ pub async fn execute_script_interactive(
         debug!("making script executable");
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&temp_path)?.permissions();
-        perms.set_mode(0o755);
+        perms.set_mode(0o700);
         std::fs::set_permissions(&temp_path, perms)?;
     }
 
@@ -109,39 +121,45 @@ pub async fn execute_script_interactive(
     // This ensures it won't be deleted while the script is running
     let keep_temp_file = temp_file;
 
-    debug!("attempting direct script execution");
-    let mut child_result = tokio::process::Command::new(temp_path.to_str().unwrap())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
+    // Linux passes everything after the interpreter as one argument. Invoke multi-argument
+    // interpreters explicitly, keeping the complete script on disk. env -S handles its own
+    // splitting, including quoting, so those shebangs should still go through the kernel.
+    let env_splits_arguments =
+        parts.first().is_some_and(|p| std::path::Path::new(p).file_name() == Some("env".as_ref()))
+            && parts.get(1).is_some_and(|arg| is_env_split_string_option(arg));
+    let interpreter_command = || {
+        let mut command = tokio::process::Command::new(parts[0]);
+        if env_splits_arguments {
+            // Match the kernel's single shebang argument so env can parse its own quoting.
+            command.arg(interpreter[parts[0].len()..].trim());
+        } else {
+            command.args(&parts[1..]);
+        }
+        command.arg(&temp_path);
+        command
+    };
+    let explicit_interpreter = parts.len() > 2 && !env_splits_arguments;
+    let mut command = if explicit_interpreter {
+        debug!("executing interpreter with separate arguments");
+        interpreter_command()
+    } else {
+        debug!("attempting direct script execution");
+        tokio::process::Command::new(&temp_path)
+    };
+    let mut child_result =
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
 
     // If direct execution fails, try using the interpreter
-    if let Err(e) = &child_result {
+    if let Err(e) = &child_result
+        && !explicit_interpreter
+        && !parts.is_empty()
+    {
         debug!("direct execution failed: {}, trying with interpreter", e);
-
-        // When falling back to interpreter, remove the shebang from the file
-        // Some interpreters don't handle scripts with shebangs well
-        debug!("writing script content without shebang for interpreter execution");
-        tokio::fs::write(&temp_path, &script).await?;
-
-        // Parse the interpreter command
-        let parts: Vec<&str> = interpreter.split_whitespace().collect();
-        if !parts.is_empty() {
-            let mut cmd = tokio::process::Command::new(parts[0]);
-
-            // Add any interpreter args
-            for i in parts.iter().skip(1) {
-                cmd.arg(i);
-            }
-
-            // Add the script path
-            cmd.arg(temp_path.to_str().unwrap());
-
-            // Try with the interpreter
-            child_result =
-                cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
-        }
+        child_result = interpreter_command()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
     }
 
     // If it still fails, return the error
@@ -283,6 +301,92 @@ mod tests {
     use rstest::rstest;
 
     use super::build_executable_script;
+
+    #[rstest]
+    #[case::short("-S", true)]
+    #[case::short_attached("-Ssh", true)]
+    #[case::long_attached("--split-string=sh", true)]
+    #[case::ignore_environment("-iS", true)]
+    #[case::debug("-ivS", true)]
+    #[case::reordered_flags("-viSsh", true)]
+    #[case::null("-0S", true)]
+    #[case::unset_value("-uSESSION", false)]
+    #[case::chdir_value("-CScripts", false)]
+    #[case::argv0_value("-aSHELL", false)]
+    #[case::long_unset_value("--unset=SESSION", false)]
+    #[case::missing_value("--split-string", false)]
+    fn env_split_flags(#[case] option: &str, #[case] expected: bool) {
+        assert_eq!(super::is_env_split_string_option(option), expected);
+    }
+
+    #[cfg(unix)]
+    async fn script_exit(script: String, shebang: &str) -> Option<i32> {
+        let mut session = super::execute_script_interactive(script, shebang.to_owned())
+            .await
+            .expect("script should start");
+        tokio::time::timeout(std::time::Duration::from_secs(5), session.wait_for_exit())
+            .await
+            .expect("script should exit")
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::path_lookup("sh")]
+    #[case::path_lookup_with_flag("sh -e")]
+    #[tokio::test]
+    async fn execution_falls_back_to_an_interpreter_on_path(#[case] shebang: &str) {
+        assert_eq!(script_exit("exit 7\n".to_owned(), shebang).await, Some(7));
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::default_bash("", false, false)]
+    #[case::bare_interpreter("/bin/sh", false, false)]
+    #[case::prefixed_interpreter("#!/usr/bin/env sh", false, false)]
+    // The kernel cannot find a relative interpreter; PATH lookup forces the fallback.
+    #[case::fallback_preserves_header("sh", false, false)]
+    #[case::env_bash("#!/usr/bin/env bash -e", false, true)]
+    #[case::bare_env_bash("/usr/bin/env bash -e", false, true)]
+    #[case::env_multiple_args("#!/usr/bin/env sh -e -u", true, true)]
+    #[case::direct_multiple_args("#!/bin/sh -e -u", true, true)]
+    #[case::multiline_header(
+        "#!/usr/bin/env sh -e\n#! nix shell nixpkgs#bash --command bash",
+        false,
+        true
+    )]
+    #[tokio::test]
+    async fn execution_preserves_interpreter_arguments(
+        #[case] shebang: &str,
+        #[case] nounset: bool,
+        #[case] errexit: bool,
+    ) {
+        let header = build_executable_script("", shebang);
+        let header = header.lines().next().unwrap();
+        let pragma = "#! nix shell nixpkgs#bash --command bash";
+        let script = format!(
+            "{pragma}\n{{ IFS= read -r first; IFS= read -r second; }} < \"$0\"\n[ \"$first\" = \
+             '{header}' ] && [ \"$second\" = '{pragma}' ] || exit 9\nif {nounset}; then case $- \
+             in *u*) ;; *) exit 8 ;; esac; fi\nfalse\nexit 0\n"
+        );
+        assert_eq!(
+            script_exit(script, shebang).await,
+            Some(i32::from(errexit)),
+            "all interpreter flags and script headers must be preserved"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[rstest]
+    #[case::short("-S ")]
+    #[case::long("--split-string=")]
+    #[case::combined_ignore_environment("-iS ")]
+    #[case::combined_debug("-ivS ")]
+    #[tokio::test]
+    async fn native_env_split_preserves_quoted_arguments(#[case] split_flag: &str) {
+        let shebang =
+            format!(r#"#!/usr/bin/env {split_flag}sh -c 'test "$0" = "two words"' 'two words'"#);
+        assert_eq!(script_exit("exit 9\n".to_owned(), &shebang).await, Some(0));
+    }
 
     #[rstest]
     #[case::default_bash("", "#!/usr/bin/env bash")]
