@@ -11,6 +11,7 @@ mod shell;
 
 use std::path::PathBuf;
 
+use atuin_common::path::PathBufExt as _;
 use common::{FreshEnv, SESSION, marker, output, wait_until};
 use pty::PtyShell;
 use rstest::rstest;
@@ -91,6 +92,48 @@ fn selection_returns_for_editing(
     pty.send_enter();
     pty.wait_for_line(&format!("{marker}-edited"));
     assert!(!executed_line(&pty.screen(), &marker), "selection executed before editing");
+}
+
+#[rstest]
+#[case::edit(false, b"\r".as_slice(), false)]
+#[case::accept(true, b"\r".as_slice(), true)]
+#[case::cancel(false, b"\x1b".as_slice(), false)]
+fn blocked_logs_do_not_contaminate_the_widget_result(
+    #[files("tests/shells/*.toml")] setup: PathBuf,
+    #[case] enter_accept: bool,
+    #[case] key: &[u8],
+    #[case] runs: bool,
+) {
+    let Some(setup) = shell::Setup::find(&setup) else {
+        return;
+    };
+    let env = FreshEnv::new();
+    let legacy_config = env.home().join(".config/atuin");
+    let legacy_data = env.home().join(".local/share/atuin");
+    std::fs::create_dir_all(&legacy_config).unwrap();
+    std::fs::create_dir_all(&legacy_data).unwrap();
+    std::fs::write(legacy_config.joined("config.toml"), format!("enter_accept = {enter_accept}\n"))
+        .unwrap();
+    std::fs::write(env.atuin_home(), "legacy shell integration").unwrap();
+    env.run(&["store", "status"]);
+    let marker = marker();
+    env.record(&format!("echo {marker}"), SESSION, env.home());
+    let (pty, _) = setup.spawn(&env, std::collections::BTreeMap::new(), "");
+    search_for_marker(&pty, &marker, b"\x12");
+    pty.send(key);
+    if runs {
+        pty.wait_for_screen("selection executes without log diagnostics", |screen| {
+            !screen.contains(": exit") && executed_line(screen, &marker)
+        });
+    } else if key == b"\x1b" {
+        pty.wait_for_prompt();
+    } else {
+        pty.wait_for_screen("only the selected command is returned for editing", |screen| {
+            !screen.contains(": exit")
+                && screen.lines().any(|line| line.trim() == format!("{PROMPT} echo {marker}"))
+        });
+    }
+    assert!(!pty.screen().contains("cannot create log directory"));
 }
 
 #[rstest]

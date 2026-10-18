@@ -1,9 +1,11 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
+use atuin_client::logs::FromSettings as _;
 use atuin_client::settings::Settings;
 use atuin_common::env;
 use atuin_common::path::PathExt;
@@ -426,6 +428,22 @@ fn checks(info: &DoctorDump, settings: &Settings) {
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_data_dir(&settings.data_dir) {
         let warning = super::info::shadowed_data_dir_warning(&legacy, &settings.data_dir);
         println!("{}", format!("[Data] {warning}").bold().red());
+    }
+
+    let directories = [&settings.logs.search, &settings.logs.daemon, &settings.logs.ai]
+        .into_iter()
+        .filter_map(|child| atuin_common::logs::FileConfig::from_settings(&settings.logs, child))
+        .map(|file| file.directory().to_path_buf())
+        .collect::<BTreeSet<_>>();
+    for directory in directories {
+        if let Some(path) = crate::logs::directory_blocked_by_file(&directory) {
+            let warning = crate::i18n::fl!(
+                "log-directory-blocked-by-file-hint",
+                directory = directory.display().to_string(),
+                path = path.display().to_string()
+            );
+            println!("{}", format!("[Logs] {warning}").bold().red());
+        }
     }
 
     // Shell

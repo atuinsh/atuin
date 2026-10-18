@@ -1,4 +1,5 @@
 use std::io::IsTerminal;
+use std::path::PathBuf;
 
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
 use tracing::Level;
@@ -169,8 +170,22 @@ fn clean_up_old_logs(config: &FileConfig) {
 enum FileWriterError {
     #[error("{}", fl!("log-file-name-not-utf8"))]
     NonUtf8Filename,
+    #[error("{}", fl!("log-directory-blocked-by-file",
+        directory = .directory.display().to_string(),
+        path = .path.display().to_string(),
+        source = .source.to_string()))]
+    DirectoryBlockedByFile {
+        directory: PathBuf,
+        path: PathBuf,
+        #[source]
+        source: rolling::InitError,
+    },
     #[error("{0}")]
     RollingFileAppender(#[from] rolling::InitError),
+}
+
+pub fn directory_blocked_by_file(directory: &std::path::Path) -> Option<&std::path::Path> {
+    directory.ancestors().find(|path| path.is_file())
 }
 
 fn make_file_writer(config: &FileConfig) -> Result<RollingFileAppender, FileWriterError> {
@@ -178,6 +193,62 @@ fn make_file_writer(config: &FileConfig) -> Result<RollingFileAppender, FileWrit
     let writer = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
         .filename_prefix(prefix)
-        .build(config.directory())?;
+        .build(config.directory())
+        .map_err(|source| {
+            if let Some(path) = directory_blocked_by_file(config.directory()) {
+                FileWriterError::DirectoryBlockedByFile {
+                    directory: config.directory().to_path_buf(),
+                    path: path.to_path_buf(),
+                    source,
+                }
+            } else {
+                FileWriterError::RollingFileAppender(source)
+            }
+        })?;
     Ok(writer)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use atuin_common::logs::LogLevel;
+    use atuin_common::path::PathBufExt as _;
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[fixture]
+    fn temp_dir() -> TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    fn file_config(path: PathBuf) -> FileConfig {
+        FileConfig {
+            path,
+            level: LogLevel::Info,
+            retention: Duration::from_hours(24),
+        }
+    }
+
+    #[rstest]
+    #[case::parent_file(".atuin", ".atuin/logs")]
+    #[case::directory_file("logs", "logs")]
+    fn blocked_log_directory_names_the_conflicting_file(
+        temp_dir: TempDir,
+        #[case] blocker: &str,
+        #[case] directory: &str,
+    ) {
+        let blocker = temp_dir.path().join(blocker);
+        std::fs::write(&blocker, "legacy shell integration").unwrap();
+        let config = file_config(temp_dir.path().join(directory).joined("search.log"));
+        let error = make_file_writer(&config).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(&blocker.display().to_string()), "{message}");
+        assert!(message.contains(&config.directory().display().to_string()), "{message}");
+        assert!(std::error::Error::source(&error).is_some());
+        assert!(message.contains(&std::error::Error::source(&error).unwrap().to_string()));
+    }
 }
