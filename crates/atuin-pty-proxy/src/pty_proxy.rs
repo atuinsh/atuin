@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::OsString;
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -154,13 +155,33 @@ fn env_flag(name: &str) -> bool {
 /// setting) without conflicting with an existing standalone `atuin pty-proxy init` line in shell
 /// config.
 #[must_use]
-pub fn init_script(shell: Shell) -> &'static str {
+pub fn init_script(shell: Shell) -> Cow<'static, str> {
     match shell {
-        Shell::Bash | Shell::Zsh => BASH_ZSH_INIT,
-        Shell::Fish => FISH_INIT,
-        Shell::Nu => NU_INIT,
+        Shell::Bash => BASH_ZSH_INIT.into(),
+        Shell::Zsh => format!("{ZSH_BEFORE_PROXY}{BASH_ZSH_INIT}{ZSH_AFTER_PROXY}").into(),
+        Shell::Fish => FISH_INIT.into(),
+        Shell::Nu => NU_INIT.into(),
     }
 }
+
+// Preserve only whether integration was enabled; do not reconstruct Ghostty's private
+// ZDOTDIR injection or change the user's export attributes. This belongs to Zsh's
+// init rather than the shared proxy preamble. Other shells keep their own startup paths.
+const ZSH_BEFORE_PROXY: &str = r"if [[ -o interactive && -n ${_ghostty_state+set} && -n ${GHOSTTY_RESOURCES_DIR-} ]]; then
+    export ATUIN_PTY_PROXY_GHOSTTY_ZSH=1
+fi
+";
+
+const ZSH_AFTER_PROXY: &str = r#"if [[ ${ATUIN_PTY_PROXY_GHOSTTY_ZSH-} = 1 ]]; then
+    unset ATUIN_PTY_PROXY_GHOSTTY_ZSH
+    # Ghostty documents this entry point for shells it did not start itself.
+    if [[ ${__atuin_pty_proxy_owns_tty-} = 1 && -z ${_ghostty_state+set} &&
+          -n ${GHOSTTY_RESOURCES_DIR-} &&
+          -r "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration" ]]; then
+        source "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
+    fi
+fi
+"#;
 
 /// Preamble for Bash and Zsh.
 ///
@@ -345,7 +366,7 @@ mod tests {
             Regex::new(&format!(r"if test -t 0\s+{exec}\s+else\s+{exec} </dev/tty\s+end")).unwrap();
 
         assert!(
-            branch.is_match(init_script(Shell::Fish)),
+            branch.is_match(&init_script(Shell::Fish)),
             "fish init: {}",
             init_script(Shell::Fish)
         );
@@ -366,6 +387,6 @@ mod tests {
         r"if \$nu\.is-login \{\s+\$pty_proxy_args = \(\$pty_proxy_args \+\+ \[--shell -l\]\)"
     )]
     fn init_scripts_maintain_login_status(#[case] shell: Shell, #[case] expected: &str) {
-        assert!(Regex::new(expected).unwrap().is_match(init_script(shell)));
+        assert!(Regex::new(expected).unwrap().is_match(&init_script(shell)));
     }
 }

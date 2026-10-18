@@ -65,20 +65,7 @@ impl Setup {
     pub fn find(path: &Path) -> Option<Self> {
         let config: ShellConfig = toml_edit::de::from_str(&fs::read_to_string(path).unwrap())
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let override_var = format!("ATUIN_E2E_{}", config.shell.to_uppercase());
-        let executable = if let Some(path) = atuin_common::env::var_os(&override_var) {
-            let path = PathBuf::from(path);
-            assert!(path.is_file(), "{override_var} is not a file: {}", path.display());
-            Some(path)
-        } else {
-            std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
-                .map(|dir| dir.joined(&config.shell))
-                .find(|path| path.is_file())
-        };
-        let Some(executable) = executable else {
-            missing(path, &config.shell);
-            return None;
-        };
+        let executable = binary(&config.shell)?;
         let mut files = BTreeMap::new();
         for (name, default) in &config.required_files {
             let value = atuin_common::env::var(name).unwrap_or_else(|_| {
@@ -127,6 +114,24 @@ impl Setup {
         pty.wait_for_line_editor();
         (pty, config)
     }
+}
+
+/// Locate a test shell using the same overrides for every PTY test binary.
+pub fn binary(shell: &str) -> Option<PathBuf> {
+    let override_var = format!("ATUIN_E2E_{}", shell.to_uppercase());
+    let found = if let Some(path) = atuin_common::env::var_os(&override_var) {
+        let path = PathBuf::from(path);
+        assert!(path.is_file(), "{override_var} is not a file: {}", path.display());
+        Some(path)
+    } else {
+        std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.joined(shell))
+            .find(|path| path.is_file())
+    };
+    if found.is_none() {
+        missing(Path::new(shell), shell);
+    }
+    found
 }
 
 fn missing(config: &Path, dependency: &str) {

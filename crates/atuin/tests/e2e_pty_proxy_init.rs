@@ -1,4 +1,4 @@
-//! However the pty-proxy init is sourced, the shell it execs must keep its keyboard.
+//! The pty-proxy init preserves the terminal and shell integrations across exec.
 //!
 //! Fish users are told to run `atuin pty-proxy init fish | source`, which puts the init script
 //! itself on the sourcing shell's stdin. Fish keeps the redirections in effect across `exec`, so
@@ -9,6 +9,9 @@
 //! The preamble repairs that by falling back to `/dev/tty`, but only when stdin is not already a
 //! terminal, so both sourcing styles are driven here: the pipe that needs the fallback, and the
 //! file that must not take it.
+//!
+//! Zsh tests also cover Ghostty reintegration after re-exec, including ZDOTDIR set
+//! in the environment or by the user's .zshenv, and disabled integration.
 
 #![cfg(all(unix, feature = "pty-proxy"))]
 
@@ -17,12 +20,11 @@ mod common;
 #[allow(dead_code, reason = "the pty harness is shared with the other e2e test binaries")]
 #[path = "common/pty.rs"]
 mod pty;
-#[allow(dead_code, reason = "only `PROMPT` is needed here; `pty` reaches for it by path")]
+#[allow(dead_code, reason = "the shell harness is shared with other e2e test binaries")]
 #[path = "common/shell.rs"]
 mod shell;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use atuin_common::path::PathBufExt as _;
 use common::FreshEnv;
@@ -48,34 +50,11 @@ function fish_mode_prompt
 end
 "#;
 
-/// The fish binary to test against, or [`None`] when fish is not installed.
-///
-/// Mirrors the lookup in [`shell::Shell::start`]: `ATUIN_E2E_FISH` overrides the binary, and a
-/// missing fish is a hard error only when `ATUIN_E2E_REQUIRE_SHELLS` is set.
-fn fish() -> Option<PathBuf> {
-    if let Some(path) = atuin_common::env::var_os("ATUIN_E2E_FISH") {
-        let path = PathBuf::from(path);
-        assert!(path.is_file(), "ATUIN_E2E_FISH is not a file: {}", path.display());
-        return Some(path);
-    }
-    let found = std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
-        .map(|dir| dir.joined("fish"))
-        .find(|path| path.is_file());
-    if found.is_none() {
-        assert!(
-            atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(),
-            "missing fish for e2e_pty_proxy_init"
-        );
-        eprintln!("skipping e2e_pty_proxy_init: missing fish");
-    }
-    found
-}
-
 #[rstest]
 fn fish_keeps_its_keyboard_however_the_preamble_is_sourced(
     #[values(Sourced::FromPipe, Sourced::FromFile)] sourced: Sourced,
 ) {
-    let Some(fish) = fish() else {
+    let Some(fish) = shell::binary("fish") else {
         return;
     };
 
@@ -100,4 +79,98 @@ fn fish_keeps_its_keyboard_however_the_preamble_is_sourced(
     // preamble that quietly declined to exec would keep the keyboard working too.
     pty.send_line("test -n \"$ATUIN_PTY_PROXY_ACTIVE\" && echo proxy=1 || echo proxy=0");
     pty.wait_for_line("proxy=1");
+}
+
+/// Model Ghostty's original injection and its documented entry point separately.
+const GHOSTTY_ZSHENV: &str = r#"if [[ -n ${GHOSTTY_ZSH_ZDOTDIR+set} ]]; then
+    export ZDOTDIR="$GHOSTTY_ZSH_ZDOTDIR"
+    unset GHOSTTY_ZSH_ZDOTDIR
+else
+    unset ZDOTDIR
+fi
+if [[ -r "${ZDOTDIR-$HOME}/.zshenv" ]]; then
+    source "${ZDOTDIR-$HOME}/.zshenv"
+fi
+source "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
+"#;
+
+#[derive(Clone, Copy, Debug)]
+enum Zdotdir {
+    Default,
+    Environment,
+    ExportedInZshenv,
+    LocalInZshenv,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Integration {
+    Enabled,
+    Disabled,
+}
+
+/// Restart Zsh with integration enabled only when Ghostty enabled it for the original shell.
+/// Neither exported nor shell-local ZDOTDIR values may change their startup semantics.
+#[rstest]
+fn zsh_preserves_ghostty_integration(
+    #[values(
+        Zdotdir::Default,
+        Zdotdir::Environment,
+        Zdotdir::ExportedInZshenv,
+        Zdotdir::LocalInZshenv
+    )]
+    zdotdir: Zdotdir,
+    #[values(Integration::Enabled, Integration::Disabled)] integration: Integration,
+) {
+    let Some(zsh) = shell::binary("zsh") else {
+        return;
+    };
+    let env = FreshEnv::new();
+    env.write_config("[pty_proxy]\nenabled = true\n");
+    let resources = env.home().join("ghostty resources");
+    let injection = resources.join("shell-integration").joined("zsh");
+    std::fs::create_dir_all(&injection).unwrap();
+    std::fs::write(injection.join(".zshenv"), GHOSTTY_ZSHENV).unwrap();
+    std::fs::write(
+        injection.join("ghostty-integration"),
+        "typeset -gi _ghostty_state=0\n(( ++ghostty_loads ))\n",
+    )
+    .unwrap();
+    let config_dir = env.home().join("zsh config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let home_env = match zdotdir {
+        Zdotdir::ExportedInZshenv => {
+            format!("(( ++user_env_loads ))\nexport ZDOTDIR='{}'\n", config_dir.display())
+        }
+        Zdotdir::LocalInZshenv => {
+            format!("(( ++user_env_loads ))\nZDOTDIR='{}'\n", config_dir.display())
+        }
+        _ => "(( ++user_env_loads ))\n".into(),
+    };
+    std::fs::write(env.home().join(".zshenv"), home_env).unwrap();
+    std::fs::write(config_dir.join(".zshenv"), "(( ++user_env_loads ))\n").unwrap();
+    let rc = format!("eval \"$(atuin init zsh)\"\nPS1='{PROMPT} '\nRPS1=''\n");
+    std::fs::write(config_dir.join(".zshrc"), &rc).unwrap();
+    std::fs::write(env.home().join(".zshrc"), &rc).unwrap();
+    let mut vars =
+        BTreeMap::from([("GHOSTTY_RESOURCES_DIR".into(), resources.display().to_string())]);
+    if matches!(integration, Integration::Enabled) {
+        vars.insert("ZDOTDIR".into(), injection.display().to_string());
+        if matches!(zdotdir, Zdotdir::Environment) {
+            vars.insert("GHOSTTY_ZSH_ZDOTDIR".into(), config_dir.display().to_string());
+        }
+    } else if matches!(zdotdir, Zdotdir::Environment) {
+        vars.insert("ZDOTDIR".into(), config_dir.display().to_string());
+    }
+    let pty = PtyShell::spawn(&zsh, &[], &env, &vars);
+    pty.wait_for_prompt();
+    pty.send_line(r#"[[ -n $ATUIN_PTY_PROXY_ACTIVE ]] && print -r -- "integration=${ghostty_loads-0} user_env=${user_env_loads-0} proxy=1""#);
+    let loads = u8::from(matches!(integration, Integration::Enabled));
+    pty.wait_for_line(&format!("integration={loads} user_env=1 proxy=1"));
+    pty.send_line(r#"print -r -- "zdotdir=${ZDOTDIR-unset} type=${(t)ZDOTDIR}""#);
+    let expected = match zdotdir {
+        Zdotdir::Default => "zdotdir=unset type=".into(),
+        Zdotdir::LocalInZshenv => format!("zdotdir={} type=scalar", config_dir.display()),
+        _ => format!("zdotdir={} type=scalar-export", config_dir.display()),
+    };
+    pty.wait_for_line(&expected);
 }
