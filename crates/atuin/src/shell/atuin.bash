@@ -7,6 +7,9 @@ if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
 fi
 ATUIN_STTY=$(stty -g)
 ATUIN_HISTORY_ID=""
+# Track ownership separately from the environment restored by tools such as devbox.
+__atuin_history_id=""
+export -n __atuin_history_id
 
 if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
     # The pty-proxy preamble also sets this variable, but make sure it's set here,
@@ -33,25 +36,25 @@ __atuin_mark_output_start() {
         printf '\033]133;B\a'
     fi
 
-    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
+    [[ -n "${__atuin_history_id:-}" ]] || return 0
 
     if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
         # Current pty-proxy is an older version that expects OSC 133; new
         # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
         printf '\033]133;C\a'
     else
-        printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"
+        printf '\033]18188735;C;%s\a' "$__atuin_history_id"
     fi
 }
 
 __atuin_mark_output_end() {
     [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
-    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
+    [[ -n "${__atuin_history_id:-}" ]] || return 0
 
     if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
-        printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
+        printf '\033]133;D;%s;history_id=%s\a' "$1" "$__atuin_history_id"
     else
-        printf '\033]18188735;D;%s\a' "$ATUIN_HISTORY_ID"
+        printf '\033]18188735;D;%s\a' "$__atuin_history_id"
     fi
 }
 
@@ -76,12 +79,12 @@ __atuin_preexec() {
         # robust way to detect the command for keybindings, but at least we
         # want to exclude Atuin's keybindings.  When the preexec hook is called
         # for a keybinding, the preexec hook for the user command will not
-        # fire, so we instead set a fake ATUIN_HISTORY_ID here to notify
+        # fire, so we instead set a private marker here to notify
         # __atuin_precmd of this failure.
         if [[ $BASH_COMMAND != "$1" ]]; then
             case $BASH_COMMAND in
                 '__atuin_history'* | '__atuin_widget_run'* | '__atuin_bash42_dispatch'*)
-                    ATUIN_HISTORY_ID=__bash_preexec_failure__
+                    __atuin_history_id=__bash_preexec_failure__
                     return 0 ;;
             esac
         fi
@@ -93,6 +96,7 @@ __atuin_preexec() {
 
     local id
     id=$(ATUIN_SHELL=bash atuin history start --hook -- "$1" 2>/dev/null)
+    __atuin_history_id=$id
     export ATUIN_HISTORY_ID=$id
     [[ -n ${__atuin_skip_output_markers:-} ]] || __atuin_mark_output_start
     __atuin_preexec_time=${EPOCHREALTIME-}
@@ -101,11 +105,11 @@ __atuin_preexec() {
 __atuin_precmd() {
     local EXIT=$? __atuin_precmd_time=${EPOCHREALTIME-}
 
-    [[ ! $ATUIN_HISTORY_ID ]] && return 0
+    [[ ! ${__atuin_history_id:-} ]] && return 0
 
     # If the previous preexec hook failed, we manually call __atuin_preexec
     local __atuin_skip_output_markers=""
-    if [[ $ATUIN_HISTORY_ID == __bash_preexec_failure__ ]]; then
+    if [[ $__atuin_history_id == __bash_preexec_failure__ ]]; then
         # This is the command extraction code taken from bash-preexec
         local previous_command
         previous_command=$(
@@ -126,7 +130,8 @@ __atuin_precmd() {
         # microsecond resolution, or the builtin `time` in bash < 5.0 with the
         # millisecond resolution.
         duration=${_ble_exec_time_ata}000
-    elif ((BASH_VERSINFO[0] >= 5)); then
+    elif ((BASH_VERSINFO[0] >= 5)) &&
+        [[ -n ${__atuin_preexec_time-} && -n ${__atuin_precmd_time-} ]]; then
         # We calculate the high-resolution duration based on EPOCHREALTIME
         # (bash >= 5.0) recorded by precmd/preexec, though it might not be as
         # accurate as `_ble_exec_time_ata` provided by ble.sh because it
@@ -145,7 +150,8 @@ __atuin_precmd() {
     fi
 
     [[ -n ${__atuin_skip_output_markers:-} ]] || __atuin_mark_output_end "$EXIT"
-    (atuin history end --hook --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$ATUIN_HISTORY_ID" >/dev/null 2>&1 &)
+    (atuin history end --hook --exit "$EXIT" ${duration:+"--duration=$duration"} -- "$__atuin_history_id" >/dev/null 2>&1 &)
+    __atuin_history_id=""
     export ATUIN_HISTORY_ID=""
 }
 

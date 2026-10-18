@@ -98,6 +98,13 @@ impl Setup {
         })
     }
 
+    /// Commands run after shell integration is initialized, before the first prompt.
+    pub fn with_post_init(mut self, script: &str) -> Self {
+        self.config.script.push('\n');
+        self.config.script.push_str(script);
+        self
+    }
+
     /// The shell started in `env`, with `vars` set (over the files it needs, where they name the
     /// same) and `init_args` passed to `atuin init`, at its prompt.
     pub fn spawn(

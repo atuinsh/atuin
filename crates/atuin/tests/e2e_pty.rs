@@ -63,6 +63,49 @@ fn shell_hooks_record_history(#[files("tests/shells/*.toml")] setup: PathBuf) {
     });
 }
 
+/// A devbox-style environment restore must not let the child finish its parent's entry.
+#[rstest]
+#[case::bash_preexec("tests/shells/bash-preexec.toml")]
+#[case::bash_blesh("tests/shells/bash-blesh.toml")]
+#[case::zsh_emacs("tests/shells/zsh-emacs.toml")]
+#[case::zsh_vi("tests/shells/zsh-vi.toml")]
+fn restored_parent_history_id_is_not_owned_by_the_child(
+    #[case] setup: &str,
+    #[values(false, true)] store_failed: bool,
+) {
+    let Some(setup) = shell::Setup::find(std::path::Path::new(setup)) else {
+        return;
+    };
+    let env = FreshEnv::new();
+    env.write_config(&format!("store_failed = {store_failed}\n"));
+    env.run(&["store", "status"]);
+    let parent_command = format!("devbox shell # {}", marker());
+    let mut start = env.atuin(&["history", "start", "--", &parent_command]);
+    start.env("ATUIN_SESSION", SESSION);
+    let parent_id = output(start);
+    let parent_id = parent_id.trim();
+    let setup = setup.with_post_init(&format!("export ATUIN_HISTORY_ID={parent_id}\nfalse\n"));
+    let (pty, _) = setup.spawn(&env, std::collections::BTreeMap::new(), "");
+    let child_command = format!("echo {}", marker());
+    pty.send_line(&child_command);
+    let list = |format: &str| {
+        let mut command = env.atuin(&["history", "list", "--format", format]);
+        command.env("ATUIN_SESSION", SESSION);
+        output(command)
+    };
+    wait_until("child's own command completed", || {
+        list("{command}\t{exit}").lines().any(|line| line == format!("{child_command}\t0"))
+    });
+    let history = list("{uuid}\t{exit}\t{duration}");
+    assert!(
+        history.lines().any(|line| line == format!("{parent_id}\t-1\t0s")),
+        "child completed or removed its parent's in-flight entry: {history}"
+    );
+    env.run(&["history", "end", "--exit", "0", "--duration", "1000000000", "--", parent_id]);
+    let history = list("{uuid}\t{exit}\t{duration}");
+    assert!(history.lines().any(|line| line == format!("{parent_id}\t0\t1s")));
+}
+
 #[rstest]
 fn selection_returns_for_editing(
     #[files("tests/shells/*.toml")] setup: PathBuf,
