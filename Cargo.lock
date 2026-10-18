@@ -661,6 +661,7 @@ dependencies = [
  "divan",
  "easy-cast",
  "rand 0.8.7",
+ "proptest",
  "rstest",
  "serde",
  "time",

@@ -22,6 +22,7 @@ unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true }
+proptest = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 

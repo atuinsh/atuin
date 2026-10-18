@@ -275,12 +275,8 @@ pub fn compute(
         commands.insert(command);
 
         split_at_pipe(command)
-            .iter()
-            .map(|l| {
-                let command = l.trim();
-                commands.insert(command);
-                command
-            })
+            .into_iter()
+            .map(str::trim)
             .collect::<Vec<_>>()
             .windows(ngram_size)
             .for_each(|w| {
@@ -337,12 +333,14 @@ mod tests {
     }
 
     #[rstest]
-    fn ignored_commands() {
+    #[case::simple("cd foo")]
+    #[case::pipeline("cd foo | echo ignored")]
+    fn ignored_commands(#[case] ignored: &str) {
         let mut settings = Settings::utc();
         settings.stats.ignored_commands.push("cd".to_string());
 
         let history = [
-            History::import().timestamp(OffsetDateTime::now_utc()).command("cd foo").build().into(),
+            History::import().timestamp(OffsetDateTime::now_utc()).command(ignored).build().into(),
             History::import()
                 .timestamp(OffsetDateTime::now_utc())
                 .command("cargo build stuff")
@@ -353,6 +351,87 @@ mod tests {
         let stats = compute(&settings, &history, 10, 1).expect("failed to compute stats");
         assert_eq!(stats.total_commands, 1);
         assert_eq!(stats.unique_commands, 1);
+    }
+
+    #[rstest]
+    #[case::pipeline(&["echo hello | wc -c"], 1)]
+    #[case::repeated_pipeline(&["echo hello | wc -c", "echo hello | wc -c"], 1)]
+    #[case::different_arguments(&["echo one | wc -c", "echo two | wc -c"], 2)]
+    #[case::standalone_segment(&["echo hello | wc -c", "echo hello"], 2)]
+    #[case::quoted_pipe(&["echo 'hello | world'"], 1)]
+    #[case::normalized_pipeline(&[" echo hello | wc -c ", "FOO=bar echo hello | wc -c"], 1)]
+    fn command_totals_count_full_history_entries(#[case] commands: &[&str], #[case] unique: usize) {
+        let history = commands
+            .iter()
+            .map(|command| {
+                History::import()
+                    .timestamp(OffsetDateTime::now_utc())
+                    .command(*command)
+                    .build()
+                    .into()
+            })
+            .collect::<Vec<_>>();
+
+        let stats = compute(&Settings::utc(), &history, 10, 1).expect("failed to compute stats");
+        assert_eq!(stats.total_commands, commands.len());
+        assert_eq!(stats.unique_commands, unique);
+    }
+
+    #[rstest]
+    #[case::unigram(1, vec![(vec!["echo".into()], 2), (vec!["wc".into()], 2)])]
+    #[case::bigram(2, vec![(vec!["echo".into(), "wc".into()], 2)])]
+    fn pipeline_segments_contribute_to_rankings(
+        #[case] ngram_size: usize,
+        #[case] expected: Vec<(Vec<String>, usize)>,
+    ) {
+        let history = (0..2)
+            .map(|_| {
+                History::import()
+                    .timestamp(OffsetDateTime::now_utc())
+                    .command("echo hello | wc -c")
+                    .build()
+                    .into()
+            })
+            .collect::<Vec<_>>();
+
+        let stats =
+            compute(&Settings::utc(), &history, 10, ngram_size).expect("failed to compute stats");
+        let mut top = stats.top;
+        top.sort_unstable();
+        assert_eq!(top, expected);
+    }
+
+    #[rstest]
+    fn unique_commands_never_exceed_total_commands() {
+        use proptest::prelude::*;
+        use proptest::test_runner::TestRunner;
+
+        let command = prop_oneof![
+            any::<String>(),
+            (any::<String>(), any::<String>())
+                .prop_map(|(left, right)| format!("{left} | {right}")),
+        ];
+        let mut settings = Settings::utc();
+        settings.stats.ignored_commands.push("cd".into());
+        TestRunner::deterministic()
+            .run(&(proptest::collection::vec(command, 0..32), 1usize..4), |(commands, ngram)| {
+                let history = commands
+                    .into_iter()
+                    .map(|command| {
+                        History::import()
+                            .timestamp(OffsetDateTime::UNIX_EPOCH)
+                            .command(command)
+                            .build()
+                            .into()
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(stats) = compute(&settings, &history, 10, ngram) {
+                    prop_assert!(stats.unique_commands <= stats.total_commands);
+                    prop_assert!(stats.total_commands <= history.len());
+                }
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[rstest]
