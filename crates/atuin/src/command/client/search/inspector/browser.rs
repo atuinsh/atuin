@@ -18,7 +18,7 @@ use time::macros::format_description;
 use unicode_width::UnicodeWidthStr as _;
 
 use super::bindings::Bindings;
-use super::output::Capture;
+use super::output::{Capture, Output};
 use crate::command::client::search::keybindings::Action;
 use crate::command::client::search::syntax;
 use crate::command::client::theme::{Meaning, Theme};
@@ -78,7 +78,7 @@ pub struct Browser {
     selected_for: Option<HistoryId>,
     command: Paragraph<'static>,
     command_size: (usize, usize),
-    details: Paragraph<'static>,
+    details: Output,
     output_heading: Paragraph<'static>,
 
     output: Capture,
@@ -241,23 +241,52 @@ impl Browser {
     }
 
     pub fn draw(&mut self, f: &mut Frame<'_>, chunk: Rect, theme: &Theme, bindings: &Bindings) {
+        // Two borders, column headings, and at least one run must remain visible.
+        const MIN_LIST_HEIGHT: u16 = 4;
+
         let styles = Styles::new(theme);
         if self.view == View::Output {
             self.draw_output(f, chunk, theme, bindings);
             return;
         }
 
-        let areas = Layout::vertical([
-            Constraint::Min(3),
-            Constraint::Length(if chunk.height >= 10 {
-                5
+        let available = chunk.height.saturating_sub(MIN_LIST_HEIGHT);
+        let block = if available >= 3 {
+            panel(" Selected run ", styles)
+        } else {
+            Block::default()
+        };
+        let inner = block.inner(chunk);
+        let overhead = chunk.height.saturating_sub(inner.height);
+        let capacity = usize::from(available.saturating_sub(overhead));
+        let rows = self.details.rows(inner.width);
+        let mut visible = rows.iter().take(capacity).cloned().collect::<Vec<_>>();
+        if rows.len() > visible.len()
+            && let Some(last) = visible.last_mut()
+        {
+            let plain = last.to_string();
+            let prefix = if inner.width > 1 {
+                vt100::capture::basic_formatted_rows(&plain, inner.width - 1)
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
             } else {
-                0
-            }),
+                String::new()
+            };
+            *last = Line::styled(format!("{prefix}…"), styles.base);
+        }
+        let details_height = if inner.width == 0 || visible.is_empty() {
+            0
+        } else {
+            u16::try_from(visible.len()).unwrap_or(u16::MAX).saturating_add(overhead)
+        };
+        let areas = Layout::vertical([
+            Constraint::Min(MIN_LIST_HEIGHT),
+            Constraint::Length(details_height),
         ])
         .split(chunk);
         self.draw_list(f, areas[0], styles);
-        f.render_widget(&self.details, areas[1]);
+        f.render_widget(Paragraph::new(visible).style(styles.base).block(block), areas[1]);
     }
 
     fn draw_list(&mut self, f: &mut Frame<'_>, area: Rect, styles: Styles) {
@@ -438,8 +467,12 @@ fn exit_label(exit: i64) -> String {
     }
 }
 
-fn details(selected: &History, settings: &Settings, styles: Styles) -> Paragraph<'static> {
+fn details(selected: &History, settings: &Settings, styles: Styles) -> Output {
     let lines = vec![
+        Line::from(vec![
+            Span::styled("Cwd   ", styles.label),
+            Span::raw(selected.cwd.escape_non_printable().into_owned()),
+        ]),
         Line::from(vec![
             Span::styled("When  ", styles.label),
             Span::raw(timestamp(selected, settings)),
@@ -461,16 +494,9 @@ fn details(selected: &History, settings: &Settings, styles: Styles) -> Paragraph
             Span::styled("   Shell  ", styles.label),
             Span::raw(selected.shell.as_deref().unwrap_or("—").escape_non_printable().into_owned()),
         ]),
-        Line::from(vec![
-            Span::styled("Cwd   ", styles.label),
-            Span::raw(selected.cwd.escape_non_printable().into_owned()),
-        ]),
     ];
 
-    Paragraph::new(lines)
-        .style(styles.base)
-        .wrap(Wrap { trim: false })
-        .block(panel(" Selected run ", styles))
+    Output::new(Text::from(lines))
 }
 
 fn command_text(history: &History, highlight: bool, theme: &Theme) -> Text<'static> {
@@ -609,7 +635,7 @@ pub fn draw_views(
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::theme::ThemeManagerOptions;
+    use atuin_client::theme::{ThemeManager, ThemeManagerOptions};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use rstest::{fixture, rstest};
@@ -618,6 +644,36 @@ mod tests {
     use super::*;
     use crate::command::client::search::keybindings::EvalContext;
     use crate::command::client::search::keybindings::defaults::default_inspector_keymap;
+
+    #[fixture]
+    fn themes() -> ThemeManager {
+        ThemeManagerOptions {
+            debug: true,
+            builtin_only: true,
+        }
+        .build()
+    }
+
+    fn rendered(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .chunks(usize::from(buffer.area.width).max(1))
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn render(
+        browser: &mut Browser,
+        theme: &Theme,
+        bindings: &Bindings,
+        width: u16,
+        height: u16,
+    ) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| browser.draw(f, f.area(), theme, bindings)).unwrap();
+        terminal.backend().buffer().clone()
+    }
 
     #[fixture]
     fn bindings() -> Bindings {
@@ -641,6 +697,87 @@ mod tests {
             .cwd("/tmp")
             .build()
             .into()
+    }
+
+    #[rstest]
+    #[case::narrow(30)]
+    #[case::medium(60)]
+    #[case::wide(120)]
+    fn selected_directory_wraps_without_truncation(
+        mut history: History,
+        bindings: Bindings,
+        mut themes: ThemeManager,
+        #[case] width: u16,
+    ) {
+        history.cwd = format!("/home/user/{}工程/终点", "very-long-directory-name/".repeat(8));
+        let theme = themes.load_theme("(none)", None);
+        let mut browser = Browser::default();
+        browser.prepare(&history, &Settings::utc(), theme);
+        let buffer = render(&mut browser, theme, &bindings, width, 30);
+        let text = rendered(&buffer);
+        let compact: String = text
+            .chars()
+            .filter(|ch| !ch.is_whitespace() && !('\u{2500}'..='\u{257f}').contains(ch))
+            .collect();
+        assert!(compact.contains(&history.cwd), "directory truncated: {text}");
+    }
+
+    #[rstest]
+    #[case::normal(120, 30, true)]
+    #[case::borderless(30, 5, true)]
+    #[case::short(30, 7, true)]
+    #[case::below_old_cutoff(30, 9, true)]
+    #[case::zero_width(0, 12, false)]
+    #[case::no_inner_width(3, 12, false)]
+    #[case::tiny(3, 3, false)]
+    #[case::empty(0, 0, false)]
+    fn selected_details_fit_small_terminals(
+        history: History,
+        bindings: Bindings,
+        mut themes: ThemeManager,
+        #[case] width: u16,
+        #[case] height: u16,
+        #[case] show_directory: bool,
+    ) {
+        let theme = themes.load_theme("(none)", None);
+        let mut browser = Browser::default();
+        browser.prepare(&history, &Settings::utc(), theme);
+        let text = rendered(&render(&mut browser, theme, &bindings, width, height));
+        assert_eq!(text.contains("Cwd"), show_directory, "{text}");
+    }
+
+    #[rstest]
+    fn capped_details_prioritize_the_directory_and_mark_truncation(
+        mut history: History,
+        bindings: Bindings,
+        mut themes: ThemeManager,
+        #[values(View::Runs, View::Session)] view: View,
+        #[values(40, 80)] width: u16,
+        #[values(5, 7, 9, 10, 24)] height: u16,
+    ) {
+        history.command = "chosen-command".into();
+        history.cwd = format!("/selected/{}", "long-directory/".repeat(100));
+        let mut earlier = history.clone();
+        earlier.id = HistoryId::new(atuin_common::utils::uuid_v7());
+        earlier.cwd = "/earlier".into();
+        earlier.command = "earlier".into();
+        let settings = Settings::utc();
+        let theme = themes.load_theme("(none)", None);
+        let mut browser = Browser {
+            view,
+            entries: vec![
+                Run::new(&earlier, view == View::Session, &settings),
+                Run::new(&history, view == View::Session, &settings),
+            ],
+            ..Browser::default()
+        };
+        browser.table.select(Some(1));
+        browser.prepare(&history, &settings, theme);
+        let text = rendered(&render(&mut browser, theme, &bindings, width, height));
+        assert!(text.contains('›'), "selected run is hidden: {text}");
+        let cwd = text.lines().find(|line| line.contains("Cwd")).expect("directory label");
+        assert!(cwd.contains("/selected/"), "directory lost its space to other metadata: {text}");
+        assert!(text.contains('…'), "truncation must be explicit: {text}");
     }
 
     #[rstest]
@@ -689,6 +826,7 @@ mod tests {
     #[case("a long command that wraps across lines", 12, 24, 2)]
     #[case("echo first\necho second", 80, 5, 1)]
     fn command_header_follows_selection_and_stays_compact(
+        mut themes: ThemeManager,
         mut history: History,
         #[case] command: &str,
         #[case] width: u16,
@@ -696,11 +834,6 @@ mod tests {
         #[case] rows: u16,
     ) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManagerOptions {
-            debug: true,
-            builtin_only: true,
-        }
-        .build();
         let theme = themes.load_theme("(none)", None);
         let mut browser = Browser::default();
         browser.prepare(&history, &Settings::utc(), theme);
@@ -721,15 +854,11 @@ mod tests {
     #[case(true)]
     #[case(false)]
     fn command_text_is_safe_and_respects_highlighting(
+        mut themes: ThemeManager,
         mut history: History,
         #[case] highlight: bool,
     ) {
         history.command = "echo héllo\0\ncat '\x1b[31m世界'".into();
-        let mut themes = ThemeManagerOptions {
-            debug: true,
-            builtin_only: true,
-        }
-        .build();
         let theme = themes.load_theme("(none)", None);
         let text = command_text(&history, highlight, theme);
         assert_eq!(text.to_string(), "echo héllo^@\ncat '^[[31m世界'");
@@ -790,17 +919,13 @@ mod tests {
     #[case(20, 5)]
     #[case(80, 24)]
     fn output_wraps_and_scrolls_to_the_end(
+        mut themes: ThemeManager,
         history: History,
         #[case] width: u16,
         #[case] height: u16,
     ) {
         use ratatui::style::Color;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManagerOptions {
-            debug: true,
-            builtin_only: true,
-        }
-        .build();
         let theme = themes.load_theme("(none)", None);
         let mut browser = Browser {
             view: View::Output,

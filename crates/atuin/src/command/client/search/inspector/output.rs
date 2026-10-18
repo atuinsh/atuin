@@ -126,6 +126,13 @@ pub(super) struct Output {
 }
 
 impl Output {
+    pub fn new(text: Text<'static>) -> Self {
+        Self {
+            text,
+            ..Self::default()
+        }
+    }
+
     #[cfg(any(feature = "daemon", test))]
     pub fn parse(capture: &str) -> Self {
         use ansi_to_tui::IntoText as _;
@@ -155,10 +162,7 @@ impl Output {
             text.lines.clear();
         }
 
-        Self {
-            text,
-            ..Self::default()
-        }
+        Self::new(text)
     }
 
     #[cfg(feature = "daemon")]
