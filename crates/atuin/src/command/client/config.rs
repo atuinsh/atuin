@@ -763,19 +763,6 @@ mod tests {
         assert_eq!(format_config_value(&doc["value"]), expected);
     }
 
-    #[rstest]
-    #[case::plain_string(r#""fuzzy""#, "fuzzy")]
-    #[case::backslashes(r#""C:\\Users\\alice""#, r"C:\Users\alice")]
-    #[case::embedded_quotes(r#""say \"hello\"""#, r#"say "hello""#)]
-    #[case::literal_string(r"'C:\Users\alice'", r"C:\Users\alice")]
-    #[case::whitespace(r#""  value  ""#, "  value  ")]
-    #[case::array(r#"["a", "b"]"#, r#"["a", "b"]"#)]
-    fn config_value_output(#[case] input: &str, #[case] expected: &str) {
-        let doc = format!("value = {input}").parse::<Document<_>>().unwrap();
-
-        assert_eq!(format_config_value(&doc["value"]), expected);
-    }
-
     /// Call [`update_config`] with a single key.
     fn set(input: &str, key: &str, value: Value) -> String {
         update_config(input, [(key, value)]).expect("the update should succeed")
