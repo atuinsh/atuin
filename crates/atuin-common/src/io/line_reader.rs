@@ -244,6 +244,9 @@ impl Cursor {
                 return Ok(Some(line));
             }
             if self.fill(file)? == 0 {
+                // An empty view of the buffer still holds all of it: idle at the end of the file,
+                // keep only the line read in part.
+                self.pending = BytesMut::from(&self.pending[..]);
                 return Ok(None);
             }
         }
@@ -607,6 +610,20 @@ mod tests {
         append(&file.path, b"\nc\n");
         let end = end + 2 + long.len() as u64 + 1;
         assert_eq!(drain(reader.lines().unwrap()), [line(end + 2, "c")]);
+    }
+
+    /// A reader at the end of the file holds the line it read in part, not the buffer the lines
+    /// before it were read into.
+    #[rstest]
+    #[case::whole_lines(b"\n")]
+    #[case::a_line_read_in_part(b"\nab")]
+    fn a_reader_at_the_end_holds_no_buffer(#[case] tail: &[u8]) {
+        let long = vec![b'a'; 100_000];
+        let file = file(&[&long[..], tail].concat());
+        let mut reader = LineReader::new(File::open(&file.path).unwrap());
+        let [line] = drain(reader.lines().unwrap()).try_into().unwrap();
+        assert!(line.bytes.is_unique(), "the reader still holds the buffer the line was read into");
+        assert_eq!(reader.cursor.pending, tail[1..]);
     }
 
     #[cfg(unix)]
