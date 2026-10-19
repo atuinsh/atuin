@@ -15,7 +15,7 @@ use futures::StreamExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use strum::IntoStaticStr;
+use strum_macros::IntoStaticStr;
 
 use super::caller::{Caller, is_own};
 use super::{connect, is_subagent, label, link_lines, parent_line, timestamp};
