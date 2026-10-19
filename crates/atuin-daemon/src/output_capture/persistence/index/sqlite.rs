@@ -97,6 +97,7 @@ mod tests {
     use std::collections::HashSet;
 
     use rstest::rstest;
+    use sqlx::pool::PoolConnection;
 
     use super::super::schema::CHUNK;
     use super::*;
@@ -125,6 +126,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let index = SqliteIndex::open(&dir.path().join("index.sqlite")).await.expect("open");
         (index, dir)
+    }
+
+    impl SqliteIndex {
+        /// All the connections the pool can hold, so including any that ran an earlier query.
+        async fn every_connection(&self) -> Vec<PoolConnection<sqlx::Sqlite>> {
+            let pool = self.db.pool();
+            let mut conns = Vec::new();
+            for _ in 0..pool.options().get_max_connections() {
+                conns.push(pool.acquire().await.expect("acquire"));
+            }
+            conns
+        }
     }
 
     #[rstest]
@@ -210,13 +223,51 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn repeated_highlighting_does_not_leak_the_previous_body() {
-        // The scratch table is per connection and reused; a stale row must never be returned.
         let (index, _dir) = temp_index().await;
         let first = index.highlight("error", "an error here").await.expect("highlight");
         assert_eq!(first.ranges().count(), 1);
         let second = index.highlight("error", "nothing to see").await.expect("highlight");
         assert_eq!(second.display_plain().to_string(), "nothing to see");
         assert_eq!(second.ranges().count(), 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn highlighting_leaves_no_scratch_table_behind() {
+        // A kept table pins its last body in memory for as long as its connection lives.
+        let (index, _dir) = temp_index().await;
+        index.highlight("error", "an error here").await.expect("highlight");
+
+        for mut conn in index.every_connection().await {
+            let temp_tables: i64 = db::query_scalar("SELECT count(*) FROM temp.sqlite_master")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+            assert_eq!(temp_tables, 0);
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_scratch_table_left_by_an_interrupted_highlight_is_reused() {
+        // A failed or dropped highlight returns its connection with the table and its body.
+        let (index, _dir) = temp_index().await;
+        for mut conn in index.every_connection().await {
+            db::query(
+                "CREATE VIRTUAL TABLE temp.highlights USING fts5(body, tokenize = 'unicode61')",
+            )
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+            db::query("INSERT INTO temp.highlights(rowid, body) VALUES (1, 'a stale error')")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+
+        let hit = index.highlight("error", "a fresh error").await.expect("highlight");
+        assert_eq!(hit.display_plain().to_string(), "a fresh error");
+        assert_eq!(hit.ranges().count(), 1);
     }
 
     #[rstest]

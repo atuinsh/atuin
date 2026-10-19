@@ -6,6 +6,7 @@ use atuin_common::futures::stream::ChunkedStream;
 use atuin_common::string::highlighted::HighlightedString;
 use futures::stream;
 use sqlx::Row;
+use tracing::warn;
 
 use super::super::{IndexError, RankedMatch};
 use super::{CHUNK, id_from_bytes, store};
@@ -141,6 +142,10 @@ impl super::Schema for Schema {
         // diacritics: 'cafe' matches café). So the body goes through a scratch FTS5 table, where
         // the same MATCH highlights it exactly as it was matched.
         let mut conn = db.pool().acquire().await.map_err(store)?;
+        // 256 KiB: caps what one large body pins; the rest spills to sqlite's temp file.
+        db::query("PRAGMA temp.cache_size = -256").execute(&mut *conn).await.map_err(store)?;
+        // An error or a dropped search between here and the DROP returns the connection with the
+        // table still there, holding the last body: IF NOT EXISTS and the DELETE keep that safe.
         db::query(
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.highlights USING fts5(body, tokenize = \
              'unicode61')",
@@ -162,6 +167,14 @@ impl super::Schema for Schema {
         .fetch_optional(&mut *conn)
         .await
         .map_err(store)?;
+
+        // A kept table pins its last body in the connection's temp page cache until the pool
+        // reaps the connection. Failing to drop it costs memory, not this highlight. The DROP
+        // needs the SELECT finished: fetch_optional resets it, an undrained fetch() would leave
+        // the table locked.
+        if let Err(err) = db::query("DROP TABLE temp.highlights").execute(&mut *conn).await {
+            warn!(?err, "failed to drop the output highlight scratch table");
+        }
 
         // A body that no longer matches (its plaintext changed since it was indexed) is still a
         // hit, just an unhighlighted one.
