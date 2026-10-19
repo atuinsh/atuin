@@ -9,7 +9,7 @@
 | `--session`/`-s` | List history for the current session only (default: false)                    |
 | `--human`        | Use human-readable formatting for the timestamp and duration (default: false) |
 | `--cmd-only`     | Show only the text of the command (default: false)                            |
-| `--reverse`      | Reverse the order of the output (default: false)                              |
+| `--reverse`      | Reverse the order of the output (default: true)                               |
 | `--format`       | Specify the formatting of a command (see below)                               |
 | `--print0`       | Terminate the output with a null, for better multiline support                                                                              |
 
