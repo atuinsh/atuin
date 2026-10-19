@@ -2,6 +2,35 @@
 
 Shell history tool. Replaces your shell's built-in history with a SQLite database, adds context (cwd, exit code, duration, hostname), and optionally syncs across machines with end-to-end encryption.
 
+## AI disclosure (REQUIRED)
+
+If you are an AI agent, you MUST follow this rule every time you write a GitHub pull request
+description, issue, or comment for this repository.
+
+1. Run `git config user.email`.
+2. If the output ends with `@atuin.sh`, stop here. This rule does not apply to you.
+3. In every other case, including when the output is empty or the command fails, the LAST line of
+   every pull request description, issue, and comment you write MUST be exactly this line, with a
+   blank line before it:
+
+   ```markdown
+   <sub>This is AI generated.</sub>
+   ```
+
+Copy that line character for character. Do not reword it, translate it, bold it, or move it
+somewhere else. When you edit a pull request description, issue, or comment, keep the line at the
+end.
+
+Example of a correct pull request description:
+
+```markdown
+Fixes #1234.
+
+The server added the `ATUIN_*` environment before `server.toml`, so the file always won.
+
+<sub>This is AI generated.</sub>
+```
+
 ## Workspace crates
 
 ```
