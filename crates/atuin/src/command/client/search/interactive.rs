@@ -1295,7 +1295,7 @@ impl State {
                 Span::raw(": edit"),
                 Span::raw(", "),
                 Span::styled("<enter>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(if settings.enter_accept {
+                Span::raw(if settings.active_enter_accept() {
                     ": run"
                 } else {
                     ": edit"
@@ -3551,5 +3551,49 @@ mod tests {
             matches!(result, super::InputAction::ReturnQuery),
             "Tab configured as return-query should return InputAction::ReturnQuery"
         );
+    }
+    struct HelpRenderer {
+        themes: atuin_client::theme::ThemeManager,
+        buffer: ratatui::buffer::Buffer,
+    }
+
+    #[fixture]
+    fn help_renderer() -> HelpRenderer {
+        HelpRenderer {
+            themes: atuin_client::theme::ThemeManagerOptions {
+                debug: true,
+                builtin_only: true,
+            }
+            .build(),
+            buffer: ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, 1)),
+        }
+    }
+
+    #[rstest]
+    #[case::up_runs(false, true, true, "<enter>: run")]
+    #[case::up_edits(true, false, true, "<enter>: edit")]
+    #[case::ctrl_r_edits(false, true, false, "<enter>: edit")]
+    #[case::ctrl_r_runs(true, false, false, "<enter>: run")]
+    fn help_uses_the_active_enter_behavior(
+        state: State,
+        mut help_renderer: HelpRenderer,
+        #[case] enter_accept: bool,
+        #[case] up_override: bool,
+        #[case] shell_up_key_binding: bool,
+        #[case] expected: &str,
+    ) {
+        use ratatui::widgets::Widget as _;
+
+        let mut settings = Settings::utc();
+        settings.enter_accept = enter_accept;
+        settings.enter_accept_shell_up_key_binding = Some(up_override);
+        settings.shell_up_key_binding = shell_up_key_binding;
+        let theme = help_renderer.themes.load_theme("(none)", None);
+        state
+            .build_help(&settings, theme)
+            .render(help_renderer.buffer.area, &mut help_renderer.buffer);
+        let text: String =
+            help_renderer.buffer.content().iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert!(text.contains(expected), "{text}");
     }
 }

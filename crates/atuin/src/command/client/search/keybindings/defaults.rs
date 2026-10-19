@@ -68,13 +68,13 @@ fn add_common_bindings(km: &mut Keymap) {
     km.bind(key("ctrl-g"), Action::ReturnOriginal);
     km.bind(key("ctrl-o"), Action::ToggleTab);
 
-    // Tab: always returns selection without executing (unlike Enter which respects enter_accept)
+    // Tab always returns the selection for editing; Enter uses the active accept setting.
     km.bind(key("tab"), Action::ReturnSelection);
 }
 
-/// Returns `Accept` or `ReturnSelection` based on the `enter_accept` setting.
+/// Returns `Accept` or `ReturnSelection` based on [`Settings::active_enter_accept`].
 fn accept_action(settings: &Settings) -> Action {
-    if settings.enter_accept {
+    if settings.active_enter_accept() {
         Action::Accept
     } else {
         Action::ReturnSelection
@@ -595,6 +595,34 @@ mod tests {
         let ctx = make_ctx(0, 0, 0, 10);
         assert_eq!(km.resolve(&key("enter"), &ctx), Some(Action::Accept));
         assert_eq!(km.resolve(&key("tab"), &ctx), Some(Action::ReturnSelection));
+    }
+
+    #[rstest]
+    #[case::inherit_edit_ctrl_r(false, None, false, Action::ReturnSelection)]
+    #[case::inherit_edit_up(false, None, true, Action::ReturnSelection)]
+    #[case::inherit_run_ctrl_r(true, None, false, Action::Accept)]
+    #[case::inherit_run_up(true, None, true, Action::Accept)]
+    #[case::up_override_keeps_ctrl_r_edit(false, Some(true), false, Action::ReturnSelection)]
+    #[case::up_override_runs(false, Some(true), true, Action::Accept)]
+    #[case::ctrl_r_keeps_run(true, Some(false), false, Action::Accept)]
+    #[case::up_override_edits(true, Some(false), true, Action::ReturnSelection)]
+    #[case::explicit_edit(false, Some(false), true, Action::ReturnSelection)]
+    #[case::explicit_run(true, Some(true), true, Action::Accept)]
+    fn enter_accept_can_differ_for_the_shell_up_binding(
+        #[values(default_emacs_keymap, default_vim_normal_keymap, default_vim_insert_keymap)]
+        keymap: fn(&Settings, &Keys) -> Keymap,
+        #[case] enter_accept: bool,
+        #[case] up_override: Option<bool>,
+        #[case] shell_up_key_binding: bool,
+        #[case] expected: Action,
+    ) {
+        let mut settings = Settings::utc();
+        settings.enter_accept = enter_accept;
+        settings.enter_accept_shell_up_key_binding = up_override;
+        settings.shell_up_key_binding = shell_up_key_binding;
+        let map = keymap(&settings, &settings.keys);
+        let ctx = make_ctx(0, 0, 0, 10);
+        assert_eq!(map.resolve(&key("enter"), &ctx), Some(expected));
     }
 
     // -- Vim Normal keymap tests --

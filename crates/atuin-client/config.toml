@@ -155,6 +155,10 @@
 ## This applies for new installs. Old installs will keep the old behaviour unless configured otherwise.
 enter_accept = true
 
+## Override enter_accept for searches opened with the shell's Up arrow.
+## When unset, these searches use enter_accept too.
+# enter_accept_shell_up_key_binding = true
+
 ## Defaults to false. If enabled, when triggered after &&, || or |, Atuin will complete commands to chain rather than replace the current line.
 # command_chaining = false
 

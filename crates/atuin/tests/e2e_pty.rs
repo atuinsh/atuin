@@ -114,6 +114,36 @@ fn search_enter_accepts_and_runs(
 }
 
 #[rstest]
+fn up_arrow_runs_while_ctrl_r_returns_for_editing(#[files("tests/shells/*.toml")] setup: PathBuf) {
+    let Some(shell) = Shell::start(
+        &setup,
+        Some("enter_accept = false\nenter_accept_shell_up_key_binding = true\n"),
+    ) else {
+        return;
+    };
+    let pty = &shell.pty;
+    let marker = marker();
+    run_echo_marker(pty, &marker);
+    search_for_marker(pty, &marker, b"\x1b[A");
+    pty.send_enter();
+    pty.wait_for_screen("Up then Enter executes the selected command", |screen| {
+        !screen.contains(": exit") && executed_line(screen, &marker)
+    });
+    search_for_marker(pty, &marker, b"\x12");
+    pty.send_enter();
+    pty.wait_for_screen("Ctrl-R then Enter returns the command for editing", |screen| {
+        !screen.contains(": exit")
+            && !executed_line(screen, &marker)
+            && screen
+                .lines()
+                .any(|line| line.contains(PROMPT) && line.contains(&format!("echo {marker}")))
+    });
+    pty.send_str("-edited");
+    pty.send_enter();
+    pty.wait_for_line(&format!("{marker}-edited"));
+}
+
+#[rstest]
 fn empty_history_search_can_be_cancelled(#[files("tests/shells/*.toml")] setup: PathBuf) {
     let Some(shell) = Shell::start(&setup, None) else {
         return;

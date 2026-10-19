@@ -636,6 +636,22 @@ change to be the default for everyone in a later release.
 enter_accept = false
 ```
 
+### `enter_accept_shell_up_key_binding`
+
+Default: unset (uses `enter_accept`)
+
+Set the ++enter++ behavior for searches opened with the shell's ++up++ arrow separately
+from ++ctrl+r++. For example, this configuration executes the selection from ++up++ arrow
+searches and returns it for editing from ++ctrl+r++ searches:
+
+```toml
+enter_accept = false
+enter_accept_shell_up_key_binding = true
+```
+
+++tab++ returns the selection for editing in both searches. Explicit `enter` bindings in
+`[keymap]` take precedence over both settings.
+
 ### `keymap_mode`
 
 Default: `emacs`

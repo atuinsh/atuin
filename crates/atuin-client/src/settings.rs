@@ -1107,6 +1107,7 @@ pub struct Settings {
     pub extra_headers: HashMap<String, SecretString>,
 
     pub enter_accept: bool,
+    pub enter_accept_shell_up_key_binding: Option<bool>,
     pub smart_sort: bool,
     pub command_chaining: bool,
 
@@ -1203,6 +1204,17 @@ impl Settings {
             .then(|| self.search_mode_shell_up_key_binding())
             .flatten()
             .unwrap_or_else(|| self.search_mode())
+    }
+
+    /// `enter_accept_shell_up_key_binding` when invoked from the shell's up-key binding and set,
+    /// otherwise `enter_accept`.
+    #[must_use]
+    pub fn active_enter_accept(&self) -> bool {
+        if self.shell_up_key_binding {
+            self.enter_accept_shell_up_key_binding.unwrap_or(self.enter_accept)
+        } else {
+            self.enter_accept
+        }
     }
 
     /// Directory of the durable command-output capture store, under the [data dir](Self::data_dir).
@@ -1577,6 +1589,7 @@ impl Settings {
             // muscle memory.
             // New users will get the new default, that is more similar to what they are used to.
             .set_default("enter_accept", false)?
+            .set_default("enter_accept_shell_up_key_binding", None::<bool>)?
             .set_default("keys.scroll_exits", true)?
             .set_default("keys.accept_past_line_end", true)?
             .set_default("keys.exit_past_line_start", true)?
