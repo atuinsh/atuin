@@ -2,7 +2,7 @@
 //!
 //! A [`TreeWatcher`] walks a `root` directory and yields a [`WatchedFile`] for each regular file
 //! whose path its filter accepts. Directories and symlinks are never yielded, and a rejected
-//! file is never offered to the filter again while it stays in place.
+//! file is offered to the filter again each time it is seen.
 //!
 //! A [`WatchedFile`]'s [`stat`](WatchedFile::stat) is a [`tokio::sync::watch::Receiver`] holding
 //! the file's latest [`FileStat`]: it changes whenever the file's content does (size, modification

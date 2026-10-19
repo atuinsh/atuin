@@ -61,7 +61,8 @@ where
 {
     /// Yield only the regular files whose path `filter` accepts (default: every file).
     ///
-    /// `filter` runs on the watcher's task, once per file path that appears, so it must not block.
+    /// `filter` runs on the watcher's task each time a file it has not accepted is seen, so it
+    /// must be a cheap, non-blocking, pure function of the path.
     #[must_use]
     pub fn filter<G>(self, filter: G) -> TreeWatcherBuilder<G>
     where
