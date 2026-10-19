@@ -302,7 +302,7 @@ impl<'a> PackManifestRecordView<'a> {
             .await
             .map_err(RecordLoadingError::StoreError)?;
 
-        Ok(run)
+        Ok(run.into_iter().take_while(|record| record.idx < range.end).collect())
     }
 
     /// Asynchronously pack the records enclosed by this manifest.
