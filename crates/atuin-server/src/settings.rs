@@ -124,4 +124,33 @@ mod tests {
         let settings = settings_with_max_record_size("1048576");
         assert_eq!(settings.max_record_size, ByteSize::mib(1));
     }
+
+    /// `Settings::new` reads the real process environment, which only a child process can be
+    /// given here: `set_var` is unsafe and the crate forbids that.
+    #[rstest]
+    fn environment_overrides_server_toml() {
+        const PORT_OUT: &str = "SETTINGS_TEST_PORT_OUT";
+        if let Some(out) = atuin_common::env::var_os(PORT_OUT) {
+            fs_err::write(out, Settings::new().unwrap().port.to_string()).unwrap();
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        fs_err::write(
+            dir.path().join("server.toml"),
+            "port = 8000\ndb_uri = \"sqlite::memory:\"\n",
+        )
+        .unwrap();
+        let out = dir.path().join("port");
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "settings::tests::environment_overrides_server_toml"])
+            .env(PORT_OUT, &out)
+            .env("ATUIN_CONFIG_DIR", dir.path())
+            .env("ATUIN_PORT", "9000")
+            .output()
+            .unwrap();
+
+        assert!(child.status.success(), "{}", String::from_utf8_lossy(&child.stdout));
+        assert_eq!(fs_err::read_to_string(out).unwrap(), "9000");
+    }
 }
