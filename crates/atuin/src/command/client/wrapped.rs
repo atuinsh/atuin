@@ -10,6 +10,223 @@ use eyre::Result;
 use time::{Date, Duration, Month, OffsetDateTime, Time};
 use tracing::instrument;
 
+fn package_subcommand(program: &str, words: &mut impl Iterator<Item = String>) -> String {
+    while let Some(word) = words.next() {
+        if word == "--" {
+            return words.next().unwrap_or_default();
+        }
+        if word.starts_with('-') {
+            if package_option_takes_value(program, &word) {
+                words.next();
+            }
+        } else if !(program == "cargo" && word.starts_with('+')) {
+            return word;
+        }
+    }
+    String::new()
+}
+
+fn package_option_takes_value(program: &str, option: &str) -> bool {
+    matches!(
+        (program, option),
+        ("cargo", "-C" | "-Z" | "--config" | "--color")
+            | (
+                "npm",
+                "--prefix"
+                    | "-w"
+                    | "--workspace"
+                    | "--registry"
+                    | "--userconfig"
+                    | "--cache"
+                    | "--loglevel"
+                    | "--location"
+            )
+            | ("pnpm", "-C" | "--dir" | "-F" | "--filter" | "--store-dir" | "--registry")
+            | (
+                "yarn",
+                "--cwd" | "--cache-folder" | "--modules-folder" | "--registry" | "--use-yarnrc"
+            )
+            | ("uv", "--directory" | "--project" | "--config-file" | "--cache-dir" | "--color")
+            | ("poetry", "-C" | "--directory" | "-P" | "--project")
+            | ("bundle", "--gemfile")
+            | ("composer", "-d" | "--working-dir")
+            | ("go", "-C")
+    )
+}
+
+fn is_package_command(settings: &Settings, command: &str) -> bool {
+    let command = command.trim_start();
+    let command = split_common_prefix(settings, command).map_or(command, |(_, rest)| rest);
+    // Only lex the words needed for classification. Arguments after the operation may use
+    // another shell's syntax, such as a PowerShell path ending in a backslash.
+    let mut words = shlex::Shlex::new(command);
+    let Some(program) = words.next() else {
+        return false;
+    };
+    let program = program.as_str();
+    let subcommand = package_subcommand(program, &mut words);
+    let subcommand = subcommand.as_str();
+    let subcommand = if program == "cabal" {
+        subcommand
+            .strip_prefix("v1-")
+            .or_else(|| subcommand.strip_prefix("v2-"))
+            .unwrap_or(subcommand)
+    } else {
+        subcommand
+    };
+
+    match program {
+        "cargo" | "npm" | "pnpm" | "pipenv" | "poetry" | "bundle" | "composer" | "cabal"
+        | "yarn" => {
+            (matches!(program, "yarn" | "bundle") && subcommand.is_empty())
+                || matches!(
+                    (program, subcommand),
+                    ("pipenv", "clean" | "check")
+                        | ("bundle" | "poetry", "check")
+                        | ("npm", "i" | "un" | "r")
+                        | ("pnpm", "i")
+                )
+                || PACKAGE_SUBCOMMANDS.contains(&subcommand)
+        }
+        "uv" => match subcommand {
+            "tool" => matches!(
+                words.next().as_deref(),
+                Some("install" | "uninstall" | "upgrade" | "list")
+            ),
+            "pip" | "add" | "remove" | "sync" | "lock" | "tree" | "export" | "cache" | "build" => {
+                true
+            }
+            _ => false,
+        },
+        "dotnet" => match subcommand {
+            "restore" | "nuget" => true,
+            "add" | "remove" | "list" => match words.next().as_deref() {
+                Some("package") => true,
+                Some("reference") | None => false,
+                Some(project) => {
+                    !project.starts_with('-') && words.next().as_deref() == Some("package")
+                }
+            },
+            "package" => {
+                matches!(words.next().as_deref(), Some("add" | "remove" | "list" | "search"))
+            }
+            "tool" => {
+                matches!(
+                    words.next().as_deref(),
+                    Some("install" | "uninstall" | "update" | "restore" | "list")
+                )
+            }
+            _ => false,
+        },
+        "go" => {
+            subcommand == "get"
+                || (subcommand == "mod"
+                    && matches!(
+                        words.next().as_deref(),
+                        Some("download" | "tidy" | "vendor" | "graph" | "verify" | "edit" | "why")
+                    ))
+        }
+        "nix" => {
+            subcommand == "profile"
+                || (subcommand == "flake"
+                    && matches!(words.next().as_deref(), Some("update" | "lock")))
+        }
+        "mix" => {
+            subcommand.starts_with("deps.")
+                || subcommand.starts_with("hex.")
+                || matches!(subcommand, "local.hex" | "local.rebar")
+        }
+        "rebar3" => {
+            matches!(subcommand, "get-deps" | "update" | "upgrade" | "hex" | "lock" | "tree")
+        }
+        "gradle" => std::iter::once(subcommand.to_owned()).chain(words).any(|task| {
+            matches!(
+                task.as_str(),
+                "dependencies" | "dependencyInsight" | "publish" | "publishToMavenLocal"
+            )
+        }),
+        "maven" | "mvn" => std::iter::once(subcommand.to_owned()).chain(words).any(|goal| {
+            goal.starts_with("dependency:") || matches!(goal.as_str(), "install" | "deploy")
+        }),
+        "pipx" => subcommand != "run",
+        _ => DEDICATED_PACKAGE_MANAGERS.contains(&program),
+    }
+}
+
+const PACKAGE_SUBCOMMANDS: &[&str] = &[
+    "add",
+    "remove",
+    "rm",
+    "uninstall",
+    "install",
+    "update",
+    "upgrade",
+    "up",
+    "require",
+    "outdated",
+    "list",
+    "ls",
+    "info",
+    "show",
+    "search",
+    "view",
+    "why",
+    "explain",
+    "audit",
+    "fund",
+    "ci",
+    "link",
+    "unlink",
+    "rebuild",
+    "dedupe",
+    "prune",
+    "fetch",
+    "sync",
+    "lock",
+    "generate-lockfile",
+    "tree",
+    "export",
+    "requirements",
+    "publish",
+    "unpublish",
+    "pack",
+    "package",
+    "cache",
+    "owner",
+    "yank",
+    "vendor",
+    "pristine",
+];
+
+const DEDICATED_PACKAGE_MANAGERS: &[&str] = &[
+    "pip",
+    "pip3",
+    "brew",
+    "apt",
+    "apt-get",
+    "apk",
+    "pacman",
+    "yay",
+    "paru",
+    "yum",
+    "dnf",
+    "dnf5",
+    "rpm",
+    "rpm-ostree",
+    "zypper",
+    "pkg",
+    "chocolatey",
+    "choco",
+    "scoop",
+    "winget",
+    "gem",
+    "shards",
+    "nuget",
+    "hex",
+    "nix-env",
+    "opam",
+];
+
 #[derive(Debug)]
 struct WrappedStats {
     nav_commands: usize,
@@ -47,61 +264,8 @@ impl WrappedStats {
             .map(|(_, count)| count)
             .sum();
 
-        let pkg_managers = [
-            "cargo",
-            "npm",
-            "pnpm",
-            "yarn",
-            "pip",
-            "pip3",
-            "pipenv",
-            "poetry",
-            "pipx",
-            "uv",
-            "brew",
-            "apt",
-            "apt-get",
-            "apk",
-            "pacman",
-            "yay",
-            "paru",
-            "yum",
-            "dnf",
-            "dnf5",
-            "rpm",
-            "rpm-ostree",
-            "zypper",
-            "pkg",
-            "chocolatey",
-            "choco",
-            "scoop",
-            "winget",
-            "gem",
-            "bundle",
-            "shards",
-            "composer",
-            "gradle",
-            "maven",
-            "mvn",
-            "go get",
-            "nuget",
-            "dotnet",
-            "mix",
-            "hex",
-            "rebar3",
-            "nix",
-            "nix-env",
-            "cabal",
-            "opam",
-        ];
-
-        let pkg_commands = history
-            .iter()
-            .filter(|h| {
-                let cmd = h.command.clone();
-                pkg_managers.iter().any(|pm| cmd.starts_with(pm))
-            })
-            .count();
+        let pkg_commands =
+            history.iter().filter(|h| is_package_command(settings, &h.command)).count();
 
         // Error analysis
         let mut command_errors: HashMap<String, (usize, usize)> = HashMap::new(); // (total_uses, errors)
@@ -346,10 +510,149 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use atuin_client::history::History;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use time::macros::datetime;
 
     use super::*;
+
+    #[fixture]
+    fn history() -> History {
+        History::import()
+            .timestamp(datetime!(2024-01-01 0:00 UTC))
+            .command("echo hello")
+            .build()
+            .into()
+    }
+
+    #[rstest]
+    #[case("cargo add serde", 1)]
+    #[case("cargo remove serde", 1)]
+    #[case("cargo install atuin", 1)]
+    #[case("cargo +nightly install atuin", 1)]
+    #[case("cargo build", 0)]
+    #[case("cargo test", 0)]
+    #[case("cargo check", 0)]
+    #[case("cargo r", 0)]
+    #[case("cargo run", 0)]
+    #[case("cargo +nightly fmt", 0)]
+    #[case("uv add requests", 1)]
+    #[case("uv pip install requests", 1)]
+    #[case("uv tool install ruff", 1)]
+    #[case("uv tool run ruff", 0)]
+    #[case("uv run python script.py", 0)]
+    #[case("uv venv", 0)]
+    #[case("npm install", 1)]
+    #[case("npm i", 1)]
+    #[case("npm un typescript", 1)]
+    #[case("npm ci", 1)]
+    #[case("npm --prefix ./app install", 1)]
+    #[case("npm --prefix=./app install", 1)]
+    #[case("npm --prefix './my app' install", 1)]
+    #[case("npm --registry https://registry.npmjs.org install", 1)]
+    #[case("npm --workspace app install", 1)]
+    #[case("npm --prefix install run build", 0)]
+    #[case("npm --prefix ./app run build", 0)]
+    #[case("uv --directory ./app add requests", 1)]
+    #[case("uv --directory=./app add requests", 1)]
+    #[case("uv --directory './my app' add requests", 1)]
+    #[case("uv --project ./app sync", 1)]
+    #[case("uv --directory add run python", 0)]
+    #[case("uv --directory ./app run python", 0)]
+    #[case("pnpm -C ./app add typescript", 1)]
+    #[case("pnpm --filter app add typescript", 1)]
+    #[case("pnpm --filter add exec tsc", 0)]
+    #[case("yarn --cwd ./app", 1)]
+    #[case("yarn --cwd ./app start", 0)]
+    #[case("bundle --gemfile ./Gemfile", 1)]
+    #[case("cargo --color always add serde", 1)]
+    #[case("cargo +nightly -Z unstable-options install atuin", 1)]
+    #[case("cargo --config install build", 0)]
+    #[case("poetry -C ./app add requests", 1)]
+    #[case("composer --working-dir ./app require monolog/monolog", 1)]
+    #[case("go -C ./app mod tidy", 1)]
+    #[case("npm run build", 0)]
+    #[case("npm test", 0)]
+    #[case("pnpm add typescript", 1)]
+    #[case("pnpm i", 1)]
+    #[case("pnpm exec tsc", 0)]
+    #[case("yarn", 1)]
+    #[case("yarn add typescript", 1)]
+    #[case("yarn start", 0)]
+    #[case("pipenv install", 1)]
+    #[case("pipenv run python", 0)]
+    #[case("poetry add requests", 1)]
+    #[case("poetry run python", 0)]
+    #[case("bundle install", 1)]
+    #[case("bundle", 1)]
+    #[case("bundle exec rake", 0)]
+    #[case("composer require monolog/monolog", 1)]
+    #[case("composer run-script test", 0)]
+    #[case("dotnet add package Newtonsoft.Json", 1)]
+    #[case("dotnet add MyApp.csproj package Newtonsoft.Json", 1)]
+    #[case("dotnet list MyApp.csproj package", 1)]
+    #[case("dotnet remove MyApp.csproj package Newtonsoft.Json", 1)]
+    #[case("dotnet add 'My App.csproj' package Newtonsoft.Json", 1)]
+    #[case("dotnet list MySolution.sln package", 1)]
+    #[case("dotnet add MyApp.csproj reference Other.csproj", 0)]
+    #[case("dotnet list MyApp.csproj reference", 0)]
+    #[case("dotnet remove MyApp.csproj reference Other.csproj", 0)]
+    #[case("dotnet add reference package", 0)]
+    #[case("dotnet list reference package", 0)]
+    #[case("dotnet restore", 1)]
+    #[case("dotnet run", 0)]
+    #[case("dotnet add reference Other.csproj", 0)]
+    #[case("dotnet tool run dotnetsay", 0)]
+    #[case("mix deps.get", 1)]
+    #[case("mix test", 0)]
+    #[case("rebar3 get-deps", 1)]
+    #[case("rebar3 compile", 0)]
+    #[case("cabal install hlint", 1)]
+    #[case("cabal v2-install hlint", 1)]
+    #[case("cabal v2-build", 0)]
+    #[case("cabal build", 0)]
+    #[case("go get example.com/pkg", 1)]
+    #[case("go mod tidy", 1)]
+    #[case("go build", 0)]
+    #[case("nix profile install nixpkgs#hello", 1)]
+    #[case("nix flake update", 1)]
+    #[case("nix build", 0)]
+    #[case("gradle dependencies", 1)]
+    #[case("gradle build", 0)]
+    #[case("mvn dependency:resolve", 1)]
+    #[case("mvn test", 0)]
+    #[case("sudo apt install hello", 1)]
+    #[case(" \t doas apk add hello", 1)]
+    #[case("pip install requests", 1)]
+    #[case(r"pip install C:\projects\demo\", 1)]
+    #[case(r"npm install C:\projects\demo\", 1)]
+    #[case(r"uv pip install C:\projects\demo\", 1)]
+    #[case(r"cargo install --path C:\projects\demo\", 1)]
+    #[case(r"dotnet add MyApp.csproj package Newtonsoft.Json --configfile C:\config\", 1)]
+    #[case(r"npm run build C:\projects\demo\", 0)]
+    #[case(r"uv run python C:\projects\demo\", 0)]
+    #[case(r"dotnet list MyApp.csproj reference C:\projects\demo\", 0)]
+    #[case("brew upgrade", 1)]
+    #[case("pacman -S hello", 1)]
+    #[case("nix-env -i hello", 1)]
+    #[case("cargo-watch", 0)]
+    #[case("npm-not-a-package-manager", 0)]
+    #[case("go getty", 0)]
+    #[case("echo cargo install atuin", 0)]
+    #[case("", 0)]
+    fn package_count_excludes_development_commands(
+        mut history: History,
+        #[case] command: &str,
+        #[case] expected: usize,
+    ) {
+        history.command = command.to_owned();
+        let stats = Stats {
+            total_commands: 1,
+            unique_commands: 1,
+            top: vec![],
+        };
+        let wrapped = WrappedStats::new(&Settings::utc(), &stats, &[history], &HashMap::new());
+        assert_eq!(wrapped.pkg_commands, expected);
+    }
 
     #[rstest]
     #[case::default_prefix(None, "sudo echo hello", "echo")]
