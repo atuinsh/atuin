@@ -4,6 +4,7 @@ pub mod model;
 pub mod patch;
 pub mod synthetic;
 
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -11,6 +12,7 @@ use std::time::{Duration, SystemTime};
 pub use checkpoint::Checkpoint;
 use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
+use futures::stream::AbortHandle;
 use futures::{Stream, StreamExt, TryStreamExt};
 pub use model::{
     Content, MessageId, ParentKind, Role, SessionEvent, SessionId, StopReason, TitleChange,
@@ -196,11 +198,13 @@ pub trait Listener {
     /// from its beginning when it no longer names what it was taken after
     /// ([`Session::messages_from`]). A session with none is read, whole, only once it changes
     /// after `since` ([`Session::changed_after`]): one nobody touches since is history, left to
-    /// an import.
+    /// an import. `checkpointed` names the sessions with one stored as this starts: only those are
+    /// asked for theirs at once, the rest once they change.
     fn events<F>(
         self,
         since: SystemTime,
-        checkpoint: impl Fn(&SessionId) -> F + Clone + Send + 'static,
+        mut checkpointed: HashSet<SessionId>,
+        checkpoint: impl Fn(&SessionId) -> F + Send + 'static,
     ) -> impl Stream<Item = Result<SessionEvent<<Self::Session as Session>::Message>, CaptureError>>
     + Send
     + 'static
@@ -211,63 +215,77 @@ pub trait Listener {
         let sessions = self.watch();
         async_stream::stream! {
             let mut active = futures::stream::SelectAll::new();
-            // One live stream per transcript. A session the watcher reports again (the file
-            // removed and recreated, or renamed back) replaces the old stream: its buffered
+            // Sessions without a checkpoint, until they change after `since`: bare waits, as
+            // most of them never do.
+            let mut waiting = futures::stream::FuturesUnordered::new();
+            // One live read per transcript. A session the watcher reports again (the file
+            // removed and recreated, or renamed back) ends its old read at once: its buffered
             // lines would otherwise interleave with the new one and could move the checkpoint
-            // backwards. ponytail: handles are kept for every session ever seen; prune on end
-            // if the map ever matters.
-            let mut handles: std::collections::HashMap<SessionId, futures::stream::AbortHandle> =
-                std::collections::HashMap::new();
+            // backwards. ponytail: a handle outlives its read, which only ends once its file is
+            // removed; prune on end, guarding against a replaced read's end, if the map ever
+            // matters.
+            let mut handles: HashMap<SessionId, AbortHandle> = HashMap::new();
             futures::pin_mut!(sessions);
             let mut sessions_done = false;
             loop {
-                if sessions_done && active.is_empty() {
+                if sessions_done && active.is_empty() && waiting.is_empty() {
                     break;
                 }
-                tokio::select! {
+                let start = tokio::select! {
                     biased;
                     appeared = sessions.next(), if !sessions_done => match appeared {
                         Some(Ok(session)) => {
                             let id = session.id();
-                            let from = checkpoint(&id).await;
-                            let tag = id.clone();
-                            let checkpoint = checkpoint.clone();
-                            let changed = futures::stream::once(async move {
-                                match from {
-                                    Some(_) => Some((session, from)),
-                                    None => {
-                                        let session = session.changed_after(since).await?;
-                                        // An import may have stored it meanwhile.
-                                        let from = checkpoint(&session.id()).await;
-                                        Some((session, from))
+                            let stored = checkpointed.contains(&id);
+                            let from = if stored { checkpoint(&id).await } else { None };
+                            match from {
+                                Some(_) => Some((session, from)),
+                                None => {
+                                    if let Some(old) = handles.remove(&id) {
+                                        old.abort();
                                     }
+                                    waiting.push(session.changed_after(since));
+                                    None
                                 }
-                            });
-                            let messages = changed
-                                .filter_map(std::future::ready)
-                                .flat_map(|(session, from)| session.messages_from(from));
-                            let (tagged, handle) = futures::stream::abortable(
-                                messages.map(move |item| (tag.clone(), item)),
-                            );
-                            if let Some(old) = handles.insert(id, handle) {
-                                old.abort();
                             }
-                            active.push(tagged.boxed());
                         }
-                        Some(Err(err)) => yield Err(CaptureError::from(err)),
-                        None => sessions_done = true,
+                        Some(Err(err)) => {
+                            yield Err(CaptureError::from(err));
+                            None
+                        }
+                        None => {
+                            sessions_done = true;
+                            None
+                        }
+                    },
+                    changed = waiting.next(), if !waiting.is_empty() => match changed.flatten() {
+                        Some(session) => {
+                            // An import may have stored it meanwhile.
+                            let from = checkpoint(&session.id()).await;
+                            Some((session, from))
+                        }
+                        None => None,
                     },
                     tagged = active.next(), if !active.is_empty() => {
-                        if let Some((session, result)) = tagged {
-                            match result {
-                                Ok((at, message)) => {
-                                    yield Ok(SessionEvent { session, checkpoint: at, message });
-                                }
-                                Err(source) => yield Err(CaptureError::Message { session, source }),
+                        let Some((session, result)) = tagged else { continue };
+                        match result {
+                            Ok((at, message)) => {
+                                yield Ok(SessionEvent { session, checkpoint: at, message });
                             }
+                            Err(source) => yield Err(CaptureError::Message { session, source }),
                         }
+                        None
                     }
+                };
+                let Some((session, from)) = start else { continue };
+                let id = session.id();
+                // Its read may store a checkpoint: reported again, it resumes from it at once.
+                checkpointed.insert(id.clone());
+                let (messages, handle) = futures::stream::abortable(session.messages_from(from));
+                if let Some(old) = handles.insert(id.clone(), handle) {
+                    old.abort();
                 }
+                active.push(messages.map(move |item| (id.clone(), item)).boxed());
             }
         }
     }
@@ -341,11 +359,13 @@ mod tests {
     }
 
     /// A transcript that yields a message at each of the given positions, then either ends or
-    /// hangs like a live file waiting for more.
+    /// hangs like a live file waiting for more. Changed after `since` if it `changes`, else gone
+    /// before it ever was.
     struct StubSession {
         id: &'static str,
         offsets: Vec<u64>,
         hang: bool,
+        changes: bool,
     }
 
     impl Session for StubSession {
@@ -380,52 +400,101 @@ mod tests {
         fn read(&self) -> impl Stream<Item = Result<StubMsg, MessageError>> + Send + 'static {
             futures::stream::empty()
         }
+
+        fn changed_after(self, _since: SystemTime) -> impl Future<Output = Option<Self>> + Send {
+            std::future::ready(self.changes.then_some(self))
+        }
     }
 
-    /// Reports `first` at once and `second` shortly after, as a watcher does for a transcript
-    /// that is removed and recreated.
+    /// Reports each session 50 ms after the one before, as a watcher does for a transcript that
+    /// is removed and recreated. The tests pause time, so that is once everything before it has
+    /// settled.
     struct StubListener {
-        first: StubSession,
-        second: StubSession,
+        reports: Vec<StubSession>,
     }
 
     impl Listener for StubListener {
         type Session = StubSession;
 
         fn watch(self) -> impl Stream<Item = Result<StubSession, WatchError>> + Send + 'static {
-            let second = self.second;
-            futures::stream::iter([Ok(self.first)]).chain(futures::stream::once(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                Ok(second)
-            }))
+            futures::stream::iter(self.reports).then(|session| async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok(session)
+            })
         }
     }
 
-    /// A session reported twice keeps only its newest stream: the first stream hangs like a
-    /// live transcript, and without replacement `events()` would never end.
+    const ANY: Checkpoint = Checkpoint {
+        at: 0,
+        digest: 0,
+        generation: 0,
+    };
+
+    /// A session reported twice keeps only its newest read: the first hangs like a live
+    /// transcript, and without replacement `events()` would never end.
     #[rstest]
-    #[tokio::test]
-    async fn a_reported_again_session_replaces_its_earlier_stream() {
-        let listener = StubListener {
-            first: StubSession {
-                id: "s",
-                offsets: vec![1],
-                hang: true,
-            },
-            second: StubSession {
-                id: "s",
-                offsets: vec![2],
-                hang: false,
-            },
+    #[tokio::test(start_paused = true)]
+    async fn a_reported_again_session_replaces_its_earlier_read(
+        #[values(false, true)] stored: bool,
+    ) {
+        let report = |at, hang| StubSession {
+            id: "s",
+            offsets: vec![at],
+            hang,
+            changes: true,
         };
-        let events = listener.events(SystemTime::UNIX_EPOCH, |_| async { None });
+        let listener = StubListener {
+            reports: vec![report(1, true), report(2, false)],
+        };
+        let checkpointed = stored.then(|| SessionId::from("s".to_owned())).into_iter().collect();
+        let from = stored.then_some(ANY);
+        let events = listener
+            .events(SystemTime::UNIX_EPOCH, checkpointed, move |_| std::future::ready(from));
         let offsets: Vec<u64> = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            Duration::from_secs(5),
             events.map(|ev| ev.unwrap().checkpoint.at).collect(),
         )
         .await
-        .expect("the replaced stream must not keep events() alive");
+        .expect("a replaced read must not keep events() alive");
         assert_eq!(offsets, vec![1, 2]);
+    }
+
+    /// Only a session with a checkpoint stored is asked for it at once; any other is asked, and
+    /// read, once it changes after `since`, and never if it doesn't.
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn a_session_without_a_checkpoint_is_asked_for_one_only_once_it_changes() {
+        let session = |id, at, changes| StubSession {
+            id,
+            offsets: vec![at],
+            hang: false,
+            changes,
+        };
+        let listener = StubListener {
+            reports: vec![
+                session("stored", 1, false),
+                session("untouched", 2, false),
+                session("changed", 3, true),
+            ],
+        };
+        let asked = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let checkpoint = {
+            let asked = std::sync::Arc::clone(&asked);
+            move |id: &SessionId| {
+                asked.lock().push(id.to_string());
+                std::future::ready(Some(ANY))
+            }
+        };
+        let checkpointed = HashSet::from([SessionId::from("stored".to_owned())]);
+        let events = listener.events(SystemTime::UNIX_EPOCH, checkpointed, checkpoint);
+        let read: Vec<u64> = tokio::time::timeout(
+            Duration::from_secs(5),
+            events.map(|ev| ev.unwrap().checkpoint.at).collect(),
+        )
+        .await
+        .expect("events() did not end");
+        assert_eq!(read, vec![1, 3]);
+        assert_eq!(*asked.lock(), ["stored", "changed"]);
     }
 
     #[derive(Debug, Clone, Copy)]
