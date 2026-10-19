@@ -168,16 +168,20 @@ pub fn init_script(shell: Shell) -> &'static str {
 /// spawns the same binary that sourced the init, rather than resolving via `$PATH` (which can
 /// pick the wrong installation when the user has, for instance, both `/usr/bin/bash` and
 /// `/opt/homebrew/bin/bash`).
-const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]] &&
-  [[ -z ${__atuin_pty_proxy_owns_tty-} ]]
-then
-  __atuin_pty_proxy_owns_tty=0
+const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+  if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
+    if __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null) &&
+      [[ $__atuin_pty_proxy_answer = 1 ]]
+    then
+      __atuin_pty_proxy_owns_tty=1
+    else
+      __atuin_pty_proxy_owns_tty=0
+    fi
+  fi
 
-  # Check whether this terminal is already running in an Atuin PTY proxy.
-  if ! __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null); then
+  if [[ $__atuin_pty_proxy_owns_tty = 1 ]]; then
+    # This terminal is already running in an Atuin PTY proxy.
     :
-  elif [[ $__atuin_pty_proxy_answer = 1 ]]; then
-    __atuin_pty_proxy_owns_tty=1
   elif [[ -n ${ATUIN_PTY_PROXY_FAILED-} ]]; then
     # If the PTY proxy failed to spawn its server, stop here instead of endlessly
     # trying to spawn more proxies.
@@ -215,16 +219,17 @@ fi
 // on stdin, making it necessarily not a tty. This is also why we do `</dev/tty` when invoking
 // `atuin pty-proxy` if stdin is not a terminal.
 const FISH_INIT: &str = r#"if status is-interactive; and test -t 1
-    and not set -q __atuin_pty_proxy_owns_tty
+    if not set -q __atuin_pty_proxy_owns_tty
+        set -g __atuin_pty_proxy_owns_tty 0
+        set -l __atuin_pty_proxy_answer (atuin __internal pty-proxy-active 2>/dev/null)
+        if test $status -eq 0; and test "$__atuin_pty_proxy_answer" = 1
+            set -g __atuin_pty_proxy_owns_tty 1
+        else
+            set -g __atuin_pty_proxy_owns_tty 0
+        end
+    end
 
-    set -g __atuin_pty_proxy_owns_tty 0
-    set -l __atuin_pty_proxy_answer (atuin __internal pty-proxy-active 2>/dev/null)
-    set -l __atuin_pty_proxy_status $status
-
-    if test $__atuin_pty_proxy_status -ne 0
-    else if test "$__atuin_pty_proxy_answer" = 1
-        set -g __atuin_pty_proxy_owns_tty 1
-    else if not set -q ATUIN_PTY_PROXY_FAILED
+    if test "$__atuin_pty_proxy_owns_tty" != 1; and not set -q ATUIN_PTY_PROXY_FAILED
         set __atuin_pty_proxy_args --shell (status fish-path)
         if status is-login
             set -a __atuin_pty_proxy_args --shell -l
@@ -242,17 +247,18 @@ end
 ///
 /// Nushell cannot dynamically source the output of `atuin init nu`, so only the pty-proxy
 /// preamble is emitted here; users must also set up `atuin init nu` separately.
-const NU_INIT: &str = r#"if (is-terminal --stdin) and (is-terminal --stdout) and ('__atuin_pty_proxy' not-in $env) {
-    # Use a record rather than a plain string so the variable doesn't get exported
-    # to child processes -- we want each child shell to perform its own detection.
-    $env.__atuin_pty_proxy = { owns_tty: false }
+const NU_INIT: &str = r#"if (is-terminal --stdin) and (is-terminal --stdout) {
+    if '__atuin_pty_proxy' not-in $env {
+        let atuin_proxy_check = (do -i { atuin __internal pty-proxy-active } | complete)
 
-    let atuin_proxy_check = (do -i { atuin __internal pty-proxy-active } | complete)
+        # Use a record rather than a plain string so the variable doesn't get exported
+        # to child processes -- we want each child shell to perform its own detection.
+        $env.__atuin_pty_proxy = { owns_tty: (
+            $atuin_proxy_check.exit_code == 0 and ($atuin_proxy_check.stdout | str trim) == "1"
+        ) }
+    }
 
-    if $atuin_proxy_check.exit_code != 0 {
-    } else if ($atuin_proxy_check.stdout | str trim) == "1" {
-        $env.__atuin_pty_proxy = { owns_tty: true }
-    } else if ('ATUIN_PTY_PROXY_FAILED' not-in $env) {
+    if not $env.__atuin_pty_proxy.owns_tty and 'ATUIN_PTY_PROXY_FAILED' not-in $env {
         mut pty_proxy_args = [--shell $nu.current-exe]
         if $nu.is-login {
             $pty_proxy_args = ($pty_proxy_args ++ [--shell -l])
