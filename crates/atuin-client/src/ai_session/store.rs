@@ -21,9 +21,13 @@ use crate::record::sqlite_store::SqliteStore;
 const RECORD_ZSTD_LEVEL: i32 = 3;
 
 /// Records read from the record store at a time while reprojecting, each page appended in one
-/// transaction: fewer, larger commits flush and merge the search index far less often. A page
-/// holds capture off for as long as it takes to append (a fraction of a second).
-const REPROJECT_PAGE: u64 = 4096;
+/// transaction. A page holds capture off for as long as it takes to append (a fraction of a
+/// second).
+///
+/// Two pages are in memory at once, one appending while the next is read and decoded, so the page
+/// bounds what a replay holds: a full replay peaked near 150 MB at 4096 and 65 MB at 512, in about
+/// the same time. 512 still decodes on up to 8 threads and commits hundreds of rows at a time.
+const REPROJECT_PAGE: u64 = 512;
 
 /// How many times one reprojection starts over after an invalidation lands in the middle of it.
 /// Past that it gives up for now with [`BuildError::Incomplete`]: the invalidation cleared the
