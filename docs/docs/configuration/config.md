@@ -528,7 +528,7 @@ stored at all. Add patterns of your own with
 
 ### macOS Ctrl-n key shortcuts
 
-Default: `true`
+Default: `false`
 
 macOS doesn't have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. _However_, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
 
