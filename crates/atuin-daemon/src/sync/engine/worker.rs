@@ -196,6 +196,13 @@ impl Worker {
             return Err(SyncTickError::NotLoggedIn);
         }
 
+        let caps = self.handle.caps();
+        if !caps.is_fetched()
+            && let Err(e) = caps.refresh().await
+        {
+            tracing::warn!("failed to fetch the server's capabilities: {e}");
+        }
+
         // Perform the sync
         //
         // TODO(markovejnovic): The fact that we rebuild the SyncSession on every single iteration

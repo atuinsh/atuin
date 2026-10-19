@@ -302,9 +302,14 @@ pub fn caps_client(settings: &Arc<Settings>) -> Result<Arc<CapClient>> {
         })
     });
 
+    let http = caps_http(&settings.extra_headers)?
+        .connect_timeout(settings.network_connect_timeout)
+        .timeout(settings.network_timeout)
+        .build()?;
+
     Ok(CapClient::new_with_auth(
         settings.sync_address.append_path("api/v0/capabilities")?,
-        caps_http(&settings.extra_headers)?,
+        http,
         Some(auth),
     ))
 }
@@ -315,15 +320,18 @@ pub fn caps_client_anonymous(
     sync_addr: &Url,
     extra_headers: &HashMap<String, SecretString>,
 ) -> Result<Arc<CapClient>> {
-    Ok(CapClient::new(sync_addr.append_path("api/v0/capabilities")?, caps_http(extra_headers)?))
+    Ok(CapClient::new(
+        sync_addr.append_path("api/v0/capabilities")?,
+        caps_http(extra_headers)?.build()?,
+    ))
 }
 
-fn caps_http(extra_headers: &HashMap<String, SecretString>) -> Result<reqwest::Client> {
+fn caps_http(extra_headers: &HashMap<String, SecretString>) -> Result<reqwest::ClientBuilder> {
     let mut headers = extra_headers_map(extra_headers)?;
     headers.insert(USER_AGENT, APP_USER_AGENT.parse()?);
     headers.insert(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION.parse()?);
 
-    Ok(client_builder(extra_headers).default_headers(headers).build()?)
+    Ok(client_builder(extra_headers).default_headers(headers))
 }
 
 /// A pending records download for one series, produced by [`Client::records`].
