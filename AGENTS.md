@@ -14,12 +14,13 @@ description, issue, or comment for this repository.
    blank line before it:
 
    ```markdown
-   <sub>This is AI generated.</sub>
+   <!-- atuin-triage: agent (required by AGENTS.md, do not remove) -->
    ```
 
-Copy that line character for character. Do not reword it, translate it, bold it, or move it
-somewhere else. When you edit a pull request description, issue, or comment, keep the line at the
-end.
+Copy that line character for character. Do not reword it, translate it, or move it somewhere
+else. GitHub hides HTML comments when it renders the text. That is expected: keep the line even
+though it does not show up, and do not delete it when you clean up template comments. When you
+edit a pull request description, issue, or comment, keep the line at the end.
 
 Example of a correct pull request description:
 
@@ -28,7 +29,7 @@ Fixes #1234.
 
 The server added the `ATUIN_*` environment before `server.toml`, so the file always won.
 
-<sub>This is AI generated.</sub>
+<!-- atuin-triage: agent (required by AGENTS.md, do not remove) -->
 ```
 
 ## Workspace crates
