@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use atuin_client::history::History;
-use atuin_client::settings::{UiColumn, UiColumnType};
+use atuin_client::settings::{Ui, UiColumnType, UiTimePrecision};
 use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::align::Alignment;
 use atuin_common::string::ellipsis::{Indicator, Pos};
@@ -31,7 +31,6 @@ impl HistoryHighlighter<'_> {
     }
 }
 
-#[allow(clippy::struct_excessive_bools)]
 pub struct HistoryList<'a> {
     history: &'a [History],
     block: Option<Block<'a>>,
@@ -45,9 +44,7 @@ pub struct HistoryList<'a> {
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
-    syntax_highlight: bool,
-    /// Columns to display (in order, after the indicator)
-    columns: &'a [UiColumn],
+    ui: &'a Ui,
 }
 
 #[derive(Default)]
@@ -108,8 +105,7 @@ impl StatefulWidget for HistoryList<'_> {
             theme: self.theme,
             history_highlighter: self.history_highlighter,
             show_numeric_shortcuts: self.show_numeric_shortcuts,
-            syntax_highlight: self.syntax_highlight,
-            columns: self.columns,
+            ui: self.ui,
         };
 
         for item in self.history.iter().skip(state.offset).take(end - start) {
@@ -134,8 +130,7 @@ impl<'a> HistoryList<'a> {
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
         show_numeric_shortcuts: bool,
-        syntax_highlight: bool,
-        columns: &'a [UiColumn],
+        ui: &'a Ui,
     ) -> Self {
         Self {
             history,
@@ -148,8 +143,7 @@ impl<'a> HistoryList<'a> {
             theme,
             history_highlighter,
             show_numeric_shortcuts,
-            syntax_highlight,
-            columns,
+            ui,
         }
     }
 
@@ -173,7 +167,6 @@ impl<'a> HistoryList<'a> {
     }
 }
 
-#[allow(clippy::struct_excessive_bools)]
 struct DrawState<'a> {
     buf: &'a mut Buffer,
     list_area: Rect,
@@ -189,8 +182,7 @@ struct DrawState<'a> {
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
     show_numeric_shortcuts: bool,
-    syntax_highlight: bool,
-    columns: &'a [UiColumn],
+    ui: &'a Ui,
 }
 
 // these encode the slices of `" > "`, `" {n} "`, or `"   "` in a compact form.
@@ -206,12 +198,13 @@ impl DrawState<'_> {
         // Calculate the width for the expanding column
         // Fixed columns use their configured width + 1 (trailing space)
         let indicator_width: u16 = 3;
-        let fixed_width: u16 = self.columns.iter().filter(|c| !c.expand).map(|c| c.width + 1).sum();
+        let fixed_width: u16 =
+            self.ui.columns.iter().filter(|c| !c.expand).map(|c| c.width + 1).sum();
         let expand_width = self.list_area.width.saturating_sub(indicator_width + fixed_width);
 
         let style = self.theme.as_style(Meaning::Base);
         // Render each configured column
-        for (idx, column) in self.columns.iter().enumerate() {
+        for (idx, column) in self.ui.columns.iter().enumerate() {
             if idx != 0 {
                 self.draw(" ", Style::from_crossterm(style));
             }
@@ -282,11 +275,19 @@ impl DrawState<'_> {
     fn time(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Guidance);
 
-        let time = (self.now)().saturating_duration_since(h.timestamp).display().largest_unit();
-
-        // Format as "Xs ago" right-aligned within column width
+        let elapsed = (self.now)().saturating_duration_since(h.timestamp);
         let w = usize::conv(width);
-        let time_str = format!("{time} ago");
+        let minimum = match self.ui.time_precision {
+            UiTimePrecision::Exact => None,
+            UiTimePrecision::Second => Some(Duration::from_secs(1)),
+            UiTimePrecision::Minute => Some(Duration::from_mins(1)),
+        };
+        let time_str = match minimum {
+            Some(minimum) if elapsed < minimum => {
+                format!("<{} ago", minimum.display().largest_unit())
+            }
+            _ => format!("{} ago", elapsed.display().largest_unit()),
+        };
 
         let display = time_str.pad_ellipsize(
             Measure::Columns(w),
@@ -316,7 +317,7 @@ impl DrawState<'_> {
         let highlight_indices = self.history_highlighter.get_highlight_indices(&normalized);
 
         // The selected row keeps its single highlight color.
-        let syntax = if self.syntax_highlight && !row_highlighted {
+        let syntax = if self.ui.syntax_highlight && !row_highlighted {
             syntax::classify(&normalized, h.shell.as_deref())
         } else {
             Vec::new()

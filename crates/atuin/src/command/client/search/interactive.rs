@@ -9,7 +9,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{
     CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
-    SearchMode, Settings, UiColumn,
+    SearchMode, Settings, Ui,
 };
 use atuin_common::shell::Shell;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
@@ -1151,8 +1151,7 @@ impl State {
                     theme,
                     history_highlighter,
                     settings.show_numeric_shortcuts,
-                    settings.ui.syntax_highlight,
-                    &settings.ui.columns,
+                    &settings.ui,
                 );
                 f.render_stateful_widget(results_list, results_list_chunk, &mut self.results_state);
             }
@@ -1368,8 +1367,7 @@ impl State {
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
         show_numeric_shortcuts: bool,
-        syntax_highlight: bool,
-        columns: &'a [UiColumn],
+        ui: &'a Ui,
     ) -> HistoryList<'a> {
         let results_list = HistoryList::new(
             results,
@@ -1381,8 +1379,7 @@ impl State {
             theme,
             history_highlighter,
             show_numeric_shortcuts,
-            syntax_highlight,
-            columns,
+            ui,
         );
 
         match style.compactness {
@@ -2997,6 +2994,74 @@ mod tests {
 
         let result = state.execute_action(&Action::AcceptNth(3), &settings);
         assert!(matches!(result, super::InputAction::Accept(8)));
+    }
+
+    #[fixture]
+    fn time_themes() -> atuin_client::theme::ThemeManager {
+        atuin_client::theme::ThemeManagerOptions {
+            debug: true,
+            builtin_only: true,
+        }
+        .build()
+    }
+
+    #[rstest]
+    #[case::exact_seconds(
+        atuin_client::settings::UiTimePrecision::Exact,
+        45_000_000_000,
+        "45s ago"
+    )]
+    #[case::exact_millis(atuin_client::settings::UiTimePrecision::Exact, 1_000_000, "1ms ago")]
+    #[case::second_zero(atuin_client::settings::UiTimePrecision::Second, 0, "<1s ago")]
+    #[case::below_second(atuin_client::settings::UiTimePrecision::Second, 999_999_999, "<1s ago")]
+    #[case::at_second(atuin_client::settings::UiTimePrecision::Second, 1_000_000_000, "1s ago")]
+    #[case::minute_zero(atuin_client::settings::UiTimePrecision::Minute, 0, "<1m ago")]
+    #[case::minute_millis(atuin_client::settings::UiTimePrecision::Minute, 1_000_000, "<1m ago")]
+    #[case::below_minute(
+        atuin_client::settings::UiTimePrecision::Minute,
+        59_999_999_999,
+        "<1m ago"
+    )]
+    #[case::at_minute(atuin_client::settings::UiTimePrecision::Minute, 60_000_000_000, "1m ago")]
+    #[case::after_minute(atuin_client::settings::UiTimePrecision::Minute, 61_000_000_000, "1m ago")]
+    #[case::hour(atuin_client::settings::UiTimePrecision::Minute, 3_600_000_000_000, "1h ago")]
+    #[case::future(atuin_client::settings::UiTimePrecision::Minute, -1_000_000_000, "<1m ago")]
+    fn time_precision_renders_in_search(
+        #[with(KeymapMode::Emacs, 1)] mut state: State,
+        mut time_themes: atuin_client::theme::ThemeManager,
+        #[case] precision: atuin_client::settings::UiTimePrecision,
+        #[case] age_ns: i64,
+        #[case] expected: &str,
+        #[values(8, 9)] width: u16,
+    ) {
+        use atuin_client::settings::{UiColumn, UiColumnType};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::buffer::Cell;
+
+        let mut settings = Settings::utc();
+        settings.ui.time_precision = precision;
+        settings.show_preview = false;
+        settings.show_help = false;
+        settings.show_tabs = false;
+        settings.ui.columns = vec![
+            UiColumn::with_width(UiColumnType::Time, width),
+            UiColumn::new(UiColumnType::Command),
+        ];
+        let now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(2);
+        state.now = Box::new(move || now);
+        let history = [History::capture()
+            .timestamp(now - time::Duration::nanoseconds(age_ns))
+            .command("echo example")
+            .cwd("/tmp")
+            .build()
+            .into()];
+        let theme = time_themes.load_theme("(none)", None);
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|f| state.draw(f, &history, None, None, &settings, theme, false)).unwrap();
+        let text: String = terminal.backend().buffer().content().iter().map(Cell::symbol).collect();
+        assert!(text.contains("echo example"), "{text}");
+        assert!(text.contains(expected), "{text}");
     }
 
     #[rstest]

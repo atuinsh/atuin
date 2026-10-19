@@ -969,6 +969,19 @@ impl<'de> serde::Deserialize<'de> for UiColumn {
     }
 }
 
+/// Smallest unit shown by relative command ages in interactive search.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UiTimePrecision {
+    /// Preserve the exact relative age, including subsecond units.
+    #[default]
+    Exact,
+    /// Render ages below one second as `<1s ago`.
+    Second,
+    /// Render ages below one minute as `<1m ago`.
+    Minute,
+}
+
 /// UI-specific settings for the interactive search.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Ui {
@@ -982,6 +995,10 @@ pub struct Ui {
     /// Syntax highlight commands in the interactive search results.
     #[serde(default = "Ui::default_syntax_highlight")]
     pub syntax_highlight: bool,
+
+    /// Smallest unit displayed by the relative time column.
+    #[serde(default)]
+    pub time_precision: UiTimePrecision,
 }
 
 impl Ui {
@@ -1020,6 +1037,7 @@ impl Default for Ui {
         Self {
             columns: Self::default_columns(),
             syntax_highlight: Self::default_syntax_highlight(),
+            time_precision: UiTimePrecision::default(),
         }
     }
 }
@@ -1619,6 +1637,7 @@ impl Settings {
             .set_default("ai.opening.send_cwd", false)?
             .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
+            .set_default("ui.time_precision", "exact")?
             .set_default("search.filters", vec![
                 "global",
                 "host",
@@ -2002,7 +2021,7 @@ mod tests {
 
     use super::{
         AiEndpointProtocol, ConfigFile, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
-        Settings, UtcOffsetSpec,
+        Settings, UiTimePrecision, UtcOffsetSpec,
     };
 
     #[rstest]
@@ -2400,6 +2419,19 @@ mod tests {
         let settings =
             parse_settings(&format!("[output]\n{enabled}command_filter = [\"^cat \"]\n"));
         assert!(settings.output.command_filter().is_match("cat .env"));
+    }
+
+    #[rstest]
+    fn time_precision_defaults_with_a_ui_table() {
+        assert_eq!(
+            parse_settings("[ui]\ncolumns = [\"command\"]").ui.time_precision,
+            UiTimePrecision::Exact
+        );
+        assert_eq!(
+            Settings::builder().unwrap().build().unwrap().get_string("ui.time_precision").unwrap(),
+            "exact"
+        );
+        assert!(Settings::validate_str("[ui]\ntime_precision = \"hour\"").is_err());
     }
 
     #[rstest]

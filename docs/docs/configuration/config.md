@@ -1476,7 +1476,7 @@ Each column can be specified as:
 | Column      | Default Width | Description                                     |
 | ----------- | -------------- | ----------------------------------------------- |
 | `duration`  | 5              | Command execution duration (for example, "123ms")      |
-| `time`      | 8              | Relative time since execution (for example, "59m ago") |
+| `time`      | 9              | Relative time since execution (for example, "59m ago") |
 | `datetime`  | 16             | Absolute timestamp (for example, "2025-01-22 14:35")   |
 | `directory` | 20             | Working directory (truncated if too long)       |
 | `host`      | 15             | Hostname where command was run                  |
@@ -1527,6 +1527,24 @@ so commands are shown unhighlighted there.
 
 ```toml
 syntax_highlight = false
+```
+
+### `time_precision`
+
+Default: `"exact"`
+
+Set the smallest unit shown by the `time` column:
+
+- `"exact"`: retain the precise age, including fractions of a second.
+- `"second"`: show `<1s ago` for commands newer than one second.
+- `"minute"`: show `<1m ago` for commands newer than one minute.
+
+Older commands keep their usual relative age. This setting only changes display;
+search filtering and ordering still use the original timestamps.
+
+```toml
+[ui]
+time_precision = "minute"
 ```
 
 ## ai

@@ -391,6 +391,10 @@ enter_accept = true
 # height = "60%"
 
 [ui]
+## Smallest unit shown by the time column: "exact" (default), "second", or "minute".
+## Newer commands show "<1s ago" or "<1m ago" when a minimum unit is set.
+# time_precision = "exact"
+
 ## Columns to display in the interactive search, from left to right.
 ## The selection indicator (" > ") is always shown first implicitly.
 ##
@@ -400,7 +404,7 @@ enter_accept = true
 ##
 ## Available column types (with default widths):
 ##   duration  (5)  - Command execution duration (e.g., "123ms")
-##   time      (8)  - Relative time since execution (e.g., "59m ago")
+##   time      (9)  - Relative time since execution (e.g., "59m ago")
 ##   datetime  (16) - Absolute timestamp (e.g., "2025-01-22 14:35")
 ##   directory (20) - Working directory (truncated if too long)
 ##   host      (15) - Hostname where command was run
