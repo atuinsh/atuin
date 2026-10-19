@@ -27,5 +27,6 @@ atuin history list --format "{time} - {duration} - {command}"
 Supported variables
 
 ```text
-{command}, {directory}, {duration}, {user}, {host} and {time}
+{command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {exit},
+{time}, {session}, and {uuid}
 ```
