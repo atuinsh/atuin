@@ -14,7 +14,7 @@ description, issue, or comment for this repository.
    blank line before it:
 
    ```markdown
-   <!-- atuin-pr-template: v2 -->
+   <!-- atuin-pr-template-necessary-for-ci: v2 -->
    ```
 
 That line marks the text as written by an AI agent. Copy it character for character. Do not
@@ -30,7 +30,7 @@ Fixes #1234.
 
 The server added the `ATUIN_*` environment before `server.toml`, so the file always won.
 
-<!-- atuin-pr-template: v2 -->
+<!-- atuin-pr-template-necessary-for-ci: v2 -->
 ```
 
 ## Workspace crates
