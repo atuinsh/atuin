@@ -840,6 +840,8 @@ pub enum UiColumnType {
     Host,
     /// Username
     User,
+    /// Session identifier suffix
+    Session,
     /// Exit code
     Exit,
     /// The command itself (should be last, expands to fill)
@@ -858,6 +860,7 @@ impl UiColumnType {
             Self::Directory => 20,
             Self::Host => 15,
             Self::User => 10,
+            Self::Session => 6,
             Self::Exit => {
                 if cfg!(windows) {
                     11 // 32-bit integer on Windows: "-1978335212"

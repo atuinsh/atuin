@@ -3,7 +3,7 @@ use std::time::Duration;
 use atuin_client::history::History;
 use atuin_client::settings::{UiColumn, UiColumnType};
 use atuin_client::theme::{Meaning, Theme};
-use atuin_common::string::align::Alignment;
+use atuin_common::string::align::{AlignExt as _, Alignment};
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{EllipsizeExt as _, EscapeNonPrintablePosixExt as _, Measure};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt};
@@ -227,6 +227,7 @@ impl DrawState<'_> {
                 UiColumnType::Directory => self.directory(h, width),
                 UiColumnType::Host => self.host(h, width),
                 UiColumnType::User => self.user(h, width),
+                UiColumnType::Session => self.session(h, width),
                 UiColumnType::Exit => self.exit_code(h, width),
                 UiColumnType::Command => self.command(h, width),
             }
@@ -408,6 +409,16 @@ impl DrawState<'_> {
         self.draw(&display, Style::from_crossterm(style));
     }
 
+    /// Render a session ID suffix.
+    fn session(&mut self, h: &History, width: u16) {
+        let style = self.theme.as_style(Meaning::Annotation);
+        let budget = Measure::Columns(usize::from(width));
+        let session = h.session.escape_non_printable();
+        let suffix = session.ellipsize(budget, Pos::Start, Indicator::new("")).to_string();
+        let display = suffix.pad_to(budget, Alignment::Start);
+        self.draw(&display, Style::from_crossterm(style));
+    }
+
     /// Render the exit code column
     fn exit_code(&mut self, h: &History, width: u16) {
         let style = if h.success() {
@@ -437,5 +448,112 @@ impl DrawState<'_> {
 
         let w = usize::conv(self.list_area.width - self.x);
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::database::DbSearchMode;
+    use atuin_client::theme::{ThemeManager, ThemeManagerOptions};
+    use ratatui::style::Style;
+    use rstest::{fixture, rstest};
+
+    use super::*;
+    use crate::command::client::search::engines::db;
+
+    struct Renderer {
+        themes: ThemeManager,
+        engine: AnySearchEngine,
+        buffer: Buffer,
+    }
+
+    #[fixture]
+    fn renderer() -> Renderer {
+        Renderer {
+            themes: ThemeManagerOptions {
+                debug: true,
+                builtin_only: true,
+            }
+            .build(),
+            engine: db::Search(DbSearchMode::Fuzzy).into(),
+            buffer: Buffer::empty(Rect::new(0, 0, 40, 2)),
+        }
+    }
+
+    impl Renderer {
+        fn render(&mut self, sessions: &[&str], columns: &[UiColumn]) -> &Buffer {
+            let history = sessions
+                .iter()
+                .map(|session| {
+                    let mut entry: History = History::capture()
+                        .timestamp(OffsetDateTime::UNIX_EPOCH)
+                        .command("echo example")
+                        .cwd("/tmp")
+                        .build()
+                        .into();
+                    entry.session = (*session).to_owned();
+                    entry
+                })
+                .collect::<Vec<_>>();
+            let theme = self.themes.load_theme("(none)", None);
+            HistoryList::new(
+                &history,
+                true,
+                false,
+                &|| OffsetDateTime::UNIX_EPOCH,
+                UtcOffset::UTC,
+                " > ",
+                theme,
+                HistoryHighlighter {
+                    engine: &self.engine,
+                    search_input: "",
+                },
+                false,
+                false,
+                columns,
+            )
+            .render(self.buffer.area, &mut self.buffer, &mut ListState::default());
+            &self.buffer
+        }
+    }
+
+    #[rstest]
+    #[case::short_suffix("019a000000007f00abcd000000000abc", 3, "abc")]
+    #[case::custom_width("abcdef012345", 8, "ef012345")]
+    #[case::short_id("ab", 3, "ab ")]
+    #[case::empty_id("", 3, "   ")]
+    #[case::hidden("abcdef", 0, "")]
+    #[case::control("abc\x1b", 3, "c^[")]
+    #[case::wide_characters("世界", 3, "界 ")]
+    fn session_column_renders_a_padded_suffix(
+        mut renderer: Renderer,
+        #[case] session: &str,
+        #[case] width: u16,
+        #[case] expected: &str,
+    ) {
+        let columns = [
+            UiColumn::with_width(UiColumnType::Session, width),
+            UiColumn::new(UiColumnType::Command),
+        ];
+        let buffer = renderer.render(&[session], &columns);
+        let mut reference = Buffer::empty(buffer.area);
+        reference.set_string(3, 0, expected, Style::default());
+        for x in 3..3 + width {
+            assert_eq!(buffer[(x, 0)].symbol(), reference[(x, 0)].symbol());
+        }
+        assert_eq!(buffer[(4 + width, 0)].symbol(), "e");
+    }
+
+    #[rstest]
+    fn default_session_labels_distinguish_shared_uuid_prefixes(mut renderer: Renderer) {
+        let column = UiColumn::new(UiColumnType::Session);
+        let buffer = renderer.render(
+            &["019a000000007f00abcd000000000abc", "019a000000007f00abcd000000000def"],
+            &[column, UiColumn::new(UiColumnType::Command)],
+        );
+        let labels = (0..2)
+            .map(|y| (3..9).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, ["000abc", "000def"]);
     }
 }

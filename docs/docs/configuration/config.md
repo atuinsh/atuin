@@ -1481,8 +1481,15 @@ Each column can be specified as:
 | `directory` | 20             | Working directory (truncated if too long)       |
 | `host`      | 15             | Hostname where command was run                  |
 | `user`      | 10             | Username                                        |
+| `session`   | 6              | Session ID suffix                               |
 | `exit`      | 3              | Exit code (colored by success/failure)          |
 | `command`   | *              | The command itself (expands by default)         |
+
+The `session` column shows the end of the session ID, so commands from the same
+session share a label. The default is six characters. Different sessions can share
+an abbreviated label; increase the width to reduce collisions. To inspect exactly
+which commands belong to a session, press ++ctrl+o++ and switch to the Session view
+with ++s++. The column keeps labels visible across the result list while you scan.
 
 #### Column options
 
@@ -1504,6 +1511,9 @@ columns = ["duration", "time", "host", "command"]
 
 # Show exit codes prominently
 columns = ["exit", "duration", "command"]
+
+# Show each command's host and session
+columns = ["time", "host", "session", "command"]
 
 # Make directory expand instead of command
 columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]

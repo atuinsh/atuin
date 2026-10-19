@@ -405,6 +405,7 @@ enter_accept = true
 ##   directory (20) - Working directory (truncated if too long)
 ##   host      (15) - Hostname where command was run
 ##   user      (10) - Username
+##   session   (6)  - Session ID suffix (abbreviated labels can collide)
 ##   exit      (3)  - Exit code (colored by success/failure)
 ##   command   (*)  - The command itself (expands by default)
 ##
@@ -427,6 +428,9 @@ enter_accept = true
 ##
 ## Show exit codes prominently:
 # columns = ["exit", "duration", "command"]
+##
+## Show each command's host and session:
+# columns = ["time", "host", "session", "command"]
 ##
 ## Make directory expand instead of command:
 # columns = ["duration", "time", { type = "directory", expand = true }, { type = "command", expand = false }]
