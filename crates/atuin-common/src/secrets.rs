@@ -505,7 +505,7 @@ static SGR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").exp
 macro_rules! ran {
     ($command:expr) => {
         concat!(
-            r"(?:^|[;&|(`{!\n])[ \t]*(?:(?:sudo|command|exec|time|env|nohup|then|do|else)\s+|\w+=\S*\s+)*(?:\S*/)?",
+            r"(?:^|[;&|(`{!\n])[ \t]*(?:(?:sudo|command|exec|time|env|nohup|then|do|else)\s+|(?-u:\w)+=\S*\s+)*(?:\S*/)?",
             $command
         )
     };
@@ -528,9 +528,11 @@ macro_rules! executed {
 /// Commands whose output may hold a credential: Atuin's own, and other tools' that print a token,
 /// a password or a key, or the whole environment.
 ///
-/// Their word boundaries are ASCII ones: a Unicode `\b` stops the fast engines at the first
-/// non-ASCII byte, and agents' tool calls (whole files, at times) are full of them. Commands are
-/// ASCII anyway.
+/// Their word boundaries, and the variable names `ran!` skips over, are ASCII: a Unicode `\b`
+/// stops the fast engines at the first non-ASCII byte, and agents' tool calls (whole files, at
+/// times) are full of them; a Unicode `\w` grows the reverse NFA from ~8k to ~51k states, which
+/// every thread's match cache is sized to (1.4 MB a thread, against 0.4 MB). Commands are ASCII
+/// anyway.
 static OUTPUT_UNSAFE: LazyLock<RegexSet> = LazyLock::new(|| {
     let patterns = [
         executed!(r"key\b"),
@@ -1719,6 +1721,11 @@ mod tests {
     #[case::beside_non_ascii("echo 'café ☕'\natuin key", true)]
     // ASCII word boundaries: a non-ASCII letter ends a word, which errs towards withholding.
     #[case::non_ascii_suffix("atuin keyé", true)]
+    #[case::env_prefixes("AWS_PROFILE=prod _X1= printenv", true)]
+    #[case::env_prefix_non_ascii_value("GREETING=café gh auth token", true)]
+    // ASCII variable names: a non-ASCII one, which zsh and fish accept, is not skipped over. That
+    // errs towards capturing, and what is captured is still redacted.
+    #[case::env_prefix_non_ascii_name("café=1 printenv", false)]
     fn commands_whose_output_may_hold_a_credential(#[case] command: &str, #[case] unsafe_: bool) {
         assert_eq!(output_unsafe(command), unsafe_);
     }
