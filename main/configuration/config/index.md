@@ -6,6 +6,8 @@ You can configure Atuin to use a different directory by setting the `ATUIN_HOME`
 
 Additionally, if set, `ATUIN_CONFIG_DIR` will override the location of `config.toml` and [`server.toml`](https://docs.atuin.sh/self-hosting/server-setup/index.md): Atuin will look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
 
+Paths in the config may start with `~` and refer to environment variables, as in `$XDG_RUNTIME_DIR/atuin.sock`; write `$$` for a literal `$`. A relative path is relative to the directory holding `config.toml`, whatever directory Atuin runs in: with the default config, `socket_path = "atuin.sock"` is `~/.atuin/atuin.sock`. This holds for paths set through `ATUIN_*` environment variables too. A database path must name a file: SQLite's `:memory:` isn't accepted, and neither is a `sqlite:` or `file:` URI.
+
 Upgrading from older versions
 
 Older versions of Atuin stored data in `~/.config/atuin` (or `$XDG_CONFIG_HOME/atuin`) and `~/.local/share/atuin` (or `$XDG_DATA_HOME/atuin`). If `ATUIN_HOME` is unset (the default), Atuin will continue to look for data in the old locations if it doesn't find it in `~/.atuin`, so existing installations will keep working without any modifications.
