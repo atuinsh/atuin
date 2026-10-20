@@ -6,7 +6,7 @@ use std::{borrow::Cow, path::Path};
 #[cfg(unix)]
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 #[cfg(unix)]
-use atuin_common::path::{EnvDependentPathBuf, PathBufExt as _};
+use atuin_common::path::{AbsPath, AbsPathBuf, EnvDependentPathBuf, PathBufExt as _};
 // `AsDisableableDuration` is deprecated.
 #[allow(deprecated)]
 use atuin_common::time::{AsDisableableDuration, NonZeroDuration, Seconds};
@@ -172,12 +172,12 @@ impl Daemon {
                     let runtime_path =
                         self.systemd_socket.then(|| ctx.runtime_socket_path()).flatten();
                     has_runtime_path = runtime_path.is_some();
-                    (Step::DefaultPrimary, runtime_path)
+                    (Step::DefaultPrimary, runtime_path.map(PathBuf::from))
                 }
                 Step::DefaultPrimary => {
                     let default_socket_path = ctx.default_socket_path();
                     default_envless = default_socket_path.envless;
-                    (Step::Legacy, Some(default_socket_path.primary))
+                    (Step::Legacy, Some(default_socket_path.primary.into()))
                 }
                 Step::Legacy => {
                     // If `runtime_path` was `Some`, `ctx.legacy_socket_path()` will return the same
@@ -185,7 +185,7 @@ impl Daemon {
                     // in that case.
                     (Step::DefaultEnvless, (!has_runtime_path).then(|| ctx.legacy_socket_path()))
                 }
-                Step::DefaultEnvless => (Step::Done, default_envless.take()),
+                Step::DefaultEnvless => (Step::Done, default_envless.take().map(PathBuf::from)),
                 Step::Done => return None,
             };
             step = next;
@@ -202,7 +202,7 @@ impl Daemon {
 /// instance of Atuin. Non-test code should always use [`DefaultSocketCtx`].
 #[cfg(unix)]
 trait SocketCtx: Copy + Sized {
-    fn tmp_dir(&self) -> PathBuf {
+    fn tmp_dir(&self) -> AbsPathBuf {
         atuin_common::os::unix::tmp_dir()
     }
 
@@ -210,11 +210,11 @@ trait SocketCtx: Copy + Sized {
     ///
     /// This is a workaround for systems in which the daemon is spawned in an environment that
     /// has `$TMPDIR` unset, but where `$TMPDIR` *is* set when the client is run.
-    fn envless_tmp_dir(&self) -> &Path {
-        Path::new("/tmp")
+    fn envless_tmp_dir(&self) -> &AbsPath {
+        AbsPath::new("/tmp").expect("/tmp is absolute")
     }
 
-    fn runtime_dir(&self) -> Option<PathBuf> {
+    fn runtime_dir(&self) -> Option<AbsPathBuf> {
         atuin_common::env::var_abspath("XDG_RUNTIME_DIR")
     }
 
@@ -227,25 +227,31 @@ trait SocketCtx: Copy + Sized {
     }
 
     fn default_socket_path(&self) -> EnvDependentPathBuf {
-        let subdir_name = format!("atuin-{}", self.uid());
-        let make_socket_path = |tmp: PathBuf| tmp.joined(&subdir_name).joined(SOCKET_NAME);
+        let socket = PathBuf::from(format!("atuin-{}", self.uid())).joined(SOCKET_NAME);
+        let make_socket_path = |tmp: &AbsPath| {
+            tmp.resolve(&socket).expect("a relative path resolves under an absolute one on Unix")
+        };
 
         let tmp = self.tmp_dir();
         let envless_tmp = self.envless_tmp_dir();
-        let envless_tmp = (tmp != envless_tmp).then(|| PathBuf::from(envless_tmp));
 
         EnvDependentPathBuf {
-            primary: make_socket_path(tmp),
-            envless: envless_tmp.map(make_socket_path),
+            primary: make_socket_path(&tmp),
+            envless: (tmp != envless_tmp).then(|| make_socket_path(envless_tmp)),
         }
     }
 
-    fn runtime_socket_path(&self) -> Option<PathBuf> {
-        self.runtime_dir().map(|dir| dir.joined(SOCKET_NAME))
+    fn runtime_socket_path(&self) -> Option<AbsPathBuf> {
+        let dir = self.runtime_dir()?;
+        Some(
+            dir.resolve(SOCKET_NAME)
+                .expect("a relative path resolves under an absolute one on Unix"),
+        )
     }
 
     fn legacy_socket_path(&self) -> PathBuf {
-        self.runtime_socket_path().unwrap_or_else(|| self.legacy_data_dir().joined(SOCKET_NAME))
+        self.runtime_socket_path()
+            .map_or_else(|| self.legacy_data_dir().joined(SOCKET_NAME), PathBuf::from)
     }
 }
 
@@ -260,7 +266,7 @@ pub enum SocketPath<'a> {
     /// A socket path that the user has manually configured in config.toml.
     UserDefined(&'a Path),
     /// The default socket path, used when the path is not manually set in config.toml.
-    Default(PathBuf),
+    Default(AbsPathBuf),
 }
 
 #[cfg(unix)]
@@ -274,7 +280,7 @@ impl<'a> SocketPath<'a> {
             return Ok(());
         };
         let dir = path.parent().expect("default socket path always has a parent");
-        create_secure_temp_dir(dir)?;
+        create_secure_temp_dir(dir.as_path())?;
         Ok(())
     }
 
@@ -290,7 +296,7 @@ impl<'a> SocketPath<'a> {
     pub fn into_cow(self) -> Cow<'a, Path> {
         match self {
             Self::UserDefined(path) => path.into(),
-            Self::Default(path) => path.into(),
+            Self::Default(path) => path.into_path_buf().into(),
         }
     }
 
@@ -338,7 +344,7 @@ mod unix_tests {
 
     impl DefaultSocket {
         fn path(&self) -> SocketPath<'static> {
-            SocketPath::Default(self.dir.join("atuin.sock"))
+            SocketPath::Default(AbsPathBuf::new(self.dir.join("atuin.sock")).unwrap())
         }
     }
 
@@ -372,32 +378,32 @@ mod unix_tests {
     /// directories.
     #[derive(Clone, Copy)]
     struct TestCtx<'a> {
-        tmp_dir: &'a Path,
-        envless_tmp_dir: &'a Path,
-        runtime_dir: Option<&'a Path>,
+        tmp_dir: &'a AbsPath,
+        envless_tmp_dir: &'a AbsPath,
+        runtime_dir: Option<&'a AbsPath>,
     }
 
     impl Default for TestCtx<'_> {
         fn default() -> Self {
             Self {
-                tmp_dir: Path::new("/tmp"),
-                envless_tmp_dir: Path::new("/tmp"),
-                runtime_dir: Some(Path::new("/run/user/1234")),
+                tmp_dir: AbsPath::new("/tmp").unwrap(),
+                envless_tmp_dir: AbsPath::new("/tmp").unwrap(),
+                runtime_dir: AbsPath::new("/run/user/1234"),
             }
         }
     }
 
     impl SocketCtx for TestCtx<'_> {
-        fn tmp_dir(&self) -> PathBuf {
-            self.tmp_dir.into()
+        fn tmp_dir(&self) -> AbsPathBuf {
+            self.tmp_dir.to_owned()
         }
 
-        fn envless_tmp_dir(&self) -> &Path {
+        fn envless_tmp_dir(&self) -> &AbsPath {
             self.envless_tmp_dir
         }
 
-        fn runtime_dir(&self) -> Option<PathBuf> {
-            self.runtime_dir.map(Into::into)
+        fn runtime_dir(&self) -> Option<AbsPathBuf> {
+            self.runtime_dir.map(ToOwned::to_owned)
         }
 
         fn legacy_data_dir(&self) -> PathBuf {
@@ -419,7 +425,7 @@ mod unix_tests {
         #[case] expected: &str,
     ) {
         let ctx = TestCtx {
-            tmp_dir: Path::new(tmp_dir),
+            tmp_dir: AbsPath::new(tmp_dir).unwrap(),
             ..TestCtx::default()
         };
 
@@ -458,8 +464,8 @@ mod unix_tests {
     ) {
         let daemon = daemon(configured.map(PathBuf::from), systemd_socket);
         let ctx = TestCtx {
-            tmp_dir: Path::new(tmp_dir),
-            runtime_dir: runtime_dir.then_some(Path::new("/run/user/1234")),
+            tmp_dir: AbsPath::new(tmp_dir).unwrap(),
+            runtime_dir: runtime_dir.then_some(AbsPath::new("/run/user/1234").unwrap()),
             ..TestCtx::default()
         };
 
@@ -487,8 +493,9 @@ mod unix_tests {
     ) {
         // Prefix a path with `tmp`.
         let scoped = |path: &str| tmp.path().join(path.trim_start_matches('/'));
+        let scoped_abs = |path: &str| AbsPathBuf::new(scoped(path)).unwrap();
         let (tmp_dir, envless_tmp_dir, runtime_dir) =
-            (scoped(TMPDIR), scoped("/tmp"), scoped("/run/user/1234"));
+            (scoped_abs(TMPDIR), scoped_abs("/tmp"), scoped_abs("/run/user/1234"));
         let ctx = TestCtx {
             tmp_dir: &tmp_dir,
             envless_tmp_dir: &envless_tmp_dir,

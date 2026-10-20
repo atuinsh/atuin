@@ -126,7 +126,7 @@ mod tests {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
-    use atuin_common::path::PathBufExt as _;
+    use atuin_common::path::{AbsPathBuf, PathBufExt as _};
     use portable_pty::{CommandBuilder, PtyPair, PtySize, native_pty_system};
     use rstest::rstest;
 
@@ -238,7 +238,7 @@ mod tests {
     fn the_cwd_is_the_shells_while_it_is_in_the_foreground() {
         let dir = tempfile::tempdir().unwrap();
         // A working directory is never a symlink, but a temporary directory may be.
-        let expected = dir.path().canonicalize().unwrap();
+        let expected = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
         let fixture = Fixture::new(dir.path());
 
         let found = settles_on(&Some(expected.clone()), || fixture.cwd());
@@ -249,7 +249,8 @@ mod tests {
     #[rstest]
     fn the_cwd_follows_the_shell_as_it_moves() {
         let dir = tempfile::tempdir().unwrap();
-        let elsewhere = dir.path().canonicalize().unwrap().joined("elsewhere");
+        let elsewhere =
+            AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf().joined("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
         let mut fixture = Fixture::new(dir.path());
 
@@ -265,7 +266,7 @@ mod tests {
         // A multiplexer reports the directory of whatever is in the foreground, which is not the
         // shell while a job is running.
         let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().canonicalize().unwrap();
+        let home = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
         let elsewhere = home.join("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
         let mut fixture = Fixture::new(&home);
@@ -289,7 +290,7 @@ mod tests {
         // `sudo` puts a process we have no business reading in the foreground, and a process
         // group outlives the leader that names it. Either way the child is the better answer.
         let dir = tempfile::tempdir().unwrap();
-        let expected = dir.path().canonicalize().unwrap();
+        let expected = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
         // The shell starts somewhere other than the directory we expect back, so a reading
         // taken from it rather than from the fallback would be visible.
         let mut fixture = Fixture::new(Path::new("/"));
@@ -332,7 +333,7 @@ mod tests {
         // The updater keeps a copy of the descriptor precisely so that reading the terminal
         // doesn't mean holding on to the pty itself.
         let dir = tempfile::tempdir().unwrap();
-        let expected = dir.path().canonicalize().unwrap();
+        let expected = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
         let pair = open_pty();
         let mut shell = spawn_shell(&pair, dir.path());
         drop(pair.slave);

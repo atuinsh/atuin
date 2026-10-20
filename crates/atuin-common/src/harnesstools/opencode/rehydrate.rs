@@ -1112,6 +1112,7 @@ pub(crate) mod tests {
     use crate::harnesstools::opencode::session::OpencodeSessions;
     use crate::harnesstools::rehydrate::testing;
     use crate::harnesstools::session::{Message, Session, Sessions};
+    use crate::path::AbsPathBuf;
 
     /// The part of opencode's schema the import writes and capture reads.
     const DDL: &[&str] = &[
@@ -1689,7 +1690,7 @@ pub(crate) mod tests {
         let (_bin, program) = fake_opencode(dir.path());
         let db = dir.path().join("opencode.db");
         let mut s = session(SES, Some("t"), every_kind());
-        s.cwd = dir.path().canonicalize().unwrap();
+        s.cwd = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
 
         let err = import(&program, &db, &s).await.unwrap_err();
         assert!(matches!(&err, RehydrateError::Other(why) if why.contains("boom")), "{err}");
@@ -1810,7 +1811,7 @@ touch {}/ran
         let (_bin, program) = succeeding_opencode(dir.path());
         let db = dir.path().join("opencode.db");
         let mut s = session(SES, None, every_kind());
-        s.cwd = dir.path().canonicalize().unwrap();
+        s.cwd = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
         let exported = export(&s);
         let mut conn = database(&db).await;
         opencode_import(&mut conn, &exported, "/here").await;

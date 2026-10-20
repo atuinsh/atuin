@@ -30,6 +30,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use crate::path::AbsPathBuf;
+
 /// Whether a harness process on this machine may be writing a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Liveness {
@@ -368,7 +370,7 @@ fn within(dir: &Path, root: &Path) -> bool {
     if dir.starts_with(root) {
         return true;
     }
-    match (dir.canonicalize(), root.canonicalize()) {
+    match (AbsPathBuf::canonicalize(dir), AbsPathBuf::canonicalize(root)) {
         (Ok(dir), Ok(root)) => dir.starts_with(root),
         _ => false,
     }

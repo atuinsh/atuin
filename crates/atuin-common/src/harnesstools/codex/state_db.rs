@@ -19,6 +19,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::{Connection, Sqlite, SqliteConnection};
 
 use crate::db::{query, query_scalar};
+use crate::path::AbsPathBuf;
 
 /// What [`point_at`] found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,7 +155,7 @@ pub async fn point_at(
 
 fn same_file(a: &Path, b: &Path) -> bool {
     a == b
-        || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
+        || matches!((AbsPathBuf::canonicalize(a), AbsPathBuf::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
 #[cfg(test)]

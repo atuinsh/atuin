@@ -13,6 +13,7 @@ use crate::harnesstools::opencode::rehydrate::tests::{SES, captured, every_kind}
 use crate::harnesstools::opencode::session::projection::projected;
 use crate::harnesstools::rehydrate::{ForkOf, RehydrateError, testing};
 use crate::harnesstools::session::Usage;
+use crate::path::AbsPathBuf;
 
 /// The part of opencode 2.0.24's schema its import writes and capture reads.
 const DDL: &[&str] = &[
@@ -656,7 +657,7 @@ async fn opencode_2_imports_its_own_export() {
     let (_bin, program) = fake_opencode(dir.path());
     let db = dir.path().join("opencode.db");
     let mut s = session(SES, Some("t"), every_kind());
-    s.cwd = dir.path().canonicalize().unwrap();
+    s.cwd = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
 
     let err = import(&program, &db, &s).await.unwrap_err();
     assert!(matches!(&err, RehydrateError::Other(why) if why.contains("boom")), "{err}");

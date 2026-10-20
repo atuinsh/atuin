@@ -116,6 +116,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::path::AbsPathBuf;
 
     /// Spawn a process that sits still in `dir`.
     fn sleeper(dir: &std::path::Path) -> (Child, Pid) {
@@ -146,7 +147,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // The temporary directory may sit behind a symlink (/tmp on macOS), and a working
         // directory never does.
-        let expected = dir.path().canonicalize().unwrap();
+        let expected = AbsPathBuf::canonicalize(dir.path()).unwrap();
         let (mut child, pid) = sleeper(dir.path());
 
         let found = settles_on(&expected, || cwd(pid));
@@ -161,7 +162,7 @@ mod tests {
         // Linux takes the /proc route, so without this the portable route would go untested
         // until it reached a platform that has no choice but to use it.
         let dir = tempfile::tempdir().unwrap();
-        let expected = dir.path().canonicalize().unwrap();
+        let expected = AbsPathBuf::canonicalize(dir.path()).unwrap();
         let (mut child, _) = sleeper(dir.path());
         let pid = child.id();
 

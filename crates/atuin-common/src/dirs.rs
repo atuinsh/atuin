@@ -65,7 +65,7 @@ impl From<AtuinHome> for PathBuf {
 /// determined for the default case.
 pub fn try_atuin_home() -> Result<AtuinHome, HomeError> {
     if let Some(value) = var_abspath("ATUIN_HOME") {
-        return Ok(AtuinHome::Set(value));
+        return Ok(AtuinHome::Set(value.into()));
     }
     Ok(AtuinHome::Default(try_home_dir()?.joined(".atuin")))
 }
@@ -236,7 +236,7 @@ impl XdgDir {
     /// Create an [`XdgDir`] from the given environment variable.
     pub fn from_var(name: &str) -> Self {
         match var_abspath(name) {
-            Some(path) => Self::Explicit(path),
+            Some(path) => Self::Explicit(path.into()),
             None => Self::Default,
         }
     }

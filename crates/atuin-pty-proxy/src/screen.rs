@@ -36,7 +36,7 @@ fn socket_name(tty_id: TtyId) -> String {
 /// The directory in which PTY proxy sockets are stored.
 fn socket_dir() -> Result<PathBuf, SecureTempDirError> {
     let uid = atuin_common::os::unix::uid();
-    let dir = atuin_common::os::unix::tmp_dir().joined(format!("atuin-{uid}"));
+    let dir = atuin_common::os::unix::tmp_dir().into_path_buf().joined(format!("atuin-{uid}"));
     create_secure_temp_dir(dir)
 }
 

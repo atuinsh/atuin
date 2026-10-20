@@ -11,6 +11,7 @@ mod shell;
 
 use std::path::PathBuf;
 
+use atuin_common::path::AbsPathBuf;
 use common::{FreshEnv, SESSION, marker, output, wait_until};
 use pty::PtyShell;
 use rstest::rstest;
@@ -52,7 +53,7 @@ fn shell_hooks_record_history(#[files("tests/shells/*.toml")] setup: PathBuf) {
 
     let command = format!("sh -c 'exit 7' # {marker}");
     pty.send_line(&command);
-    let cwd = env.home().canonicalize().unwrap();
+    let cwd = AbsPathBuf::canonicalize(env.home()).unwrap();
     let expected = format!("7\t{}\t{command}", cwd.display());
     // Fish and zsh finish history entries asynchronously.
     wait_until("completed history entry with exit status and cwd", || {

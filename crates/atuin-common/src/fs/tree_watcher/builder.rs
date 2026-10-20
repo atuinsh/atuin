@@ -10,6 +10,7 @@ use super::stat::StatPoller;
 use super::tracker::FileTracker;
 use super::walk::WalkPoller;
 use super::{TreeWatcher, TreeWatcherError};
+use crate::path::AbsPathBuf;
 use crate::sync::BlockingPool;
 use crate::time::NonZeroDuration;
 
@@ -126,7 +127,7 @@ where
 
     /// Start watching `root`, yielding each regular file the [`filter`](Self::filter) accepts.
     pub fn watch(self, root: impl AsRef<Path>) -> Result<TreeWatcher, TreeWatcherError> {
-        let root = std::fs::canonicalize(root.as_ref())?;
+        let root = AbsPathBuf::canonicalize(root)?.into_path_buf();
         if !root.is_dir() {
             return Err(TreeWatcherError::NotADirectory(root));
         }

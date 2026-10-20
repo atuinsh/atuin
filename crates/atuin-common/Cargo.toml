@@ -61,6 +61,7 @@ notify-debouncer-full = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true, optional = true }
+ref-cast = { workspace = true }
 regex = { workspace = true }
 rmp = { workspace = true }
 schemars = { workspace = true }

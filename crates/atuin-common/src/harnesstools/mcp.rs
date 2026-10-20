@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::pi::Flavour;
 use super::{AnyHarness, opencode};
-use crate::path::PathBufExt as _;
+use crate::path::{AbsPathBuf, PathBufExt as _};
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstallMcpError {
@@ -98,7 +98,11 @@ fn launch_path(exe: PathBuf) -> PathBuf {
             .find(|candidate| candidate.is_file())
     });
     match on_path {
-        Some(on_path) if on_path.canonicalize().ok() == exe.canonicalize().ok() => on_path,
+        Some(on_path)
+            if AbsPathBuf::canonicalize(&on_path).ok() == AbsPathBuf::canonicalize(&exe).ok() =>
+        {
+            on_path
+        }
         _ => exe,
     }
 }
@@ -136,7 +140,8 @@ async fn add_to_config(
     server: Value,
 ) -> Result<(), InstallMcpError> {
     // A config linked from a dotfiles repo is saved there, keeping the link.
-    let path = &tokio::fs::canonicalize(path).await.unwrap_or_else(|_| path.to_owned());
+    let path =
+        &AbsPathBuf::canonicalize_async(path).await.map_or_else(|_| path.to_owned(), PathBuf::from);
     let read = match tokio::fs::read(path).await {
         Ok(read) => Some(read),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,

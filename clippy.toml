@@ -78,3 +78,19 @@ path = "sqlx::migrate"
 reason = """use atuin_common::db::migrate!, which runs the migrator and then clears the \
     connection's prepared-statement cache so a later query can't reuse pre-migration column \
     metadata"""
+
+[[disallowed-methods]]
+path = "std::path::absolute"
+reason = "use atuin_common::path::AbsPathBuf::from_current_dir, whose type says the path is absolute"
+
+[[disallowed-methods]]
+path = "std::fs::canonicalize"
+reason = "use atuin_common::path::AbsPathBuf::canonicalize, whose type says the path is absolute"
+
+[[disallowed-methods]]
+path = "std::path::Path::canonicalize"
+reason = "use atuin_common::path::AbsPathBuf::canonicalize, whose type says the path is absolute"
+
+[[disallowed-methods]]
+path = "tokio::fs::canonicalize"
+reason = "use atuin_common::path::AbsPathBuf::canonicalize_async, whose type says the path is absolute"

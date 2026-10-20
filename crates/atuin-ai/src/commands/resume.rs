@@ -797,10 +797,13 @@ fn exec(plan: &ResumePlan) -> Result<()> {
     // session's directory), and made absolute before changing directory, so a relative `PATH` entry
     // such as `.` finds what the check found; elsewhere the name is looked up as it was checked.
     #[cfg(windows)]
+    use atuin_common::path::AbsPathBuf;
+
+    #[cfg(windows)]
     use crate::resume_tui::resumer;
     #[cfg(windows)]
     let program = match resumer::find_program(&resumer::program_to_check(plan)) {
-        Some(found) => std::path::absolute(found)?,
+        Some(found) => AbsPathBuf::from_current_dir(found)?.into_path_buf(),
         None => plan.program.clone().into(),
     };
     #[cfg(not(windows))]

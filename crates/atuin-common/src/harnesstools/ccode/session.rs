@@ -25,7 +25,7 @@ use crate::harnesstools::session::{
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
-use crate::path::PathBufExt as _;
+use crate::path::{AbsPathBuf, PathBufExt as _};
 use crate::sync::BlockingPool;
 
 #[derive(Debug, Clone, TypedBuilder)]
@@ -175,7 +175,7 @@ impl Listener for CcodeListener {
         let pool = self.pool;
         async_stream::stream! {
             // The watcher reports paths under the canonical root.
-            let projects = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+            let projects = AbsPathBuf::canonicalize(&root).map_or_else(|_| root.clone(), PathBuf::from);
             let files = TreeWatcher::builder()
                 .filter(move |path| is_transcript(&projects, path))
                 .watch(&root);

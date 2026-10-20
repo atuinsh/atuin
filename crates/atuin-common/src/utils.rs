@@ -176,6 +176,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::path::AbsPathBuf;
 
     #[cfg(not(windows))]
     #[rstest]
@@ -253,9 +254,10 @@ mod tests {
         assert_eq!(git_checkout_root(deep.to_str().unwrap()), Some(worktree));
         assert_eq!(git_checkout_root(main.to_str().unwrap()), Some(main.clone()));
         // Through the `.git` file, whose path may be resolved (on macOS, /var is /private/var).
-        let repo = |path: &Path| in_git_repo(path.to_str()?).map(|p| p.canonicalize().unwrap());
-        assert_eq!(repo(&deep), Some(main.canonicalize().unwrap()));
-        assert_eq!(repo(&main), Some(main.canonicalize().unwrap()));
+        let repo =
+            |path: &Path| in_git_repo(path.to_str()?).map(|p| AbsPathBuf::canonicalize(p).unwrap());
+        assert_eq!(repo(&deep), Some(AbsPathBuf::canonicalize(&main).unwrap()));
+        assert_eq!(repo(&main), Some(AbsPathBuf::canonicalize(&main).unwrap()));
     }
 
     #[rstest]

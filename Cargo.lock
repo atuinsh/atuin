@@ -509,6 +509,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "prost",
+ "ref-cast",
  "regex",
  "rmp",
  "rstest",

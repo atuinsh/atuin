@@ -2384,6 +2384,7 @@ mod tests {
     use atuin_client::settings::{
         ExitMode, FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
     };
+    use atuin_common::path::AbsPathBuf;
     use atuin_common::shell::Shell;
     use rstest::{fixture, rstest};
     use time::OffsetDateTime;
@@ -2958,7 +2959,7 @@ mod tests {
                 continue;
             };
             writeln!(script, "{cd}\n{print_cwd}").unwrap();
-            expected.push(dir.canonicalize().unwrap());
+            expected.push(AbsPathBuf::canonicalize(&dir).unwrap());
         }
         let skipped = NAMES.iter().filter(|n| shell == Shell::Powershell && n.contains('\\'));
         assert_eq!(expected.len(), NAMES.len() - skipped.count(), "unexpected skips");
@@ -2984,7 +2985,7 @@ mod tests {
             "{program} failed:\n{script}\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let landed: Vec<_> = stdout.lines().map(|l| std::fs::canonicalize(l).unwrap()).collect();
+        let landed: Vec<_> = stdout.lines().map(|l| AbsPathBuf::canonicalize(l).unwrap()).collect();
         assert_eq!(landed, expected, "{program} script:\n{script}");
     }
 
