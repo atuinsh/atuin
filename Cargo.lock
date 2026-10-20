@@ -316,7 +316,7 @@ dependencies = [
  "runtime-format",
  "rusqlite",
  "rust-embed",
- "rustix 1.1.5",
+ "rustix",
  "secrecy",
  "semver",
  "serde",
@@ -511,7 +511,7 @@ dependencies = [
  "regex",
  "rmp",
  "rstest",
- "rustix 1.1.5",
+ "rustix",
  "rusty_paserk",
  "rusty_paseto",
  "schemars 1.2.1",
@@ -556,6 +556,7 @@ dependencies = [
  "atuin-domain",
  "atuin-history",
  "atuin-octavo",
+ "atuin-service-manager",
  "daemonix",
  "dashmap",
  "derive_more",
@@ -585,7 +586,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "service-manager",
  "sqlx",
  "strum 0.27.2",
  "strum_macros 0.28.0",
@@ -737,7 +737,7 @@ dependencies = [
  "proptest",
  "regex",
  "rstest",
- "rustix 1.1.5",
+ "rustix",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -822,6 +822,20 @@ dependencies = [
  "tracing-tree",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "atuin-service-manager"
+version = "0.12.0"
+source = "git+https://github.com/atuinsh/service-manager-rs?branch=main#3adaec7432ebe7cb5636be1ab3fe7be7d8cf202b"
+dependencies = [
+ "cfg-if",
+ "dirs 4.0.0",
+ "libc",
+ "log",
+ "plist",
+ "which",
+ "xml-rs",
 ]
 
 [[package]]
@@ -1521,7 +1535,7 @@ dependencies = [
  "futures-core",
  "mio",
  "parking_lot",
- "rustix 1.1.5",
+ "rustix",
  "serde",
  "signal-hook",
  "signal-hook-mio",
@@ -2419,7 +2433,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
- "rustix 1.1.5",
+ "rustix",
  "windows-link 0.2.1",
 ]
 
@@ -2606,15 +2620,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
-]
-
-[[package]]
-name = "home"
-version = "0.5.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
-dependencies = [
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3274,12 +3279,6 @@ checksum = "5f4de44e98ddbf09375cbf4d17714d18f39195f4f4894e8524501726fd9a8a4a"
 dependencies = [
  "bitflags 2.13.0",
 ]
-
-[[package]]
-name = "linux-raw-sys"
-version = "0.4.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
 name = "linux-raw-sys"
@@ -4310,7 +4309,6 @@ dependencies = [
  "base64 0.23.1",
  "indexmap 2.14.0",
  "quick-xml 0.42.0",
- "serde",
  "time",
 ]
 
@@ -5187,19 +5185,6 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "0.38.44"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
-dependencies = [
- "bitflags 2.13.0",
- "errno",
- "libc",
- "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "rustix"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
@@ -5207,7 +5192,7 @@ dependencies = [
  "bitflags 2.13.0",
  "errno",
  "libc",
- "linux-raw-sys 0.12.1",
+ "linux-raw-sys",
  "windows-sys 0.61.2",
 ]
 
@@ -5553,19 +5538,6 @@ dependencies = [
  "cfg-if",
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "service-manager"
-version = "0.11.0"
-dependencies = [
- "cfg-if",
- "dirs 4.0.0",
- "libc",
- "log",
- "plist",
- "which",
- "xml-rs",
 ]
 
 [[package]]
@@ -6111,7 +6083,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.5",
+ "rustix",
  "windows-sys 0.61.2",
 ]
 
@@ -6123,7 +6095,7 @@ checksum = "9048a889effe34a5cddee0af7f53285198b16dca3be510858d38dfdb3e62a04e"
 dependencies = [
  "bitflags 2.13.0",
  "parking_lot",
- "rustix 1.1.5",
+ "rustix",
  "signal-hook",
  "windows-sys 0.61.2",
 ]
@@ -6134,7 +6106,7 @@ version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
- "rustix 1.1.5",
+ "rustix",
  "windows-sys 0.61.2",
 ]
 
@@ -7164,7 +7136,7 @@ checksum = "aa75f400b7f719bcd68b3f47cd939ba654cedeef690f486db71331eec4c6a406"
 dependencies = [
  "cc",
  "downcast-rs",
- "rustix 1.1.5",
+ "rustix",
  "smallvec",
  "wayland-sys",
 ]
@@ -7176,7 +7148,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab51d9f7c071abeee76007e2b742499e535148035bb835f97aaed1338cf516c3"
 dependencies = [
  "bitflags 2.13.0",
- "rustix 1.1.5",
+ "rustix",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -7320,14 +7292,11 @@ dependencies = [
 
 [[package]]
 name = "which"
-version = "4.4.2"
+version = "8.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87ba24419a2078cd2b0f2ede2691b6c66d8e47836da3b6db8265ebad47afbfc7"
+checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
 dependencies = [
- "either",
- "home",
- "once_cell",
- "rustix 0.38.44",
+ "libc",
 ]
 
 [[package]]
@@ -7791,7 +7760,7 @@ dependencies = [
  "libc",
  "log",
  "os_pipe",
- "rustix 1.1.5",
+ "rustix",
  "thiserror 2.0.21",
  "tree_magic_mini",
  "wayland-backend",
@@ -7813,7 +7782,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9993aa5be5a26815fe2c3eacfc1fde061fc1a1f094bf1ad2a18bf9c495dd7414"
 dependencies = [
  "gethostname",
- "rustix 1.1.5",
+ "rustix",
  "x11rb-protocol",
 ]
 

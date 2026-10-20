@@ -60,3 +60,5 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The unpublished service-manager fork; see the TODO on its dependency in Cargo.toml.
+allow-git = ["https://github.com/atuinsh/service-manager-rs"]

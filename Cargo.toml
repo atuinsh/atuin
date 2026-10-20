@@ -141,9 +141,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_regex = "1"
 serde_with = "3"
-# TODO(markovejnovic): A path dependency on the unpublished fork of service-manager, which keeps
+# TODO(markovejnovic): A git dependency on the unpublished fork of service-manager, which keeps
 #                      atuin from publishing to crates.io. Swap it for the published fork.
-service-manager = { path = "../service-manager-rs", default-features = false }
+service-manager = { package = "atuin-service-manager", version = "0.12", git = "https://github.com/atuinsh/service-manager-rs", branch = "main", default-features = false }
 sha2 = "0.10"
 shellexpand = "3"
 shlex = "2"
