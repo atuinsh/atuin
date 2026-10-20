@@ -1,9 +1,8 @@
 # search
 
-Atuin search supports wildcards, with either the `*` or `%` character. By
-default, a fuzzy search is performed. A prefix search (that is, every query
-automatically appended with a wildcard) is what `search_mode = "prefix"` gives
-you; see [`search_mode`](../configuration/config.md#search_mode).
+By default, Atuin performs a fuzzy search. With `search_mode = "prefix"`,
+every query is automatically appended with a wildcard, and you can use `*` or
+`%` as wildcards; see [`search_mode`](../configuration/config.md#search_mode).
 
 | Arg                  | Description |
 | -------------------- | ----------------------------------------------------------------------------- |
