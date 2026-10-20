@@ -7,6 +7,8 @@ use std::path::Path;
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
+#[cfg(unix)]
+use atuin_client::settings::Daemon as DaemonSettings;
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
@@ -55,12 +57,12 @@ use crate::service::{ActiveService, FindError};
 /// [1]: crate::service::pidfile::Pidfile::socket_path
 #[cfg(unix)]
 pub fn potential_socket_paths(
-    settings: &Settings,
+    daemon: &DaemonSettings,
 ) -> impl Iterator<Item = Cow<'_, Path>> + use<'_> {
     if atuin_common::dirs::atuin_home_is_set() {
-        itertools::Either::Left(std::iter::once(settings.daemon.preferred_socket_path()))
+        itertools::Either::Left(std::iter::once(daemon.preferred_socket_path()))
     } else {
-        itertools::Either::Right(settings.daemon.potential_socket_paths())
+        itertools::Either::Right(daemon.potential_socket_paths())
     }
 }
 

@@ -1,7 +1,7 @@
 //! Where the daemon listens, and how a client connects to it there.
 //!
 //! The daemon listens on a Unix socket, or on Windows on TCP. Each platform's module defines the
-//! same [`DaemonAddress`] and [`DaemonStream`].
+//! same [`DaemonAddress`], [`DaemonListener`] and [`DaemonStream`].
 
 #[cfg(unix)]
 mod unix;
@@ -12,9 +12,9 @@ use hyper_util::rt::TokioIo;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 #[cfg(unix)]
-pub use unix::{DaemonAddress, DaemonStream};
+pub use unix::{DaemonAddress, DaemonListener, DaemonStream};
 #[cfg(not(unix))]
-pub use windows::{DaemonAddress, DaemonStream};
+pub use windows::{DaemonAddress, DaemonListener, DaemonStream};
 
 impl DaemonAddress {
     /// Open a gRPC channel to the daemon at this address.

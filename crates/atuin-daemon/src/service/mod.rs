@@ -4,8 +4,11 @@
 
 pub mod address;
 mod backend;
+mod claim;
 mod connection;
 pub mod pidfile;
+#[cfg(unix)]
+mod socket_file;
 mod startup_lock;
 
 use std::time::Duration;
@@ -14,9 +17,12 @@ use atuin_client::settings::{Daemon as DaemonSettings, Settings};
 #[cfg(unix)]
 pub use backend::DaemonizeError;
 pub use backend::{SpawnError, StopError, Subproc};
+pub use claim::{ClaimError, ServiceClaim};
 pub use connection::FindError;
 use pidfile::Pidfile;
 pub use pidfile::PidfileWaitError;
+#[cfg(unix)]
+pub use socket_file::RemoveSocketError;
 use startup_lock::StartupLock;
 pub use startup_lock::StartupLockError;
 
@@ -156,6 +162,16 @@ impl ActiveService {
             startup,
             timeout,
         }))
+    }
+
+    /// Kill the service `daemon` describes, whether or not it answers, and remove what it left
+    /// behind, as far as its backend allows.
+    ///
+    /// Best effort: what it can't kill or remove, it logs.
+    pub async fn evict(daemon: &DaemonSettings) {
+        if let Err(e) = AnyBackend::new(daemon).evict().await {
+            tracing::warn!("{e}");
+        }
     }
 
     /// Where the running service `daemon` describes listens, whichever started it.

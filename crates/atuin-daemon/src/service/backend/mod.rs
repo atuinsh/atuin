@@ -1,6 +1,6 @@
 //! The backend used to manage the daemon service.
 #[cfg(unix)]
-mod external;
+mod external_systemd;
 mod subproc;
 
 use std::time::Duration;
@@ -8,14 +8,16 @@ use std::time::Duration;
 use atuin_client::settings::Daemon as DaemonSettings;
 use enum_dispatch::enum_dispatch;
 #[cfg(unix)]
-pub use external::External;
+pub use external_systemd::ExternalSystemd;
 #[cfg(unix)]
 pub use subproc::DaemonizeError;
 pub use subproc::Subproc;
 
 use crate::service::PidfileWaitError;
-use crate::service::address::DaemonAddress;
+use crate::service::address::{DaemonAddress, DaemonListener};
 use crate::service::connection::{Connection, FindError};
+#[cfg(unix)]
+use crate::service::socket_file::SocketFile;
 
 /// An error from a [`Backend`], each of which fails in its own ways.
 #[derive(Debug, thiserror::Error)]
@@ -50,6 +52,14 @@ pub enum StopError {
     Backend(#[from] BackendError),
 }
 
+/// The socket a backend hands the service it runs.
+pub struct Listening {
+    pub listener: DaemonListener,
+    /// The socket file the service bound itself, which it owns until it exits.
+    #[cfg(unix)]
+    pub socket: Option<SocketFile>,
+}
+
 /// How a service is started and stopped, and where it listens.
 ///
 /// Waiting for one to exit or answer is the same whatever runs it, and is left to the caller.
@@ -62,17 +72,23 @@ pub trait Backend {
     /// Where the running service listens, whichever started it.
     fn locate(&self) -> Result<DaemonAddress, BackendError>;
 
+    /// Take up the socket to serve on, from within a service this backend runs.
+    fn listen(&self) -> Result<Listening, BackendError>;
+
     /// Start a service, without waiting for it to answer.
     async fn launch(&self) -> Result<(), BackendError>;
 
     /// Ask `service` to stop, without waiting for it to exit.
     async fn stop(&self, service: &Connection) -> Result<(), BackendError>;
+
+    /// Kill the running service, whether or not it answers, and remove what it left behind.
+    async fn evict(&self) -> Result<(), BackendError>;
 }
 
 #[enum_dispatch(Backend)]
 pub enum AnyBackend {
     #[cfg(unix)]
-    External(External),
+    ExternalSystemd(ExternalSystemd),
     Subproc(Subproc),
 }
 
@@ -81,7 +97,7 @@ impl AnyBackend {
     pub fn new(daemon: &DaemonSettings) -> Self {
         #[cfg(unix)]
         if daemon.systemd_socket {
-            return External::new(daemon).into();
+            return ExternalSystemd::new(daemon).into();
         }
 
         Subproc::new(daemon).into()

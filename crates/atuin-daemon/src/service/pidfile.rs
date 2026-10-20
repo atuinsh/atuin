@@ -199,7 +199,7 @@ impl Pidfile {
     ///
     /// TODO(taylordotfish): On Windows, this locks the entire byte range of the pidfile, which
     /// means that while the lock is held, no other process can read the contents of the pidfile.
-    /// This means that `force_cleanup` in `atuin/src/command/client/daemon.rs` can never
+    /// This means that [`ActiveService::evict`](crate::service::ActiveService::evict) can never
     /// successfully kill a running daemon, because either:
     ///
     /// * The daemon is running, which means the lock is held, which means the client can't read the
@@ -207,7 +207,7 @@ impl Pidfile {
     /// * The daemon isn't running, so the client can read the pidfile, but the PID in the pidfile
     ///   necessarily isn't running.
     ///
-    /// This is not a critical issue -- it only affects the `force_cleanup` path in which somethis
+    /// This is not a critical issue -- it only affects the `evict` path in which somethis
     /// has already gone wrong -- but it would still be good to fix. A potential approach would be
     /// to use `windows-sys` to lock a single byte well past the actual contents of the file. SQLite
     /// uses this approach; its locks start at 0x40000000.

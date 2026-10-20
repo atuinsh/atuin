@@ -1,6 +1,3 @@
-use std::fs;
-use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,8 +7,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::grpc::versioning::BUILD_STR;
-use atuin_daemon::service::pidfile::{Pidfile, PidfileInfo};
-use atuin_daemon::service::{ActiveService, PidfileWaitError, StopError};
+use atuin_daemon::service::{ActiveService, PidfileWaitError, ServiceClaim, StopError};
 use clap::Subcommand;
 use eyre::{Result, WrapErr, bail};
 
@@ -75,18 +71,13 @@ impl Cmd {
         }
     }
 
-    pub async fn run(
-        self,
-        settings: Arc<Settings>,
-        store: SqliteStore,
-        history_db: Sqlite,
-    ) -> Result<()> {
+    pub async fn run(self, settings: Arc<Settings>) -> Result<()> {
         match self.subcmd {
             None => {
                 eprintln!("Warning: `atuin daemon` is deprecated, use `atuin daemon start`");
-                run(settings, store, history_db, false).await
+                run(settings, false).await
             }
-            Some(SubCmd::Start { force, .. }) => run(settings, store, history_db, force).await,
+            Some(SubCmd::Start { force, .. }) => run(settings, force).await,
             Some(SubCmd::Status) => status_cmd(&settings).await,
             Some(SubCmd::Stop) => stop_cmd(&settings).await,
             Some(SubCmd::Restart) => restart_cmd(&settings, false).await,
@@ -106,65 +97,6 @@ pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
             | DaemonClientErrorKind::Unimplemented
             | DaemonClientErrorKind::BuildMismatch
     )
-}
-
-/// An error that occurred while trying to remove a socket.
-#[cfg(unix)]
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "{}",
-    fl!(
-        "daemon-remove-socket-failed",
-        path = .path.display().to_string(),
-        source = .source.to_string()
-    )
-)]
-struct RemoveSocketError {
-    path: PathBuf,
-    source: std::io::Error,
-}
-
-/// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
-#[cfg(unix)]
-fn remove_sockets(
-    settings: &Settings,
-    should_remove: impl Fn(&Path) -> bool,
-) -> Result<(), RemoveSocketError> {
-    if settings.daemon.systemd_socket {
-        return Ok(());
-    }
-
-    let mut error = None;
-    for socket_path in atuin_daemon::client::potential_socket_paths(settings) {
-        if !socket_path.exists() || !should_remove(&socket_path) {
-            continue;
-        }
-
-        if let Err(e) = fs::remove_file(&socket_path)
-            && e.kind() != ErrorKind::NotFound
-        {
-            // Log the error because we only return the first error when multiple occur.
-            tracing::error!("failed to remove daemon socket {}: {e}", socket_path.display());
-            error.get_or_insert_with(|| RemoveSocketError {
-                path: socket_path.into_owned(),
-                source: e,
-            });
-        }
-    }
-
-    error.map_or(Ok(()), Err)
-}
-
-/// Remove any socket left behind by a daemon that is no longer listening.
-#[cfg(unix)]
-fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
-    use std::os::unix::fs::FileTypeExt;
-
-    remove_sockets(settings, |socket_path| {
-        matches!(atuin_common::os::unix::socket_in_use(socket_path), Ok(false))
-            // Ensure file is a socket; `socket_in_use` can return `Ok(false)` for regular files.
-            && fs::symlink_metadata(socket_path).is_ok_and(|meta| meta.file_type().is_socket())
-    })
 }
 
 /// Acquire a [`HistoryClient`] connected to a daemon of our build, starting or replacing it first
@@ -358,55 +290,19 @@ pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> R
     Ok(())
 }
 
-async fn run(
-    settings: Arc<Settings>,
-    store: SqliteStore,
-    history_db: Sqlite,
-    force: bool,
-) -> Result<()> {
+async fn run(settings: Arc<Settings>, force: bool) -> Result<()> {
     if force {
-        force_cleanup(&settings).await;
+        ActiveService::evict(&settings.daemon).await;
     }
 
-    let _pidfile_guard = Pidfile::new(&settings.daemon.pidfile_path)
-        .acquire(&PidfileInfo::current(&settings.daemon))?;
+    let (_claim, listener) = ServiceClaim::take(&settings.daemon)?;
 
-    // A daemon that crashed left its socket behind, which would keep this one from listening.
-    #[cfg(unix)]
-    remove_stale_socket_if_present(&settings)?;
+    let history_db = Sqlite::new(&settings.db_path, settings.local_timeout).await?;
+    let store = SqliteStore::new(&settings.record_store_path, settings.local_timeout).await?;
 
-    atuin_daemon::boot(settings, store, history_db).await?;
+    atuin_daemon::boot(settings, listener, store, history_db).await?;
 
     Ok(())
-}
-
-/// Force cleanup: kill existing daemon process and remove socket.
-async fn force_cleanup(settings: &Settings) {
-    let pidfile_path = Path::new(&settings.daemon.pidfile_path);
-
-    // Read and kill the existing process if pidfile exists
-    if pidfile_path.exists() {
-        if let Some(pid) = Pidfile::new(&settings.daemon.pidfile_path).pid()
-            && pid != 0
-            && let Err(e) =
-                atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
-        {
-            tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
-        }
-
-        // Remove the pidfile
-        if let Err(e) = fs::remove_file(pidfile_path)
-            && e.kind() != ErrorKind::NotFound
-        {
-            tracing::warn!("failed to remove pidfile: {e}");
-        }
-    }
-
-    // Remove the socket files
-    #[cfg(unix)]
-    if let Err(e) = remove_sockets(settings, |_| true) {
-        tracing::warn!("{e}");
-    }
 }
 
 #[cfg(test)]
@@ -415,46 +311,6 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-
-    #[cfg(unix)]
-    #[rstest]
-    fn remove_socket_error_names_the_path_and_cause() {
-        let err = RemoveSocketError {
-            path: PathBuf::from("/run/atuin.sock"),
-            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-        };
-        assert_eq!(
-            err.to_string(),
-            "failed to remove daemon socket /run/atuin.sock: permission denied"
-        );
-    }
-
-    /// A socket nothing listens on is removed; one a daemon listens on, and a file that is no
-    /// socket (a `socket_path` set wrong), are not.
-    #[cfg(unix)]
-    #[rstest]
-    #[case::stale(false, true, false)]
-    #[case::listening(true, true, true)]
-    #[case::not_a_socket(false, false, true)]
-    fn only_a_stale_socket_is_removed(
-        #[case] listening: bool,
-        #[case] socket: bool,
-        #[case] kept: bool,
-    ) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("atuin.sock");
-        let listener = socket.then(|| std::os::unix::net::UnixListener::bind(&path).unwrap());
-        if !socket {
-            fs::write(&path, "not a socket").unwrap();
-        }
-        if !listening {
-            drop(listener);
-        }
-        let mut settings = Settings::default();
-        settings.daemon.socket_path = AbsPathBuf::new(path.clone()).ok();
-        remove_stale_socket_if_present(&settings).unwrap();
-        assert_eq!(path.exists(), kept);
-    }
 
     /// A stopped daemon's socket still accepts connections but never answers.
     #[cfg(unix)]

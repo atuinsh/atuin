@@ -5,7 +5,6 @@ arg-gen-completions-shell = Set the shell for generating completions
 arg-gen-completions-out-dir = Set the output directory
 output-search-disabled = output capture is disabled. run `atuin config enable output-capture` to enable
 output-search-empty-query = blank query provided. please run 'atuin output search --help'
-daemon-remove-socket-failed = failed to remove daemon socket { $path }: { $source }
 hook-malformed-json = hook payload is not valid JSON at line { $line }, column { $column }
 output-search-connect-failed = could not connect to the daemon
 output-search-daemon-failed = the daemon failed to search command output
