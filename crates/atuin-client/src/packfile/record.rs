@@ -331,10 +331,8 @@ impl<'a> PackManifestRecordView<'a> {
             })?;
 
             let packed_decrypted = buf.into_vec();
-            let compressed = zstd::stream::encode_all(
-                packed_decrypted.as_slice(),
-                Self::ZSTD_ENCODING_LEVEL.get().into(),
-            )?;
+            let compressed =
+                zstd::bulk::compress(&packed_decrypted, Self::ZSTD_ENCODING_LEVEL.get().into())?;
 
             // TODO: One huge PASETO may not be the best choice. @ellie suggests switching to
             // xchacha20-poly1305.
