@@ -16,6 +16,7 @@ use tracing::warn;
 use crate::service::address::{DaemonAddress, DaemonListener};
 use crate::service::backend::{Backend, BackendError, Listening, Subproc};
 use crate::service::connection::Connection;
+use crate::service::pidfile::Pidfile;
 use crate::service::socket_file::SocketFile;
 
 /// Represents a backend that runs atuin-daemon as a launchd agent in the user's `gui/<uid>`
@@ -26,8 +27,6 @@ use crate::service::socket_file::SocketFile;
 /// starts the next one for the next client.
 pub struct Launchd {
     daemon: DaemonSettings,
-    /// Runs the agent when launchd won't.
-    fallback: Subproc,
     manager: LaunchdServiceManager,
 }
 
@@ -42,7 +41,6 @@ impl Launchd {
     pub fn new(daemon: &DaemonSettings) -> Self {
         Self {
             daemon: daemon.clone(),
-            fallback: Subproc::new(daemon),
             manager: LaunchdServiceManager::user(),
         }
     }
@@ -128,11 +126,13 @@ impl Launchd {
 
 impl Backend for Launchd {
     fn address(&self) -> DaemonAddress {
-        self.fallback.address()
+        DaemonAddress::from(self.daemon.socket_path().into_owned())
     }
 
     fn locate(&self) -> Result<DaemonAddress, BackendError> {
-        self.fallback.locate()
+        let pidfile = Pidfile::new(&self.daemon.pidfile_path);
+        let socket = pidfile.socket_path(&self.daemon).map_err(BackendError::new)?;
+        Ok(DaemonAddress::from(socket))
     }
 
     fn listen(&self) -> Result<Listening, BackendError> {
@@ -140,7 +140,7 @@ impl Backend for Launchd {
             Ok(listener) => listener,
             // Started outside launchd, which leaves the agent to bind its own socket.
             Err(launchd::ActivateError::NotManaged | launchd::ActivateError::NotFound(_)) => {
-                return self.fallback.listen();
+                return Subproc::new(&self.daemon).listen();
             }
             Err(err) => return Err(BackendError::new(err)),
         };
@@ -154,13 +154,7 @@ impl Backend for Launchd {
     }
 
     async fn launch(&self) -> Result<(), BackendError> {
-        // launchd refuses the agent when the user has turned it off in Login Items. Start it the
-        // way clients always have, rather than not at all.
-        if let Err(err) = self.install().await {
-            warn!(%err, "could not run the daemon as a launchd agent; starting it directly");
-            self.fallback.launch().await?;
-        }
-        Ok(())
+        self.install().await.map_err(BackendError::new)
     }
 
     async fn stop(&self, service: &Connection) -> Result<(), BackendError> {
@@ -179,7 +173,7 @@ impl Backend for Launchd {
         // Booted out, the agent stops, and launchd stops listening on the socket a daemon started
         // in its place has to bind.
         self.uninstall().await.map_err(BackendError::new)?;
-        self.fallback.evict().await
+        Subproc::new(&self.daemon).evict().await
     }
 }
 
