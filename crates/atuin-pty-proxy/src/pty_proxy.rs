@@ -52,7 +52,7 @@ pub enum Shell {
 pub struct RuntimeOptions {
     pub(crate) debug_markers: bool,
     pub(crate) shell: Vec<OsString>,
-    pub(crate) command_capture: Option<CaptureConfig>,
+    pub(crate) command_capture: Box<dyn FnOnce() -> Option<CaptureConfig>>,
     pub(crate) child_umask: Option<u32>,
 }
 
@@ -60,7 +60,7 @@ impl RuntimeOptions {
     fn new(
         debug_markers: bool,
         shell: Vec<OsString>,
-        command_capture: Option<CaptureConfig>,
+        command_capture: Box<dyn FnOnce() -> Option<CaptureConfig>>,
         child_umask: Option<u32>,
     ) -> Self {
         Self {
@@ -73,10 +73,17 @@ impl RuntimeOptions {
 }
 
 impl PtyProxy {
+    /// `command_capture` is called on the proxy's runtime, so it can spawn the task that drains
+    /// what its sink is handed.
+    ///
     /// `child_umask` is the umask to restore in the spawned shell. Atuin sets
     /// a restrictive process-wide umask early in startup, which the shell
     /// would otherwise inherit (#3695).
-    pub fn run(self, command_capture: Option<CaptureConfig>, child_umask: Option<u32>) {
+    pub fn run(
+        self,
+        command_capture: impl FnOnce() -> Option<CaptureConfig> + 'static,
+        child_umask: Option<u32>,
+    ) {
         if self.cmd.is_some() && !self.shell.is_empty() {
             eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");
             std::process::exit(2);
@@ -91,7 +98,7 @@ impl PtyProxy {
             None => runtime::main(RuntimeOptions::new(
                 self.debug_markers,
                 self.shell,
-                command_capture,
+                Box::new(command_capture),
                 child_umask,
             )),
         }

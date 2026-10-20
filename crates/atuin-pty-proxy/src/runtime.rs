@@ -143,7 +143,7 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
 
     let (msg_tx, msg_rx) = mpsc::channel::<Msg>(64);
     let _parser_handle = screen::spawn_parser(rows, cols, msg_rx, screen::ParserOptions {
-        command_capture: options.command_capture,
+        command_capture: (options.command_capture)(),
         debug_markers: options.debug_markers,
     })?;
 
