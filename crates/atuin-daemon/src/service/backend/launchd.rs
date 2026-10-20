@@ -42,11 +42,20 @@ impl Launchd {
         }
     }
 
-    /// Whether launchd can run the agent, which it can only for the user logged in at the
-    /// console: nobody else has a `gui/<uid>` domain.
+    /// Whether launchd can run the agent for this client, which it can only for the user logged in
+    /// at the console, and only in that user's home.
+    ///
+    /// Nobody else has a `gui/<uid>` domain, and launchd starts the agent with `HOME` set to the
+    /// user's home, whatever this client's is.
     pub fn is_available() -> bool {
-        std::fs::metadata("/dev/console")
-            .is_ok_and(|console| console.uid() == atuin_common::os::unix::uid())
+        let console = std::fs::metadata("/dev/console")
+            .is_ok_and(|console| console.uid() == atuin_common::os::unix::uid());
+        // The user's agents live in `~/Library/LaunchAgents`, `~` being the home launchd uses.
+        console
+            && LaunchdServiceManager::user().domain.plist_dir().is_ok_and(|agents| {
+                agents.parent().and_then(Path::parent)
+                    == atuin_common::dirs::try_home_dir().ok().as_deref()
+            })
     }
 
     /// Whether the agent's plist is installed, whether or not launchd has it loaded.
