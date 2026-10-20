@@ -161,7 +161,7 @@ impl Backend for Subproc {
 
         let mut service = Command::new(exe);
         service
-            .args(["daemon", "start"])
+            .args(["daemon", "start", "--service-manager=subprocess"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

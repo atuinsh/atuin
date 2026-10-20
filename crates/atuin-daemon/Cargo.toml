@@ -20,6 +20,7 @@ atuin-client = { workspace = true, features = ["proto"] }
 atuin-common = { workspace = true, features = ["ai", "os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-history = { workspace = true }
+clap = { workspace = true }
 atuin-octavo = { workspace = true, optional = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }

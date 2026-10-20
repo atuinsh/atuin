@@ -35,7 +35,7 @@ impl Launchd {
     const SOCKET: &CStr = c"atuin";
 
     /// The flag that tells `atuin daemon start` that launchd holds its socket.
-    const FLAG: &str = "--launchd";
+    const FLAG: &str = "--service-manager=launchd";
 
     #[must_use]
     pub fn new(daemon: &DaemonSettings) -> Self {
