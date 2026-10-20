@@ -147,13 +147,18 @@ impl ActiveService {
     /// TODO(markovejnovic): Do not use the global Settings but pass DaemonSettings.
     pub async fn find(settings: &Settings) -> Result<Option<Self>, ServiceFindError> {
         let backend = AnyBackend::new(&settings.daemon);
-        let Some(connection) = Connection::at(backend.locate().map_err(FindError::from)?).await?
-        else {
+        let timeout = Self::timeout(settings.local_timeout);
+        let address = backend.locate().map_err(FindError::from)?;
+        // A socket can accept connections with nothing behind it to answer them, as launchd's does
+        // while the agent it starts fails to boot.
+        let found = tokio::time::timeout(timeout, Connection::at(address))
+            .await
+            .map_err(|_| FindError::Unresponsive(timeout))?;
+        let Some(connection) = found? else {
             return Ok(None);
         };
 
         let pidfile = Pidfile::new(&settings.daemon.pidfile_path);
-        let timeout = Self::timeout(settings.local_timeout);
         let startup = pidfile.startup_lock(timeout);
         Ok(Some(Self {
             backend,

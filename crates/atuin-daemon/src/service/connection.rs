@@ -27,6 +27,8 @@ pub enum FindError {
     Connect(#[from] ConnectError),
     #[error("legacy daemon detected; restart daemon manually")]
     Legacy,
+    #[error("the daemon accepted the connection but didn't answer within {}ms", .0.as_millis())]
+    Unresponsive(Duration),
     #[error("could not ask the daemon for its status: {0}")]
     Status(Box<tonic::Status>),
 }
