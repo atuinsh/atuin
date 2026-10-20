@@ -68,6 +68,61 @@ fn data_dir_and_the_paths_in_it_agree(env: FreshEnv, #[values(false, true)] env_
     assert_eq!(resolved("meta.db_path"), expected.join("meta.db"));
 }
 
+/// A relative path in config.toml lands beside config.toml, not in the directory Atuin runs in.
+#[rstest]
+fn relative_paths_resolve_next_to_config_toml(env: FreshEnv) {
+    env.write_config("data_dir = \"relative-data\"\ndb_path = \"relative-history.db\"\n");
+    let cwd = env.home().join("tmp");
+
+    let mut command = env.atuin(&["history", "list"]);
+    command.env("ATUIN_SESSION", SESSION).current_dir(&cwd);
+    let out = Process::spawn(command).wait();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+
+    assert!(env.atuin_home().joined("relative-data").joined("key").is_file());
+    assert!(env.atuin_home().joined("relative-history.db").is_file());
+    assert!(!cwd.join("relative-data").exists());
+    assert!(!cwd.join("relative-history.db").exists());
+}
+
+/// `config get --resolved` prints a path as Atuin opens it, not as config.toml or Atuin's escaped
+/// defaults write it.
+#[rstest]
+#[case::relative("db_path = \"relative.db\"", "db_path", "{atuin_home}/relative.db")]
+#[case::variable("[meta]\ndb_path = \"$NAME.db\"", "meta.db_path", "{atuin_home}/atuin-test.db")]
+#[case::log_file("[logs.search]\nfile = \"$NAME.log\"", "logs.search.file", "atuin-test.log")]
+#[case::socket(
+    "[daemon]\nsocket_path = \"atuin.sock\"",
+    "daemon.socket_path",
+    "{atuin_home}/atuin.sock"
+)]
+#[case::dollar_data_dir(
+    "data_dir = \"{atuin_home}/price$$usd\"",
+    "data_dir",
+    "{atuin_home}/price$usd"
+)]
+#[case::dollar_default(
+    "data_dir = \"{atuin_home}/price$$usd\"",
+    "db_path",
+    "{atuin_home}/price$usd/history.db"
+)]
+fn resolved_paths_print_as_opened(
+    env: FreshEnv,
+    #[case] config: &str,
+    #[case] key: &str,
+    #[case] expected: &str,
+) {
+    let atuin_home = env.atuin_home().display().to_string();
+    env.write_config(&config.replace("{atuin_home}", &atuin_home));
+
+    let mut command = env.atuin(&["config", "get", key, "--resolved"]);
+    // The harness's private socket would win over config.toml's.
+    command.env("NAME", "atuin-test").env_remove("ATUIN_DAEMON__SOCKET_PATH");
+    let out = Process::spawn(command).wait();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(stdout(&out).trim(), expected.replace("{atuin_home}", &atuin_home));
+}
+
 /// An install from before `$ATUIN_HOME` keeps its XDG data and config where they are.
 #[rstest]
 fn existing_xdg_install_is_used_in_place(env: FreshEnv) {

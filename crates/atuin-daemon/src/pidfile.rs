@@ -259,7 +259,7 @@ impl PidfileGuard {
     /// to use `windows-sys` to lock a single byte well past the actual contents of the file. SQLite
     /// uses this approach; its locks start at 0x40000000.
     pub fn acquire(settings: &DaemonSettings) -> Result<Self, AcquireGuardError> {
-        let path = Path::new(&settings.pidfile_path);
+        let path = settings.pidfile_path.as_path();
 
         let mut file = LockOptions {
             create: true,
@@ -323,6 +323,7 @@ pub fn is_live(pidfile_path: &Path) -> bool {
 mod tests {
     use std::fs::OpenOptions;
 
+    use atuin_common::path::AbsPathBuf;
     #[cfg(unix)]
     use proptest::prelude::*;
     use rstest::{fixture, rstest};
@@ -368,10 +369,13 @@ mod tests {
 
     fn daemon_settings(pidfile: &Path, systemd_socket: bool) -> DaemonSettings {
         DaemonSettings {
-            pidfile_path: pidfile.to_str().unwrap().to_string(),
-            socket_path: Some("/tmp/atuin.sock".into()),
+            enabled: false,
+            autostart: false,
+            sync_frequency: None,
+            pidfile_path: AbsPathBuf::new(pidfile.to_owned()).unwrap(),
+            socket_path: Some(AbsPathBuf::new(pidfile.with_file_name("atuin.sock")).unwrap()),
             systemd_socket,
-            ..DaemonSettings::default()
+            tcp_port: 8889,
         }
     }
 
@@ -390,7 +394,8 @@ mod tests {
         assert_eq!(info.version, crate::VERSION);
         // The socket path is only recorded if the daemon chose it: not under systemd, which passes
         // the daemon a socket, and not on Windows, which doesn't use one.
-        let expected = (cfg!(unix) && !systemd_socket).then(|| PathBuf::from("/tmp/atuin.sock"));
+        let expected =
+            (cfg!(unix) && !systemd_socket).then(|| pidfile.path.with_file_name("atuin.sock"));
         assert_eq!(info.socket_path, expected);
 
         // After guard is dropped, lock should be released — acquiring again must succeed.

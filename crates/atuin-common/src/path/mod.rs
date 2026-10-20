@@ -2,11 +2,15 @@
 
 mod absolute;
 pub mod display_rich;
+mod serde_with;
 
 use std::path::{Path, PathBuf};
 
 pub use absolute::{AbsPath, AbsPathBuf, NotAbsoluteError};
 pub use display_rich::{DisplayRichExt, RichDisplay};
+
+// `self::`, or this reads as a re-export from the `serde_with` crate.
+pub use self::serde_with::{PathAnchor, RelativeTo, ShellExpanded};
 
 /// Utility extensions for paths in atuin.
 pub trait PathExt {

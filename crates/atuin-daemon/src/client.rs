@@ -123,7 +123,7 @@ pub fn socket_path(settings: &Settings) -> Result<PathBuf, SocketPathError> {
         return Ok(existing_socket_path());
     }
 
-    let pidfile_path: &Path = settings.daemon.pidfile_path.as_ref();
+    let pidfile_path = settings.daemon.pidfile_path.as_path();
     let socket_path = PidfileInfo::read(pidfile_path).and_then(|info| info.socket_path);
 
     if !atuin_common::dirs::atuin_home_is_set() {
@@ -810,7 +810,7 @@ mod tests {
     use std::path::Path;
 
     use atuin_common::env::MockEnv;
-    use atuin_common::path::PathBufExt as _;
+    use atuin_common::path::{AbsPathBuf, PathBufExt as _};
     use rstest::rstest;
 
     use super::*;
@@ -820,8 +820,8 @@ mod tests {
     /// Settings for a client whose daemon socket is configured at `socket_path`.
     fn settings(pidfile: &Path, socket_path: &Path, systemd_socket: bool) -> Settings {
         let mut settings = Settings::default();
-        settings.daemon.pidfile_path = pidfile.to_str().unwrap().to_string();
-        settings.daemon.socket_path = Some(socket_path.to_owned());
+        settings.daemon.pidfile_path = AbsPathBuf::new(pidfile.to_owned()).unwrap();
+        settings.daemon.socket_path = Some(AbsPathBuf::new(socket_path.to_owned()).unwrap());
         settings.daemon.systemd_socket = systemd_socket;
         settings
     }

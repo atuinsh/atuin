@@ -1,4 +1,3 @@
-use std::num::NonZeroU64;
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::{borrow::Cow, path::Path};
@@ -6,18 +5,18 @@ use std::{borrow::Cow, path::Path};
 #[cfg(unix)]
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
 #[cfg(unix)]
-use atuin_common::path::{AbsPath, AbsPathBuf, EnvDependentPathBuf, PathBufExt as _};
+use atuin_common::path::{AbsPath, EnvDependentPathBuf, PathBufExt as _};
+use atuin_common::path::{AbsPathBuf, RelativeTo};
 // `AsDisableableDuration` is deprecated.
 #[allow(deprecated)]
 use atuin_common::time::{AsDisableableDuration, NonZeroDuration, Seconds};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
+use super::ConfigDir;
+
 #[cfg(unix)]
 const SOCKET_NAME: &str = "atuin.sock";
-
-const DEFAULT_SYNC_FREQUENCY: NonZeroDuration =
-    NonZeroDuration::from_secs(NonZeroU64::new(300).unwrap());
 
 #[allow(deprecated)]
 #[serde_as]
@@ -38,30 +37,18 @@ pub struct Daemon {
 
     /// The path to the unix socket used by the daemon.
     /// When unset, [`Daemon::socket_path`] picks the default location.
-    pub socket_path: Option<PathBuf>,
+    #[serde_as(as = "Option<RelativeTo<ConfigDir>>")]
+    pub socket_path: Option<AbsPathBuf>,
 
     /// Path to the daemon pidfile used for process coordination.
-    pub pidfile_path: String,
+    #[serde_as(as = "RelativeTo<ConfigDir>")]
+    pub pidfile_path: AbsPathBuf,
 
     /// Use a socket passed via systemd's socket activation protocol, instead of the path
     pub systemd_socket: bool,
 
     /// The port that should be used for TCP on non unix systems
     pub tcp_port: u64,
-}
-
-impl Default for Daemon {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            autostart: false,
-            sync_frequency: Some(DEFAULT_SYNC_FREQUENCY),
-            socket_path: None,
-            pidfile_path: "".to_string(),
-            systemd_socket: false,
-            tcp_port: 8889,
-        }
-    }
 }
 
 #[cfg(unix)]
@@ -145,7 +132,7 @@ impl Daemon {
         &self,
         ctx: impl SocketCtx,
     ) -> impl Iterator<Item = Cow<'_, Path>> {
-        if let Some(path) = self.socket_path.as_deref() {
+        if let Some(path) = self.socket_path.as_deref().map(AbsPath::as_path) {
             itertools::Either::Left(std::iter::once(Cow::Borrowed(path)))
         } else {
             itertools::Either::Right(self.default_socket_paths(ctx).map(Cow::Owned))
@@ -264,7 +251,7 @@ impl SocketCtx for DefaultSocketCtx {}
 #[cfg(unix)]
 pub enum SocketPath<'a> {
     /// A socket path that the user has manually configured in config.toml.
-    UserDefined(&'a Path),
+    UserDefined(&'a AbsPath),
     /// The default socket path, used when the path is not manually set in config.toml.
     Default(AbsPathBuf),
 }
@@ -295,7 +282,7 @@ impl<'a> SocketPath<'a> {
     #[must_use]
     pub fn into_cow(self) -> Cow<'a, Path> {
         match self {
-            Self::UserDefined(path) => path.into(),
+            Self::UserDefined(path) => path.as_path().into(),
             Self::Default(path) => path.into_path_buf().into(),
         }
     }
@@ -358,9 +345,13 @@ mod unix_tests {
 
     fn daemon(socket_path: Option<PathBuf>, systemd_socket: bool) -> Daemon {
         Daemon {
-            socket_path,
+            enabled: false,
+            autostart: false,
+            sync_frequency: None,
+            socket_path: socket_path.map(|path| AbsPathBuf::new(path).unwrap()),
+            pidfile_path: AbsPathBuf::new(PathBuf::from("/tmp/atuin-daemon.pid")).unwrap(),
             systemd_socket,
-            ..Daemon::default()
+            tcp_port: 8889,
         }
     }
 

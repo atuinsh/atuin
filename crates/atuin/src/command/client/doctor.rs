@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
 use std::time::Duration;
@@ -6,7 +5,7 @@ use std::time::Duration;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::env;
-use atuin_common::path::PathExt;
+use atuin_common::path::{AbsPathBuf, PathExt};
 use atuin_common::shell::{Shell, shell_name};
 use atuin_common::string::NonEmptyOrExt as _;
 use colored::Colorize;
@@ -294,9 +293,9 @@ impl SyncInfo {
 
 #[derive(Debug)]
 struct SettingPaths {
-    db: PathBuf,
-    record_store: PathBuf,
-    key: PathBuf,
+    db: AbsPathBuf,
+    record_store: AbsPathBuf,
+    key: AbsPathBuf,
 }
 
 impl SettingPaths {

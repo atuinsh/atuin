@@ -13,7 +13,7 @@ pub fn run(settings: &Settings) {
         sever_config.to_string_lossy(),
         settings.db_path.display(),
         settings.key_path.display(),
-        settings.meta.db_path
+        settings.meta.db_path.display()
     );
 
     let env_vars = std::fmt::from_fn(|f| {

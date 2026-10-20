@@ -123,8 +123,9 @@ impl TestEnvBuilder {
     pub async fn build(self) -> TestEnv {
         let tmp = tempfile::tempdir().unwrap();
         let settings = Arc::new(TestEnv::settings_in(tmp.path()));
-        let socket_path =
-            settings.daemon.socket_path.clone().expect("the harness sets a socket path");
+        let socket_path = PathBuf::from(
+            settings.daemon.socket_path.clone().expect("the harness sets a socket path"),
+        );
 
         let history_db = Sqlite::new(&settings.db_path, self.db_timeout).await.unwrap();
         let store = SqliteStore::new(&settings.record_store_path, self.db_timeout).await.unwrap();

@@ -78,7 +78,7 @@ pub struct GetCmd {
 }
 
 impl GetCmd {
-    pub async fn run(&self, _settings: &Settings) -> Result<()> {
+    pub async fn run(&self, settings: &Settings) -> Result<()> {
         let key = self.key.trim();
         if key.is_empty() || key.contains(char::is_whitespace) {
             eyre::bail!("Config key must be non-empty and must not contain whitespace");
@@ -88,12 +88,12 @@ impl GetCmd {
             println!("Config file:");
             self.print_current_value(key, "  ").await?;
             println!("\nResolved:");
-            Self::print_effective_value(key, "  ");
+            Self::print_effective_value(settings, key, "  ");
             return Ok(());
         }
 
         if self.resolved {
-            Self::print_effective_value(key, "");
+            Self::print_effective_value(settings, key, "");
         } else {
             self.print_current_value(key, "").await?;
         }
@@ -128,8 +128,8 @@ impl GetCmd {
         Ok(())
     }
 
-    fn print_effective_value(key: &str, prefix: &str) {
-        match Settings::get_config_value(key) {
+    fn print_effective_value(settings: &Settings, key: &str, prefix: &str) {
+        match settings.get_config_value(key) {
             Ok(value) => {
                 for line in value.lines() {
                     println!("{prefix}{line}");

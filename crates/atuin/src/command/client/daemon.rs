@@ -643,13 +643,11 @@ pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> R
 /// runtime corrupts its internal state.
 #[cfg(unix)]
 pub fn daemonize_current_process() -> Result<()> {
-    let settings = Settings::new().wrap_err("could not load client settings")?;
-
     // Run from `/`, not the directory we were autostarted in: that directory may since have been
-    // deleted, and holding it open would stop its filesystem from being unmounted. A relative path
-    // in the config resolves against the working directory, though, so keep it then, or the daemon
-    // would look for its files somewhere other than the client that started it.
-    let working_directory = if uses_relative_paths(&settings) {
+    // deleted, and holding it open would stop its filesystem from being unmounted. The daemon reads
+    // the config again once started, though, so keep the directory when a relative
+    // `ATUIN_CONFIG_DIR` puts the config there. Paths in the config never depend on it.
+    let working_directory = if atuin_common::dirs::config_path("config.toml").is_relative() {
         std::env::current_dir().wrap_err("could not determine current directory for daemon")?
     } else {
         PathBuf::from("/")
@@ -663,29 +661,6 @@ pub fn daemonize_current_process() -> Result<()> {
         .wrap_err("failed to daemonize process")?;
 
     Ok(())
-}
-
-/// Whether any of the paths the daemon uses is configured relative to the working directory.
-#[cfg(unix)]
-fn uses_relative_paths(settings: &Settings) -> bool {
-    // The data dir holds the stores the daemon finds through it: captured output, the AI session
-    // sidecar and the Octavo queue.
-    let data_dir = &settings.data_dir;
-    // The config is read again once the daemon has started, so its location counts too.
-    let config_file = atuin_common::dirs::config_path("config.toml");
-    [
-        settings.db_path.as_path(),
-        settings.record_store_path.as_path(),
-        settings.key_path.as_path(),
-        Path::new(&settings.daemon.pidfile_path),
-        Path::new(&settings.logs.dir),
-        Path::new(&settings.meta.db_path),
-        data_dir.as_path(),
-    ]
-    .into_iter()
-    .chain(settings.daemon.socket_path.as_deref())
-    .chain([config_file.as_path()])
-    .any(Path::is_relative)
 }
 
 async fn run(
@@ -740,6 +715,7 @@ async fn force_cleanup(settings: &Settings) {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
 
     use super::*;
@@ -779,52 +755,9 @@ mod tests {
             drop(listener);
         }
         let mut settings = Settings::default();
-        settings.daemon.socket_path = Some(path.clone());
+        settings.daemon.socket_path = AbsPathBuf::new(path.clone()).ok();
         remove_stale_socket_if_present(&settings).unwrap();
         assert_eq!(path.exists(), kept);
-    }
-
-    #[cfg(unix)]
-    #[rstest]
-    fn default_paths_are_absolute() {
-        assert!(!uses_relative_paths(&Settings::default()));
-    }
-
-    #[cfg(unix)]
-    #[rstest]
-    #[case::db(|s: &mut Settings| s.db_path = "history.db".into())]
-    #[case::socket(|s: &mut Settings| s.daemon.socket_path = Some("atuin.sock".into()))]
-    #[case::pidfile(|s: &mut Settings| s.daemon.pidfile_path = "atuin.pid".into())]
-    #[case::meta(|s: &mut Settings| s.meta.db_path = "meta.db".into())]
-    #[case::data_dir(|s: &mut Settings| s.data_dir = "data".into())]
-    fn relative_paths_are_detected(#[case] set: fn(&mut Settings)) {
-        let mut settings = Settings::default();
-        set(&mut settings);
-        assert!(uses_relative_paths(&settings));
-    }
-
-    /// The config is read again once the daemon has started, from `ATUIN_CONFIG_DIR` if it's set.
-    #[cfg(unix)]
-    #[rstest]
-    #[case::absolute("/etc/atuin", false)]
-    #[case::relative("atuin-config", true)]
-    fn a_relative_config_dir_is_detected(#[case] config_dir: &str, #[case] expected: bool) {
-        let settings = Settings::default();
-        let env = atuin_common::env::MockEnv::install();
-        env.set("ATUIN_CONFIG_DIR", config_dir);
-        assert_eq!(uses_relative_paths(&settings), expected);
-    }
-
-    /// Paths only the client uses don't tie the daemon to its working directory.
-    #[cfg(unix)]
-    #[rstest]
-    #[case::kv(|s: &mut Settings| s.kv.db_path = "kv.db".into())]
-    #[case::scripts(|s: &mut Settings| s.scripts.db_path = "scripts.db".into())]
-    #[case::ai(|s: &mut Settings| s.ai.db_path = "ai.db".into())]
-    fn client_only_relative_paths_are_ignored(#[case] set: fn(&mut Settings)) {
-        let mut settings = Settings::default();
-        set(&mut settings);
-        assert!(!uses_relative_paths(&settings));
     }
 
     /// The check's report of a daemon of build `theirs`.
@@ -873,8 +806,8 @@ mod tests {
         let socket = dir.path().join("stopped.sock");
         let _listener = tokio::net::UnixListener::bind(&socket).unwrap();
         let mut settings = Settings::default();
-        settings.daemon.socket_path = Some(socket);
-        settings.daemon.pidfile_path = dir.path().join("d.pid").to_str().unwrap().to_owned();
+        settings.daemon.socket_path = AbsPathBuf::new(socket).ok();
+        settings.daemon.pidfile_path = AbsPathBuf::new(dir.path().join("d.pid")).unwrap();
         settings.daemon.autostart = false;
         let history = History::import()
             .timestamp(time::OffsetDateTime::now_utc())

@@ -95,6 +95,7 @@ pub fn watch(probe: Arc<dyn RebuildProbe>, every: Duration) -> watch::Receiver<O
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::path::AbsPathBuf;
     use parking_lot::Mutex;
     use rstest::rstest;
 
@@ -152,8 +153,9 @@ mod tests {
     async fn an_unreachable_daemon_says_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let mut settings = Settings::utc();
-        settings.daemon.socket_path = Some(dir.path().join("nobody.sock"));
-        settings.daemon.pidfile_path = dir.path().join("atuin-daemon.pid").to_string_lossy().into();
+        settings.daemon.socket_path = AbsPathBuf::new(dir.path().join("nobody.sock")).ok();
+        settings.daemon.pidfile_path =
+            AbsPathBuf::new(dir.path().join("atuin-daemon.pid")).unwrap();
         let started = std::time::Instant::now();
         assert_eq!(DaemonProbe::new(Arc::new(settings)).rebuilding().await, None);
         assert!(started.elapsed() < Duration::from_secs(5));

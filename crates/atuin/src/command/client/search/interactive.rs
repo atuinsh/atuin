@@ -3425,7 +3425,7 @@ mod tests {
         settings.daemon.enabled = true;
         settings.daemon.autostart = true;
         settings.daemon.systemd_socket = true;
-        settings.daemon.socket_path = Some(temp.path().join("missing.sock"));
+        settings.daemon.socket_path = AbsPathBuf::new(temp.path().join("missing.sock")).ok();
         let settings = Arc::new(settings);
 
         let mut state = state(KeymapMode::Emacs, 0, 0, FilterMode::Global, "query");

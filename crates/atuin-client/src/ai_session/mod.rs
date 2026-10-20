@@ -51,13 +51,15 @@ pub async fn invalidate_sidecar(settings: &Settings) -> Result<(), DbError> {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::path::AbsPathBuf;
+
     use super::*;
 
     #[rstest::rstest]
     fn legacy_sidecar_moves_to_threads_db() {
         let dir = tempfile::tempdir().unwrap();
         let mut settings = Settings::utc();
-        settings.data_dir = dir.path().to_path_buf();
+        settings.data_dir = AbsPathBuf::new(dir.path().to_path_buf()).unwrap();
         for name in [LEGACY_SIDECAR, "ai_session_sidecar.db-wal", "ai_session_sidecar.db-shm"] {
             std::fs::write(dir.path().join(name), name).unwrap();
         }
