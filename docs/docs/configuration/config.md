@@ -1058,7 +1058,8 @@ enabled = true
 Default: `false`
 
 Automatically start and manage the daemon when needed.
-This isn't compatible with `systemd_socket = true`.
+A daemon that systemd starts through socket activation is left to systemd: the
+client won't stop or replace it.
 If a legacy experimental daemon is already running, restart it manually once before using autostart.
 
 ```toml
@@ -1080,16 +1081,17 @@ sync_frequency = "5m"
 
 ### `socket_path`
 
-Default if [`systemd_socket`] is false: `$TMPDIR/atuin-$UID/atuin.sock`, where
-`$UID` is your [user ID]. `$TMPDIR` defaults to `/tmp` if unset.
-
-Default if [`systemd_socket`] is true: `$XDG_RUNTIME_DIR/atuin.sock` if
-`$XDG_RUNTIME_DIR` is set, otherwise `$TMPDIR/atuin-$UID/atuin.sock`.
+Default: `$TMPDIR/atuin-$UID/atuin.sock`, where `$UID` is your [user ID].
+`$TMPDIR` defaults to `/tmp` if unset.
 
 [user ID]: https://en.wikipedia.org/wiki/User_identifier
-[`systemd_socket`](#systemd_socket)
 
 Where to bind a Unix socket for client -> daemon communication.
+
+If systemd starts the daemon through socket activation, the daemon listens on
+the socket systemd passes it instead. A socket unit listening on
+`%t/atuin.sock` (`$XDG_RUNTIME_DIR/atuin.sock`) works without setting this; for
+any other path, set `socket_path` to it.
 
 The default doesn't depend on `ATUIN_HOME`. To run daemons for more than one
 `ATUIN_HOME` at the same time, set a different `socket_path` in each one's
@@ -1114,16 +1116,8 @@ Path to the daemon `pidfile` used for process coordination.
 
 ### `systemd_socket`
 
-Default `false`
-
-Use a socket passed via systemd socket activation protocol instead of the path
-
-```toml
-systemd_socket = false
-```
-
-Note: setting this to true changes the default value of
-[`socket_path`](#socket_path).
+Removed. The daemon detects systemd socket activation itself, and the setting
+is ignored.
 
 ### `tcp_port`
 

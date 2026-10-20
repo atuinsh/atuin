@@ -85,7 +85,7 @@
 //! <https://raw.githubusercontent.com/void-linux/void-packages/master/srcpkgs/atuin/template> --
 //! binary-only: the template installs the binary, license, and completions, and the `srcpkgs/atuin`
 //! dir contains only `template` (no `patches/`, no `files/`). Void is runit-based with no daemon
-//! service, so `systemd_socket` is irrelevant and behavior matches the curl Install Script case.
+//! service, so behavior matches the curl Install Script case.
 //!
 //! ### home-manager (Nix)
 //!
@@ -95,19 +95,20 @@
 //! macOS. Crucially, it also WRITES our config into `config.toml`:
 //!
 //!   - `daemon.enabled = true` (always),
-//!   - `daemon.systemd_socket = true` on systemd, `false` on launchd,
+//!   - `daemon.systemd_socket = true` on systemd, `false` on launchd, which we ignore: the daemon
+//!     detects socket activation itself,
 //!   - `daemon.socket_path = $XDG_DATA_HOME/atuin/daemon.sock` on launchd only.
 //!
 //! It never sets `daemon.autostart`, so it stays `false`. That means the client ALWAYS takes the
 //! bail-on-mismatch path -- it never sends `Shutdown` and never respawns the daemon itself.
 //! Replacing the daemon is left to the service manager plus `home-manager switch`.
 //!
-//!   - On Linux (`systemd_socket = true`, `autostart = false`), the `.socket` listens on
-//!     `%t/atuin.sock` (`$XDG_RUNTIME_DIR/atuin.sock`), exactly our socket-activation path. On a
+//!   - On Linux (`autostart = false`), the `.socket` listens on `%t/atuin.sock`
+//!     (`$XDG_RUNTIME_DIR/atuin.sock`), one of the paths a client looks for a socket at. On a
 //!     mismatch the client bails. A rebuild changes the unit's `ExecStart` store path, so
 //!     activation (the default `sd-switch` backend) restarts the unit; the next connection then
 //!     socket-activates the new binary.
-//!   - On macOS (`systemd_socket = false`, `autostart = false`), the launchd agent uses a
+//!   - On macOS (`autostart = false`), the launchd agent uses a
 //!     conditional `KeepAlive` (`Crashed = true; SuccessfulExit = false`), so launchd will NOT
 //!     respawn a cleanly-exited daemon -- a stale-version daemon persists until `home-manager
 //!     switch` reloads the agent (its `ProgramArguments` store path changes).
@@ -123,15 +124,14 @@
 //! <https://github.com/gentoo/gentoo/blob/master/app-shells/atuin/files/atuin-daemon.socket> and
 //! <https://github.com/gentoo/gentoo/blob/master/app-shells/atuin/files/atuin-daemon.service>.
 //!
-//! The socket listens on `%t/atuin.sock` (`$XDG_RUNTIME_DIR/atuin.sock`, our socket-activation
-//! path) with `RemoveOnStop=true`. The service is pure socket-activation: `Requires=` the socket,
+//! The socket listens on `%t/atuin.sock` (`$XDG_RUNTIME_DIR/atuin.sock`, one of the paths a client
+//! looks for a socket at) with `RemoveOnStop=true`. The service is pure socket-activation: `Requires=` the socket,
 //! `ExecStart=atuin daemon` (the deprecated bare form; we warn in favor of `atuin daemon start`),
 //! and it sets no `Restart=`, so systemd defaults to `Restart=no` and never supervise-restarts it.
 //!
-//! Because the ebuild sets no config, the user must set `daemon.systemd_socket = true` (and
-//! `enabled = true`) themselves; the intended pairing is `systemd_socket = true` + `autostart =
-//! false`. On a mismatch the client therefore bails and defers to systemd (autostart is
-//! incompatible with `systemd_socket`).
+//! Because the ebuild sets no config, the user must set `enabled = true` themselves, and should
+//! keep `autostart = false`. On a mismatch the client therefore bails and defers to systemd; with
+//! `autostart = true` it refuses to replace a daemon systemd started, naming `systemctl` instead.
 //!
 //! **In effect an `emerge` upgrade leaves the stale daemon running until it is stopped; the next
 //! client connection then socket-activates a fresh daemon from the new binary.**

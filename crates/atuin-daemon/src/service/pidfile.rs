@@ -8,6 +8,7 @@
 //! - The daemon's PID
 //! - The daemon's version
 //! - The daemon's socket path
+//! - Whether systemd started the daemon through socket activation
 //!
 //! The format of the pidfile is as follows:
 //!
@@ -42,6 +43,7 @@ use atuin_common::string::AutoOsString;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
+use crate::server::SocketSource;
 use crate::service::startup_lock::StartupLock;
 
 const FORMAT_V1: &str = "v1";
@@ -59,15 +61,21 @@ pub struct PidfileInfo {
 
     /// The path to the socket the daemon is listening on.
     ///
-    /// This is [`None`] on Windows, or if `daemon.systemd_socket` is true in `config.toml`.
+    /// This is [`None`] on Windows, or for a socket systemd passed in without a path.
     #[serde_as(as = "Option<AutoOsString>")]
     pub socket_path: Option<PathBuf>,
+
+    /// Whether systemd passed the daemon its socket through socket activation, and so starts and
+    /// stops the daemon rather than a client.
+    #[serde(default)]
+    pub systemd: bool,
 }
 
 impl PidfileInfo {
-    /// Create a [`PidfileInfo`] for the current process (assuming this process is the daemon).
+    /// Create a [`PidfileInfo`] for the current process (assuming this process is the daemon),
+    /// listening on `socket`.
     #[must_use]
-    pub fn current(settings: &DaemonSettings) -> Self {
+    pub fn current(settings: &DaemonSettings, socket: &SocketSource) -> Self {
         #[cfg(not(unix))]
         let _ = settings;
 
@@ -75,9 +83,14 @@ impl PidfileInfo {
             pid: std::process::id(),
             version: crate::VERSION.to_string(),
             #[cfg(unix)]
-            socket_path: (!settings.systemd_socket).then(|| settings.socket_path().into_owned()),
+            socket_path: socket.path(settings),
             #[cfg(not(unix))]
             socket_path: None,
+            systemd: match socket {
+                SocketSource::Configured => false,
+                #[cfg(unix)]
+                SocketSource::Systemd(_) => true,
+            },
         }
     }
 
@@ -426,8 +439,8 @@ impl SocketPathError {
 impl Pidfile {
     /// The path to the daemon's socket.
     ///
-    /// If the daemon is running and has recorded its socket path in the pidfile, this function returns
-    /// that. Otherwise:
+    /// If the daemon is running, or systemd started it, and it recorded its socket path in the
+    /// pidfile, this function returns that. Otherwise:
     ///
     /// * If `ATUIN_HOME` is unset (the default), [`daemon.existing_socket_path()`][0] is returned,
     ///   which will check for existing sockets in legacy locations.
@@ -444,20 +457,21 @@ impl Pidfile {
     ///
     /// TODO(markovejnovic): Eventually get to the point where we don't need to take the settings.
     pub fn socket_path(&self, daemon: &DaemonSettings) -> Result<PathBuf, SocketPathError> {
-        let existing_socket_path = || daemon.existing_socket_path().into_owned();
-
-        let socket_path = self.info().and_then(|info| info.socket_path);
-
-        if !atuin_common::dirs::atuin_home_is_set() {
-            return Ok(socket_path.unwrap_or_else(existing_socket_path));
+        // systemd keeps listening on its socket once the daemon it started exits, but any other
+        // daemon's socket goes with it. Trusting such a stale record would hide a systemd socket
+        // unit behind a daemon a client once forked.
+        if let Some(PidfileInfo {
+            socket_path: Some(path),
+            systemd,
+            ..
+        }) = self.info()
+            && (systemd || self.is_live())
+        {
+            return Ok(path);
         }
 
-        // If `ATUIN_HOME` is set, require the pidfile to be live to avoid connecting to the wrong
-        // daemon. This should potentially be done even when `ATUIN_HOME` isn't set, but that would be a
-        // larger and possibly riskier change. For now, scope the check to when `ATUIN_HOME` is set,
-        // which is when we would most expect there to be multiple daemons running on the user's system.
-        if let Some(path) = socket_path.filter(|_| self.is_live()) {
-            return Ok(path);
+        if !atuin_common::dirs::atuin_home_is_set() {
+            return Ok(daemon.existing_socket_path().into_owned());
         }
 
         // If there's no socket path in the pidfile (or the pidfile was missing/stale) and `ATUIN_HOME`
@@ -529,6 +543,7 @@ mod tests {
             pid: std::process::id(),
             version: crate::VERSION.to_string(),
             socket_path: socket_path.map(PathBuf::from),
+            systemd: false,
         }
     }
 
@@ -536,21 +551,20 @@ mod tests {
         info_with(Some("/tmp/atuin-1000/atuin.sock"))
     }
 
-    fn daemon_settings(pidfile: &Path, systemd_socket: bool) -> DaemonSettings {
+    fn daemon_settings(pidfile: &Path) -> DaemonSettings {
         DaemonSettings {
             enabled: false,
             autostart: false,
             sync_frequency: None,
             pidfile_path: AbsPathBuf::new(pidfile.to_owned()).unwrap(),
             socket_path: Some(AbsPathBuf::new(pidfile.with_file_name("atuin.sock")).unwrap()),
-            systemd_socket,
             tcp_port: 8889,
         }
     }
 
     #[rstest]
-    fn test_guard_acquire_and_drop(pidfile: Pidfile, #[values(false, true)] systemd_socket: bool) {
-        let settings = daemon_settings(&pidfile.path, systemd_socket);
+    fn test_guard_acquire_and_drop(pidfile: Pidfile) {
+        let settings = daemon_settings(&pidfile.path);
         {
             let _guard = acquire(&settings).unwrap();
             // Guard holds an exclusive lock — on Windows other handles cannot
@@ -561,19 +575,31 @@ mod tests {
         assert_eq!(contents.lines().next().unwrap(), std::process::id().to_string());
         let info = at(&pidfile).info().unwrap();
         assert_eq!(info.version, crate::VERSION);
-        // The socket path is only recorded if the daemon chose it: not under systemd, which passes
-        // the daemon a socket, and not on Windows, which doesn't use one.
-        let expected =
-            (cfg!(unix) && !systemd_socket).then(|| pidfile.path.with_file_name("atuin.sock"));
+        // Windows doesn't use a socket.
+        let expected = cfg!(unix).then(|| pidfile.path.with_file_name("atuin.sock"));
         assert_eq!(info.socket_path, expected);
+        assert!(!info.systemd);
 
         // After guard is dropped, lock should be released — acquiring again must succeed.
         let _guard2 = acquire(&settings).unwrap();
     }
 
+    /// A daemon records the socket systemd passed it, for clients to find it at while it runs, and
+    /// that systemd manages it.
+    #[cfg(unix)]
+    #[rstest]
+    fn a_systemd_socket_is_recorded(pidfile: Pidfile) {
+        let path = pidfile.path.with_file_name("systemd.sock");
+        let socket = SocketSource::Systemd(std::os::unix::net::UnixListener::bind(&path).unwrap());
+
+        let info = PidfileInfo::current(&daemon_settings(&pidfile.path), &socket);
+        assert_eq!(info.socket_path, Some(path));
+        assert!(info.systemd);
+    }
+
     #[rstest]
     fn test_guard_prevents_double_acquire(pidfile: Pidfile) {
-        let settings = daemon_settings(&pidfile.path, false);
+        let settings = daemon_settings(&pidfile.path);
         let _guard = acquire(&settings).unwrap();
         let result = acquire(&settings);
         assert!(matches!(
@@ -668,7 +694,8 @@ mod tests {
             Some(PidfileInfo {
                 pid: 1234,
                 version: "1.2.3".into(),
-                socket_path: None
+                socket_path: None,
+                systemd: false,
             })
         );
     }
@@ -688,8 +715,9 @@ mod tests {
             pid in any::<u32>(),
             version in ".*",
             socket_path in proptest::option::of(path_buf()),
+            systemd in any::<bool>(),
         ) {
-            let info = PidfileInfo { pid, version, socket_path };
+            let info = PidfileInfo { pid, version, socket_path, systemd };
             let contents = format!(
                 "{pid}\n{FORMAT_V1}\n{}\n",
                 serde_json::to_string(&info).unwrap()
@@ -717,7 +745,8 @@ mod tests {
 
     /// Lock the pidfile `daemon` configures, as a daemon started with it does.
     fn acquire(daemon: &DaemonSettings) -> Result<PidfileGuard, AcquireGuardError> {
-        super::Pidfile::new(&daemon.pidfile_path).acquire(&PidfileInfo::current(daemon))
+        super::Pidfile::new(&daemon.pidfile_path)
+            .acquire(&PidfileInfo::current(daemon, &SocketSource::Configured))
     }
 
     /// Where the pidfile `daemon` configures says the daemon listens.
@@ -728,47 +757,48 @@ mod tests {
 
     /// Settings for a client whose daemon socket is configured at `socket_path`.
     #[cfg(unix)]
-    fn settings(pidfile: &Path, socket_path: &Path, systemd_socket: bool) -> Settings {
+    fn settings(pidfile: &Path, socket_path: &Path) -> Settings {
         let mut settings = Settings::default();
         settings.daemon.pidfile_path = AbsPathBuf::new(pidfile.to_owned()).unwrap();
         settings.daemon.socket_path = Some(AbsPathBuf::new(socket_path.to_owned()).unwrap());
-        settings.daemon.systemd_socket = systemd_socket;
         settings
     }
 
-    /// A daemon configured for `old.sock` has exited, leaving its pidfile behind, and the client is
-    /// now configured for `new.sock`.
+    /// A daemon recorded `old.sock` in its pidfile, and the client is configured for `new.sock`.
+    /// The record is used while the daemon runs, and after it exits only if systemd, which keeps
+    /// listening, started it.
     #[cfg(unix)]
     #[rstest]
-    #[case::pidfile_path_is_used(false, false, "old.sock")]
-    #[case::systemd_daemon_records_no_path(true, false, "new.sock")]
-    #[case::both_systemd(true, true, "new.sock")]
-    fn test_socket_path_with_stale_pidfile(
-        #[case] daemon_systemd_socket: bool,
-        #[case] client_systemd_socket: bool,
+    #[case::running(true, false, "old.sock")]
+    #[case::exited(false, false, "new.sock")]
+    #[case::started_by_systemd_and_exited(false, true, "old.sock")]
+    fn test_socket_path_with_recorded_path(
+        #[case] running: bool,
+        #[case] systemd: bool,
         #[case] expected: &str,
     ) {
         let dir = tempfile::tempdir().unwrap();
         let _env = env(dir.path(), false);
 
         let pidfile = dir.path().join("atuin-daemon.pid");
+        let recorded = PidfileInfo {
+            socket_path: Some(dir.path().join("old.sock")),
+            systemd,
+            ..info()
+        };
+        let guard = super::Pidfile::new(&pidfile).acquire(&recorded).unwrap();
+        // A daemon exits by dropping its guard.
+        let _running = running.then_some(guard);
 
-        let old = settings(&pidfile, &dir.path().join("old.sock"), daemon_systemd_socket);
-        drop(acquire(&old.daemon).unwrap());
-
-        let new = settings(&pidfile, &dir.path().join("new.sock"), client_systemd_socket);
-        assert_eq!(socket_path(&new.daemon).unwrap(), dir.path().join(expected));
+        let client = settings(&pidfile, &dir.path().join("new.sock"));
+        assert_eq!(socket_path(&client.daemon).unwrap(), dir.path().join(expected));
     }
 
     #[cfg(unix)]
     #[rstest]
-    fn test_socket_path_without_pidfile(#[values(false, true)] systemd_socket: bool) {
+    fn test_socket_path_without_pidfile() {
         let dir = tempfile::tempdir().unwrap();
-        let settings = settings(
-            &dir.path().join("atuin-daemon.pid"),
-            &dir.path().join("a.sock"),
-            systemd_socket,
-        );
+        let settings = settings(&dir.path().join("atuin-daemon.pid"), &dir.path().join("a.sock"));
         assert_eq!(socket_path(&settings.daemon).unwrap(), dir.path().join("a.sock"));
     }
 
@@ -810,8 +840,7 @@ mod tests {
     /// Settings with the socket at [`preferred_path`], and a pidfile in `dir`.
     #[cfg(unix)]
     fn settings_in(dir: &Path, configured: bool) -> Settings {
-        let mut settings =
-            settings(&dir.join("atuin-daemon.pid"), &dir.join("configured.sock"), false);
+        let mut settings = settings(&dir.join("atuin-daemon.pid"), &dir.join("configured.sock"));
         if !configured {
             settings.daemon.socket_path = None;
         }
@@ -886,10 +915,10 @@ mod tests {
         let _env = env(dir.path(), true);
         let pidfile = dir.path().join("atuin-daemon.pid");
 
-        let daemon = settings(&pidfile, &dir.path().join("daemon.sock"), false);
+        let daemon = settings(&pidfile, &dir.path().join("daemon.sock"));
         let _guard = acquire(&daemon.daemon).unwrap();
 
-        let client = settings(&pidfile, &dir.path().join("other.sock"), false);
+        let client = settings(&pidfile, &dir.path().join("other.sock"));
         let _listener = listen(&dir.path().join("other.sock"));
         assert_eq!(socket_path(&client.daemon).unwrap(), dir.path().join("daemon.sock"));
     }
@@ -906,7 +935,7 @@ mod tests {
 
         // A daemon recorded `daemon.sock`, then exited, leaving its pidfile behind. Its path is
         // now live, as if another profile's daemon had taken it.
-        let daemon = settings(&pidfile, &dir.path().join("daemon.sock"), false);
+        let daemon = settings(&pidfile, &dir.path().join("daemon.sock"));
         drop(acquire(&daemon.daemon).unwrap());
         let _taken = listen(&dir.path().join("daemon.sock"));
 

@@ -255,27 +255,20 @@ enter_accept = true
 # enabled = false
 
 ## Automatically start and manage the daemon when needed.
-## Not compatible with `systemd_socket = true`.
+## A daemon systemd starts through socket activation is left to systemd.
 # autostart = false
 
 ## How often the daemon should sync in seconds
 # sync_frequency = 300
 
 ## The path to the unix socket used by the daemon (on unix systems)
-## linux/mac default:
-## - if systemd_socket is false: $TMPDIR/atuin-$UID/atuin.sock
-## - if systemd_socket is true: $XDG_RUNTIME_DIR/atuin.sock
+## linux/mac default: $TMPDIR/atuin-$UID/atuin.sock
+## A systemd socket unit at $XDG_RUNTIME_DIR/atuin.sock is found without setting this.
 ## windows: Not Supported
 # socket_path = "/custom/path/to/atuin.sock"
 
 ## The daemon pidfile used for lifecycle management.
 # pidfile_path = "~/.atuin/data/atuin-daemon.pid"
-
-## Use systemd socket activation rather than opening the given path (the path must still be correct).
-## Note: setting this to true changes the default value of socket_path; see above.
-## linux: false
-## mac/windows: Not Supported
-# systemd_socket = false
 
 ## The port that should be used for TCP on non unix systems
 # tcp_port = 8889

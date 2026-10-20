@@ -44,9 +44,6 @@ pub struct Daemon {
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub pidfile_path: AbsPathBuf,
 
-    /// Use a socket passed via systemd's socket activation protocol, instead of the path
-    pub systemd_socket: bool,
-
     /// The port that should be used for TCP on non unix systems
     pub tcp_port: u64,
 }
@@ -76,14 +73,12 @@ impl Daemon {
     /// If the user has manually configured a socket path in config.toml, this method yields only
     /// that path. Otherwise, it yields:
     ///
-    /// 1. If `systemd_socket` is true and `$XDG_RUNTIME_DIR` is non-empty,
-    ///    `$XDG_RUNTIME_DIR/atuin.sock`.
-    /// 2. `$TMPDIR/atuin-$UID/atuin.sock` (substituting `/tmp` for `$TMPDIR` if unset).
-    /// 3. If `$XDG_RUNTIME_DIR` is non-empty, `$XDG_RUNTIME_DIR/atuin.sock` (legacy path), unless
-    ///    step #1 already yielded that path.
-    /// 4. If `$XDG_DATA_HOME` is non-empty, `$XDG_DATA_HOME/atuin/atuin.sock` (legacy path).
-    /// 5. If `$XDG_DATA_HOME` is unset or empty, `~/.local/share/atuin/atuin.sock` (legacy path).
-    /// 6. If `$TMPDIR` is set, `/tmp/atuin-$UID/atuin.sock` (ignoring `$TMPDIR`).
+    /// 1. `$TMPDIR/atuin-$UID/atuin.sock` (substituting `/tmp` for `$TMPDIR` if unset).
+    /// 2. If `$XDG_RUNTIME_DIR` is non-empty, `$XDG_RUNTIME_DIR/atuin.sock`, where systemd socket
+    ///    units (`%t/atuin.sock`) and older versions of Atuin listen.
+    /// 3. If `$XDG_DATA_HOME` is non-empty, `$XDG_DATA_HOME/atuin/atuin.sock` (legacy path).
+    /// 4. If `$XDG_DATA_HOME` is unset or empty, `~/.local/share/atuin/atuin.sock` (legacy path).
+    /// 5. If `$TMPDIR` is set, `/tmp/atuin-$UID/atuin.sock` (ignoring `$TMPDIR`).
     ///
     /// Note: you should almost always use `atuin_daemon::client::potential_socket_paths` instead of
     /// this method, as it implements additional logic.
@@ -104,14 +99,6 @@ impl Daemon {
     fn socket_path_ctx(&self, ctx: impl SocketCtx) -> SocketPath<'_> {
         if let Some(path) = &self.socket_path {
             return SocketPath::UserDefined(path);
-        }
-
-        // systemd units typically listen on `%t/atuin.sock`, which is `$XDG_RUNTIME_DIR/atuin.sock`
-        // for user units, so we should default to that path when `systemd_socket` is true.
-        if self.systemd_socket
-            && let Some(path) = ctx.runtime_socket_path()
-        {
-            return SocketPath::Default(path);
         }
 
         SocketPath::Default(ctx.default_socket_path().primary)
@@ -135,43 +122,30 @@ impl Daemon {
         if let Some(path) = self.socket_path.as_deref().map(AbsPath::as_path) {
             itertools::Either::Left(std::iter::once(Cow::Borrowed(path)))
         } else {
-            itertools::Either::Right(self.default_socket_paths(ctx).map(Cow::Owned))
+            itertools::Either::Right(Self::default_socket_paths(ctx).map(Cow::Owned))
         }
     }
 
-    fn default_socket_paths(&self, ctx: impl SocketCtx) -> impl Iterator<Item = PathBuf> {
+    fn default_socket_paths(ctx: impl SocketCtx) -> impl Iterator<Item = PathBuf> {
         #[derive(Clone, Copy, Eq, PartialEq)]
         enum Step {
-            Runtime,
             DefaultPrimary,
             Legacy,
             DefaultEnvless,
             Done,
         }
 
-        let mut step = Step::Runtime;
-        let mut has_runtime_path = false;
+        let mut step = Step::DefaultPrimary;
         let mut default_envless = None;
 
         std::iter::from_fn(move || {
             let (next, item) = match step {
-                Step::Runtime => {
-                    let runtime_path =
-                        self.systemd_socket.then(|| ctx.runtime_socket_path()).flatten();
-                    has_runtime_path = runtime_path.is_some();
-                    (Step::DefaultPrimary, runtime_path.map(PathBuf::from))
-                }
                 Step::DefaultPrimary => {
                     let default_socket_path = ctx.default_socket_path();
                     default_envless = default_socket_path.envless;
                     (Step::Legacy, Some(default_socket_path.primary.into()))
                 }
-                Step::Legacy => {
-                    // If `runtime_path` was `Some`, `ctx.legacy_socket_path()` will return the same
-                    // path (both pointing to `$XDG_RUNTIME_DIR`), so don't include the legacy path
-                    // in that case.
-                    (Step::DefaultEnvless, (!has_runtime_path).then(|| ctx.legacy_socket_path()))
-                }
+                Step::Legacy => (Step::DefaultEnvless, Some(ctx.legacy_socket_path())),
                 Step::DefaultEnvless => (Step::Done, default_envless.take().map(PathBuf::from)),
                 Step::Done => return None,
             };
@@ -343,14 +317,13 @@ mod unix_tests {
         }
     }
 
-    fn daemon(socket_path: Option<PathBuf>, systemd_socket: bool) -> Daemon {
+    fn daemon(socket_path: Option<PathBuf>) -> Daemon {
         Daemon {
             enabled: false,
             autostart: false,
             sync_frequency: None,
             socket_path: socket_path.map(|path| AbsPathBuf::new(path).unwrap()),
             pidfile_path: AbsPathBuf::new(PathBuf::from("/tmp/atuin-daemon.pid")).unwrap(),
-            systemd_socket,
             tcp_port: 8889,
         }
     }
@@ -424,36 +397,28 @@ mod unix_tests {
     }
 
     #[rstest]
-    // With nothing configured we use the per-uid default, and only fall back to where an older
-    // version of Atuin would have left a socket. `$TMPDIR` is unset here, so the default already
-    // is the `/tmp` path and it is not yielded a second time.
-    #[case::unconfigured("/tmp", None, false, true, vec![DEFAULT, RUNTIME])]
-    #[case::unconfigured_without_runtime_dir("/tmp", None, false, false, vec![DEFAULT, LEGACY])]
-    // A socket-activated unit listens on `%t/atuin.sock`, which is also the legacy path.
-    #[case::systemd("/tmp", None, true, true, vec![RUNTIME, DEFAULT])]
-    #[case::systemd_without_runtime_dir("/tmp", None, true, false, vec![DEFAULT, LEGACY])]
+    // With nothing configured we use the per-uid default, then fall back to `%t/atuin.sock`, where
+    // a systemd socket unit or an older version of Atuin listens. `$TMPDIR` is unset here, so the
+    // default already is the `/tmp` path and it is not yielded a second time.
+    #[case::unconfigured("/tmp", None, true, vec![DEFAULT, RUNTIME])]
+    #[case::unconfigured_without_runtime_dir("/tmp", None, false, vec![DEFAULT, LEGACY])]
     // A configured path is the only one we ever consider.
-    #[case::configured("/tmp", Some(CUSTOM), false, true, vec![CUSTOM])]
-    #[case::configured_with_systemd("/tmp", Some(CUSTOM), true, true, vec![CUSTOM])]
+    #[case::configured("/tmp", Some(CUSTOM), true, vec![CUSTOM])]
     // With `$TMPDIR` set, the `$TMPDIR` socket still wins, but `/tmp` is tried last, because the
     // daemon may have been started in an environment where `$TMPDIR` was unset.
-    #[case::tmpdir_set(TMPDIR, None, false, true, vec![TMPDIR_DEFAULT, RUNTIME, DEFAULT])]
+    #[case::tmpdir_set(TMPDIR, None, true, vec![TMPDIR_DEFAULT, RUNTIME, DEFAULT])]
     #[case::tmpdir_set_without_runtime_dir(
-        TMPDIR, None, false, false, vec![TMPDIR_DEFAULT, LEGACY, DEFAULT]
-    )]
-    #[case::tmpdir_set_with_systemd(
-        TMPDIR, None, true, true, vec![RUNTIME, TMPDIR_DEFAULT, DEFAULT]
+        TMPDIR, None, false, vec![TMPDIR_DEFAULT, LEGACY, DEFAULT]
     )]
     // A configured path stays the only one we consider, `$TMPDIR` or not.
-    #[case::tmpdir_set_and_configured(TMPDIR, Some(CUSTOM), false, true, vec![CUSTOM])]
+    #[case::tmpdir_set_and_configured(TMPDIR, Some(CUSTOM), true, vec![CUSTOM])]
     fn socket_paths_are_tried_in_priority_order(
         #[case] tmp_dir: &str,
         #[case] configured: Option<&str>,
-        #[case] systemd_socket: bool,
         #[case] runtime_dir: bool,
         #[case] expected: Vec<&str>,
     ) {
-        let daemon = daemon(configured.map(PathBuf::from), systemd_socket);
+        let daemon = daemon(configured.map(PathBuf::from));
         let ctx = TestCtx {
             tmp_dir: AbsPath::new(tmp_dir).unwrap(),
             runtime_dir: runtime_dir.then_some(AbsPath::new("/run/user/1234").unwrap()),
@@ -471,6 +436,7 @@ mod unix_tests {
     /// on a fallback path is still found.
     #[rstest]
     #[case::none_exist(&[], TMPDIR_DEFAULT)]
+    // How a client finds a systemd socket unit before it has started the daemon.
     #[case::only_the_runtime_fallback_exists(&[RUNTIME], RUNTIME)]
     // The case this fallback exists for: a daemon started without `$TMPDIR` is listening on
     // `/tmp`, while the client that looks for it has `$TMPDIR` set.
@@ -499,13 +465,13 @@ mod unix_tests {
             fs_err::File::create(path).unwrap();
         }
 
-        assert_eq!(daemon(None, false).existing_socket_path_ctx(ctx), scoped(expected));
+        assert_eq!(daemon(None).existing_socket_path_ctx(ctx), scoped(expected));
     }
 
     #[rstest]
     fn no_directory_is_created_for_a_user_defined_socket(tmp: TempDir) {
         let dir = tmp.path().join("custom");
-        let daemon = daemon(Some(dir.join("atuin.sock")), false);
+        let daemon = daemon(Some(dir.join("atuin.sock")));
 
         daemon.socket_path().create_default_dir_if_needed().unwrap();
 

@@ -1623,7 +1623,6 @@ impl Settings {
             .set_default("daemon.autostart", false)?
             .set_default("daemon.socket_path", None::<String>)?
             .set_default("daemon.pidfile_path", pidfile_path.to_str().map(ShellExpanded::escape))?
-            .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
             .set_default("output.enabled", output.enabled)?
             .set_default("output.max_output_size", output.max_output_size.to_string())?

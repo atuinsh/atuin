@@ -9,8 +9,6 @@ use daemonix::Daemonize;
 use crate::service::address::DaemonAddress;
 use crate::service::backend::{Backend, BackendError};
 use crate::service::connection::Connection;
-#[cfg(unix)]
-use crate::service::pidfile::{Pidfile, SocketPathError};
 
 /// Represents a backend that manages atuin-daemon as a background task by forking a user's regular
 /// `atuin` process.
@@ -23,9 +21,6 @@ pub struct Subproc {
 pub enum SubprocError {
     #[error("failed to launch the daemon: {0}")]
     Launch(std::io::Error),
-    #[cfg(unix)]
-    #[error(transparent)]
-    SocketPath(#[from] SocketPathError),
 }
 
 /// Errors from [`Subproc::daemonize`].
@@ -88,25 +83,15 @@ impl Backend for Subproc {
         }
     }
 
-    fn locate(&self) -> Result<DaemonAddress, BackendError> {
-        #[cfg(unix)]
-        {
-            let pidfile = Pidfile::new(&self.daemon.pidfile_path);
-            let socket = pidfile.socket_path(&self.daemon).map_err(SubprocError::from);
-            Ok(DaemonAddress::from(socket.map_err(BackendError::new)?))
-        }
-        #[cfg(not(unix))]
-        {
-            Ok(DaemonAddress::from(self.daemon.tcp_port))
-        }
-    }
-
     async fn launch(&self) -> Result<(), BackendError> {
         let exe = atuin_common::os::process::current_exe();
 
         let mut service = Command::new(exe);
         service
             .args(["daemon", "start"])
+            // It binds its own socket, whatever systemd passed this client.
+            .env_remove("LISTEN_FDS")
+            .env_remove("LISTEN_PID")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

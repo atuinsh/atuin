@@ -111,7 +111,6 @@ impl ActiveService {
     ///
     /// TODO(markovejnovic): Do not use the global Settings but pass DaemonSettings.
     pub async fn find_or_spawn(settings: &Settings) -> Result<Self, ServiceFindError> {
-        let backend = AnyBackend::new(&settings.daemon);
         let pidfile = Pidfile::new(&settings.daemon.pidfile_path);
         let timeout = Self::timeout(settings.local_timeout);
         let startup = pidfile.startup_lock(timeout);
@@ -125,6 +124,7 @@ impl ActiveService {
             }
         }
 
+        let backend = AnyBackend::new(&settings.daemon);
         let connection = Self::launch(&backend, &pidfile, timeout).await?;
         connection.ensure_our_build()?;
         Ok(Self {
@@ -140,12 +140,11 @@ impl ActiveService {
     ///
     /// TODO(markovejnovic): Do not use the global Settings but pass DaemonSettings.
     pub async fn find(settings: &Settings) -> Result<Option<Self>, ServiceFindError> {
-        let backend = AnyBackend::new(&settings.daemon);
-        let Some(connection) = Connection::at(backend.locate().map_err(FindError::from)?).await?
-        else {
+        let Some(connection) = Connection::at(Self::locate(&settings.daemon)?).await? else {
             return Ok(None);
         };
 
+        let backend = AnyBackend::new(&settings.daemon);
         let pidfile = Pidfile::new(&settings.daemon.pidfile_path);
         let timeout = Self::timeout(settings.local_timeout);
         let startup = pidfile.startup_lock(timeout);
@@ -160,7 +159,15 @@ impl ActiveService {
 
     /// Where the running service `daemon` describes listens, whichever started it.
     pub fn locate(daemon: &DaemonSettings) -> Result<DaemonAddress, FindError> {
-        Ok(AnyBackend::new(daemon).locate()?)
+        #[cfg(unix)]
+        {
+            let pidfile = Pidfile::new(&daemon.pidfile_path);
+            Ok(DaemonAddress::from(pidfile.socket_path(daemon)?))
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(DaemonAddress::from(daemon.tcp_port))
+        }
     }
 
     /// Check that the service is this client's build.
