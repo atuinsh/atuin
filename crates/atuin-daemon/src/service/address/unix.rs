@@ -1,5 +1,5 @@
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::net::UnixStream;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -8,7 +8,10 @@ use tokio_stream::wrappers::UnixListenerStream;
 pub type DaemonStream = UnixStream;
 
 /// Where the daemon listens for clients: a Unix socket.
-#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::From)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, derive_more::AsRef, derive_more::Display, derive_more::From,
+)]
+#[as_ref(Path)]
 #[display("{}", _0.display())]
 pub struct DaemonAddress(PathBuf);
 

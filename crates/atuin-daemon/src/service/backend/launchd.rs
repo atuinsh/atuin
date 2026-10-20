@@ -128,12 +128,10 @@ impl Launchd {
         .expect("uninstalling the launchd agent shouldn't panic")
     }
 
-    /// Remove the socket's file that launchd leaves behind, once nothing listens on it.
+    /// Remove the socket's file at `path` that launchd leaves behind, once nothing listens on it.
     ///
     /// An agent started outside launchd still listens on it until it exits, and removes it itself.
-    fn remove_stale_socket(&self) {
-        let socket = self.daemon.socket_path();
-        let path = socket.as_path();
+    fn remove_stale_socket(path: &Path) {
         let stale = matches!(atuin_common::os::unix::socket_in_use(path), Ok(false))
             // `socket_in_use` is `Ok(false)` for a regular file at a misconfigured path too.
             && std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_socket());
@@ -183,7 +181,8 @@ impl Backend for Launchd {
         // An older client, or `atuin daemon start`, may have started the agent outside launchd.
         service.request_shutdown().await;
 
-        self.remove_stale_socket();
+        // Where the agent was found, which the config may have moved the socket from since.
+        Self::remove_stale_socket(service.address().as_ref());
         Ok(())
     }
 
