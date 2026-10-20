@@ -6,11 +6,13 @@ use std::time::Duration;
 use atuin_client::settings::Daemon as DaemonSettings;
 use tokio::task::JoinHandle;
 
-/// The socket file a daemon bound itself, kept fresh against temporary file cleaners and removed
-/// when dropped.
+/// The socket file a daemon listens on, kept fresh against temporary file cleaners and, if the
+/// daemon bound it itself, removed when dropped.
 pub(super) struct SocketFile {
     path: PathBuf,
     keepalive: JoinHandle<()>,
+    /// Whether the file goes when the daemon exits, rather than outliving it as launchd's does.
+    owned: bool,
 }
 
 /// An error that occurred while trying to remove a socket.
@@ -28,6 +30,16 @@ impl SocketFile {
 
     /// Own the socket bound at `path`, keeping it fresh from the current Tokio runtime.
     pub(super) fn new(path: PathBuf) -> Self {
+        Self::keep_fresh(path, true)
+    }
+
+    /// Keep fresh the socket launchd holds at `path`, which goes on listening once the daemon exits.
+    #[cfg(target_os = "macos")]
+    pub(super) fn held_by_launchd(path: PathBuf) -> Self {
+        Self::keep_fresh(path, false)
+    }
+
+    fn keep_fresh(path: PathBuf, owned: bool) -> Self {
         let touched = path.clone();
         let keepalive = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Self::KEEPALIVE_INTERVAL);
@@ -38,7 +50,11 @@ impl SocketFile {
                 }
             }
         });
-        Self { path, keepalive }
+        Self {
+            path,
+            keepalive,
+            owned,
+        }
     }
 
     /// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
@@ -81,6 +97,9 @@ impl SocketFile {
 impl Drop for SocketFile {
     fn drop(&mut self) {
         self.keepalive.abort();
+        if !self.owned {
+            return;
+        }
         tracing::info!("removing socket {}", self.path.display());
         if let Err(e) = std::fs::remove_file(&self.path)
             && e.kind() != ErrorKind::NotFound

@@ -1,6 +1,8 @@
 //! The backend used to manage the daemon service.
 #[cfg(unix)]
 mod external_systemd;
+#[cfg(target_os = "macos")]
+mod launchd;
 mod subproc;
 
 use std::time::Duration;
@@ -9,6 +11,8 @@ use atuin_client::settings::Daemon as DaemonSettings;
 use enum_dispatch::enum_dispatch;
 #[cfg(unix)]
 pub use external_systemd::ExternalSystemd;
+#[cfg(target_os = "macos")]
+pub use launchd::Launchd;
 #[cfg(unix)]
 pub use subproc::DaemonizeError;
 pub use subproc::Subproc;
@@ -89,6 +93,8 @@ pub trait Backend {
 pub enum AnyBackend {
     #[cfg(unix)]
     ExternalSystemd(ExternalSystemd),
+    #[cfg(target_os = "macos")]
+    Launchd(Launchd),
     Subproc(Subproc),
 }
 
@@ -98,6 +104,13 @@ impl AnyBackend {
         #[cfg(unix)]
         if daemon.systemd_socket {
             return ExternalSystemd::new(daemon).into();
+        }
+
+        // Without `autostart`, something else manages the daemon (`brew services`, home-manager),
+        // and an agent of our own beside theirs would fight theirs for the pidfile at every login.
+        #[cfg(target_os = "macos")]
+        if daemon.autostart && Launchd::is_available() {
+            return Launchd::new(daemon).into();
         }
 
         Subproc::new(daemon).into()

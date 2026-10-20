@@ -242,7 +242,8 @@ impl ActiveService {
         timeout: Duration,
     ) -> Result<Connection, SpawnError> {
         // A service that was just asked to shut down holds the pidfile until it exits, and one
-        // launched before then would find the pidfile taken and exit itself.
+        // launched before then would find the pidfile taken and exit itself. Under launchd, the new
+        // service's socket would also replace the one the last service still answers on.
         pidfile.released(timeout).await?;
         backend.launch().await?;
         Connection::connect_when_ready(&backend.address(), timeout).await

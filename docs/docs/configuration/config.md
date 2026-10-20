@@ -1060,6 +1060,9 @@ Default: `false`
 Automatically start and manage the daemon when needed.
 This isn't compatible with `systemd_socket = true`.
 If a legacy experimental daemon is already running, restart it manually once before using autostart.
+On macOS, when you're logged in graphically, Atuin runs the daemon as a launchd agent at
+`~/Library/LaunchAgents/sh.atuin.daemon.plist`, and macOS tells you it added a background item the
+first time.
 
 ```toml
 autostart = false
