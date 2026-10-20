@@ -57,6 +57,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// engine, starts the gRPC server with their services, and runs the event loop.
 pub async fn boot(
     settings: Arc<Settings>,
+    socket: server::SocketSource,
     store: SqliteStore,
     history_db: HistoryDatabase,
 ) -> Result<()> {
@@ -197,6 +198,7 @@ pub async fn boot(
     // Start the gRPC server in the background
     server::run_grpc_server(
         &settings,
+        socket,
         history_service,
         search_service.build(handle.clone()),
         ai_session_service,

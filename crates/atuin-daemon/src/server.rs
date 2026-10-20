@@ -21,6 +21,43 @@ const SOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from
 pub const STRICT_VERSION_LAYER: StrictVersionLayer =
     StrictVersionLayer::new(&["/history.History/Shutdown"]);
 
+/// Where the daemon gets the socket it serves clients on.
+#[derive(Debug)]
+pub enum SocketSource {
+    /// The configured socket, which the daemon binds and removes again on exit. On Windows, a TCP
+    /// port.
+    Configured,
+    /// The socket systemd bound and passed in through socket activation.
+    #[cfg(unix)]
+    Systemd(std::os::unix::net::UnixListener),
+}
+
+impl SocketSource {
+    /// The socket systemd passed this process in `LISTEN_FDS`, if it passed one, otherwise the
+    /// configured one.
+    ///
+    /// Takes the socket out of the environment, so call it once, before anything else reads it.
+    pub fn from_env() -> std::io::Result<Self> {
+        #[cfg(target_os = "linux")]
+        if let Some(listener) = listenfd::ListenFd::from_env().take_unix_listener(0)? {
+            return Ok(Self::Systemd(listener));
+        }
+        Ok(Self::Configured)
+    }
+
+    /// The path of the socket the daemon listens on, if it has one.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn path(&self, daemon: &atuin_client::settings::Daemon) -> Option<std::path::PathBuf> {
+        match self {
+            Self::Configured => Some(daemon.socket_path().into_owned()),
+            Self::Systemd(listener) => {
+                listener.local_addr().ok()?.as_pathname().map(std::path::Path::to_path_buf)
+            }
+        }
+    }
+}
+
 /// Run the gRPC server with the given services.
 ///
 /// This starts the gRPC server in the background and returns immediately.
@@ -29,6 +66,7 @@ pub const STRICT_VERSION_LAYER: StrictVersionLayer =
 #[allow(clippy::unused_async, reason = "needs to match the cfg(not(unix)) version")]
 pub async fn run_grpc_server(
     settings: &Settings,
+    socket: SocketSource,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     ai_session_service: AiSessionServer<grpc::AiSessionService>,
@@ -37,62 +75,37 @@ pub async fn run_grpc_server(
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
 
-    let socket_path = settings.daemon.socket_path();
-
-    let (uds, cleanup_path) = if cfg!(target_os = "linux") && settings.daemon.systemd_socket {
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::unix::net::SocketAddr;
-            use std::path::PathBuf;
-
-            use eyre::{OptionExt, WrapErr};
-            tracing::info!("getting systemd socket");
-            let listener = listenfd::ListenFd::from_env()
-                .take_unix_listener(0)?
-                .ok_or_eyre("missing systemd socket")?;
+    let (uds, cleanup_path) = match socket {
+        SocketSource::Systemd(listener) => {
             listener.set_nonblocking(true)?;
-            let actual_path: Result<PathBuf, eyre::Report> = listener
-                .local_addr()
-                .context("getting systemd socket's path")
-                .and_then(|addr: SocketAddr| {
-                    addr.as_pathname()
-                        .ok_or_eyre("systemd socket missing path")
-                        .map(|path: &std::path::Path| path.to_owned())
-                });
-            match actual_path {
-                Ok(actual_path) => {
-                    tracing::info!("listening on systemd socket: {actual_path:?}");
-                    if actual_path != socket_path.as_path() {
-                        tracing::warn!(
-                            "systemd socket is not at configured client path: {:?}",
-                            socket_path.as_path(),
-                        );
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "could not detect systemd socket path, ensure that it's at the configured \
-                         path: {:?}, error: {err:?}",
-                        socket_path.as_path(),
-                    );
-                }
+            let path = listener.local_addr()?;
+            tracing::info!("listening on systemd socket {path:?}");
+            // Clients find a running daemon through its pidfile, but a stopped one only at a path
+            // they look for sockets at.
+            if !path.as_pathname().is_some_and(|path| {
+                crate::client::potential_socket_paths(settings).any(|candidate| candidate == path)
+            }) {
+                tracing::warn!(
+                    "clients won't find systemd socket {path:?} while the daemon is stopped; set \
+                     `daemon.socket_path` to it"
+                );
             }
             (UnixListener::from_std(listener)?, None)
         }
-        #[cfg(not(target_os = "linux"))]
-        unreachable!()
-    } else {
-        use atuin_common::path::DisplayRichExt;
+        SocketSource::Configured => {
+            use atuin_common::path::DisplayRichExt;
 
-        socket_path.create_default_dir_if_needed()?;
-        tracing::info!("listening on unix socket {:?}", socket_path.as_path());
-        (
-            UnixListener::bind(&socket_path).context(format!(
-                "reading socket: {}",
-                socket_path.display_rich().relative_to_cwd()
-            ))?,
-            Some(socket_path.into_owned()),
-        )
+            let socket_path = settings.daemon.socket_path();
+            socket_path.create_default_dir_if_needed()?;
+            tracing::info!("listening on unix socket {:?}", socket_path.as_path());
+            (
+                UnixListener::bind(&socket_path).context(format!(
+                    "reading socket: {}",
+                    socket_path.display_rich().relative_to_cwd()
+                ))?,
+                Some(socket_path.into_owned()),
+            )
+        }
     };
 
     let uds_stream = UnixListenerStream::new(uds);
@@ -160,6 +173,7 @@ pub async fn run_grpc_server(
 #[cfg(not(unix))]
 pub async fn run_grpc_server(
     settings: &Settings,
+    socket: SocketSource,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
     ai_session_service: AiSessionServer<grpc::AiSessionService>,
@@ -169,6 +183,7 @@ pub async fn run_grpc_server(
     use tokio_stream::wrappers::TcpListenerStream;
     use tonic::transport::Server;
 
+    let SocketSource::Configured = socket;
     let port = settings.daemon.tcp_port;
     let url = format!("127.0.0.1:{port}");
     let tcp = TcpListener::bind(&url).await?;

@@ -3423,9 +3423,9 @@ mod tests {
         let mut settings = Settings::utc();
         settings.requested_search_mode = RequestedSearchMode::DaemonFuzzy;
         settings.daemon.enabled = true;
-        settings.daemon.autostart = true;
-        settings.daemon.systemd_socket = true;
         settings.daemon.socket_path = AbsPathBuf::new(temp.path().join("missing.sock")).ok();
+        settings.daemon.pidfile_path =
+            AbsPathBuf::new(temp.path().join("atuin-daemon.pid")).unwrap();
         let settings = Arc::new(settings);
 
         let mut state = state(KeymapMode::Emacs, 0, 0, FilterMode::Global, "query");

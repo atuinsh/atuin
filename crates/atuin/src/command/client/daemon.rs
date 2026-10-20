@@ -10,6 +10,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::grpc::versioning::BUILD_STR;
+use atuin_daemon::server::SocketSource;
 use atuin_daemon::service::pidfile::{Pidfile, PidfileInfo};
 use atuin_daemon::service::{ActiveService, PidfileWaitError, StopError};
 use clap::Subcommand;
@@ -124,14 +125,17 @@ struct RemoveSocketError {
     source: std::io::Error,
 }
 
-/// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
+/// Remove the daemon's socket from every path it may be at, subject to `should_remove`, unless
+/// `socket` is one systemd holds.
 #[cfg(unix)]
 fn remove_sockets(
     settings: &Settings,
+    socket: &SocketSource,
     should_remove: impl Fn(&Path) -> bool,
 ) -> Result<(), RemoveSocketError> {
-    if settings.daemon.systemd_socket {
-        return Ok(());
+    match socket {
+        SocketSource::Configured => {}
+        SocketSource::Systemd(_) => return Ok(()),
     }
 
     let mut error = None;
@@ -157,10 +161,13 @@ fn remove_sockets(
 
 /// Remove any socket left behind by a daemon that is no longer listening.
 #[cfg(unix)]
-fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
+fn remove_stale_socket_if_present(
+    settings: &Settings,
+    socket: &SocketSource,
+) -> Result<(), RemoveSocketError> {
     use std::os::unix::fs::FileTypeExt;
 
-    remove_sockets(settings, |socket_path| {
+    remove_sockets(settings, socket, |socket_path| {
         matches!(atuin_common::os::unix::socket_in_use(socket_path), Ok(false))
             // Ensure file is a socket; `socket_in_use` can return `Ok(false)` for regular files.
             && fs::symlink_metadata(socket_path).is_ok_and(|meta| meta.file_type().is_socket())
@@ -364,23 +371,28 @@ async fn run(
     history_db: Sqlite,
     force: bool,
 ) -> Result<()> {
+    let socket = SocketSource::from_env().wrap_err("taking the socket systemd passed in")?;
+
     if force {
         force_cleanup(&settings).await;
     }
 
     let _pidfile_guard = Pidfile::new(&settings.daemon.pidfile_path)
-        .acquire(&PidfileInfo::current(&settings.daemon))?;
+        .acquire(&PidfileInfo::current(&settings.daemon, &socket))?;
 
     // A daemon that crashed left its socket behind, which would keep this one from listening.
     #[cfg(unix)]
-    remove_stale_socket_if_present(&settings)?;
+    remove_stale_socket_if_present(&settings, &socket)?;
 
-    atuin_daemon::boot(settings, store, history_db).await?;
+    atuin_daemon::boot(settings, socket, store, history_db).await?;
 
     Ok(())
 }
 
-/// Force cleanup: kill existing daemon process and remove socket.
+/// Force cleanup: kill the daemon the pidfile names and remove the pidfile.
+///
+/// Sockets are left to the stale-socket check every start makes: nothing listens at the killed
+/// daemon's anymore, but a systemd socket unit's still does and must stay.
 async fn force_cleanup(settings: &Settings) {
     let pidfile_path = Path::new(&settings.daemon.pidfile_path);
 
@@ -400,12 +412,6 @@ async fn force_cleanup(settings: &Settings) {
         {
             tracing::warn!("failed to remove pidfile: {e}");
         }
-    }
-
-    // Remove the socket files
-    #[cfg(unix)]
-    if let Err(e) = remove_sockets(settings, |_| true) {
-        tracing::warn!("{e}");
     }
 }
 
@@ -452,8 +458,27 @@ mod tests {
         }
         let mut settings = Settings::default();
         settings.daemon.socket_path = AbsPathBuf::new(path.clone()).ok();
-        remove_stale_socket_if_present(&settings).unwrap();
+        remove_stale_socket_if_present(&settings, &SocketSource::Configured).unwrap();
         assert_eq!(path.exists(), kept);
+    }
+
+    /// A forced start leaves a socket something still listens on, as a systemd socket unit does
+    /// whether or not its daemon runs, rather than cutting clients off from it.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn a_forced_start_keeps_a_socket_something_listens_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atuin.sock");
+        let _socket_unit = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let mut settings = Settings::default();
+        settings.daemon.socket_path = AbsPathBuf::new(path.clone()).ok();
+        settings.daemon.pidfile_path = AbsPathBuf::new(dir.path().join("d.pid")).unwrap();
+
+        force_cleanup(&settings).await;
+        remove_stale_socket_if_present(&settings, &SocketSource::Configured).unwrap();
+
+        assert!(path.exists());
     }
 
     /// A stopped daemon's socket still accepts connections but never answers.

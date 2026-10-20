@@ -8,7 +8,9 @@ use tonic::transport::Channel;
 use crate::HistoryClient;
 use crate::grpc::versioning::VersionMatchError;
 use crate::service::address::{ConnectError, DaemonAddress};
-use crate::service::backend::{BackendError, SpawnError};
+use crate::service::backend::SpawnError;
+#[cfg(unix)]
+use crate::service::pidfile::SocketPathError;
 
 /// A connection to a running service, whatever its build.
 pub struct Connection {
@@ -21,8 +23,9 @@ pub struct Connection {
 /// Errors from finding a service.
 #[derive(Debug, thiserror::Error)]
 pub enum FindError {
+    #[cfg(unix)]
     #[error(transparent)]
-    Locate(#[from] BackendError),
+    SocketPath(#[from] SocketPathError),
     #[error(transparent)]
     Connect(#[from] ConnectError),
     #[error("legacy daemon detected; restart daemon manually")]
