@@ -4,12 +4,12 @@
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
 use atuin_common::os::unix::process;
 use portable_pty::MasterPty;
 use rustix::process::Pid;
+use tokio::sync::mpsc;
 
 /// The minimum amount of time between successive CWD updates.
 ///
@@ -23,7 +23,7 @@ const MIN_UPDATE_DELAY: Duration = Duration::from_millis(100);
 const MAX_UPDATE_DELAY: Duration = Duration::from_secs(1);
 
 /// Get an [`OwnedFd`] from a [`MasterPty`].
-fn pty_parent_fd(parent: &dyn MasterPty) -> Option<OwnedFd> {
+pub fn pty_parent_fd(parent: &dyn MasterPty) -> Option<OwnedFd> {
     let raw_fd = parent.as_raw_fd()?;
     // SAFETY: `parent` owns the underlying FD, and it cannot be dropped while this function runs
     // because we hold a reference to it.
@@ -58,10 +58,35 @@ fn tcgetpgrp(terminal: BorrowedFd<'_>) -> Option<Pid> {
     Pid::from_raw(pid)
 }
 
+/// Moves this process into the PTY proxy child's CWD.
+struct Follower {
+    parent: Option<OwnedFd>,
+    child: Option<Pid>,
+    /// The CWD this process last moved into, if any.
+    cwd: Option<PathBuf>,
+}
+
+impl Follower {
+    /// Move into the child's CWD if it has changed.
+    ///
+    /// Blocks: looking up the CWD and moving into it can both wait on a slow filesystem.
+    fn follow(&mut self) {
+        let Some(new_cwd) = pty_cwd(self.parent.as_ref().map(AsFd::as_fd), self.child) else {
+            return;
+        };
+        if self.cwd.as_ref() == Some(&new_cwd) {
+            return;
+        }
+        if std::env::set_current_dir(&new_cwd).is_ok() {
+            self.cwd = Some(new_cwd);
+        }
+    }
+}
+
 /// Updates this process's CWD to match the PTY proxy child's CWD.
 pub struct CwdUpdater {
-    /// Used to tell the update thread to update the CWD now.
-    tx: SyncSender<()>,
+    /// Used to tell the update task to update the CWD now.
+    tx: mpsc::Sender<()>,
 }
 
 impl CwdUpdater {
@@ -70,37 +95,40 @@ impl CwdUpdater {
     /// `master` is the PTY proxy's master PTY. `shell` is the PID of the PTY's child process, if
     /// available.
     ///
-    /// Returns a [`CwdUpdater`] that can be used to signal the update thread to update the CWD now.
+    /// Returns a [`CwdUpdater`] that can be used to signal the update task to update the CWD now.
     pub fn new(master: &dyn MasterPty, child: Option<Pid>) -> Self {
-        let (tx, rx) = mpsc::sync_channel(1);
+        let (tx, mut rx) = mpsc::channel(1);
         let parent = pty_parent_fd(master);
 
-        std::thread::spawn(move || {
-            let mut cwd = None;
-            let mut set_cwd = |new_cwd: PathBuf| {
-                if cwd.as_deref().is_some_and(|p| p == new_cwd) {
-                    return;
-                }
-                if std::env::set_current_dir(&new_cwd).is_ok() {
-                    cwd = Some(new_cwd);
-                }
+        tokio::spawn(async move {
+            let mut follower = Follower {
+                parent,
+                child,
+                cwd: None,
             };
 
             let timeout_after_min_delay = MAX_UPDATE_DELAY - MIN_UPDATE_DELAY;
             let mut timeout = MAX_UPDATE_DELAY;
             loop {
-                match rx.recv_timeout(timeout) {
-                    Ok(()) => {}
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => return,
+                match tokio::time::timeout(timeout, rx.recv()).await {
+                    Ok(Some(())) | Err(_) => {}
+                    Ok(None) => return,
                 }
 
                 loop {
-                    if let Some(new_cwd) = pty_cwd(parent.as_ref().map(AsFd::as_fd), child) {
-                        set_cwd(new_cwd);
-                    }
-                    std::thread::sleep(MIN_UPDATE_DELAY);
-                    if rx.try_iter().count() == 0 {
+                    // Off the runtime thread: a hung NFS or FUSE mount must stall only this task,
+                    // never the forwarding of keystrokes and output.
+                    let following = tokio::task::spawn_blocking(move || {
+                        follower.follow();
+                        follower
+                    });
+                    let Ok(followed) = following.await else {
+                        return;
+                    };
+                    follower = followed;
+
+                    tokio::time::sleep(MIN_UPDATE_DELAY).await;
+                    if rx.try_recv().is_err() {
                         timeout = timeout_after_min_delay;
                         break;
                     }
