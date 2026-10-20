@@ -246,6 +246,9 @@ impl AgentPlist {
             .environment
             .iter()
             .map(|(name, value)| (name.clone(), Value::from(value.as_str())))
+            // launchd holds the socket the agent was installed with, even once the config moves
+            // it, so the agent publishes that one in its pidfile for clients to find.
+            .chain([("ATUIN_DAEMON__SOCKET_PATH".to_owned(), path(&self.socket)?)])
             .collect();
         let socket = Dictionary::from_iter([
             ("SockPathName".to_owned(), path(&self.socket)?),
