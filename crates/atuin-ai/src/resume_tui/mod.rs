@@ -125,7 +125,7 @@ impl ResumeContext {
 ///
 /// [`in_git_repo`]: atuin_common::utils::in_git_repo
 fn checkout(cwd: &Path) -> (Option<PathBuf>, Option<String>) {
-    let root = atuin_common::utils::git_checkout_root(&cwd.to_string_lossy());
+    let root = atuin_common::utils::git_checkout_root(cwd);
     let branch = root.as_deref().and_then(current_branch);
     (root, branch)
 }

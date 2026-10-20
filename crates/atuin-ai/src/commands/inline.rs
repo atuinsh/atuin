@@ -79,9 +79,8 @@ pub async fn run(
         None
     };
 
-    let git_root = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| atuin_common::utils::in_git_repo(cwd.to_str()?));
+    let git_root =
+        std::env::current_dir().ok().and_then(|cwd| atuin_common::utils::in_git_repo(&cwd));
 
     let ctx = AppContext {
         endpoint,
