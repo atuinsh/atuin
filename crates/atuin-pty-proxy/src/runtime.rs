@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_common::os::unix::io::WriteAllExt as _;
+use atuin_common::os::unix::io::{ReadRetryingExt as _, WriteAllExt as _};
 use atuin_common::os::unix::tty::{Access, AsyncTty, TtyId};
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use rustix::termios::SpecialCodeIndex;
-use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
@@ -187,11 +187,10 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
 
     // A terminal we cannot open afresh (one owned by another user after `su`, say) is read and
     // written on tokio's blocking threads instead.
-    let mut stdin: Box<dyn AsyncRead + Send + Unpin> =
-        match AsyncTty::reopen(rustix::stdio::stdin(), Access::Read) {
-            Ok(tty) => Box::new(tty),
-            Err(_) => Box::new(tokio::io::stdin()),
-        };
+    let mut stdin = match AsyncTty::reopen(rustix::stdio::stdin(), Access::Read) {
+        Ok(tty) => Stdin::Reopened(tty),
+        Err(_) => Stdin::Inherited(Arc::new(std::io::stdin().as_fd().try_clone_to_owned()?)),
+    };
     let mut stdout = match AsyncTty::reopen(rustix::stdio::stdout(), Access::Write) {
         Ok(tty) => Stdout::Reopened(tty),
         Err(_) => Stdout::Inherited(Arc::new(std::io::stdout().as_fd().try_clone_to_owned()?)),
@@ -242,7 +241,17 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
     });
 
     tokio::spawn(async move {
-        let _ = tokio::io::copy(&mut stdin, &mut pty_writer).await;
+        let mut buf = [0u8; 8192];
+        loop {
+            match stdin.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if pty_writer.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
         // Hand the end of our input on to the shell, so that piped input ends the session. EOF
         // only counts at the start of a line, hence the newline.
         if let Ok(termios) = rustix::termios::tcgetattr(&pty_writer)
@@ -266,6 +275,39 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
     let _ = terminal::disable_raw_mode();
     drop(socket_path); // delete the socket
     Ok(process_exit_code(status.exit_code()))
+}
+
+/// Where the user's input comes from.
+enum Stdin {
+    /// The user's terminal, opened afresh and driven by the reactor.
+    Reopened(AsyncTty),
+    /// The inherited stdin, read on the blocking pool.
+    ///
+    /// Whatever else shares its description may have made it non-blocking, so having nothing to
+    /// read yet is waited out rather than taken for the end of input.
+    Inherited(Arc<OwnedFd>),
+}
+
+impl Stdin {
+    /// Read some input into `buf`; `0` means the end of input.
+    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Reopened(tty) => tty.read(buf).await,
+            Self::Inherited(fd) => {
+                let (fd, len) = (Arc::clone(fd), buf.len());
+                let chunk = tokio::task::spawn_blocking(move || {
+                    let mut chunk = vec![0; len];
+                    let read = fd.read_retrying(&mut chunk)?;
+                    chunk.truncate(read);
+                    Ok::<_, rustix::io::Errno>(chunk)
+                })
+                .await
+                .map_err(std::io::Error::other)??;
+                buf[..chunk.len()].copy_from_slice(&chunk);
+                Ok(chunk.len())
+            }
+        }
+    }
 }
 
 /// Where the child's output goes.
@@ -340,7 +382,7 @@ fn process_exit_code(code: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
-    use std::io::Read as _;
+    use std::io::{Read as _, Write as _};
     use std::path::Path;
     use std::sync::Arc;
     use std::time::Duration;
@@ -348,7 +390,7 @@ mod tests {
     use easy_cast::Conv;
     use rstest::rstest;
 
-    use super::{CommandBuilder, Stdout, process_exit_code, set_child_env};
+    use super::{CommandBuilder, Stdin, Stdout, process_exit_code, set_child_env};
 
     #[rstest]
     #[case::zero(0, 0)]
@@ -403,5 +445,24 @@ mod tests {
         drop(stdout); // EOF for the reader
 
         assert_eq!(collector.join().unwrap(), data);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn inherited_stdin_waits_for_input_on_a_non_blocking_pipe() {
+        // Whatever shares the inherited description can leave it non-blocking. Nothing to read
+        // yet is not the end of input, which would hand the shell an EOF and end the session.
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        rustix::io::ioctl_fionbio(&reader, true).unwrap();
+        let mut stdin = Stdin::Inherited(Arc::new(reader.into()));
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            writer.write_all(b"typed").unwrap();
+        });
+
+        let mut buf = [0u8; 64];
+        let n = stdin.read(&mut buf).await.unwrap();
+
+        assert_eq!(&buf[..n], b"typed");
     }
 }
