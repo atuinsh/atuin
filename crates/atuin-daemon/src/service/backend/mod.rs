@@ -108,8 +108,13 @@ impl AnyBackend {
 
         // Without `autostart`, something else manages the daemon (`brew services`, home-manager),
         // and an agent of our own beside theirs would fight theirs for the pidfile at every login.
+        // One installed while it was on is still ours to stop, though. launchd has the one
+        // `sh.atuin.daemon`, so an `ATUIN_HOME` profile's agent would replace the default one's.
         #[cfg(target_os = "macos")]
-        if daemon.autostart && Launchd::is_available() {
+        if (daemon.autostart || Launchd::is_installed())
+            && !atuin_common::dirs::atuin_home_is_set()
+            && Launchd::is_available()
+        {
             return Launchd::new(daemon).into();
         }
 

@@ -49,6 +49,13 @@ impl Launchd {
             .is_ok_and(|console| console.uid() == atuin_common::os::unix::uid())
     }
 
+    /// Whether the agent's plist is installed, whether or not launchd has it loaded.
+    pub fn is_installed() -> bool {
+        let label = Self::label().to_qualified_name();
+        let manager = LaunchdServiceManager::user();
+        manager.domain.plist_dir().is_ok_and(|dir| dir.join(format!("{label}.plist")).exists())
+    }
+
     /// The socket launchd holds for the agent, if launchd started this process as the agent.
     fn activate_socket() -> Result<Option<UnixListener>, launchd::ActivateError> {
         let socket = match launchd::CheckedInSocket::activate(Self::SOCKET) {
