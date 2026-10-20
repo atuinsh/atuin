@@ -127,6 +127,7 @@ mod tests {
         (index, dir)
     }
 
+    #[rstest]
     #[tokio::test]
     async fn open_stamps_the_schema_version() {
         let (index, _dir) = temp_index().await;
@@ -135,6 +136,7 @@ mod tests {
         assert_eq!(version, Current::VERSION);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn insert_then_search_finds_by_word() {
         let (index, _dir) = temp_index().await;
@@ -150,6 +152,7 @@ mod tests {
         assert_eq!(got, vec!["error"]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn every_match_in_the_output_gets_a_range() {
         let (index, _dir) = temp_index().await;
@@ -162,6 +165,7 @@ mod tests {
         assert_eq!(got, vec!["error", "error"]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn marker_codepoints_in_the_text_cannot_forge_a_match() {
         let (index, _dir) = temp_index().await;
@@ -179,6 +183,7 @@ mod tests {
         assert_eq!(got, vec!["real"]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn the_index_stores_no_body() {
         let (index, _dir) = temp_index().await;
@@ -192,6 +197,7 @@ mod tests {
         assert_eq!(content_tables, 0);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn a_body_that_drifted_from_the_index_is_returned_unhighlighted() {
         let (index, _dir) = temp_index().await;
@@ -201,6 +207,7 @@ mod tests {
         assert_eq!(hit.ranges().count(), 0);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn repeated_highlighting_does_not_leak_the_previous_body() {
         // The scratch table is per connection and reused; a stale row must never be returned.
@@ -212,6 +219,7 @@ mod tests {
         assert_eq!(second.ranges().count(), 0);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn search_returns_nothing_for_a_miss() {
         let (index, _dir) = temp_index().await;
@@ -219,6 +227,7 @@ mod tests {
         assert!(search_hits(&index, "absent", "hello world").await.is_empty());
     }
 
+    #[rstest]
     #[tokio::test]
     async fn limit_zero_is_unbounded_and_a_positive_limit_caps() {
         let (index, _dir) = temp_index().await;
@@ -234,6 +243,7 @@ mod tests {
         assert_eq!(capped.len(), 2);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn blank_query_yields_no_results() {
         // A whitespace-only query has no searchable terms; search must short-circuit rather than
@@ -243,6 +253,7 @@ mod tests {
         assert!(search_hits(&index, "   ", "hello world").await.is_empty());
     }
 
+    #[rstest]
     #[tokio::test]
     async fn reinserting_the_same_id_does_not_duplicate() {
         let (index, _dir) = temp_index().await;
@@ -253,6 +264,7 @@ mod tests {
         assert_eq!(hits.len(), 1, "the id appears once, not twice");
     }
 
+    #[rstest]
     #[tokio::test]
     async fn remove_drops_the_entry() {
         let (index, _dir) = temp_index().await;
@@ -293,6 +305,7 @@ mod tests {
         }
     }
 
+    #[rstest]
     #[tokio::test]
     async fn indexed_ids_lists_every_entry() {
         let (index, _dir) = temp_index().await;
@@ -305,6 +318,7 @@ mod tests {
         assert_eq!(ids, vec![hid(1), hid(2)]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn indexed_ids_pages_past_the_chunk_boundary() {
         let (index, _dir) = temp_index().await;
@@ -319,6 +333,7 @@ mod tests {
         assert_eq!(ids, expected);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn punctuation_in_the_query_does_not_error() {
         let (index, _dir) = temp_index().await;
@@ -334,6 +349,7 @@ mod tests {
         }
     }
 
+    #[rstest]
     #[tokio::test]
     async fn reopening_reuses_the_existing_table() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -348,6 +364,7 @@ mod tests {
         assert_eq!(hits.len(), 1);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn writes_wait_for_a_held_write_lock_on_a_cold_connection() {
         let dir = tempfile::tempdir().expect("tempdir");
