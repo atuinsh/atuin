@@ -345,7 +345,10 @@ static SECRET_PATTERNS: &[Pattern] = &[
                 input: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
                 redacted: "https://hooks.slack.com/services/****",
             },
-            Test { input: "T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX", redacted: REDACTED },
+            Test {
+                input: "T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+                redacted: REDACTED,
+            },
         ],
     },
     Pattern {
@@ -440,7 +443,7 @@ struct Table {
     /// is run on its own instead, which, for the many that begin with a literal (`glpat-`), is a
     /// fast search for it.
     set: Option<RegexSet>,
-    regexes: Vec<Regex>,
+    regexes: Cow<'static, [Regex]>,
     spare: Vec<Spare>,
 }
 
@@ -455,6 +458,15 @@ impl Table {
             set,
             regexes: patterns.iter().map(|pattern| compile(pattern)).collect(),
             spare,
+        }
+    }
+
+    /// The vendor formats.
+    fn vendors() -> Self {
+        Self {
+            set: None,
+            regexes: Cow::Borrowed(VENDOR_REGEXES.as_slice()),
+            spare: vec![Spare::Nothing; VENDOR_REGEXES.len()],
         }
     }
 
@@ -477,7 +489,8 @@ fn compile(pattern: &Pattern) -> Regex {
         .unwrap_or_else(|e| panic!("failed to compile regex for {}: {e}", pattern.name))
 }
 
-/// The vendor formats, each compiled on its own (see [`Table::set`]), for [`contains_secret`].
+/// The vendor formats, each compiled on its own (see [`Table::set`]), for [`contains_secret`] and
+/// [`redact`].
 static VENDOR_REGEXES: LazyLock<Vec<Regex>> =
     LazyLock::new(|| vendors::VENDOR_PATTERNS.iter().map(compile).collect());
 
@@ -486,7 +499,7 @@ static VENDOR_REGEXES: LazyLock<Vec<Regex>> =
 static REDACTION: LazyLock<[Table; 3]> = LazyLock::new(|| {
     [
         Table::new(SECRET_PATTERNS.iter().map(|pattern| (pattern, Spare::Nothing)), true),
-        Table::new(vendors::VENDOR_PATTERNS.iter().map(|pattern| (pattern, Spare::Nothing)), false),
+        Table::vendors(),
         Table::new(
             structural::STRUCTURAL_PATTERNS
                 .iter()
@@ -806,8 +819,8 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        REDACTED, REDACTION, Redactor, SECRET_GROUP, contains_secret, history_patterns,
-        output_unsafe, redact, redaction_patterns, vendors,
+        REDACTED, REDACTION, Redactor, SECRET_GROUP, VENDOR_REGEXES, contains_secret,
+        history_patterns, output_unsafe, redact, redaction_patterns, vendors,
     };
 
     pub(super) struct Test {
@@ -948,7 +961,7 @@ mod tests {
     /// is the credential and which is the variable name holding it.
     #[rstest]
     fn every_pattern_names_its_secret_group() {
-        let regexes = REDACTION.iter().flat_map(|table| &table.regexes);
+        let regexes = REDACTION.iter().flat_map(|table| &*table.regexes);
         for (pattern, regex) in redaction_patterns().zip(regexes) {
             assert!(
                 regex.capture_names().any(|name| name == Some(SECRET_GROUP)),
@@ -956,6 +969,16 @@ mod tests {
                 pattern.name
             );
         }
+    }
+
+    /// `redact` scans with the vendor regexes `contains_secret` compiled, not a second copy with
+    /// match caches of its own on every thread that runs both.
+    #[rstest]
+    fn redaction_shares_the_vendor_regexes() {
+        assert!(
+            REDACTION.iter().any(|table| table.regexes.as_ptr() == VENDOR_REGEXES.as_ptr()),
+            "no redaction table borrows VENDOR_REGEXES"
+        );
     }
 
     #[rstest]
@@ -1288,7 +1311,7 @@ mod tests {
         fn text_with_nothing_recognisable_is_returned_as_is(
             s in credential_dense().prop_filter("contains a secret", |s| {
                 !contains_secret(s)
-                    && !REDACTION.iter().flat_map(|table| &table.regexes).any(|r| r.is_match(s))
+                    && !REDACTION.iter().flat_map(|table| &*table.regexes).any(|r| r.is_match(s))
             }),
         ) {
             prop_assert!(matches!(redact(&s), Cow::Borrowed(_)));
