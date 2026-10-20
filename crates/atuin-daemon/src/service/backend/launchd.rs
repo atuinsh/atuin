@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use atuin_client::settings::Daemon as DaemonSettings;
 use atuin_common::os::macos::launchd;
-use atuin_common::path::PathBufExt as _;
+use atuin_common::path::{PathBufExt as _, ShellExpanded};
 use plist::{Dictionary, Value};
 use service_manager::{
     LaunchdServiceManager, RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceManager,
@@ -230,14 +230,15 @@ impl AgentPlist {
     }
 
     fn to_xml(&self) -> io::Result<String> {
-        let path = |path: &Path| {
-            path.to_str().map(Value::from).ok_or_else(|| {
+        let utf8: fn(&Path) -> io::Result<&str> = |path| {
+            path.to_str().ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("{} is not UTF-8, which a plist requires", path.display()),
                 )
             })
         };
+        let path = |path: &Path| utf8(path).map(Value::from);
 
         let program_arguments =
             std::iter::once(path(&self.exe)?).chain(["daemon", "start"].map(Value::from)).collect();
@@ -246,8 +247,12 @@ impl AgentPlist {
             .iter()
             .map(|(name, value)| (name.clone(), Value::from(value.as_str())))
             // launchd holds the socket the agent was installed with, even once the config moves
-            // it, so the agent publishes that one in its pidfile for clients to find.
-            .chain([("ATUIN_DAEMON__SOCKET_PATH".to_owned(), path(&self.socket)?)])
+            // it, so the agent publishes that one in its pidfile for clients to find. The agent
+            // expands it as it does the config's paths, so it must expand back to itself.
+            .chain([(
+                "ATUIN_DAEMON__SOCKET_PATH".to_owned(),
+                Value::from(ShellExpanded::escape(utf8(&self.socket)?)),
+            )])
             .collect();
         let socket = Dictionary::from_iter([
             ("SockPathName".to_owned(), path(&self.socket)?),
@@ -300,6 +305,32 @@ mod tests {
     #[case::tmpdir_prefix("TMPDIR_OLD", false)]
     fn agent_inherits_only_atuin_configuration(#[case] name: &str, #[case] inherited: bool) {
         assert_eq!(AgentPlist::is_inherited(name), inherited);
+    }
+
+    /// The agent reads its pinned socket back through the config's expansion, which must give the
+    /// path the client worked out, `$` and all.
+    #[rstest]
+    fn pinned_socket_expands_back_to_itself() {
+        let socket = PathBuf::from("/tmp/atuin-$__atuin_unset.sock");
+        let plist = AgentPlist {
+            exe: PathBuf::from("/opt/atuin"),
+            working_dir: PathBuf::from("/"),
+            socket: socket.clone(),
+            environment: Vec::new(),
+        };
+        let xml = Value::from_reader_xml(plist.to_xml().unwrap().as_bytes()).unwrap();
+        let pinned = xml
+            .as_dictionary()
+            .and_then(|plist| plist.get("EnvironmentVariables")?.as_dictionary())
+            .and_then(|env| env.get("ATUIN_DAEMON__SOCKET_PATH")?.as_string())
+            .unwrap();
+
+        let expanded: PathBuf =
+            serde_with::As::<ShellExpanded>::deserialize(serde::de::value::StrDeserializer::<
+                serde::de::value::Error,
+            >::new(pinned))
+            .unwrap();
+        assert_eq!(expanded, socket);
     }
 
     /// A lossy path would point launchd at an executable that doesn't exist.
