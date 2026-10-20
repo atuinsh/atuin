@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use atuin_client::settings::Daemon as DaemonSettings;
 use atuin_common::os::macos::launchd;
+use atuin_common::path::PathBufExt as _;
 use plist::{Dictionary, Value};
 use service_manager::{
     LaunchdServiceManager, RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceManager,
@@ -62,7 +63,7 @@ impl Launchd {
     pub fn is_installed() -> bool {
         let label = Self::label().to_qualified_name();
         let manager = LaunchdServiceManager::user();
-        manager.domain.plist_dir().is_ok_and(|dir| dir.join(format!("{label}.plist")).exists())
+        manager.domain.plist_dir().is_ok_and(|dir| dir.joined(format!("{label}.plist")).exists())
     }
 
     /// The socket launchd holds for the agent, if launchd started this process as the agent.
