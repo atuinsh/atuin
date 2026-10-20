@@ -34,9 +34,6 @@ impl Launchd {
     /// The name of the agent's socket among the `Sockets` in its plist.
     const SOCKET: &CStr = c"atuin";
 
-    /// The flag that tells `atuin daemon start` that launchd holds its socket.
-    const FLAG: &str = "--service-manager=launchd";
-
     #[must_use]
     pub fn new(daemon: &DaemonSettings) -> Self {
         Self {
@@ -52,11 +49,19 @@ impl Launchd {
             .is_ok_and(|console| console.uid() == atuin_common::os::unix::uid())
     }
 
-    /// Take the socket launchd holds for the agent, which only the agent launchd started can.
-    pub fn activate_socket() -> Result<UnixListener, launchd::ActivateError> {
+    /// The socket launchd holds for the agent, if launchd started this process as the agent.
+    fn activate_socket() -> Result<Option<UnixListener>, launchd::ActivateError> {
+        let socket = match launchd::CheckedInSocket::activate(Self::SOCKET) {
+            Ok(socket) => socket,
+            // Started outside launchd, or by a job of someone else's, such as `brew services`.
+            Err(launchd::ActivateError::NotManaged | launchd::ActivateError::NotFound(_)) => {
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
         // A socket at a path has the one descriptor.
-        let fd = launchd::CheckedInSocket::activate(Self::SOCKET)?.into_iter().next();
-        Ok(UnixListener::from(fd.expect("an activated socket has a descriptor")))
+        let fd = socket.into_iter().next();
+        Ok(Some(UnixListener::from(fd.expect("an activated socket has a descriptor"))))
     }
 
     /// The agent's label, `sh.atuin.daemon`.
@@ -136,13 +141,9 @@ impl Backend for Launchd {
     }
 
     fn listen(&self) -> Result<Listening, BackendError> {
-        let listener = match Self::activate_socket() {
-            Ok(listener) => listener,
-            // Started outside launchd, which leaves the agent to bind its own socket.
-            Err(launchd::ActivateError::NotManaged | launchd::ActivateError::NotFound(_)) => {
-                return Subproc::new(&self.daemon).listen();
-            }
-            Err(err) => return Err(BackendError::new(err)),
+        // Started outside launchd, the daemon binds its own socket.
+        let Some(listener) = Self::activate_socket().map_err(BackendError::new)? else {
+            return Subproc::new(&self.daemon).listen();
         };
 
         let socket_path = self.daemon.socket_path().into_owned();
@@ -222,9 +223,8 @@ impl AgentPlist {
             })
         };
 
-        let program_arguments = std::iter::once(path(&self.exe)?)
-            .chain(["daemon", "start", Launchd::FLAG].map(Value::from))
-            .collect();
+        let program_arguments =
+            std::iter::once(path(&self.exe)?).chain(["daemon", "start"].map(Value::from)).collect();
         let environment = self
             .environment
             .iter()
