@@ -17,7 +17,7 @@ use crate::service::PidfileWaitError;
 use crate::service::address::DaemonAddress;
 use crate::service::connection::{Connection, FindError};
 #[cfg(unix)]
-use crate::service::pidfile::{Pidfile, PidfileInfo};
+use crate::service::pidfile::Pidfile;
 
 /// An error from a [`Backend`], each of which fails in its own ways.
 #[derive(Debug, thiserror::Error)]
@@ -86,12 +86,11 @@ impl AnyBackend {
         {
             let pidfile = Pidfile::new(&daemon.pidfile_path);
             if pidfile.is_live()
-                && let Some(PidfileInfo {
-                    systemd: true,
-                    socket_path: Some(path),
-                    ..
-                }) = pidfile.info()
+                && let Some(info) = pidfile.info()
+                && info.started_by_systemd()
             {
+                let path =
+                    info.socket_path.unwrap_or_else(|| daemon.existing_socket_path().into_owned());
                 return External::new(path.into()).into();
             }
         }
@@ -107,15 +106,19 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::service::pidfile::PidfileInfo;
 
-    /// A client leaves the daemon to systemd only while one that systemd started runs: neither a
-    /// daemon that bound its own socket nor the record of one that has exited is a reason to.
+    /// A client leaves the daemon to systemd only while one that systemd started runs, including
+    /// one from before the pidfile said so, which recorded no socket path: neither a daemon that
+    /// bound its own socket nor the record of one that has exited is a reason to.
     #[rstest]
-    #[case::started_by_systemd(true, true, true)]
-    #[case::exited(true, false, false)]
-    #[case::bound_its_own_socket(false, true, false)]
+    #[case::started_by_systemd(true, Some("atuin.sock"), true, true)]
+    #[case::exited(true, Some("atuin.sock"), false, false)]
+    #[case::bound_its_own_socket(false, Some("atuin.sock"), true, false)]
+    #[case::started_by_systemd_before_it_said_so(false, None, true, true)]
     fn systemd_manages_only_a_running_daemon_it_started(
         #[case] systemd: bool,
+        #[case] socket: Option<&str>,
         #[case] running: bool,
         #[case] external: bool,
     ) {
@@ -126,7 +129,7 @@ mod tests {
         let info = PidfileInfo {
             pid: std::process::id(),
             version: crate::VERSION.to_string(),
-            socket_path: Some(dir.path().join("atuin.sock")),
+            socket_path: socket.map(|name| dir.path().join(name)),
             systemd,
         };
         let guard = Pidfile::new(&settings.daemon.pidfile_path).acquire(&info).unwrap();

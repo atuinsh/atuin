@@ -374,7 +374,7 @@ async fn run(
     let socket = SocketSource::from_env().wrap_err("taking the socket systemd passed in")?;
 
     if force {
-        force_cleanup(&settings, &socket).await;
+        force_cleanup(&settings).await;
     }
 
     let _pidfile_guard = Pidfile::new(&settings.daemon.pidfile_path)
@@ -389,11 +389,11 @@ async fn run(
     Ok(())
 }
 
-/// Force cleanup: kill existing daemon process and remove socket.
-async fn force_cleanup(settings: &Settings, socket: &SocketSource) {
-    #[cfg(not(unix))]
-    let _ = socket;
-
+/// Force cleanup: kill the daemon the pidfile names and remove the pidfile.
+///
+/// Sockets are left to the stale-socket check every start makes: nothing listens at the killed
+/// daemon's anymore, but a systemd socket unit's still does and must stay.
+async fn force_cleanup(settings: &Settings) {
     let pidfile_path = Path::new(&settings.daemon.pidfile_path);
 
     // Read and kill the existing process if pidfile exists
@@ -412,12 +412,6 @@ async fn force_cleanup(settings: &Settings, socket: &SocketSource) {
         {
             tracing::warn!("failed to remove pidfile: {e}");
         }
-    }
-
-    // Remove the socket files
-    #[cfg(unix)]
-    if let Err(e) = remove_sockets(settings, socket, |_| true) {
-        tracing::warn!("{e}");
     }
 }
 
@@ -466,6 +460,25 @@ mod tests {
         settings.daemon.socket_path = AbsPathBuf::new(path.clone()).ok();
         remove_stale_socket_if_present(&settings, &SocketSource::Configured).unwrap();
         assert_eq!(path.exists(), kept);
+    }
+
+    /// A forced start leaves a socket something still listens on, as a systemd socket unit does
+    /// whether or not its daemon runs, rather than cutting clients off from it.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn a_forced_start_keeps_a_socket_something_listens_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atuin.sock");
+        let _socket_unit = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let mut settings = Settings::default();
+        settings.daemon.socket_path = AbsPathBuf::new(path.clone()).ok();
+        settings.daemon.pidfile_path = AbsPathBuf::new(dir.path().join("d.pid")).unwrap();
+
+        force_cleanup(&settings).await;
+        remove_stale_socket_if_present(&settings, &SocketSource::Configured).unwrap();
+
+        assert!(path.exists());
     }
 
     /// A stopped daemon's socket still accepts connections but never answers.

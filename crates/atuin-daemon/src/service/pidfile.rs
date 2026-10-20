@@ -94,6 +94,17 @@ impl PidfileInfo {
         }
     }
 
+    /// Whether systemd started the daemon, which leaves starting and stopping it to systemd.
+    ///
+    /// A daemon that recorded no socket path was one too: before [`systemd`](Self::systemd) was
+    /// recorded, a daemon with `daemon.systemd_socket = true` recorded none, and since, only one
+    /// systemd passed a socket without a path does.
+    #[cfg(unix)]
+    #[must_use]
+    pub const fn started_by_systemd(&self) -> bool {
+        self.systemd || self.socket_path.is_none()
+    }
+
     /// Parse the contents of a pidfile, returning `None` if it's not in the `v1` format.
     fn parse(contents: &str) -> Option<Self> {
         let (pid, rest) = contents.split_once('\n')?;
@@ -439,8 +450,8 @@ impl SocketPathError {
 impl Pidfile {
     /// The path to the daemon's socket.
     ///
-    /// If the daemon is running, or systemd started it, and it recorded its socket path in the
-    /// pidfile, this function returns that. Otherwise:
+    /// If the daemon recorded its socket path in the pidfile, and is running or systemd started it
+    /// and still listens there, this function returns that. Otherwise:
     ///
     /// * If `ATUIN_HOME` is unset (the default), [`daemon.existing_socket_path()`][0] is returned,
     ///   which will check for existing sockets in legacy locations.
@@ -459,13 +470,16 @@ impl Pidfile {
     pub fn socket_path(&self, daemon: &DaemonSettings) -> Result<PathBuf, SocketPathError> {
         // systemd keeps listening on its socket once the daemon it started exits, but any other
         // daemon's socket goes with it. Trusting such a stale record would hide a systemd socket
-        // unit behind a daemon a client once forked.
+        // unit behind a daemon a client once forked, and trusting systemd's after its socket unit
+        // moved would hide the new socket. Connecting to check starts the daemon, as the caller is
+        // about to.
         if let Some(PidfileInfo {
             socket_path: Some(path),
             systemd,
             ..
         }) = self.info()
-            && (systemd || self.is_live())
+            && (self.is_live()
+                || systemd && matches!(atuin_common::os::unix::socket_in_use(&path), Ok(true)))
         {
             return Ok(path);
         }
@@ -700,6 +714,23 @@ mod tests {
         );
     }
 
+    /// A daemon from before the pidfile said whether systemd started it recorded no socket path
+    /// when `daemon.systemd_socket` was set, and that still marks it as systemd's.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::forked(
+        r#"{"version":"18.24.0","socket_path":{"Utf8":"/tmp/atuin-1000/atuin.sock"}}"#,
+        false
+    )]
+    #[case::systemd_socket(r#"{"version":"18.24.0","socket_path":null}"#, true)]
+    fn an_older_daemon_without_a_socket_path_was_started_by_systemd(
+        #[case] payload: &str,
+        #[case] systemd: bool,
+    ) {
+        let info = PidfileInfo::parse(&format!("1234\n{FORMAT_V1}\n{payload}\n")).unwrap();
+        assert_eq!(info.started_by_systemd(), systemd);
+    }
+
     #[cfg(unix)]
     fn path_buf() -> impl Strategy<Value = PathBuf> {
         use std::ffi::OsString;
@@ -766,15 +797,17 @@ mod tests {
 
     /// A daemon recorded `old.sock` in its pidfile, and the client is configured for `new.sock`.
     /// The record is used while the daemon runs, and after it exits only if systemd, which keeps
-    /// listening, started it.
+    /// listening, started it and still listens there.
     #[cfg(unix)]
     #[rstest]
-    #[case::running(true, false, "old.sock")]
-    #[case::exited(false, false, "new.sock")]
-    #[case::started_by_systemd_and_exited(false, true, "old.sock")]
+    #[case::running(true, false, true, "old.sock")]
+    #[case::exited(false, false, false, "new.sock")]
+    #[case::started_by_systemd_and_exited(false, true, true, "old.sock")]
+    #[case::systemd_moved_its_socket(false, true, false, "new.sock")]
     fn test_socket_path_with_recorded_path(
         #[case] running: bool,
         #[case] systemd: bool,
+        #[case] listening: bool,
         #[case] expected: &str,
     ) {
         let dir = tempfile::tempdir().unwrap();
@@ -789,6 +822,10 @@ mod tests {
         let guard = super::Pidfile::new(&pidfile).acquire(&recorded).unwrap();
         // A daemon exits by dropping its guard.
         let _running = running.then_some(guard);
+        let listener = listen(&dir.path().join("old.sock"));
+        // Dropping the listener leaves the socket behind, as systemd does by default when it stops
+        // listening.
+        let _listening = listening.then_some(listener);
 
         let client = settings(&pidfile, &dir.path().join("new.sock"));
         assert_eq!(socket_path(&client.daemon).unwrap(), dir.path().join(expected));
