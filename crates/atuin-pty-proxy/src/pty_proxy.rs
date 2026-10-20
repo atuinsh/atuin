@@ -186,12 +186,53 @@ const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]];
     fi
   fi
 
+  # Check if we're allowed to spawn a PTY proxy in this shell. If false, this is most commonly
+  # because the shell was started with `-ic <command>` or `-i <file>`, and spawning a proxy would
+  # fail to forward those arguments.
+  __atuin_pty_proxy_spawning_allowed() {
+    if [[ -n ${ZSH_VERSION-} ]]; then
+      # If `-c` was passed, return false.
+      [[ -n ${ZSH_EXECUTION_STRING+x} ]] && return 1
+
+      # If missing ZSH_ARGZERO, default to true.
+      [[ -z ${ZSH_ARGZERO-} ]] && return 0
+
+      # If ZSH_ARGZERO starts with "-" but the shell isn't a login shell, we're executing
+      # a file, so return false.
+      [[ $ZSH_ARGZERO == -* ]] && ! [[ -o login ]] && return 1
+
+      # Get basename of ZSH_ARGZERO and strip leading "-" (matches how ZSH_NAME is calculated)
+      # and compare to ZSH_NAME. If they're different, we're executing a file, so return false.
+      [[ ${${ZSH_ARGZERO:t}#-} != "$ZSH_NAME" ]] && return 1
+
+      # Finally, return true iff $ZSH_ARGZERO (minus leading "-") is an executable. This
+      # is what we use when spawning the proxy, so we would necessarily fail otherwise.
+      local zsh="${${ZSH_ARGZERO#-}:c}"
+      [[ $zsh == */* ]] && [[ -x $zsh ]] && ! [[ -d $zsh ]]
+    elif [[ -n ${BASH_VERSION-} ]]; then
+      # If `-c` was passed, return false.
+      [[ $- == *c* ]] && return 1
+
+      # If $0 starts with "-" but the shell isn't a login shell, we're executing a file,
+      # so return false.
+      [[ $0 == -* ]] && ! shopt -q login_shell && return 1
+
+      # Finally, return true iff $0 (minus leading "-") is the same file as $BASH or matches
+      # the basename of $BASH.
+      [[ ${0#-} -ef $BASH ]] || [[ ${0#-} == "${BASH##*/}" ]]
+    else
+      true
+    fi
+  }
+
   if [[ $__atuin_pty_proxy_owns_tty = 1 ]]; then
     # This terminal is already running in an Atuin PTY proxy.
     :
   elif [[ -n ${ATUIN_PTY_PROXY_FAILED-} ]]; then
     # If the PTY proxy failed to spawn its server, stop here instead of endlessly
     # trying to spawn more proxies.
+    :
+  elif ! __atuin_pty_proxy_spawning_allowed; then
     :
   elif [[ -n "${BASH_VERSION:-}" ]]; then
     __atuin_pty_proxy_args=(--shell "$BASH")
@@ -207,16 +248,22 @@ const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]];
     # a bare command name ("zsh") rather than a path; the :c modifier
     # resolves that to an absolute path via $PATH, leaves an absolute path
     # unchanged, and leaves an unresolvable name as-is.
-    __atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
-    __atuin_pty_proxy_args=(--shell "${${__atuin_pty_proxy_zsh#-}:c}")
+    if [[ -n ${ZSH_ARGZERO-} ]]; then
+      __atuin_pty_proxy_zsh=${${ZSH_ARGZERO#-}:c}
+    else
+      __atuin_pty_proxy_zsh=$(command -v zsh)
+    fi
+    __atuin_pty_proxy_args=(--shell "$__atuin_pty_proxy_zsh")
     if [[ -o login ]]; then
-        __atuin_pty_proxy_args+=(--shell -l)
+      __atuin_pty_proxy_args+=(--shell -l)
     fi
     exec atuin pty-proxy "${__atuin_pty_proxy_args[@]}"
   else
     exec atuin pty-proxy
   fi
-  unset __atuin_pty_proxy_answer
+
+  unset -v __atuin_pty_proxy_answer
+  unset -f __atuin_pty_proxy_spawning_allowed
 fi
 "#;
 
@@ -337,16 +384,26 @@ mod tests {
         // zsh: capture ZSH_ARGZERO (with PATH fallback), strip the leading
         // dash present on login shells, then resolve a bare command name to
         // an absolute path with the :c modifier before forwarding it.
-        assert!(posix.contains(r#"__atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
-        assert!(
-            posix.contains(r#"__atuin_pty_proxy_args=(--shell "${${__atuin_pty_proxy_zsh#-}:c}")"#)
-        );
+        assert!(posix.contains(r"__atuin_pty_proxy_zsh=${${ZSH_ARGZERO#-}:c}"));
+        assert!(posix.contains(r"__atuin_pty_proxy_zsh=$(command -v zsh)"));
+        assert!(posix.contains(r#"__atuin_pty_proxy_args=(--shell "$__atuin_pty_proxy_zsh")"#));
 
         let fish = init_script(Shell::Fish);
         assert!(fish.contains("set __atuin_pty_proxy_args --shell (status fish-path)"));
 
         let nu = init_script(Shell::Nu);
         assert!(nu.contains("mut pty_proxy_args = [--shell $nu.current-exe]"));
+    }
+
+    #[rstest]
+    #[case::bash(Shell::Bash, "[[ $- == *c* ]]")]
+    #[case::zsh(Shell::Zsh, "[[ -n ${ZSH_EXECUTION_STRING+x} ]]")]
+    fn bash_zsh_init_skips_shells_started_with_a_command(
+        #[case] shell: Shell,
+        #[case] expected: &str,
+    ) {
+        // `bash -ic cmd` and `zsh -ic cmd` are interactive, but re-execing them would drop `cmd`.
+        assert!(init_script(shell).contains(expected));
     }
 
     #[rstest]
