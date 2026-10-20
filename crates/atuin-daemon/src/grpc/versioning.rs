@@ -180,6 +180,20 @@ pub enum VersionMatchError {
     },
 }
 
+impl VersionMatchError {
+    /// Whether the peer runs a newer build than ours.
+    #[must_use]
+    pub fn peer_is_newer(&self) -> bool {
+        match self {
+            Self::Mismatched { theirs, ours } => matches!(
+                (semver::Version::parse(theirs), semver::Version::parse(ours)),
+                (Ok(peer), Ok(ours)) if peer.cmp_precedence(&ours).is_gt()
+            ),
+            Self::Unannounced | Self::Malformed { .. } => false,
+        }
+    }
+}
+
 /// Checks the build a peer announced on a reply or a refusal.
 pub trait VersionedExt {
     /// Check whether the version of the peer matches the expected version.
@@ -306,5 +320,35 @@ where
             None => format!("daemon is build {BUILD_STR}, client sent no build"),
         };
         Either::Left(ready(Ok(Self::stamp(Status::failed_precondition(refusal).into_http()))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// The check's report of a daemon of build `theirs`.
+    fn mismatched(theirs: &str) -> VersionMatchError {
+        VersionMatchError::Mismatched {
+            theirs: theirs.to_owned(),
+            ours: BUILD_STR,
+        }
+    }
+
+    #[rstest]
+    #[case::older(mismatched("0.0.0"), false)]
+    #[case::newer(mismatched("999.0.0"), true)]
+    // `zzz` sorts after any SHA, so this daemon would look newer if commits were ordered.
+    #[case::other_commit_of_ours(mismatched(&format!("{}+zzz", crate::VERSION)), false)]
+    #[case::unparsable(mismatched("dev"), false)]
+    #[case::malformed(VersionMatchError::Malformed { theirs: vec![0xff] }, false)]
+    #[case::predates_builds(VersionMatchError::Unannounced, false)]
+    fn only_a_newer_build_is_left_running(
+        #[case] mismatch: VersionMatchError,
+        #[case] newer: bool,
+    ) {
+        assert_eq!(mismatch.peer_is_newer(), newer);
     }
 }

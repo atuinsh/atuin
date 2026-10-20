@@ -41,6 +41,7 @@ prost-types = { workspace = true }
 regex = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
@@ -55,6 +56,9 @@ tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+daemonix = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }

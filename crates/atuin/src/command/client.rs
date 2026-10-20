@@ -196,7 +196,7 @@ impl Cmd {
         if let Self::Daemon(ref cmd) = self
             && cmd.should_daemonize()
         {
-            daemon::daemonize_current_process()?;
+            atuin_daemon::service::Subproc::daemonize()?;
         }
 
         #[cfg(feature = "ai")]

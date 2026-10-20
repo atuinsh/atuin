@@ -170,11 +170,13 @@ impl Cmd {
             Ok(stream) => stream,
             Err(err) if settings.daemon.autostart && daemon::should_retry_after_error(&err) => {
                 debug!("daemon unavailable for output search; attempting auto-start");
-                daemon::ensure_daemon_running(settings).await.map_err(|start_err| {
-                    RunError::Connect(
-                        err.wrap_err(format!("failed to auto-start daemon: {start_err:#}")),
-                    )
-                })?;
+                atuin_daemon::service::ActiveService::ready(settings).await.map_err(
+                    |start_err| {
+                        RunError::Connect(
+                            err.wrap_err(format!("failed to auto-start daemon: {start_err:#}")),
+                        )
+                    },
+                )?;
                 open().await.map_err(to_run_error)?
             }
             Err(err) => return Err(to_run_error(err)),

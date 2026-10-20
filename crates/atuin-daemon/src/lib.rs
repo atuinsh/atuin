@@ -23,9 +23,9 @@ pub(crate) mod history_journal;
 #[cfg(feature = "octavo")]
 mod octavo;
 mod output_capture;
-pub mod pidfile;
 pub mod search;
 pub mod server;
+pub mod service;
 pub mod session_capture;
 mod sync;
 
