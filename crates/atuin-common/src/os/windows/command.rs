@@ -215,6 +215,7 @@ mod tests {
 
     use super::*;
     use crate::os::windows::get_last_error;
+    use crate::path::AbsPathBuf;
 
     const PROGRAM: &str = r"C:\Program Files\atuin\atuin.exe";
 
@@ -459,8 +460,8 @@ mod tests {
 
         let reported = std::fs::read_to_string(dir.path().join("cwd.txt")).unwrap();
         assert_eq!(
-            Path::new(reported.trim_end()).canonicalize().unwrap(),
-            dir.path().canonicalize().unwrap()
+            AbsPathBuf::canonicalize(reported.trim_end()).unwrap(),
+            AbsPathBuf::canonicalize(dir.path()).unwrap()
         );
     }
 }
