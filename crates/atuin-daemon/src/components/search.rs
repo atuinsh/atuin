@@ -3,14 +3,14 @@
 //! Provides fuzzy search over command history using the Nucleo search library
 //! with frecency-based ranking and dynamic filtering.
 
-use std::pin::{Pin, pin};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use eyre::Result;
-use futures::{StreamExt, TryStreamExt};
-use tokio::sync::RwLock;
+use futures::StreamExt;
+use tokio::sync::{RwLock, RwLockReadGuard};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{Instrument as _, Level, debug, error, info, instrument, span, trace};
@@ -75,36 +75,6 @@ impl SearchComponent {
         let settings = handle.settings().await;
         index.read().await.rebuild_frecency(&settings.search);
     }
-
-    /// Populate the search index from the database, then its frecency map.
-    ///
-    /// The read guard is re-acquired per page rather than held across the whole load, so concurrent
-    /// index operations aren't blocked while this does its expensive work.
-    #[instrument(skip_all, level = Level::TRACE)]
-    async fn populate_index(
-        handle: &DaemonHandle,
-        index: &RwLock<SearchIndex>,
-    ) -> Result<(), eyre::Error> {
-        info!(
-            "Loading history into search index; page size = {}",
-            SearchIndex::HISTORY_LOAD_PAGE_SIZE
-        );
-        let mut pages = pin!(SearchIndex::history_pages(handle.history_db()));
-        while let Some(histories) =
-            pages.try_next().await.inspect_err(|e| error!("Failed to load history: {e}"))?
-        {
-            info!("Loading {} history entries into search index", histories.len());
-            index.read().await.add_histories(&histories);
-        }
-
-        info!(
-            "History load complete; {} unique commands indexed",
-            index.read().await.command_count()
-        );
-
-        Self::rebuild_frecency(handle, index).await;
-        Ok(())
-    }
 }
 
 impl Default for SearchComponent {
@@ -121,24 +91,21 @@ impl Component for SearchComponent {
     async fn start(&mut self, handle: DaemonHandle) -> Result<()> {
         self.handle = Some(handle.clone());
 
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .read() and the subsequent .write() are completely discarded from the new
-        //              index.
+        // Configure the initial filter before exposing the service. A later shell-filter reload
+        // is serialized with the initial load and chooses its own filter when it acquires the lock.
+        let shells = handle.settings().await.search.shells.to_filter().to_vec_filter();
+        self.index.write().await.shells = shells;
+
         // Spawn background task to load history into index
-        let index = self.index.clone();
+        let initial = SearchIndex::initial_loader(self.index.clone()).await;
         let handle_for_loader = handle.clone();
 
         self.loader_handle = Some(tokio::spawn(async move {
-            // Build the initial shell filter from the settings. If `search.shells` is "auto", this
-            // will use the value of the `ATUIN_SHELL` environment variable. This variable might be
-            // correct if the daemon was autostarted by the shell hooks, but if it's unset or
-            // incorrect, we'll simply rebuild the index upon receipt of the first request.
-            let shells =
-                handle_for_loader.settings().await.search.shells.to_filter().to_vec_filter();
-            index.write().await.shells = shells;
-            let _ = Self::populate_index(&handle_for_loader, &index).await.inspect_err(|err| {
-                error!(?err, "failed to rebuild the index.");
-            });
+            let search = handle_for_loader.settings().await.search.clone();
+            let _ =
+                initial.load(handle_for_loader.history_db(), &search).await.inspect_err(|err| {
+                    error!(?err, "failed to rebuild the index.");
+                });
         }));
 
         // Spawn background task to periodically refresh frecency
@@ -213,20 +180,16 @@ impl SearchGrpcService {
     async fn maybe_rebuild_index(
         &self,
         shells: OrFilter<Vec<String>>,
-    ) -> Result<Option<SearchIndex>, ()> {
-        if self.index.read().await.shells == shells {
-            return Ok(None);
+    ) -> Result<RwLockReadGuard<'_, SearchIndex>, ()> {
+        let index = self.index.read().await;
+        if index.shells == shells {
+            return Ok(index);
         }
-
-        info!("Rebuilding search index from database after shell filter change");
-
+        drop(index);
         let search = self.handle.settings().await.search.clone();
-        let new_index = SearchIndex::from_db(shells, self.handle.history_db(), &search)
+        SearchIndex::reload(&self.index, Some(shells), self.handle.history_db(), &search)
             .await
-            .map_err(|e| error!("Failed to rebuild search index: {e}"))?;
-
-        info!("Search index rebuild complete; {} unique commands", new_index.command_count());
-        Ok(Some(new_index))
+            .map_err(|e| error!("Failed to rebuild search index: {e}"))
     }
 }
 
@@ -277,20 +240,9 @@ impl SearchSvc for SearchGrpcService {
 
                 // An empty list in `SearchRequest::shells` means "all".
                 let shells = OrFilter::from_list(search_req.shells).unwrap_or_default();
-                // TODO(#4052): This is inherently racy -- any add_history operations added between
-                //              this .maybe_rebuild_index() and the subsequent .write() are
-                //              completely discarded from the new index.
-                let index = match this.maybe_rebuild_index(shells).await {
-                    Ok(Some(new_index)) => {
-                        let mut guard = this.index.write().await;
-                        *guard = new_index;
-                        guard.downgrade()
-                    }
-                    Ok(None) => this.index.read().await,
-                    Err(()) => {
-                        let _ = tx.send(Err(Status::internal("failed to build index"))).await;
-                        break;
-                    }
+                let Ok(index) = this.maybe_rebuild_index(shells).await else {
+                    let _ = tx.send(Err(Status::internal("failed to build index"))).await;
+                    break;
                 };
 
                 // Perform the search
@@ -326,17 +278,12 @@ impl SearchSvc for SearchGrpcService {
         request: Request<PrepareIndexRequest>,
     ) -> Result<Response<PrepareIndexResponse>, Status> {
         // Same as `SearchRequest::shells` -- empty list means "all".
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .maybe_rebuild_index() and the subsequent .write() are completely discarded
-        //              from the new index.
         let shells = OrFilter::from_list(request.into_inner().shells).unwrap_or_default();
-        if let Some(index) = self
-            .maybe_rebuild_index(shells)
-            .await
-            .map_err(|()| Status::internal("failed to build index"))?
-        {
-            *self.index.write().await = index;
-        }
+        drop(
+            self.maybe_rebuild_index(shells)
+                .await
+                .map_err(|()| Status::internal("failed to build index"))?,
+        );
         Ok(Response::new(PrepareIndexResponse {}))
     }
 
@@ -347,21 +294,15 @@ impl SearchSvc for SearchGrpcService {
         let index = self.index.clone();
         let handle = self.handle.clone();
 
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        // .read() and the subsequent .write() are completely discarded from the new index.
-        //
         // Using `tokio::spawn` so that a client that stops waiting for the response doesn't cancel
         // the rebuild.
         tokio::spawn(
             async move {
-                let shells = index.read().await.shells.clone();
                 let search = handle.settings().await.search.clone();
-                let new_index = SearchIndex::from_db(shells, handle.history_db(), &search).await?;
-                info!(
-                    "Search index rebuild complete; {} unique commands",
-                    new_index.command_count()
-                );
-                *index.write().await = new_index;
+                let command_count = SearchIndex::reload(&index, None, handle.history_db(), &search)
+                    .await?
+                    .command_count();
+                info!("Search index rebuild complete; {command_count} unique commands");
                 Ok::<_, eyre::Report>(())
             }
             .instrument(tracing::Span::current()),

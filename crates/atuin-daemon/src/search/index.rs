@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::pin::pin;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
@@ -21,8 +21,9 @@ use atuin_common::path::DisplayRichExt;
 use easy_cast::Conv;
 use futures::{Stream, TryStreamExt, stream};
 use lasso::{Spur, ThreadedRodeo};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use time::OffsetDateTime;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, RwLock as AsyncRwLock, RwLockReadGuard};
 use tracing::{Level, instrument};
 use uuid::Uuid;
 
@@ -32,6 +33,85 @@ use uuid::Uuid;
 pub struct LoadFromDbError(eyre::Report);
 
 use atuin_common::string::StrExt;
+
+#[derive(Debug, Default)]
+struct PendingHistories {
+    /// An initial load writes directly into the live index, once per invocation.
+    loaded: Option<HashSet<HistoryId>>,
+    /// A replacement reload must replay concurrent writes after its database scan.
+    rows: Vec<History>,
+}
+
+impl PendingHistories {
+    fn record(&mut self, history: &History) -> bool {
+        if let Some(loaded) = self.loaded.as_mut() {
+            loaded.insert(history.id)
+        } else {
+            self.rows.push(history.clone());
+            true
+        }
+    }
+}
+
+type HistoryUpdates = Mutex<Option<PendingHistories>>;
+
+/// Owns the update log for one reload. Deactivate it even if loading fails or is cancelled:
+/// an in-flight writer may still hold an upgraded reference after the reload future is dropped.
+struct ReloadUpdates {
+    rows: Arc<HistoryUpdates>,
+}
+
+impl ReloadUpdates {
+    fn new(loaded: Option<HashSet<HistoryId>>) -> Self {
+        Self {
+            rows: Arc::new(Mutex::new(Some(PendingHistories {
+                loaded,
+                rows: Vec::new(),
+            }))),
+        }
+    }
+}
+
+impl Drop for ReloadUpdates {
+    fn drop(&mut self) {
+        drop(self.rows.lock().take());
+    }
+}
+
+/// Register before exposing the service, so writes before the loader task is first polled
+/// also participate in initial-load deduplication.
+pub struct InitialIndexLoad {
+    index: Arc<AsyncRwLock<SearchIndex>>,
+    _updates: ReloadUpdates,
+    _reload: OwnedMutexGuard<()>,
+}
+
+impl InitialIndexLoad {
+    pub(crate) async fn load(
+        self,
+        db: &Sqlite,
+        search_settings: &Search,
+    ) -> Result<(), LoadFromDbError> {
+        self.load_pages(SearchIndex::history_pages(db), search_settings).await
+    }
+
+    async fn load_pages(
+        self,
+        pages: impl Stream<Item = Result<Vec<History>, LoadFromDbError>>,
+        search_settings: &Search,
+    ) -> Result<(), LoadFromDbError> {
+        let mut pages = pin!(pages);
+        loop {
+            let page = pages.try_next().await?;
+            let Some(histories) = page else {
+                break;
+            };
+            self.index.read().await.add_histories(&histories);
+        }
+        self.index.read().await.rebuild_frecency(search_settings);
+        Ok(())
+    }
+}
 
 /// Data for a unique command.
 #[derive(Debug)]
@@ -343,6 +423,12 @@ pub struct SearchIndex {
 
     /// Controls which shells' commands are included.
     pub shells: OrFilter<Vec<String>>,
+
+    /// Shared by successive generations so reloads cannot publish out of order.
+    reload_lock: Arc<AsyncMutex<()>>,
+
+    /// Updates to replay into the replacement. Only a running reload owns the log.
+    reload_updates: Weak<HistoryUpdates>,
 }
 
 impl SearchIndex {
@@ -354,7 +440,94 @@ impl SearchIndex {
             frecency_map: RwLock::default(),
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
+            reload_lock: Arc::new(AsyncMutex::new(())),
+            reload_updates: Weak::new(),
         }
+    }
+
+    /// Reload a live index without losing history added during the database scan.
+    ///
+    /// `Some(shells)` only reloads if the filter differs; `None` forces a reload using the current
+    /// filter. The returned read guard keeps that filter in place until the caller finishes using
+    /// the index. Database loading holds no guard on the live index.
+    pub async fn reload<'a>(
+        index: &'a AsyncRwLock<Self>,
+        shells: Option<OrFilter<Vec<String>>>,
+        db: &Sqlite,
+        search_settings: &Search,
+    ) -> Result<RwLockReadGuard<'a, Self>, LoadFromDbError> {
+        Self::reload_from_pages(index, shells, Self::history_pages(db), search_settings).await
+    }
+
+    /// Prepare a progressive load into the initially empty index. Reserve it before spawning the
+    /// loader, serialize it with reloads, and count each invocation only once.
+    pub(crate) async fn initial_loader(index: Arc<AsyncRwLock<Self>>) -> InitialIndexLoad {
+        let reload_lock = index.read().await.reload_lock.clone();
+        let reload = reload_lock.lock_owned().await;
+        let updates = ReloadUpdates::new(Some(HashSet::new()));
+        index.write().await.reload_updates = Arc::downgrade(&updates.rows);
+        InitialIndexLoad {
+            index,
+            _updates: updates,
+            _reload: reload,
+        }
+    }
+
+    async fn reload_from_pages<'a>(
+        index: &'a AsyncRwLock<Self>,
+        shells: Option<OrFilter<Vec<String>>>,
+        pages: impl Stream<Item = Result<Vec<History>, LoadFromDbError>>,
+        search_settings: &Search,
+    ) -> Result<RwLockReadGuard<'a, Self>, LoadFromDbError> {
+        let reload_lock = {
+            let active = index.read().await;
+            if shells.as_ref().is_some_and(|shells| *shells == active.shells) {
+                return Ok(active);
+            }
+            active.reload_lock.clone()
+        };
+        let _reload = reload_lock.lock().await;
+
+        let (mut replacement, updates) = {
+            let mut active = index.write().await;
+            // Another queued reload may already have selected this filter.
+            if shells.as_ref().is_some_and(|shells| *shells == active.shells) {
+                return Ok(active.downgrade());
+            }
+            let updates = ReloadUpdates::new(None);
+            active.reload_updates = Arc::downgrade(&updates.rows);
+            let replacement = Self::new(shells.unwrap_or_else(|| active.shells.clone()));
+            (replacement, updates)
+        };
+
+        // A concurrent write may also be returned by the paged scan. Keep invocation IDs only
+        // during loading so replaying it cannot inflate the command's frequency.
+        let mut loaded = HashSet::new();
+        let mut pages = pin!(pages);
+        loop {
+            let page = pages.try_next().await?;
+            let Some(histories) = page else {
+                break;
+            };
+            loaded.extend(histories.iter().map(|history| history.id));
+            replacement.add_histories(&histories);
+        }
+        // Score the full snapshot before taking the live write lock. Replayed updates use the
+        // usual periodic frecency refresh, just like history added after publication.
+        replacement.rebuild_frecency(search_settings);
+
+        let mut active = index.write().await;
+        let pending = updates.rows.lock().take();
+        if let Some(pending) = pending {
+            for history in pending.rows {
+                if loaded.insert(history.id) {
+                    replacement.add_history(&history);
+                }
+            }
+        }
+        replacement.reload_lock = reload_lock.clone();
+        *active = replacement;
+        Ok(active.downgrade())
     }
 
     /// Build a fresh index for `shells`, populated from `db` and with its frecency map ready.
@@ -400,6 +573,13 @@ impl SearchIndex {
     /// If the command already exists, updates its invocation data.
     /// If it's a new command, adds it to both the map and Nucleo.
     pub fn add_history(&self, history: &History) {
+        // Record before filtering: a replacement may include shells the current index excludes.
+        if let Some(updates) = self.reload_updates.upgrade()
+            && let Some(pending) = updates.lock().as_mut()
+            && !pending.record(history)
+        {
+            return;
+        }
         if history.is_agent() {
             return;
         }
@@ -574,9 +754,11 @@ impl Default for SearchIndex {
 
 #[cfg(test)]
 mod tests {
+    use futures::{StreamExt, poll};
     use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use time::macros::datetime;
+    use tokio::sync::oneshot;
 
     use super::*;
 
@@ -598,6 +780,201 @@ mod tests {
         RwLockReadGuard::map(index.commands.read(), |commands| {
             &commands.data[usize::conv(commands.indices[command])]
         })
+    }
+
+    #[fixture]
+    fn live_index() -> Arc<AsyncRwLock<SearchIndex>> {
+        Arc::new(AsyncRwLock::new(SearchIndex::default()))
+    }
+
+    struct ReloadGate {
+        scanned: oneshot::Receiver<()>,
+        resume: oneshot::Sender<Result<Vec<History>, LoadFromDbError>>,
+    }
+
+    /// Pause after one page has actually been indexed, without sleeps or scheduler assumptions.
+    fn paused_pages(
+        first: Vec<History>,
+    ) -> (impl Stream<Item = Result<Vec<History>, LoadFromDbError>>, ReloadGate) {
+        let (scanned_tx, scanned) = oneshot::channel();
+        let (resume, resume_rx) = oneshot::channel();
+        let pages = stream::iter([Ok(first)]).chain(stream::once(async move {
+            scanned_tx.send(()).unwrap();
+            resume_rx.await.unwrap()
+        }));
+        (pages, ReloadGate { scanned, resume })
+    }
+
+    fn spawn_reload(
+        index: Arc<AsyncRwLock<SearchIndex>>,
+        shells: Option<OrFilter<Vec<String>>>,
+        pages: impl Stream<Item = Result<Vec<History>, LoadFromDbError>> + Send + 'static,
+    ) -> tokio::task::JoinHandle<Result<(), LoadFromDbError>> {
+        tokio::spawn(async move {
+            SearchIndex::reload_from_pages(&index, shells, pages, &Search::default())
+                .await
+                .map(drop)
+        })
+    }
+
+    #[derive(Clone, Copy)]
+    enum Scanned {
+        Never,
+        FirstPage,
+        LastPage,
+    }
+
+    #[rstest]
+    #[case::before_loading(true)]
+    #[case::during_loading(false)]
+    #[tokio::test]
+    async fn initial_load_exposes_pages_and_deduplicates_live_updates(
+        live_index: Arc<AsyncRwLock<SearchIndex>>,
+        #[case] before_loading: bool,
+    ) {
+        let old = make_history("echo old", "/old", datetime!(2024-01-01 10:00 UTC));
+        let new = make_history("echo new", "/new", datetime!(2024-01-01 11:00 UTC));
+        let initial = SearchIndex::initial_loader(live_index.clone()).await;
+        if before_loading {
+            live_index.read().await.add_history(&new);
+        }
+        let (pages, gate) = paused_pages(vec![old.clone()]);
+        let load = tokio::spawn(async move { initial.load_pages(pages, &Search::default()).await });
+        gate.scanned.await.unwrap();
+        assert_eq!(
+            live_index.read().await.search("old", &IndexFilterMode::Global, 10).collect::<Vec<_>>(),
+            [old.id],
+            "the first page is already visible"
+        );
+        live_index.read().await.add_history(&new);
+        live_index.read().await.add_history(&new);
+        gate.resume.send(Ok(vec![new.clone()])).unwrap();
+        load.await.unwrap().unwrap();
+
+        let index = live_index.read().await;
+        assert_eq!(command(&index, "echo new").count, 1);
+        assert_eq!(index.search("new", &IndexFilterMode::Global, 10).collect::<Vec<_>>(), [new.id]);
+    }
+
+    #[rstest]
+    #[case::past_the_cursor(Scanned::Never)]
+    #[case::before_the_update(Scanned::FirstPage)]
+    #[case::after_the_update(Scanned::LastPage)]
+    #[tokio::test]
+    async fn reload_preserves_updates_without_counting_them_twice(
+        live_index: Arc<AsyncRwLock<SearchIndex>>,
+        #[case] scanned: Scanned,
+    ) {
+        let old = make_history("echo same", "/old", datetime!(2024-01-01 10:00 UTC));
+        let new = make_history("echo same", "/new", datetime!(2024-01-01 11:00 UTC));
+        let mut first = vec![old];
+        if matches!(scanned, Scanned::FirstPage) {
+            first.push(new.clone());
+        }
+        let last = if matches!(scanned, Scanned::LastPage) {
+            vec![new.clone()]
+        } else {
+            Vec::new()
+        };
+        let (pages, gate) = paused_pages(first);
+        let reload = spawn_reload(live_index.clone(), None, pages);
+        gate.scanned.await.unwrap();
+
+        // The live index remains available while the scan is paused. Repeated delivery of one
+        // invocation must also be deduplicated when replaying the pending updates.
+        live_index.read().await.add_history(&new);
+        live_index.read().await.add_history(&new);
+        gate.resume.send(Ok(last)).unwrap();
+        reload.await.unwrap().unwrap();
+
+        let index = live_index.read().await;
+        assert_eq!(command(&index, "echo same").count, 2);
+        assert_eq!(command(&index, "echo same").most_recent_id, new.id);
+        assert_eq!(
+            index.search("same", &IndexFilterMode::Global, 10).collect::<Vec<_>>(),
+            [new.id]
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reload_records_updates_excluded_by_the_previous_shell_filter(
+        live_index: Arc<AsyncRwLock<SearchIndex>>,
+    ) {
+        live_index.write().await.shells = OrFilter::from_list(vec!["bash".into()]).unwrap();
+        let mut new = make_history("echo fish", "/new", datetime!(2024-01-01 11:00 UTC));
+        new.shell = Some("fish".into());
+        let fish = OrFilter::from_list(vec!["fish".into()]).unwrap();
+        let (pages, gate) = paused_pages(Vec::new());
+        let reload = spawn_reload(live_index.clone(), Some(fish.clone()), pages);
+        gate.scanned.await.unwrap();
+
+        live_index.read().await.add_history(&new);
+        assert_eq!(live_index.read().await.command_count(), 0);
+        gate.resume.send(Ok(Vec::new())).unwrap();
+        reload.await.unwrap().unwrap();
+
+        let index = live_index.read().await;
+        assert_eq!(index.shells, fish);
+        assert_eq!(
+            index.search("fish", &IndexFilterMode::Global, 10).collect::<Vec<_>>(),
+            [new.id]
+        );
+    }
+
+    #[rstest]
+    #[case::load_error(false)]
+    #[case::cancelled(true)]
+    #[tokio::test]
+    async fn an_abandoned_reload_keeps_the_live_index_and_allows_another_reload(
+        live_index: Arc<AsyncRwLock<SearchIndex>>,
+        #[case] cancel: bool,
+    ) {
+        let old = make_history("echo old", "/old", datetime!(2024-01-01 10:00 UTC));
+        let new = make_history("echo new", "/new", datetime!(2024-01-01 11:00 UTC));
+        live_index.read().await.add_history(&old);
+        let (pages, gate) = paused_pages(Vec::new());
+        let fish = OrFilter::from_list(vec!["fish".into()]).unwrap();
+        let reload = spawn_reload(live_index.clone(), Some(fish), pages);
+        gate.scanned.await.unwrap();
+        live_index.read().await.add_history(&new);
+
+        if cancel {
+            reload.abort();
+            assert!(reload.await.unwrap_err().is_cancelled());
+        } else {
+            gate.resume.send(Err(LoadFromDbError(eyre::eyre!("load failed")))).unwrap();
+            assert!(reload.await.unwrap().is_err());
+        }
+        assert_eq!(live_index.read().await.shells, OrFilter::<Vec<String>>::all());
+        assert_eq!(live_index.read().await.command_count(), 2);
+
+        let pages = stream::iter([Ok(vec![old, new])]);
+        let index = SearchIndex::reload_from_pages(&live_index, None, pages, &Search::default())
+            .await
+            .unwrap();
+        assert_eq!(index.command_count(), 2);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn queued_reload_keeps_the_most_recent_shell_filter(
+        live_index: Arc<AsyncRwLock<SearchIndex>>,
+    ) {
+        let fish = OrFilter::from_list(vec!["fish".into()]).unwrap();
+        let (pages, gate) = paused_pages(Vec::new());
+        let first = spawn_reload(live_index.clone(), Some(fish.clone()), pages);
+        gate.scanned.await.unwrap();
+
+        let settings = Search::default();
+        let pages = stream::iter([Ok(Vec::new())]);
+        let mut second = pin!(SearchIndex::reload_from_pages(&live_index, None, pages, &settings));
+        assert!(poll!(&mut second).is_pending(), "the second reload must wait for the first");
+        gate.resume.send(Ok(Vec::new())).unwrap();
+        first.await.unwrap().unwrap();
+
+        let index = second.await.unwrap();
+        assert_eq!(index.shells, fish, "a queued reload must not restore the old filter");
     }
 
     /// A [`CommandData`] used `count` times, most recently at `most_recent_timestamp`.
