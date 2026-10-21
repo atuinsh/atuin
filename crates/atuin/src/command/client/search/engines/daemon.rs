@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use atuin_client::database::{DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
-use atuin_common::string::NormalizeDiacriticsExt;
-use atuin_daemon::client::{SearchClient, SearchParams};
+use atuin_common::string::StrExt as _;
+use atuin_daemon::client::{FromSettingsError, SearchClient, SearchParams};
 use atuin_daemon::search::truncate_query;
 use easy_cast::Conv;
 use eyre::Result;
@@ -35,7 +37,7 @@ impl LazyClient {
         Ok(self.0.as_mut().unwrap())
     }
 
-    async fn connect(&self, settings: &Settings) -> Result<SearchClient> {
+    async fn connect(&self, settings: &Settings) -> Result<SearchClient, FromSettingsError> {
         SearchClient::from_settings(settings).await
     }
 
@@ -60,7 +62,7 @@ impl LazyClient {
 
         debug!("daemon not available, attempting auto-start");
         self.0 = None;
-        if let Err(start_error) = daemon::ensure_daemon_running(settings).await {
+        if let Err(start_error) = atuin_daemon::service::ActiveService::ready(settings).await {
             return Err(err.wrap_err(format!("failed to auto-start daemon: {start_error:#}")));
         }
         let client = self.get(settings).await?;
@@ -70,15 +72,15 @@ impl LazyClient {
 
 pub struct Search {
     client: LazyClient,
-    settings: Settings,
+    settings: Arc<Settings>,
     query_id: u64,
 }
 
 impl Search {
-    pub fn new(settings: &Settings) -> Self {
+    pub fn new(settings: Arc<Settings>) -> Self {
         Search {
             client: LazyClient::default(),
-            settings: settings.clone(),
+            settings,
             query_id: 0,
         }
     }
@@ -278,14 +280,16 @@ impl SearchEngine for Search {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     /// Regression test: the daemon truncates queries before frizbee sees
     /// them, but highlighting used the raw input — a pasted query with an
     /// atom past frizbee's needle limit panicked in `Matcher::from_query`.
-    #[test]
+    #[rstest]
     fn long_query_does_not_panic_highlighting() {
-        let engine = Search::new(&Settings::default());
+        let engine = Search::new(Arc::new(Settings::default()));
         let long_query = "a".repeat(5000);
         let indices = engine.get_highlight_indices("echo hello", &long_query);
         assert!(indices.is_empty());
@@ -295,9 +299,9 @@ mod tests {
     /// and returns byte offsets into the original command — the renderer
     /// tests each display char's source byte against these ("echo déjà" is
     /// e0 c1 h2 o3 ␣4 d5 é6 j8 à9; é and à are two bytes each).
-    #[test]
+    #[rstest]
     fn accented_command_highlights_unaccented_query() {
-        let engine = Search::new(&Settings::default());
+        let engine = Search::new(Arc::new(Settings::default()));
         let indices = engine.get_highlight_indices("echo déjà", "deja");
         assert_eq!(indices, vec![5, 6, 8, 9]);
     }
@@ -305,9 +309,9 @@ mod tests {
     /// A multibyte char before the match must not shift the highlight:
     /// frizbee's offsets are into the normalized text ("emacs test"), which
     /// is one byte shorter than the command wherever é shrank to e.
-    #[test]
+    #[rstest]
     fn multibyte_char_before_match_does_not_shift_highlight() {
-        let engine = Search::new(&Settings::default());
+        let engine = Search::new(Arc::new(Settings::default()));
         let indices = engine.get_highlight_indices("émacs test", "test");
         assert_eq!(indices, vec![7, 8, 9, 10]);
     }
@@ -315,9 +319,9 @@ mod tests {
     /// Non-Latin text doesn't normalize, so matchable and command share a
     /// byte layout; offsets still land on the match ("日本 git" is 日0 本3
     /// ␣6 g7 i8 t9).
-    #[test]
+    #[rstest]
     fn cjk_prefix_highlights_at_correct_bytes() {
-        let engine = Search::new(&Settings::default());
+        let engine = Search::new(Arc::new(Settings::default()));
         let indices = engine.get_highlight_indices("日本 git", "git");
         assert_eq!(indices, vec![7, 8, 9]);
     }

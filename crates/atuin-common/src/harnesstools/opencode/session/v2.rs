@@ -80,8 +80,8 @@ use sqlx::{Connection, Row, Sqlite};
 use xxhash_rust::xxh3::xxh3_64;
 
 use super::{
-    Body, MessageInfo, Next, OpencodeMessage, POLL, Reads, epoch_millis, file_identity, json, text,
-    tokens, usage_of,
+    Body, MessageInfo, Next, OpencodeMessage, POLL, Reads, SOURCE, epoch_millis, exited_non_zero,
+    file_identity, json, text, tokens, tool_patch, usage_of,
 };
 use crate::db::sqlite::TransientResultCode;
 use crate::db::sqlite::observe::{ObserveError, ReplayBehavior};
@@ -89,7 +89,7 @@ use crate::db::{query_as, query_scalar};
 use crate::harnesstools::session::model::{
     Content, Role, StopReason, ToolCallId, ToolResult, ToolUse,
 };
-use crate::harnesstools::session::{Checkpoint, MessageError};
+use crate::harnesstools::session::{Checkpoint, Message as _, MessageError};
 use crate::os::fs::FdIdentity;
 
 /// The first line of the prompt a subagent session starts with (`tool/plugin/subagent.ts`,
@@ -99,117 +99,74 @@ const SUBAGENT_PROMPT: &str = "You are a subagent spawned by another session.";
 /// Light rows a pass reads at a time.
 const ROWS: usize = 256;
 
-/// A place in one layout of a session: the `seq` of the last row passed and a digest of its id.
+/// A place in one layout of a session: the `seq` of the last row passed and the low half of its
+/// id's xxh3, which is what a [`checkpoint`] holding both layouts has room for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Mark {
     pub(super) seq: i64,
-    digest: Digest,
-}
-
-/// How much of an id's xxh3 a mark keeps: all of it, or the low half a checkpoint holding both
-/// layouts has room for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Digest {
-    Full(u64),
-    Low(u32),
+    digest: u32,
 }
 
 impl Mark {
     pub(super) fn of(seq: i64, id: &str) -> Self {
         Self {
             seq,
-            digest: Digest::Full(xxh3_64(id.as_bytes())),
+            digest: Self::digest_of(id),
         }
     }
 
     /// Whether `id` is the id of the row this mark was taken at.
     pub(super) fn names(&self, id: &str) -> bool {
-        let hash = xxh3_64(id.as_bytes());
-        match self.digest {
-            Digest::Full(digest) => hash == digest,
-            Digest::Low(low) => Self::low_of(hash) == low,
-        }
-    }
-
-    const fn low(&self) -> u32 {
-        match self.digest {
-            Digest::Full(hash) => Self::low_of(hash),
-            Digest::Low(low) => low,
-        }
+        Self::digest_of(id) == self.digest
     }
 
     #[allow(clippy::cast_possible_truncation, reason = "the low half is the point")]
-    const fn low_of(hash: u64) -> u32 {
-        hash as u32
+    fn digest_of(id: &str) -> u32 {
+        xxh3_64(id.as_bytes()) as u32
     }
 }
 
-/// The bit a checkpoint holding both layouts sets.
-const BOTH: u64 = 1 << 63;
-/// How many bits of such a checkpoint hold the 2.0 layout's place.
+/// The top bit, which every checkpoint sets above the places it packs.
+const PACKED: u64 = 1 << 63;
+/// How many bits of a checkpoint hold the 2.0 layout's place.
 const NEXT_BITS: u32 = 31;
 
 /// The checkpoint of a session whose 1.x layout was read up to `legacy` and whose 2.0 layout up
-/// to `next`.
-///
-/// A session read in its 1.x layout alone keeps the checkpoint it always had: the row's `seq`
-/// and the full digest of its id, so a checkpoint stored before 2.0 support still resumes. Once
-/// the 2.0 layout has a place, both are packed into one: the top bit set, then each place's `seq`
-/// plus one (zero for none), the 1.x one above the 2.0 one, so that the checkpoint grows as
-/// either place does; the digest holds the low halves of both ids' digests. A place too far on
-/// to pack -- two billion events into one session -- is left out and read again.
+/// to `next`: the top bit set, then each place's `seq` plus one (zero for none), the 1.x one above
+/// the 2.0 one, so that the checkpoint grows as either place does; the digest holds both marks'
+/// digests. A place too far on to pack -- two billion events into one session -- is left out and
+/// read again.
 pub(super) fn checkpoint(legacy: Option<(i64, &str)>, next: Option<Mark>) -> Checkpoint {
-    let legacy = legacy.map(|(seq, id)| Mark::of(seq, id));
-    let Some(next) = next else {
-        return match legacy {
-            Some(mark) => Checkpoint {
-                at: u64::try_from(mark.seq).unwrap_or_default(),
-                digest: match mark.digest {
-                    Digest::Full(digest) => digest,
-                    Digest::Low(low) => u64::from(low),
-                },
-            },
-            None => Checkpoint {
-                at: BOTH,
-                digest: 0,
-            },
-        };
-    };
     let plus_one = |mark: Option<Mark>, bits: u32| {
         mark.and_then(|mark| u64::try_from(mark.seq).ok())
             .map(|seq| seq + 1)
             .filter(|place| *place < 1 << bits)
             .zip(mark)
     };
-    let (legacy_at, legacy_low) =
-        plus_one(legacy, 32).map_or((0, 0), |(at, mark)| (at, mark.low()));
-    let (next_at, next_low) =
-        plus_one(Some(next), NEXT_BITS).map_or((0, 0), |(at, mark)| (at, mark.low()));
+    let legacy = legacy.map(|(seq, id)| Mark::of(seq, id));
+    let (legacy_at, legacy_digest) =
+        plus_one(legacy, 32).map_or((0, 0), |(at, mark)| (at, mark.digest));
+    let (next_at, next_digest) =
+        plus_one(next, NEXT_BITS).map_or((0, 0), |(at, mark)| (at, mark.digest));
     Checkpoint {
-        at: BOTH | legacy_at << NEXT_BITS | next_at,
-        digest: u64::from(legacy_low) << 32 | u64::from(next_low),
+        at: PACKED | legacy_at << NEXT_BITS | next_at,
+        digest: u64::from(legacy_digest) << 32 | u64::from(next_digest),
+        generation: 0,
     }
 }
 
 /// The places a checkpoint names in each layout (see [`checkpoint`]).
 pub(super) fn unpack(from: Checkpoint) -> (Option<Mark>, Option<Mark>) {
-    if from.at & BOTH == 0 {
-        let legacy = i64::try_from(from.at).ok().map(|seq| Mark {
-            seq,
-            digest: Digest::Full(from.digest),
-        });
-        return (legacy, None);
-    }
     let place = |at: u64, low: u64| {
         let seq = i64::try_from(at.checked_sub(1)?).ok()?;
         Some(Mark {
             seq,
-            digest: Digest::Low(u32::try_from(low & 0xffff_ffff).unwrap_or_default()),
+            digest: u32::try_from(low & 0xffff_ffff).unwrap_or_default(),
         })
     };
     let next_mask = (1 << NEXT_BITS) - 1;
     (
-        place((from.at & !BOTH) >> NEXT_BITS, from.digest >> 32),
+        place((from.at & !PACKED) >> NEXT_BITS, from.digest >> 32),
         place(from.at & next_mask, from.digest),
     )
 }
@@ -288,7 +245,7 @@ impl Reader {
             self.delivered.insert(seq);
         } else {
             self.mark = Some(Mark::of(seq, id));
-            self.delivered = self.delivered.split_off(&(seq + 1));
+            self.delivered.retain(|&delivered| delivered > seq);
         }
     }
 }
@@ -346,7 +303,13 @@ impl Pass<'_> {
                     self.state = state;
                     self.stage = Stage::Rows;
                     if reader.info.as_ref().is_none_or(|said| !said.says(&info)) {
-                        let message = info.message();
+                        // A title read with the session from its start is the one it has; one
+                        // read past rows delivered before may be a rename since.
+                        let renamed = match &reader.info {
+                            Some(said) => said.title != info.title,
+                            None => reader.mark.is_some(),
+                        };
+                        let message = info.message(renamed);
                         reader.info = Some(info);
                         return Some((reader.mark, Ok(message)));
                     }
@@ -501,8 +464,9 @@ impl SessionInfo {
 
     /// The session info as the message a 1.x `session.updated.1` row would be: its title, its
     /// directory, and the session it came from -- a subagent's parent, or the session a fork
-    /// copied.
-    fn message(&self) -> OpencodeMessage {
+    /// copied. Stamped when the session was last updated if it was `renamed` since it was last
+    /// read, else when it was created (see `OpencodeMessage::session`).
+    fn message(&self, renamed: bool) -> OpencodeMessage {
         let mut info = serde_json::json!({
             "id": self.id,
             "title": self.title,
@@ -516,7 +480,7 @@ impl SessionInfo {
         } else if let Some(fork) = &self.fork {
             info["forkedFrom"] = Value::from(fork.as_str());
         }
-        OpencodeMessage::session(serde_json::json!({ "info": info }))
+        OpencodeMessage::session(serde_json::json!({ "info": info }), renamed)
             .expect("the info is an object")
     }
 }
@@ -630,6 +594,7 @@ impl Full {
                 return Some(Err(MessageError::from(err)));
             }
         };
+        let session = info.id.as_str();
         let time = epoch_millis(&data["time"]["created"]).or(self.created);
         let said = |role: Role, content: Vec<Content>| Next {
             role,
@@ -639,7 +604,7 @@ impl Full {
             stop: None,
         };
         let text = |key: &str| data[key].as_str().unwrap_or_default().to_owned();
-        let (next, info) = match self.kind.as_str() {
+        let (mut next, info) = match self.kind.as_str() {
             "user" => {
                 let prompt = text("text");
                 let role = if prompt.starts_with(SUBAGENT_PROMPT) {
@@ -691,6 +656,10 @@ impl Full {
                 }));
             }
         };
+        // a message atuin wrote from rows of its own is read back as the first of them
+        if let Some(source) = written_from(&data, session)["source"].as_str() {
+            source.clone_into(&mut next.id);
+        }
         Some(Ok(OpencodeMessage {
             role: next.role.clone(),
             body: Body::Next(next),
@@ -706,6 +675,7 @@ impl Full {
             role: Role::Assistant,
             turn: Some(turn(epoch_millis(&data["time"]["created"]), model, of, &data["tokens"])),
             model: model["id"].as_str().map(str::to_owned),
+            provider: model["providerID"].as_str().map(str::to_owned),
             cwd: state.cwd_at(self.seq),
             ..MessageInfo::unknown()
         }
@@ -730,11 +700,15 @@ impl Full {
                         input: state["input"].clone(),
                     }));
                     match state["status"].as_str() {
-                        Some("completed") => content.push(Content::ToolResult(ToolResult {
-                            call,
-                            output: state["content"].clone(),
-                            error: false,
-                        })),
+                        Some("completed") => {
+                            let patch = tool_patch(&call, &state["metadata"]);
+                            content.push(Content::ToolResult(ToolResult {
+                                call,
+                                output: state["content"].clone(),
+                                error: exited_non_zero(&state["metadata"]),
+                            }));
+                            content.extend(patch.map(Content::Patch));
+                        }
                         Some("error") => content.push(Content::ToolResult(ToolResult {
                             call,
                             output: Value::from(error_text(&state["error"])),
@@ -785,6 +759,18 @@ impl Full {
     }
 }
 
+/// What a message atuin wrote of session `session` says it was written from (see [`SOURCE`]),
+/// `Null` for any other: opencode's own fork copies a message whole, `metadata` and all, into
+/// another session, where it is a row of that session's own.
+fn written_from<'a>(data: &'a Value, session: &str) -> &'a Value {
+    let written = &data["metadata"][SOURCE];
+    if written["session"] == session {
+        written
+    } else {
+        &Value::Null
+    }
+}
+
 /// The tables a read of the 2.0 layout looks for.
 async fn tables(conn: &mut SqliteConnection) -> Result<Vec<String>, sqlx::Error> {
     query_scalar::<Sqlite, String>(
@@ -793,6 +779,136 @@ async fn tables(conn: &mut SqliteConnection) -> Result<Vec<String>, sqlx::Error>
     )
     .fetch_all(conn)
     .await
+}
+
+/// A 2.0 session as opencode holds it now, for sync (see `projection`).
+#[derive(Debug)]
+pub(super) struct Held {
+    pub(super) directory: Option<String>,
+    pub(super) created: Option<i64>,
+    /// When opencode last updated the session or any of its rows.
+    pub(super) updated: Option<i64>,
+    /// A revert is pending.
+    pub(super) reverting: bool,
+    /// Its rows, in `seq` order.
+    pub(super) rows: Vec<HeldRow>,
+}
+
+/// A row of a [`Held`] session.
+#[derive(Debug)]
+pub(super) struct HeldRow {
+    pub(super) id: String,
+    pub(super) kind: String,
+    pub(super) created: Option<i64>,
+    pub(super) data: Option<String>,
+    /// opencode is done writing it (see [`Reads::rows`]).
+    pub(super) settled: bool,
+    /// The id capture delivers the row under; `None` for a row it delivers nothing of: one with
+    /// no message, one not settled yet, or a copy of a 1.x message.
+    pub(super) delivered: Option<String>,
+    /// The other rows atuin wrote the message from, which it holds without a row of their own
+    /// (see [`SOURCE`]).
+    pub(super) merged: Vec<String>,
+}
+
+/// Session `id` as `conn`'s `session_v2` and `session_message` tables hold it; `None` when they
+/// hold no such session, or aren't there.
+pub(super) async fn held(
+    conn: &mut SqliteConnection,
+    id: &str,
+) -> Result<Option<Held>, sqlx::Error> {
+    const PLAIN: &str = "SELECT id, seq, type, time_created, data, 0 AS migrated FROM \
+                         session_message WHERE session_id = ?1 ORDER BY seq";
+    // as `Reads::row` tells a copy of a 1.x message
+    const LEGACY: &str = "SELECT m.id, m.seq, m.type, m.time_created, m.data, EXISTS (SELECT 1 \
+                          FROM message l WHERE l.session_id = m.session_id AND (l.id = m.id OR \
+                          (m.type = 'synthetic' AND substr(l.id, 1, 16) = substr(m.id, 1, 16)))) \
+                          AS migrated FROM session_message m WHERE m.session_id = ?1 ORDER BY \
+                          m.seq";
+    let tables = tables(&mut *conn).await?;
+    let has = |name: &str| tables.iter().any(|table| table == name);
+    if !has("session_v2") || !has("session_message") {
+        return Ok(None);
+    }
+    let Some(info) = query_as::<Sqlite, SessionInfo>(
+        "SELECT id, title, parent_id, fork_session_id, directory, time_created, time_updated FROM \
+         session_v2 WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let revert =
+        query_scalar::<Sqlite, Option<String>>("SELECT revert FROM session_v2 WHERE id = ?1")
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await?;
+    let updated = query_scalar::<Sqlite, Option<i64>>(
+        "SELECT MAX(t) FROM (SELECT time_updated AS t FROM session_v2 WHERE id = ?1 UNION ALL \
+         SELECT time_updated FROM session_message WHERE session_id = ?1)",
+    )
+    .bind(id)
+    .fetch_one(&mut *conn)
+    .await?;
+    let legacy = has("message");
+    let rows = query_as::<Sqlite, Full>(if legacy {
+        LEGACY
+    } else {
+        PLAIN
+    })
+    .bind(id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let state = State {
+        info: Some(info.clone()),
+        legacy,
+        ..State::default()
+    };
+    let rows = rows
+        .into_iter()
+        .map(|full| {
+            let parsed = full.data.as_deref().and_then(|data| json(data).ok()).unwrap_or_default();
+            let settled = match full.kind.as_str() {
+                "assistant" => !parsed["time"]["completed"].is_null(),
+                "compaction" => parsed["status"] != "running",
+                _ => true,
+            };
+            let (id, kind, created, data) =
+                (full.id.clone(), full.kind.clone(), full.created, full.data.clone());
+            let merged = written_from(&parsed, &info.id)["merged"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect();
+            let delivered = if settled && !full.migrated {
+                match full.message(&info, &state) {
+                    Some(Ok(message)) => message.id().map(String::from),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            HeldRow {
+                id,
+                kind,
+                created,
+                data,
+                settled,
+                delivered,
+                merged,
+            }
+        })
+        .collect();
+    Ok(Some(Held {
+        directory: info.directory,
+        created: info.created,
+        updated,
+        reverting: revert.is_some_and(|r| !r.trim().is_empty() && r != "null"),
+        rows,
+    }))
 }
 
 impl Reads {

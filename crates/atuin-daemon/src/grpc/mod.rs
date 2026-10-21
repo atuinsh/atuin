@@ -2,32 +2,6 @@
 //!
 //! The client talks to the daemon over GRPC. This module does all of that.
 
-/// Trait for reply types that include the daemon version and protocol version.
-pub trait VersionedReply {
-    fn version(&self) -> &str;
-    fn protocol(&self) -> u32;
-}
-
-/// Mark a reply as versioned.
-///
-/// Versioned replies are protobuf messages that have a `version` field and a `protocol` field. This
-/// will implement the [`VersionedReply`] trait for the given messages.
-macro_rules! versioned_messages {
-    ($($name:ident),* $(,)?) => {
-        $(
-            impl crate::grpc::VersionedReply for $name {
-                fn version(&self) -> &str {
-                    &self.version
-                }
-
-                fn protocol(&self) -> u32 {
-                    self.protocol
-                }
-            }
-        )*
-    };
-}
-
 /// Mark a [`thiserror::Error`] type as an invalid argument error.
 ///
 /// Invalid argument errors receive an [`Into`] implementation into [`tonic::Status`] which returns
@@ -63,6 +37,7 @@ macro_rules! internal_errors {
 pub mod ai;
 pub mod common;
 pub mod history;
+pub mod versioning;
 
 pub use ai::session::Service as AiSessionService;
 pub use history::Service as HistoryService;

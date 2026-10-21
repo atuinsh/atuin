@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
@@ -191,7 +192,7 @@ impl Browser {
         &mut self,
         db: &Sqlite,
         selected: &History,
-        settings: &Settings,
+        settings: &Arc<Settings>,
     ) -> eyre::Result<(Option<HistoryId>, Option<HistoryId>)> {
         if self.view == View::Output {
             if self.output.poll(selected.id, settings).await {
@@ -608,7 +609,7 @@ pub fn draw_views(
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::theme::ThemeManager;
+    use atuin_client::theme::ThemeManagerOptions;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use rstest::{fixture, rstest};
@@ -620,7 +621,8 @@ mod tests {
 
     #[fixture]
     fn bindings() -> Bindings {
-        Bindings::new(&default_inspector_keymap(&Settings::utc()), &EvalContext {
+        let settings = Settings::utc();
+        Bindings::new(&default_inspector_keymap(&settings, &settings.keys), &EvalContext {
             cursor_position: 0,
             input_width: 0,
             input_byte_len: 0,
@@ -658,7 +660,7 @@ mod tests {
         neighbor.command = "pwd".into();
         db.save(&neighbor).await.unwrap();
         let mut browser = Browser::default();
-        let settings = Settings::utc();
+        let settings = Arc::new(Settings::utc());
         assert_eq!(
             browser.refresh(&db, &history, &settings).await.unwrap(),
             (Some(other_run.id), None)
@@ -694,7 +696,11 @@ mod tests {
         #[case] rows: u16,
     ) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManager::new(Some(true), Some(String::new()));
+        let mut themes = ThemeManagerOptions {
+            debug: true,
+            builtin_only: true,
+        }
+        .build();
         let theme = themes.load_theme("(none)", None);
         let mut browser = Browser::default();
         browser.prepare(&history, &Settings::utc(), theme);
@@ -719,7 +725,11 @@ mod tests {
         #[case] highlight: bool,
     ) {
         history.command = "echo héllo\0\ncat '\x1b[31m世界'".into();
-        let mut themes = ThemeManager::new(Some(true), Some(String::new()));
+        let mut themes = ThemeManagerOptions {
+            debug: true,
+            builtin_only: true,
+        }
+        .build();
         let theme = themes.load_theme("(none)", None);
         let text = command_text(&history, highlight, theme);
         assert_eq!(text.to_string(), "echo héllo^@\ncat '^[[31m世界'");
@@ -786,7 +796,11 @@ mod tests {
     ) {
         use ratatui::style::Color;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManager::new(Some(true), Some(String::new()));
+        let mut themes = ThemeManagerOptions {
+            debug: true,
+            builtin_only: true,
+        }
+        .build();
         let theme = themes.load_theme("(none)", None);
         let mut browser = Browser {
             view: View::Output,

@@ -351,25 +351,27 @@ impl SearchSvc for SearchGrpcService {
         let limit = usize::try_from(request.limit).unwrap_or(0);
         let context = request.context.map(|c| usize::try_from(c).unwrap_or(usize::MAX));
 
-        let matches =
-            self.output_store.search(&request.query, limit, context).await.items().map(|result| {
-                match result {
-                    Ok(m) => Ok(OutputSearchMatch {
-                        history_id: Some(m.history_id.into()),
-                        lines: m
-                            .lines
-                            .iter()
-                            .map(|l| OutputSearchLine {
-                                line: l.line,
-                                content: Some((&l.content).into()),
-                            })
-                            .collect(),
-                        score: m.score,
-                    }),
-                    Err(err) => {
-                        error!(?err, "output full-text search failed");
-                        Err(Status::internal("output search failed"))
-                    }
+        let matches = self
+            .output_store
+            .search(request.terms.iter().map(String::as_str), limit, context)
+            .await
+            .items()
+            .map(|result| match result {
+                Ok(m) => Ok(OutputSearchMatch {
+                    history_id: Some(m.history_id.into()),
+                    lines: m
+                        .lines
+                        .iter()
+                        .map(|l| OutputSearchLine {
+                            line: l.line,
+                            content: Some((&l.content).into()),
+                        })
+                        .collect(),
+                    score: m.score,
+                }),
+                Err(err) => {
+                    error!(?err, "output full-text search failed");
+                    Err(Status::internal("output search failed"))
                 }
             });
 

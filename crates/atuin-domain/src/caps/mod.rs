@@ -57,6 +57,8 @@ mod client;
 mod middleware;
 mod server;
 
+#[cfg(feature = "octavo")]
+pub use all::OctavoCap;
 pub use all::{CapabilitiesCap, PackfileCap, PageSizeCap};
 pub use client::{AuthHeaderProvider, CapClient, ServerSupportError};
 pub use middleware::{CapMiddleware, CapMismatch, CapabilitiesExt};

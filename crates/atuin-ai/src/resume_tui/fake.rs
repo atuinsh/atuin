@@ -4,22 +4,35 @@
 //! It covers all four harnesses, forks and subagents grouped under their roots, sessions from other
 //! hosts, a deleted worktree (missing cwd), and live sessions (updated in the last two minutes).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
+use atuin_client::ai_session::{
+    AiSessionDatabase, Analysis, AtuinSessionId, HarnessKind, HarnessSession, Message,
+    NativeSessionId, SourceId,
+};
 use atuin_common::harnesstools::Harness as _;
-use atuin_common::harnesstools::rehydrate::RehydrateSession;
+use atuin_common::harnesstools::continuation::Flattened;
+use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use atuin_common::harnesstools::resume::CwdRequirement;
-use atuin_common::harnesstools::session::Usage;
+use atuin_common::harnesstools::session::{Content, Role as Said, Usage};
+use atuin_common::harnesstools::sync::{LocalTip, Stamp};
+use atuin_domain::record::{HostId, RecordId};
+use parking_lot::Mutex;
 use time::{Duration, OffsetDateTime};
 
 use super::ResumeContext;
+use super::catchup::CatchUp;
 use super::resumer::{
-    NotResumable, Restore, Resume, ResumeError, ResumePlan, ResumeTarget, Resumer,
+    Continued, ForkFrom, Forked, NotResumable, Restore, Resume, ResumeError, ResumePlan,
+    ResumeTarget, Resumer, Switched,
 };
-use super::source::{Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet};
+use super::source::{
+    Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet, Transcript,
+    TranscriptBuilder,
+};
 
 pub const THIS_HOST_ID: &str = "01900000000070008000000000000001";
 pub const REPO: &str = "/home/ellie/src/atuin";
@@ -45,7 +58,7 @@ pub fn context() -> ResumeContext {
 pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
     let started_at = now() - Duration::hours(1);
     SessionRow {
-        atuin_id: handle(harness, id).atuin_id(started_at),
+        atuin_id: atuin_id(harness, id, started_at),
         handle: handle(harness, id),
         parent: None,
         relation: Relation::Root,
@@ -57,10 +70,14 @@ pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
         host_id: THIS_HOST_ID.to_owned(),
         started_at,
         updated_at: now() - Duration::minutes(30),
+        active_at: now() - Duration::minutes(30),
         messages: 10,
         usage: Usage::default(),
         children: 0,
         matched: None,
+        matched_at: None,
+        tree: String::new(),
+        forks_at: None,
     }
 }
 
@@ -69,6 +86,16 @@ fn handle(harness: HarnessKind, id: &str) -> HarnessSession {
         harness,
         session: NativeSessionId::from(id.to_owned()),
     }
+}
+
+/// A fake session's atuin id: a UUIDv7 at its start, like a minted one, but with its other bits
+/// from its handle, so renders are deterministic.
+fn atuin_id(harness: HarnessKind, id: &str, started_at: OffsetDateTime) -> AtuinSessionId {
+    let millis = u64::try_from(started_at.unix_timestamp_nanos() / 1_000_000).unwrap_or(0);
+    let hash = xxhash_rust::xxh3::xxh3_128(format!("{harness:?}:{id}").as_bytes()).to_le_bytes();
+    let mut bits = [0; 10];
+    bits.copy_from_slice(&hash[..10]);
+    uuid::Builder::from_unix_timestamp_millis(millis, &bits).into_uuid().into()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,6 +114,77 @@ struct FakeSession {
 
 pub struct FakeSource {
     sessions: Vec<FakeSession>,
+    /// The rows sync holds of a session, for its branches ([`SessionSource::analyse`]).
+    synced: HashMap<HarnessSession, Vec<Message>>,
+}
+
+/// The session [`synced_rows`] are of.
+pub fn synced_handle() -> HarnessSession {
+    HarnessSession {
+        harness: HarnessKind::ClaudeCode,
+        session: NativeSessionId::from("s".to_owned()),
+    }
+}
+
+/// The rows sync holds of a Claude Code session: `a`-`b` on this host, then `c`-`d` on another;
+/// `diverged`, this host went on from `b` with `x`-`y` too.
+pub fn synced_rows(diverged: bool) -> Vec<Message> {
+    synced_rows_of(&synced_handle(), diverged)
+}
+
+/// [`synced_rows`], of session `handle`.
+pub fn synced_rows_of(handle: &HarnessSession, diverged: bool) -> Vec<Message> {
+    let mut specs = vec![
+        ("a", None, 1, 0, false),
+        ("b", Some("a"), 1, 1, true),
+        ("c", Some("b"), 2, 2, false),
+        ("d", Some("c"), 2, 3, true),
+    ];
+    if diverged {
+        specs.extend([("x", Some("b"), 1, 4, false), ("y", Some("x"), 1, 5, true)]);
+    }
+    specs.into_iter().map(|spec| synced_row(handle, spec)).collect()
+}
+
+/// A copy holding `known`, going on from `at`.
+pub fn local_tip(known: &[&str], at: Option<&str>) -> LocalTip {
+    LocalTip {
+        native_path: PathBuf::from("/t/s.jsonl"),
+        known_source_ids: known.iter().map(|s| (*s).to_owned()).collect::<HashSet<_>>(),
+        merged: HashMap::new(),
+        tip_source_id: at.map(str::to_owned),
+        stamp: Stamp::of(b""),
+        modified: None,
+        cwd: None,
+        unswitchable: None,
+    }
+}
+
+/// The hosts' ids, but for their last digit.
+const HOST_BASE: u128 = 0x0190_0000_0000_7000_8000_0000_0000_0000;
+
+/// A row synced of session `handle`: `id`, hanging from `parent`, captured on host `host` (its
+/// id's last digit: 1 is this host) `minutes` after the hour, a prompt or (`reply`) a reply.
+pub fn synced_row(
+    handle: &HarnessSession,
+    (id, parent, host, minutes, reply): (&str, Option<&str>, u128, i64, bool),
+) -> Message {
+    let role = if reply {
+        Said::Assistant
+    } else {
+        Said::User
+    };
+    let mut message = Message::builder()
+        .id(RecordId(atuin_common::utils::uuid_v7()))
+        .session(handle.clone())
+        .source_id(SourceId::from(id.to_owned()))
+        .parent_source_id(parent.map(|p| SourceId::from(p.to_owned())))
+        .timestamp(now() - Duration::hours(1) + Duration::minutes(minutes))
+        .role(role)
+        .content(vec![Content::Text(format!("message {id}"))])
+        .build();
+    message.host = Some(HostId(uuid::Uuid::from_u128(HOST_BASE | host)));
+    message
 }
 
 struct Spec {
@@ -129,7 +227,7 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
     };
     FakeSession {
         row: SessionRow {
-            atuin_id: handle(spec.harness, spec.id).atuin_id(updated_at - spec.duration),
+            atuin_id: atuin_id(spec.harness, spec.id, updated_at - spec.duration),
             handle: handle(spec.harness, spec.id),
             parent: parent.map(|p| p.handle.clone()),
             relation,
@@ -141,6 +239,7 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
             host_id: spec.host.to_owned(),
             started_at: updated_at - spec.duration,
             updated_at,
+            active_at: updated_at,
             messages: spec.msgs,
             usage: Usage {
                 input: Some(spec.msgs * 2_300),
@@ -151,6 +250,9 @@ fn build(spec: Spec, relation: Relation, parent: Option<&SessionRow>) -> FakeSes
             },
             children: 0,
             matched: None,
+            matched_at: None,
+            tree: String::new(),
+            forks_at: None,
         },
         parent: parent.map(|p| p.handle.clone()),
         root: None,
@@ -664,7 +766,16 @@ impl FakeSource {
             s.root = root;
         }
 
-        Self { sessions }
+        Self {
+            sessions,
+            synced: HashMap::new(),
+        }
+    }
+
+    /// This source, with `rows` synced of session `handle`.
+    pub fn with_synced(mut self, handle: &HarnessSession, rows: Vec<Message>) -> Self {
+        self.synced.insert(handle.clone(), rows);
+        self
     }
 
     /// A source holding only `rows`.
@@ -680,7 +791,15 @@ impl FakeSource {
                     messages: Vec::new(),
                 })
                 .collect(),
+            synced: HashMap::new(),
         }
+    }
+
+    /// Every row synced of `session`, in time order, as the sidecar restores them.
+    fn synced_messages(&self, session: &HarnessSession) -> Vec<RehydrateMessage> {
+        let mut rows = self.synced.get(session).cloned().unwrap_or_default();
+        rows.sort_by_key(|m| m.timestamp);
+        rows.into_iter().map(RehydrateMessage::from).collect()
     }
 
     fn children_of<'a>(
@@ -790,6 +909,12 @@ impl SessionSource for FakeSource {
                     .iter()
                     .flat_map(|g| g.messages.iter().map(|(_, t)| *t))
                     .find_map(|t| snippet(t, &terms));
+                // As the database does: only a match in the session's own messages has a place.
+                row.matched_at = s
+                    .messages
+                    .iter()
+                    .position(|(_, t)| snippet(t, &terms).is_some())
+                    .and_then(|i| u64::try_from(i).ok());
             }
             rows.push((score, row));
         }
@@ -807,7 +932,9 @@ impl SessionSource for FakeSource {
             .sessions
             .iter()
             .filter(|s| {
-                s.row.handle.session.as_ref().starts_with(id) || s.row.atuin_id.has_prefix(id)
+                s.row.handle.session.as_ref().starts_with(id)
+                    || s.row.atuin_id.has_prefix(id)
+                    || s.row.atuin_id.has_suffix(id)
             })
             .map(|s| s.row.clone())
             .collect())
@@ -832,6 +959,21 @@ impl SessionSource for FakeSource {
         })
     }
 
+    async fn transcript(&self, session: &HarnessSession) -> eyre::Result<Transcript> {
+        let mut transcript = TranscriptBuilder::default();
+        if let Some(s) = self.sessions.iter().find(|s| &s.row.handle == session) {
+            transcript.counted(s.row.messages);
+            for (index, (role, text)) in (0u64..).zip(&s.messages) {
+                transcript.at(index);
+                match role {
+                    Role::User => transcript.prompt(text),
+                    Role::Assistant => transcript.reply(text),
+                }
+            }
+        }
+        Ok(transcript.finish())
+    }
+
     async fn children(&self, session: &HarnessSession) -> eyre::Result<Vec<SessionRow>> {
         let mut rows: Vec<SessionRow> = self
             .children_of(session)
@@ -842,7 +984,8 @@ impl SessionSource for FakeSource {
         Ok(rows)
     }
 
-    /// The session without its messages: the fake sessions have none.
+    /// The session, with every row synced of it as its messages (the fake sessions' own messages
+    /// are preview text only).
     async fn rehydrate(
         &self,
         session: &HarnessSession,
@@ -862,23 +1005,50 @@ impl SessionSource for FakeSource {
             git_branch: row.branch.clone(),
             model: row.model.clone(),
             started_at: row.started_at,
-            messages: Vec::new(),
+            messages: self.synced_messages(session),
+            fork_of: None,
         })
     }
+
+    async fn analyse(&self, session: &HarnessSession) -> eyre::Result<Option<Analysis>> {
+        let Some(rows) = self.synced.get(session) else {
+            return Ok(None);
+        };
+        let db = AiSessionDatabase::in_memory().await?;
+        for row in rows {
+            db.append(row).await?;
+        }
+        Ok(Some(db.analyse(session).await?))
+    }
 }
+
+/// Where [`FakeResumer::switch`] says the copy switched is kept.
+pub const SWITCHED_BACKUP: &str = "/data/ai/switched/claude-code/s1-20260918T100000.000Z.jsonl";
 
 /// A [`Resumer`] for the fake sessions: the harnesses' real plans, with the deleted worktree as the
 /// only missing directory (none of the fake paths exist on this machine, so it can't check).
 /// Other hosts' sessions are restored from sync, into the directory they ran in; restoring
 /// writes nothing.
 pub struct FakeResumer {
-    missing: HashSet<PathBuf>,
+    pub missing: HashSet<PathBuf>,
+    /// What catching this host's sessions up does, when they are caught up at all.
+    pub catch_up: Option<CatchUp>,
+    /// What each fork started from.
+    pub forks: Arc<Mutex<Vec<ForkFrom>>>,
+    /// The head each switch went to.
+    pub switches: Arc<Mutex<Vec<SourceId>>>,
+    /// The head each continuation followed, if one was named.
+    pub continues: Arc<Mutex<Vec<Option<SourceId>>>>,
 }
 
 impl Default for FakeResumer {
     fn default() -> Self {
         Self {
             missing: HashSet::from([PathBuf::from(DELETED_WORKTREE)]),
+            catch_up: None,
+            forks: Arc::default(),
+            switches: Arc::default(),
+            continues: Arc::default(),
         }
     }
 }
@@ -912,16 +1082,38 @@ impl FakeResumer {
 
 #[async_trait]
 impl Resumer for FakeResumer {
+    /// This host's sessions are here, live while they were written to in the last two minutes;
+    /// other hosts' are restored.
     async fn plan(&self, session: &SessionRow) -> Result<Resume, NotResumable> {
         let plan = self.plan_for(session, None)?;
         if session.host_id == THIS_HOST_ID {
-            return Ok(Resume::ready(plan));
+            let ago = now() - session.active_at;
+            return Ok(Resume {
+                catch_up: self.catch_up.is_some(),
+                live: ago < Duration::seconds(i64::try_from(super::state::LIVE_SECS).unwrap_or(0)),
+                ..Resume::ready(plan)
+            });
         }
         let cwd = session.cwd.clone().unwrap_or_else(|| PathBuf::from(REPO));
         Ok(Resume {
-            plan,
             restore: Some(Restore { cwd, note: None }),
+            ..Resume::ready(plan)
         })
+    }
+
+    async fn catch_up(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        _head: Option<&SourceId>,
+    ) -> Result<CatchUp, NotResumable> {
+        match &self.catch_up {
+            Some(caught) if session.host_id == THIS_HOST_ID => Ok(caught.clone()),
+            _ => Ok(CatchUp::Ready {
+                plan: self.plan(session).await?.plan,
+                status: None,
+            }),
+        }
     }
 
     async fn restore(
@@ -932,5 +1124,87 @@ impl Resumer for FakeResumer {
     ) -> Result<ResumePlan, NotResumable> {
         let native = PathBuf::from(format!("/restored/{}.jsonl", session.handle.session));
         self.plan_for(session, Some(native))
+    }
+
+    /// Every other harness is installed. A session of a harness atuin can't read back (Copilot)
+    /// can't be continued anywhere.
+    fn continue_targets(&self, session: &SessionRow) -> Vec<HarnessKind> {
+        if session.handle.harness.harness().is_none() {
+            return Vec::new();
+        }
+        [HarnessKind::ClaudeCode, HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi]
+            .into_iter()
+            .filter(|kind| *kind != session.handle.harness)
+            .collect()
+    }
+
+    /// Plans resuming a made-up new session, written nowhere, with a round number of calls
+    /// flattened.
+    async fn continue_in(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        target: HarnessKind,
+        head: Option<&SourceId>,
+    ) -> Result<Continued, NotResumable> {
+        self.continues.lock().push(head.cloned());
+        let mut row = session.clone();
+        row.handle = HarnessSession {
+            harness: target,
+            session: NativeSessionId::from(format!("continued-{}", session.handle.session)),
+        };
+        let native = PathBuf::from(format!("/continued/{}", row.handle.session));
+        Ok(Continued {
+            target,
+            plan: self.plan_for(&row, Some(native))?,
+            flattened: Flattened {
+                tool_calls: 42,
+                tool_results: 42,
+            },
+            along: None,
+            note: None,
+        })
+    }
+
+    /// Every harness atuin writes is installed.
+    fn can_fork(&self, session: &SessionRow) -> bool {
+        session.handle.harness.harness().is_some()
+    }
+
+    /// Plans resuming a made-up fork, written nowhere.
+    async fn fork(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        from: ForkFrom,
+    ) -> Result<Forked, NotResumable> {
+        self.forks.lock().push(from);
+        let mut row = session.clone();
+        row.handle.session = NativeSessionId::from(format!("forked-{}", session.handle.session));
+        let native = PathBuf::from(format!("/forked/{}", row.handle.session));
+        Ok(Forked {
+            harness: row.handle.harness,
+            id: row.handle.session.to_string(),
+            plan: self.plan_for(&row, Some(native))?,
+            note: None,
+        })
+    }
+
+    /// Plans resuming the copy as switched, writing nothing.
+    async fn switch(
+        &self,
+        _source: &dyn SessionSource,
+        session: &SessionRow,
+        head: Option<&SourceId>,
+    ) -> Result<Switched, NotResumable> {
+        let head = head.cloned().ok_or(NotResumable::Switch("no head named".to_owned()))?;
+        self.switches.lock().push(head);
+        Ok(Switched {
+            host: "@00000002".to_owned(),
+            messages: 4,
+            backup: PathBuf::from(SWITCHED_BACKUP),
+            warning: None,
+            plan: self.plan_for(session, None)?,
+        })
     }
 }

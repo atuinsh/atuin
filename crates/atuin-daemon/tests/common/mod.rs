@@ -28,7 +28,9 @@ use atuin_daemon::client::{HistoryClient, SearchClient, SearchParams};
 use atuin_daemon::grpc::HistoryService;
 use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
+use atuin_daemon::grpc::versioning::StrictVersionInterceptor;
 use atuin_daemon::search::{IndexFilterMode, SearchIndex};
+use atuin_daemon::server::STRICT_VERSION_LAYER;
 use atuin_daemon::{
     Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCaptureEngine, SearchComponent,
 };
@@ -40,6 +42,7 @@ use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{RwLock, oneshot};
 use tokio_stream::wrappers::UnixListenerStream;
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 use tower::service_fn;
 use uuid::Uuid;
@@ -119,34 +122,13 @@ impl TestEnvBuilder {
 
     pub async fn build(self) -> TestEnv {
         let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("history.db");
-        let record_path = tmp.path().join("records.db");
-        let key_path = tmp.path().join("key");
-        let socket_path = tmp.path().join("test.sock");
+        let settings = Arc::new(TestEnv::settings_in(tmp.path()));
+        let socket_path = PathBuf::from(
+            settings.daemon.socket_path.clone().expect("the harness sets a socket path"),
+        );
 
-        let settings: Settings = Settings::builder()
-            .expect("could not build settings builder")
-            .set_override("db_path", db_path.to_str().unwrap())
-            .unwrap()
-            .set_override("record_store_path", record_path.to_str().unwrap())
-            .unwrap()
-            .set_override("key_path", key_path.to_str().unwrap())
-            .unwrap()
-            .set_override("daemon.socket_path", socket_path.to_str().unwrap())
-            .unwrap()
-            // Unroutable on purpose: the capability warm-up must fail fast, not dial the internet.
-            .set_override("sync_address", "http://127.0.0.1:1")
-            .unwrap()
-            // The harness opens a real output store, as the daemon only does with capture on.
-            .set_override("output.enabled", true)
-            .unwrap()
-            .build()
-            .expect("could not build settings")
-            .try_deserialize()
-            .expect("could not deserialize settings");
-
-        let history_db = Sqlite::new(&db_path, self.db_timeout).await.unwrap();
-        let store = SqliteStore::new(&record_path, self.db_timeout).await.unwrap();
+        let history_db = Sqlite::new(&settings.db_path, self.db_timeout).await.unwrap();
+        let store = SqliteStore::new(&settings.record_store_path, self.db_timeout).await.unwrap();
 
         let output_capture =
             OutputCaptureEngine::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited).await;
@@ -201,6 +183,7 @@ impl TestEnvBuilder {
         tokio::spawn(async move {
             let mut rx = server_handle.subscribe();
             Server::builder()
+                .layer(STRICT_VERSION_LAYER)
                 .add_service(history_service)
                 .add_service(search_service)
                 .serve_with_incoming_shutdown(incoming, async move {
@@ -240,7 +223,7 @@ impl TestEnvBuilder {
 
 pub struct TestEnv {
     pub tmp: TempDir,
-    pub settings: Settings,
+    pub settings: Arc<Settings>,
     pub history_db: Sqlite,
     pub store: SqliteStore,
     pub history_store: HistoryStore,
@@ -261,6 +244,41 @@ impl TestEnv {
             seed_rows: 0,
             seed: 0x5EED,
         }
+    }
+
+    /// The harness settings, built afresh as a config reload builds them: equal to the daemon's,
+    /// but not shared with it, so a test can change them and apply the result.
+    #[must_use]
+    pub fn reload_settings(&self) -> Settings {
+        Self::settings_in(self.tmp.path())
+    }
+
+    fn settings_in(dir: &Path) -> Settings {
+        Settings::builder()
+            .expect("could not build settings builder")
+            .set_override("db_path", dir.join("history.db").to_str().unwrap())
+            .unwrap()
+            .set_override("record_store_path", dir.join("records.db").to_str().unwrap())
+            .unwrap()
+            .set_override("key_path", dir.join("key").to_str().unwrap())
+            .unwrap()
+            .set_override("daemon.socket_path", dir.join("test.sock").to_str().unwrap())
+            .unwrap()
+            .set_override("meta.db_path", dir.join("meta.db").to_str().unwrap())
+            .unwrap()
+            // Prevent meta store from migrating files from the real data dir.
+            .set_override("data_dir", dir.to_str().unwrap())
+            .unwrap()
+            // Unroutable on purpose: the capability warm-up must fail fast, not dial the internet.
+            .set_override("sync_address", "http://127.0.0.1:1")
+            .unwrap()
+            // The harness opens a real output store, as the daemon only does with capture on.
+            .set_override("output.enabled", true)
+            .unwrap()
+            .build()
+            .expect("could not build settings")
+            .try_deserialize()
+            .expect("could not deserialize settings")
     }
 
     /// A fresh connection, like every shell hook makes. Retries briefly in case the server task
@@ -284,20 +302,27 @@ impl TestEnv {
     }
 
     /// The prost-generated client, for sending hand-built (possibly malformed) messages.
-    pub async fn raw_history_client(&self) -> pb::history_client::HistoryClient<Channel> {
+    pub async fn raw_history_client(
+        &self,
+    ) -> pb::history_client::HistoryClient<InterceptedService<Channel, StrictVersionInterceptor>>
+    {
+        pb::history_client::HistoryClient::with_interceptor(
+            self.channel().await,
+            StrictVersionInterceptor,
+        )
+    }
+
+    /// A connection that stamps no build on its requests.
+    pub async fn channel(&self) -> Channel {
         let path = self.socket_path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")
-                .unwrap()
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .unwrap();
-        pb::history_client::HistoryClient::new(channel)
+        Endpoint::try_from("http://atuin_local_daemon:0")
+            .unwrap()
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let path = path.clone();
+                async move { Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?)) }
+            }))
+            .await
+            .unwrap()
     }
 
     /// Start and end `cmd` through the RPCs, the way a shell does.
@@ -344,7 +369,7 @@ impl TestEnv {
 
     pub async fn active_ids(&self) -> HashSet<HistoryId> {
         let mut ids = HashSet::new();
-        let mut pager = self.history_db.all_paged(corpus::SEED_BATCH, false, false);
+        let mut pager = self.history_db.all_paged(corpus::SEED_BATCH, false);
         while let Some(page) = pager.next().await.unwrap() {
             ids.extend(page.into_iter().map(|h| h.id));
         }

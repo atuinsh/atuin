@@ -18,6 +18,7 @@ sync = ["reqwest", "dep:reqwest-middleware"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
+octavo = []
 # Derive the protobuf enum traits on domain enums the daemon extern-paths into its codegen.
 proto = ["dep:prost"]
 # Statically link (vendor) OpenSSL for native-tls instead of using the system
@@ -57,9 +58,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_regex = { workspace = true }
 serde_with = { workspace = true }
-shellexpand = { workspace = true }
 sql-builder = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
+rusqlite = { workspace = true }
+parking_lot = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = ["macros", "formatting", "parsing"] }
 tokio = { workspace = true }
@@ -69,7 +71,6 @@ unicode-normalization = { workspace = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-xxhash-rust = { workspace = true }
 
 # encryption
 rusty_paserk = { workspace = true }
@@ -86,7 +87,7 @@ palette = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 
-# packfile
+# packfiles, and ai-session record bodies
 zstd = { workspace = true }
 
 [dev-dependencies]

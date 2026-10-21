@@ -170,6 +170,7 @@ fn format_iso8601(dt: OffsetDateTime) -> String {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::path::PathBufExt as _;
     use rstest::*;
 
     use super::*;
@@ -187,14 +188,14 @@ mod tests {
         assert_eq!(sanitize_path(&input), expected);
     }
 
-    #[test]
+    #[rstest]
     fn sanitize_no_collision_between_similar_paths() {
         let a = sanitize_path(Path::new("/foo/bar-baz"));
         let b = sanitize_path(Path::new("/foo/bar/baz"));
         assert_ne!(a, b);
     }
 
-    #[test]
+    #[rstest]
     fn sanitize_backslash_encoded() {
         // Windows-style path: backslashes become %5C, drive prefix stripped
         let s = sanitize_path(Path::new("C:\\Users\\me\\config.toml"));
@@ -204,7 +205,7 @@ mod tests {
         assert!(s.contains("config.toml"));
     }
 
-    #[test]
+    #[rstest]
     fn sanitize_result_is_flat_filename() {
         // The result must not be interpreted as a path with separators
         // when passed to Path::join — no raw / or \ allowed.
@@ -250,7 +251,7 @@ mod tests {
 
     #[rstest]
     fn atomic_write_creates_parent_dirs(tmp: tempfile::TempDir) {
-        let target = tmp.path().join("sub").join("dir").join("test.txt");
+        let target = tmp.path().join("sub").joined("dir").joined("test.txt");
 
         atomic_write_file(&target, b"nested").unwrap();
 
@@ -334,7 +335,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(snapshot_file).unwrap(), "first content");
     }
 
-    #[test]
+    #[rstest]
     fn snapshot_store_loads_existing_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let session_dir = dir.path().join("session-abc");
@@ -382,7 +383,7 @@ mod tests {
         assert_eq!(manifest["files"].as_object().unwrap().len(), 2);
     }
 
-    #[test]
+    #[rstest]
     fn format_iso8601_produces_valid_format() {
         let dt = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
         let formatted = format_iso8601(dt);

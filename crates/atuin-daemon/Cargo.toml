@@ -11,12 +11,16 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+octavo = ["dep:atuin-octavo", "atuin-client/octavo"]
+
 [dependencies]
 async-stream = { workspace = true }
 atuin-client = { workspace = true, features = ["proto"] }
 atuin-common = { workspace = true, features = ["ai", "os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-history = { workspace = true }
+atuin-octavo = { workspace = true, optional = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
@@ -27,14 +31,17 @@ eyre = { workspace = true }
 fjall = { workspace = true }
 frizbee = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 hyper-util = { workspace = true }
 itertools = { workspace = true }
 lasso = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
+regex = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
@@ -49,13 +56,15 @@ tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-xxhash-rust = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+daemonix = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }
 
 [dev-dependencies]
-atuin-common = { workspace = true, features = ["os", "sqlite"] }
+atuin-common = { workspace = true, features = ["test-utils"] }
 divan = { workspace = true }
 proptest = { workspace = true }
 regex = { workspace = true }

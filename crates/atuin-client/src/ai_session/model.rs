@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
+use atuin_common::harnesstools::pi::Flavour;
 use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use atuin_common::harnesstools::session::{
-    Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage,
+    Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
 };
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId};
@@ -23,6 +24,7 @@ pub enum HarnessKind {
     Copilot = 3,
     Opencode = 4,
     Pi = 5,
+    Omp = 6,
 }
 
 impl From<&AnyHarness> for HarnessKind {
@@ -31,7 +33,10 @@ impl From<&AnyHarness> for HarnessKind {
             AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
             AnyHarness::Codex(_) => Self::Codex,
             AnyHarness::Opencode(_) => Self::Opencode,
-            AnyHarness::Pi(_) => Self::Pi,
+            AnyHarness::Pi(pi) => match pi.flavour() {
+                Flavour::Pi => Self::Pi,
+                Flavour::Omp => Self::Omp,
+            },
         }
     }
 }
@@ -46,7 +51,8 @@ impl HarnessKind {
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
-            Self::Pi => Some(AnyHarness::Pi(pi::Pi)),
+            Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
+            Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
             Self::Copilot | Self::Unknown => None,
         }
     }
@@ -121,6 +127,34 @@ impl AtuinSessionId {
     pub fn has_prefix(&self, prefix: &str) -> bool {
         Self::prefix_range(prefix).is_some_and(|(low, high)| (low..=high).contains(self))
     }
+
+    /// The id as the UI shows it: its last [`Self::SHORT_LEN`] hex digits. The leading digits
+    /// are the start time, shared by every session started around then; these are random.
+    #[must_use]
+    pub fn short(&self) -> String {
+        let hex = self.to_string();
+        hex[hex.len() - Self::SHORT_LEN..].to_owned()
+    }
+
+    pub const SHORT_LEN: usize = 8;
+
+    /// The fewest hex digits a suffix takes to name an id, so a short word doesn't match one by
+    /// chance.
+    pub const MIN_SUFFIX_LEN: usize = 6;
+
+    /// Whether the id's displayed form ends with `suffix`, of at least [`Self::MIN_SUFFIX_LEN`]
+    /// hex digits.
+    #[must_use]
+    pub fn has_suffix(&self, suffix: &str) -> bool {
+        Self::is_suffix(suffix) && self.to_string().ends_with(&suffix.to_ascii_lowercase())
+    }
+
+    /// Whether `suffix` is one [`Self::has_suffix`] can match.
+    #[must_use]
+    pub fn is_suffix(suffix: &str) -> bool {
+        (Self::MIN_SUFFIX_LEN..=32).contains(&suffix.len())
+            && suffix.bytes().all(|b| b.is_ascii_hexdigit())
+    }
 }
 
 impl std::str::FromStr for AtuinSessionId {
@@ -132,49 +166,6 @@ impl std::str::FromStr for AtuinSessionId {
     }
 }
 
-impl HarnessSession {
-    /// The id for a session whose records predate stored ids (v0), so every host derives the same
-    /// one. A native UUIDv7 (Codex) is reused. Otherwise it's a UUIDv7 at the session's start
-    /// (from an opencode `ses_` id, else `started_at`), its other bits the little-endian
-    /// xxh3-128 of `"{harness repr}:{native id}"`.
-    #[must_use]
-    pub fn atuin_id(&self, started_at: OffsetDateTime) -> AtuinSessionId {
-        let native = self.session.as_ref();
-
-        if let Ok(id) = Uuid::parse_str(native)
-            && id.get_version() == Some(uuid::Version::SortRand)
-            && id.get_variant() == uuid::Variant::RFC4122
-        {
-            return AtuinSessionId(id);
-        }
-
-        let started = i64::try_from(started_at.unix_timestamp_nanos() / 1_000_000).unwrap_or(0);
-        let millis = match self.harness {
-            HarnessKind::Opencode => opencode_millis(native, started),
-            _ => None,
-        }
-        .unwrap_or(started);
-        let hash =
-            xxhash_rust::xxh3::xxh3_128(format!("{}:{native}", self.harness as u8).as_bytes())
-                .to_le_bytes();
-        let mut bits = [0; 10];
-        bits.copy_from_slice(&hash[..10]);
-        let millis = u64::try_from(millis).unwrap_or(0);
-        AtuinSessionId(Builder::from_unix_timestamp_millis(millis, &bits).into_uuid())
-    }
-}
-
-/// opencode's `ses_` ids hold the inverted low 48 bits of `millis * 0x1000 + counter`, so only
-/// the time's low 36 bits survive; the rest come from the match nearest `started`.
-fn opencode_millis(id: &str, started: i64) -> Option<i64> {
-    const WRAP: i64 = 1 << 36;
-
-    let encoded = u64::from_str_radix(id.strip_prefix("ses_")?.get(..12)?, 16).ok()?;
-    let low = i64::try_from((!encoded & 0xffff_ffff_ffff) >> 12).ok()?;
-    let near = started - started.rem_euclid(WRAP) + low;
-    [near - WRAP, near, near + WRAP].into_iter().min_by_key(|t| (t - started).abs())
-}
-
 /// Records encode these fields by position: adding, removing or reordering one needs a new
 /// [record version](super::AiSessionRecord::VERSION).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
@@ -184,11 +175,11 @@ pub struct Message {
     pub source_id: SourceId,
     #[builder(default)]
     pub parent: Option<HarnessSession>,
-    /// How this session relates to [`Self::parent`]. Absent in records written before it was
-    /// captured, and whenever the harness did not say. A kind this build does not know (a newer
-    /// build's) reads as absent, rather than failing the whole record.
+    /// How this session relates to [`Self::parent`]. Absent whenever the harness did not say. A
+    /// kind this build does not know (a newer build's) reads as absent, rather than failing the
+    /// whole record.
     #[builder(default)]
-    #[serde(default, deserialize_with = "known_parent_kind")]
+    #[serde(deserialize_with = "known_parent_kind")]
     pub parent_kind: Option<ParentKind>,
     #[builder(default)]
     pub parent_source_id: Option<SourceId>,
@@ -213,26 +204,23 @@ pub struct Message {
     /// survives a reproject from the synced record store (records carry messages only, not the
     /// separate `Started` metadata). `None` once a title is cleared: the newest row decides.
     #[builder(default)]
-    #[serde(default)]
     pub session_title: Option<String>,
     /// Where [`Self::session_title`] came from, so a resumed capture keeps ranking it.
     #[builder(default)]
-    #[serde(default)]
     pub session_title_source: Option<TitleSource>,
     /// The title this row's own line set or cleared. Replayed on resume, so every source's
     /// title is known again and a cleared one can fall back to the next.
     #[builder(default)]
-    #[serde(default)]
     pub title_change: Option<TitleChange>,
     /// The model call this row came from, unique within the harness and the same in every
     /// session a harness copies the row into. Groups the rows one response is split into, so
     /// their usage counts once.
     #[builder(default)]
-    #[serde(default)]
     pub turn_id: Option<String>,
-    /// `None` until capture sets it, and in v0 records.
+    /// The session's id. `None` until capture sets it, which it does before storing the row,
+    /// and in rows read back from the sidecar or over the daemon's API, which keep it on the
+    /// session.
     #[builder(default)]
-    #[serde(default)]
     pub atuin_id: Option<AtuinSessionId>,
     /// The host that captured this row. Never part of the record body: the record envelope
     /// already carries it, so a reproject takes it from there and live capture from the local
@@ -240,11 +228,28 @@ pub struct Message {
     #[builder(default)]
     #[serde(skip)]
     pub host: Option<HostId>,
+    /// Who served [`Self::model`] (`openai-codex`, say), for the harnesses that reopen a session
+    /// on a model by provider and model (pi, omp, opencode). Last, and left out when `None`, so a
+    /// record without one is still the v2 layout; one with it is v3 (see
+    /// [`AiSessionRecord::version`]).
+    ///
+    /// [`AiSessionRecord::version`]: super::AiSessionRecord::version
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+impl Message {
+    /// The earliest and latest [`Self::timestamp`] stored: a day inside the years
+    /// [`OffsetDateTime`] can name, so either is still a date in any offset. A harness line can
+    /// name an instant past them (Claude Code's `9999-12-31T23:59:59-23:59` is in year 10000 in
+    /// UTC), which capture and the sidecar hold to these.
+    pub const EARLIEST: OffsetDateTime = time::macros::datetime!(-9999-01-02 0:00 UTC);
+    pub const LATEST: OffsetDateTime = time::macros::datetime!(9999-12-30 0:00 UTC);
 }
 
 /// [`Message::parent_kind`] as a record holds it: `None` for a kind this build does not know,
-/// so a newer build can add kinds without its records failing to decode here, and for a value
-/// that names no kind at all (some development builds' records hold another field there).
+/// so a newer build can add kinds without its records failing to decode here.
 fn known_parent_kind<'de, D>(deserializer: D) -> Result<Option<ParentKind>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -252,23 +257,12 @@ where
     use serde::de::IntoDeserializer;
     use serde::de::value::{Error, StringDeserializer};
 
-    /// A kind's name, or anything else a record may hold there.
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Raw {
-        Name(String),
-        Other(serde::de::IgnoredAny),
-    }
-
     // Parse the name with `ParentKind`'s own `Deserialize`, so a new variant is known here
     // without listing it twice.
-    Ok(match Option::<Raw>::deserialize(deserializer)? {
-        Some(Raw::Name(name)) => {
-            let name: StringDeserializer<Error> = name.into_deserializer();
-            ParentKind::deserialize(name).ok()
-        }
-        Some(Raw::Other(_)) | None => None,
-    })
+    Ok(Option::<String>::deserialize(deserializer)?.and_then(|name| {
+        let name: StringDeserializer<Error> = name.into_deserializer();
+        ParentKind::deserialize(name).ok()
+    }))
 }
 
 impl From<Message> for RehydrateMessage {
@@ -280,6 +274,7 @@ impl From<Message> for RehydrateMessage {
             role: m.role,
             content: m.content,
             model: m.model,
+            provider: m.provider,
             usage: m.usage,
             stop_reason: m.stop_reason,
             turn_id: m.turn_id,
@@ -348,6 +343,20 @@ pub struct Session {
     pub group_updated_at: Option<OffsetDateTime>,
     #[builder(default)]
     pub atuin_id: AtuinSessionId,
+    /// The atuin id of [`Self::parent`], resolved when read: `None` while the parent is not
+    /// stored. Links are stored as the harness gave them, so this is never recorded.
+    #[builder(default)]
+    #[serde(default)]
+    pub parent_atuin_id: Option<AtuinSessionId>,
+    /// The atuin id of [`Self::root`], resolved when read like [`Self::parent_atuin_id`].
+    #[builder(default)]
+    #[serde(default)]
+    pub root_atuin_id: Option<AtuinSessionId>,
+    /// The atuin ids of the stored sessions naming this one their [`Self::parent`], resolved
+    /// when read, oldest first.
+    #[builder(default)]
+    #[serde(default)]
+    pub child_atuin_ids: Vec<AtuinSessionId>,
 }
 
 impl Session {
@@ -368,6 +377,7 @@ impl Session {
             model: self.model.clone(),
             started_at: self.started_at,
             messages: messages.into_iter().map(RehydrateMessage::from).collect(),
+            fork_of: None,
         }
     }
 
@@ -383,37 +393,96 @@ impl Session {
         self.root.as_ref().unwrap_or(&self.handle)
     }
 
-    /// How this session relates to its parent: the [`Self::parent_kind`] capture recorded, else
-    /// the kind its harness and id tell. A parentless copy of another session ([`Self::copy_of`])
-    /// is a [fork](ParentKind::Fork) of it.
+    /// How this session relates to its parent: the [`Self::parent_kind`] capture recorded. A
+    /// parentless copy of another session ([`Self::copy_of`]) is a [fork](ParentKind::Fork) of
+    /// it.
     ///
-    /// `None` for a session with no parent (and not a copy), and for a child whose kind cannot be
-    /// told. Only forks and continuations count toward a group's [`Self::child_count`]: subagents
-    /// are fragments of their parent's work, and so are taken to be the children of unknown kind
-    /// (most of Codex's and opencode's are spawned agents).
+    /// `None` for a session with no parent (and not a copy), and for a child of a kind this build
+    /// does not know (a newer build's). Only forks and continuations count toward a group's
+    /// [`Self::child_count`]: subagents are fragments of their parent's work, and so are taken to
+    /// be the children of unknown kind.
     #[must_use]
     pub fn inferred_parent_kind(&self) -> Option<ParentKind> {
         match &self.parent {
-            Some(parent) => self.parent_kind.or_else(|| self.guess_parent_kind(parent)),
+            Some(_) => self.parent_kind,
             None => self.copy_of.as_ref().map(|_| ParentKind::Fork),
         }
     }
+}
 
-    /// The kind of a parent recorded without one (by a build from before kinds were captured), as
-    /// well as the harness and id tell: another harness's session is only ever named by a
-    /// continuation, and a Claude Code `agent-*` session is a subagent while its other children
-    /// are forks, as are all of pi's. Codex and opencode link subagents and forks alike: `None`.
-    fn guess_parent_kind(&self, parent: &HarnessSession) -> Option<ParentKind> {
-        if parent.harness != self.handle.harness {
-            return Some(ParentKind::Continuation);
+/// Who a message is from, as a search's [`SessionFilter::roles`] tells them apart: tool output
+/// is [`Self::Tool`] whatever its envelope role, and whatever is neither the person, the model
+/// nor a tool was written by the harness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MessageRole {
+    User,
+    Assistant,
+    Tool,
+    Harness,
+}
+
+impl MessageRole {
+    #[must_use]
+    pub fn of(role: &Role, content: &[Content]) -> Self {
+        if is_tool_output(content) {
+            return Self::Tool;
         }
-        match self.handle.harness {
-            HarnessKind::ClaudeCode if self.handle.session.as_ref().starts_with("agent-") => {
-                Some(ParentKind::Subagent)
+        match role {
+            Role::User => Self::User,
+            Role::Assistant => Self::Assistant,
+            Role::Tool => Self::Tool,
+            Role::System | Role::Other(_) => Self::Harness,
+        }
+    }
+}
+
+/// The kinds of content block a message holds, as a bit set: stored with each message so queries
+/// can classify it (see [`MessageRole`]) without decoding its content.
+///
+/// The bits are stored, so never renumber or reuse one: a new kind of block takes the next free
+/// bit (there are 63), and needs a sidecar migration that rebuilds the projection, as
+/// `0002_message_blocks.sql` does, so rows stored before it get the bit too. A block this build
+/// does not know arrives as [`Content::Other`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, From, Into)]
+pub struct ContentBlocks(pub i64);
+
+impl ContentBlocks {
+    pub const TEXT: i64 = 1;
+    pub const REASONING: i64 = 1 << 1;
+    pub const TOOL_USE: i64 = 1 << 2;
+    pub const TOOL_RESULT: i64 = 1 << 3;
+    /// A tool result that reported an error; always with [`Self::TOOL_RESULT`].
+    pub const TOOL_ERROR: i64 = 1 << 4;
+    pub const PATCH: i64 = 1 << 5;
+    pub const SUMMARY: i64 = 1 << 6;
+    pub const ERROR: i64 = 1 << 7;
+    pub const OTHER: i64 = 1 << 8;
+    pub const REASONING_SUMMARY: i64 = 1 << 9;
+    /// What tool output holds: anything else makes a message more than tool output.
+    pub const TOOL_OUTPUT: i64 = Self::TOOL_RESULT | Self::TOOL_ERROR | Self::PATCH;
+
+    #[must_use]
+    pub fn of(content: &[Content]) -> Self {
+        Self(content.iter().fold(0, |bits, block| {
+            bits | match block {
+                Content::Text(_) => Self::TEXT,
+                Content::Reasoning(_) => Self::REASONING,
+                Content::ToolUse(_) => Self::TOOL_USE,
+                Content::ToolResult(result) if result.error => Self::TOOL_RESULT | Self::TOOL_ERROR,
+                Content::ToolResult(_) => Self::TOOL_RESULT,
+                Content::Patch(_) => Self::PATCH,
+                Content::Summary(_) => Self::SUMMARY,
+                Content::Error(_) => Self::ERROR,
+                Content::Other(_) => Self::OTHER,
+                Content::ReasoningSummary { .. } => Self::REASONING_SUMMARY,
             }
-            HarnessKind::ClaudeCode | HarnessKind::Pi => Some(ParentKind::Fork),
-            _ => None,
-        }
+        }))
+    }
+
+    /// [`is_tool_output`], from the blocks alone.
+    #[must_use]
+    pub const fn is_tool_output(self) -> bool {
+        self.0 != 0 && self.0 & !Self::TOOL_OUTPUT == 0
     }
 }
 
@@ -443,23 +512,29 @@ pub struct SessionFilter {
     /// Return only roots, each carrying its [`Session::child_count`], with the sessions grouped
     /// under it counting toward it: in a search, a child's match is its root's.
     pub roots_only: bool,
+    /// Leave out subagents (and children of unknown kind, read as subagents): with
+    /// [`Self::roots_only`], their matches no longer count toward their root.
+    pub exclude_subagents: bool,
+    /// Only sessions with a message from one of these roles (any, when empty); in a search, only
+    /// such messages match.
+    pub roles: Vec<MessageRole>,
     /// Active at or after this time (its `updated_at`).
     pub updated_since: Option<OffsetDateTime>,
 }
 
-/// How a search query's terms match a message.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// What a search looks for, and how it matches a message.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SearchTerms {
-    /// Every term, each as a whole word (`app` finds `app`, not `apple`).
-    #[default]
-    All,
-    /// [`Self::All`] for search as you type: the last term also matches as a prefix, unless
-    /// the query ends in whitespace (see
+    /// Every term, each as whole words (`app` finds `app`, not `apple`). A term of several words
+    /// is a phrase: they must appear together, in that order.
+    All(Vec<String>),
+    /// A line being typed (search as you type): [`Self::All`] over its whitespace-separated
+    /// words, the last also matching as a prefix unless the line ends in whitespace (see
     /// [`atuin_common::db::sqlite::fts::prefix_match_expression`]).
-    Typed,
+    Typed(String),
     /// Any term, each as a prefix: the fallback when no message holds every term (see
     /// [`atuin_common::db::sqlite::fts::match_any_expression`]).
-    Any,
+    Any(Vec<String>),
 }
 
 /// What a session's preview shows, read without the content of every message (see
@@ -502,33 +577,10 @@ pub struct MatchedSession {
 #[cfg(test)]
 mod tests {
     use atuin_domain::record::RecordVersion;
-    use proptest::prelude::*;
     use rstest::rstest;
 
     use super::*;
     use crate::ai_session::{AiSessionRecord, DecodeError};
-
-    fn arb_content() -> impl Strategy<Value = Content> {
-        "[a-zA-Z0-9 ]{0,16}".prop_map(Content::Text)
-    }
-
-    fn arb_message() -> impl Strategy<Value = Message> {
-        ("[a-z0-9]{1,8}", "[a-z0-9]{1,8}", proptest::collection::vec(arb_content(), 0..3)).prop_map(
-            |(native_session, source_id, content)| {
-                Message::builder()
-                    .id(RecordId(atuin_common::utils::uuid_v7()))
-                    .session(HarnessSession {
-                        harness: HarnessKind::ClaudeCode,
-                        session: NativeSessionId::from(native_session),
-                    })
-                    .source_id(SourceId::from(source_id))
-                    .timestamp(OffsetDateTime::UNIX_EPOCH)
-                    .role(Role::User)
-                    .content(content)
-                    .build()
-            },
-        )
-    }
 
     /// Every kind with harness tools maps back to itself; the rest have none to resume with.
     #[rstest]
@@ -549,8 +601,6 @@ mod tests {
         }
     }
 
-    /// Records are named-field msgpack, so a host whose build predates a field (here `turn_id`)
-    /// still decodes a newer host's records, skipping the field it does not know.
     fn record_message() -> Message {
         Message::builder()
             .id(RecordId(Uuid::from_u128(1)))
@@ -567,53 +617,74 @@ mod tests {
             .build()
     }
 
-    /// Changing `Message`'s fields breaks v1 records: bump the record version instead.
+    /// Changing `Message`'s fields breaks v1 and v2 records: bump the record version instead.
     #[rstest]
-    fn the_v1_layout_is_pinned() {
+    fn the_v2_layout_is_pinned() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        assert_eq!(hex(&record), V1_LAYOUT);
+        let (kind, body) = record.split_first().unwrap();
+        let mut body = zstd::stream::decode_all(body).unwrap();
+        body.insert(0, *kind);
+        assert_eq!(hex(&body), V1_LAYOUT);
+    }
+
+    /// A record written before [`Message::provider`] reads back without one.
+    #[rstest]
+    fn a_v2_record_reads_without_a_provider() {
+        let bytes: Vec<u8> = (0..V1_LAYOUT.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&V1_LAYOUT[i..i + 2], 16).unwrap())
+            .collect();
+        let (kind, body) = bytes.split_first().unwrap();
+        let mut record = vec![*kind];
+        record.extend(zstd::bulk::compress(body, 0).unwrap());
+
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record, &RecordVersion::V2).unwrap();
+        assert_eq!(read, record_message());
     }
 
     #[rstest]
-    fn a_v0_record_still_decodes() {
-        #[derive(Serialize)]
-        struct V0<'a> {
-            id: RecordId,
-            session: &'a HarnessSession,
-            source_id: &'a SourceId,
-            timestamp: OffsetDateTime,
-            role: Role,
-            content: &'a [Content],
-            turn_id: Option<&'a str>,
-        }
-        let msg = record_message();
-        let mut record = vec![0];
-        record.extend(
-            rmp_serde::to_vec_named(&V0 {
-                id: msg.id,
-                session: &msg.session,
-                source_id: &msg.source_id,
-                timestamp: msg.timestamp,
-                role: msg.role.clone(),
-                content: &msg.content,
-                turn_id: msg.turn_id.as_deref(),
-            })
-            .unwrap(),
-        );
+    fn a_v0_record_is_no_longer_read() {
+        let record = AiSessionRecord::Message(record_message()).serialize();
+        let err = AiSessionRecord::deserialize(&record, &RecordVersion::V0).unwrap_err();
+        assert!(matches!(err, DecodeError::Retired(RecordVersion::V0)));
+    }
 
-        let AiSessionRecord::Message(back) =
-            AiSessionRecord::deserialize(&record, &RecordVersion::V0).unwrap();
-        assert_eq!(back, Message {
-            atuin_id: None,
-            ..msg
-        });
+    /// A message v2 readers can't decode (naming omp, or with a provider) is written as v3, and
+    /// reads back.
+    #[rstest]
+    #[case::pi(HarnessKind::Pi, None, None, RecordVersion::V2)]
+    #[case::omp(HarnessKind::Omp, None, None, RecordVersion::V3)]
+    #[case::continued_from_omp(HarnessKind::Pi, Some(HarnessKind::Omp), None, RecordVersion::V3)]
+    #[case::with_a_provider(HarnessKind::Omp, None, Some("openai-codex"), RecordVersion::V3)]
+    fn omp_messages_are_v3(
+        #[case] harness: HarnessKind,
+        #[case] parent: Option<HarnessKind>,
+        #[case] provider: Option<&str>,
+        #[case] want: RecordVersion,
+    ) {
+        let handle = |harness| HarnessSession {
+            harness,
+            session: NativeSessionId::from("s".to_owned()),
+        };
+        let mut msg = record_message();
+        msg.session = handle(harness);
+        msg.parent = parent.map(handle);
+        msg.provider = provider.map(str::to_owned);
+        let record = AiSessionRecord::Message(msg.clone());
+
+        assert_eq!(record.version(), want);
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record.serialize(), &want).unwrap();
+        assert_eq!(read, msg);
     }
 
     #[rstest]
     fn an_unknown_version_is_refused() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        let err = AiSessionRecord::deserialize(&record, &RecordVersion::V2).unwrap_err();
-        assert!(matches!(err, DecodeError::UnknownVersion(RecordVersion::V2)));
+        let version = RecordVersion::Other("v4".to_owned());
+        let err = AiSessionRecord::deserialize(&record, &version).unwrap_err();
+        assert!(matches!(err, DecodeError::UnknownVersion(v) if v == version));
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -655,98 +726,25 @@ mod tests {
         assert_eq!(back.parent_kind, kind);
     }
 
-    /// A kind this build does not know (a newer build's), or a value naming none, reads as no
-    /// kind: the rest of the record still decodes.
+    /// A kind this build does not know (a newer build's) reads as no kind: the rest of the record
+    /// still decodes.
     #[rstest]
-    #[case::a_newer_kind("Handoff")]
-    #[case::not_a_kind("784ad9be-9b3d-48e2-a3d7-a7cf227fd86e")]
-    fn an_unknown_parent_kind_reads_as_none(#[case] kind: &str) {
-        /// A record as a build that writes `kind` would.
-        #[derive(Serialize)]
-        struct Written<'a> {
-            id: RecordId,
-            session: HarnessSession,
-            source_id: SourceId,
-            parent_kind: &'a str,
-            timestamp: OffsetDateTime,
-            role: Role,
-            content: Vec<Content>,
-        }
-        let written = Written {
-            id: RecordId(atuin_common::utils::uuid_v7()),
-            session: HarnessSession {
-                harness: HarnessKind::ClaudeCode,
-                session: NativeSessionId::from("s".to_owned()),
-            },
-            source_id: SourceId::from("x".to_owned()),
-            parent_kind: kind,
-            timestamp: OffsetDateTime::UNIX_EPOCH,
-            role: Role::User,
-            content: vec![],
-        };
-        let body = rmp_serde::to_vec_named(&written).unwrap();
-        let back: Message = rmp_serde::from_slice(&body).unwrap();
-        assert_eq!(back.parent_kind, None);
-        assert_eq!(back.source_id, written.source_id);
-        assert_eq!(back.atuin_id, None);
+    fn an_unknown_parent_kind_reads_as_none() {
+        let msg = kinded(Some(ParentKind::Fork));
+        let body = rmp_serde::to_vec(&msg).unwrap();
+        let (known, newer) =
+            (rmp_serde::to_vec("Fork").unwrap(), rmp_serde::to_vec("Handoff").unwrap());
+        let at = body.windows(known.len()).position(|w| w == known).unwrap();
+        let written = [&body[..at], &newer, &body[at + known.len()..]].concat();
+
+        let back: Message = rmp_serde::from_slice(&written).unwrap();
+        assert_eq!(back, Message {
+            parent_kind: None,
+            ..msg
+        });
     }
 
-    /// Without a recorded kind (records from before capture recorded one), the kind is told from
-    /// the harness and id.
-    #[rstest]
-    #[case::no_parent(HarnessKind::ClaudeCode, "s", false, None)]
-    #[case::claude_subagent(HarnessKind::ClaudeCode, "agent-a1", true, Some(ParentKind::Subagent))]
-    #[case::claude_fork(HarnessKind::ClaudeCode, "0b3c", true, Some(ParentKind::Fork))]
-    #[case::pi_branch(HarnessKind::Pi, "s", true, Some(ParentKind::Fork))]
-    #[case::codex_child(HarnessKind::Codex, "s", true, None)]
-    #[case::opencode_child(HarnessKind::Opencode, "ses_1", true, None)]
-    fn without_a_kind_it_is_told_from_the_harness_and_id(
-        #[case] harness: HarnessKind,
-        #[case] id: &str,
-        #[case] has_parent: bool,
-        #[case] expected: Option<ParentKind>,
-    ) {
-        let handle = |id: &str| HarnessSession {
-            harness,
-            session: NativeSessionId::from(id.to_owned()),
-        };
-        let session = Session::builder()
-            .handle(handle(id))
-            .parent(has_parent.then(|| handle("parent")))
-            .started_at(OffsetDateTime::UNIX_EPOCH)
-            .updated_at(OffsetDateTime::UNIX_EPOCH)
-            .usage(Usage::default())
-            .build();
-        assert_eq!(session.inferred_parent_kind(), expected);
-    }
-
-    /// A session carried on in another harness is a continuation of the one it continues,
-    /// whatever its own harness calls its children, even in records from before capture recorded
-    /// the kind.
-    #[rstest]
-    fn a_continuation_in_another_harness_is_a_continuation(
-        #[values(HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::ClaudeCode)]
-        harness: HarnessKind,
-        #[values(None, Some(ParentKind::Continuation))] kind: Option<ParentKind>,
-    ) {
-        let session = Session::builder()
-            .handle(HarnessSession {
-                harness,
-                session: NativeSessionId::from("agent-new".to_owned()),
-            })
-            .parent(Some(HarnessSession {
-                harness: HarnessKind::Pi,
-                session: NativeSessionId::from("original".to_owned()),
-            }))
-            .parent_kind(kind)
-            .started_at(OffsetDateTime::UNIX_EPOCH)
-            .updated_at(OffsetDateTime::UNIX_EPOCH)
-            .usage(Usage::default())
-            .build();
-        assert_eq!(session.inferred_parent_kind(), Some(ParentKind::Continuation));
-    }
-
-    /// A recorded kind decides, whatever the harness and id suggest.
+    /// A recorded kind is the session's kind, whatever its harness and id.
     #[rstest]
     #[case::codex_subagent(HarnessKind::Codex, "s", ParentKind::Subagent)]
     #[case::codex_fork(HarnessKind::Codex, "s", ParentKind::Fork)]
@@ -797,25 +795,6 @@ mod tests {
         }
     }
 
-    #[rstest]
-    fn message_msgpack_roundtrips() {
-        proptest!(|(m in arb_message())| {
-            let bytes = rmp_serde::to_vec_named(&m).unwrap();
-            let back: Message = rmp_serde::from_slice(&bytes).unwrap();
-            prop_assert_eq!(m, back);
-        });
-    }
-
-    /// From a real opencode export.
-    const OPENCODE: (&str, i64) = ("ses_f2b668796ffe7eBzqVGu7k59OB", 1_790_273_222_761);
-
-    fn session(harness: HarnessKind, id: &str) -> HarnessSession {
-        HarnessSession {
-            harness,
-            session: NativeSessionId::from(id.to_owned()),
-        }
-    }
-
     fn at(millis: i64) -> OffsetDateTime {
         OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000).unwrap()
     }
@@ -825,90 +804,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::claude(HarnessKind::ClaudeCode, "0b7c2a7e-3f53-4b8e-9f43-6c1f6f0f2a10")]
-    #[case::codex_v4(HarnessKind::Codex, "5e0f2c1a-6a5b-4c3d-8e9f-0a1b2c3d4e5f")]
-    #[case::opencode(HarnessKind::Opencode, OPENCODE.0)]
-    #[case::pi(HarnessKind::Pi, "pi-session")]
-    #[case::copilot(HarnessKind::Copilot, "")]
-    fn the_id_is_a_v7(#[case] harness: HarnessKind, #[case] id: &str) {
-        let id = session(harness, id).atuin_id(at(1_790_000_000_000));
-        assert_eq!(Uuid::from(id).get_version(), Some(uuid::Version::SortRand));
-        assert_eq!(Uuid::from(id).get_variant(), uuid::Variant::RFC4122);
-    }
-
-    #[rstest]
     fn a_minted_id_is_a_fresh_v7_at_the_start() {
         let (a, b) = (AtuinSessionId::mint(at(1_234)), AtuinSessionId::mint(at(1_234)));
         assert_ne!(a, b);
         assert_eq!(millis_of(a), 1_234);
         assert_eq!(Uuid::from(a).get_version(), Some(uuid::Version::SortRand));
         assert_eq!(Uuid::from(a).get_variant(), uuid::Variant::RFC4122);
-    }
-
-    #[rstest]
-    fn the_id_is_stable_and_names_one_session() {
-        let started = at(1_790_000_000_000);
-        let claude = session(HarnessKind::ClaudeCode, "s");
-        assert_eq!(claude.atuin_id(started), claude.atuin_id(started));
-        assert_ne!(
-            claude.atuin_id(started),
-            session(HarnessKind::ClaudeCode, "t").atuin_id(started)
-        );
-        // The same native id in another harness is another session.
-        assert_ne!(claude.atuin_id(started), session(HarnessKind::Pi, "s").atuin_id(started));
-    }
-
-    #[rstest]
-    fn a_native_v7_is_the_id() {
-        let native = "01a0d147-e745-7ae2-8000-0123456789ab";
-        let id = session(HarnessKind::Codex, native).atuin_id(at(0));
-        assert_eq!(Uuid::from(id).to_string(), native);
-    }
-
-    #[rstest]
-    fn any_native_id_gives_a_v7() {
-        proptest!(|(native in any::<u128>(), harness in 0u8..6)| {
-            let harness = match harness {
-                0 => HarnessKind::Unknown,
-                1 => HarnessKind::ClaudeCode,
-                2 => HarnessKind::Codex,
-                3 => HarnessKind::Copilot,
-                4 => HarnessKind::Opencode,
-                _ => HarnessKind::Pi,
-            };
-            let native = Uuid::from_u128(native).to_string();
-            let id = session(harness, &native).atuin_id(at(1_790_000_000_000));
-            prop_assert_eq!(Uuid::from(id).get_version(), Some(uuid::Version::SortRand));
-            prop_assert_eq!(Uuid::from(id).get_variant(), uuid::Variant::RFC4122);
-        });
-    }
-
-    #[rstest]
-    fn a_later_start_moves_only_the_timestamp() {
-        let s = session(HarnessKind::ClaudeCode, "s");
-        let (full, partial) = (s.atuin_id(at(1_000)), s.atuin_id(at(9_000)));
-        assert_eq!((millis_of(full), millis_of(partial)), (1_000, 9_000));
-        assert_eq!(Uuid::from(full).as_u128() << 48, Uuid::from(partial).as_u128() << 48);
-    }
-
-    #[rstest]
-    #[case::at_creation(0)]
-    #[case::a_partial_capture(3_600_000)]
-    #[case::clock_skew(-5_000)]
-    #[case::most_of_a_year_off(300 * 86_400_000)]
-    #[case::most_of_a_year_early(-300 * 86_400_000)]
-    fn an_opencode_id_gives_its_own_time(#[case] off_by: i64) {
-        let (native, created) = OPENCODE;
-        let id = session(HarnessKind::Opencode, native).atuin_id(at(created + off_by));
-        assert_eq!(millis_of(id), created);
-    }
-
-    #[rstest]
-    #[case::not_hex("ses_zzzzzzzzzzzzabc")]
-    #[case::too_short("ses_f2b6")]
-    fn an_opencode_id_without_a_time_uses_the_start(#[case] native: &str) {
-        let id = session(HarnessKind::Opencode, native).atuin_id(at(1_234));
-        assert_eq!(millis_of(id), 1_234);
     }
 
     #[rstest]
@@ -923,5 +824,19 @@ mod tests {
         let id: AtuinSessionId = "01a0d147-e745-7ae2-8000-0123456789ab".parse().unwrap();
         assert_eq!(id.to_string(), "01a0d147e7457ae280000123456789ab");
         assert_eq!(id.has_prefix(prefix), matches);
+    }
+
+    #[rstest]
+    #[case::short("456789ab", true)]
+    #[case::shortest("6789ab", true)]
+    #[case::upper("6789AB", true)]
+    #[case::whole("01a0d147e7457ae280000123456789ab", true)]
+    #[case::too_short("789ab", false)]
+    #[case::other("6789ac", false)]
+    #[case::not_hex("6789ag", false)]
+    fn a_suffix_names_the_ids_it_ends(#[case] suffix: &str, #[case] matches: bool) {
+        let id: AtuinSessionId = "01a0d147-e745-7ae2-8000-0123456789ab".parse().unwrap();
+        assert_eq!(id.short(), "456789ab");
+        assert_eq!(id.has_suffix(suffix), matches);
     }
 }

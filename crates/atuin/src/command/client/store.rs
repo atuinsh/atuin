@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
@@ -58,9 +60,9 @@ pub enum Cmd {
 /// re-encrypted the records under it: they say what they said, so what is projected stays and
 /// the replay only has to cover it again with the new key. Best effort: the maintenance itself
 /// has already happened.
-pub async fn invalidate_ai_sessions() {
-    if let Err(err) = atuin_client::ai_session::invalidate_sidecar().await {
-        eprintln!("Failed to schedule a rebuild of the ai session index: {err}");
+pub async fn invalidate_ai_sessions(settings: &Settings) {
+    if let Err(err) = atuin_client::ai_session::invalidate_sidecar(settings).await {
+        eprintln!("Failed to schedule a rebuild of the threads index: {err}");
     }
 }
 
@@ -82,18 +84,18 @@ pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
     {
         if !settings.daemon.enabled {
             eyre::bail!(
-                "AI sessions need the daemon: enable it (`enabled = true` under `[daemon]` in the \
-                 config) to rebuild the AI session index"
+                "Threads need the daemon: enable it (`enabled = true` under `[daemon]` in the \
+                 config) to rebuild the threads index"
             );
         }
         daemon::rebuild_ai_sessions(settings)
             .await
-            .wrap_err("the daemon could not rebuild the AI session index")
+            .wrap_err("the daemon could not rebuild the threads index")
     }
     #[cfg(not(feature = "daemon"))]
     {
         let _ = settings;
-        eyre::bail!("AI sessions need the daemon, which this build of atuin does not include");
+        eyre::bail!("Threads need the daemon, which this build of atuin does not include");
     }
 }
 
@@ -101,12 +103,12 @@ pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
 /// index is now stale, and how to fix it. Nothing to do when there is no index yet: the daemon
 /// builds it from the records as they are now.
 pub async fn reset_ai_sessions_after(settings: &Settings) -> Result<()> {
-    if !atuin_client::ai_session::sidecar_path().exists() {
+    if !atuin_client::ai_session::sidecar_path(settings).exists() {
         return Ok(());
     }
     reset_ai_sessions(settings).await.wrap_err(
-        "the records changed, but the AI session index was not rebuilt and still lists what they \
-         held: run `atuin store rebuild ai-session` once the daemon is enabled and running",
+        "the records changed, but the threads index was not rebuilt and still lists what they \
+         held: run `atuin store rebuild threads` once the daemon is enabled and running",
     )
 }
 
@@ -114,12 +116,12 @@ impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(
         &self,
-        settings: &Settings,
+        settings: &Arc<Settings>,
         database: &Sqlite,
         store: SqliteStore,
     ) -> Result<()> {
         match self {
-            Self::Status => self.status(store).await,
+            Self::Status => self.status(settings, store).await,
             Self::Rebuild(rebuild) => rebuild.run(settings, store, database).await,
             Self::Rekey(rekey) => rekey.run(settings, store).await,
             Self::Compact => {
@@ -148,8 +150,8 @@ impl Cmd {
         }
     }
 
-    pub async fn status(&self, store: SqliteStore) -> Result<()> {
-        let host_id = Settings::host_id().await?;
+    pub async fn status(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        let host_id = settings.host_id().await?;
         let offset = time::UtcOffset::local_or_utc();
 
         let status = store.status().await?;

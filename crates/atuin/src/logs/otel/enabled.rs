@@ -35,7 +35,7 @@ impl OtelCtx {
     pub fn try_enable(service_name: &'static str) -> Result<Option<Self>, OtelCtxEnableError> {
         // TODO(markovejnovic): We should really have our own env-var parsing logic to avoid
         // this annoying error handling here.
-        let otel_env: Option<String> = match std::env::var("ATUIN_OTEL") {
+        let otel_env: Option<String> = match atuin_common::env::var("ATUIN_OTEL") {
             Ok(v) => Some(v),
             Err(e) => match e {
                 VarError::NotPresent => None,

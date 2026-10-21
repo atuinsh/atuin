@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::db;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use eyre::{Result, eyre};
@@ -87,9 +88,9 @@ impl NuHistDb {
     pub fn histpath() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| eyre!("could not determine config directory"))?
-            .join("nushell");
+            .joined("nushell");
 
-        let histdb_path = config_dir.join("history.sqlite3");
+        let histdb_path = config_dir.joined("history.sqlite3");
         if histdb_path.exists() {
             Ok(histdb_path)
         } else {

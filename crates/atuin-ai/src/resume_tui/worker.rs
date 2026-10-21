@@ -6,29 +6,40 @@
 //!   screen until then;
 //! - details (preview, children, plan) for the selected session. Only the newest request of each
 //!   kind is kept: while the selection moves, the sessions it passed over are never loaded.
-//!   Restoring a session from sync, which only an enter or tab asks for, goes first: only the
-//!   newest accepted session's is kept, and one dropped before it started is reported
-//!   ([`Response::Abandoned`]) so that the picker asks again if the user comes back to it. One
-//!   already running finishes and reports as usual. Then the plan an enter or tab is waiting on,
-//!   which is never dropped for another session's (see [`Request::Accept`]).
+//!   Restoring a session from sync (or catching its copy here up with sync), or continuing it in
+//!   another harness, which only an enter or tab asks for, goes first: only the newest accepted
+//!   session's restore or catch-up is kept, and one dropped
+//!   before it started is reported ([`Response::Abandoned`]) so that the picker asks again if the
+//!   user comes back to it. Likewise only the newest continuation, fork or switch is kept, and
+//!   one is dropped when the picker stops waiting on it ([`Request::CancelContinue`]); once the
+//!   picker is gone, nothing queued runs. One already running finishes and reports as usual: its
+//!   files are left as written, not deleted, since capture may already have read and synced them.
+//!   Then the plan an enter or tab is waiting on, which is never dropped for another session's
+//!   (see [`Request::Accept`]).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use atuin_client::ai_session::HarnessSession;
-use atuin_client::settings::AiSessionFilterMode as FilterMode;
+use atuin_client::ai_session::{HarnessKind, HarnessSession, SourceId};
+use atuin_common::harnesstools::continuation::{self, Flattened};
 use tokio::sync::mpsc;
 
-use super::resumer::{NotResumable, Restore, Resume, ResumePlan, Resumer};
-use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource};
+use super::catchup::{self, CatchUp};
+use super::panel;
+use super::resumer::{
+    Continued, Forked, NotResumable, Restore, Resume, ResumePlan, Resumer, Switched,
+};
+use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource, Transcript};
 
 #[derive(Debug)]
 pub enum Request {
     Search {
         generation: u64,
-        mode: FilterMode,
         filter: SessionFilter,
     },
     Preview(HarnessSession),
+    /// The whole conversation, for the reader. On a lane of its own (see [`transcripts`]).
+    Transcript(HarnessSession),
     /// The forks grouped under a root.
     Children(HarnessSession),
     /// Plan resuming a session (may walk the harness's session directories).
@@ -39,23 +50,52 @@ pub enum Request {
     Accept(Box<SessionRow>),
     /// Write out the transcript of a session planned with a restore, and plan resuming it.
     Restore(Box<SessionRow>, Restore),
+    /// Catch the copy here of a session up with sync, and plan resuming it. Kept as a restore
+    /// is, in its place.
+    CatchUp(Box<SessionRow>),
+    /// Count what continuing a session in another harness would flatten (reads all of it).
+    Flatten(HarnessSession, PathBuf),
+    /// Write a session out as a new session of another harness, and plan resuming that. The id
+    /// comes back with the answer. Only the newest is kept: one a newer one replaces before it
+    /// started never runs (its answer would be ignored, as the picker waits on the newer id).
+    Continue(Box<SessionRow>, HarnessKind, u64),
+    /// Write a session out as a fork of it (from a head, when one is given), and plan resuming
+    /// that. Answered as a continuation is, and in its place: a newer pick supersedes either.
+    Fork(Box<SessionRow>, u64, Option<SourceId>),
+    /// Switch the copy here of a session to a head's branch, and plan resuming it. Answered as a
+    /// fork is, and in its place.
+    Switch(Box<SessionRow>, u64, SourceId),
+    /// The picker no longer waits on a continuation or fork (the user chose something else):
+    /// drop the one not yet started, so nothing is written for it.
+    CancelContinue,
 }
 
 #[derive(Debug)]
 pub enum Response {
     Results {
         generation: u64,
-        mode: FilterMode,
         rows: Result<Vec<SessionRow>, String>,
     },
     Preview(HarnessSession, SessionPreview),
+    /// A transcript read, or why it couldn't be.
+    Transcript(HarnessSession, Result<Transcript, String>),
     Children(HarnessSession, Vec<SessionRow>),
     Plan(HarnessSession, Result<Resume, NotResumable>),
     /// The session is restored (or couldn't be): the plan that resumes it.
     Restored(HarnessSession, Result<ResumePlan, NotResumable>),
-    /// The session's restore was dropped before it started, for a newer accepted session's: it
-    /// has to be asked for again.
+    /// The copy here is caught up (or catching up needs a choice, or failed).
+    CaughtUp(HarnessSession, Result<CatchUp, NotResumable>),
+    /// The session's restore or catch-up was dropped before it started, for a newer accepted
+    /// session's: it has to be asked for again.
     Abandoned(HarnessSession),
+    /// What continuing the session in another harness would flatten (or why that can't be read).
+    Flattened(HarnessSession, Result<Flattened, String>),
+    /// The continuation with this id is written (or couldn't be).
+    Continued(u64, Result<Continued, NotResumable>),
+    /// The fork with this id is written (or couldn't be).
+    Forked(u64, Result<Forked, NotResumable>),
+    /// The switch with this id is written (or was refused).
+    Switched(u64, Result<Switched, NotResumable>),
 }
 
 /// Sends requests to the worker's lanes. The worker stops when this is dropped.
@@ -63,6 +103,7 @@ pub enum Response {
 pub struct Requests {
     searches: mpsc::UnboundedSender<Request>,
     details: mpsc::UnboundedSender<Request>,
+    transcripts: mpsc::UnboundedSender<Request>,
 }
 
 impl Requests {
@@ -70,6 +111,7 @@ impl Requests {
     pub fn send(&self, request: Request) {
         let lane = match request {
             Request::Search { .. } => &self.searches,
+            Request::Transcript(_) => &self.transcripts,
             _ => &self.details,
         };
         let _ = lane.send(request);
@@ -83,16 +125,60 @@ pub fn spawn(
 ) -> (Requests, mpsc::UnboundedReceiver<Response>) {
     let (search_tx, search_rx) = mpsc::unbounded_channel();
     let (detail_tx, detail_rx) = mpsc::unbounded_channel();
+    let (transcript_tx, transcript_rx) = mpsc::unbounded_channel();
     let (resp_tx, resp_rx) = mpsc::unbounded_channel();
     tokio::spawn(searches(source.clone(), search_rx, resp_tx.clone()));
+    tokio::spawn(transcripts(source.clone(), transcript_rx, resp_tx.clone()));
     tokio::spawn(details(source, resumer, detail_rx, resp_tx));
     (
         Requests {
             searches: search_tx,
             details: detail_tx,
+            transcripts: transcript_tx,
         },
         resp_rx,
     )
+}
+
+/// Reads transcripts, on a lane of their own: a long one never holds up a preview, a plan or an
+/// enter. Only the newest asked for is read, and asking for another drops the read under way.
+async fn transcripts(
+    source: Arc<dyn SessionSource>,
+    mut requests: mpsc::UnboundedReceiver<Request>,
+    responses: mpsc::UnboundedSender<Response>,
+) {
+    let mut next = None;
+    loop {
+        let mut request = match next.take() {
+            Some(request) => request,
+            None => match requests.recv().await {
+                Some(request) => request,
+                None => return,
+            },
+        };
+        while let Ok(newer) = requests.try_recv() {
+            request = newer;
+        }
+        let Request::Transcript(session) = request else {
+            continue;
+        };
+        tokio::select! {
+            transcript = source.transcript(&session) => {
+                let transcript = transcript.map_err(|e| {
+                    tracing::warn!("failed to load the transcript for {session:?}: {e:#}");
+                    format!("{e:#}")
+                });
+                if responses.send(Response::Transcript(session, transcript)).is_err() {
+                    return;
+                }
+            }
+            newer = requests.recv() => match newer {
+                // The read under way is dropped: another session's is wanted now.
+                Some(newer) => next = Some(newer),
+                None => return,
+            },
+        }
+    }
 }
 
 async fn searches(
@@ -105,24 +191,40 @@ async fn searches(
         while let Ok(next) = requests.try_recv() {
             request = next;
         }
-        let Request::Search {
-            generation,
-            mode,
-            filter,
-        } = request
-        else {
+        let Request::Search { generation, filter } = request else {
             continue;
         };
-        let rows = source.search(&filter).await.map_err(|e| format!("{e:#}"));
-        let response = Response::Results {
-            generation,
-            mode,
-            rows,
+        let rows = match source.search(&filter).await {
+            Ok(rows) => Ok(with_forks(source.as_ref(), rows).await),
+            Err(e) => Err(format!("{e:#}")),
         };
+        let response = Response::Results { generation, rows };
         if responses.send(response).is_err() {
             return;
         }
     }
+}
+
+/// `rows` with the forks grouped under each listed beneath it, as a tree.
+async fn with_forks(source: &dyn SessionSource, rows: Vec<SessionRow>) -> Vec<SessionRow> {
+    let mut out = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        let children = if row.children > 0 {
+            source.children(&row.handle).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let order = panel::tree_order(&row.handle, &children);
+        row.forks_at = children.iter().map(|c| c.active_at).max();
+        out.push(row);
+        for (mut tree, i) in order {
+            let mut child = children[i].clone();
+            // Flush with the root's title, not indented as in Inspect.
+            child.tree = tree.split_off(3.min(tree.len()));
+            out.push(child);
+        }
+    }
+    out
 }
 
 /// The newest unanswered detail request of each kind.
@@ -133,6 +235,8 @@ struct Latest {
     plan: Option<Request>,
     accept: Option<Request>,
     restore: Option<Request>,
+    flatten: Option<Request>,
+    continuation: Option<Request>,
 }
 
 impl Latest {
@@ -146,27 +250,38 @@ impl Latest {
             Request::Children(_) => &mut self.children,
             Request::Plan(_) => &mut self.plan,
             Request::Accept(_) => &mut self.accept,
-            Request::Restore(..) => &mut self.restore,
-            Request::Search { .. } => return None,
+            Request::Restore(..) | Request::CatchUp(_) => &mut self.restore,
+            Request::Flatten(..) => &mut self.flatten,
+            Request::Continue(..) | Request::Fork(..) | Request::Switch(..) => {
+                &mut self.continuation
+            }
+            Request::CancelContinue => {
+                self.continuation = None;
+                return None;
+            }
+            // On lanes of their own.
+            Request::Search { .. } | Request::Transcript(_) => return None,
         };
         let dropped = slot.replace(request)?;
         match (dropped, &*slot) {
-            (Request::Restore(old, _), Some(Request::Restore(new, _)))
-                if old.handle != new.handle =>
-            {
-                Some(old.handle)
-            }
+            (
+                Request::Restore(old, _) | Request::CatchUp(old),
+                Some(Request::Restore(new, _) | Request::CatchUp(new)),
+            ) if old.handle != new.handle => Some(old.handle),
             _ => None,
         }
     }
 
-    /// The next to answer: the restore, then the plan an enter is waiting on (an enter waits on
-    /// either), then the selection's plan (one may soon be), then children, then the preview.
+    /// The next to answer: a continuation, the restore, then the plan an enter is waiting on (an
+    /// enter waits on any of them), then the selection's plan (one may soon be), then what the
+    /// chooser shows, then children, then the preview. (Transcripts have their own lane.)
     fn take(&mut self) -> Option<Request> {
-        self.restore
+        self.continuation
             .take()
+            .or_else(|| self.restore.take())
             .or_else(|| self.accept.take())
             .or_else(|| self.plan.take())
+            .or_else(|| self.flatten.take())
             .or_else(|| self.children.take())
             .or_else(|| self.preview.take())
     }
@@ -181,8 +296,14 @@ async fn details(
     let mut latest = Latest::default();
     loop {
         let mut abandoned = Vec::new();
-        while let Ok(next) = requests.try_recv() {
-            abandoned.extend(latest.put(next));
+        loop {
+            match requests.try_recv() {
+                Ok(next) => abandoned.extend(latest.put(next)),
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                // The picker is gone: nothing queued is wanted any more, and a continuation or
+                // restore not yet started must not write a session the user left.
+                Err(mpsc::error::TryRecvError::Disconnected) => return,
+            }
         }
         for session in abandoned {
             if responses.send(Response::Abandoned(session)).is_err() {
@@ -220,7 +341,34 @@ async fn details(
                 row.handle.clone(),
                 resumer.restore(source.as_ref(), &row, &restore).await,
             ),
-            Request::Search { .. } => continue,
+            Request::CatchUp(row) => Response::CaughtUp(
+                row.handle.clone(),
+                resumer.catch_up(source.as_ref(), &row, None).await,
+            ),
+            Request::Flatten(session, cwd) => {
+                let flattened =
+                    source.rehydrate(&session, &cwd).await.map_err(|e| format!("{e:#}")).and_then(
+                        |original| continuation::flattened(&original).map_err(|e| e.to_string()),
+                    );
+                Response::Flattened(session, flattened)
+            }
+            Request::Continue(row, target, id) => Response::Continued(
+                id,
+                resumer.continue_in(source.as_ref(), &row, target, None).await,
+            ),
+            Request::Fork(row, id, head) => {
+                let source = source.as_ref();
+                let from = catchup::fork_from(source, &row.handle, head.as_ref()).await;
+                let forked = match from {
+                    Ok(from) => resumer.fork(source, &row, from).await,
+                    Err(why) => Err(why),
+                };
+                Response::Forked(id, forked)
+            }
+            Request::Switch(row, id, head) => {
+                Response::Switched(id, resumer.switch(source.as_ref(), &row, Some(&head)).await)
+            }
+            Request::Search { .. } | Request::Transcript(_) | Request::CancelContinue => continue,
         };
         if responses.send(response).is_err() {
             return;
@@ -240,6 +388,7 @@ mod tests {
 
     use super::*;
     use crate::resume_tui::fake::{self, FakeResumer, FakeSource};
+    use crate::resume_tui::resumer::ForkFrom;
 
     fn roots() -> SessionFilter {
         let mut filter = SessionFilter::default();
@@ -253,7 +402,6 @@ mod tests {
         let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), Arc::new(FakeResumer::default()));
         tx.send(Request::Search {
             generation: 1,
-            mode: FilterMode::Global,
             filter: roots(),
         });
         let Some(Response::Results {
@@ -339,7 +487,6 @@ mod tests {
         }
         tx.send(Request::Search {
             generation: 7,
-            mode: FilterMode::Global,
             filter: roots(),
         });
         let Some(Response::Results { generation, .. }) = rx.recv().await else {
@@ -357,6 +504,175 @@ mod tests {
         }
         assert_eq!(answered, vec![session("s0"), session("s3")]);
         assert_eq!(*source.previewed.lock(), answered);
+    }
+
+    /// A [`FakeResumer`] whose continuations and forks wait for a permit, recording the ids
+    /// started (a fork's as `fork:<id>`).
+    struct GatedContinues {
+        inner: FakeResumer,
+        gate: Semaphore,
+        started: Mutex<Vec<String>>,
+    }
+
+    fn gated_continues() -> Arc<GatedContinues> {
+        Arc::new(GatedContinues {
+            inner: FakeResumer::default(),
+            gate: Semaphore::new(0),
+            started: Mutex::new(Vec::new()),
+        })
+    }
+
+    #[async_trait]
+    impl Resumer for GatedContinues {
+        async fn plan(&self, session: &SessionRow) -> Result<Resume, NotResumable> {
+            self.inner.plan(session).await
+        }
+
+        async fn restore(
+            &self,
+            source: &dyn SessionSource,
+            session: &SessionRow,
+            restore: &Restore,
+        ) -> Result<ResumePlan, NotResumable> {
+            self.inner.restore(source, session, restore).await
+        }
+
+        async fn continue_in(
+            &self,
+            source: &dyn SessionSource,
+            session: &SessionRow,
+            target: HarnessKind,
+            head: Option<&SourceId>,
+        ) -> Result<Continued, NotResumable> {
+            self.started.lock().push(session.handle.session.to_string());
+            self.gate.acquire().await.unwrap().forget();
+            self.inner.continue_in(source, session, target, head).await
+        }
+
+        async fn fork(
+            &self,
+            source: &dyn SessionSource,
+            session: &SessionRow,
+            from: ForkFrom,
+        ) -> Result<Forked, NotResumable> {
+            self.started.lock().push(format!("fork:{}", session.handle.session));
+            self.gate.acquire().await.unwrap().forget();
+            self.inner.fork(source, session, from).await
+        }
+    }
+
+    /// While the worker writes continuation `a`, others are asked for. One a newer one replaced,
+    /// or the picker cancelled (it moved on to another choice), before it started never runs:
+    /// nothing is written for a choice the user left. `a`, already running, finishes.
+    #[rstest]
+    #[case::replaced(&["b", "c"], false, &["a", "c"])]
+    #[case::cancelled(&["b"], true, &["a"])]
+    #[case::replaced_then_cancelled(&["b", "c"], true, &["a"])]
+    #[tokio::test]
+    async fn a_superseded_continuation_never_starts(
+        #[case] queued: &[&str],
+        #[case] cancel: bool,
+        #[case] expected: &[&str],
+    ) {
+        let resumer = gated_continues();
+        let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), resumer.clone());
+        let continue_ = |id: &str, n: u64| {
+            let row = fake::row(HarnessKind::ClaudeCode, id, "t");
+            Request::Continue(Box::new(row), HarnessKind::Codex, n)
+        };
+        tx.send(continue_("a", 0));
+        while resumer.started.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        for (n, id) in (1..).zip(queued) {
+            tx.send(continue_(id, n));
+        }
+        if cancel {
+            tx.send(Request::CancelContinue);
+        }
+        // Answered after any continuation still kept, which goes first.
+        tx.send(Request::Preview(session("after")));
+        resumer.gate.add_permits(10);
+
+        loop {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv());
+            match next.await.expect("the worker is stuck").expect("the worker stopped") {
+                Response::Continued(_, result) => assert!(result.is_ok(), "{result:?}"),
+                Response::Preview(..) => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(*resumer.started.lock(), expected);
+    }
+
+    /// A fork waits in a continuation's place: one asked for while continuation `a` is written
+    /// never starts when the picker cancels it, or a newer continuation replaces it; and a newer
+    /// fork replaces a waiting continuation.
+    #[rstest]
+    #[case::fork_cancelled(&[true], true, &["a"])]
+    #[case::fork_replaced(&[true, false], false, &["a", "c"])]
+    #[case::fork_replaces(&[false, true], false, &["a", "fork:c"])]
+    #[tokio::test]
+    async fn a_superseded_fork_never_starts(
+        #[case] forks: &[bool],
+        #[case] cancel: bool,
+        #[case] expected: &[&str],
+    ) {
+        let resumer = gated_continues();
+        let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), resumer.clone());
+        let row = |id: &str| Box::new(fake::row(HarnessKind::ClaudeCode, id, "t"));
+        tx.send(Request::Continue(row("a"), HarnessKind::Codex, 0));
+        while resumer.started.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        // `b`, then `c`: each forked, or continued.
+        for ((n, id), &fork) in (1..).zip(["b", "c"]).zip(forks) {
+            tx.send(if fork {
+                Request::Fork(row(id), n, None)
+            } else {
+                Request::Continue(row(id), HarnessKind::Codex, n)
+            });
+        }
+        if cancel {
+            tx.send(Request::CancelContinue);
+        }
+        tx.send(Request::Preview(session("after")));
+        resumer.gate.add_permits(10);
+
+        loop {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv());
+            match next.await.expect("the worker is stuck").expect("the worker stopped") {
+                Response::Continued(_, result) => assert!(result.is_ok(), "{result:?}"),
+                Response::Forked(_, result) => assert!(result.is_ok(), "{result:?}"),
+                Response::Preview(..) => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(*resumer.started.lock(), expected);
+    }
+
+    /// The picker gone (its requests dropped) while a continuation waits behind a running one:
+    /// the waiting one never runs.
+    #[rstest]
+    #[tokio::test]
+    async fn nothing_queued_runs_once_the_picker_is_gone() {
+        let resumer = gated_continues();
+        let (tx, mut rx) = spawn(Arc::new(FakeSource::new()), resumer.clone());
+        let row = |id: &str| Box::new(fake::row(HarnessKind::ClaudeCode, id, "t"));
+        tx.send(Request::Continue(row("a"), HarnessKind::Codex, 0));
+        while resumer.started.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        tx.send(Request::Continue(row("b"), HarnessKind::Codex, 1));
+        drop(tx);
+        resumer.gate.add_permits(10);
+
+        // `a` finishes; then the worker stops, its response channel closing.
+        let next = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while rx.recv().await.is_some() {}
+        });
+        next.await.expect("the worker kept running");
+        assert_eq!(*resumer.started.lock(), ["a"]);
     }
 
     /// An enter on a fork while the detail lane is busy, and then the selection settling on the

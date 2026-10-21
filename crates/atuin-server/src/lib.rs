@@ -76,7 +76,7 @@ pub async fn connect(db_uri: OwnedDbUrl) -> DbResult<Arc<dyn DynDatabase>> {
 }
 
 async fn connect_and_build_router(settings: Settings) -> Result<Router> {
-    let database = connect(settings.db_settings.db_uri.clone())
+    let database = connect(settings.db_settings.connect_url()?)
         .await
         .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
 

@@ -1,25 +1,15 @@
-use std::fs;
-use std::io::ErrorKind;
-use std::ops::ControlFlow;
-#[cfg(unix)]
-use std::os::unix::net::UnixStream as StdUnixStream;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
-use atuin_common::fs::lock::{LockMode, LockOptions};
-use atuin_common::futures::Backoff;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
-use atuin_daemon::pidfile::{self, PidfileGuard};
-use atuin_daemon::{PROTOCOL_VERSION, VERSION};
+use atuin_daemon::grpc::versioning::BUILD_STR;
+use atuin_daemon::service::{ActiveService, PidfileWaitError, ServiceClaim, StopError};
 use clap::Subcommand;
-#[cfg(unix)]
-use daemonix::Daemonize;
-use eyre::{Result, WrapErr, bail, eyre};
+use eyre::{Result, WrapErr, bail};
 
 use crate::i18n::fl;
 
@@ -81,43 +71,17 @@ impl Cmd {
         }
     }
 
-    pub async fn run(
-        self,
-        settings: Settings,
-        store: SqliteStore,
-        history_db: Sqlite,
-    ) -> Result<()> {
+    pub async fn run(self, settings: Arc<Settings>) -> Result<()> {
         match self.subcmd {
             None => {
                 eprintln!("Warning: `atuin daemon` is deprecated, use `atuin daemon start`");
-                run(settings, store, history_db, false).await
+                run(settings, false).await
             }
-            Some(SubCmd::Start { force, .. }) => run(settings, store, history_db, force).await,
+            Some(SubCmd::Start { force, .. }) => run(settings, force).await,
             Some(SubCmd::Status) => status_cmd(&settings).await,
             Some(SubCmd::Stop) => stop_cmd(&settings).await,
-            Some(SubCmd::Restart) => restart_cmd(&settings).await,
+            Some(SubCmd::Restart) => restart_cmd(&settings, false).await,
         }
-    }
-}
-
-const STARTUP_POLL: Duration = Duration::from_millis(40);
-const LEGACY_DAEMON_RESTART_MESSAGE: &str = "legacy daemon detected; restart daemon manually";
-
-enum Probe {
-    Ready(HistoryClient),
-    NeedsRestart(String),
-    Unreachable(eyre::Report),
-}
-
-fn daemon_matches_expected(version: &str, protocol: u32) -> bool {
-    version == VERSION && protocol == PROTOCOL_VERSION
-}
-
-fn daemon_mismatch_message(version: &str, protocol: u32) -> String {
-    if protocol == PROTOCOL_VERSION {
-        format!("daemon is out of date: expected {VERSION}, got {version}")
-    } else {
-        format!("daemon protocol mismatch: expected {PROTOCOL_VERSION}, got {protocol}")
     }
 }
 
@@ -131,316 +95,53 @@ pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
         DaemonClientErrorKind::Connect
             | DaemonClientErrorKind::Unavailable
             | DaemonClientErrorKind::Unimplemented
+            | DaemonClientErrorKind::BuildMismatch
     )
 }
 
-async fn wait_for_pidfile_available(path: &Path, timeout: Duration) -> Result<()> {
-    let file = LockOptions {
-        create: true,
-        mode: LockMode::Exclusive,
-    }
-    .wait(path, timeout)
-    .await
-    .wrap_err_with(|| format!("failed to lock daemon pidfile at {}", path.display()))?;
-
-    file.unlock()
-        .wrap_err_with(|| format!("failed to unlock daemon pidfile at {}", path.display()))?;
-    Ok(())
-}
-
-async fn connect_client(settings: &Settings) -> Result<HistoryClient> {
-    HistoryClient::from_settings(settings).await
-}
-
-async fn probe(settings: &Settings) -> Probe {
-    let mut client = match connect_client(settings).await {
-        Ok(client) => client,
-        Err(err) => return Probe::Unreachable(err),
-    };
-
-    match client.status().await {
-        Ok(status) => {
-            if daemon_matches_expected(&status.version, status.protocol) {
-                Probe::Ready(client)
-            } else {
-                Probe::NeedsRestart(daemon_mismatch_message(&status.version, status.protocol))
-            }
-        }
-        Err(err) => Probe::Unreachable(err),
-    }
-}
-
-async fn request_shutdown(settings: &Settings) {
-    if let Ok(mut client) = connect_client(settings).await {
-        let _ = client.shutdown().await;
-    }
-}
-
-fn spawn_daemon_process() -> Result<()> {
-    let exe = std::env::current_exe().wrap_err("could not locate atuin executable")?;
-
-    let mut cmd = Command::new(exe);
-    cmd.arg("daemon").arg("start").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-
-    #[cfg(unix)]
-    cmd.arg("--daemonize");
-
-    cmd.spawn().wrap_err("failed to spawn daemon process")?;
-
-    Ok(())
-}
-
-fn startup_timeout(settings: &Settings) -> Duration {
-    settings.local_timeout.max(Duration::from_millis(500)) + Duration::from_secs(2)
-}
-
-/// An error that occurred while trying to remove a socket.
-#[cfg(unix)]
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "{}",
-    fl!(
-        "daemon-remove-socket-failed",
-        path = .path.display().to_string(),
-        source = .source.to_string()
-    )
-)]
-struct RemoveSocketError {
-    path: PathBuf,
-    source: std::io::Error,
-}
-
-/// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
-#[cfg(unix)]
-fn remove_sockets(
-    settings: &Settings,
-    should_remove: impl Fn(&Path) -> bool,
-) -> Result<(), RemoveSocketError> {
-    if settings.daemon.systemd_socket {
-        return Ok(());
-    }
-
-    let mut error = None;
-    for socket_path in settings.daemon.potential_socket_paths() {
-        if !socket_path.exists() || !should_remove(&socket_path) {
-            continue;
-        }
-
-        if let Err(e) = fs::remove_file(&socket_path)
-            && e.kind() != ErrorKind::NotFound
-        {
-            // Log the error because we only return the first error when multiple occur.
-            tracing::error!("failed to remove daemon socket {}: {e}", socket_path.display());
-            error.get_or_insert_with(|| RemoveSocketError {
-                path: socket_path.into_owned(),
-                source: e,
-            });
-        }
-    }
-
-    error.map_or(Ok(()), Err)
-}
-
-/// Remove any socket left behind by a daemon that is no longer listening.
-#[cfg(unix)]
-fn remove_stale_socket_if_present(settings: &Settings) -> Result<(), RemoveSocketError> {
-    remove_sockets(settings, |socket_path| {
-        // A refused connection means the socket is left over from a daemon that is gone.
-        matches!(
-            StdUnixStream::connect(socket_path),
-            Err(e) if e.kind() == ErrorKind::ConnectionRefused
-        )
-    })
-}
-
-async fn wait_until_ready(settings: &Settings, timeout: Duration) -> Result<HistoryClient> {
-    Backoff::Constant(STARTUP_POLL)
-        .retry(
-            || async move {
-                match probe(settings).await {
-                    Probe::Ready(client) => ControlFlow::Break(Ok(client)),
-                    Probe::NeedsRestart(reason) => ControlFlow::Continue(eyre!(reason)),
-                    Probe::Unreachable(err) => {
-                        if is_legacy_daemon_error(&err) {
-                            ControlFlow::Break(Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE)))
-                        } else {
-                            ControlFlow::Continue(err)
-                        }
-                    }
-                }
-            },
-            timeout,
-        )
-        .await
-        .unwrap_or_else(|last| {
-            Err(last.wrap_err(format!(
-                "timed out waiting for daemon startup after {}ms",
-                timeout.as_millis()
-            )))
-        })
-}
-
-#[allow(clippy::unnecessary_wraps)]
-fn ensure_autostart_supported(settings: &Settings) -> Result<()> {
-    #[cfg(unix)]
-    if settings.daemon.systemd_socket {
-        bail!(
-            "daemon autostart is incompatible with `daemon.systemd_socket = true`; use systemd to \
-             manage the daemon"
-        );
-    }
-    #[cfg(not(unix))]
-    let _ = settings;
-
-    Ok(())
-}
-
-/// The path to the lock used to prevent two clients from trying to start the daemon at the same
-/// time.
-#[must_use]
-fn startup_lock_path(pidfile_path: &Path) -> PathBuf {
-    let mut os = pidfile_path.as_os_str().to_os_string();
-    os.push(".startup.lock");
-    PathBuf::from(os)
-}
-
-/// Ensure the daemon is running, starting it if necessary.
-///
-/// If the daemon is already running and up-to-date, this is a no-op.
-/// If it is not running or needs a restart, this will spawn a new daemon
-/// process and wait for it to become ready.
-///
-/// Returns an error if the daemon could not be started.
-pub async fn ensure_daemon_running(settings: &Settings) -> Result<()> {
-    ensure_autostart_supported(settings)?;
-
-    let timeout = startup_timeout(settings);
-    let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-    let startup_lock_path = startup_lock_path(&pidfile_path);
-    let startup_lock = LockOptions {
-        create: true,
-        mode: LockMode::Exclusive,
-    }
-    .wait(&startup_lock_path, timeout)
-    .await
-    .wrap_err_with(|| {
-        format!("failed to acquire daemon startup lock at {}", startup_lock_path.display())
-    })?;
-
-    match probe(settings).await {
-        Probe::Ready(_) => {
-            drop(startup_lock);
-            return Ok(());
-        }
-        Probe::NeedsRestart(_) => {
-            request_shutdown(settings).await;
-        }
-        Probe::Unreachable(err) => {
-            if is_legacy_daemon_error(&err) {
-                return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
-            }
-        }
-    }
-
-    // This prevents rapid-fire hook invocations from racing daemon restart.
-    wait_for_pidfile_available(&pidfile_path, timeout).await?;
-
-    #[cfg(unix)]
-    remove_stale_socket_if_present(settings)?;
-
-    spawn_daemon_process()?;
-    let _ = wait_until_ready(settings, timeout).await?;
-
-    drop(startup_lock);
-    Ok(())
-}
-
-async fn restart_daemon(settings: &Settings) -> Result<HistoryClient> {
-    ensure_daemon_running(settings).await?;
-    connect_client(settings).await
-}
-
-fn ensure_reply_compatible(settings: &Settings, version: &str, protocol: u32) -> Result<()> {
-    if daemon_matches_expected(version, protocol) {
-        return Ok(());
-    }
-
-    let message = daemon_mismatch_message(version, protocol);
-    if settings.daemon.autostart {
-        bail!("{message}");
-    }
-
-    bail!("{message}. Enable `daemon.autostart = true` or restart the daemon manually");
-}
-
-/// Acquire a [`HistoryClient`] connected to a daemon we expect to understand us, probing over the
-/// wire-stable Status RPC first and restarting the daemon if it is absent or version/protocol
-/// skewed.
-///
-/// TODO(markovejnovic): This is egregious slop, but not worse than the original solution. I want to
-///                      remove this in a future PR: <https://github.com/atuinsh/atuin/pull/4002>
+/// Acquire a [`HistoryClient`] connected to a daemon of our build, starting or replacing it first
+/// when `daemon.autostart` allows.
 pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
-    match probe(settings).await {
-        Probe::Ready(client) => return Ok(client),
-        Probe::NeedsRestart(reason) if !settings.daemon.autostart => {
-            bail!("{reason}. Enable `daemon.autostart = true` or restart the daemon manually");
-        }
-        Probe::Unreachable(err) if is_legacy_daemon_error(&err) => {
-            return Err(err.wrap_err(LEGACY_DAEMON_RESTART_MESSAGE));
-        }
-        Probe::Unreachable(err) if !settings.daemon.autostart => return Err(err),
-        Probe::Unreachable(err) if !should_retry_after_error(&err) => return Err(err),
-        Probe::NeedsRestart(_) | Probe::Unreachable(_) => {}
-    }
-
-    restart_daemon(settings).await
+    Ok(ActiveService::ready(settings).await?.into_client())
 }
 
-/// Send a request to the daemon, first ensuring (via [`ready_client`]) that it is running and
-/// speaks our version.
+/// Send a request to the daemon, first ensuring (via [`ready_client`]) that it is running and is
+/// our build.
 async fn try_with_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
 where
     F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
-    R: atuin_daemon::grpc::VersionedReply,
 {
-    let client = ready_client(settings).await?;
-    send_checked(settings, client, send_request).await
+    let mut client = ready_client(settings).await?;
+    send_request(&mut client).await
 }
 
-/// Send a request to an already-running daemon that speaks our version.
+/// Send a request to an already-running daemon of our build.
 ///
 /// This function never starts or restarts the daemon.
 async fn try_without_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
 where
     F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
-    R: atuin_daemon::grpc::VersionedReply,
 {
-    let client = match probe(settings).await {
-        Probe::Ready(client) => client,
-        Probe::NeedsRestart(reason) => bail!(reason),
-        Probe::Unreachable(err) => return Err(err),
+    let Some(service) = ActiveService::find(settings).await? else {
+        bail!("no daemon is running");
     };
-    send_checked(settings, client, send_request).await
+    service.ensure_our_build()?;
+    send_request(&mut service.into_client()).await
 }
 
-/// Send a message to the daemon and ensure the response is [compatible](ensure_reply_compatible).
-async fn send_checked<F, R>(
-    settings: &Settings,
-    mut client: HistoryClient,
-    send_request: F,
-) -> Result<R>
-where
-    F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
-    R: atuin_daemon::grpc::VersionedReply,
-{
-    let resp = send_request(&mut client).await?;
-    ensure_reply_compatible(settings, resp.version(), resp.protocol())?;
-    Ok(resp)
-}
+/// How long `history start` waits on the daemon. It runs synchronously before every command, and a
+/// stuck daemon still accepts connections, so without a limit the prompt hangs. On timeout the
+/// command is saved to the local database instead.
+///
+/// `history end` and `cancel` have no limit: the hooks run them in the background (on Nushell, from
+/// 0.104), and giving up would lose a command that only exists in the daemon's memory.
+const START_HISTORY_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub async fn start_history(settings: &Settings, history: History) -> Result<HistoryId> {
-    let resp =
-        try_with_restart(settings, async |client| client.start_history(history).await).await?;
+    let start = try_with_restart(settings, async |client| client.start_history(history).await);
+    let resp = tokio::time::timeout(START_HISTORY_TIMEOUT, start)
+        .await
+        .wrap_err("timed out waiting for the daemon")??;
     let id = resp.id.ok_or_else(|| eyre::eyre!("daemon reply is missing the history id"))?;
     Ok(HistoryId::try_from(id)?)
 }
@@ -480,87 +181,107 @@ pub async fn rebuild_ai_sessions(settings: &Settings) -> Result<()> {
     client.rebuild_sessions().await
 }
 
+/// How long to look for a running daemon to project synced AI sessions: a stopped daemon's socket
+/// still accepts connections but never answers.
+const PROJECT_SYNCED_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long a sync waits for the daemon to project the AI sessions it downloaded. A large store
+/// takes longer; the daemon carries on regardless.
+const PROJECT_SYNCED_WAIT: Duration = Duration::from_secs(10);
+
+/// Have a running daemon project the AI session records this process synced into the record
+/// store, returning once they are listed or, after [`PROJECT_SYNCED_WAIT`], leaving the daemon to
+/// finish on its own. Never starts or replaces one: a daemon started later, or replacing one too
+/// old to be asked, projects them as it starts.
+pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
+    let found = tokio::time::timeout(PROJECT_SYNCED_PROBE_TIMEOUT, ActiveService::find(settings));
+    let Ok(Ok(Some(service))) = found.await else {
+        return Ok(());
+    };
+    if service.ensure_our_build().is_err() {
+        return Ok(());
+    }
+    let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
+    match tokio::time::timeout(PROJECT_SYNCED_WAIT, client.project_synced()).await {
+        Ok(Err(err)) if is_legacy_daemon_error(&err) => Ok(()),
+        Ok(projected) => projected,
+        Err(_) => {
+            eprintln!("Indexing threads in the background");
+            Ok(())
+        }
+    }
+}
+
 pub async fn compact_store(settings: &Settings) -> Result<u64> {
     let reply = try_with_restart(settings, async |client| client.compact_store().await).await?;
     Ok(reply.rewritten)
 }
 
 async fn status_cmd(settings: &Settings) -> Result<()> {
-    match probe(settings).await {
-        Probe::Ready(mut client) => {
-            let status = client.status().await?;
+    let Some(service) = ActiveService::find(settings).await? else {
+        println!("Daemon is not running");
+        return Ok(());
+    };
+
+    match service.ensure_our_build() {
+        Ok(()) => {
+            let address = service.address().clone();
+            let status = service.into_client().status().await?;
             println!("Daemon running");
             println!("  PID:      {}", status.pid);
             println!("  Version:  {}", status.version);
-            println!("  Protocol: {}", status.protocol);
+            println!("  Build:    {BUILD_STR}");
             println!("  Healthy:  {}", status.healthy);
-            #[cfg(unix)]
-            println!("  Socket:   {}", atuin_daemon::client::socket_path(settings).display());
-            #[cfg(not(unix))]
-            println!("  Port:     {}", settings.daemon.tcp_port);
+            println!("  Address:  {address}");
         }
-        Probe::NeedsRestart(reason) => {
-            println!("Daemon running (needs restart)");
+        Err(reason) if reason.peer_is_newer() => {
+            println!("Daemon running (newer than this client)");
             println!("  Reason: {reason}");
         }
-        Probe::Unreachable(_) => {
-            println!("Daemon is not running");
+        Err(reason) => {
+            println!("Daemon running (needs restart)");
+            println!("  Reason: {reason}");
         }
     }
 
     Ok(())
 }
 
-async fn stop_cmd(settings: &Settings) -> Result<()> {
-    let Ok(mut client) = connect_client(settings).await else {
+pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
+    let Some(service) = ActiveService::find(settings).await? else {
         println!("Daemon is not running");
         return Ok(());
     };
 
-    match client.shutdown().await {
-        Ok(true) => {
-            println!("Shutdown requested");
-
-            let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-            let timeout = Duration::from_secs(5);
-            match wait_for_pidfile_available(&pidfile_path, timeout).await {
-                Ok(()) => println!("Daemon stopped"),
-                Err(_) => println!("Daemon may still be shutting down"),
-            }
-
-            Ok(())
+    match service.stop().await {
+        Ok(()) => println!("Daemon stopped"),
+        Err(StopError::Pidfile(PidfileWaitError::StillHeld { .. })) => {
+            println!("Daemon may still be shutting down");
         }
-        Ok(false) => bail!("Daemon rejected shutdown request"),
-        Err(err) => Err(err.wrap_err("Failed to send shutdown request")),
+        Err(err) => return Err(err.into()),
     }
+
+    Ok(())
 }
 
-pub(super) async fn restart_cmd(settings: &Settings) -> Result<()> {
-    // Stop if running
-    match probe(settings).await {
-        Probe::Ready(_) | Probe::NeedsRestart(_) => {
-            request_shutdown(settings).await;
-            println!("Stopping daemon...");
-
-            let pidfile_path = PathBuf::from(&settings.daemon.pidfile_path);
-            let timeout = Duration::from_secs(5);
-            wait_for_pidfile_available(&pidfile_path, timeout)
-                .await
-                .wrap_err("Timed out waiting for old daemon to stop")?;
+pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> Result<()> {
+    let service = match ActiveService::find(settings).await? {
+        Some(service) => {
+            println!("Restarting daemon...");
+            service.restart().await?
         }
-        Probe::Unreachable(_) => {
+        None if only_if_running => {
             println!("No daemon running");
+            return Ok(());
         }
-    }
+        None => {
+            println!("No daemon running");
+            println!("Starting daemon...");
+            ActiveService::find_or_spawn(settings).await?
+        }
+    };
 
-    #[cfg(unix)]
-    remove_stale_socket_if_present(settings)?;
-
-    spawn_daemon_process()?;
-    println!("Starting daemon...");
-
-    let timeout = startup_timeout(settings);
-    let status = wait_until_ready(settings, timeout).await?.status().await?;
+    let status = service.into_client().status().await?;
 
     println!("Daemon restarted");
     println!("  PID:      {}", status.pid);
@@ -569,115 +290,50 @@ pub(super) async fn restart_cmd(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-/// Daemonize the current process. Must be called before creating the tokio
-/// runtime or opening database connections, since `fork()` inside an async
-/// runtime corrupts its internal state.
-#[cfg(unix)]
-pub fn daemonize_current_process() -> Result<()> {
-    let cwd =
-        std::env::current_dir().wrap_err("could not determine current directory for daemon")?;
-
-    Daemonize::new().working_directory(cwd).start().wrap_err("failed to daemonize process")?;
-
-    Ok(())
-}
-
-async fn run(
-    settings: Settings,
-    store: SqliteStore,
-    history_db: Sqlite,
-    force: bool,
-) -> Result<()> {
+async fn run(settings: Arc<Settings>, force: bool) -> Result<()> {
     if force {
-        force_cleanup(&settings).await;
+        ActiveService::evict(&settings.daemon).await;
     }
 
-    let _pidfile_guard = PidfileGuard::acquire(&settings.daemon)?;
+    let (_claim, listener) = ServiceClaim::take(&settings.daemon)?;
 
-    atuin_daemon::boot(settings, store, history_db).await?;
+    let history_db = Sqlite::new(&settings.db_path, settings.local_timeout).await?;
+    let store = SqliteStore::new(&settings.record_store_path, settings.local_timeout).await?;
+
+    atuin_daemon::boot(settings, listener, store, history_db).await?;
 
     Ok(())
-}
-
-/// Force cleanup: kill existing daemon process and remove socket.
-async fn force_cleanup(settings: &Settings) {
-    let pidfile_path = Path::new(&settings.daemon.pidfile_path);
-
-    // Read and kill the existing process if pidfile exists
-    if pidfile_path.exists() {
-        if let Some(pid) = pidfile::try_read_pid(pidfile_path)
-            && pid != 0
-            && let Err(e) =
-                atuin_common::os::process::force_terminate(pid, Duration::from_secs(2)).await
-        {
-            tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
-        }
-
-        // Remove the pidfile
-        if let Err(e) = fs::remove_file(pidfile_path)
-            && e.kind() != ErrorKind::NotFound
-        {
-            tracing::warn!("failed to remove pidfile: {e}");
-        }
-    }
-
-    // Remove the socket files
-    #[cfg(unix)]
-    if let Err(e) = remove_sockets(settings, |_| true) {
-        tracing::warn!("{e}");
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
 
     use super::*;
 
+    /// A stopped daemon's socket still accepts connections but never answers.
     #[cfg(unix)]
     #[rstest]
-    fn remove_socket_error_names_the_path_and_cause() {
-        let err = RemoveSocketError {
-            path: PathBuf::from("/run/atuin.sock"),
-            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-        };
-        assert_eq!(
-            err.to_string(),
-            "failed to remove daemon socket /run/atuin.sock: permission denied"
-        );
-    }
+    #[tokio::test]
+    async fn start_history_times_out_on_a_daemon_that_never_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("stopped.sock");
+        let _listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let mut settings = Settings::default();
+        settings.daemon.socket_path = AbsPathBuf::new(socket).ok();
+        settings.daemon.pidfile_path = AbsPathBuf::new(dir.path().join("d.pid")).unwrap();
+        settings.daemon.autostart = false;
+        let history = History::import()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("true")
+            .cwd("/")
+            .build();
 
-    #[rstest]
-    #[case::matches(VERSION, PROTOCOL_VERSION, true)]
-    #[case::wrong_version("0.0.0", PROTOCOL_VERSION, false)]
-    #[case::wrong_protocol(VERSION, 999, false)]
-    #[case::wrong_both("0.0.0", 999, false)]
-    fn daemon_matches_expected_cases(
-        #[case] version: &str,
-        #[case] protocol: u32,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(daemon_matches_expected(version, protocol), expected);
-    }
+        let started = std::time::Instant::now();
+        let err = start_history(&settings, history.into()).await.unwrap_err();
 
-    #[rstest]
-    #[case::out_of_date("0.0.0", PROTOCOL_VERSION, vec!["out of date", "0.0.0", VERSION])]
-    #[case::protocol_mismatch(VERSION, 999, vec!["protocol mismatch"])]
-    fn daemon_mismatch_message_cases(
-        #[case] version: &str,
-        #[case] protocol: u32,
-        #[case] needles: Vec<&str>,
-    ) {
-        let msg = daemon_mismatch_message(version, protocol);
-        for needle in needles {
-            assert!(msg.contains(needle), "got: {msg}");
-        }
-    }
-
-    #[rstest]
-    #[case("/tmp/atuin-daemon.pid", "/tmp/atuin-daemon.pid.startup.lock")]
-    #[case("/path/to/pidfile", "/path/to/pidfile.startup.lock")]
-    fn test_startup_lock_path(#[case] pidfile_path: &str, #[case] expected: &str) {
-        assert_eq!(startup_lock_path(Path::new(pidfile_path)), Path::new(expected));
+        assert!(started.elapsed() < START_HISTORY_TIMEOUT * 2, "{:?}", started.elapsed());
+        assert!(format!("{err:#}").contains("timed out"), "{err:#}");
     }
 }

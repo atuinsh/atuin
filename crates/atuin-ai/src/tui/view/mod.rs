@@ -14,6 +14,7 @@ use eye_declare::{
 use ratatui_core::style::{Color, Modifier, Style};
 
 use crate::fsm::tools::{InterruptReason, TrackedTool};
+use crate::permissions::writer::ProjectScope;
 use crate::tools::{ClientToolCall, HistorySearchFilterMode, ToolPreview};
 use crate::tui::events::PermissionResult;
 use crate::tui::select;
@@ -660,10 +661,12 @@ fn suggested_command_view(details: &SuggestedCommandDetails) -> AnyElement<'stat
 ///
 /// Edit/Write tools get a per-file session-scoped option instead of the
 /// workspace-level "Always allow in this directory"; other tools keep the
-/// standard set, with the directory label reflecting git-project status.
+/// standard set, with the directory label reflecting the project scope.
+/// The directory option isn't offered with [`ProjectScope::Home`] as it would
+/// conflict with the global permissions file.
 pub fn permission_options(
     tool: &ClientToolCall,
-    in_git_project: bool,
+    project_scope: ProjectScope,
 ) -> Vec<(&'static str, PermissionResult)> {
     match tool {
         ClientToolCall::Edit(_) | ClientToolCall::Write(_) => vec![
@@ -672,26 +675,27 @@ pub fn permission_options(
             ("Always allow", PermissionResult::AlwaysAllow),
             ("Deny", PermissionResult::Deny),
         ],
-        _ => vec![
-            ("Allow", PermissionResult::Allow),
-            (
-                if in_git_project {
-                    "Always allow in this workspace"
-                } else {
-                    "Always allow in this directory"
-                },
-                PermissionResult::AlwaysAllowInDir,
-            ),
-            ("Always allow", PermissionResult::AlwaysAllow),
-            ("Deny", PermissionResult::Deny),
-        ],
+        _ => [
+            Some(("Allow", PermissionResult::Allow)),
+            match project_scope {
+                ProjectScope::Workspace => Some("Always allow in this workspace"),
+                ProjectScope::Directory => Some("Always allow in this directory"),
+                ProjectScope::Home => None,
+            }
+            .map(|label| (label, PermissionResult::AlwaysAllowInDir)),
+            Some(("Always allow", PermissionResult::AlwaysAllow)),
+            Some(("Deny", PermissionResult::Deny)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
     }
 }
 
 /// `Atuin AI would like to <verb>: <target>` plus the options list.
 pub fn permission_prompt_view(
     tool_call: &TrackedTool,
-    in_git_project: bool,
+    project_scope: ProjectScope,
     cursor: usize,
 ) -> AnyElement<'static> {
     let verb = tool_call.tool.descriptor().display_verb;
@@ -715,7 +719,7 @@ pub fn permission_prompt_view(
         }
         ClientToolCall::LoadSkill(tool) => wrapped(format!("skill: {}", tool.name)),
     };
-    let options = permission_options(&tool_call.tool, in_git_project);
+    let options = permission_options(&tool_call.tool, project_scope);
 
     col()
         .child(header)
@@ -835,14 +839,61 @@ fn format_path_for_display(path: &std::path::Path) -> String {
 mod tests {
     use std::time::Duration;
 
-    use super::format_elapsed;
+    use rstest::rstest;
 
-    #[test]
+    use super::{format_elapsed, permission_options};
+    use crate::permissions::writer::ProjectScope;
+    use crate::tools::ClientToolCall;
+    use crate::tui::events::PermissionResult;
+
+    #[rstest]
     fn elapsed_formats_by_magnitude() {
         assert_eq!(format_elapsed(Duration::from_millis(600)), "0.6 seconds");
         assert_eq!(format_elapsed(Duration::from_millis(3240)), "3.2 seconds");
         assert_eq!(format_elapsed(Duration::from_millis(42600)), "43 seconds");
         assert_eq!(format_elapsed(Duration::from_secs(65)), "1m 05s");
         assert_eq!(format_elapsed(Duration::from_secs(154)), "2m 34s");
+    }
+
+    fn tool(name: &str, input: &serde_json::Value) -> ClientToolCall {
+        ClientToolCall::try_from((name, input)).unwrap()
+    }
+
+    /// "Always allow" for the project is offered, labelled for its scope, unless the project root
+    /// is the home directory: then a project rule would be global.
+    #[rstest]
+    #[case::workspace(ProjectScope::Workspace, Some("Always allow in this workspace"))]
+    #[case::directory(ProjectScope::Directory, Some("Always allow in this directory"))]
+    #[case::home(ProjectScope::Home, None)]
+    fn always_allow_in_project_is_not_offered_for_the_home_directory(
+        #[case] scope: ProjectScope,
+        #[case] expected: Option<&str>,
+    ) {
+        let shell = tool("execute_shell_command", &serde_json::json!({ "command": "ls" }));
+        let options = permission_options(&shell, scope);
+        let in_project: Vec<_> = options
+            .iter()
+            .filter(|(_, result)| matches!(result, PermissionResult::AlwaysAllowInDir))
+            .map(|(label, _)| *label)
+            .collect();
+        assert_eq!(in_project, expected.into_iter().collect::<Vec<_>>());
+        // The other options are always there.
+        let labels: Vec<_> = options.iter().map(|(label, _)| *label).collect();
+        for label in ["Allow", "Always allow", "Deny"] {
+            assert!(labels.contains(&label), "{labels:?}");
+        }
+    }
+
+    /// Edits and writes never offer it, whatever the scope.
+    #[rstest]
+    fn edits_are_offered_the_same_options_in_every_scope(
+        #[values(ProjectScope::Workspace, ProjectScope::Directory, ProjectScope::Home)]
+        scope: ProjectScope,
+    ) {
+        let write =
+            tool("write_file", &serde_json::json!({ "file_path": "/tmp/file", "content": "text" }));
+        let labels: Vec<_> =
+            permission_options(&write, scope).into_iter().map(|(label, _)| label).collect();
+        assert_eq!(labels, ["Allow", "Allow this file for this session", "Always allow", "Deny"]);
     }
 }

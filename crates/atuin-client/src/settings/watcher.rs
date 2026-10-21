@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use atuin_common::path::AbsPathBuf;
 use eyre::{Result, WrapErr};
 use notify::event::{EventKind, ModifyKind};
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
@@ -98,12 +99,7 @@ impl SettingsWatcher {
 
     /// Get the config file path.
     fn config_path() -> PathBuf {
-        let config_dir = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
-            PathBuf::from(p)
-        } else {
-            atuin_common::utils::config_dir()
-        };
-        config_dir.join("config.toml")
+        atuin_common::dirs::config_path("config.toml")
     }
 
     /// Create the file watcher with debouncing.
@@ -125,9 +121,8 @@ impl SettingsWatcher {
 
         // Canonicalize config path for reliable comparison on macOS
         // (handles symlinks like /var -> /private/var)
-        let canonical_config_path = config_path_for_watcher
-            .canonicalize()
-            .unwrap_or_else(|_| config_path_for_watcher.clone());
+        let canonical_config_path = AbsPathBuf::canonicalize(&config_path_for_watcher)
+            .map_or_else(|_| config_path_for_watcher.clone(), PathBuf::from);
 
         // Create file watcher
         let mut watcher = RecommendedWatcher::new(
@@ -148,8 +143,8 @@ impl SettingsWatcher {
                         // (filter out editor temp files, backups, etc.)
                         let is_config_file = event.paths.iter().any(|path| {
                             // Canonicalize for reliable comparison (handles macOS symlinks)
-                            let canonical_event_path =
-                                path.canonicalize().unwrap_or_else(|_| path.clone());
+                            let canonical_event_path = AbsPathBuf::canonicalize(path)
+                                .map_or_else(|_| path.clone(), PathBuf::from);
 
                             // Check if this event is for our config file
                             // (either exact match or the file was renamed to our config)
@@ -161,12 +156,7 @@ impl SettingsWatcher {
                             return;
                         }
 
-                        // Only react to modify events (content changes) or creates
-                        if matches!(
-                            event.kind,
-                            EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Any)
-                                | EventKind::Create(_)
-                        ) {
+                        if reloads_on(event.kind) {
                             debug!("config file event detected: {:?}", event);
                             // Send to debounce channel (ignore send errors - receiver might be gone)
                             let _ = debounce_tx.send(());
@@ -244,5 +234,36 @@ impl SettingsWatcher {
                 }
             }
         }
+    }
+}
+
+/// Whether an event on the config file may have changed its contents: a write, a create, or a
+/// rename onto it, which is how editors that save atomically (and `sed -i`) replace the file. A
+/// rename away from it is let through too; the reload skips a file that no longer exists.
+fn reloads_on(kind: EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Name(_) | ModifyKind::Any)
+            | EventKind::Create(_)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use notify::event::{AccessKind, CreateKind, DataChange, MetadataKind, RemoveKind, RenameMode};
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn reloads_on_writes_creates_and_renames_onto_the_file() {
+        assert!(reloads_on(EventKind::Modify(ModifyKind::Data(DataChange::Content))));
+        assert!(reloads_on(EventKind::Create(CreateKind::File)));
+        assert!(reloads_on(EventKind::Modify(ModifyKind::Name(RenameMode::To))));
+        assert!(reloads_on(EventKind::Modify(ModifyKind::Name(RenameMode::Both))));
+
+        assert!(!reloads_on(EventKind::Access(AccessKind::Read)));
+        assert!(!reloads_on(EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions))));
+        assert!(!reloads_on(EventKind::Remove(RemoveKind::File)));
     }
 }

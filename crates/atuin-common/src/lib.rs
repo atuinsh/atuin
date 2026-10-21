@@ -4,8 +4,10 @@
 pub mod ansi;
 #[cfg(feature = "db")]
 pub mod db;
+pub mod dirs;
 pub mod docs;
 pub mod encryption;
+pub mod env;
 pub mod filter;
 pub mod fs;
 pub mod futures;

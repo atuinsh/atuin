@@ -63,9 +63,6 @@ impl GrpcService for Service {
 
         Ok(Response::new(StartHistoryReply {
             id: Some(id.into()),
-            // TODO(markovejnovic): Pull this from one constant, well-defined spot.
-            version: crate::VERSION.to_string(),
-            protocol: crate::PROTOCOL_VERSION,
         }))
     }
 
@@ -89,9 +86,6 @@ impl GrpcService for Service {
         Ok(Response::new(EndHistoryReply {
             record_id: Some(finished_cmd.history_record_id.into()),
             record_idx: finished_cmd.history_record_idx,
-            // TODO(markovejnovic): Pull this from one constant, well-defined spot.
-            version: crate::VERSION.to_string(),
-            protocol: crate::PROTOCOL_VERSION,
         }))
     }
 
@@ -108,11 +102,7 @@ impl GrpcService for Service {
             .await
             .map_err(|e| Status::internal(format!("cancel did not complete: {e}")))??;
 
-        Ok(Response::new(CancelHistoryReply {
-            // TODO(markovejnovic): Pull this from one constant, well-defined spot.
-            version: crate::VERSION.to_string(),
-            protocol: crate::PROTOCOL_VERSION,
-        }))
+        Ok(Response::new(CancelHistoryReply {}))
     }
 
     #[instrument(skip_all, level = Level::TRACE)]
@@ -134,8 +124,6 @@ impl GrpcService for Service {
 
         Ok(Response::new(DeleteHistoryReply {
             deleted: deleted.cast(),
-            version: crate::VERSION.to_string(),
-            protocol: crate::PROTOCOL_VERSION,
         }))
     }
 
@@ -147,10 +135,7 @@ impl GrpcService for Service {
         let search_settings = self.daemon_handle.settings().await.search.clone();
         self.journal.rebuild(&search_settings).await?;
 
-        Ok(Response::new(RebuildHistoryReply {
-            version: crate::VERSION.to_string(),
-            protocol: crate::PROTOCOL_VERSION,
-        }))
+        Ok(Response::new(RebuildHistoryReply {}))
     }
 
     #[instrument(skip_all, level = Level::TRACE)]
@@ -165,11 +150,7 @@ impl GrpcService for Service {
             .await
             .map_err(|e| Status::internal(format!("compact did not complete: {e}")))?;
 
-        Ok(Response::new(CompactStoreReply {
-            rewritten,
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            protocol: crate::PROTOCOL_VERSION,
-        }))
+        Ok(Response::new(CompactStoreReply { rewritten }))
     }
 
     #[instrument(skip_all, level = Level::TRACE)]
@@ -203,10 +184,8 @@ impl GrpcService for Service {
     ) -> Result<Response<StatusReply>, Status> {
         Ok(Response::new(StatusReply {
             healthy: true,
-            // TODO(markovejnovic): Pull this from one constant, well-defined spot.
             version: crate::VERSION.to_string(),
             pid: std::process::id(),
-            protocol: crate::PROTOCOL_VERSION,
         }))
     }
 
@@ -234,11 +213,14 @@ impl GrpcService for Service {
         let request = request.into_inner();
         let id = request.history_id()?;
         let capture = request.capture()?.into();
-        let output = self.daemon_handle.settings().await.output.clone();
+        let settings = self.daemon_handle.settings().await;
+        let output = settings.output.clone();
+        let files = settings.security.sensitive_files(&settings.key_path);
+        drop(settings);
         let journal = self.journal.clone();
         // Spawned so a client disconnect cannot drop the call half-way.
         tokio::spawn(
-            async move { journal.register_command_output(id, capture, &output).await }
+            async move { journal.register_command_output(id, capture, &output, &files).await }
                 .instrument(tracing::Span::current()),
         )
         .await

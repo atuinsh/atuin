@@ -1,4 +1,3 @@
-use std::env;
 use std::time::Duration;
 
 use atuin_client::api_client;
@@ -26,7 +25,7 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
         .with(EnvFilter::new("atuin_server=debug,atuin_client=debug,info"))
         .into();
 
-    let db_uri = env::var("ATUIN_DB_URI")
+    let db_uri = atuin_common::env::var("ATUIN_DB_URI")
         .unwrap_or_else(|_| "postgres://atuin:pass@localhost:5432/atuin".to_owned());
 
     let server_settings = ServerSettings {
@@ -39,6 +38,7 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
         register_webhook_username: String::new(),
         db_settings: DbSettings {
             db_uri: db_uri.parse().expect("invalid ATUIN_DB_URI"),
+            db_password_file: None,
         },
         metrics: atuin_server::settings::Metrics::default(),
         fake_version: None,

@@ -14,6 +14,7 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 
 use atuin_common::os::unix::process;
+use atuin_common::path::AbsPathBuf;
 use common::{FreshEnv, wait_until};
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -110,7 +111,7 @@ impl Drop for Proxy {
 fn the_proxy_follows_its_shell_between_directories() {
     let env = FreshEnv::new();
     // A working directory is never a symlink, but a temporary directory may be (/tmp on macOS).
-    let home = env.home().canonicalize().unwrap();
+    let home = AbsPathBuf::canonicalize(env.home()).unwrap();
     let elsewhere = home.join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
 

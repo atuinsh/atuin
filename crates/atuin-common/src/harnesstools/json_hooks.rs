@@ -55,7 +55,9 @@ pub async fn install(
 /// changed.
 ///
 /// Atuin hooks are removed wherever they sit, so reinstalling after an upgrade or a moved binary
-/// never leaves a stale or duplicate hook behind.
+/// never leaves a stale or duplicate hook behind. An entry already as it would be added stays
+/// where it is: Codex trusts each hook by where it is, so moving it would move the user's after
+/// it and leave them untrusted.
 fn add_hook_entries(
     hooks: &mut Map<String, Value>,
     matcher: &str,
@@ -70,7 +72,15 @@ fn add_hook_entries(
             .as_array_mut()
             .ok_or(InstallHookError::Malformed("a hook event is not an array"))?;
 
-        for entry in entries.iter_mut() {
+        let installed = json!({
+            "matcher": matcher,
+            "hooks": [{"type": "command", "command": hook_command}],
+        });
+        let kept = entries.iter().position(|entry| *entry == installed);
+        for (at, entry) in entries.iter_mut().enumerate() {
+            if Some(at) == kept {
+                continue;
+            }
             if let Some(entry_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
                 entry_hooks.retain(|hook| {
                     !hook
@@ -84,10 +94,9 @@ fn add_hook_entries(
             entry.get("hooks").and_then(Value::as_array).is_none_or(|hooks| !hooks.is_empty())
         });
 
-        entries.push(json!({
-            "matcher": matcher,
-            "hooks": [{"type": "command", "command": hook_command}],
-        }));
+        if kept.is_none() {
+            entries.push(installed);
+        }
     }
 
     Ok(*hooks != before)
@@ -116,7 +125,7 @@ fn hook_command(executable: &Path, harness: &str) -> Result<String, InstallHookE
 }
 
 /// Whether `command` runs `atuin hook <harness>`, through any path to the atuin executable.
-fn invokes_atuin_hook(command: &str, harness: &str) -> bool {
+pub fn invokes_atuin_hook(command: &str, harness: &str) -> bool {
     let Some(parts) = shlex::split(command) else {
         return false;
     };
@@ -173,6 +182,35 @@ mod tests {
                     "hooks": [{"type": "command", "command": "atuin hook codex"}],
                 }, installed],
                 "PostToolUse": [installed],
+                "PostToolUseFailure": [installed],
+            })
+        );
+    }
+
+    /// Installed again, atuin's entry stays where it is, ahead of the user's added since.
+    #[rstest]
+    fn add_hook_entries_keeps_an_installed_entry_in_place() {
+        let command = "/opt/atuin/bin/atuin hook codex";
+        let installed = json!({
+            "matcher": "^Bash$",
+            "hooks": [{"type": "command", "command": command}],
+        });
+        let theirs = json!({"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]});
+        let stale = json!({"matcher": "^Bash$", "hooks": [{"type": "command", "command": "atuin hook codex"}]});
+        let mut hooks = json!({
+            "PreToolUse": [installed, theirs],
+            "PostToolUse": [stale, installed, theirs],
+            "PostToolUseFailure": [installed],
+        });
+
+        assert!(
+            add_hook_entries(hooks.as_object_mut().unwrap(), "^Bash$", "codex", command).unwrap()
+        );
+        assert_eq!(
+            hooks,
+            json!({
+                "PreToolUse": [installed, theirs],
+                "PostToolUse": [installed, theirs],
                 "PostToolUseFailure": [installed],
             })
         );

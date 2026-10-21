@@ -1,10 +1,12 @@
 use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
-use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError};
+use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError, codex};
+use atuin_common::path::PathBufExt as _;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
 use tracing::instrument;
@@ -39,7 +41,7 @@ pub struct Cmd {
 
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match (self.action, self.agent) {
             (Some(Action::Install { agent }), None) => install(&agent).await,
             (None, Some(agent)) => handle(&agent, settings).await,
@@ -54,7 +56,7 @@ impl Cmd {
 }
 
 fn id_file_path(tool_use_id: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("atuin-hook-{tool_use_id}"))
+    std::env::temp_dir().joined(format!("atuin-hook-{tool_use_id}"))
 }
 
 /// How the user makes an agent pick up a freshly installed extension. Only the
@@ -62,6 +64,7 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
 fn reload_hint(harness_name: &str) -> Option<&'static str> {
     match harness_name {
         "pi" => Some("Reload pi with `/reload` or restart pi."),
+        "omp" => Some("Reload omp with `/reload` or restart omp."),
         "opencode" => Some("Restart opencode to load the plugin."),
         _ => None,
     }
@@ -73,6 +76,11 @@ async fn install(agent_name: &str) -> Result<()> {
     match harness.install_hooks().await {
         Ok(path) => {
             eprintln!("Atuin hooks installed for {}. Path: {}", harness.name(), path.display());
+            if harness.name() == "codex" {
+                // Codex runs only the hooks the user trusted (see `codex::hook_trust`).
+                let config = path.with_file_name("config.toml");
+                eprintln!("Trusted them in Codex's config: {}", config.display());
+            }
             if let Some(hint) = reload_hint(harness.name()) {
                 eprintln!("{hint}");
             }
@@ -83,10 +91,15 @@ async fn install(agent_name: &str) -> Result<()> {
         Err(err) => return Err(err.into()),
     }
 
+    if cfg!(feature = "ai") {
+        let name = harness.name();
+        eprintln!("To let {name} search your history too, run `atuin mcp install {name}`.");
+    }
+
     Ok(())
 }
 
-async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
+async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
     let harness = AnyHarness::from_name(agent_name)?;
 
     let mut input = String::new();
@@ -114,7 +127,17 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
                 std::fs::write(id_file_path(&tool_use_id), history_id.to_string())?;
             }
         }
-        Some(HookEvent::End { tool_use_id, exit }) => {
+        Some(HookEvent::End {
+            tool_use_id,
+            exit,
+            transcript,
+        }) => {
+            let exit = exit
+                .or_else(|| {
+                    let transcript = transcript.filter(|_| harness.name() == "codex")?;
+                    codex::session::command_exit_code(&transcript, &tool_use_id)
+                })
+                .unwrap_or(0);
             let id_path = id_file_path(&tool_use_id);
 
             if let Ok(history_id) = std::fs::read_to_string(&id_path) {

@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-slim-bookworm@sha256:9a2089c084b6f8b85b7cbc6dac81f38afcdcd87708fe5a5a1697da254d21c147 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-slim-bookworm@sha256:b4b459d305bee99c8f8200212c46276108af90b0501386e1339336c2e03c81a2 AS chef
 WORKDIR app
 
 # Build with the toolchain pinned in rust-toolchain.toml, not the image's.
@@ -24,7 +24,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --bin atuin-server
 
-FROM debian:bookworm-20260918-slim AS runtime
+FROM debian:bookworm-20261005-slim AS runtime
 LABEL org.opencontainers.image.source="https://github.com/atuinsh/atuin" \
   org.opencontainers.image.url="https://atuin.sh" \
   org.opencontainers.image.licenses="MIT"

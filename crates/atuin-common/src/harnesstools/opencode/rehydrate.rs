@@ -1,6 +1,10 @@
 //! An opencode session written back out from captured messages (see [`rehydrate`]), through
 //! opencode's own `opencode import`.
 //!
+//! opencode 2 dropped `opencode import` for `opencode session import`, which takes a format of its
+//! own (see `v2`); which one the installed opencode takes is told by its version. What follows
+//! is opencode 1.x's.
+//!
 //! opencode keeps its sessions in one SQLite database, whose schema is its own business; `opencode
 //! import <file>` takes the JSON `opencode export` writes and inserts it the way opencode itself
 //! does (`cli/cmd/import.ts`): the session under its own id, each message and part under theirs.
@@ -8,49 +12,57 @@
 //!
 //! # What survives
 //!
-//! Every part capture delivered, under its own id: text (the user's, the model's, and what
-//! opencode injected, `synthetic`), reasoning, tool calls with their result or error, retries,
-//! each model call's `step-finish` with its token counts and finish reason, and the parts capture
-//! kept whole (`step-start`, files, compaction markers, subtasks...) as they were. A failed
-//! model call is its assistant message's `error`, under the message id capture keyed it on.
+//! Every part capture keeps, under its own id: text (the user's, the model's, and a continuation's
+//! or fork's marker, `synthetic` or `ignored`), tool calls with their result or error, retries,
+//! and each model call's `step-finish` with its token counts and finish reason. A failed model
+//! call is its assistant message's `error`, under the message id capture keyed it on. Reasoning
+//! (kept only as a marker) and the parts capture keeps nothing of (`step-start`, files,
+//! compaction markers, subtasks...) are left out.
 //!
 //! What capture keeps of a message is less than opencode's info for it, so the rest is rebuilt:
 //!
 //! - **Which message a part belongs to.** Rows carry no message id, so parts are grouped back
 //!   into messages: an assistant's by the user message it answers and the model call it was
 //!   (`MessageInfo::turn_of`, which also gives back its creation time, provider and model), the
-//!   rest in the order they came. A message's id is recovered where a row names it -- a part
-//!   kept whole carries its `messageID`, a failure is keyed on it, an assistant message names the
-//!   user message it answers -- and minted otherwise. Only part and failure ids are row keys, so a
+//!   rest in the order they came. A message's id is recovered where a row names it -- an
+//!   opencode 2.0 row and a failure are keyed on it, an assistant message names the user message
+//!   it answers -- and minted otherwise. Only part and failure ids are row keys, so a
 //!   minted message id costs nothing on re-capture.
-//! - **Agent and mode** (`build`), cost (`0`), and a tool call's title and metadata (empty).
+//! - **Agent and mode** (`build`), cost (`0`), and a tool call's title (empty) and metadata:
+//!   empty, but for a call whose patch capture kept, which gets back the diff opencode shows an
+//!   `edit` or `apply_patch` with (`filediff`, `files`, `diff`).
 //!
 //! The session takes the directory `opencode import` runs in, its project, and its title.
 //!
 //! # What is not the same
 //!
-//! - **Tool calls captured without their input** (capture keeps only a call's name now) are not
-//!   written as tool parts: opencode would send the model a call on no input (`{"input": null}`,
-//!   the object its state needs) with an output it never had. Each becomes a text part under the
-//!   call's own part id, reading as a [note](crate::harnesstools::note::tool_note) (`[ran a shell command]`), or joins a
-//!   text part of the same message before it, with nothing but reasoning or other notes between
-//!   (the same note several times in a row counted, `×3`; see [`Flatten::Notes`]). Re-captured,
+//! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
+//!   it) are not written as tool parts: opencode would send the model a call on no input
+//!   (`{"input": null}`, the object its state needs) with an output it never had. Each becomes a
+//!   text part under the call's own part id, reading as a
+//!   [note](crate::harnesstools::note::tool_note) (`[ran a shell command]`), or joins a text part
+//!   of the same message before it, with nothing but reasoning or other notes between (the same
+//!   note several times in a row counted, `×3`; see [`Flatten::Notes`]). Re-captured,
 //!   the part reads back under a part id capture already holds, so nothing is pushed; a part
 //!   merged away is not there to capture again.
-//! - **Tool output**: capture keeps none now; a call kept with its input (older records) is
-//!   written `completed` (or `error`) with [`UNCAPTURED_OUTPUT`] as its output.
-//! - opencode stamps each part row with the time of the import. Text, reasoning, tool and retry
-//!   parts carry their own clock and read back with the captured timestamp; the rest (`step-start`,
-//!   `step-finish`, whole parts) read back with the import's.
+//! - **Tool output**: written back as captured. A call kept with its input but not its output
+//!   (withheld by a policy, or over the size limit) is written `completed` (or `error`) with
+//!   [`UNCAPTURED_OUTPUT`] as its output.
+//! - opencode stamps each part row with the time of the import. Text, tool and retry parts carry
+//!   their own clock and read back with the captured timestamp; a `step-finish` reads back with
+//!   the import's.
 //! - opencode reads a message's parts in id order, where capture delivered them as they finished:
 //!   parallel tool calls that finished out of order come back in id order.
 //! - A tool call captured without a result (one opencode stopped mid-way) is written `pending`,
 //!   which opencode shows as interrupted and capture skips as unfinished.
-//! - The session's parent, for a subagent's, is not kept.
+//! - The session's parent, for a subagent's, is not kept. A [fork](crate::harnesstools::fork)
+//!   names its original in a marker instead, and gets fresh message and part ids.
 //! - Rows opencode 2.0 wrote (`session_v2`, the experimental event system) name no part id of the
 //!   older layout `opencode import` writes; their parts get minted ids and would be captured again
-//!   as new rows.
+//!   as new rows. Their calls and results, rows apart, are joined into one tool part.
 
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -63,10 +75,15 @@ use time::OffsetDateTime;
 use super::session;
 use crate::db::query_scalar;
 use crate::harnesstools::rehydrate::{
-    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
+    Flatten, ForkOf, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
     flatten_uncaptured_calls,
 };
-use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, ToolUse, Usage};
+use crate::harnesstools::session::{
+    Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
+};
+use crate::harnesstools::{AnyHarness, continuation};
+
+mod v2;
 
 /// How long `opencode import` may take before it is given up on.
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -83,22 +100,25 @@ const QUIET_ENV: &[(&str, &str)] = &[
     ("OPENCODE_PURE", "1"),
 ];
 
-/// Import `session` into opencode's database with `opencode import`, run from the session's
-/// directory ([`RehydrateSession::cwd`], which becomes the session's directory and project), and
-/// hand back the database: the path `locate` finds the session in.
+/// Import `session` into opencode's database with `opencode import` (opencode 2: `opencode
+/// session import`), into the session's directory ([`RehydrateSession::cwd`], which becomes the
+/// session's directory and project), and hand back the database: the path `locate` finds the
+/// session in.
 ///
 /// The database is the one opencode resolves from this process's environment (`OPENCODE_DB`,
-/// `XDG_DATA_HOME`, its channel databases; see `session::default_db`), and `opencode import` is
-/// pointed at it explicitly (`OPENCODE_DB`), so the two cannot disagree. opencode must be on
-/// `PATH`. It is never asked to call a model: import only writes the database.
+/// `XDG_DATA_HOME`, its channel databases; see `session::default_db`), and opencode is pointed at
+/// it explicitly (`OPENCODE_DB`), so the two cannot disagree: opencode 2 imports through a server
+/// of its own (`--standalone`), not its background one, which keeps the environment it started
+/// with. opencode must be on `PATH`. It is never asked to call a model: import only writes the
+/// database.
 ///
 /// Fails with [`RehydrateError::AlreadyExists`] when opencode already holds the session whole.
-/// The export goes to opencode in one file, but opencode inserts it a row at a time (the session
-/// first), so an import that fails part-way leaves the session partly written, where
-/// [`locate`](crate::harnesstools::Harness::locate) finds it. Such a session is imported again:
-/// import inserts each message and part only if its id is new, so what is there stays as it is
-/// and what is missing is added. A session that has been worked on since (see `Held`) is left
-/// alone, so that a message a revert deleted never comes back.
+/// opencode 1.x inserts an import a row at a time (the session first), so one that fails part-way
+/// leaves the session partly written, where [`locate`](crate::harnesstools::Harness::locate)
+/// finds it. Such a session is imported again: import inserts each message and part only if its
+/// id is new, so what is there stays as it is and what is missing is added. A session that has
+/// been worked on since (see `Held`) is left alone, so that a message a revert deleted never comes
+/// back. opencode 2 imports a session whole or not at all.
 pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
     let db = session::default_db().ok_or(RehydrateError::NoDataDir)?;
     import(Path::new("opencode"), &db, session).await
@@ -117,6 +137,7 @@ pub(crate) async fn import(
         )));
     }
     let exported = export(session);
+    // a session opencode 2 holds is in none of the tables `held` reads: held whole
     if session::locate(db, &session.id).await.is_some()
         && held(db, &session.id, &exported).await != Held::Partly
     {
@@ -128,13 +149,72 @@ pub(crate) async fn import(
             session.cwd.display()
         )));
     }
-    let file = export_file(&exported)?;
+    let stdout = if major_version(program).await? >= 2 {
+        let args = [
+            OsStr::new("session"),
+            OsStr::new("import"),
+            OsStr::new("--standalone"),
+            OsStr::new("--directory"),
+            session.cwd.as_os_str(),
+        ];
+        run(program, &args, db, &session.cwd, &v2::export(session)).await?
+    } else {
+        run_import(program, db, &session.cwd, &exported).await?
+    };
+    session::locate(db, &session.id).await.ok_or_else(|| {
+        RehydrateError::Other(format!("opencode import did not write the session: {stdout}"))
+    })
+}
+
+/// The major version of the `opencode` executable `program`, as `opencode --version` prints it
+/// (`1.18.32`; opencode 2: `opencode v2.0.24`).
+pub(crate) async fn major_version(program: &Path) -> Result<u64, RehydrateError> {
     let mut command = tokio::process::Command::new(program);
     command
-        .arg("import")
-        .arg("--pure")
+        .arg("--version")
+        .envs(QUIET_ENV.iter().copied())
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(IMPORT_TIMEOUT, command.output())
+        .await
+        .map_err(|_| RehydrateError::Other("opencode --version timed out".to_owned()))??;
+    let printed = String::from_utf8_lossy(&output.stdout);
+    printed
+        .split_whitespace()
+        .last()
+        .and_then(|version| version.trim_start_matches('v').split('.').next()?.parse().ok())
+        .ok_or_else(|| {
+            RehydrateError::Other(format!("can't tell opencode's version from {printed:?}"))
+        })
+}
+
+/// Run `opencode import` (the executable `program`) of `export` into `db`, from `cwd` (which
+/// becomes the session's directory and project), handing back what it printed.
+pub(crate) async fn run_import(
+    program: &Path,
+    db: &Path,
+    cwd: &Path,
+    export: &Value,
+) -> Result<String, RehydrateError> {
+    run(program, &[OsStr::new("import"), OsStr::new("--pure")], db, cwd, export).await
+}
+
+/// Run `opencode <args> <file>` (the executable `program`), `file` holding `export`, against `db`
+/// from `cwd`, handing back what it printed.
+async fn run(
+    program: &Path,
+    args: &[&OsStr],
+    db: &Path,
+    cwd: &Path,
+    export: &Value,
+) -> Result<String, RehydrateError> {
+    let file = export_file(export)?;
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
         .arg(&*file)
-        .current_dir(&session.cwd)
+        .current_dir(cwd)
         .env("OPENCODE_DB", db)
         .env_remove("OPENCODE_AUTO_SHARE")
         .envs(QUIET_ENV.iter().copied())
@@ -152,12 +232,7 @@ pub(crate) async fn import(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    session::locate(db, &session.id).await.ok_or_else(|| {
-        RehydrateError::Other(format!(
-            "opencode import did not write the session: {}",
-            String::from_utf8_lossy(&output.stdout).trim()
-        ))
-    })
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 /// How much of an export opencode's database holds of a session it has a row for.
@@ -277,7 +352,24 @@ fn millis(at: OffsetDateTime) -> i64 {
 /// own ascending ids) the time it stands for in hex, then characters derived from `seed`, so the
 /// same session always mints the same ids.
 fn mint(prefix: &str, at: i64, seed: &str) -> String {
-    const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    mint_at(prefix, u64::try_from(at).unwrap_or_default().wrapping_mul(0x1000), seed)
+}
+
+/// A new part's id, as [`mint`] makes them: parts of one message sort in time order.
+pub(crate) fn mint_part(at: OffsetDateTime, seed: &str) -> String {
+    mint("prt", millis(at), seed)
+}
+
+/// A new session's id, as opencode's own (`Identifier.descending`): [`mint`]'s, its time
+/// inverted so the newest sorts first.
+pub(crate) fn mint_session(at: OffsetDateTime, seed: &str) -> String {
+    mint_at("ses", !u64::try_from(millis(at)).unwrap_or_default().wrapping_mul(0x1000), seed)
+}
+
+/// The digits of opencode's ids, in the order they sort in.
+const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+fn mint_at(prefix: &str, time: u64, seed: &str) -> String {
     let mut hash = xxhash_rust::xxh3::xxh3_128(seed.as_bytes());
     let tail: String = (0..14)
         .map(|_| {
@@ -286,7 +378,7 @@ fn mint(prefix: &str, at: i64, seed: &str) -> String {
             char::from(c)
         })
         .collect();
-    let time = u64::try_from(at).unwrap_or_default().wrapping_mul(0x1000) & 0xffff_ffff_ffff;
+    let time = time & 0xffff_ffff_ffff;
     format!("{prefix}_{time:012x}{tail}")
 }
 
@@ -330,6 +422,8 @@ struct Draft {
     created: i64,
     completed: i64,
     model: Option<String>,
+    /// Who served `model`, when capture knows.
+    provider: Option<String>,
     cwd: Option<PathBuf>,
     summary: bool,
     error: Option<Value>,
@@ -349,6 +443,7 @@ impl Draft {
             created: at,
             completed: at,
             model: row.model.clone(),
+            provider: row.provider.clone(),
             cwd: row.cwd.clone(),
             summary: false,
             error: None,
@@ -368,16 +463,9 @@ fn turn_base(row: &RehydrateMessage) -> Option<String> {
     Some(turn.split_once('#').map_or(turn, |(turn, _)| turn).to_owned())
 }
 
-/// The message a row names as its own: a part kept whole carries its `messageID`, a row of
-/// opencode 2.0 is keyed `<message>/<part>`, and a failure is keyed on its message.
+/// The message a row names as its own: a row of opencode 2.0 is keyed `<message>/<part>`, and a
+/// failure is keyed on its message.
 fn named_message(row: &RehydrateMessage) -> Option<String> {
-    for content in &row.content {
-        if let Content::Other(part) = content
-            && let Some(id) = part["messageID"].as_str()
-        {
-            return Some(id.to_owned());
-        }
-    }
     if let Some((message, _)) = row.source_id.split_once('/') {
         return Some(message.to_owned());
     }
@@ -391,16 +479,23 @@ fn is_failure(row: &RehydrateMessage) -> bool {
         && matches!(row.content.as_slice(), [Content::Error(_)])
 }
 
-/// The row for the session itself (`<session>:title:<title>`, `<session>:session`), which the
-/// session's own info stands for.
+/// The row for the session itself (`<session>:title:<digest>`, `<session>:session`), which the
+/// session's own info stands for; for a fork, the original's too.
 fn is_session_row(session: &RehydrateSession, row: &RehydrateMessage) -> bool {
+    let of = |id: &str| row.source_id.strip_prefix(id).is_some_and(|rest| rest.starts_with(':'));
     row.content.is_empty()
         && row.usage.is_none()
-        && row.source_id.strip_prefix(session.id.as_str()).is_some_and(|rest| rest.starts_with(':'))
+        && (of(&session.id) || session.fork_of.as_ref().is_some_and(|f| of(&f.id)))
 }
 
 /// The JSON `opencode export` writes for `session`, which `opencode import` reads back.
 pub(crate) fn export(session: &RehydrateSession) -> Value {
+    export_minting(session).0
+}
+
+/// [`export`], and the ids of its messages that were minted, not recovered from a row naming
+/// them: every one of a fork's, whose ids are all fresh.
+pub(crate) fn export_minting(session: &RehydrateSession) -> (Value, HashSet<String>) {
     let mut drafts: Vec<Draft> = Vec::new();
     // A note joins a text part of its own message: the one answering the same prompt in the
     // same model call.
@@ -410,6 +505,7 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
         },
         own: &|_| true,
     });
+    let rows = join_results(rows);
     for row in &rows {
         if is_session_row(session, row) {
             continue;
@@ -449,6 +545,9 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
         if draft.model.is_none() {
             draft.model.clone_from(&row.model);
         }
+        if draft.provider.is_none() {
+            draft.provider.clone_from(&row.provider);
+        }
         if draft.cwd.is_none() {
             draft.cwd.clone_from(&row.cwd);
         }
@@ -471,8 +570,7 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
         }
     }
     // A user message's id is the one the assistant message answering it names.
-    let mut used: std::collections::HashSet<String> =
-        drafts.iter().filter_map(|draft| draft.id.clone()).collect();
+    let mut used: HashSet<String> = drafts.iter().filter_map(|draft| draft.id.clone()).collect();
     for at in 0..drafts.len() {
         if drafts[at].id.is_some() || drafts[at].assistant {
             continue;
@@ -487,10 +585,13 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
             drafts[at].id = Some(id);
         }
     }
+    let mut minted = HashSet::new();
     for (n, draft) in drafts.iter_mut().enumerate() {
         if draft.id.is_none() {
             let created = draft_created(draft);
-            draft.id = Some(mint("msg", created, &format!("{}/message/{n}", session.id)));
+            let id = mint("msg", created, &format!("{}/message/{n}", session.id));
+            minted.insert(id.clone());
+            draft.id = Some(id);
         }
     }
 
@@ -528,7 +629,12 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
 
     let updated = session.messages.iter().map(|m| millis(m.timestamp)).max();
     let started = millis(session.started_at);
-    json!({
+    if let Some(of) = &session.fork_of {
+        fork(&mut messages, session, of);
+        minted =
+            messages.iter().filter_map(|m| m["info"]["id"].as_str().map(str::to_owned)).collect();
+    }
+    let export = json!({
         "info": {
             "id": session.id,
             "slug": session.id,
@@ -540,7 +646,143 @@ pub(crate) fn export(session: &RehydrateSession) -> Value {
             "time": {"created": started, "updated": updated.unwrap_or(started).max(started)},
         },
         "messages": messages,
-    })
+    });
+    (export, minted)
+}
+
+/// Make the messages of `session`'s export a fork's of `of`: its first user message (one of its
+/// own, ahead of the rest, when it has none) starts with a
+/// [fork marker](continuation::fork_marker_text), an `ignored` text part, which opencode keeps
+/// from the model and capture reads as the fork's link; and every message and part gets a fresh
+/// id. opencode's ids are keys of its whole database, which `opencode import` skips when it
+/// holds them already: under the original's, the fork would import empty.
+///
+/// A fresh id keeps the old one's prefix and time (opencode orders by id), then a tail of the
+/// fork's own (from its session id, so a retried import mints the same) and the old id's rank:
+/// the fork's ids sort as the original's did.
+fn fork(messages: &mut Vec<Value>, session: &RehydrateSession, of: &ForkOf) {
+    let source = AnyHarness::from_name("opencode").expect("opencode is a harness");
+    let marker = continuation::fork_marker_text(source, &of.id, of.atuin_id.as_deref());
+    // With no user message (only the model's replies were captured), the marker gets one of its
+    // own ahead of the rest. Not in an assistant message: opencode sends an assistant's text to
+    // the model, `ignored` or not, and a user message of only ignored parts not at all.
+    if !messages.iter().any(|m| m["info"]["role"] == "user")
+        && let Some(first) = messages.first()
+    {
+        let created = first["info"]["time"]["created"].as_i64().unwrap_or_default();
+        let time = first["info"]["id"]
+            .as_str()
+            .and_then(id_time)
+            .unwrap_or_else(|| u64::try_from(created).unwrap_or_default().wrapping_mul(0x1000));
+        let model = |field: &str, or: &str| first["info"][field].as_str().unwrap_or(or).to_owned();
+        // The user message the first reply answers, which isn't there: this is it now.
+        let id = first["info"]["parentID"].as_str().map_or_else(
+            || mint_at("msg", time.saturating_sub(1), &format!("{}/fork", session.id)),
+            str::to_owned,
+        );
+        let info = json!({
+            "id": id,
+            "sessionID": session.id,
+            "role": "user",
+            "time": {"created": created},
+            "agent": "build",
+            "model": {
+                "providerID": model("providerID", "opencode"),
+                "modelID": model("modelID", "unknown"),
+            },
+        });
+        messages.insert(0, json!({"info": info, "parts": []}));
+    }
+    if let Some(first) = messages.iter_mut().find(|m| m["info"]["role"] == "user") {
+        let created = first["info"]["time"]["created"].as_i64().unwrap_or_default();
+        let message = first["info"]["id"].clone();
+        let parts = first["parts"].as_array_mut().expect("an export's parts are an array");
+        // Ahead of every part of the message, the time (and so the order) of each in its id.
+        let earliest = parts
+            .iter()
+            .filter_map(|p| id_time(p["id"].as_str()?))
+            .chain([u64::try_from(created).unwrap_or_default().wrapping_mul(0x1000)])
+            .min()
+            .unwrap_or_default();
+        parts.insert(
+            0,
+            json!({
+                "id": mint_at("prt", earliest.saturating_sub(1), &format!("{}/fork", session.id)),
+                "sessionID": session.id,
+                "messageID": message,
+                "type": "text",
+                "text": marker,
+                "ignored": true,
+                "time": {"start": created, "end": created},
+            }),
+        );
+    }
+
+    let mut old: Vec<String> = messages
+        .iter()
+        .flat_map(|m| {
+            let parts = m["parts"].as_array().into_iter().flatten().map(|p| &p["id"]);
+            std::iter::once(&m["info"]["id"]).chain(parts)
+        })
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect();
+    old.sort();
+    old.dedup();
+    let tail = mint_at("", 0, &session.id);
+    let tail = &tail[tail.len() - 8..];
+    let fresh: HashMap<String, String> = old
+        .into_iter()
+        .enumerate()
+        .map(|(rank, id)| {
+            // An id not in opencode's own format keeps all of itself, so it sorts as it did.
+            let kept = match id_time(&id) {
+                Some(_) => &id[..16],
+                None => id.as_str(),
+            };
+            let new = format!("{kept}{tail}{}", base62(rank));
+            (id, new)
+        })
+        .collect();
+    for message in messages {
+        replace_ids(message, &fresh);
+    }
+}
+
+/// The time an opencode id holds (its 12 hex digits after the prefix), as [`mint_at`] takes it.
+fn id_time(id: &str) -> Option<u64> {
+    let (_, rest) = id.split_once('_')?;
+    u64::from_str_radix(rest.get(..12)?, 16).ok()
+}
+
+/// `n` in six base-62 digits, which sort as the numbers do.
+fn base62(mut n: usize) -> String {
+    let mut digits = [b'0'; 6];
+    for digit in digits.iter_mut().rev() {
+        *digit = BASE62[n % 62];
+        n /= 62;
+    }
+    String::from_utf8_lossy(&digits).into_owned()
+}
+
+/// The ids of an exported `message` that are keys of `fresh` (its own, the message it answers,
+/// and each part's own and its message's), replaced by their values. Only the fields the export
+/// writes ids into: what was said, or a tool's input, may hold an id too, and stays as it was.
+fn replace_ids(message: &mut Value, fresh: &HashMap<String, String>) {
+    let swap = |value: &mut Value, field: &str| {
+        if let Some(id) = value.get_mut(field)
+            && let Some(new) = id.as_str().and_then(|old| fresh.get(old))
+        {
+            *id = Value::String(new.clone());
+        }
+    };
+    if let Some(info) = message.get_mut("info") {
+        swap(info, "id");
+        swap(info, "parentID");
+    }
+    for part in message.get_mut("parts").and_then(Value::as_array_mut).into_iter().flatten() {
+        swap(part, "id");
+        swap(part, "messageID");
+    }
 }
 
 /// When a message was created: an assistant's, as its turn says (to the millisecond, which the
@@ -553,7 +795,8 @@ fn draft_created(draft: &Draft) -> i64 {
 }
 
 /// The provider and model an assistant message ran on: its turn's, else what its rows or the
-/// session say (a model with no provider is taken for opencode's own).
+/// session say. A model is kept whole when its provider was captured (OpenRouter's
+/// `anthropic/claude-sonnet-4`), else names its provider before a `/`, else is opencode's own.
 fn provider_model(session: &RehydrateSession, draft: &Draft) -> Option<(String, String)> {
     if let Some(Turn::Call {
         provider, model, ..
@@ -562,6 +805,9 @@ fn provider_model(session: &RehydrateSession, draft: &Draft) -> Option<(String, 
         return Some((provider.to_owned(), model.to_owned()));
     }
     let model = draft.model.clone().or_else(|| session.model.clone())?;
+    if let Some(provider) = &draft.provider {
+        return Some((provider.clone(), model));
+    }
     Some(match model.split_once('/') {
         Some((provider, model)) => (provider.to_owned(), model.to_owned()),
         None => ("opencode".to_owned(), model),
@@ -707,6 +953,34 @@ fn step_tokens(row: &RehydrateMessage, usage: &Usage) -> Value {
 }
 
 /// The part a row is, without its ids; `None` for a row no part can carry.
+/// `rows` with each result kept on a row apart from its call's (opencode 2.0's, whose call and
+/// result are events of their own), and the patch beside it, joined to its call's row: opencode
+/// writes a call and its result as one tool part. A result whose call row is not there stays a row
+/// of its own, which no part is written for.
+fn join_results(rows: Vec<RehydrateMessage>) -> Vec<RehydrateMessage> {
+    let mut calls: HashMap<String, usize> = HashMap::new();
+    let mut out: Vec<RehydrateMessage> = Vec::with_capacity(rows.len());
+    for row in rows {
+        match row.content.as_slice() {
+            [Content::ToolUse(call)] => {
+                calls.insert(call.id.to_string(), out.len());
+            }
+            [Content::ToolResult(result), rest @ ..]
+                if rest.iter().all(|c| matches!(c, Content::Patch(_))) =>
+            {
+                let call = calls.remove(result.call.as_ref());
+                if let Some(at) = call {
+                    out[at].content.extend(row.content);
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        out.push(row);
+    }
+    out
+}
+
 fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
     let at = millis(row.timestamp);
     if row.content.is_empty() {
@@ -719,7 +993,10 @@ fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
     match row.content.as_slice() {
         [Content::Text(text)] => {
             let mut part = json!({"type": "text", "text": text, "time": {"start": at, "end": at}});
-            if row.role == Role::System {
+            // A fork's marker stays kept from the model (see `fork`).
+            if row.role == Role::System && continuation::is_fork_marker(text) {
+                part["ignored"] = json!(true);
+            } else if row.role == Role::System {
                 part["synthetic"] = json!(true);
             }
             Some(part)
@@ -728,12 +1005,12 @@ fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
             draft.summary = true;
             Some(json!({"type": "text", "text": text, "time": {"start": at, "end": at}}))
         }
-        [Content::Reasoning(text)] => {
-            Some(json!({"type": "reasoning", "text": text, "time": {"start": at, "end": at}}))
-        }
-        [Content::ToolUse(call)] => Some(tool_part(call, None, at)),
+        [Content::ToolUse(call)] => Some(tool_part(call, None, None, at)),
         [Content::ToolUse(call), Content::ToolResult(result)] => {
-            Some(tool_part(call, Some(result), at))
+            Some(tool_part(call, Some(result), None, at))
+        }
+        [Content::ToolUse(call), Content::ToolResult(result), Content::Patch(patch)] => {
+            Some(tool_part(call, Some(result), Some(patch), at))
         }
         // An API error the call was retried after.
         [Content::Error(why)] => Some(json!({
@@ -742,13 +1019,13 @@ fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
             "error": {"name": "APIError", "data": {"message": why, "isRetryable": true}},
             "time": {"created": at},
         })),
-        [Content::Other(part)] if part["type"].is_string() => Some(part.clone()),
         _ => None,
     }
 }
 
-/// A tool part: `completed` or `error` with its result, `pending` without one.
-fn tool_part(call: &ToolUse, result: Option<&ToolResult>, at: i64) -> Value {
+/// A tool part: `completed` or `error` with its result, `pending` without one. A completed call
+/// whose patch capture kept gets the metadata opencode shows its diff from ([`tool_metadata`]).
+fn tool_part(call: &ToolUse, result: Option<&ToolResult>, patch: Option<&Patch>, at: i64) -> Value {
     // opencode's tool input is always an object.
     let input = match &call.input {
         Value::Object(_) => call.input.clone(),
@@ -771,12 +1048,57 @@ fn tool_part(call: &ToolUse, result: Option<&ToolResult>, at: i64) -> Value {
             "input": input,
             "output": text(&result.output),
             "title": "",
-            "metadata": {},
+            "metadata": patch.map_or_else(|| json!({}), |p| tool_metadata(&call.name, p)),
             "time": {"start": at, "end": at},
         }),
         None => json!({"status": "pending", "input": input, "raw": ""}),
     };
     json!({"type": "tool", "callID": call.id.as_ref(), "tool": call.name, "state": state})
+}
+
+/// The metadata opencode keeps of a call that changed files, which its TUI and app show the diff
+/// from (`tool/edit.ts`, `tool/apply_patch.ts`): an `apply_patch`'s `files`, else (an `edit`) the
+/// file's `filediff`; each with the unified diff (`diff`), and no diagnostics.
+fn tool_metadata(tool: &str, patch: &Patch) -> Value {
+    if tool == "apply_patch" {
+        let files: Vec<Value> = patch
+            .files
+            .iter()
+            .map(|file| {
+                let kind = match (file.change, &file.moved_to) {
+                    (Change::Update, Some(_)) => "move",
+                    (change, _) => change.as_str(),
+                };
+                let mut entry = json!({
+                    "filePath": file.path,
+                    "relativePath": file.moved_to.as_deref().unwrap_or(&file.path),
+                    "type": kind,
+                    "patch": file.unified(),
+                    "additions": file.additions(),
+                    "deletions": file.deletions(),
+                });
+                if let Some(to) = &file.moved_to {
+                    entry["movePath"] = json!(to);
+                }
+                entry
+            })
+            .collect();
+        return json!({"diff": patch.unified(), "files": files, "diagnostics": {}});
+    }
+    let Some(file) = patch.files.first() else {
+        return json!({});
+    };
+    let diff = file.unified();
+    json!({
+        "diff": diff,
+        "filediff": {
+            "file": file.path,
+            "patch": diff,
+            "additions": file.additions(),
+            "deletions": file.deletions(),
+        },
+        "diagnostics": {},
+    })
 }
 
 #[cfg(test)]
@@ -790,6 +1112,7 @@ pub(crate) mod tests {
     use crate::harnesstools::opencode::session::OpencodeSessions;
     use crate::harnesstools::rehydrate::testing;
     use crate::harnesstools::session::{Message, Session, Sessions};
+    use crate::path::AbsPathBuf;
 
     /// The part of opencode's schema the import writes and capture reads.
     const DDL: &[&str] = &[
@@ -895,6 +1218,7 @@ pub(crate) mod tests {
                     role: m.role(),
                     content: m.content(),
                     model: m.model(),
+                    provider: m.provider(),
                     usage: m.usage(),
                     stop_reason: m.stop_reason(),
                     turn_id: m.turn_id(),
@@ -920,17 +1244,18 @@ pub(crate) mod tests {
             model: None,
             started_at: messages.first().map_or(OffsetDateTime::UNIX_EPOCH, |m| m.timestamp),
             messages,
+            fork_of: None,
         }
     }
 
-    /// Captures `original` from `original_db`, writes it back as `opencode import` would and
-    /// captures it again: the rows (bar the session's own) and the session's title row.
+    /// Captures `original` from `original_db` as capture syncs it (tool payloads kept), writes it
+    /// back as `opencode import` would and captures it again.
     async fn round_trip(
         original_db: &Path,
         id: &str,
         title: Option<&str>,
     ) -> (Vec<RehydrateMessage>, Vec<RehydrateMessage>) {
-        let original = captured(original_db).await;
+        let original = testing::synced_as(captured(original_db).await, true);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
         let mut conn = database(&path).await;
@@ -1010,6 +1335,13 @@ pub(crate) mod tests {
 
         let title = s["title"].as_str();
         let (original, again) = round_trip(&path, id, title).await;
+        // A part capture kept nothing of is not written, but for a model call's `step-finish`;
+        // nor is reasoning capture kept no text of.
+        let original: Vec<RehydrateMessage> = original
+            .into_iter()
+            .filter(|m| !m.content.is_empty() || m.usage.is_some() || is_session(id, m))
+            .filter(|m| !matches!(m.content.as_slice(), [Content::ReasoningSummary { .. }]))
+            .collect();
         assert!(original.len() > 5);
         let rows = |rows: &[RehydrateMessage]| -> Vec<RehydrateMessage> {
             rows.iter().filter(|r| !is_session(id, r)).cloned().collect()
@@ -1041,6 +1373,7 @@ pub(crate) mod tests {
             role,
             content,
             model: None,
+            provider: None,
             usage: None,
             stop_reason: None,
             turn_id: None,
@@ -1065,7 +1398,7 @@ pub(crate) mod tests {
         row
     }
 
-    const SES: &str = "ses_0d148d4b0001WQdGo06CVdqA3u";
+    pub const SES: &str = "ses_0d148d4b0001WQdGo06CVdqA3u";
     const U1: &str = "msg_0d148d4b9001WQdGo06CVdqA3u";
     const U2: &str = "msg_0d149b05a001c4o2UTJB1vX46n";
     const A2: &str = "msg_0d149b2d5001gkfmc9bUMDXLJ5";
@@ -1073,7 +1406,7 @@ pub(crate) mod tests {
     const TURN2: &str = "1790217663189:openai/gpt-x";
 
     /// A session with every kind of row capture makes of opencode's parts.
-    fn every_kind() -> Vec<RehydrateMessage> {
+    pub fn every_kind() -> Vec<RehydrateMessage> {
         let mut finish = answer(
             "prt_0d148db35001Zcq9788cC4lx83",
             1_790_217_608,
@@ -1092,21 +1425,13 @@ pub(crate) mod tests {
         let mut failure =
             answer(A2, 1_790_217_663, U2, TURN2, vec![Content::Error("mock bad request".into())]);
         failure.stop_reason = Some(StopReason::Error);
-        let step_start = json!({"type": "step-start", "id": "prt_0d148db28001TznIjdIVqXAvJ3",
-                                "messageID": "msg_0d148d743001qhQZH5hIpZVrlb", "sessionID": SES});
         vec![
-            row(&format!("{SES}:title:Fix the build"), 1_790_217_606, Role::System, vec![]),
+            row(&session::title_id(SES, "Fix the build"), 1_790_217_606, Role::System, vec![]),
             row("prt_0d148d4bf001JaxA9TwaMgU5vE", 1_790_217_606, Role::User, vec![Content::Text(
                 "fix the build".into(),
             )]),
             row("prt_0d148d4c0001JaxA9TwaMgU5vF", 1_790_217_606, Role::System, vec![
                 Content::Text("Called the Read tool".into()),
-            ]),
-            answer("prt_0d148db28001TznIjdIVqXAvJ3", 1_790_217_607, U1, TURN1, vec![
-                Content::Other(step_start),
-            ]),
-            answer("prt_0d148db29001TznIjdIVqXAvJ4", 1_790_217_607, U1, TURN1, vec![
-                Content::Reasoning("thinking it over".into()),
             ]),
             answer("prt_0d148db2a001TznIjdIVqXAvJ5", 1_790_217_607, U1, TURN1, vec![
                 Content::Error("overloaded".into()),
@@ -1147,8 +1472,7 @@ pub(crate) mod tests {
     }
 
     /// Every kind of row comes back under its own id, in its message: the user message the
-    /// assistant's answers is named for it, the assistant's for the part that carried its id
-    /// or the failure keyed on it.
+    /// assistant's answers is named for it, a failed assistant's for the failure keyed on it.
     #[rstest]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn every_kind_of_row_recaptures_as_itself() {
@@ -1161,9 +1485,9 @@ pub(crate) mod tests {
         conn.close().await.unwrap();
         let again = captured(&path).await;
         pretty_assertions::assert_eq!(keys(&again), keys(&rows));
-        assert_eq!(again[9].usage, rows[9].usage);
-        assert_eq!(again[9].turn_id, rows[9].turn_id);
-        assert_eq!(again[11].stop_reason, Some(StopReason::Error));
+        assert_eq!(again[7].usage, rows[7].usage);
+        assert_eq!(again[7].turn_id, rows[7].turn_id);
+        assert_eq!(again[9].stop_reason, Some(StopReason::Error));
 
         let ids: Vec<&str> = exported["messages"]
             .as_array()
@@ -1171,13 +1495,35 @@ pub(crate) mod tests {
             .iter()
             .map(|m| m["info"]["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, [U1, "msg_0d148d743001qhQZH5hIpZVrlb", U2, A2]);
+        assert_eq!([ids[0], ids[2], ids[3]], [U1, U2, A2]);
+        assert!(ids[1].starts_with("msg_"), "the answer's id is minted: {ids:?}");
         let assistant = &exported["messages"][1]["info"];
         assert_eq!(assistant["parentID"], U1);
         assert_eq!(assistant["providerID"], "openai");
         assert_eq!(assistant["time"]["created"], 1_790_217_606_979_i64);
         assert_eq!(assistant["finish"], "tool-calls");
         assert_eq!(exported["messages"][0]["info"]["model"]["providerID"], "openai");
+    }
+
+    /// A reply whose turn names no model is written on the provider capture kept, its model
+    /// whole, else on the one its model names.
+    #[rstest]
+    #[case::captured_routed(Some("openrouter"), ("openrouter", "anthropic/claude-sonnet-4"))]
+    #[case::named(None, ("anthropic", "claude-sonnet-4"))]
+    fn a_reply_is_written_on_its_provider(
+        #[case] provider: Option<&str>,
+        #[case] want: (&str, &str),
+    ) {
+        let mut reply =
+            row("prt_a1", 1_790_217_608, Role::Assistant, vec![Content::Text("hi".to_owned())]);
+        reply.model = Some("anthropic/claude-sonnet-4".to_owned());
+        reply.provider = provider.map(str::to_owned);
+        let exported = export(&session(SES, None, vec![reply]));
+        let info = &exported["messages"][0]["info"];
+        assert_eq!(
+            (info["providerID"].as_str(), info["modelID"].as_str()),
+            (Some(want.0), Some(want.1))
+        );
     }
 
     /// Checks an export as strictly as the APIs behind opencode check what it sends from it:
@@ -1263,6 +1609,48 @@ pub(crate) mod tests {
         assert!(minted < mint("msg", 1_790_217_606_980, "other"));
     }
 
+    /// A fork's messages and parts get fresh ids, and only its ids: a prompt, or a tool's input,
+    /// that names an id of the original keeps it as written.
+    #[rstest]
+    fn a_fork_renames_ids_not_what_was_said() {
+        let said = format!("why did {U1} and prt_a fail?");
+        let rows = vec![
+            row("prt_a", 10, Role::User, vec![Content::Text(said.clone())]),
+            answer("prt_b", 11, U1, "msg_y", vec![Content::ToolUse(ToolUse {
+                id: "call_1".to_owned().into(),
+                name: "bash".into(),
+                input: json!(U1),
+            })]),
+        ];
+        let mut s = session(SES, None, rows);
+        s.fork_of = Some(ForkOf {
+            id: "ses_original".to_owned(),
+            atuin_id: None,
+            path: None,
+        });
+        let exported = export(&s);
+        let messages = exported["messages"].as_array().unwrap();
+        let (user, assistant) = (&messages[0], &messages[1]);
+
+        let ids: Vec<&str> = messages
+            .iter()
+            .flat_map(|m| {
+                let parts = m["parts"].as_array().unwrap().iter();
+                std::iter::once(&m["info"]["id"]).chain(parts.map(|p| &p["id"]))
+            })
+            .map(|id| id.as_str().unwrap())
+            .collect();
+        for old in [U1, "msg_y", "prt_a", "prt_b"] {
+            assert!(!ids.contains(&old), "{old} renamed: {ids:?}");
+        }
+        assert_eq!(assistant["info"]["parentID"], user["info"]["id"]);
+        let prompt = user["parts"].as_array().unwrap().iter().find(|p| p["ignored"].is_null());
+        assert_eq!(prompt.unwrap()["text"], said.as_str());
+        let call = &assistant["parts"][0];
+        assert_eq!(call["messageID"], assistant["info"]["id"]);
+        assert_eq!(call["state"]["input"], json!({"input": U1}));
+    }
+
     /// A directory programs can be run from, next to the test binary: CI's temporary directory is
     /// mounted without exec, so a fake program written there could not be run.
     #[cfg(unix)]
@@ -1280,9 +1668,10 @@ pub(crate) mod tests {
         std::fs::write(
             &path,
             format!(
-                "#!/bin/sh\necho \"$@\" > {log}/args\npwd > {log}/cwd\necho \"$OPENCODE_DB \
-                 $OPENCODE_DISABLE_MODELS_FETCH $OPENCODE_PURE\" > {log}/env\ncp \"$3\" \
-                 {log}/export.json\necho boom >&2\nexit 3\n",
+                "#!/bin/sh\n[ \"$1\" = --version ] && echo 1.18.32 && exit 0\necho \"$@\" > \
+                 {log}/args\npwd > {log}/cwd\necho \"$OPENCODE_DB $OPENCODE_DISABLE_MODELS_FETCH \
+                 $OPENCODE_PURE\" > {log}/env\ncp \"$3\" {log}/export.json\necho boom >&2\nexit \
+                 3\n",
                 log = dir.display()
             ),
         )
@@ -1301,7 +1690,7 @@ pub(crate) mod tests {
         let (_bin, program) = fake_opencode(dir.path());
         let db = dir.path().join("opencode.db");
         let mut s = session(SES, Some("t"), every_kind());
-        s.cwd = dir.path().canonicalize().unwrap();
+        s.cwd = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
 
         let err = import(&program, &db, &s).await.unwrap_err();
         assert!(matches!(&err, RehydrateError::Other(why) if why.contains("boom")), "{err}");
@@ -1401,6 +1790,7 @@ pub(crate) mod tests {
             &path,
             format!(
                 "#!/bin/sh
+[ \"$1\" = --version ] && echo 1.18.32 && exit 0
 touch {}/ran
 ",
                 dir.display()
@@ -1421,7 +1811,7 @@ touch {}/ran
         let (_bin, program) = succeeding_opencode(dir.path());
         let db = dir.path().join("opencode.db");
         let mut s = session(SES, None, every_kind());
-        s.cwd = dir.path().canonicalize().unwrap();
+        s.cwd = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
         let exported = export(&s);
         let mut conn = database(&db).await;
         opencode_import(&mut conn, &exported, "/here").await;
@@ -1446,5 +1836,161 @@ touch {}/ran
             .await
             .unwrap_err();
         assert!(matches!(err, RehydrateError::Other(_)));
+    }
+
+    fn file(
+        path: &str,
+        change: Change,
+        moved_to: Option<&str>,
+    ) -> crate::harnesstools::session::FilePatch {
+        crate::harnesstools::session::FilePatch {
+            path: path.to_owned(),
+            change,
+            moved_to: moved_to.map(str::to_owned),
+            hunks: vec![crate::harnesstools::session::Hunk {
+                old_start: 1,
+                old_lines: 2,
+                new_start: 1,
+                new_lines: 2,
+                lines: vec![" a".into(), "-b".into(), "+c".into()],
+            }],
+        }
+    }
+
+    fn patch_of(files: Vec<crate::harnesstools::session::FilePatch>) -> Patch {
+        Patch {
+            call: "call_1".to_owned().into(),
+            files,
+        }
+    }
+
+    /// What opencode keeps of a call that changed files reads as its patch: an `edit`'s
+    /// `filediff`, an `apply_patch`'s `files`, the experimental runner's `files`, or a bare
+    /// `diff`; a call that changed none has none.
+    #[rstest]
+    #[case::edit(
+        json!({"diff": "x", "diagnostics": {}, "filediff": {"file": "/w/a.ts",
+            "patch": "Index: /w/a.ts\n===\n--- /w/a.ts\n+++ /w/a.ts\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n",
+            "additions": 1, "deletions": 1}}),
+        Some(vec![file("/w/a.ts", Change::Update, None)])
+    )]
+    #[case::apply_patch(
+        json!({"diff": "x", "diagnostics": {}, "files": [
+            {"filePath": "/w/a.ts", "relativePath": "a.ts", "type": "update",
+                "patch": "@@ -1,2 +1,2 @@\n a\n-b\n+c\n", "additions": 1, "deletions": 1},
+            {"filePath": "/w/b.ts", "relativePath": "c.ts", "type": "move", "movePath": "/w/c.ts",
+                "patch": "@@ -1,2 +1,2 @@\n a\n-b\n+c\n", "additions": 1, "deletions": 1}]}),
+        Some(vec![file("/w/a.ts", Change::Update, None), file("/w/b.ts", Change::Update, Some("/w/c.ts"))])
+    )]
+    #[case::runner(
+        json!({"replacements": 1, "files": [{"file": "/w/a.ts", "status": "added",
+            "patch": "@@ -1,2 +1,2 @@\n a\n-b\n+c\n", "additions": 1, "deletions": 1}]}),
+        Some(vec![file("/w/a.ts", Change::Add, None)])
+    )]
+    #[case::older_filediff(
+        json!({"diff": "Index: /w/a.ts\n===\n--- /w/a.ts\n+++ /w/a.ts\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n",
+            "filediff": {"file": "/w/a.ts", "before": "a\nb\n", "after": "a\nc\n",
+                "additions": 1, "deletions": 1}}),
+        Some(vec![file("/w/a.ts", Change::Update, None)])
+    )]
+    #[case::bare_diff(
+        json!({"diff": "--- /w/a.ts\n+++ /w/a.ts\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n"}),
+        Some(vec![file("/w/a.ts", Change::Update, None)])
+    )]
+    #[case::read(json!({"preview": "a\nb", "truncated": false}), None)]
+    #[case::glob(json!({"count": 2, "files": ["/w/a.ts", "/w/b.ts"]}), None)]
+    #[case::none(json!({}), None)]
+    fn a_calls_metadata_reads_as_its_patch(
+        #[case] metadata: Value,
+        #[case] files: Option<Vec<crate::harnesstools::session::FilePatch>>,
+    ) {
+        let call = "call_1".to_owned().into();
+        assert_eq!(
+            crate::harnesstools::opencode::session::tool_patch(&call, &metadata),
+            files.map(patch_of)
+        );
+    }
+
+    /// The metadata written back for a call with a patch is what opencode shows its diff from, and
+    /// reads back as the same patch.
+    #[rstest]
+    #[case::edit("edit", vec![file("/w/a.ts", Change::Update, None)])]
+    #[case::apply_patch(
+        "apply_patch",
+        vec![
+            file("/w/a.ts", Change::Update, None),
+            file("/w/b.ts", Change::Update, Some("/w/c.ts")),
+            file("/w/d.ts", Change::Add, None),
+            file("/w/e.ts", Change::Delete, None),
+        ]
+    )]
+    fn a_patch_comes_back_as_the_metadata_opencode_shows(
+        #[case] tool: &str,
+        #[case] files: Vec<crate::harnesstools::session::FilePatch>,
+    ) {
+        let patch = patch_of(files);
+        let call = ToolUse {
+            id: patch.call.clone(),
+            name: tool.to_owned(),
+            input: json!({}),
+        };
+        let result = ToolResult {
+            call: patch.call.clone(),
+            output: json!("done"),
+            error: false,
+        };
+        let part = tool_part(&call, Some(&result), Some(&patch), 0);
+        let metadata = &part["state"]["metadata"];
+        if tool == "edit" {
+            assert_eq!(metadata["filediff"]["file"], "/w/a.ts");
+            assert_eq!(metadata["filediff"]["additions"], 1);
+            assert_eq!(metadata["diff"], metadata["filediff"]["patch"]);
+        } else {
+            let kinds: Vec<&str> = metadata["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["type"].as_str().unwrap())
+                .collect();
+            assert_eq!(kinds, ["update", "move", "add", "delete"]);
+        }
+        let read = crate::harnesstools::opencode::session::tool_patch(&patch.call, metadata);
+        assert_eq!(read, Some(patch));
+    }
+
+    /// opencode 2.0 keeps a call and its result on rows apart: they are written as one tool
+    /// part, with the metadata of the result's patch.
+    #[rstest]
+    fn a_result_apart_from_its_call_joins_it() {
+        let patch = patch_of(vec![file("/w/a.ts", Change::Update, None)]);
+        let call = ToolUse {
+            id: patch.call.clone(),
+            name: "edit".to_owned(),
+            input: json!({}),
+        };
+        let result = ToolResult {
+            call: patch.call.clone(),
+            output: json!("done"),
+            error: false,
+        };
+        let rows = vec![
+            row("msg_u/text", 1, Role::User, vec![Content::Text("edit it".to_owned())]),
+            row("msg_a/call_1", 2, Role::Assistant, vec![Content::ToolUse(call)]),
+            row("msg_a/call_1/result", 3, Role::Assistant, vec![
+                Content::ToolResult(result),
+                Content::Patch(patch),
+            ]),
+        ];
+        let exported = export(&session(SES, None, rows));
+        let tools: Vec<&Value> = exported["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m["parts"].as_array().unwrap())
+            .filter(|p| p["type"] == "tool")
+            .collect();
+        assert_eq!(tools.len(), 1, "{tools:?}");
+        assert_eq!(tools[0]["state"]["status"], "completed");
+        assert_eq!(tools[0]["state"]["metadata"]["filediff"]["file"], "/w/a.ts");
     }
 }

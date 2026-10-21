@@ -54,7 +54,7 @@ struct StaticInitOptions<'a> {
     pub enable_ctrl_r: bool,
     #[cfg_attr(not(feature = "ai"), allow(dead_code))]
     pub enable_ai: bool,
-    /// Bind ctrl-] to `atuin ai resume`. Off unless asked for: it replaces the shell's own
+    /// Bind ctrl-] to `atuin threads resume`. Off unless asked for: it replaces the shell's own
     /// binding (character search). The widgets are defined either way.
     #[cfg_attr(not(feature = "ai"), allow(dead_code))]
     pub enable_ai_resume: bool,

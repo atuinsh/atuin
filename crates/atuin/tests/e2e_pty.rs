@@ -11,6 +11,7 @@ mod shell;
 
 use std::path::PathBuf;
 
+use atuin_common::path::AbsPathBuf;
 use common::{FreshEnv, SESSION, marker, output, wait_until};
 use pty::PtyShell;
 use rstest::rstest;
@@ -52,7 +53,7 @@ fn shell_hooks_record_history(#[files("tests/shells/*.toml")] setup: PathBuf) {
 
     let command = format!("sh -c 'exit 7' # {marker}");
     pty.send_line(&command);
-    let cwd = env.home().canonicalize().unwrap();
+    let cwd = AbsPathBuf::canonicalize(env.home()).unwrap();
     let expected = format!("7\t{}\t{command}", cwd.display());
     // Fish and zsh finish history entries asynchronously.
     wait_until("completed history entry with exit status and cwd", || {
@@ -258,7 +259,7 @@ fn filter_switching_changes_results(
     run_echo_marker(pty, &format!("{marker}-resumed"));
 }
 
-/// The `atuin ai resume` widget hands its pick back through a pipe, as the history widgets do,
+/// The `atuin threads resume` widget hands its pick back through a pipe, as the history widgets do,
 /// and must not hand that pipe down: a process `atuin` leaves running (one an import started)
 /// would hold it open, and the prompt would hang until it exited. Stands in for `atuin` with a
 /// function that leaves one behind, with its standard error elsewhere.
@@ -284,7 +285,7 @@ fn ai_resume_widget_returns_while_a_process_it_left_runs(
     // function's saved copies of the pipe (close-on-exec, but never exec'd), which `atuin`
     // itself, a program, never has.
     pty.send_line(&format!(
-        "atuin() {{ if [ \"$1\" = ai ]; then (env sleep 60 2>/dev/null &); echo \
+        "atuin() {{ if [ \"$1\" = threads ]; then (env sleep 60 2>/dev/null &); echo \
          \"__atuin_accept__:echo {marker}-resumed\" >&2; else command atuin \"$@\"; fi; }}"
     ));
     pty.send_line(bind);

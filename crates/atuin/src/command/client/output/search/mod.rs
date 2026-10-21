@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
+use atuin_common::env;
 use atuin_daemon::client::SearchClient;
 use clap::{Parser, ValueEnum};
 use futures_util::{StreamExt, TryStreamExt};
@@ -123,7 +124,7 @@ fn writer_for(style: Style) -> Writer {
             Writer::Pretty(PrettyWriter)
         }
         Style::Auto => {
-            let pretty = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+            let pretty = io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none();
             colored::control::set_override(pretty);
             if pretty {
                 Writer::Pretty(PrettyWriter)
@@ -153,8 +154,7 @@ impl Cmd {
             return Err(RunError::Disabled);
         }
 
-        let query = self.query.join(" ");
-        if query.trim().is_empty() {
+        if self.query.iter().all(|term| term.trim().is_empty()) {
             return Err(RunError::EmptyQuery);
         }
 
@@ -162,18 +162,20 @@ impl Cmd {
         //                      Existing precedent.
         let open = async || {
             let mut client = SearchClient::from_settings(settings).await?;
-            client.search_command_output(query.clone(), None, self.context).await
+            client.search_command_output(self.query.clone(), None, self.context).await
         };
 
         let matches = match open().await {
             Ok(stream) => stream,
             Err(err) if settings.daemon.autostart && daemon::should_retry_after_error(&err) => {
                 debug!("daemon unavailable for output search; attempting auto-start");
-                daemon::ensure_daemon_running(settings).await.map_err(|start_err| {
-                    RunError::Connect(
-                        err.wrap_err(format!("failed to auto-start daemon: {start_err:#}")),
-                    )
-                })?;
+                atuin_daemon::service::ActiveService::ready(settings).await.map_err(
+                    |start_err| {
+                        RunError::Connect(
+                            err.wrap_err(format!("failed to auto-start daemon: {start_err:#}")),
+                        )
+                    },
+                )?;
                 open().await.map_err(to_run_error)?
             }
             Err(err) => return Err(to_run_error(err)),

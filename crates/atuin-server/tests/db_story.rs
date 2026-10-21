@@ -1,6 +1,7 @@
-use std::env::{self, temp_dir};
+use std::env::temp_dir;
 
 use atuin_common::db::DbUrl;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::utils::{crypto_random_string, uuid_v7};
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
@@ -14,7 +15,7 @@ use url::Url;
 fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
     let db_uri = env_uri.unwrap_or_else(|| {
         let dir = temp_dir();
-        let file = dir.join("atuin_test_db_");
+        let file = dir.joined("atuin_test_db_");
         let filename = file.to_str().unwrap();
         format!("sqlite://{filename}")
     });
@@ -29,11 +30,12 @@ fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
 
     Ok(DbSettings {
         db_uri: db_uri.parse()?,
+        db_password_file: None,
     })
 }
 
 async fn create_test_db() -> eyre::Result<DbSettings> {
-    let var = env::var("ATUIN_TEST_DB_URI").ok();
+    let var = atuin_common::env::var("ATUIN_TEST_DB_URI").ok();
     let settings = get_settings(var)?;
 
     match &settings.db_uri {

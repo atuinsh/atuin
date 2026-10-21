@@ -1,34 +1,33 @@
+#[cfg(unix)]
+use std::borrow::Cow;
 use std::num::NonZeroU32;
 #[cfg(unix)]
-use std::path::PathBuf;
+use std::path::Path;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
+#[cfg(unix)]
+use atuin_client::settings::Daemon as DaemonSettings;
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
 use easy_cast::Conv;
-use eyre::{Context as EyreContext, Result};
+use eyre::Result;
 use futures::{Stream, StreamExt};
-use hyper_util::rt::TokioIo;
 use itertools::Itertools;
 use time::OffsetDateTime;
-#[cfg(windows)]
-use tokio::net::TcpStream;
-#[cfg(unix)]
-use tokio::net::UnixStream;
 use tonic::Code;
-use tonic::transport::{Channel, Endpoint, Uri};
-use tower::service_fn;
-use tracing::{Level, instrument, span};
+use tonic::service::interceptor::InterceptedService;
+use tonic::transport::Channel;
+use tracing::{Level, instrument, span, warn};
 
 use crate::grpc::ai::agent::pb::Session as AiSession;
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
 use crate::grpc::ai::session::pb::{
-    GetSessionEvent, GetSessionRequest, GetTranscriptChunk, GetTranscriptRequest,
-    ImportSessionsEvent, ImportSessionsRequest, ListSessionsRequest, RebuildSessionsRequest,
-    SearchSessionsMatch, SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
+    GetSessionEvent, GetSessionRequest, ImportSessionsEvent, ImportSessionsRequest,
+    ListSessionsRequest, ProjectSyncedRequest, RebuildSessionsRequest, SearchSessionsMatch,
+    SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
 };
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
@@ -39,37 +38,49 @@ use crate::grpc::history::pb::{
     StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
     TailHistoryRequest,
 };
+use crate::grpc::versioning::{StrictVersionInterceptor, VersionMatchError, VersionedExt as _};
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
     FilterMode as RpcFilterMode, PrepareIndexRequest, SearchCommandOutputRequest,
     SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
+use crate::service::address::{ConnectError, DaemonAddress};
+use crate::service::{ActiveService, FindError};
 
-/// The path to the daemon's socket.
+/// The paths that should be checked when looking for existing daemon sockets.
 ///
-/// If the daemon is running and has recorded its socket path in the pidfile, this function returns
-/// that. Otherwise, this function returns [`settings.daemon.existing_socket_path()`][0].
+/// For the same reasons explained in [`Pidfile::socket_path`][1], when `ATUIN_HOME` is set, this function will
+/// only yield the [preferred socket path][0] instead of also including the legacy paths.
 ///
-/// As an exception, if [`systemd_socket`][1] is true, the pidfile isn't consulted, as the socket
-/// path comes from systemd directly through a file descriptor.
-///
-/// [0]: atuin_client::settings::Daemon::existing_socket_path
-/// [1]: atuin_client::settings::Daemon::systemd_socket
+/// [0]: atuin_client::settings::Daemon::preferred_socket_path
+/// [1]: crate::service::pidfile::Pidfile::socket_path
 #[cfg(unix)]
-#[must_use]
-pub fn socket_path(settings: &atuin_client::settings::Settings) -> PathBuf {
-    (!settings.daemon.systemd_socket)
-        .then(|| {
-            crate::pidfile::PidfileInfo::read(settings.daemon.pidfile_path.as_ref())
-                .and_then(|info| info.socket_path)
-        })
-        .flatten()
-        .unwrap_or_else(|| settings.daemon.existing_socket_path().into_owned())
+pub fn potential_socket_paths(
+    daemon: &DaemonSettings,
+) -> impl Iterator<Item = Cow<'_, Path>> + use<'_> {
+    if atuin_common::dirs::atuin_home_is_set() {
+        itertools::Either::Left(std::iter::once(daemon.preferred_socket_path()))
+    } else {
+        itertools::Either::Right(daemon.potential_socket_paths())
+    }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum FromSettingsError {
+    #[error(transparent)]
+    Find(#[from] FindError),
+    #[error(transparent)]
+    Connect(#[from] ConnectError),
+}
+
+/// A connection to the daemon that stamps every request with this client's
+/// [`BUILD_STR`](crate::grpc::versioning::BUILD_STR).
+type DaemonChannel = InterceptedService<Channel, StrictVersionInterceptor>;
+
+#[derive(Clone)]
 pub struct HistoryClient {
-    client: HistoryServiceClient<Channel>,
+    client: HistoryServiceClient<DaemonChannel>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,6 +88,8 @@ pub enum DaemonClientErrorKind {
     Connect,
     Unavailable,
     Unimplemented,
+    /// The daemon is another build and refused the call.
+    BuildMismatch,
     OtherGrpc,
     NonGrpc,
 }
@@ -89,6 +102,17 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
         }
 
         if let Some(status) = cause.downcast_ref::<tonic::Status>() {
+            // A status with no build isn't a refusal: tonic makes one up when a call never reaches
+            // the daemon, and a daemon from before builds were exchanged sends none.
+            if let Err(
+                mismatch @ (VersionMatchError::Mismatched { .. }
+                | VersionMatchError::Malformed { .. }),
+            ) = status.check_version()
+            {
+                warn!(err = ?mismatch, "daemon version mismatch");
+                return DaemonClientErrorKind::BuildMismatch;
+            }
+
             return match status.code() {
                 Code::Unavailable => DaemonClientErrorKind::Unavailable,
                 Code::Unimplemented => DaemonClientErrorKind::Unimplemented,
@@ -100,65 +124,22 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
     DaemonClientErrorKind::NonGrpc
 }
 
+impl From<Channel> for HistoryClient {
+    fn from(channel: Channel) -> Self {
+        Self {
+            client: HistoryServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+        }
+    }
+}
+
 // Wrap the grpc client
 impl HistoryClient {
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        use eyre::Context;
-
-        let log_path = path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")?
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
-
-        let client = HistoryServiceClient::new(channel);
-
-        Ok(Self { client })
+    pub async fn new(address: impl Into<DaemonAddress>) -> Result<Self, ConnectError> {
+        Ok(Self::from(address.into().channel().await?))
     }
 
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        let client = HistoryServiceClient::new(channel);
-
-        Ok(HistoryClient { client })
-    }
-
-    #[cfg(unix)]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(socket_path(settings)).await
-    }
-
-    #[cfg(not(unix))]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.tcp_port).await
+    pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
+        Ok(Self::new(ActiveService::locate(&settings.daemon)?).await?)
     }
 
     pub async fn start_history(&mut self, h: History) -> Result<StartHistoryReply> {
@@ -236,15 +217,32 @@ impl HistoryClient {
         Ok(self.client.compact_store(CompactStoreRequest {}).await?.into_inner())
     }
 
-    pub async fn status(&mut self) -> Result<StatusReply> {
+    pub async fn status(&mut self) -> Result<StatusReply, tonic::Status> {
         Ok(self.client.status(StatusRequest {}).await?.into_inner())
+    }
+
+    /// Checks the daemon's build against ours. `Err` means the daemon couldn't be asked.
+    ///
+    /// A daemon of another build refuses `Status`, stamping the refusal with its build. One from
+    /// before builds were exchanged answers, unstamped.
+    pub async fn check_daemon_version(
+        &mut self,
+    ) -> Result<Result<(), VersionMatchError>, tonic::Status> {
+        match self.client.status(StatusRequest {}).await {
+            Ok(response) => Ok(response.check_version()),
+            Err(status) => match status.check_version() {
+                // Not a refusal: the daemon is our build and failed, or the call never reached it.
+                Ok(()) | Err(VersionMatchError::Unannounced) => Err(status),
+                mismatch => Ok(mismatch),
+            },
+        }
     }
 
     pub async fn tail_history(&mut self) -> Result<tonic::Streaming<TailHistoryReply>> {
         Ok(self.client.tail_history(TailHistoryRequest {}).await?.into_inner())
     }
 
-    pub async fn shutdown(&mut self) -> Result<bool> {
+    pub async fn shutdown(&mut self) -> Result<bool, tonic::Status> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
     }
@@ -321,65 +319,24 @@ impl From<SearchParams> for SearchRequest {
 }
 
 pub struct SearchClient {
-    client: SearchServiceClient<Channel>,
+    client: SearchServiceClient<DaemonChannel>,
+}
+
+impl From<Channel> for SearchClient {
+    fn from(channel: Channel) -> Self {
+        Self {
+            client: SearchServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+        }
+    }
 }
 
 impl SearchClient {
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        let log_path = path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")?
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
-
-        let client = SearchServiceClient::new(channel);
-
-        Ok(Self { client })
+    pub async fn new(address: impl Into<DaemonAddress>) -> Result<Self, ConnectError> {
+        Ok(Self::from(address.into().channel().await?))
     }
 
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        let client = SearchServiceClient::new(channel);
-
-        Ok(SearchClient { client })
-    }
-
-    #[cfg(unix)]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(socket_path(settings)).await
-    }
-
-    #[cfg(not(unix))]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.tcp_port).await
+    pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
+        Ok(Self::new(ActiveService::locate(&settings.daemon)?).await?)
     }
 
     #[instrument(
@@ -406,16 +363,17 @@ impl SearchClient {
         level = Level::TRACE,
         name = "search_command_output",
     )]
-    /// Relevance-ranked hits, each reduced to the lines within `context` of a match, or whole
-    /// when `context` is `None`.
+    /// Relevance-ranked hits for output holding every one of `terms` (a term of several words
+    /// as a phrase), each reduced to the lines within `context` of a match, or whole when
+    /// `context` is `None`.
     pub async fn search_command_output(
         &mut self,
-        query: String,
+        terms: Vec<String>,
         limit: Option<NonZeroU32>,
         context: Option<u32>,
     ) -> Result<impl Stream<Item = Result<OutputMatch>> + Send + use<>> {
         let request = SearchCommandOutputRequest {
-            query,
+            terms,
             limit: limit.map_or(0, NonZeroU32::get),
             context,
         };
@@ -470,77 +428,35 @@ const REBUILD_POLL_MAX: std::time::Duration = std::time::Duration::from_secs(5);
 /// way [`HistoryClient`] and [`SearchClient`] do, returning the raw protobuf messages so callers can
 /// render them however they like.
 pub struct AiClient {
-    client: AiSessionServiceClient<Channel>,
+    client: AiSessionServiceClient<DaemonChannel>,
 }
 
 impl AiClient {
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        let log_path = path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")?
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
+    /// The stub over `channel`, taking messages of any size: a message the daemon streams holds
+    /// one captured message, as big as the prompt or reply in it, past tonic's default 4 MiB.
+    /// The daemon is local and trusted (the server encodes any size by default).
+    fn service(channel: Channel) -> AiSessionServiceClient<DaemonChannel> {
+        AiSessionServiceClient::with_interceptor(channel, StrictVersionInterceptor)
+            .max_decoding_message_size(usize::MAX)
+    }
 
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
-
+    pub async fn new(address: impl Into<DaemonAddress>) -> Result<Self, ConnectError> {
         Ok(Self {
-            client: AiSessionServiceClient::new(channel),
+            client: Self::service(address.into().channel().await?),
         })
     }
 
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        Ok(Self {
-            client: AiSessionServiceClient::new(channel),
-        })
-    }
-
-    #[cfg(unix)]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(socket_path(settings)).await
-    }
-
-    #[cfg(not(unix))]
-    pub async fn from_settings(settings: &Settings) -> Result<Self> {
-        Self::new(settings.daemon.tcp_port).await
+    pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
+        Ok(Self::new(ActiveService::locate(&settings.daemon)?).await?)
     }
 
     /// Wait while the daemon is still rebuilding AI sessions after starting: until then every
     /// session read but a tail is refused rather than answered partially. Calls `on_wait` each
     /// time it finds the daemon rebuilding, with how far it has got (records replayed, and
-    /// roughly how many there are to replay) when the daemon says, and returns at once when it
-    /// is not. After this the daemon serves reads until a store command has it rebuild again
-    /// (`atuin store rebuild ai-session`, a purge or a forced pull), which is rare.
-    pub async fn wait_for_sessions(
-        &mut self,
-        mut on_wait: impl FnMut(Option<(u64, u64)>),
-    ) -> Result<()> {
+    /// roughly how many there are to replay), and returns at once when it is not. After this the
+    /// daemon serves reads until a store command has it rebuild again (`atuin store rebuild
+    /// ai-session`, a purge or a forced pull), which is rare.
+    pub async fn wait_for_sessions(&mut self, mut on_wait: impl FnMut((u64, u64))) -> Result<()> {
         let mut delay = REBUILD_POLL_START;
         while let Some(progress) = self.rebuild_status().await? {
             on_wait(progress);
@@ -552,22 +468,24 @@ impl AiClient {
 
     /// Whether the daemon is rebuilding AI sessions right now (see [`Self::wait_for_sessions`]),
     /// without waiting for it to finish: `Some` while it is, with how far it has got (records
-    /// replayed, and roughly how many there are to replay) when the daemon says; `None` when it
-    /// serves reads.
-    pub async fn rebuild_status(&mut self) -> Result<Option<Option<(u64, u64)>>> {
+    /// replayed, and roughly how many there are to replay); `None` when it serves reads.
+    pub async fn rebuild_status(&mut self) -> Result<Option<(u64, u64)>> {
         // A listing filtered to the future matches nothing, so the probe costs little beyond the
         // rebuild check every read makes first.
         let future = OffsetDateTime::now_utc() + time::Duration::days(365);
-        let probe = list_sessions_request(&SessionFilter {
+        let filter = SessionFilter {
             updated_since: Some(future),
             ..SessionFilter::default()
-        });
+        };
+        let probe = ListSessionsRequest {
+            filter: Some((&filter).into()),
+        };
         match self.client.list_sessions(probe).await {
-            Err(status) if crate::grpc::ai::session::is_rebuilding(&status) => {
-                Ok(Some(crate::grpc::ai::session::rebuild_progress(&status)))
-            }
-            Err(status) => Err(status.into()),
             Ok(_) => Ok(None),
+            Err(status) => match crate::grpc::ai::session::rebuild_progress(&status) {
+                Some(progress) => Ok(Some(progress)),
+                None => Err(status.into()),
+            },
         }
     }
 
@@ -579,7 +497,9 @@ impl AiClient {
         &mut self,
         filter: &SessionFilter,
     ) -> Result<tonic::Streaming<AiSession>> {
-        let request = list_sessions_request(filter);
+        let request = ListSessionsRequest {
+            filter: Some(filter.into()),
+        };
         Ok(self.client.list_sessions(request).await?.into_inner())
     }
 
@@ -594,17 +514,6 @@ impl AiClient {
         Ok(self.client.get_session(request).await?.into_inner())
     }
 
-    /// Stream a rendered plain-text transcript in chunks; concatenate them in arrival order.
-    pub async fn get_transcript(
-        &mut self,
-        session: HarnessSession,
-    ) -> Result<tonic::Streaming<GetTranscriptChunk>> {
-        let request = GetTranscriptRequest {
-            session: Some(session.into()),
-        };
-        Ok(self.client.get_transcript(request).await?.into_inner())
-    }
-
     /// Follow sessions and messages as they are recorded. `harness` filters to one harness when set.
     pub async fn tail_sessions(
         &mut self,
@@ -616,20 +525,31 @@ impl AiClient {
         Ok(self.client.tail_sessions(request).await?.into_inner())
     }
 
-    /// Stream the sessions matching `query` (its terms matching as `terms` says) and passing
-    /// `filter`, most relevant first, at most `limit` (0 is unbounded). An empty query streams
-    /// them newest first.
+    /// Stream the sessions matching `terms` and passing `filter`, most relevant first, at most
+    /// `limit` (0 is unbounded). No terms stream them newest first.
     ///
-    /// The daemon matches every term as a whole word, or with [`SearchTerms::Any`] any term as a
-    /// prefix; [`SearchTerms::Typed`] (search as you type) is searched as [`SearchTerms::All`].
+    /// The daemon matches every term as whole words, or with [`SearchTerms::Any`] any term as a
+    /// prefix; a [`SearchTerms::Typed`] line (search as you type) is searched as
+    /// [`SearchTerms::All`] over its words.
     pub async fn search_sessions(
         &mut self,
-        query: &str,
         terms: SearchTerms,
         filter: &SessionFilter,
         limit: u32,
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
-        let request = search_sessions_request(query, terms, filter, limit);
+        let (terms, any_term) = match terms {
+            SearchTerms::All(terms) => (terms, false),
+            SearchTerms::Typed(line) => {
+                (line.split_whitespace().map(str::to_owned).collect(), false)
+            }
+            SearchTerms::Any(terms) => (terms, true),
+        };
+        let request = SearchSessionsRequest {
+            terms,
+            limit,
+            any_term,
+            filter: Some(filter.into()),
+        };
         Ok(self.client.search_sessions(request).await?.into_inner())
     }
 
@@ -638,6 +558,14 @@ impl AiClient {
     /// background, and [`Self::wait_for_sessions`] waits it out.
     pub async fn rebuild_sessions(&mut self) -> Result<()> {
         self.client.rebuild_sessions(RebuildSessionsRequest {}).await?;
+        Ok(())
+    }
+
+    /// Have the daemon project the records this process synced into the record store. Returns
+    /// once the projection is over, which goes on if this stops waiting; a failure is only in the
+    /// daemon's log.
+    pub async fn project_synced(&mut self) -> Result<()> {
+        self.client.project_synced(ProjectSyncedRequest {}).await?;
         Ok(())
     }
 
@@ -652,118 +580,30 @@ impl AiClient {
     }
 }
 
-/// A listing of the sessions passing `filter`. The harness and `updated_since` go in the bare
-/// fields as well as the filter, for a daemon from before `filter` (still running after an
-/// upgrade), which ignores it; a newer one reads the filter's first, so the two never disagree.
-fn list_sessions_request(filter: &SessionFilter) -> ListSessionsRequest {
-    ListSessionsRequest {
-        harness: filter.harness.map(|h| h as i32),
-        updated_since: filter.updated_since.map(|ts| prost_types::Timestamp {
-            seconds: ts.unix_timestamp(),
-            nanos: ts.nanosecond().cast_signed(),
-        }),
-        filter: Some(filter.into()),
-    }
-}
-
-/// A search for `query` over the sessions passing `filter`, with the harness and workspace in the
-/// bare fields too (see [`list_sessions_request`]).
-fn search_sessions_request(
-    query: &str,
-    terms: SearchTerms,
-    filter: &SessionFilter,
-    limit: u32,
-) -> SearchSessionsRequest {
-    SearchSessionsRequest {
-        query: query.to_owned(),
-        limit,
-        harness: filter.harness.map(|h| h as i32),
-        cwd: filter.workspace.as_ref().map(|w| w.to_string_lossy().into_owned()),
-        any_term: terms == SearchTerms::Any,
-        filter: Some(filter.into()),
-    }
-}
-
-#[cfg(test)]
-mod request_tests {
-    use atuin_client::ai_session::{HarnessKind, SearchTerms, SessionFilter};
-    use rstest::rstest;
-
-    use super::{list_sessions_request, search_sessions_request};
-
-    /// An older daemon reads only the legacy `harness` field, so it must carry the filter's.
-    #[rstest]
-    #[case::none(None)]
-    #[case::codex(Some(HarnessKind::Codex))]
-    fn requests_carry_the_harness_in_the_legacy_field(#[case] harness: Option<HarnessKind>) {
-        let filter = SessionFilter {
-            harness,
-            branch: Some("main".to_owned()),
-            ..SessionFilter::default()
-        };
-        let expected = harness.map(|h| h as i32);
-
-        let list = list_sessions_request(&filter);
-        assert_eq!(list.harness, expected);
-        assert_eq!(list.filter.as_ref().and_then(|f| f.harness), expected);
-        assert_eq!(list.filter.and_then(|f| f.branch).as_deref(), Some("main"));
-
-        let search = search_sessions_request("words", SearchTerms::All, &filter, 7);
-        assert_eq!(search.harness, expected);
-        assert_eq!(search.filter.as_ref().and_then(|f| f.harness), expected);
-        assert_eq!((search.query.as_str(), search.limit), ("words", 7));
-    }
-}
-
 #[cfg(all(test, unix))]
 mod tests {
-    use std::path::Path;
-
     use rstest::rstest;
 
     use super::*;
-    use crate::pidfile::PidfileGuard;
+    use crate::grpc::versioning::{BUILD_HEADER_KEY, BUILD_STR};
 
-    /// Settings for a client whose daemon socket is configured at `socket_path`.
-    fn settings(pidfile: &Path, socket_path: &Path, systemd_socket: bool) -> Settings {
-        let mut settings = Settings::default();
-        settings.daemon.pidfile_path = pidfile.to_str().unwrap().to_string();
-        settings.daemon.socket_path = Some(socket_path.to_owned());
-        settings.daemon.systemd_socket = systemd_socket;
-        settings
-    }
-
-    /// A daemon configured for `old.sock` has exited, leaving its pidfile behind, and the client is
-    /// now configured for `new.sock`.
+    /// Services return `FAILED_PRECONDITION` for their own reasons too: a refusal is known by the
+    /// other build on it.
     #[rstest]
-    #[case::pidfile_path_is_used(false, false, "old.sock")]
-    #[case::systemd_client_ignores_pidfile(false, true, "new.sock")]
-    #[case::systemd_daemon_records_no_path(true, false, "new.sock")]
-    #[case::both_systemd(true, true, "new.sock")]
-    fn test_socket_path_with_stale_pidfile(
-        #[case] daemon_systemd_socket: bool,
-        #[case] client_systemd_socket: bool,
-        #[case] expected: &str,
+    #[case::other_build(Some("0.0.0"), DaemonClientErrorKind::BuildMismatch)]
+    #[case::our_build(Some(BUILD_STR), DaemonClientErrorKind::OtherGrpc)]
+    #[case::no_build(None, DaemonClientErrorKind::OtherGrpc)]
+    fn a_refusal_is_known_by_its_build(
+        #[case] build: Option<&'static str>,
+        #[case] expected: DaemonClientErrorKind,
     ) {
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("atuin-daemon.pid");
-
-        let old = settings(&pidfile, &dir.path().join("old.sock"), daemon_systemd_socket);
-        drop(PidfileGuard::acquire(&old.daemon).unwrap());
-
-        let new = settings(&pidfile, &dir.path().join("new.sock"), client_systemd_socket);
-        assert_eq!(socket_path(&new), dir.path().join(expected));
-    }
-
-    #[rstest]
-    fn test_socket_path_without_pidfile(#[values(false, true)] systemd_socket: bool) {
-        let dir = tempfile::tempdir().unwrap();
-        let settings = settings(
-            &dir.path().join("atuin-daemon.pid"),
-            &dir.path().join("a.sock"),
-            systemd_socket,
-        );
-        assert_eq!(socket_path(&settings), dir.path().join("a.sock"));
+        let mut status = tonic::Status::failed_precondition("refused");
+        if let Some(build) = build {
+            status
+                .metadata_mut()
+                .insert(BUILD_HEADER_KEY, tonic::metadata::MetadataValue::from_static(build));
+        }
+        assert_eq!(classify_error(&status.into()), expected);
     }
 }
 
@@ -805,7 +645,7 @@ mod rebuild_tests {
             client
                 .wait_for_sessions(|progress| {
                     // The test's store replays nothing: the daemon reports that it has none to.
-                    assert_eq!(progress, Some((0, 0)));
+                    assert_eq!(progress, (0, 0));
                     counter.fetch_add(1, Ordering::SeqCst);
                 })
                 .await
@@ -844,7 +684,7 @@ mod rebuild_tests {
     async fn reads_the_rebuild_status_without_waiting() {
         let (mut client, state, _dir) = serve(StoreState::Recovering).await;
         // The test's store replays nothing: the daemon reports that it has none to.
-        assert_eq!(client.rebuild_status().await.unwrap(), Some(Some((0, 0))));
+        assert_eq!(client.rebuild_status().await.unwrap(), Some((0, 0)));
         state.send_replace(StoreState::Ready);
         assert_eq!(client.rebuild_status().await.unwrap(), None);
     }

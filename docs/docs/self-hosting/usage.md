@@ -9,6 +9,6 @@
 
 ## Client setup
 
-In order use a self hosted server with Atuin, you'll have to set up the `sync_address` in the config file at `~/.config/atuin/config.toml`. See the [config](../configuration/config.md#sync_address) page for more details on how to set the `sync_address`.
+In order use a self hosted server with Atuin, you'll have to set up the `sync_address` in the config file at `~/.atuin/config.toml`. See the [config](../configuration/config.md#sync_address) page for more details on how to set the `sync_address`.
 
 Alternatively you can set the environment variable `ATUIN_SYNC_ADDRESS` to the correct host, for example `ATUIN_SYNC_ADDRESS=https://api.atuin.sh`.

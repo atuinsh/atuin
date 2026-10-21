@@ -54,22 +54,22 @@ pub enum SyncError {
     #[error("the local store is ahead of the remote, but for another host. has remote lost data?")]
     LocalAheadOtherHost,
 
-    #[error("an issue with the local database occurred: {msg:?}")]
+    #[error("an issue with the local database occurred: {msg}")]
     LocalStoreError {
         msg: String,
     },
 
-    #[error("something has gone wrong with the sync logic: {msg:?}")]
+    #[error("something has gone wrong with the sync logic: {msg}")]
     SyncLogicError {
         msg: String,
     },
 
-    #[error("operational error: {msg:?}")]
+    #[error("operational error: {msg}")]
     OperationalError {
         msg: String,
     },
 
-    #[error("a request to the sync server failed: {msg:?}")]
+    #[error("a request to the sync server failed: {msg}")]
     RemoteRequestError {
         msg: String,
     },
@@ -88,13 +88,13 @@ pub(crate) enum PackfileDownloadError {
     #[error("failed to load the packfile manifest: {0}")]
     PackManifest(#[from] ParsingError),
 
-    #[error("packfile download failed: {0}")]
+    #[error("packfile download failed: {0:#}")]
     Api(eyre::Report),
 
     #[error(transparent)]
     Unpack(#[from] UnpackError),
 
-    #[error("failed to store the unpacked history: {0}")]
+    #[error("failed to store the unpacked history: {0:#}")]
     Store(eyre::Report),
 }
 
@@ -217,7 +217,11 @@ impl SyncSession {
         let record = match self.client.records(&series).one().await {
             Ok(Some(record)) => record,
             Ok(None) => return None,
-            Err(e) => return Some(SyncError::RemoteRequestError { msg: e.to_string() }),
+            Err(e) => {
+                return Some(SyncError::RemoteRequestError {
+                    msg: format!("{e:#}"),
+                });
+            }
         };
 
         record.decrypt(key).err().map(|_| SyncError::WrongKey)
@@ -226,25 +230,21 @@ impl SyncSession {
     /// Fetch the remote's record status index.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn record_status(&self) -> Result<RecordStatus, SyncError> {
-        self.client
-            .record_status()
-            .await
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })
+        self.client.record_status().await.map_err(|e| SyncError::RemoteRequestError {
+            msg: format!("{e:#}"),
+        })
     }
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn diff(&self) -> Result<(Vec<Diff>, RecordStatus), SyncError> {
-        let local_index = self
-            .store
-            .status()
-            .await
-            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+        let local_index = self.store.status().await.map_err(|e| SyncError::LocalStoreError {
+            msg: format!("{e:#}"),
+        })?;
 
-        let remote_index = self
-            .client
-            .record_status()
-            .await
-            .map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+        let remote_index =
+            self.client.record_status().await.map_err(|e| SyncError::RemoteRequestError {
+                msg: format!("{e:#}"),
+            })?;
 
         let diff = local_index.diff(&remote_index);
 
@@ -369,7 +369,9 @@ impl Keyed<'_> {
                 .map_err(|e| {
                     error!("failed to read upload page: {e:?}");
 
-                    SyncError::LocalStoreError { msg: e.to_string() }
+                    SyncError::LocalStoreError {
+                        msg: format!("{e:#}"),
+                    }
                 })?;
 
             if page.is_empty() {
@@ -397,21 +399,27 @@ impl Keyed<'_> {
                     .await
                     .map_err(|e| {
                         error!("failed to pack packfile: {e}");
-                        SyncError::RemoteRequestError { msg: e.to_string() }
+                        SyncError::RemoteRequestError {
+                            msg: format!("{e:#}"),
+                        }
                     })?;
                 client
                     .upload_packfiles(stream::iter(packed.into_iter().map(Ok::<_, eyre::Report>)))
                     .await
                     .map_err(|e| {
                         error!("failed to upload packfile: {e}");
-                        SyncError::RemoteRequestError { msg: e.to_string() }
+                        SyncError::RemoteRequestError {
+                            msg: format!("{e:#}"),
+                        }
                     })?;
             }
 
             client.post_records(&page).await.map_err(|e| {
                 error!("failed to post records: {e:?}");
 
-                SyncError::RemoteRequestError { msg: e.to_string() }
+                SyncError::RemoteRequestError {
+                    msg: format!("{e:#}"),
+                }
             })?;
 
             progress += u64::conv(page.len());
@@ -442,10 +450,10 @@ impl Keyed<'_> {
         // pack whose history landed ABOVE a still-missing index; keying off the highest index would
         // never fetch the hole before it. Start from the actual missing index; records already
         // present above it will be "unnecessarily" redownloaded, but this is a no-op.
-        let first_missing_local = store
-            .first_gap(series)
-            .await
-            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+        let first_missing_local =
+            store.first_gap(series).await.map_err(|e| SyncError::LocalStoreError {
+                msg: format!("{e:#}"),
+            })?;
 
         // One higher than the latest record index we have locally. The case described above where
         // we have a hole in the sequence of record indices should not happen in practice; this
@@ -456,7 +464,9 @@ impl Keyed<'_> {
         let latest = store
             .last(series)
             .await
-            .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?
+            .map_err(|e| SyncError::LocalStoreError {
+                msg: format!("{e:#}"),
+            })?
             .map(|record| record.idx);
 
         if first_missing_local != latest.map_or(0, |n| n + 1) {
@@ -553,7 +563,9 @@ impl Keyed<'_> {
         let pages = self.session.client.records(series).stream(chunks);
         futures::pin_mut!(pages);
         while let Some(page) = pages.next().await {
-            let page = page.map_err(|e| SyncError::RemoteRequestError { msg: e.to_string() })?;
+            let page = page.map_err(|e| SyncError::RemoteRequestError {
+                msg: format!("{e:#}"),
+            })?;
 
             // A packfile manifest's history must land in the store *before* the manifest itself, so
             // a stored manifest always has its records. Loose pages have no such step.
@@ -561,11 +573,11 @@ impl Keyed<'_> {
                 ret.extend(self.expand_manifests(&page).await?);
             }
 
-            self.session
-                .store
-                .push_batch(page.iter())
-                .await
-                .map_err(|e| SyncError::LocalStoreError { msg: e.to_string() })?;
+            self.session.store.push_batch(page.iter()).await.map_err(|e| {
+                SyncError::LocalStoreError {
+                    msg: format!("{e:#}"),
+                }
+            })?;
 
             ret.extend(page.iter().map(|f| f.id));
 
@@ -601,7 +613,9 @@ impl Keyed<'_> {
                 ),
                 Err(e) => {
                     error!("failed to download packfile: {e:?}");
-                    return Err(SyncError::RemoteRequestError { msg: e.to_string() });
+                    return Err(SyncError::RemoteRequestError {
+                        msg: format!("{e:#}"),
+                    });
                 }
             }
         }
@@ -930,6 +944,25 @@ mod tests {
         });
 
         assert_eq!(result_ops, operations);
+    }
+
+    /// reqwest's own message is only "error sending request for url (..)"; the reason it couldn't
+    /// connect is further down the chain.
+    #[rstest]
+    #[tokio::test]
+    async fn remote_error_keeps_the_connect_cause() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr: url::Url = format!("http://{}", listener.local_addr().unwrap()).parse().unwrap();
+        drop(listener);
+
+        let session = super::packfile_sync_tests::build_session(
+            super::packfile_sync_tests::mock_client(&addr),
+            super::packfile_sync_tests::memory_store().await,
+        )
+        .await;
+        let err = session.record_status().await.unwrap_err().to_string();
+
+        assert!(err.contains("tcp connect error"), "{err}");
     }
 }
 

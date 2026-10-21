@@ -1,5 +1,5 @@
-//! MCP tools over AI-agent sessions captured by the daemon: `atuin_ai_session_list`,
-//! `atuin_ai_session_search`, and `atuin_ai_session_read`.
+//! MCP tools over AI-agent sessions captured by the daemon: `atuin_threads_list`,
+//! `atuin_threads_search`, and `atuin_threads_read`.
 
 pub mod caller;
 pub mod list;
@@ -9,9 +9,10 @@ pub mod search;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use atuin_client::ai_session::{HarnessKind, Session, SessionFilter};
+use atuin_client::ai_session::{HarnessKind, HarnessSession, Session, SessionFilter};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::ParentKind;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_daemon::AiClient;
 use futures::{StreamExt, TryStreamExt};
@@ -22,8 +23,8 @@ use crate::tools::ToolOutcome;
 async fn connect(settings: &Settings) -> Result<AiClient, ToolOutcome> {
     AiClient::from_settings(settings).await.map_err(|e| {
         ToolOutcome::Error(format!(
-            "AI sessions are unavailable: could not connect to the Atuin daemon ({e}). Shell \
-             history search still works."
+            "Threads are unavailable: could not connect to the Atuin daemon ({e}). Shell history \
+             search still works."
         ))
     })
 }
@@ -76,7 +77,7 @@ fn resolve_cwd(cwd: Option<&str>) -> Result<Option<PathBuf>, ToolOutcome> {
                  directory, so it cannot be resolved. Pass the project's absolute path."
             )));
         };
-        dir.join(path)
+        dir.joined(path)
     };
     Ok(Some(normalise(&joined)))
 }
@@ -160,21 +161,52 @@ fn elsewhere_note<'a>(
 
 /// A subagent: a fragment of the session that spawned it, only meaningful as part of it. Not any
 /// session with a parent: forks and continuations have one too, and those are sessions a person
-/// ran. A parent of unknown kind (records captured before the kind was) counts as a subagent,
-/// the cautious reading, since most sessions with a parent are subagents.
+/// ran. A child of a kind this build does not know (a newer build's) is taken for one, as the
+/// sidecar does.
 fn is_subagent(s: &Session) -> bool {
-    s.parent.is_some()
-        && !matches!(s.parent_kind, Some(ParentKind::Fork | ParentKind::Continuation))
+    s.parent.is_some() && matches!(s.parent_kind, Some(ParentKind::Subagent) | None)
 }
 
-/// How a session relates to its parent, phrased to precede the parent's id.
+/// How a session relates to its parent, phrased to precede the parent's id. A kind this build
+/// does not know reads as a subagent, as in [`is_subagent`].
 const fn relation(kind: Option<ParentKind>) -> &'static str {
     match kind {
-        Some(ParentKind::Subagent) => "subagent of",
+        Some(ParentKind::Subagent) | None => "subagent of",
         Some(ParentKind::Fork) => "forked from",
         Some(ParentKind::Continuation) => "continues from",
-        None => "started from",
     }
+}
+
+/// How many children's atuin ids a list entry or read header names before counting the rest,
+/// so a session with many subagents cannot crowd out the rest of the output.
+const NAMED_CHILDREN: usize = 3;
+
+/// `<relation> <parent's id>`, with the parent's atuin id when it is stored.
+fn parent_line(s: &Session, parent: &HarnessSession) -> String {
+    let relation = relation(s.parent_kind);
+    match s.parent_atuin_id {
+        Some(id) => format!("{relation} {} (atuin id {id})", parent.session),
+        None => format!("{relation} {}", parent.session),
+    }
+}
+
+/// The atuin ids of the root (unless it is the parent, already named) and the children, as
+/// `("root", id)` and `("children", "id, id, and N more")`, naming at most [`NAMED_CHILDREN`].
+fn link_lines(s: &Session) -> Vec<(&'static str, String)> {
+    let mut lines = Vec::new();
+    if let Some(root) = s.root_atuin_id.filter(|root| s.parent_atuin_id != Some(*root)) {
+        lines.push(("root", root.to_string()));
+    }
+    if !s.child_atuin_ids.is_empty() {
+        let mut ids: Vec<String> =
+            s.child_atuin_ids.iter().take(NAMED_CHILDREN).map(ToString::to_string).collect();
+        let more = s.child_atuin_ids.len().saturating_sub(NAMED_CHILDREN);
+        if more > 0 {
+            ids.push(format!("and {more} more"));
+        }
+        lines.push(("children", ids.join(", ")));
+    }
+    lines
 }
 
 /// The session's title, falling back to its opening prompt.
@@ -213,7 +245,10 @@ fn render_session_summary(out: &mut String, index: usize, s: &Session, offset: t
             writeln!(out, "   in {cwd}{}", branch.map(|b| format!(" ({b})")).unwrap_or_default());
     }
     if let Some(parent) = &s.parent {
-        let _ = writeln!(out, "   {} {}", relation(s.parent_kind), parent.session);
+        let _ = writeln!(out, "   {}", parent_line(s, parent));
+    }
+    for (label, ids) in link_lines(s) {
+        let _ = writeln!(out, "   {label} {ids}");
     }
     // How it ended, so a reader can tell which session holds the answer without opening each.
     if let Some(reply) = s.last_reply.as_deref().map(|r| one_line(r, 240)).filter(|r| !r.is_empty())
@@ -243,7 +278,7 @@ pub(super) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::ai_session::{HarnessSession, NativeSessionId};
+    use atuin_client::ai_session::{AtuinSessionId, NativeSessionId};
     use rstest::rstest;
 
     use super::*;
@@ -267,7 +302,7 @@ mod tests {
     fn resolve_cwd_expands_home() {
         let home = std::env::home_dir().unwrap();
         assert_eq!(resolve_cwd(Some("~")).ok().unwrap(), Some(home.clone()));
-        assert_eq!(resolve_cwd(Some("~/src/x")).ok().unwrap(), Some(home.join("src/x")));
+        assert_eq!(resolve_cwd(Some("~/src/x")).ok().unwrap(), Some(home.joined("src/x")));
     }
 
     #[rstest]
@@ -278,7 +313,6 @@ mod tests {
 
     #[rstest]
     #[case::subagent(Some(ParentKind::Subagent), true)]
-    #[case::unknown_kind(None, true)]
     #[case::fork(Some(ParentKind::Fork), false)]
     #[case::continuation(Some(ParentKind::Continuation), false)]
     fn subagents_are_children_not_known_to_be_forks(
@@ -300,9 +334,50 @@ mod tests {
     #[case::subagent(Some(ParentKind::Subagent), "subagent of")]
     #[case::fork(Some(ParentKind::Fork), "forked from")]
     #[case::continuation(Some(ParentKind::Continuation), "continues from")]
-    #[case::unknown_kind(None, "started from")]
     fn relation_names_the_parent_kind(#[case] kind: Option<ParentKind>, #[case] want: &str) {
         assert_eq!(relation(kind), want);
+    }
+
+    /// A list entry names the parent, root and children by atuin id, a few children at most,
+    /// and leaves out a link whose session is not stored.
+    #[rstest]
+    fn a_summary_names_links_by_atuin_id() {
+        let id = |n: u128| AtuinSessionId::from(uuid::Uuid::from_u128(n));
+        let mut s = fixtures::session("child", None, time::OffsetDateTime::UNIX_EPOCH);
+        s.parent = Some(HarnessSession {
+            harness: HarnessKind::ClaudeCode,
+            session: NativeSessionId::from("p".to_owned()),
+        });
+        s.parent_kind = Some(ParentKind::Fork);
+        s.parent_atuin_id = Some(id(1));
+        s.root_atuin_id = Some(id(2));
+        s.child_atuin_ids = (3..8).map(id).collect();
+
+        let mut out = String::new();
+        render_session_summary(&mut out, 1, &s, time::UtcOffset::UTC);
+        assert!(out.contains(&format!("   forked from p (atuin id {})\n", id(1))), "{out}");
+        assert!(out.contains(&format!("   root {}\n", id(2))), "{out}");
+        assert!(
+            out.contains(&format!("   children {}, {}, {}, and 2 more\n", id(3), id(4), id(5))),
+            "{out}"
+        );
+
+        // A root that is the parent is named once; an unstored parent has no atuin id.
+        s.root_atuin_id = None;
+        s.parent_atuin_id = None;
+        s.child_atuin_ids.clear();
+        let mut out = String::new();
+        render_session_summary(&mut out, 1, &s, time::UtcOffset::UTC);
+        assert!(out.contains("   forked from p\n"), "{out}");
+        assert!(!out.contains("root ") && !out.contains("children "), "{out}");
+    }
+
+    #[rstest]
+    fn a_root_that_is_the_parent_is_named_once() {
+        let mut s = fixtures::session("child", None, time::OffsetDateTime::UNIX_EPOCH);
+        s.parent_atuin_id = Some(AtuinSessionId::from(uuid::Uuid::from_u128(1)));
+        s.root_atuin_id = s.parent_atuin_id;
+        assert!(link_lines(&s).is_empty());
     }
 
     #[rstest]

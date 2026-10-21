@@ -11,19 +11,21 @@ use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
+use crate::harnesstools::access::Access;
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::session::model::{
     Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
-    ToolResult, ToolUse, Usage,
+    ToolResult, ToolUse, UNREADABLE_SUMMARY, Usage,
 };
+use crate::harnesstools::session::synthetic::{content_hash, synthetic_id};
 use crate::harnesstools::session::{
-    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
-    Sessions, WatchError, scan_sessions,
+    Change, Checkpoint, FilePatch, Hunk, Listener, Message, MessageError, Observable, Patch,
+    RuntimeError, Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
-use crate::utils::{env_nonempty, home_dir};
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct CodexSessions {
@@ -41,10 +43,7 @@ impl CodexSessions {
 
 /// Codex's live rollouts: `$CODEX_HOME/sessions`, else `~/.codex/sessions`.
 pub(crate) fn default_root() -> PathBuf {
-    env_nonempty("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".codex"))
-        .join("sessions")
+    super::home().joined("sessions")
 }
 
 /// The rollout of session `id` under `root` (`<yyyy>/<mm>/<dd>/rollout-<timestamp>-<id>.jsonl`).
@@ -57,6 +56,12 @@ pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
         CodexListener::session_id(path).is_some_and(|found| found.as_ref() == id)
     })
 }
+
+/// The `session_meta` field in which a fork atuin wrote (`atuin threads resume`) names the session it
+/// was forked from when that is a segment of a thread (`<thread>_<rollout>`, see
+/// [`session_id_of`]): `forked_from_id`, which Codex reads as a thread id, can only name the
+/// thread. Codex's reader leaves fields it doesn't know be (`SessionMeta` denies none).
+pub(crate) const ATUIN_FORKED_FROM: &str = "atuin_forked_from";
 
 /// The id `codex resume` takes for session `id`: its thread's (see [`thread_of`]).
 pub(crate) fn resume_id(id: &str) -> &str {
@@ -149,7 +154,7 @@ impl Observable for Codex {
 /// thread's history since the revert and names the rollout before it as its `history_base`.
 /// Such a file keeps both ids as its session, so it never shares one with the thread's earlier
 /// rollout (see [`thread_of`]).
-pub(super) fn session_id_of(stem: &str) -> SessionId {
+pub(crate) fn session_id_of(stem: &str) -> SessionId {
     const UUID_LEN: usize = 36;
     if let Some((head, rollout)) = stem.rsplit_once('_')
         && let Some(thread) = head.len().checked_sub(UUID_LEN).and_then(|at| head.get(at..))
@@ -247,8 +252,8 @@ impl CodexSession {
     }
 
     /// The byte offset to read from: `from`'s, if the line ending there is still the one `from`
-    /// was taken after, else the transcript's start.
-    async fn start(&self, from: Checkpoint) -> u64 {
+    /// was taken after (handed back too), else the transcript's start.
+    async fn start(&self, from: Checkpoint) -> (u64, Option<Line>) {
         let path = self.path.clone();
         let found = self
             .pool
@@ -257,13 +262,13 @@ impl CodexSession {
             .map_err(io::Error::other)
             .and_then(|found| found);
         match found {
-            Ok(Some(line)) if from.names(&line.bytes) => from.at,
+            Ok(Some(line)) if from.names(&line.bytes) => (from.at, Some(line)),
             Ok(_) => {
                 tracing::debug!(
                     path = %self.path.display(),
                     "the checkpoint no longer names its line; reading from the start"
                 );
-                0
+                (0, None)
             }
             Err(err) => {
                 tracing::warn!(
@@ -271,7 +276,7 @@ impl CodexSession {
                     path = %self.path.display(),
                     "failed to read the line a checkpoint names; reading from the start"
                 );
-                0
+                (0, None)
             }
         }
     }
@@ -299,6 +304,8 @@ impl CodexSession {
             before: start,
             usage_recorded: (start == 0).then_some(false),
             history_start: (start == 0).then_some(None),
+            follows: None,
+            open: Vec::new(),
         }
     }
 }
@@ -315,18 +322,31 @@ impl Session for CodexSession {
         from: Option<Checkpoint>,
     ) -> impl Stream<Item = Result<(Checkpoint, CodexMessage), MessageError>> + Send + 'static {
         async_stream::stream! {
-            let start = match from {
+            let (start, before) = match from {
                 Some(from) => self.start(from).await,
-                None => 0,
+                None => (0, None),
             };
+            // A checkpoint names a line's end, never 0: read from there, it no longer held.
+            let over = from.is_some() && start == 0;
             let mut stamper = self.stamper(start);
+            // Resumed past a checkpoint: the line it was taken after is the last capture took a
+            // row of, which the first line read now follows. One with no id capture keyed on its
+            // content, as here.
+            if let Some(before) = before
+                && let Ok(mut previous) = serde_json::from_slice::<CodexMessage>(&before.bytes)
+            {
+                stamper.stamp(&before, &mut previous).await;
+                stamper.follows = Some(previous.id().unwrap_or_else(|| {
+                    MessageId::from(synthetic_id(content_hash(&self.id, &previous), 0))
+                }));
+            }
             let messages =
                 Self::lines(&self.path, start, self.changes, self.pool).json::<CodexMessage>();
             for await item in messages {
                 yield match item {
                     Ok((line, mut message)) => {
                         stamper.stamp(&line, &mut message).await;
-                        Ok((Checkpoint::new(line.end, &line.bytes), message))
+                        Ok((Checkpoint::after(&line).started_over(over), message))
                     }
                     Err(err) => Err(MessageError::from(err)),
                 };
@@ -349,6 +369,11 @@ impl Session for CodexSession {
             }
         }
     }
+
+    async fn changed_after(mut self, since: std::time::SystemTime) -> Option<Self> {
+        modified_after(self.changes.as_mut(), since).await?;
+        Some(self)
+    }
 }
 
 /// Tells each line of one rollout what only its reader knows (see [`LineContext`]).
@@ -366,16 +391,129 @@ struct Stamper {
     /// The ordinal this rollout's own history starts at, when it begins with history inherited
     /// from its parent (its `session_meta.subagent_history_start_ordinal`); `None` until known.
     history_start: Option<Option<u64>>,
+    /// What the next line [follows](Message::follows), when reading did not start at the start.
+    follows: Option<MessageId>,
+    /// The calls made and not yet answered, oldest first.
+    open: Vec<OpenCall>,
+}
+
+/// A tool call made and not yet answered (see [`Stamper::track_calls`]).
+struct OpenCall {
+    id: String,
+    /// What it touches: what its commands and patches are known by.
+    accesses: Vec<Access>,
+    /// What it runs is all known (see [`Access::all`]).
+    known: bool,
+    /// A command it ran failed.
+    failed: bool,
 }
 
 impl Stamper {
     async fn stamp(&mut self, line: &Line, message: &mut CodexMessage) {
+        self.stamp_history(line, message).await;
+        self.track_calls(message);
+    }
+
+    /// What Codex 0.160 tells of a call only in the events of what it ran (its tools run
+    /// through a script, `exec`, see [`Access::all`]): which call a `FileChange` was made in (the
+    /// item names no call), and whether a command failed (the script's output says nothing of
+    /// it). A command is the open call's whose script runs it, else the only open call's, where
+    /// what that runs isn't all known: a command started in the background ends during a later
+    /// call that didn't run it (a poll). A file change is the call's whose script writes the
+    /// file, else the latest's. Calls left open when a turn ends were interrupted. Where reading
+    /// began after the call was made, it isn't known.
+    fn track_calls(&mut self, message: &mut CodexMessage) {
+        let Some(payload) = message.payload.as_ref() else {
+            return;
+        };
+        let call_id = payload["call_id"].as_str();
+        match (message.kind.as_str(), payload["type"].as_str()) {
+            ("response_item", Some("function_call" | "custom_tool_call")) => {
+                let input = if payload["type"] == "function_call" {
+                    &payload["arguments"]
+                } else {
+                    &payload["input"]
+                };
+                if let Some(id) = call_id {
+                    let name = payload["name"].as_str().unwrap_or_default();
+                    let (accesses, known) = Access::all(name, input);
+                    self.open.push(OpenCall {
+                        id: id.to_owned(),
+                        accesses,
+                        known,
+                        failed: false,
+                    });
+                }
+            }
+            ("response_item", Some("function_call_output" | "custom_tool_call_output")) => {
+                if let Some(at) =
+                    self.open.iter().position(|call| Some(call.id.as_str()) == call_id)
+                {
+                    message.context.failed = self.open.remove(at).failed;
+                }
+            }
+            ("event_msg", Some("task_complete" | "turn_complete" | "turn_aborted")) => {
+                self.open.clear();
+            }
+            ("event_msg", Some("item_completed")) => {
+                let item = &payload["item"];
+                match item["type"].as_str() {
+                    Some("CommandExecution") => {
+                        let failed = item["exit_code"].as_i64().is_some_and(|code| code != 0)
+                            || matches!(item["status"].as_str(), Some("failed" | "declined"));
+                        let ran =
+                            Access::of("shell", &serde_json::json!({"command": item["command"]}))
+                                .command;
+                        let ran_it = |call: &OpenCall| {
+                            call.accesses.iter().any(|a| ran.is_some() && a.command == ran)
+                        };
+                        let at = self.open.iter().rposition(ran_it).or_else(|| {
+                            matches!(self.open.as_slice(), [only] if !only.known).then_some(0)
+                        });
+                        if let Some(call) = at.and_then(|at| self.open.get_mut(at)) {
+                            call.failed |= failed;
+                        }
+                    }
+                    // Before 0.160 the item was the `apply_patch` call itself, under its id.
+                    Some("FileChange")
+                        if !self.open.iter().any(|call| item["id"] == call.id.as_str()) =>
+                    {
+                        let changed = item["changes"].as_object();
+                        let names = |written: &String| {
+                            changed.is_some_and(|changes| {
+                                changes.keys().any(|path| {
+                                    path == written
+                                        || path
+                                            .strip_suffix(written.as_str())
+                                            .is_some_and(|dir| dir.ends_with('/'))
+                                })
+                            })
+                        };
+                        let writes = |call: &&OpenCall| {
+                            call.accesses.iter().any(|a| a.writes.iter().any(names))
+                        };
+                        message.context.call = self
+                            .open
+                            .iter()
+                            .rfind(writes)
+                            .or_else(|| self.open.last())
+                            .map(|call| call.id.clone());
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    async fn stamp_history(&mut self, line: &Line, message: &mut CodexMessage) {
         // The rollout's first line: reading began at its start, or restarted there after the
         // file was truncated or replaced, so nothing was skipped and nothing before it counts.
         if line.end == line.bytes.len() as u64 + 1 {
             self.before = 0;
             self.usage_recorded = Some(false);
             self.history_start = Some(None);
+            self.open.clear();
         }
         if message.kind == TOKEN_USAGE_RECORD {
             self.usage_recorded = Some(true);
@@ -396,11 +534,19 @@ impl Stamper {
         message.context = LineContext {
             session: Some(self.session.clone()),
             usage_recorded: self.usage_recorded == Some(true),
+            follows: self.follows.take(),
+            ..LineContext::default()
         };
         if let Some(meta) = message.own_meta() {
             self.history_start = Some(history_start_of(meta));
             if records_usage(meta) {
                 self.usage_recorded = Some(true);
+            }
+            let end = meta["history_base"]["end_byte_offset"].as_u64();
+            if let (Some(end), Some((base, ParentKind::Continuation))) = (end, message.parent()) {
+                let path = self.path.clone();
+                let found = self.pool.run(move || base_tail(&path, &base, end)).await;
+                message.context.follows = found.ok().flatten();
             }
             return;
         }
@@ -448,12 +594,15 @@ impl CodexMessage {
         .into_iter()
         .find_map(serde_json::Value::as_str)?;
         let spawned = !meta["source"]["subagent"].is_null() || meta["parent_thread_id"].is_string();
-        let kind = if spawned {
-            ParentKind::Subagent
-        } else {
-            ParentKind::Fork
-        };
-        Some((SessionId::from(parent.to_owned()), kind))
+        if spawned {
+            return Some((SessionId::from(parent.to_owned()), ParentKind::Subagent));
+        }
+        // A fork atuin wrote of a segment of the thread `forked_from_id` names: that segment.
+        let parent = meta[ATUIN_FORKED_FROM]
+            .as_str()
+            .filter(|segment| meta["forked_from_id"].as_str() == Some(resume_id(segment)))
+            .unwrap_or(parent);
+        Some((SessionId::from(parent.to_owned()), ParentKind::Fork))
     }
 }
 
@@ -485,6 +634,62 @@ fn records_usage(meta: &serde_json::Value) -> bool {
     })
 }
 
+/// The exit code of the command Codex ran as item `item` (a `CommandExecution`, which its hooks
+/// name the command by), from the end of the rollout at `path`: Codex records the item before
+/// it runs the command's `PostToolUse` hooks, which say only its output.
+///
+/// The item's line holds the command's output three times over, so it isn't parsed: from where
+/// it names the item (`"type":"CommandExecution","id":"<item>"`, as Codex writes it, the last
+/// time the rollout does), its `"exit_code":` is looked for before the line ends. Only so much
+/// of the rollout is read either way.
+#[must_use]
+pub fn command_exit_code(path: &Path, item: &str) -> Option<i64> {
+    const SCANNED: u64 = 16 * 1024 * 1024;
+    const EXIT: &[u8] = b"\"exit_code\":";
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let named = format!("\"type\":\"CommandExecution\",\"id\":{}", serde_json::json!(item));
+    let at = rfind(&mut file, len, named.as_bytes(), SCANNED).ok()??;
+
+    io::Seek::seek(&mut file, io::SeekFrom::Start(at)).ok()?;
+    let mut line = io::BufRead::split(io::BufReader::new(file.take(SCANNED)), b'\n');
+    // Only the first line read, the item's: up to where its exit code is.
+    let line = line.next()?.ok()?;
+    let from = memchr::memmem::find(&line, EXIT)? + EXIT.len();
+    let digits: Vec<u8> =
+        line[from..].iter().copied().take_while(|b| *b == b'-' || b.is_ascii_digit()).collect();
+    std::str::from_utf8(&digits).ok()?.parse().ok()
+}
+
+/// Where `needle` last starts in the first `end` bytes of `file`, looking back no further than
+/// `limit` bytes, read in chunks.
+fn rfind(file: &mut File, end: u64, needle: &[u8], limit: u64) -> io::Result<Option<u64>> {
+    const CHUNK: u64 = 64 * 1024;
+    let finder = memchr::memmem::FinderRev::new(needle);
+    let floor = end.saturating_sub(limit);
+    let mut pos = end;
+    // The start of the chunk read last, which a match may run on into.
+    let mut carry = Vec::new();
+    while pos > floor {
+        let start = pos.saturating_sub(CHUNK).max(floor);
+        let mut window = vec![0; usize::try_from(pos - start).unwrap_or_default()];
+        io::Seek::seek(file, io::SeekFrom::Start(start))?;
+        file.read_exact(&mut window)?;
+        window.extend_from_slice(&carry);
+        if let Some(at) = finder.rfind(&window) {
+            return Ok(Some(start + at as u64));
+        }
+        carry = window[..needle.len().saturating_sub(1).min(window.len())].to_vec();
+        pos = start;
+    }
+    Ok(None)
+}
+
+/// The own `session_meta` payload of the rollout of session `id` at `path`.
+pub(crate) fn own_meta_at(path: &Path, id: &str) -> Option<serde_json::Value> {
+    first_own_meta(path, &SessionId::from(id.to_owned()))
+}
+
 /// The own `session_meta` payload of the rollout at `path`, which is its first line.
 fn first_own_meta(path: &Path, session: &SessionId) -> Option<serde_json::Value> {
     let mut first = String::new();
@@ -496,6 +701,52 @@ fn first_own_meta(path: &Path, session: &SessionId) -> Option<serde_json::Value>
     let mut line: CodexMessage = serde_json::from_str(&first).ok()?;
     line.context.session = Some(session.clone());
     line.own_meta().cloned()
+}
+
+/// The last line with an id in the rollout of session `base` before byte `end`: where a rollout
+/// a thread was reverted into (see [`session_id_of`]) continues it, its `history_base` saying
+/// up to where. Looked for in the sessions directory `path` is in (or the archive beside it).
+///
+/// A line capture keys on its content (`syn-`) has no id to name, so where one ends that part
+/// (none usually does: a turn ends in a message or its usage), the link names the row before it,
+/// which is on the same line of history.
+fn base_tail(path: &Path, base: &SessionId, end: u64) -> Option<MessageId> {
+    let is_digits = |dir: &Path| {
+        dir.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    // `<root>/<yyyy>/<mm>/<dd>/<file>`, or flat in the archive.
+    let dated = path.ancestors().skip(1).take(3).all(is_digits);
+    let root = if dated {
+        path.ancestors().nth(4)
+    } else {
+        path.parent()
+    }?;
+    let mut roots = vec![root.to_path_buf()];
+    roots.extend(archive_of(root));
+    if root.file_name().is_some_and(|n| n == "archived_sessions") {
+        roots.push(root.with_file_name("sessions"));
+    }
+    let file = roots.iter().find_map(|root| {
+        crate::harnesstools::resume::find_file(root, |p| {
+            CodexListener::session_id(p).as_ref() == Some(base)
+        })
+    })?;
+
+    let mut tail = None;
+    let mut usage_recorded = false;
+    let lines = std::io::BufRead::lines(std::io::BufReader::new(File::open(file).ok()?.take(end)));
+    for line in lines {
+        let Ok(mut m) = serde_json::from_str::<CodexMessage>(&line.ok()?) else {
+            continue;
+        };
+        m.context.session = Some(base.clone());
+        usage_recorded |= m.kind == TOKEN_USAGE_RECORD || m.own_meta().is_some_and(records_usage);
+        m.context.usage_recorded = usage_recorded;
+        tail = m.id().or(tail);
+    }
+    tail
 }
 
 /// Whether the first `end` bytes of the file at `path` contain `needle`, read in chunks so a
@@ -537,6 +788,14 @@ struct LineContext {
     /// writes them (see [`records_usage`]): this rollout records usage per model call, so its
     /// `token_count` lines only repeat it.
     usage_recorded: bool,
+    /// What the line [follows](Message::follows), when the reader knows and capture does not.
+    follows: Option<MessageId>,
+    /// For a `FileChange` event, the call it was made in, when the reader knows (see
+    /// [`Stamper::track_calls`]).
+    call: Option<String>,
+    /// For a call's output, whether a command the call ran failed (see
+    /// [`Stamper::track_calls`]).
+    failed: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -904,6 +1163,56 @@ impl CodexMessage {
         }
     }
 
+    /// The call an applied patch's event names, and the files it changed (`{path: FileChange}`):
+    /// a legacy rollout's `patch_apply_end`, a paginated one's `item_completed` of a
+    /// `FileChange` item (which Codex shows the diff from on resume). A patch that failed or was
+    /// declined changed nothing.
+    fn file_changes(&self) -> Option<(&str, &serde_json::Map<String, serde_json::Value>)> {
+        let payload = self.payload.as_ref()?;
+        let (call, changes, applied) = if self.is_event("patch_apply_end") {
+            let applied = match payload["status"].as_str() {
+                Some(status) => status == "completed",
+                None => payload["success"].as_bool().unwrap_or(false),
+            };
+            (&payload["call_id"], &payload["changes"], applied)
+        } else if self.is_event("item_completed") && payload["item"]["type"] == "FileChange" {
+            let item = &payload["item"];
+            let applied = item["status"].as_str().is_none_or(|status| status == "completed");
+            (&item["id"], &item["changes"], applied)
+        } else {
+            return None;
+        };
+        let changes = changes.as_object().filter(|changes| applied && !changes.is_empty())?;
+        Some((call.as_str().filter(|call| !call.is_empty())?, changes))
+    }
+
+    /// The patch [`Self::file_changes`] names, of the call it was made in: a `FileChange` item
+    /// Codex 0.160 made in a script names only itself (`exec-...`).
+    fn patch(&self) -> Option<Patch> {
+        let (item, changes) = self.file_changes()?;
+        let call = self.context.call.as_deref().unwrap_or(item);
+        let files = changes
+            .iter()
+            .map(|(path, change)| {
+                let content = change["content"].as_str().unwrap_or_default();
+                match change["type"].as_str() {
+                    Some("add") => FilePatch::added(path.clone(), content),
+                    Some("delete") => FilePatch::deleted(path.clone(), content),
+                    _ => FilePatch {
+                        path: path.clone(),
+                        change: Change::Update,
+                        moved_to: change["move_path"].as_str().map(str::to_owned),
+                        hunks: Hunk::parse(change["unified_diff"].as_str().unwrap_or_default()),
+                    },
+                }
+            })
+            .collect();
+        Some(Patch {
+            call: ToolCallId::from(call.to_owned()),
+            files,
+        })
+    }
+
     /// Why the turn this event ends failed or stopped, when it did.
     fn failure(&self) -> Option<(StopReason, String)> {
         let payload = self.payload.as_ref()?;
@@ -948,8 +1257,12 @@ impl Message for CodexMessage {
             return self.own_meta()?["id"].as_str().map(|id| MessageId::from(id.to_owned()));
         }
         // Events carry no item id; some name a tool call (`patch_apply_end`, `mcp_tool_call_end`),
-        // an id the call's own item already holds. Items that are no conversation (a compaction's
+        // an id the call's own item already holds: the files an applied patch changed are kept
+        // under the call's id marked as its patch. Items that are no conversation (a compaction's
         // opaque checkpoint, a configuration update) would only keep an empty row.
+        if let Some((call, _)) = self.file_changes() {
+            return Some(MessageId::from(format!("{call}#patch")));
+        }
         if !self.is_item() || self.payload_type().is_some_and(is_opaque_item) {
             return None;
         }
@@ -982,6 +1295,9 @@ impl Message for CodexMessage {
         // InterAgentCommunication`): the harness delivered them, no user typed them.
         if self.kind == "inter_agent_communication" {
             return Role::System;
+        }
+        if self.file_changes().is_some() {
+            return Role::Tool;
         }
         let payload = self.payload.as_ref();
         match self.payload_type() {
@@ -1018,16 +1334,22 @@ impl Message for CodexMessage {
         let Some(payload) = self.payload.as_ref() else {
             return Vec::new();
         };
+        // Compacted by the API, the summary is encrypted in the line's `replacement_history`:
+        // the conversation before it is still no longer what the model sees.
         if self.kind == "compacted" {
-            return payload["message"]
-                .as_str()
-                .map(compaction_summary)
-                .filter(|summary| !summary.is_empty())
-                .map(|summary| vec![Content::Summary(summary.to_owned())])
-                .unwrap_or_default();
+            let summary = payload["message"].as_str().map_or("", compaction_summary);
+            let summary = if summary.is_empty() {
+                UNREADABLE_SUMMARY
+            } else {
+                summary
+            };
+            return vec![Content::Summary(summary.to_owned())];
         }
         if let Some((_, why)) = self.failure() {
             return vec![Content::Error(why)];
+        }
+        if let Some(patch) = self.patch() {
+            return vec![Content::Patch(patch)];
         }
         if !self.is_item() {
             return Vec::new();
@@ -1091,7 +1413,7 @@ impl Message for CodexMessage {
                 vec![Content::ToolResult(ToolResult {
                     call: call_id("call_id"),
                     output: payload["output"].clone(),
-                    error: codex_output_failed(&payload["output"]),
+                    error: self.context.failed || codex_output_failed(&payload["output"]),
                 })]
             }
             Some("tool_search_output") => vec![Content::ToolResult(ToolResult {
@@ -1157,6 +1479,14 @@ impl Message for CodexMessage {
     /// response id.
     fn turn_id(&self) -> Option<String> {
         self.usage_turn()
+    }
+
+    /// Codex lines name no parent: capture links each row to the one before (see
+    /// `MessageEnricher`). The first line of a read resumed past a checkpoint follows the line
+    /// the checkpoint was taken after, and a reverted thread's rollout follows the line of the
+    /// rollout it continues where it does (its `history_base`).
+    fn follows(&self) -> Option<MessageId> {
+        self.context.follows.clone()
     }
 
     /// A name given to the thread, as rollouts recorded it from 0.93.0 until names moved to
@@ -1454,11 +1784,11 @@ mod tests {
     #[tokio::test]
     async fn watch_emits_sessions_as_files_appear() {
         let dir = tempfile::tempdir().unwrap();
-        let sub = dir.path().join("2026").join("09").join("19");
+        let sub = dir.path().join("2026").joined("09").joined("19");
         std::fs::create_dir_all(&sub).unwrap();
         let sid = "0a1b2c3d-4e5f-6789-abcd-ef0123456789";
         std::fs::write(
-            sub.join(format!("rollout-2026-09-19T00-00-00-{sid}.jsonl")),
+            sub.joined(format!("rollout-2026-09-19T00-00-00-{sid}.jsonl")),
             serde_json::json!({"type": "session_meta", "payload": {"id": sid}}).to_string(),
         )
         .unwrap();
@@ -1592,7 +1922,7 @@ mod tests {
     #[tokio::test]
     async fn a_real_rollout_counts_each_recorded_call_once() {
         let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex/session1.jsonl");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures/codex/session1.jsonl");
         let session = CodexSession::open(SessionId::from("s".to_owned()), path, pool());
         let lines: Vec<CodexMessage> = session.read().try_collect().await.unwrap();
         let usage: Vec<&CodexMessage> = lines.iter().filter(|m| m.usage().is_some()).collect();
@@ -1845,6 +2175,22 @@ mod tests {
         assert_eq!(m.parent_kind(), Some(kind));
     }
 
+    /// A fork atuin wrote of a segment of a thread names the segment in `atuin_forked_from`, and
+    /// is linked to it; a value that isn't a segment of the thread `forked_from_id` names is not
+    /// believed.
+    #[rstest]
+    #[case::a_segment_of_the_thread("parent_01a0d160", "parent_01a0d160")]
+    #[case::another_threads("other_01a0d160", "parent")]
+    fn an_atuin_fork_names_the_segment_it_forked(#[case] named: &str, #[case] parent: &str) {
+        let m = line(&serde_json::json!({
+            "timestamp": "2026-09-18T10:00:00.000Z", "type": "session_meta",
+            "payload": {"id": "child", "cwd": "/work", "forked_from_id": "parent",
+                "atuin_forked_from": named},
+        }));
+        assert_eq!(m.parent_session(), Some(SessionId::from(parent.to_owned())));
+        assert_eq!(m.parent_kind(), Some(ParentKind::Fork));
+    }
+
     /// A fork copies its parent's rollout, `session_meta` included, after its own
     /// (codex-rs `ForkPersistence::Copied`). The copy describes the parent: it must not
     /// replace the child's parent link (with the grandparent) or its session context.
@@ -2073,16 +2419,25 @@ mod tests {
     }
 
     /// A `compacted` line carries the compaction summary in `payload.message` (codex-rs
-    /// `CompactedItemWire.message`).
+    /// `CompactedItemWire.message`). Compacted by the API (as Codex 0.160 does on OpenAI), the
+    /// summary is encrypted in its `replacement_history` and the message empty: still a
+    /// compaction, its summary unreadable.
     #[rstest]
-    fn compacted_summary_is_kept() {
+    #[case::readable(
+        serde_json::json!({"message": "Summary of the conversation so far", "replacement_history": []}),
+        "Summary of the conversation so far"
+    )]
+    #[case::encrypted(
+        serde_json::json!({"message": "", "replacement_history": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            {"type": "compaction", "id": "cmp_1", "encrypted_content": "gAAAAB..."}]}),
+        UNREADABLE_SUMMARY
+    )]
+    fn compacted_summary_is_kept(#[case] payload: serde_json::Value, #[case] summary: &str) {
         let m = line(&serde_json::json!({
-            "timestamp": "2026-09-18T10:00:00.000Z", "type": "compacted",
-            "payload": {"message": "Summary of the conversation so far", "replacement_history": []},
+            "timestamp": "2026-09-18T10:00:00.000Z", "type": "compacted", "payload": payload,
         }));
-        assert_eq!(m.content(), vec![Content::Summary(
-            "Summary of the conversation so far".to_owned()
-        )]);
+        assert_eq!(m.content(), vec![Content::Summary(summary.to_owned())]);
         assert_eq!(m.role(), Role::System);
     }
 
@@ -2237,7 +2592,7 @@ mod tests {
     }
 
     fn fixture(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex").join(name)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures/codex").joined(name)
     }
 
     async fn read_session(id: &str, path: PathBuf) -> Vec<CodexMessage> {
@@ -2314,6 +2669,142 @@ mod tests {
         assert_eq!(m.git_branch().as_deref(), Some("main"));
         assert_eq!(m.parent_session(), Some(SessionId::from(parent.to_owned())));
         assert_eq!(m.parent_kind(), Some(ParentKind::Continuation));
+    }
+
+    /// Codex 0.160 runs each tool through a script (`exec`), whose output says nothing of how
+    /// its commands went, and whose patches' `FileChange` items name only themselves: a failed
+    /// command's call fails, and a patch belongs to the call that made it. From a codex 0.160.1
+    /// run.
+    #[rstest]
+    #[tokio::test]
+    async fn a_scripts_failures_and_patches_are_its_calls() {
+        let id = "01a11e4a-7de0-77a3-9030-5535c9877485";
+        let lines = read_session(id, fixture("code-mode.jsonl")).await;
+        let content: Vec<Content> = lines.iter().flat_map(Message::content).collect();
+        let failed: Vec<&str> = content
+            .iter()
+            .filter_map(|c| match c {
+                Content::ToolResult(r) if r.error => Some(r.call.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(failed, ["call_3243009da42b4e1b916288e04872b89c"]);
+        // Each keeps its item's id: one script can apply several.
+        let patches: Vec<(String, String)> = lines
+            .iter()
+            .filter_map(|m| match m.content().as_slice() {
+                [Content::Patch(p)] => Some((m.id()?.to_string(), p.call.to_string())),
+                _ => None,
+            })
+            .collect();
+        let patch = |item: &str, call: &str| (format!("{item}#patch"), call.to_owned());
+        assert_eq!(patches, [
+            patch(
+                "exec-dbb70cd4-3cec-41f3-acb0-cce249b2aada",
+                "call_b9854e37b255482a8e0760061b40aa72"
+            ),
+            patch(
+                "exec-df2a946a-e49c-453a-a5a1-9af8d26eeae8",
+                "call_e5f92d9061964574bde820232646737f"
+            ),
+        ]);
+    }
+
+    /// A hook names the command it ran by its item, whose exit code the rollout records.
+    #[rstest]
+    #[case::failed("exec-4ba1d5ca-afce-484c-9151-6ffbca09fb0d", Some(2))]
+    #[case::succeeded("exec-0cc28dd9-b1a1-4b58-8230-d2b26119bd6f", Some(0))]
+    #[case::a_patch("exec-dbb70cd4-3cec-41f3-acb0-cce249b2aada", None)]
+    #[case::unknown("exec-nope", None)]
+    fn a_commands_exit_code_is_in_its_rollout(#[case] item: &str, #[case] exit: Option<i64>) {
+        assert_eq!(command_exit_code(&fixture("code-mode.jsonl"), item), exit);
+    }
+
+    /// A command whose output is larger than any chunk read (`seq 1 400000; exit 3` made a
+    /// 2.47 MB line), with lines after it, still says its exit code.
+    #[rstest]
+    fn a_large_commands_exit_code_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let output = "1\n".repeat(400_000);
+        let item = serde_json::json!({"type": "event_msg", "payload": {"type": "item_completed",
+            "item": {"type": "CommandExecution", "id": "exec-big",
+                "command": ["/bin/zsh", "-lc", "seq 1 400000; exit 3"], "status": "failed",
+                "stdout": output, "aggregated_output": output, "exit_code": 3,
+                "formatted_output": output}}});
+        let after = serde_json::json!({"type": "event_msg", "payload": {"type": "token_count"}});
+        std::fs::write(&path, format!("{item}\n{after}\n")).unwrap();
+        assert_eq!(command_exit_code(&path, "exec-big"), Some(3));
+    }
+
+    /// Of the calls open when a command ran, the one whose script runs it is the one that ran it;
+    /// read past the call (resumed after it), the patch names only itself.
+    #[rstest]
+    #[tokio::test]
+    async fn an_event_goes_to_the_call_that_ran_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-2026-10-09T00-00-00-th1.jsonl");
+        let script = |id: &str, script: &str| {
+            serde_json::json!({"type": "response_item", "payload": {"type": "custom_tool_call",
+                "call_id": id, "name": "exec", "input": script}})
+        };
+        let call = |id: &str, cmd: &str| {
+            script(id, &format!("await tools.exec_command({{cmd:{}}})", serde_json::json!(cmd)))
+        };
+        let computed = "const c = await f(); await tools.exec_command({cmd: c})";
+        let ran = |cmd: &str, exit: i64| {
+            serde_json::json!({"type": "event_msg", "payload": {"type": "item_completed",
+                "item": {"type": "CommandExecution", "id": "exec-1",
+                    "command": ["/bin/zsh", "-lc", cmd], "exit_code": exit,
+                    "status": if exit == 0 { "completed" } else { "failed" }}}})
+        };
+        let output = |id: &str| {
+            serde_json::json!({"type": "response_item", "payload": {
+                "type": "custom_tool_call_output", "call_id": id,
+                "output": [{"type": "input_text", "text": "Script completed\nOutput:\n"}]}})
+        };
+        let lines = [
+            call("c1", "false"),
+            call("c2", "true"),
+            ran("false", 1),
+            ran("true", 0),
+            output("c2"),
+            output("c1"),
+            // A command started in the background ends during a poll, which didn't run it.
+            script("c3", "await tools.write_stdin({session_id: 7, chars: \"\"})"),
+            ran("sleep 1; false", 1),
+            output("c3"),
+            // The only call open ran it, as far as can be told.
+            script("c4", computed),
+            ran("make", 2),
+            output("c4"),
+            // Interrupted, never answered: no longer open once its turn ends.
+            script("c5", computed),
+            serde_json::json!({"type": "event_msg", "payload": {"type": "turn_aborted",
+                "turn_id": "t1", "reason": "interrupted"}}),
+            script("c6", computed),
+            ran("make", 2),
+            output("c6"),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&path, text).unwrap();
+        let failed: Vec<(String, bool)> = read_session("th1", path)
+            .await
+            .iter()
+            .flat_map(Message::content)
+            .filter_map(|c| match c {
+                Content::ToolResult(r) => Some((r.call.to_string(), r.error)),
+                _ => None,
+            })
+            .collect();
+        let failed: Vec<(&str, bool)> = failed.iter().map(|(c, e)| (c.as_str(), *e)).collect();
+        assert_eq!(failed, [
+            ("c2", false),
+            ("c1", true),
+            ("c3", false),
+            ("c4", true),
+            ("c6", true)
+        ]);
     }
 
     /// Before 0.32.0 (codex-rs 43809a454e) a rollout had no `type`/`payload` envelope: its first
@@ -2511,6 +3002,61 @@ mod tests {
         assert!(!kept(&m));
     }
 
+    /// An applied patch's event keeps the files it changed, under its call's id marked as its
+    /// patch: a legacy rollout's `patch_apply_end`, a paginated one's `FileChange` item. One that
+    /// failed or was declined changed nothing.
+    #[rstest]
+    #[case::legacy(serde_json::json!({"type": "event_msg", "payload": {"type": "patch_apply_end",
+        "call_id": "call_1", "turn_id": "u", "stdout": "", "stderr": "", "success": true,
+        "status": "completed", "changes": {
+            "/w/a.rs": {"type": "update", "unified_diff": "@@ -1 +1 @@\n-x\n+y\n",
+                "move_path": null},
+            "/w/b.rs": {"type": "add", "content": "b\n"}}}}), true)]
+    #[case::legacy_without_status(serde_json::json!({"type": "event_msg", "payload": {
+        "type": "patch_apply_end", "call_id": "call_1", "stdout": "", "stderr": "",
+        "success": true, "changes": {
+            "/w/a.rs": {"type": "update", "unified_diff": "@@ -1 +1 @@\n-x\n+y\n"},
+            "/w/b.rs": {"type": "add", "content": "b\n"}}}}), true)]
+    #[case::paginated(serde_json::json!({"type": "event_msg", "payload": {
+        "type": "item_completed", "thread_id": "t", "turn_id": "u", "completed_at_ms": 1,
+        "item": {"type": "FileChange", "id": "call_1", "status": "completed", "changes": {
+            "/w/a.rs": {"type": "update", "unified_diff": "@@ -1 +1 @@\n-x\n+y\n",
+                "move_path": null},
+            "/w/b.rs": {"type": "add", "content": "b\n"}}}}}), true)]
+    #[case::declined(serde_json::json!({"type": "event_msg", "payload": {"type": "patch_apply_end",
+        "call_id": "call_1", "stdout": "", "stderr": "", "success": false, "status": "declined",
+        "changes": {"/w/a.rs": {"type": "add", "content": "a"}}}}), false)]
+    #[case::failed_item(serde_json::json!({"type": "event_msg", "payload": {
+        "type": "item_completed", "thread_id": "t", "turn_id": "u",
+        "item": {"type": "FileChange", "id": "call_1", "status": "failed", "changes": {
+            "/w/a.rs": {"type": "add", "content": "a"}}}}}), false)]
+    fn an_applied_patch_keeps_its_file_changes(#[case] raw: serde_json::Value, #[case] kept: bool) {
+        let m = line(&raw);
+        if !kept {
+            assert_eq!(m.id(), None);
+            assert!(m.content().is_empty());
+            return;
+        }
+        assert_eq!(m.id(), Some(MessageId::from("call_1#patch".to_owned())));
+        assert_eq!(m.role(), Role::Tool);
+        let update = FilePatch {
+            path: "/w/a.rs".to_owned(),
+            change: Change::Update,
+            moved_to: None,
+            hunks: vec![Hunk {
+                old_start: 1,
+                old_lines: 1,
+                new_start: 1,
+                new_lines: 1,
+                lines: vec!["-x".into(), "+y".into()],
+            }],
+        };
+        assert_eq!(m.content(), vec![Content::Patch(Patch {
+            call: ToolCallId::from("call_1".to_owned()),
+            files: vec![update, FilePatch::added("/w/b.rs".to_owned(), "b\n")],
+        })]);
+    }
+
     /// A message from another agent (multi-agent v2, codex-rs `ResponseItem::AgentMessage`) was
     /// delivered by the harness; its encrypted payload is not kept. From a codex 0.156.1 run.
     #[rstest]
@@ -2572,5 +3118,93 @@ mod tests {
         let change = m.title().unwrap();
         assert_eq!(change.source, TitleSource::Named);
         assert_eq!(change.text.as_deref(), expected);
+    }
+
+    const THREAD: &str = "01a0d147-e745-7ae2-a941-ce48e7888470";
+
+    fn prompt(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "timestamp": "2026-09-24T03:00:01.000Z", "type": "response_item",
+            "payload": {"type": "message", "id": id, "role": "user",
+                "content": [{"type": "input_text", "text": id}]},
+        })
+    }
+
+    /// A line capture keeps no row of, and that has no id.
+    fn task_started() -> serde_json::Value {
+        serde_json::json!({
+            "timestamp": "2026-09-24T03:00:01.000Z", "type": "event_msg",
+            "payload": {"type": "task_started"},
+        })
+    }
+
+    fn follows(lines: &[CodexMessage]) -> Vec<Option<String>> {
+        lines.iter().map(|m| m.follows().map(String::from)).collect()
+    }
+
+    /// A read resumed past a checkpoint says its first line follows the line the checkpoint was
+    /// taken after (the last capture took a row of), so capture links it on across a restart; a
+    /// read from the start has nothing to say.
+    #[rstest]
+    #[tokio::test]
+    async fn a_resumed_read_follows_the_checkpointed_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("rollout-2026-09-24T03-00-00-{THREAD}.jsonl"));
+        let meta = serde_json::json!({"type": "session_meta", "payload": {"id": THREAD}});
+        write_lines(&path, &[meta, prompt("m1"), task_started(), prompt("m2")]);
+        let body = std::fs::read(&path).unwrap();
+        let ends: Vec<usize> = memchr::memchr_iter(b'\n', &body).collect();
+        let from =
+            Checkpoint::new(u64::try_from(ends[1] + 1).unwrap(), &body[ends[0] + 1..ends[1]]);
+
+        let session = CodexSession::open(session_id_of(THREAD), path, pool());
+        let resumed: Vec<CodexMessage> = session
+            .clone()
+            .messages_from(Some(from))
+            .map_ok(|(_, m)| m)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(follows(&resumed), [Some("m1".to_owned()), None]);
+        let whole: Vec<CodexMessage> = session.read().try_collect().await.unwrap();
+        assert!(follows(&whole).iter().all(Option::is_none));
+    }
+
+    /// A rollout a thread was reverted into follows the last line with an id of the rollout it
+    /// continues, before the point its `history_base` names: not that rollout's last line, which
+    /// the revert left behind. The rollout is looked for across the sessions directory.
+    #[rstest]
+    #[case::from_the_first_rollout(THREAD, THREAD.to_owned())]
+    #[case::from_an_earlier_revert(
+        "01a0d150-0000-7000-8000-000000000009",
+        format!("{THREAD}_01a0d150-0000-7000-8000-000000000009")
+    )]
+    #[tokio::test]
+    async fn a_reverted_rollout_follows_where_it_continues(
+        #[case] base: &str,
+        #[case] base_name: String,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let earlier = sessions.join("2026/09/23");
+        std::fs::create_dir_all(&earlier).unwrap();
+        let base_path = earlier.joined(format!("rollout-2026-09-23T00-00-00-{base_name}.jsonl"));
+        let meta = serde_json::json!({"type": "session_meta", "payload": {"id": THREAD}});
+        let kept = [meta, prompt("m1"), prompt("m2"), task_started()];
+        let end: usize = kept.iter().map(|l| l.to_string().len() + 1).sum();
+        write_lines(&base_path, &[kept.as_slice(), &[prompt("m3")]].concat());
+
+        let later = sessions.join("2026/09/24");
+        std::fs::create_dir_all(&later).unwrap();
+        let rollout = "01a0d160-0000-7000-8000-000000000001";
+        let path = later.joined(format!("rollout-2026-09-24T03-00-00-{THREAD}_{rollout}.jsonl"));
+        let segment_meta = serde_json::json!({"type": "session_meta", "payload": {"id": THREAD,
+            "history_base": {"thread_id": base, "end_ordinal_exclusive": 4, "end_byte_offset": end}}});
+        write_lines(&path, &[segment_meta, prompt("m4")]);
+
+        let id = session_id_of(&format!("{THREAD}_{rollout}"));
+        let read: Vec<CodexMessage> =
+            CodexSession::open(id, path, pool()).read().try_collect().await.unwrap();
+        assert_eq!(follows(&read), [Some("m2".to_owned()), None]);
     }
 }

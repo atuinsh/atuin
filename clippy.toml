@@ -11,6 +11,22 @@ reason = "panics on overflow; use atuin_common::time::DurationExt::try_new"
 path = "std::time::Duration::from_secs_f64"
 reason = "panics on NaN/negative/overflow; use Duration::try_from_secs_f64"
 
+[[disallowed-methods]]
+path = "std::env::var"
+reason = "use atuin_common::env::var, which can be mocked by tests"
+
+[[disallowed-methods]]
+path = "std::env::var_os"
+reason = "use atuin_common::env::var_os, which can be mocked by tests"
+
+[[disallowed-methods]]
+path = "std::env::set_var"
+reason = "unsound; in tests, use atuin_common::env::MockEnv"
+
+[[disallowed-methods]]
+path = "std::env::remove_var"
+reason = "unsound; in tests, use atuin_common::env::MockEnv"
+
 [[disallowed-types]]
 path = "std::sync::Mutex"
 reason = "use parking_lot::Mutex which is faster"
@@ -62,3 +78,19 @@ path = "sqlx::migrate"
 reason = """use atuin_common::db::migrate!, which runs the migrator and then clears the \
     connection's prepared-statement cache so a later query can't reuse pre-migration column \
     metadata"""
+
+[[disallowed-methods]]
+path = "std::path::absolute"
+reason = "use atuin_common::path::AbsPathBuf::from_current_dir, whose type says the path is absolute"
+
+[[disallowed-methods]]
+path = "std::fs::canonicalize"
+reason = "use atuin_common::path::AbsPathBuf::canonicalize, whose type says the path is absolute"
+
+[[disallowed-methods]]
+path = "std::path::Path::canonicalize"
+reason = "use atuin_common::path::AbsPathBuf::canonicalize, whose type says the path is absolute"
+
+[[disallowed-methods]]
+path = "tokio::fs::canonicalize"
+reason = "use atuin_common::path::AbsPathBuf::canonicalize_async, whose type says the path is absolute"

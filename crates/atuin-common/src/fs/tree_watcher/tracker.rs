@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher as _;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -12,7 +13,7 @@ use super::{ContentMark, FileKind, FileStat, PathFingerprint, WatchedFile};
 enum Slot {
     /// A regular file the filter accepted, and the sender its [`WatchedFile`] listens on.
     Tracked(ContentMark, watch::Sender<FileStat>),
-    /// Any other node: a directory, a symlink, or a file the filter rejected.
+    /// A node that is not a regular file: a directory, a symlink, or anything else.
     Untracked(FileKind),
 }
 
@@ -29,6 +30,11 @@ impl Slot {
 pub struct FileTracker<F> {
     filter: F,
     entries: HashMap<Arc<Path>, Slot>,
+    /// A hash of each file the filter rejected, which gets no entry, so that removing one is a
+    /// lookup and not the sweep of the whole map a path with no entry gets. A hash, not the path:
+    /// two paths sharing one (odds near 2^-64) at worst leave an orphaned subtree to the next full
+    /// scan.
+    rejected: HashSet<u64>,
     found: flume::Sender<WatchedFile>,
 }
 
@@ -40,6 +46,7 @@ where
         Self {
             filter,
             entries: HashMap::new(),
+            rejected: HashSet::new(),
             found,
         }
     }
@@ -75,10 +82,15 @@ where
                 });
                 Slot::Tracked(mark, stat)
             }
-            PathFingerprint::File(_)
-            | PathFingerprint::Dir
-            | PathFingerprint::Symlink
-            | PathFingerprint::Other => Slot::Untracked(kind),
+            // No entry: rejected files can be most of the tree, and asking the filter again is
+            // cheaper than keeping a path for each.
+            PathFingerprint::File(_) => {
+                self.rejected.insert(self.entries.hasher().hash_one(&path));
+                return;
+            }
+            PathFingerprint::Dir | PathFingerprint::Symlink | PathFingerprint::Other => {
+                Slot::Untracked(kind)
+            }
         };
         self.entries.insert(path, slot);
     }
@@ -103,6 +115,8 @@ where
             Some(slot) if slot.kind() != FileKind::Dir => {
                 self.entries.remove(path);
             }
+            // A rejected file, with no subtree to sweep for.
+            None if self.rejected.remove(&self.entries.hasher().hash_one(path)) => {}
             _ => self.entries.retain(|key, _| !key.starts_with(path)),
         }
     }
@@ -139,6 +153,9 @@ where
                 })
         });
 
+        // Rebuilt from the walk: a rejected file removed unseen would keep its hash. One under a
+        // directory the walk did not finish loses it, and its removal sweeps.
+        self.rejected.clear();
         for (path, fingerprint) in truth {
             self.observe_fingerprint(path, fingerprint);
         }
@@ -241,23 +258,28 @@ mod tests {
         assert!(files[1].stat.has_changed().is_ok());
     }
 
-    // A directory that turns into a file takes its tracked children with it; otherwise their
-    // stats outlive the file's own removal until the next full scan.
+    // A directory that turns into a file takes its tracked children with it, even when the file is
+    // rejected; otherwise their stats outlive the file's own removal until the next full scan.
     #[rstest]
-    fn observe_fingerprint_kind_change_from_dir_drops_descendants() {
-        let (mut tracker, found) = accept_all_tracker();
+    #[case::accepted(true, &["/r/x"])]
+    #[case::rejected(false, &[])]
+    fn observe_fingerprint_kind_change_from_dir_drops_descendants(
+        #[case] accepted: bool,
+        #[case] kept: &[&str],
+    ) {
+        let (mut tracker, found) = tracker(move |path| accepted || path != Path::new("/r/x"));
         tracker.observe_fingerprint(ap("/r/x"), PathFingerprint::Dir);
         tracker.observe_fingerprint(ap("/r/x/c"), PathFingerprint::File(mark(1)));
         tracker.observe_fingerprint(ap("/r/x"), PathFingerprint::File(mark(1)));
-        assert_eq!(keys(&tracker), std::iter::once(ap("/r/x")).collect());
+        assert_eq!(keys(&tracker), kept.iter().map(|path| ap(path)).collect());
         let files: Vec<WatchedFile> = found.drain().collect();
         assert_eq!(gone(&files), std::iter::once(ap("/r/x/c")).collect());
     }
 
-    // The filter sees each file path once, never directories, and a rejected file stays
-    // rejected across content changes.
+    // The filter never sees directories, and a rejected file leaves no entry behind, so it is
+    // offered again each time it is seen.
     #[rstest]
-    fn rejected_files_are_recorded_and_not_re_offered() {
+    fn rejected_files_are_re_offered_and_not_recorded() {
         let offers = Arc::new(AtomicU64::new(0));
         let o = Arc::clone(&offers);
         let (mut tracker, found) = tracker(move |_| {
@@ -267,9 +289,9 @@ mod tests {
         tracker.observe_fingerprint(ap("/r/d"), PathFingerprint::Dir);
         tracker.observe_fingerprint(ap("/r/f"), PathFingerprint::File(mark(1)));
         tracker.observe_fingerprint(ap("/r/f"), PathFingerprint::File(mark(2)));
-        assert_eq!(offers.load(Ordering::SeqCst), 1);
+        assert_eq!(offers.load(Ordering::SeqCst), 2);
         assert!(found.is_empty());
-        assert!(matches!(tracker.entries.get(Path::new("/r/f")), Some(Slot::Untracked(_))));
+        assert_eq!(keys(&tracker), std::iter::once(ap("/r/d")).collect());
     }
 
     #[rstest]
@@ -282,27 +304,38 @@ mod tests {
     }
 
     #[rstest]
-    fn forget_tree_drops_subtree() {
+    #[case::of_a_directory(true)]
+    // A directory whose own entry was missed still takes its subtree with it.
+    #[case::of_a_path_with_no_entry(false)]
+    fn forget_tree_drops_subtree(#[case] seen: bool) {
         let (mut tracker, _found) = accept_all_tracker();
-        tracker.observe_fingerprint(ap("/r/sub"), PathFingerprint::Dir);
+        if seen {
+            tracker.observe_fingerprint(ap("/r/sub"), PathFingerprint::Dir);
+        }
         tracker.observe_fingerprint(ap("/r/sub/a"), PathFingerprint::File(mark(1)));
         tracker.observe_fingerprint(ap("/r/sub2/b"), PathFingerprint::File(mark(1)));
         tracker.forget_tree(Path::new("/r/sub"));
         assert_eq!(keys(&tracker), std::iter::once(ap("/r/sub2/b")).collect());
     }
 
-    // A tracked file has no descendants, so forgetting it must be a single removal rather than
-    // a sweep: a (stale) entry under its path is the witness that no prefix scan ran.
+    // A file has no descendants, so forgetting it must be a single removal rather than a sweep,
+    // even a rejected one with no entry: a (stale) entry under its path is the witness that no
+    // prefix scan ran.
     #[rstest]
-    fn forget_tree_of_a_file_removes_only_that_entry() {
-        let (mut tracker, found) = accept_all_tracker();
+    #[case::tracked(true, &["/r/a"])]
+    #[case::rejected(false, &[])]
+    fn forget_tree_of_a_file_removes_only_that_entry(
+        #[case] accepted: bool,
+        #[case] closed: &[&str],
+    ) {
+        let (mut tracker, found) = tracker(move |path| accepted || path != Path::new("/r/a"));
         tracker.observe_fingerprint(ap("/r/a"), PathFingerprint::File(mark(1)));
         tracker.observe_fingerprint(ap("/r/a/stale"), PathFingerprint::File(mark(1)));
         tracker.observe_fingerprint(ap("/r/b"), PathFingerprint::File(mark(1)));
         tracker.forget_tree(Path::new("/r/a"));
         assert_eq!(keys(&tracker), [ap("/r/a/stale"), ap("/r/b")].into_iter().collect());
         let files: Vec<WatchedFile> = found.drain().collect();
-        assert_eq!(gone(&files), std::iter::once(ap("/r/a")).collect());
+        assert_eq!(gone(&files), closed.iter().map(|path| ap(path)).collect());
     }
 
     #[rstest]

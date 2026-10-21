@@ -7,12 +7,13 @@
 
 #[cfg(unix)]
 mod unix {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use atuin_client::database::{Context, Sqlite};
     use atuin_client::history::{History, HistoryId};
     use atuin_client::record::sqlite_store::SqliteStore;
-    use atuin_client::settings::{FilterMode, Settings, init_meta_config_for_testing};
+    use atuin_client::settings::{FilterMode, Settings};
     use atuin_common::filter::OrFilter;
     use atuin_daemon::client::{SearchClient, SearchParams};
     use atuin_daemon::components::SearchComponent;
@@ -59,8 +60,6 @@ mod unix {
         let socket_path = tmp.path().join("test.sock");
         let meta_path = tmp.path().join("meta.db");
 
-        init_meta_config_for_testing(meta_path.to_str().unwrap(), 5.0);
-
         let settings: Settings = Settings::builder()
             .expect("could not build settings builder")
             .set_override("db_path", db_path.to_str().unwrap())
@@ -73,6 +72,9 @@ mod unix {
             .expect("failed to set socket_path")
             .set_override("meta.db_path", meta_path.to_str().unwrap())
             .expect("failed to set meta.db_path")
+            // Prevent meta store from migrating files from the real data dir.
+            .set_override("data_dir", tmp.path().to_str().unwrap())
+            .expect("failed to set data_dir")
             .build()
             .expect("could not build settings")
             .try_deserialize()
@@ -89,7 +91,7 @@ mod unix {
         // nop.
         let search_service = search_component.grpc_service(OutputCaptureEngine::nop().store());
 
-        let mut daemon = Daemon::builder(settings)
+        let mut daemon = Daemon::builder(Arc::new(settings))
             .store(store)
             .history_db(history_db)
             .component(search_component)

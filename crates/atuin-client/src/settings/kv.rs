@@ -1,17 +1,12 @@
+use atuin_common::path::AbsPathBuf;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 
+use super::DbFile;
+
+#[serde_as]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
-    pub db_path: String,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        let dir = atuin_common::utils::data_dir();
-        let path = dir.join("kv.db");
-
-        Self {
-            db_path: path.to_string_lossy().to_string(),
-        }
-    }
+    #[serde_as(as = "DbFile")]
+    pub db_path: AbsPathBuf,
 }

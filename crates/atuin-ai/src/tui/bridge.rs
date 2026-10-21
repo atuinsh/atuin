@@ -8,6 +8,9 @@
 //! both aborts the HTTP stream and guarantees a replaced bridge can't
 //! populate the user-context cache with a stale gather.
 
+use std::sync::Arc;
+
+use atuin_client::settings::Settings;
 use futures::StreamExt;
 
 use crate::context::{AppContext, ClientContext};
@@ -24,6 +27,7 @@ pub fn stream_bridge(
     skill_summaries: Vec<SkillSummary>,
     skill_overflow: Option<String>,
     user_context_cache: UserContextCache,
+    settings: Arc<Settings>,
 ) -> impl futures::Stream<Item = Msg> + Send {
     async_stream::stream! {
         // User context files (TERMINAL.md) are gathered and interpolated on
@@ -46,6 +50,7 @@ pub fn stream_bridge(
             user_contexts,
             skill_summaries,
             skill_overflow,
+            settings,
         );
         futures::pin_mut!(stream);
 

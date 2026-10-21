@@ -1,2 +1,6 @@
 [alias]
 build-traced = "build -p atuin --profile profiling-traced --features profiling-traced"
+
+[env]
+# https://www.sqlite.org/compile.html#recommended_compile_time_options
+LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"

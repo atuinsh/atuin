@@ -47,7 +47,7 @@ dotted key=value pairs:
 $ atuin config get logs --resolved
 logs.ai.file = ai.log
 logs.daemon.file = daemon.log
-logs.dir = /home/user/.local/share/atuin/logs
+logs.dir = /home/user/.atuin/logs
 logs.enabled = true
 logs.level = info
 logs.search.file = search.log
@@ -69,7 +69,13 @@ Resolved:
 ### `atuin config set <key> <value>`
 
 Set a configuration value in your `config.toml`. The file's existing
-formatting and comments are preserved.
+formatting and comments are preserved.[^1]
+
+[^1]: If your config doesn't already contain the key, Atuin searches for an
+intelligent place to insert it. If your config has a commented-out assignment
+of the key like `# style = "compact"`, Atuin may uncomment the example and
+update the value, or insert a new assignment nearby, depending on whether it's
+safe to replace the comment.
 
 ```shell
 $ atuin config set search_mode fuzzy
@@ -130,6 +136,24 @@ If the daemon is already enabled, its `autostart` is left alone, since a
 service manager such as systemd or `launchd` may run it. With `autostart` off,
 Atuin asks you to restart the daemon rather than doing it itself. Open a new
 shell afterward.
+
+### `atuin config disable <feature>`
+
+Turn off a feature.
+
+```shell
+$ atuin config disable output-capture
+```
+
+| Feature          | What it sets                                                                                                 |
+|------------------|--------------------------------------------------------------------------------------------------------------|
+| `daemon`         | `daemon.enabled = false`, `daemon.autostart = false`, and `search_mode = "fuzzy"` if it was `"daemon-fuzzy"` |
+| `output-capture` | `output.enabled = false`. Leaves the daemon and search mode unchanged                                        |
+
+Disabling the daemon stops it if it was running.
+
+Disabling output capture restarts an enabled daemon with `autostart` on so
+it picks up the change. Open a new shell afterward.
 
 ### `atuin config print [key]`
 

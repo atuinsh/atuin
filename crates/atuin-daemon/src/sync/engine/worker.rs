@@ -118,7 +118,7 @@ impl Worker {
         ai_session_db: Option<AiSessionDatabase>,
         ai_session_recovery: Recovery,
     ) -> Result<Self, StartError> {
-        let host_id = Settings::host_id().await.map_err(StartError::HostId)?;
+        let host_id = handle.settings().await.host_id().await.map_err(StartError::HostId)?;
 
         let encryption_key = handle.encryption_key();
         // TODO(markovejnovic): We should definitely not be creating new stores, but this is pending
@@ -177,7 +177,7 @@ impl Worker {
     }
 
     /// Run one [`Self::sync_once`], log any failure, and translate it into a retry decision.
-    async fn sync_tick(&self, settings: &Settings) -> ControlFlow<()> {
+    async fn sync_tick(&self, settings: &Arc<Settings>) -> ControlFlow<()> {
         match self.sync_once(settings).await {
             Ok(()) => ControlFlow::Break(()),
             Err(err) => {
@@ -189,11 +189,18 @@ impl Worker {
 
     /// Attempt a single sync.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn sync_once(&self, settings: &Settings) -> Result<(), SyncTickError> {
+    async fn sync_once(&self, settings: &Arc<Settings>) -> Result<(), SyncTickError> {
         let logged_in = settings.logged_in().await.map_err(SyncTickError::LoginCheck)?;
 
         if !logged_in {
             return Err(SyncTickError::NotLoggedIn);
+        }
+
+        let caps = self.handle.caps();
+        if !caps.is_fetched()
+            && let Err(e) = caps.refresh().await
+        {
+            tracing::warn!("failed to fetch the server's capabilities: {e}");
         }
 
         // Perform the sync
@@ -230,7 +237,7 @@ impl Worker {
         self.index_downloaded_records(&downloaded_records).await;
 
         // Store sync time
-        if let Err(e) = Settings::save_sync_time().await {
+        if let Err(e) = settings.save_sync_time().await {
             tracing::error!("failed to save sync time: {e}");
         }
 

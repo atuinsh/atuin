@@ -1,4 +1,4 @@
-//! `atuin_ai_session_list`: recent AI-agent sessions, newest first.
+//! `atuin_threads_list`: recent AI-agent sessions, newest first.
 
 use std::fmt::Write as _;
 
@@ -15,7 +15,7 @@ use crate::tools::ToolOutcome;
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct AtuinAiSessionListToolCall {
+pub struct AtuinThreadsListToolCall {
     /// Only sessions whose working directory is this path or inside it. Relative paths,
     /// including '.', resolve against the current project directory, so '.' lists the sessions
     /// for this project.
@@ -39,7 +39,7 @@ pub struct AtuinAiSessionListToolCall {
     pub include_subagents: bool,
 }
 
-impl AtuinAiSessionListToolCall {
+impl AtuinThreadsListToolCall {
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
         let mut client = match connect(settings).await {
             Ok(client) => client,
@@ -79,7 +79,7 @@ impl AtuinAiSessionListToolCall {
         let fetch_since = since.map(|since| since.min(caller.active_since()));
         let all = match super::list_sessions(&mut client, harness, fetch_since).await {
             Ok(all) => all,
-            Err(e) => return ToolOutcome::Error(format!("Listing AI sessions failed: {e}")),
+            Err(e) => return ToolOutcome::Error(format!("Listing threads failed: {e}")),
         };
         let own = caller.own_in(&all);
         let (mut sessions, elsewhere): (Vec<_>, Vec<_>) = all
@@ -103,8 +103,8 @@ impl AtuinAiSessionListToolCall {
             }
             let note = note.map_or_else(String::new, |n| format!(" {n}"));
             return ToolOutcome::Success(format!(
-                "No captured AI sessions{scope}.{note} Only sessions recorded while AI session \
-                 capture was enabled are available."
+                "No captured threads{scope}.{note} Only threads recorded while thread capture was \
+                 enabled are available."
             ));
         }
 
@@ -115,7 +115,7 @@ impl AtuinAiSessionListToolCall {
         if let Some(note) = note {
             let _ = writeln!(out, "\n{note}");
         }
-        let _ = write!(out, "\nRead one with atuin_ai_session_read and its session id.");
+        let _ = write!(out, "\nRead one with atuin_threads_read and its thread id.");
         ToolOutcome::Success(out)
     }
 }
@@ -182,7 +182,7 @@ mod tests {
 
     #[rstest]
     fn defaults() {
-        let call: AtuinAiSessionListToolCall = serde_json::from_value(json!({})).unwrap();
+        let call: AtuinThreadsListToolCall = serde_json::from_value(json!({})).unwrap();
         assert_eq!(call.limit.get(), 10);
         assert!(!call.include_subagents);
         assert!(call.cwd.is_none());

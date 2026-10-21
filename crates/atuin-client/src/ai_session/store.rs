@@ -6,15 +6,24 @@ use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
 };
-use tracing::warn;
+use tracing::{debug, warn};
 use typed_builder::TypedBuilder;
 
-use crate::ai_session::Message;
-use crate::ai_session::database::{AiSessionDatabase, DbError, Watermark};
+use crate::ai_session::database::{
+    AiSessionDatabase, DbError, Generation, NewRow, PreparedMessage, Watermark,
+};
+use crate::ai_session::{HarnessKind, Message};
+use crate::record::decode::{decode_parallel, map_parallel};
 use crate::record::sqlite_store::SqliteStore;
 
-/// Records read from the record store at a time while reprojecting.
-const REPROJECT_PAGE: u64 = 512;
+/// The zstd level of a v2 record's body: on captured messages, higher levels shrink them only a
+/// little more, for several times the time.
+const RECORD_ZSTD_LEVEL: i32 = 3;
+
+/// Records read from the record store at a time while reprojecting, each page appended in one
+/// transaction: fewer, larger commits flush and merge the search index far less often. A page
+/// holds capture off for as long as it takes to append (a fraction of a second).
+const REPROJECT_PAGE: u64 = 4096;
 
 /// How many times one reprojection starts over after an invalidation lands in the middle of it.
 /// Past that it gives up for now with [`BuildError::Incomplete`]: the invalidation cleared the
@@ -28,6 +37,20 @@ pub struct AiSessionStore {
     key: Key,
 }
 
+/// What capture knows of this host's watermark before it pushes a record, for
+/// [`AiSessionStore::advance_past_capture`] to move it past the record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureMark {
+    /// Nothing but the invalidation generation, read before the push.
+    Unknown(Generation),
+    /// Where capture last moved it, and the generation it moved it under: no invalidation since
+    /// means it still stands there.
+    Moved {
+        generation: Generation,
+        mark: Watermark,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AiSessionRecord {
     Message(Message),
@@ -35,14 +58,19 @@ pub enum AiSessionRecord {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
-    #[error("empty ai-session record")]
+    #[error("empty thread record")]
     Empty,
-    #[error("unknown ai-session record kind {0}")]
+    #[error("unknown thread record kind {0}")]
     UnknownKind(u8),
-    #[error("unknown ai-session record version {}", .0.as_str())]
+    #[error("unknown thread record version {}", .0.as_str())]
     UnknownVersion(RecordVersion),
-    #[error("failed to decode ai-session record body: {0}")]
+    /// Only written by builds from before records stored the session's id.
+    #[error("thread record version {} is no longer read", .0.as_str())]
+    Retired(RecordVersion),
+    #[error("failed to decode thread record body: {0}")]
     Body(#[from] rmp_serde::decode::Error),
+    #[error("failed to decompress thread record body: {0}")]
+    Decompress(#[source] std::io::Error),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,30 +87,54 @@ pub enum BuildError {
     Db(#[from] DbError),
     /// Invalidations kept landing in the middle of it: after `REPROJECT_PASSES` passes the
     /// sidecar may still be missing records. The next reprojection replays what this one left.
-    #[error("the ai-session projection kept being invalidated, and is incomplete")]
+    #[error("the threads projection kept being invalidated, and is incomplete")]
     Incomplete,
     /// Only [`AiSessionStore::reproject_beside_capture`]: the host's series was rewritten or
     /// deleted under its watermark, and forgetting what it projected would delete rows of this
     /// host, which capture dedups against. Nothing was forgotten: the caller must have it
     /// forgotten with capture held off, then replay.
-    #[error("the ai-session records of host {0} were rewritten under capture")]
+    #[error("the thread records of host {0} were rewritten under capture")]
     ForgetHeldOff(HostId),
 }
 
 impl AiSessionRecord {
     const MESSAGE_KIND: u8 = 0;
 
-    /// v0: named msgpack, without [`Message::atuin_id`]. v1: positional, so any change to
-    /// [`Message`]'s fields needs a new version.
-    pub const VERSION: RecordVersion = RecordVersion::V1;
+    /// v1: positional msgpack, so any change to [`Message`]'s fields needs a new version. v2:
+    /// v1's body, compressed with zstd (captured tool payloads compress about 2.4 times). v0
+    /// (named msgpack, without [`Message::atuin_id`]) is no longer read.
+    pub const VERSION: RecordVersion = RecordVersion::V2;
 
-    /// A kind byte, then the positional msgpack body.
+    /// The version this record is written as: [`Self::VERSION`], or v3 (the same body) for a
+    /// message naming a harness v2 readers don't know (omp), or with a field they don't
+    /// ([`Message::provider`]). Those can't decode it, and skip what they can't decode for good;
+    /// a version they don't know they hold until they're upgraded.
+    #[must_use]
+    pub fn version(&self) -> RecordVersion {
+        match self {
+            Self::Message(msg) => {
+                let mut harnesses = std::iter::once(msg.session.harness)
+                    .chain(msg.parent.as_ref().map(|p| p.harness));
+                if harnesses.any(|h| h == HarnessKind::Omp) || msg.provider.is_some() {
+                    RecordVersion::V3
+                } else {
+                    Self::VERSION
+                }
+            }
+        }
+    }
+
+    /// A kind byte, then the zstd-compressed positional msgpack body.
     #[must_use]
     pub fn serialize(&self) -> Vec<u8> {
         match self {
             Self::Message(msg) => {
+                let body = rmp_serde::to_vec(msg).expect("Message is always serializable");
                 let mut out = vec![Self::MESSAGE_KIND];
-                out.extend(rmp_serde::to_vec(msg).expect("Message is always serializable"));
+                out.extend(
+                    zstd::bulk::compress(&body, RECORD_ZSTD_LEVEL)
+                        .expect("compressing to memory cannot fail"),
+                );
                 out
             }
         }
@@ -94,12 +146,14 @@ impl AiSessionRecord {
             return Err(DecodeError::UnknownKind(kind));
         }
 
-        // from_slice reads a map by name (v0) or an array by position (v1).
         match version {
-            RecordVersion::V0 | RecordVersion::V1 => {
-                Ok(Self::Message(rmp_serde::from_slice(body)?))
+            RecordVersion::V0 => Err(DecodeError::Retired(RecordVersion::V0)),
+            RecordVersion::V1 => Ok(Self::Message(rmp_serde::from_slice(body)?)),
+            RecordVersion::V2 | RecordVersion::V3 => {
+                let body = zstd::stream::decode_all(body).map_err(DecodeError::Decompress)?;
+                Ok(Self::Message(rmp_serde::from_slice(&body)?))
             }
-            other => Err(DecodeError::UnknownVersion(other.clone())),
+            other @ RecordVersion::Other(_) => Err(DecodeError::UnknownVersion(other.clone())),
         }
     }
 }
@@ -116,10 +170,12 @@ impl AiSessionStore {
         Ok(self.store.contains(id).await?)
     }
 
-    pub async fn push(&self, msg: &Message) -> Result<RecordId, PushError> {
+    /// Push `msg` to this host's series, returning where it was stored.
+    pub async fn push(&self, msg: &Message) -> Result<Watermark, PushError> {
         let id = msg.id;
 
-        let bytes = AiSessionRecord::Message(msg.clone()).serialize();
+        let record = AiSessionRecord::Message(msg.clone());
+        let (bytes, version) = (record.serialize(), record.version());
         let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
 
         loop {
@@ -128,23 +184,114 @@ impl AiSessionStore {
             let record = Record::builder()
                 .id(id)
                 .host(Host::new(self.host_id))
-                .version(AiSessionRecord::VERSION)
+                .version(version.clone())
                 .tag(RecordTag::AiSession)
                 .idx(idx)
                 .data(DecryptedData(bytes.clone()))
                 .build();
 
             if self.store.push_unique(&record.encrypt(&self.key)).await? {
-                return Ok(id);
+                return Ok(Watermark { idx, record_id: id });
             }
         }
     }
 
-    async fn decode_and_append(
+    /// [`Self::push`] each of `msgs`, in order and in one transaction: all of them or none.
+    /// Returns where the last was stored, `None` for none.
+    pub async fn push_all(&self, msgs: &Arc<[Message]>) -> Result<Option<Watermark>, PushError> {
+        let Some(last) = msgs.last() else {
+            return Ok(None);
+        };
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
+        let first = self.store.last(&series).await?.map_or(0, |r| r.idx + 1);
+        let (all, host, key) = (Arc::clone(msgs), Host::new(self.host_id), self.key.clone());
+        // Serializing and encrypting each is most of what pushing costs: across cores.
+        let records = map_parallel((0..msgs.len()).collect(), move |i| {
+            let record = AiSessionRecord::Message(all[i].clone());
+            Record::builder()
+                .id(all[i].id)
+                .host(host.clone())
+                .version(record.version())
+                .tag(RecordTag::AiSession)
+                .idx(first + i as u64)
+                .data(DecryptedData(record.serialize()))
+                .build()
+                .encrypt(&key)
+        })
+        .await;
+        if self.store.push_batch_unique(records.iter()).await? {
+            let idx = first + msgs.len() as u64 - 1;
+            return Ok(Some(Watermark {
+                idx,
+                record_id: last.id,
+            }));
+        }
+        // A slot taken meanwhile, or a record stored already: one at a time, as `push` retries
+        // the one and takes the other as done.
+        let mut pushed = None;
+        for msg in msgs.iter() {
+            pushed = Some(self.push(msg).await?);
+        }
+        Ok(pushed)
+    }
+
+    /// Move this host's watermark onto `pushed`, the last of `count` records [`Self::push_all`]
+    /// stored and the caller has since projected, so the next reprojection (each startup's)
+    /// doesn't replay what capture projected as it went. Only when the watermark stands on the
+    /// record just before the first of them (still the record it was, as a reprojection checks),
+    /// no invalidation happened since `known`'s generation, and no reprojection is running, which
+    /// moves it itself.
+    ///
+    /// Returns where it moved it, for the next capture's `known`: one following on from it moves
+    /// it with a single write. `None` if it didn't move it: the next capture reads the generation
+    /// before its push again.
+    pub async fn advance_past_capture(
         &self,
-        record: Record<EncryptedData>,
         db: &AiSessionDatabase,
-    ) -> Result<Projected, BuildError> {
+        known: CaptureMark,
+        pushed: Watermark,
+        count: u64,
+    ) -> Result<Option<CaptureMark>, BuildError> {
+        let Some(_running) = db.try_lock_reprojection() else {
+            return Ok(None);
+        };
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
+        let (generation, from) = match known {
+            CaptureMark::Moved { generation, mark } => {
+                if mark.idx + count != pushed.idx {
+                    return Ok(None);
+                }
+                (generation, Some(mark))
+            }
+            CaptureMark::Unknown(generation) => {
+                let from = db.reproject_watermarks().await?.remove(&series);
+                let follows = match from {
+                    None => pushed.idx + 1 == count,
+                    Some(mark) => {
+                        mark.idx + count == pushed.idx
+                            && self
+                                .store
+                                .idx(&series, mark.idx)
+                                .await?
+                                .is_some_and(|record| record.id == mark.record_id)
+                    }
+                };
+                if !follows {
+                    return Ok(None);
+                }
+                (generation, from)
+            }
+        };
+        let moved = db.advance_reproject_watermark(&series, generation, from, pushed).await?;
+        Ok(moved.then_some(CaptureMark::Moved {
+            generation,
+            mark: pushed,
+        }))
+    }
+
+    /// Decrypt and decode `record` with `key`, and prepare it for the sidecar, which the caller
+    /// appends it to.
+    fn decode(key: &Key, record: &Record<EncryptedData>) -> Result<Projected, DbError> {
         if record.tag != RecordTag::AiSession {
             return Ok(Projected::Skipped);
         }
@@ -161,9 +308,18 @@ impl AiSessionStore {
         //   series' later records on each reprojection, but never stops them projecting.
         // - One that decrypts but whose kind or version this build does not know is held until
         //   an upgrade.
+        // - One of a version this build no longer reads (from before records stored the
+        //   session's id) is skipped: no later build reads it either. Before it is decrypted,
+        //   which is most of what a replay of a store full of them costs. The version is only
+        //   authenticated by decrypting, so a record's version changed to v0 is skipped rather
+        //   than held: no more than a server can do by withholding the record.
         // - One that decrypts to a known kind but fails to decode is skipped: decryption
         //   authenticates it, so it is exactly what its writer wrote, and no retry reads it.
-        let decrypted = match record.decrypt(&self.key) {
+        if record.version == RecordVersion::V0 {
+            debug!(id = %id.0, "skipping retired ai-session record");
+            return Ok(Projected::Skipped);
+        }
+        let decrypted = match record.decrypt(key) {
             Ok(decrypted) => decrypted,
             Err(err) => {
                 warn!(?err, id = %id.0, "failed to decrypt ai-session record, holding it back");
@@ -179,6 +335,10 @@ impl AiSessionStore {
                 warn!(?err, id = %id.0, "unknown ai-session record kind or version, holding it back");
                 return Ok(Projected::Held);
             }
+            Err(DecodeError::Retired(version)) => {
+                debug!(id = %id.0, version = version.as_str(), "skipping retired ai-session record");
+                return Ok(Projected::Skipped);
+            }
             Err(err) => {
                 warn!(?err, id = %id.0, "failed to deserialize ai-session record, skipping");
                 return Ok(Projected::Skipped);
@@ -186,12 +346,11 @@ impl AiSessionStore {
         };
 
         // The record body never carries the host: its envelope does.
-        let msg = Message {
+        let msg = PreparedMessage::new(Message {
             host: Some(host),
             ..msg
-        };
-        db.append(&msg).await?;
-        Ok(Projected::Appended)
+        })?;
+        Ok(Projected::Append(Box::new(msg)))
     }
 
     /// Replay every record into the sidecar, whatever it already holds.
@@ -226,7 +385,7 @@ impl AiSessionStore {
         db: &AiSessionDatabase,
         progress: &ReprojectProgress,
     ) -> Result<Reprojected, BuildError> {
-        self.reproject_as(db, progress, Forgetting::HeldOff).await
+        self.reproject_as(db, progress, Forgetting::HeldOff, &mut |_| async {}).await
     }
 
     /// [`Self::reproject`], safe beside live capture, for projecting what a sync downloaded:
@@ -239,18 +398,25 @@ impl AiSessionStore {
     /// added rows to this host's sessions) is skipped, forgetting nothing, and once the other
     /// series are projected this fails with [`BuildError::ForgetHeldOff`] naming its host (the
     /// first, if several).
-    pub async fn reproject_beside_capture(
+    ///
+    /// Each page's rows not projected before are handed to `appended` once committed, until
+    /// something invalidates the projection or forgets a series: what is replayed after that was
+    /// projected before.
+    pub async fn reproject_beside_capture<F: Future<Output = ()>>(
         &self,
         db: &AiSessionDatabase,
+        mut appended: impl FnMut(Vec<NewRow>) -> F,
     ) -> Result<Reprojected, BuildError> {
-        self.reproject_as(db, &ReprojectProgress::default(), Forgetting::BesideCapture).await
+        let progress = ReprojectProgress::default();
+        self.reproject_as(db, &progress, Forgetting::BesideCapture, &mut appended).await
     }
 
-    async fn reproject_as(
+    async fn reproject_as<F: Future<Output = ()>>(
         &self,
         db: &AiSessionDatabase,
         progress: &ReprojectProgress,
         forgetting: Forgetting,
+        appended: &mut impl FnMut(Vec<NewRow>) -> F,
     ) -> Result<Reprojected, BuildError> {
         let _running = db.lock_reprojection().await;
         if db.check_projection_key(&self.key.key_id().to_string()).await? {
@@ -260,14 +426,17 @@ impl AiSessionStore {
 
         let mut stats = Reprojected::default();
         let mut result = None;
+        let mut appended = Some(appended);
         for _ in 0..REPROJECT_PASSES {
-            match self.reproject_pass(db, &mut stats, progress, forgetting).await {
+            let to = appended.as_deref_mut();
+            match self.reproject_pass(db, &mut stats, progress, forgetting, to).await {
                 Ok(Pass::Done) => {
                     result = Some(Ok(()));
                     break;
                 }
                 Ok(Pass::Invalidated) => {
                     warn!("ai-session projection invalidated under reproject, starting over");
+                    appended = None;
                 }
                 Err(err) => {
                     result = Some(Err(err));
@@ -288,12 +457,13 @@ impl AiSessionStore {
         }
     }
 
-    async fn reproject_pass(
+    async fn reproject_pass<F: Future<Output = ()>>(
         &self,
         db: &AiSessionDatabase,
         stats: &mut Reprojected,
         progress: &ReprojectProgress,
         forgetting: Forgetting,
+        mut appended: Option<&mut impl FnMut(Vec<NewRow>) -> F>,
     ) -> Result<Pass, BuildError> {
         let mut marks = db.reproject_watermarks().await?;
         let mut series: Vec<(RecordSeriesKey, RecordIdx)> = self
@@ -327,10 +497,16 @@ impl AiSessionStore {
         let mut held_off = None;
         for (series, last) in series {
             let mark = marks.remove(&series);
-            match self.reproject_series(db, &series, last, mark, stats, progress, forgetting).await
-            {
+            let to = appended.as_deref_mut();
+            let replayed = self
+                .reproject_series(db, &series, last, mark, stats, progress, forgetting, to)
+                .await;
+            match replayed {
                 Ok(Pass::Done) => {}
-                Ok(Pass::Invalidated) => pass = Pass::Invalidated,
+                Ok(Pass::Invalidated) => {
+                    pass = Pass::Invalidated;
+                    appended = None;
+                }
                 Err(BuildError::ForgetHeldOff(host)) => {
                     held_off.get_or_insert(host);
                 }
@@ -401,7 +577,7 @@ impl AiSessionStore {
     /// Replay `series` past `mark`. [`Pass::Invalidated`] when an invalidation stopped it, or it
     /// forgot other hosts' watermarks, so that the reprojection goes round again.
     #[expect(clippy::too_many_arguments)]
-    async fn reproject_series(
+    async fn reproject_series<F: Future<Output = ()>>(
         &self,
         db: &AiSessionDatabase,
         series: &RecordSeriesKey,
@@ -410,6 +586,7 @@ impl AiSessionStore {
         stats: &mut Reprojected,
         progress: &ReprojectProgress,
         forgetting: Forgetting,
+        mut appended: Option<&mut impl FnMut(Vec<NewRow>) -> F>,
     ) -> Result<Pass, BuildError> {
         let mut pass = Pass::Done;
         let (start, mut from) = match mark {
@@ -430,6 +607,7 @@ impl AiSessionStore {
                     if self.forget_host(db, series.host_id, forgetting).await? {
                         pass = Pass::Invalidated;
                     }
+                    appended = None;
                     stats.restarted += 1;
                     (0, None)
                 }
@@ -442,38 +620,58 @@ impl AiSessionStore {
         // Read before replaying anything: an invalidation after this stops the watermark moving.
         let generation = db.projection_generation().await?;
         let mut next = start;
-        // A held record keeps the watermark below it (see `decode_and_append`), and so does a
+        // A held record keeps the watermark below it (see `decode`), and so does a
         // hole in the series: a record missing there (not downloaded yet, as sync can fetch a
         // series' records out of order) would never be replayed if the watermark passed it.
         // Records past either are still replayed, which a later replay repeats idempotently.
         let mut held = false;
-        loop {
-            // Per page rather than per series, so capture never waits long.
-            let local = self.lock_if_local(db, series.host_id).await;
-            let page = self.store.next(series, next, REPROJECT_PAGE).await?;
-            let Some(tail) = page.last() else {
-                break;
-            };
+        // Records are only read under the lock (see `lock_if_local`), so never one capture has
+        // pushed but not yet appended. One read but not yet appended is to capture as one not yet
+        // read: as every page after the one replaying is, between pages.
+        let mut page = {
+            let _local = self.lock_if_local(db, series.host_id).await;
+            self.read_page(series, next).await?
+        };
+        while let Some(&(tail, _, _)) = page.last() {
+            let page_len = page.len() as u64;
             let mut expected = next;
-            next = tail.idx + 1;
+            next = tail + 1;
 
             let mut to = None;
-            for record in page {
-                let (idx, record_id) = (record.idx, record.id);
+            let mut msgs = Vec::with_capacity(page.len());
+            for (idx, record_id, projected) in page {
                 if idx != expected {
                     held = true;
                 }
                 expected = idx + 1;
-                if self.decode_and_append(record, db).await? == Projected::Held {
-                    held = true;
+                match projected? {
+                    Projected::Append(msg) => msgs.push(*msg),
+                    Projected::Held => held = true,
+                    Projected::Skipped => {}
                 }
-                stats.replayed += 1;
-                progress.replayed.fetch_add(1, Ordering::Relaxed);
                 if !held {
                     to = Some(Watermark { idx, record_id });
                 }
             }
+
+            // Per page rather than per series, so capture never waits long. The page is appended
+            // in one transaction (committing each row alone is most of a replay's cost), while
+            // the next one is read and decoded.
+            let local = self.lock_if_local(db, series.host_id).await;
+            let (new, following) =
+                tokio::join!(db.append_all(msgs, generation), self.read_page(series, next));
             drop(local);
+            let Some(new) = new? else {
+                warn!(host = %series.host_id, "ai-session sidecar invalidated under reproject");
+                return Ok(Pass::Invalidated);
+            };
+            if let Some(appended) = appended.as_mut()
+                && !new.is_empty()
+            {
+                appended(new).await;
+            }
+            stats.replayed += page_len;
+            progress.replayed.fetch_add(page_len, Ordering::Relaxed);
 
             // Every append up to `to` has committed, in the same database: a watermark that
             // survives a crash implies the appends it covers do too.
@@ -484,9 +682,25 @@ impl AiSessionStore {
                 }
                 from = Some(to);
             }
+            page = following?;
         }
 
         Ok(pass)
+    }
+
+    /// The page of `series` from `from`: each record's place in it, and what replaying it does,
+    /// decoded and prepared across cores.
+    async fn read_page(
+        &self,
+        series: &RecordSeriesKey,
+        from: RecordIdx,
+    ) -> Result<Vec<(RecordIdx, RecordId, Result<Projected, DbError>)>, BuildError> {
+        let records = self.store.next(series, from, REPROJECT_PAGE).await?;
+        let key = self.key.clone();
+        Ok(decode_parallel(records, move |record| {
+            (record.idx, record.id, Self::decode(&key, &record))
+        })
+        .await)
     }
 }
 
@@ -527,10 +741,10 @@ impl ReprojectProgress {
     }
 }
 
-/// What replaying one record did to the sidecar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What replaying one record does to the sidecar.
+#[derive(Debug)]
 enum Projected {
-    Appended,
+    Append(Box<PreparedMessage>),
     /// Can never be projected (not ai-session, or authentic but undecodable): pass over it.
     Skipped,
     /// Cannot be projected with this key or by this build: replay it again (with another key,
@@ -559,6 +773,7 @@ enum Pass {
 mod tests {
     use std::ops::Range;
 
+    use atuin_common::env;
     use atuin_common::harnesstools::session::{Content, Role};
     use atuin_domain::record::HostId;
     use futures::TryStreamExt;
@@ -648,9 +863,13 @@ mod tests {
         let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let s = AiSessionStore::builder().store(store.clone()).host_id(hid()).key(key()).build();
         let msg = sample_message();
-        let id = s.push(&msg).await.unwrap();
+        let pushed = s.push(&msg).await.unwrap();
 
-        assert_eq!(id, msg.id, "push must return the message's own id, not a re-minted one");
+        assert_eq!(
+            pushed.record_id, msg.id,
+            "push must return the message's own id, not a re-minted one"
+        );
+        assert_eq!(pushed.idx, 0);
 
         let recs = store.all_tagged(&RecordTag::AiSession).await.unwrap();
         assert_eq!(recs.len(), 1);
@@ -670,6 +889,43 @@ mod tests {
                 AiSessionRecord::deserialize(&bytes, &AiSessionRecord::VERSION).unwrap();
             prop_assert_eq!(m, back);
         });
+    }
+
+    fn with_patch() -> Message {
+        use atuin_common::harnesstools::session::{Change, FilePatch, Hunk, Patch};
+        let mut msg = sample_message();
+        msg.role = Role::Tool;
+        msg.content = vec![Content::Patch(Patch {
+            call: "toolu_1".to_owned().into(),
+            files: vec![FilePatch {
+                path: "/w/a.rs".to_owned(),
+                change: Change::Update,
+                moved_to: None,
+                hunks: vec![Hunk {
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec!["-b".to_owned(), "+c".to_owned()],
+                }],
+            }],
+        })];
+        msg
+    }
+
+    /// A message holding a patch round-trips through its record.
+    #[rstest]
+    #[tokio::test]
+    async fn a_patch_round_trips() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let s = AiSessionStore::builder().store(store.clone()).host_id(hid()).key(key()).build();
+        let msg = with_patch();
+        s.push(&msg).await.unwrap();
+        let recs = store.all_tagged(&RecordTag::AiSession).await.unwrap();
+        let decrypted = recs[0].decrypt(&key()).unwrap();
+        let AiSessionRecord::Message(got) =
+            AiSessionRecord::deserialize(&decrypted.data.0, &decrypted.version).unwrap();
+        assert_eq!(got, msg);
     }
 
     #[rstest]
@@ -861,7 +1117,7 @@ mod tests {
             .collect();
         assert_eq!(listed, std::slice::from_ref(&kept));
         let found: Vec<_> = db
-            .search("zebra", SearchTerms::All, &SessionFilter::default(), 0)
+            .search(SearchTerms::All(vec!["zebra".into()]), &SessionFilter::default(), 0)
             .map_ok(|m| m.session.handle)
             .try_collect()
             .await
@@ -876,7 +1132,11 @@ mod tests {
     #[tokio::test]
     async fn resetting_keeps_capture_checkpoints() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        let checkpoint = atuin_common::harnesstools::session::Checkpoint { at: 42, digest: 7 };
+        let checkpoint = atuin_common::harnesstools::session::Checkpoint {
+            at: 42,
+            digest: 7,
+            generation: 0,
+        };
         db.set_checkpoint(&sample_handle(), checkpoint).await.unwrap();
         db.reset().await.unwrap();
         assert_eq!(db.checkpoint(&sample_handle()).await.unwrap(), Some(checkpoint));
@@ -991,8 +1251,8 @@ mod tests {
         s.reproject(&db).await.unwrap();
         let before = mark(&db, &s).await;
 
-        // The sidecar dies partway through the next batch: the appends before it commit, the
-        // one it hits and every later one do not.
+        // The sidecar dies partway through the next page, which is appended in one transaction:
+        // none of it commits, source-3 before the failure included.
         push_range(&s, &handle, 3..6).await;
         let fault =
             atuin_common::db::sqlite::Sqlite::builder(path.as_os_str()).open().await.unwrap();
@@ -1004,10 +1264,10 @@ mod tests {
         .await
         .unwrap();
         assert!(s.reproject(&db).await.is_err());
-        assert_eq!(count(&db, &handle).await, Some(4), "source-3 made it in");
+        assert_eq!(count(&db, &handle).await, Some(3), "the page rolled back whole");
         assert_eq!(mark(&db, &s).await, before, "the watermark must not pass what failed");
 
-        // A restart replays from the old watermark, source-3 included, and counts it once.
+        // A restart replays the page from the old watermark.
         drop(db);
         atuin_common::db::query("DROP TRIGGER fail_write").execute(fault.pool()).await.unwrap();
         let db = AiSessionDatabase::open(&path).await.unwrap();
@@ -1101,7 +1361,10 @@ mod tests {
         .await
         .unwrap();
         assert!(matches!(s.reproject(&db).await, Err(BuildError::Incomplete)));
-        assert!(matches!(s.reproject_beside_capture(&db).await, Err(BuildError::Incomplete)));
+        assert!(matches!(
+            s.reproject_beside_capture(&db, |_| async {}).await,
+            Err(BuildError::Incomplete)
+        ));
         assert_eq!(mark(&db, &s).await, None);
 
         atuin_common::db::query("DROP TRIGGER invalidate").execute(raw.pool()).await.unwrap();
@@ -1139,7 +1402,7 @@ mod tests {
         // Host c's store is reset: its sessions hold no row of `a`, so it is forgotten.
         delete_all_of(c.host_id).await;
         push_range(&c, &session_named("again"), 30..31).await;
-        a.reproject_beside_capture(&db).await.unwrap();
+        a.reproject_beside_capture(&db, |_| async {}).await.unwrap();
         assert_eq!(count(&db, &theirs).await, None);
         assert_eq!(count(&db, &session_named("again")).await, Some(1));
 
@@ -1148,7 +1411,7 @@ mod tests {
         delete_all_of(b.host_id).await;
         push_range(&b, &session_named("anew"), 40..41).await;
         push_range(&c, &session_named("again"), 31..32).await;
-        let err = a.reproject_beside_capture(&db).await.unwrap_err();
+        let err = a.reproject_beside_capture(&db, |_| async {}).await.unwrap_err();
         assert!(matches!(err, BuildError::ForgetHeldOff(host) if host == b.host_id), "{err:?}");
         assert_eq!(count(&db, &shared).await, Some(3), "nothing was forgotten");
         assert_eq!(count(&db, &session_named("anew")).await, None);
@@ -1160,13 +1423,48 @@ mod tests {
         // This host's own series rewritten under its watermark (reset, and pushed again).
         delete_all_of(a.host_id).await;
         push_range(&a, &mine, 0..2).await;
-        let err = a.reproject_beside_capture(&db).await.unwrap_err();
+        let err = a.reproject_beside_capture(&db, |_| async {}).await.unwrap_err();
         assert!(matches!(err, BuildError::ForgetHeldOff(host) if host == a.host_id), "{err:?}");
         assert_eq!(count(&db, &mine).await, Some(2), "nothing was forgotten");
         assert_eq!(count(&db, &shared).await, Some(1));
         a.reproject(&db).await.unwrap();
         assert_eq!(count(&db, &mine).await, Some(2));
         assert_eq!(count(&db, &shared).await, None, "its row went with the old series");
+    }
+
+    /// Beside capture, the rows a reprojection appends are handed on once, as new: not again
+    /// when a series found rewritten is forgotten and replayed.
+    #[rstest]
+    #[tokio::test]
+    async fn beside_capture_rows_replayed_after_a_forget_are_not_new() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [a, c] = <[_; 2]>::try_from(writers(&store, 2)).ok().unwrap();
+        let theirs = session_named("theirs");
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let reproject = async || {
+            let mut sent = Vec::new();
+            let to = |rows: Vec<super::NewRow>| {
+                sent.extend(rows.into_iter().map(|row| row.message.source_id));
+                async {}
+            };
+            a.reproject_beside_capture(&db, to).await.unwrap();
+            sent.len()
+        };
+
+        push_range(&c, &theirs, 0..2).await;
+        assert_eq!(reproject().await, 2);
+        assert_eq!(reproject().await, 0);
+
+        // Host c's store is reset and pushed again: forgotten, then replayed.
+        for r in store.all_tagged(&RecordTag::AiSession).await.unwrap() {
+            store.delete(r.id).await.unwrap();
+        }
+        push_range(&c, &theirs, 0..2).await;
+        assert_eq!(reproject().await, 0);
+        assert_eq!(count(&db, &theirs).await, Some(2));
+
+        push_range(&c, &theirs, 2..3).await;
+        assert_eq!(reproject().await, 1);
     }
 
     /// Forgetting a host deletes its sessions whole, rows other hosts added included, so those
@@ -1249,8 +1547,7 @@ mod tests {
             let db = db.clone();
             async move {
                 let matches = db.search(
-                    query,
-                    crate::ai_session::SearchTerms::All,
+                    crate::ai_session::SearchTerms::All(vec![query.to_owned()]),
                     &crate::ai_session::SessionFilter::default(),
                     0,
                 );
@@ -1273,7 +1570,7 @@ mod tests {
         let record = Record::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .host(Host::new(s.host_id))
-            .version(RecordVersion::V0)
+            .version(AiSessionRecord::VERSION)
             .tag(RecordTag::AiSession)
             .idx(1)
             .data(DecryptedData(vec![99]))
@@ -1411,7 +1708,7 @@ mod tests {
         let record = Record::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .host(Host::new(s.host_id))
-            .version(RecordVersion::V0)
+            .version(RecordVersion::V1)
             .tag(RecordTag::AiSession)
             .idx(1)
             // A message kind, then a msgpack byte that is never valid.
@@ -1426,6 +1723,36 @@ mod tests {
         assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(3));
     }
 
+    /// A v0 record (from before records stored the session's id) is passed over, not held: it
+    /// would hold the watermark forever. It is passed over unread, so even one this key can't
+    /// decrypt (which would otherwise be held) is.
+    #[rstest]
+    #[tokio::test]
+    async fn a_v0_record_is_skipped(#[values(key(), Key::from([1u8; 32]))] written_with: Key) {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        let handle = sample_handle();
+        push_range(&s, &handle, 0..1).await;
+        let msg = message_in(&session_named("v0"), 1, "text");
+        let record = Record::builder()
+            .id(msg.id)
+            .host(Host::new(s.host_id))
+            .version(RecordVersion::V0)
+            .tag(RecordTag::AiSession)
+            .idx(1)
+            .data(DecryptedData(AiSessionRecord::Message(msg).serialize()))
+            .build();
+        store.push(&record.encrypt(&written_with)).await.unwrap();
+        push_range(&s, &handle, 1..3).await;
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 4);
+        assert_eq!(count(&db, &handle).await, Some(3));
+        assert_eq!(count(&db, &session_named("v0")).await, None);
+        assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(3));
+        assert_eq!(s.reproject(&db).await.unwrap().replayed, 0);
+    }
+
     /// Startup reprojection cost on a large store, before (a full replay into an already
     /// populated sidecar, what every startup used to do) and after (watermarks in place, a few
     /// new records). `cargo test -p atuin-client --release -- --ignored --nocapture reproject_timing`
@@ -1433,8 +1760,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "benchmark"]
     async fn reproject_timing() {
-        let records: i64 =
-            std::env::var("REPROJECT_RECORDS").map_or(20_000, |n| n.parse().unwrap());
+        let records: i64 = env::var("REPROJECT_RECORDS").map_or(20_000, |n| n.parse().unwrap());
         let dir = tempfile::tempdir().unwrap();
         let store =
             SqliteStore::new(dir.path().join("records.db"), test_local_timeout()).await.unwrap();

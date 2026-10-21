@@ -46,7 +46,7 @@ pub trait EscapeNonPrintablePosixExt: AsRef<str> {
     }
 }
 
-impl<T: AsRef<str>> EscapeNonPrintablePosixExt for T {}
+impl<T: AsRef<str> + ?Sized> EscapeNonPrintablePosixExt for T {}
 
 #[cfg(test)]
 mod tests {
