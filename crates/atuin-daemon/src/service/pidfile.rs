@@ -684,20 +684,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn run_mode() -> impl Strategy<Value = RunMode> {
-        use crate::service::run_mode::ExternalManager;
-
-        prop_oneof![
-            Just(RunMode::DaemonizeForked),
-            Just(RunMode::LaunchdAgent),
-            Just(RunMode::External(None)),
-            Just(RunMode::External(Some(ExternalManager::SystemdSocket))),
-            ".*".prop_map(|name| RunMode::External(Some(ExternalManager::SystemdUnit { name }))),
-            ".*".prop_map(|label| RunMode::External(Some(ExternalManager::LaunchdJob { label }))),
-        ]
-    }
-
-    #[cfg(unix)]
     fn path_buf() -> impl Strategy<Value = PathBuf> {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
@@ -712,7 +698,16 @@ mod tests {
             pid in any::<u32>(),
             version in ".*",
             socket_path in proptest::option::of(path_buf()),
-            run_mode in proptest::option::of(run_mode()),
+            run_mode in proptest::option::of(prop_oneof![
+                Just(RunMode::DaemonizeForked),
+                Just(RunMode::LaunchdAgent),
+                proptest::option::of(prop_oneof![
+                    Just(crate::service::ExternalManager::SystemdSocket),
+                    ".*".prop_map(|name| crate::service::ExternalManager::SystemdUnit { name }),
+                    ".*".prop_map(|label| crate::service::ExternalManager::LaunchdJob { label }),
+                ])
+                .prop_map(RunMode::External),
+            ]),
         ) {
             let info = PidfileInfo { pid, version, socket_path, run_mode };
             let contents = format!(

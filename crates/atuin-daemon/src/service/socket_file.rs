@@ -3,7 +3,6 @@ use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use atuin_client::settings::Daemon as DaemonSettings;
 use tokio::task::JoinHandle;
 
 /// The socket file a daemon listens on, kept fresh against temporary file cleaners and, if the
@@ -29,15 +28,14 @@ impl SocketFile {
 
     /// Own the socket bound at `path`, keeping it fresh from the current Tokio runtime.
     pub(super) fn new(path: PathBuf) -> Self {
-        Self {
-            keepalive: Self::keep_fresh(path.clone()),
-            remove_on_drop: Some(path),
-        }
+        let mut socket = Self::kept_fresh(path.clone());
+        socket.remove_on_drop = Some(path);
+        socket
     }
 
-    /// Keep fresh the socket launchd holds at `path`, which goes on listening once the daemon exits.
-    #[cfg(target_os = "macos")]
-    pub(super) fn held_by_launchd(path: PathBuf) -> Self {
+    /// Keep fresh the socket at `path`, which goes on listening once the daemon exits, as
+    /// launchd's does.
+    pub(super) fn kept_fresh(path: PathBuf) -> Self {
         Self {
             keepalive: Self::keep_fresh(path),
             remove_on_drop: None,
@@ -56,24 +54,25 @@ impl SocketFile {
         })
     }
 
-    /// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
+    /// Remove the daemon's socket from each of `paths` it is at, subject to `should_remove`.
     pub(super) fn remove_all(
-        daemon: &DaemonSettings,
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
         should_remove: impl Fn(&Path) -> bool,
     ) -> Result<(), RemoveSocketError> {
         let mut error = None;
-        for socket_path in crate::client::potential_socket_paths(daemon) {
-            if !socket_path.exists() || !should_remove(&socket_path) {
+        for socket_path in paths {
+            let socket_path = socket_path.as_ref();
+            if !socket_path.exists() || !should_remove(socket_path) {
                 continue;
             }
 
-            if let Err(e) = std::fs::remove_file(&socket_path)
+            if let Err(e) = std::fs::remove_file(socket_path)
                 && e.kind() != ErrorKind::NotFound
             {
                 // Log the error because we only return the first error when multiple occur.
                 tracing::error!("failed to remove daemon socket {}: {e}", socket_path.display());
                 error.get_or_insert_with(|| RemoveSocketError {
-                    path: socket_path.into_owned(),
+                    path: socket_path.to_owned(),
                     source: e,
                 });
             }
@@ -82,24 +81,11 @@ impl SocketFile {
         error.map_or(Ok(()), Err)
     }
 
-    /// Remove any socket left behind by a daemon that is no longer listening.
-    pub(super) fn remove_stale(daemon: &DaemonSettings) -> Result<(), RemoveSocketError> {
-        Self::remove_all(daemon, Self::is_stale)
-    }
-
-    /// Remove the socket at `path` if nothing listens on it any more.
-    #[cfg(target_os = "macos")]
-    pub(super) fn remove_if_stale(path: &Path) -> Result<(), RemoveSocketError> {
-        if !Self::is_stale(path) {
-            return Ok(());
-        }
-        match std::fs::remove_file(path) {
-            Err(source) if source.kind() != ErrorKind::NotFound => Err(RemoveSocketError {
-                path: path.to_owned(),
-                source,
-            }),
-            _ => Ok(()),
-        }
+    /// Remove the sockets at `paths` that a daemon no longer listening left behind.
+    pub(super) fn remove_stale(
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+    ) -> Result<(), RemoveSocketError> {
+        Self::remove_all(paths, Self::is_stale)
     }
 
     /// Whether the file at `path` is a socket that nothing listens on.
@@ -127,8 +113,6 @@ impl Drop for SocketFile {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::settings::Settings;
-    use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
 
     use super::*;
@@ -153,9 +137,7 @@ mod tests {
         if !listening {
             drop(listener);
         }
-        let mut daemon = Settings::default().daemon;
-        daemon.socket_path = AbsPathBuf::new(path.clone()).ok();
-        SocketFile::remove_stale(&daemon).unwrap();
+        SocketFile::remove_stale([&path]).unwrap();
         assert_eq!(path.exists(), kept);
     }
 }

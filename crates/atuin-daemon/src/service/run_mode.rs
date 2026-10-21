@@ -1,8 +1,7 @@
 use atuin_client::settings::Daemon as DaemonSettings;
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_os = "macos")]
-use crate::service::Launchd;
+use crate::service::backend::Launchd;
 
 /// How `atuin daemon start` was run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,36 +65,19 @@ impl RunMode {
 impl ExternalManager {
     /// What runs this process, which was started in place, as far as it can tell.
     fn detect(daemon: &DaemonSettings) -> Option<Self> {
-        #[cfg(unix)]
         if daemon.systemd_socket {
             return Some(Self::SystemdSocket);
         }
-        #[cfg(not(unix))]
-        let _ = daemon;
-
-        Self::of_this_process()
-    }
-
-    #[cfg(target_os = "macos")]
-    fn of_this_process() -> Option<Self> {
-        Launchd::external_job_label().map(|label| Self::LaunchdJob { label })
-    }
-
-    #[cfg(target_os = "linux")]
-    fn of_this_process() -> Option<Self> {
-        let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-        Self::systemd_unit(&cgroup)
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    const fn of_this_process() -> Option<Self> {
-        None
+        Launchd::external_job_label().map(|label| Self::LaunchdJob { label }).or_else(|| {
+            // Only Linux has one.
+            let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+            Self::systemd_unit(&cgroup)
+        })
     }
 
     /// The systemd user service that `cgroup`, the contents of `/proc/self/cgroup`, puts this
     /// process in, such as `atuin-daemon.service` in
     /// `0::/user.slice/user-1000.slice/user@1000.service/app.slice/atuin-daemon.service`.
-    #[cfg(any(target_os = "linux", test))]
     fn systemd_unit(cgroup: &str) -> Option<Self> {
         // cgroup v2's one hierarchy, or v1's systemd one.
         let path = cgroup.lines().find_map(|line| {

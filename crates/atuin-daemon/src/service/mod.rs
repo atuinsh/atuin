@@ -10,6 +10,7 @@ pub mod pidfile;
 mod run_mode;
 #[cfg(unix)]
 mod socket_file;
+mod socket_holder;
 mod startup_lock;
 
 use std::sync::OnceLock;
@@ -18,8 +19,6 @@ use std::time::Duration;
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
 #[cfg(unix)]
 pub use backend::DaemonizeError;
-#[cfg(target_os = "macos")]
-pub(crate) use backend::Launchd;
 pub use backend::{SpawnError, StopError, Subproc};
 pub use claim::{ClaimError, ServiceClaim};
 pub use connection::FindError;
@@ -28,13 +27,14 @@ pub use pidfile::PidfileWaitError;
 pub use run_mode::{ExternalManager, Launch, RunMode};
 #[cfg(unix)]
 pub use socket_file::RemoveSocketError;
+pub use socket_holder::ListenError;
 use startup_lock::StartupLock;
 pub use startup_lock::StartupLockError;
 
 use crate::HistoryClient;
 use crate::grpc::versioning::VersionMatchError;
 use crate::service::address::DaemonAddress;
-use crate::service::backend::{AnyBackend, Backend};
+use crate::service::backend::{AnyBackend, Backend, Launchd};
 use crate::service::connection::Connection;
 
 /// Represents an active service.
@@ -205,12 +205,8 @@ impl ActiveService {
 
     /// Remove the launchd agent, which launchd would otherwise start again at the next login, for a
     /// user turning the daemon off.
-    #[cfg(target_os = "macos")]
-    pub async fn remove_launchd_agent(daemon: &DaemonSettings) -> Result<(), StopError> {
-        let AnyBackend::Launchd(_) = AnyBackend::new(daemon) else {
-            return Ok(());
-        };
-        Ok(Launchd::remove().await?)
+    pub async fn remove_launchd_agent() -> Result<(), StopError> {
+        Ok(Launchd::uninstall().await?)
     }
 
     /// Where the running service `daemon` describes listens, whichever started it.

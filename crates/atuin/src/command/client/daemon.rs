@@ -55,7 +55,6 @@ pub enum SubCmd {
 impl Cmd {
     /// Returns `true` when the process should daemonize before creating the
     /// async runtime or opening any database connections.
-    #[cfg(unix)]
     pub fn should_daemonize(&self) -> bool {
         match &self.subcmd {
             Some(SubCmd::Start { daemonize, .. }) => *daemonize,
@@ -66,11 +65,11 @@ impl Cmd {
 
     /// How `daemon start` was asked to run: forked off the client that ran it, or in place.
     fn launch(&self) -> Launch {
-        #[cfg(unix)]
         if self.should_daemonize() {
-            return Launch::Daemonize;
+            Launch::Daemonize
+        } else {
+            Launch::InPlace
         }
-        Launch::InPlace
     }
 
     /// Returns `true` when logs should also be written to the console.

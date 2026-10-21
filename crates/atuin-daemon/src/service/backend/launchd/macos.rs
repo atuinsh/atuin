@@ -20,10 +20,10 @@ use service_manager::{
 use tracing::warn;
 
 use crate::service::address::{DaemonAddress, DaemonListener};
-use crate::service::backend::subproc::SubprocError;
-use crate::service::backend::{Backend, BackendError, Listening, Subproc};
+use crate::service::backend::{Backend, BackendError, Subproc};
 use crate::service::connection::Connection;
 use crate::service::socket_file::SocketFile;
+use crate::service::socket_holder::{Listening, SocketHolder};
 
 /// Represents a backend that runs atuin-daemon as a launchd agent in the user's `gui/<uid>`
 /// domain.
@@ -43,12 +43,6 @@ pub enum LaunchdError {
          Switch it on there to run it"
     )]
     SwitchedOff,
-    #[error(
-        "launchd holds {} for Atuin's login item. Stop the login item with `atuin daemon stop` \
-         first, or use `atuin daemon start --force`",
-        .0.display()
-    )]
-    SocketHeld(PathBuf),
     #[error("`daemon.enabled` is false, so the launchd agent removed itself")]
     Disabled,
     #[error(transparent)]
@@ -88,11 +82,34 @@ impl Launchd {
     /// The name of the agent's socket among the `Sockets` in its plist.
     const SOCKET: &CStr = c"atuin";
 
-    #[must_use]
-    pub fn new(daemon: &DaemonSettings) -> Self {
-        Self {
+    /// The agent, if it runs the daemon `daemon` describes for this client.
+    pub(in crate::service) fn for_client(daemon: &DaemonSettings) -> Option<Self> {
+        // Without `autostart`, something else manages the daemon, such as home-manager. One
+        // installed while it was on is still ours to stop, though.
+        (Self::serves_this_client() && (daemon.autostart || Self::is_installed())).then(|| Self {
             daemon: daemon.clone(),
+        })
+    }
+
+    /// Whether launchd listens on the agent's socket, as it does for as long as the agent is
+    /// installed.
+    pub(in crate::service) fn holds_socket() -> bool {
+        Self::serves_this_profile() && Self::is_installed()
+    }
+
+    /// Remove the agent, if this client has one, for a user turning the daemon off: only stopped,
+    /// launchd would start it again at the next login.
+    pub(in crate::service) async fn uninstall() -> Result<(), BackendError> {
+        if !Self::serves_this_client() {
+            return Ok(());
         }
+        Self::remove().await
+    }
+
+    /// Whether the agent can run the daemon for this client: launchd runs it only for the user at
+    /// the console, in that user's home, and for the default profile.
+    fn serves_this_client() -> bool {
+        Self::serves_this_profile() && Self::is_available()
     }
 
     /// Whether launchd can run the agent for this client, which it can only for the user logged in
@@ -100,7 +117,7 @@ impl Launchd {
     ///
     /// Nobody else has a `gui/<uid>` domain, and launchd starts the agent with `HOME` set to the
     /// user's home, whatever this client's is.
-    pub fn is_available() -> bool {
+    fn is_available() -> bool {
         let console = std::fs::metadata("/dev/console")
             .is_ok_and(|console| console.uid() == atuin_common::os::unix::uid());
         // The user's agents live in `~/Library/LaunchAgents`, `~` being the home launchd uses.
@@ -112,38 +129,61 @@ impl Launchd {
     }
 
     /// Whether the agent's plist is installed, whether or not launchd has it loaded.
-    pub fn is_installed() -> bool {
+    fn is_installed() -> bool {
         Self::plist_path().is_ok_and(|plist| plist.exists())
     }
 
     /// Whether the agent serves this profile: launchd has the one `sh.atuin.daemon`, so a profile's
     /// agent, with its own `ATUIN_HOME` or `ATUIN_CONFIG_DIR`, would replace the default one's.
-    pub fn serves_this_profile() -> bool {
+    fn serves_this_profile() -> bool {
         !atuin_common::dirs::atuin_home_is_set() && !atuin_common::dirs::atuin_config_dir_is_set()
     }
 
-    /// What launchd handed this process, if it started it as the agent.
+    /// Who holds the socket to serve on, if launchd started this process as the agent.
     ///
     /// Checking in only takes the socket launchd holds, so it may come before the pidfile. An agent
     /// that `daemon.enabled` has since switched off removes itself instead, rather than start again
     /// at every login.
     pub(in crate::service) fn check_in(
         daemon: &DaemonSettings,
-    ) -> Result<Option<CheckIn>, BackendError> {
-        let check_in = match Self::activate_socket() {
-            Ok(listener) => CheckIn::Socket(listener),
-            Err(launchd::ActivateError::Sandboxed(_)) => CheckIn::Sandboxed,
+    ) -> Result<Option<SocketHolder>, BackendError> {
+        let socket_path = daemon.socket_path().into_owned();
+        let holder = match Self::activate_socket() {
+            Ok(listener) => {
+                tracing::info!("listening on launchd socket {}", socket_path.display());
+                SocketHolder::Launchd(Listening {
+                    listener: DaemonListener::from(listener),
+                    socket: Some(SocketFile::kept_fresh(socket_path)),
+                })
+            }
+            // launchd may not create the socket's directory in `$TMPDIR`, which macOS empties at
+            // boot. The agent binds the socket itself, as a forked daemon does, until it is next
+            // installed, but pinned in the plist, the socket is no default whose directory binding
+            // creates.
+            Err(launchd::ActivateError::Sandboxed(_)) => {
+                if let Some(dir) = socket_path.parent()
+                    && !dir.exists()
+                {
+                    atuin_common::os::unix::create_secure_temp_dir(dir)
+                        .map_err(|err| BackendError::new(LaunchdError::SocketDir(err)))?;
+                }
+                tracing::info!("launchd couldn't place its socket {}", socket_path.display());
+                SocketHolder::Daemon
+            }
             // Started outside launchd, or by a job of someone else's, such as `brew services`.
             Err(launchd::ActivateError::NotManaged | launchd::ActivateError::NotFound(_)) => {
                 return Ok(None);
             }
-            Err(err) => return Err(BackendError::new(err)),
+            Err(
+                err @ (launchd::ActivateError::AlreadyActivated(_)
+                | launchd::ActivateError::Other(_)),
+            ) => return Err(BackendError::new(err)),
         };
         if !daemon.enabled {
             Self::leave();
             return Err(BackendError::new(LaunchdError::Disabled));
         }
-        Ok(Some(check_in))
+        Ok(Some(holder))
     }
 
     /// Remove the agent, if it serves this profile, for the launchd job `label`, which runs the
@@ -160,7 +200,7 @@ impl Launchd {
     }
 
     /// Remove the agent, whether or not it runs.
-    pub(in crate::service) async fn remove() -> Result<(), BackendError> {
+    async fn remove() -> Result<(), BackendError> {
         tokio::task::spawn_blocking(|| {
             LaunchdServiceManager::user().uninstall(ServiceUninstallCtx {
                 label: Self::label(),
@@ -282,23 +322,6 @@ impl Backend for Launchd {
         DaemonAddress::from(self.daemon.socket_path().into_owned())
     }
 
-    fn listen(&self) -> Result<Listening, BackendError> {
-        // A daemon launchd started has checked in already ([`Self::check_in`]), so this one was
-        // started some other way and binds its own socket.
-        Subproc::new(&self.daemon).listen().map_err(|err| {
-            let in_use = err.0.downcast_ref::<SubprocError>().is_some_and(|err| {
-                matches!(err, SubprocError::Listen { source, .. }
-                    if source.kind() == io::ErrorKind::AddrInUse)
-            });
-            // launchd listens on the agent's socket for as long as the agent is installed.
-            if in_use && Self::is_installed() {
-                BackendError::new(LaunchdError::SocketHeld(self.daemon.socket_path().into_owned()))
-            } else {
-                err
-            }
-        })
-    }
-
     async fn launch(&self) -> Result<(), BackendError> {
         // launchd would load the agent the user switched off, behind System Settings' back.
         let switched_off = Self::plist_path()
@@ -318,7 +341,7 @@ impl Backend for Launchd {
         // launchd leaves its socket's file behind, unlike an agent started outside launchd, which
         // removes it as it exits. Where the agent was found, which the config may have moved the
         // socket from since.
-        if let Err(err) = SocketFile::remove_if_stale(service.address().as_ref()) {
+        if let Err(err) = SocketFile::remove_stale([service.address()]) {
             warn!("{err}");
         }
         Ok(())
@@ -329,48 +352,6 @@ impl Backend for Launchd {
         // in its place has to bind.
         Self::bootout().await.map_err(BackendError::new)?;
         Subproc::new(&self.daemon).evict().await
-    }
-}
-
-/// What launchd handed the agent on checking it in.
-pub(in crate::service) enum CheckIn {
-    /// The socket launchd holds for the agent.
-    Socket(UnixListener),
-    /// No socket: launchd may not create its directory in `$TMPDIR`, which macOS empties at boot.
-    Sandboxed,
-}
-
-impl CheckIn {
-    /// The socket to serve on: the one launchd holds, or one the agent binds itself when launchd
-    /// couldn't place that. Binding clears the sockets a dead daemon left, so only the pidfile's
-    /// holder may.
-    pub(in crate::service) fn listen(
-        self,
-        daemon: &DaemonSettings,
-    ) -> Result<Listening, BackendError> {
-        let socket_path = daemon.socket_path().into_owned();
-        match self {
-            Self::Socket(listener) => {
-                tracing::info!("listening on launchd socket {}", socket_path.display());
-                Ok(Listening {
-                    listener: DaemonListener::from(listener),
-                    socket: Some(SocketFile::held_by_launchd(socket_path)),
-                })
-            }
-            // Bound in launchd's place, as a forked daemon binds its own, until the agent is next
-            // installed. The socket pinned in the plist is no default whose directory `listen`
-            // creates.
-            Self::Sandboxed => {
-                if let Some(dir) = socket_path.parent()
-                    && !dir.exists()
-                {
-                    atuin_common::os::unix::create_secure_temp_dir(dir)
-                        .map_err(|err| BackendError::new(LaunchdError::SocketDir(err)))?;
-                }
-                tracing::info!("launchd couldn't place its socket {}", socket_path.display());
-                Subproc::new(daemon).listen()
-            }
-        }
     }
 }
 

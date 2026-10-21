@@ -1,15 +1,10 @@
 use std::io;
-#[cfg(target_os = "macos")]
-use std::os::unix::net::UnixListener;
-#[cfg(target_os = "macos")]
-use std::path::PathBuf;
 
 use atuin_client::settings::Daemon as DaemonSettings;
 #[cfg(unix)]
 use atuin_common::os::unix::SecureTempDirError;
 
 use crate::service::address::{DaemonAddress, DaemonListener};
-#[cfg(target_os = "macos")]
 use crate::service::backend::Launchd;
 #[cfg(unix)]
 use crate::service::socket_file::{RemoveSocketError, SocketFile};
@@ -19,11 +14,10 @@ use crate::service::socket_file::{RemoveSocketError, SocketFile};
 pub(super) enum SocketHolder {
     /// The daemon, which binds the configured socket itself and removes it as it exits.
     Daemon,
-    /// launchd, which checked Atuin's agent in with the socket it holds for it.
-    #[cfg(target_os = "macos")]
-    Launchd(UnixListener),
-    /// systemd, which passed the socket in, as `daemon.systemd_socket` says it does.
-    #[cfg(target_os = "linux")]
+    /// launchd, which handed Atuin's agent the socket it holds for it.
+    #[allow(dead_code, reason = "only macOS has launchd")]
+    Launchd(Listening),
+    /// systemd, which passes the socket in, as `daemon.systemd_socket` says it does.
     Systemd,
 }
 
@@ -36,7 +30,7 @@ pub(super) struct Listening {
     pub socket: Option<SocketFile>,
 }
 
-/// Errors from [`SocketHolder::listen`].
+/// Errors from taking up the socket the daemon serves on.
 #[derive(Debug, thiserror::Error)]
 pub enum ListenError {
     #[cfg(unix)]
@@ -50,17 +44,13 @@ pub enum ListenError {
         address: DaemonAddress,
         source: io::Error,
     },
-    #[cfg(target_os = "macos")]
     #[error(
-        "launchd holds {} for Atuin's login item. Stop the login item with `atuin daemon stop` \
-         first, or use `atuin daemon start --force`",
-        .0.display()
+        "launchd holds {0} for Atuin's login item. Stop the login item with `atuin daemon stop` \
+         first, or use `atuin daemon start --force`"
     )]
-    HeldByLaunchd(PathBuf),
-    #[cfg(target_os = "linux")]
+    HeldByLaunchd(DaemonAddress),
     #[error("could not take the socket systemd passed in: {0}")]
     TakeSystemd(io::Error),
-    #[cfg(target_os = "linux")]
     #[error("`daemon.systemd_socket` is set, but systemd passed in no socket")]
     NoSystemdSocket,
 }
@@ -68,16 +58,12 @@ pub enum ListenError {
 impl SocketHolder {
     /// Who holds the socket of the daemon `daemon` describes, when launchd didn't check it in as
     /// Atuin's agent.
-    pub(super) fn configured(daemon: &DaemonSettings) -> Self {
-        // Only Linux has systemd.
-        #[cfg(target_os = "linux")]
+    pub(super) const fn configured(daemon: &DaemonSettings) -> Self {
         if daemon.systemd_socket {
-            return Self::Systemd;
+            Self::Systemd
+        } else {
+            Self::Daemon
         }
-        #[cfg(not(target_os = "linux"))]
-        let _ = daemon;
-
-        Self::Daemon
     }
 
     /// Take up the socket to serve on. Binding one clears the sockets a dead daemon left behind,
@@ -85,39 +71,29 @@ impl SocketHolder {
     pub(super) fn listen(self, daemon: &DaemonSettings) -> Result<Listening, ListenError> {
         match self {
             Self::Daemon => Self::bind(daemon),
-            #[cfg(target_os = "macos")]
-            Self::Launchd(listener) => {
-                let socket_path = daemon.socket_path().into_owned();
-                tracing::info!("listening on launchd socket {}", socket_path.display());
-                Ok(Listening {
-                    listener: DaemonListener::from(listener),
-                    socket: Some(SocketFile::held_by_launchd(socket_path)),
-                })
-            }
-            #[cfg(target_os = "linux")]
+            Self::Launchd(listening) => Ok(listening),
             Self::Systemd => Self::take_systemd_socket(daemon),
         }
     }
 
-    #[cfg(unix)]
     fn bind(daemon: &DaemonSettings) -> Result<Listening, ListenError> {
-        // A daemon that crashed left its socket behind, which would keep this one from listening.
-        SocketFile::remove_stale(daemon)?;
+        #[cfg(unix)]
+        let (address, socket_path) = {
+            // A daemon that crashed left its socket behind, which would keep this one from
+            // listening.
+            SocketFile::remove_stale(crate::client::potential_socket_paths(daemon))?;
+            let socket_path = daemon.socket_path();
+            socket_path.create_default_dir_if_needed()?;
+            let socket_path = socket_path.into_owned();
+            (DaemonAddress::from(socket_path.clone()), socket_path)
+        };
+        #[cfg(not(unix))]
+        let address = DaemonAddress::from(daemon.tcp_port);
 
-        let socket_path = daemon.socket_path();
-        socket_path.create_default_dir_if_needed()?;
-        let socket_path = socket_path.into_owned();
-        let address = DaemonAddress::from(socket_path.clone());
         let listener = match address.bind() {
             Ok(listener) => listener,
-            // launchd listens on the agent's socket for as long as the agent is installed.
-            #[cfg(target_os = "macos")]
-            Err(source)
-                if source.kind() == io::ErrorKind::AddrInUse
-                    && Launchd::serves_this_profile()
-                    && Launchd::is_installed() =>
-            {
-                return Err(ListenError::HeldByLaunchd(socket_path));
+            Err(source) if source.kind() == io::ErrorKind::AddrInUse && Launchd::holds_socket() => {
+                return Err(ListenError::HeldByLaunchd(address));
             }
             Err(source) => return Err(ListenError::Bind { address, source }),
         };
@@ -125,20 +101,9 @@ impl SocketHolder {
 
         Ok(Listening {
             listener,
+            #[cfg(unix)]
             socket: Some(SocketFile::new(socket_path)),
         })
-    }
-
-    #[cfg(not(unix))]
-    fn bind(daemon: &DaemonSettings) -> Result<Listening, ListenError> {
-        let address = DaemonAddress::from(daemon.tcp_port);
-        let listener = match address.bind() {
-            Ok(listener) => listener,
-            Err(source) => return Err(ListenError::Bind { address, source }),
-        };
-        tracing::info!("listening on {address}");
-
-        Ok(Listening { listener })
     }
 
     #[cfg(target_os = "linux")]
@@ -178,5 +143,11 @@ impl SocketHolder {
             listener: DaemonListener::from(listener),
             socket: None,
         })
+    }
+
+    /// Only Linux has systemd; elsewhere, the daemon binds its own socket.
+    #[cfg(not(target_os = "linux"))]
+    fn take_systemd_socket(daemon: &DaemonSettings) -> Result<Listening, ListenError> {
+        Self::bind(daemon)
     }
 }
