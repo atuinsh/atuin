@@ -201,6 +201,8 @@ impl GrpcService for Service {
         &self,
         _request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownReply>, Status> {
+        #[cfg(target_os = "macos")]
+        crate::service::Launchd::uninstall_from_within();
         self.daemon_handle.shutdown();
         Ok(Response::new(ShutdownReply { accepted: true }))
     }

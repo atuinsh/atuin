@@ -92,6 +92,20 @@ impl Subproc {
             .map_err(DaemonizeError::Daemonize)
     }
 
+    /// Where the running service listens, as its pidfile says.
+    pub(super) fn locate(&self) -> Result<DaemonAddress, BackendError> {
+        #[cfg(unix)]
+        {
+            let pidfile = Pidfile::new(&self.daemon.pidfile_path);
+            let socket = pidfile.socket_path(&self.daemon).map_err(SubprocError::from);
+            Ok(DaemonAddress::from(socket.map_err(BackendError::new)?))
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(DaemonAddress::from(self.daemon.tcp_port))
+        }
+    }
+
     fn bind(address: DaemonAddress) -> Result<DaemonListener, SubprocError> {
         match address.bind() {
             Ok(listener) => {
@@ -112,19 +126,6 @@ impl Backend for Subproc {
         #[cfg(not(unix))]
         {
             DaemonAddress::from(self.daemon.tcp_port)
-        }
-    }
-
-    fn locate(&self) -> Result<DaemonAddress, BackendError> {
-        #[cfg(unix)]
-        {
-            let pidfile = Pidfile::new(&self.daemon.pidfile_path);
-            let socket = pidfile.socket_path(&self.daemon).map_err(SubprocError::from);
-            Ok(DaemonAddress::from(socket.map_err(BackendError::new)?))
-        }
-        #[cfg(not(unix))]
-        {
-            Ok(DaemonAddress::from(self.daemon.tcp_port))
         }
     }
 
@@ -183,7 +184,10 @@ impl Backend for Subproc {
 
         let pidfile_path = self.daemon.pidfile_path.as_path();
         if pidfile_path.exists() {
-            if let Some(pid) = Pidfile::new(pidfile_path).pid()
+            let pidfile = Pidfile::new(pidfile_path);
+            // The PID of a pidfile nobody holds may since have gone to another process.
+            if pidfile.is_live()
+                && let Some(pid) = pidfile.pid()
                 && pid != 0
                 && let Err(e) = atuin_common::os::process::force_terminate(pid, GRACE).await
             {

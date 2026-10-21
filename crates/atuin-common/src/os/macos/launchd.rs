@@ -13,20 +13,24 @@ unsafe extern "C" {
     fn free(ptr: *mut c_void);
 }
 
-/// A socket launchd listens on for the calling job, whose descriptors close as they drop.
-#[derive(Debug)]
-pub struct CheckedInSocket {
-    /// One for each address launchd bound, so one for a `SockPathName`. Never empty.
-    fds: Vec<OwnedFd>,
-}
+/// A socket at a path, a `SockPathName`, that launchd listens on for the calling job.
+#[derive(Debug, derive_more::Into)]
+pub struct CheckedInSocket(OwnedFd);
 
 impl CheckedInSocket {
+    /// launchd's own code, past the errnos, for a socket its sandbox kept it from placing:
+    /// `launchctl error 159`.
+    const SANDBOX_RESTRICTION: c_int = 159;
+
     /// Check in for the socket `name` in the job's plist, which only the job launchd started can.
     pub fn activate(name: &CStr) -> Result<Self, ActivateError> {
         let mut fds = std::ptr::null_mut();
         let mut count = 0;
         // SAFETY: `name` is NUL-terminated, and both out-pointers point to live locals.
         let err = unsafe { launch_activate_socket(name.as_ptr(), &raw mut fds, &raw mut count) };
+        if err == Self::SANDBOX_RESTRICTION {
+            return Err(ActivateError::Sandboxed(name.to_owned()));
+        }
         if err != 0 {
             return Err(match Errno::from_raw_os_error(err) {
                 Errno::NOENT => ActivateError::NotFound(name.to_owned()),
@@ -36,22 +40,14 @@ impl CheckedInSocket {
             });
         }
 
-        let fds = NonNull::new(fds)
+        // launchd binds a socket at a path the once, and one at a host and port once for each
+        // address, of which the rest close here.
+        let fd = NonNull::new(fds)
             .map(|ptr| Descriptors { ptr, count }.into_owned())
-            .unwrap_or_default();
-        if fds.is_empty() {
-            return Err(ActivateError::NotFound(name.to_owned()));
-        }
-        Ok(Self { fds })
-    }
-}
-
-impl IntoIterator for CheckedInSocket {
-    type IntoIter = std::vec::IntoIter<OwnedFd>;
-    type Item = OwnedFd;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.fds.into_iter()
+            .unwrap_or_default()
+            .into_iter()
+            .next();
+        fd.map(Self).ok_or_else(|| ActivateError::NotFound(name.to_owned()))
     }
 }
 
@@ -64,6 +60,10 @@ pub enum ActivateError {
     NotFound(CString),
     #[error("this process is not a job launchd started")]
     NotManaged,
+    /// launchd's sandbox kept it from placing the socket, as it does in a directory of the user's
+    /// `$TMPDIR` that it would have to create.
+    #[error("launchd's sandbox kept it from placing socket {0:?}")]
+    Sandboxed(CString),
     #[error("this job has already checked in for socket {0:?}")]
     AlreadyActivated(CString),
     #[error("could not check in with launchd: {0}")]

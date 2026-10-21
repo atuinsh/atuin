@@ -99,6 +99,9 @@ norm = { version = "0.1", features = ["fzf-v2"] }
 notify = "8"
 notify-debouncer-full = "0.7"
 num-traits = "0.2"
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSURL"] }
+objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 opentelemetry = "0.32"
 opentelemetry-otlp = "0.32"
 opentelemetry_sdk = "0.32"

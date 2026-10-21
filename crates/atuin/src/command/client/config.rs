@@ -475,6 +475,14 @@ impl DisableCmd {
                     );
                     return Ok(());
                 }
+                // Only stopped, the launchd agent would start again at the next login.
+                #[cfg(target_os = "macos")]
+                if let Err(e) =
+                    atuin_daemon::service::ActiveService::remove_launchd_agent(&settings.daemon)
+                        .await
+                {
+                    eprintln!("Could not remove the Atuin daemon's launchd agent: {e}");
+                }
             }
             Feature::OutputCapture => restart_autostarted_daemon(settings).await,
             #[cfg(feature = "octavo")]

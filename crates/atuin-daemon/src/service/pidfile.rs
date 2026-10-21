@@ -42,6 +42,7 @@ use atuin_common::string::AutoOsString;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
+use crate::service::run_mode::RunMode;
 use crate::service::startup_lock::StartupLock;
 
 const FORMAT_V1: &str = "v1";
@@ -62,12 +63,18 @@ pub struct PidfileInfo {
     /// This is [`None`] on Windows, or if `daemon.systemd_socket` is true in `config.toml`.
     #[serde_as(as = "Option<AutoOsString>")]
     pub socket_path: Option<PathBuf>,
+
+    /// How the daemon runs, and so who starts and stops it. [`None`] for a daemon from before it
+    /// was recorded.
+    #[serde(default)]
+    pub run_mode: Option<RunMode>,
 }
 
 impl PidfileInfo {
-    /// Create a [`PidfileInfo`] for the current process (assuming this process is the daemon).
+    /// Create a [`PidfileInfo`] for the current process (assuming this process is the daemon),
+    /// which runs as `run_mode`.
     #[must_use]
-    pub fn current(settings: &DaemonSettings) -> Self {
+    pub fn current(settings: &DaemonSettings, run_mode: RunMode) -> Self {
         #[cfg(not(unix))]
         let _ = settings;
 
@@ -78,6 +85,7 @@ impl PidfileInfo {
             socket_path: (!settings.systemd_socket).then(|| settings.socket_path().into_owned()),
             #[cfg(not(unix))]
             socket_path: None,
+            run_mode: Some(run_mode),
         }
     }
 
@@ -529,6 +537,7 @@ mod tests {
             pid: std::process::id(),
             version: crate::VERSION.to_string(),
             socket_path: socket_path.map(PathBuf::from),
+            run_mode: Some(RunMode::DaemonizeForked),
         }
     }
 
@@ -668,9 +677,24 @@ mod tests {
             Some(PidfileInfo {
                 pid: 1234,
                 version: "1.2.3".into(),
-                socket_path: None
+                socket_path: None,
+                run_mode: None,
             })
         );
+    }
+
+    #[cfg(unix)]
+    fn run_mode() -> impl Strategy<Value = RunMode> {
+        use crate::service::run_mode::ExternalManager;
+
+        prop_oneof![
+            Just(RunMode::DaemonizeForked),
+            Just(RunMode::LaunchdAgent),
+            Just(RunMode::External(None)),
+            Just(RunMode::External(Some(ExternalManager::SystemdSocket))),
+            ".*".prop_map(|name| RunMode::External(Some(ExternalManager::SystemdUnit { name }))),
+            ".*".prop_map(|label| RunMode::External(Some(ExternalManager::LaunchdJob { label }))),
+        ]
     }
 
     #[cfg(unix)]
@@ -688,8 +712,9 @@ mod tests {
             pid in any::<u32>(),
             version in ".*",
             socket_path in proptest::option::of(path_buf()),
+            run_mode in proptest::option::of(run_mode()),
         ) {
-            let info = PidfileInfo { pid, version, socket_path };
+            let info = PidfileInfo { pid, version, socket_path, run_mode };
             let contents = format!(
                 "{pid}\n{FORMAT_V1}\n{}\n",
                 serde_json::to_string(&info).unwrap()
@@ -717,7 +742,8 @@ mod tests {
 
     /// Lock the pidfile `daemon` configures, as a daemon started with it does.
     fn acquire(daemon: &DaemonSettings) -> Result<PidfileGuard, AcquireGuardError> {
-        super::Pidfile::new(&daemon.pidfile_path).acquire(&PidfileInfo::current(daemon))
+        super::Pidfile::new(&daemon.pidfile_path)
+            .acquire(&PidfileInfo::current(daemon, RunMode::DaemonizeForked))
     }
 
     /// Where the pidfile `daemon` configures says the daemon listens.

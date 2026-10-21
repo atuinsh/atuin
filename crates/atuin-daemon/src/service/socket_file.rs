@@ -9,10 +9,9 @@ use tokio::task::JoinHandle;
 /// The socket file a daemon listens on, kept fresh against temporary file cleaners and, if the
 /// daemon bound it itself, removed when dropped.
 pub(super) struct SocketFile {
-    path: PathBuf,
     keepalive: JoinHandle<()>,
-    /// Whether the file goes when the daemon exits, rather than outliving it as launchd's does.
-    owned: bool,
+    /// The file to remove when the daemon exits, unless it outlives the daemon as launchd's does.
+    remove_on_drop: Option<PathBuf>,
 }
 
 /// An error that occurred while trying to remove a socket.
@@ -30,31 +29,31 @@ impl SocketFile {
 
     /// Own the socket bound at `path`, keeping it fresh from the current Tokio runtime.
     pub(super) fn new(path: PathBuf) -> Self {
-        Self::keep_fresh(path, true)
+        Self {
+            keepalive: Self::keep_fresh(path.clone()),
+            remove_on_drop: Some(path),
+        }
     }
 
     /// Keep fresh the socket launchd holds at `path`, which goes on listening once the daemon exits.
     #[cfg(target_os = "macos")]
     pub(super) fn held_by_launchd(path: PathBuf) -> Self {
-        Self::keep_fresh(path, false)
+        Self {
+            keepalive: Self::keep_fresh(path),
+            remove_on_drop: None,
+        }
     }
 
-    fn keep_fresh(path: PathBuf, owned: bool) -> Self {
-        let touched = path.clone();
-        let keepalive = tokio::spawn(async move {
+    fn keep_fresh(path: PathBuf) -> JoinHandle<()> {
+        tokio::spawn(async move {
             let mut interval = tokio::time::interval(Self::KEEPALIVE_INTERVAL);
             loop {
                 interval.tick().await;
-                if let Err(e) = atuin_common::os::unix::touch_file(&touched) {
-                    tracing::warn!("failed to refresh {}: {e}", touched.display());
+                if let Err(e) = atuin_common::os::unix::touch_file(&path) {
+                    tracing::warn!("failed to refresh {}: {e}", path.display());
                 }
             }
-        });
-        Self {
-            path,
-            keepalive,
-            owned,
-        }
+        })
     }
 
     /// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
@@ -85,26 +84,43 @@ impl SocketFile {
 
     /// Remove any socket left behind by a daemon that is no longer listening.
     pub(super) fn remove_stale(daemon: &DaemonSettings) -> Result<(), RemoveSocketError> {
-        Self::remove_all(daemon, |socket_path| {
-            matches!(atuin_common::os::unix::socket_in_use(socket_path), Ok(false))
-                // Ensure file is a socket; `socket_in_use` can return `Ok(false)` for regular files.
-                && std::fs::symlink_metadata(socket_path)
-                    .is_ok_and(|meta| meta.file_type().is_socket())
-        })
+        Self::remove_all(daemon, Self::is_stale)
+    }
+
+    /// Remove the socket at `path` if nothing listens on it any more.
+    #[cfg(target_os = "macos")]
+    pub(super) fn remove_if_stale(path: &Path) -> Result<(), RemoveSocketError> {
+        if !Self::is_stale(path) {
+            return Ok(());
+        }
+        match std::fs::remove_file(path) {
+            Err(source) if source.kind() != ErrorKind::NotFound => Err(RemoveSocketError {
+                path: path.to_owned(),
+                source,
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// Whether the file at `path` is a socket that nothing listens on.
+    fn is_stale(path: &Path) -> bool {
+        matches!(atuin_common::os::unix::socket_in_use(path), Ok(false))
+            // Ensure file is a socket; `socket_in_use` can return `Ok(false)` for regular files.
+            && std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_socket())
     }
 }
 
 impl Drop for SocketFile {
     fn drop(&mut self) {
         self.keepalive.abort();
-        if !self.owned {
+        let Some(path) = &self.remove_on_drop else {
             return;
-        }
-        tracing::info!("removing socket {}", self.path.display());
-        if let Err(e) = std::fs::remove_file(&self.path)
+        };
+        tracing::info!("removing socket {}", path.display());
+        if let Err(e) = std::fs::remove_file(path)
             && e.kind() != ErrorKind::NotFound
         {
-            tracing::warn!("failed to remove socket {}: {e}", self.path.display());
+            tracing::warn!("failed to remove socket {}: {e}", path.display());
         }
     }
 }
