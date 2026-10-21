@@ -1,4 +1,3 @@
-#[cfg(unix)]
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::{Command, Stdio};
@@ -43,9 +42,24 @@ pub enum SubprocError {
     #[cfg(unix)]
     #[error("could not create the daemon's socket directory: {0}")]
     SocketDir(#[from] SecureTempDirError),
+    #[cfg(windows)]
+    #[error(transparent)]
+    WorkingDir(#[from] WorkingDirError),
     #[error("could not listen on {address}: {source}")]
     Listen {
         address: DaemonAddress,
+        source: std::io::Error,
+    },
+}
+
+/// Errors from preparing the directory the daemon runs in.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkingDirError {
+    #[error(transparent)]
+    AtuinHome(#[from] atuin_common::dirs::HomeError),
+    #[error("could not create the daemon's working directory {}: {source}", .path.display())]
+    Create {
+        path: PathBuf,
         source: std::io::Error,
     },
 }
@@ -55,12 +69,7 @@ pub enum SubprocError {
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonizeError {
     #[error(transparent)]
-    AtuinHome(#[from] atuin_common::dirs::HomeError),
-    #[error("could not create the daemon's working directory {}: {source}", .path.display())]
-    WorkingDir {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    WorkingDir(#[from] WorkingDirError),
     #[error("failed to daemonize process: {0}")]
     Daemonize(daemonix::Error),
 }
@@ -79,22 +88,28 @@ impl Subproc {
     /// inside an async runtime corrupts its internal state.
     #[cfg(unix)]
     pub fn daemonize() -> Result<(), DaemonizeError> {
+        Daemonize::new()
+            .working_directory(Self::working_directory()?)
+            .umask(0o077)
+            .start()
+            .map_err(DaemonizeError::Daemonize)
+    }
+
+    /// The atuin home, created if missing, for the daemon to run in.
+    ///
+    /// Not the launching shell's directory: the daemon would keep it busy, which on Windows means
+    /// it can't be deleted, moved or renamed.
+    fn working_directory() -> Result<PathBuf, WorkingDirError> {
         let working_directory = PathBuf::from(atuin_common::dirs::try_atuin_home()?);
 
         // TODO(markovejnovic): We should have some sort of DirsProvider or something like that
         //                      which would guarantee that the directory would exist.
-        std::fs::create_dir_all(&working_directory).map_err(|source| {
-            DaemonizeError::WorkingDir {
-                path: working_directory.clone(),
-                source,
-            }
+        std::fs::create_dir_all(&working_directory).map_err(|source| WorkingDirError::Create {
+            path: working_directory.clone(),
+            source,
         })?;
 
-        Daemonize::new()
-            .working_directory(working_directory)
-            .umask(0o077)
-            .start()
-            .map_err(DaemonizeError::Daemonize)
+        Ok(working_directory)
     }
 
     fn bind(address: DaemonAddress) -> Result<DaemonListener, SubprocError> {
@@ -178,6 +193,10 @@ impl Backend for Subproc {
         #[cfg(windows)]
         WindowsCommand::new(&exe)
             .args(["daemon", "start"])
+            .current_dir(
+                Self::working_directory()
+                    .map_err(|err| BackendError::new(SubprocError::from(err)))?,
+            )
             .creation_flags(DETACHED_PROCESS)
             .spawn()
             .map_err(|err| BackendError::new(SubprocError::Launch(err)))?;
