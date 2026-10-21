@@ -65,7 +65,8 @@ fn unwritable_log_dir_warns_and_continues(env: FreshEnv) {
     assert!(stderr.contains("warning: couldn't open the log file"), "{stderr}");
 }
 
-/// Commands the shell runs on every prompt or keystroke don't pay for opening the log file.
+/// Commands the shell runs on every prompt or keystroke don't pay for the log file, nor print
+/// anything about `ATUIN_LOG`, which they don't use.
 #[rstest]
 #[case::init(&["init", "zsh"])]
 #[case::uuid(&["uuid"])]
@@ -73,15 +74,16 @@ fn unwritable_log_dir_warns_and_continues(env: FreshEnv) {
     &["search", "--cmd-only", "--limit", "1", "--search-mode", "prefix", "--autosuggest"]
 )]
 #[case::history_start_hook(&["history", "start", "--hook", "--", "ls"])]
-fn hot_paths_create_no_log_file(env: FreshEnv, #[case] args: &[&str]) {
+fn hot_paths_skip_the_log_file(env: FreshEnv, #[case] args: &[&str]) {
     let mut command = env.atuin(args);
-    command.env("ATUIN_LOG", "debug").env("ATUIN_SESSION", SESSION);
+    command.env("ATUIN_LOG", "debug,atuin=loud").env("ATUIN_SESSION", SESSION);
     // A search with no match exits non-zero, so only a rejected flag counts as a failure: it
     // would also leave no log file.
     let out = Process::spawn(command).wait();
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("unexpected argument"), "{stderr}");
+    assert!(!stderr.contains("ATUIN_LOG"), "{stderr}");
     assert_eq!(env.log_files(), Vec::<std::path::PathBuf>::new());
 }
 

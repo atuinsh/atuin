@@ -87,14 +87,23 @@ impl LogCtx {
         service_name: &'static str,
         mode: LogMode,
     ) -> Result<Self, LogCtxEnableError> {
-        let FileFilter { filter, warnings } = FileFilter::from_env();
+        // Only a process that writes the file reads ATUIN_LOG. The others run at shell startup and
+        // on hooks, where a warning about it would print every time.
+        let FileFilter { filter, warnings } = if mode.has_file() {
+            FileFilter::from_env()
+        } else {
+            FileFilter {
+                filter: EnvFilter::default(),
+                warnings: Vec::new(),
+            }
+        };
 
-        let dir = atuin_common::dirs::logs_dir();
         let file =
             (mode.has_file() && filter.max_level_hint() != Some(LevelFilter::OFF)).then(|| {
+                let dir = atuin_common::dirs::logs_dir();
                 let log_file = LogFile::new(dir.clone());
                 log_file.prune(SystemTime::now());
-                log_file.appender()
+                log_file.appender().map_err(|e| (dir, e))
             });
         let (file, file_error) = match file.transpose() {
             Ok(file) => (file, None),
@@ -113,7 +122,7 @@ impl LogCtx {
         for warning in warnings {
             tracing::warn!(target: USER, "{warning}");
         }
-        if let Some(e) = file_error {
+        if let Some((dir, e)) = file_error {
             tracing::warn!(
                 target: USER,
                 "{}",
