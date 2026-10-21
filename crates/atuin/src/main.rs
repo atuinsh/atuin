@@ -17,8 +17,6 @@ pub(crate) mod logs;
 pub(crate) mod shell;
 
 #[cfg(feature = "sync")]
-mod print_error;
-#[cfg(feature = "sync")]
 mod sync;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
