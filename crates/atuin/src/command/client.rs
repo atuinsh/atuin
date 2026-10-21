@@ -422,6 +422,8 @@ impl Cmd {
             Self::History(cmd) => cmd.log_mode(),
             Self::Internal(cmd) => cmd.log_mode(),
 
+            // Runs on every keystroke, so it skips opening the log file.
+            Self::Search(cmd) if cmd.is_autosuggest() => Some(LogMode::Stderr),
             // The TUI owns the terminal.
             Self::Search(cmd) if cmd.is_interactive() => Some(LogMode::File),
 
@@ -508,6 +510,10 @@ mod tests {
     #[rstest]
     #[case::search_interactive(&["search", "-i"], Some(LogMode::File))]
     #[case::search(&["search", "foo"], Some(LogMode::FileAndStderr))]
+    #[case::autosuggest(
+        &["search", "--cmd-only", "--limit", "1", "--search-mode", "prefix", "--autosuggest"],
+        Some(LogMode::Stderr)
+    )]
     #[case::history_hook(&["history", "start", "--hook", "--", "ls"], None)]
     #[case::history_list(&["history", "list"], Some(LogMode::FileAndStderr))]
     #[case::init(&["init", "zsh"], Some(LogMode::Stderr))]

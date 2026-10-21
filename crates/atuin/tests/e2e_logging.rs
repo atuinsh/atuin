@@ -70,6 +70,9 @@ fn unwritable_log_dir_warns_and_continues(env: FreshEnv) {
 #[rstest]
 #[case::init(&["init", "zsh"])]
 #[case::uuid(&["uuid"])]
+#[case::autosuggest(
+    &["search", "--cmd-only", "--limit", "1", "--search-mode", "prefix", "--autosuggest"]
+)]
 #[case::history_start_hook(&["history", "start", "--hook", "--", "ls"])]
 fn hot_paths_skip_the_log_file(env: FreshEnv, #[case] args: &[&str]) {
     let mut command = env.atuin(args);
