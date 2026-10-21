@@ -58,6 +58,8 @@ ignorespace
 Infracost
 launchd
 LLM
+lnav
+logfmt
 loopback
 matcher
 musl

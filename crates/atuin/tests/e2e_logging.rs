@@ -87,6 +87,22 @@ fn hot_paths_skip_the_log_file(env: FreshEnv, #[case] args: &[&str]) {
     assert_eq!(env.log_files(), Vec::<std::path::PathBuf>::new());
 }
 
+/// A config that still sets `[logs]` hears about it from commands with stderr to spare.
+#[rstest]
+#[case::explicit_command(&["history", "list"], true)]
+#[case::init(&["init", "zsh"], false)]
+fn legacy_logs_table_notice(env: FreshEnv, #[case] args: &[&str], #[case] shown: bool) {
+    env.write_config("[logs]\nlevel = \"debug\"\n");
+    let mut command = env.atuin(args);
+    command.env("ATUIN_SESSION", SESSION);
+    let out = Process::spawn(command).wait();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let noticed = stderr.contains("the [logs] section in your config is no longer used");
+    assert_eq!(noticed, shown, "{stderr}");
+}
+
 #[cfg(feature = "daemon")]
 #[rstest]
 #[tokio::test]
