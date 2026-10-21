@@ -12,7 +12,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::FilterMode::{Directory, Global, Session};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
-use atuin_common::logs::LogConfig;
+use atuin_common::logs::{LogMode, USER};
 use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
@@ -552,7 +552,10 @@ pub(super) async fn start_history_entry(
         match handle_daemon_start(settings, h.clone()).await {
             Ok(id) => return Ok(Some(id)),
             Err(e) => {
-                warn!("failed to start history via the daemon; saving it locally instead: {e:#}");
+                warn!(
+                    target: USER,
+                    "failed to start history via the daemon; saving it locally instead: {e:#}"
+                );
             }
         }
     }
@@ -578,7 +581,10 @@ pub(super) async fn end_history_entry(
         match handle_daemon_end(settings, id, exit, duration).await {
             Ok(()) => return Ok(()),
             Err(e) => {
-                warn!("failed to end history via the daemon; ending it locally instead: {e:#}");
+                warn!(
+                    target: USER,
+                    "failed to end history via the daemon; ending it locally instead: {e:#}"
+                );
             }
         }
     }
@@ -1253,8 +1259,8 @@ impl Cmd {
         }
     }
 
-    pub fn log_config(&self) -> Option<LogConfig> {
-        self.logs_enabled().then(LogConfig::stderr_only)
+    pub fn log_mode(&self) -> Option<LogMode> {
+        self.logs_enabled().then_some(LogMode::FileAndStderr)
     }
 }
 

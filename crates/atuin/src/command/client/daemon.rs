@@ -62,6 +62,14 @@ impl Cmd {
         }
     }
 
+    /// Whether this process becomes the daemon, rather than talking to one.
+    pub const fn runs_daemon(&self) -> bool {
+        match self.subcmd {
+            None | Some(SubCmd::Start { .. }) => true,
+            Some(SubCmd::Status | SubCmd::Stop | SubCmd::Restart) => false,
+        }
+    }
+
     /// Returns `true` when logs should also be written to the console.
     pub fn show_logs(&self) -> bool {
         match &self.subcmd {
