@@ -1,8 +1,4 @@
 //! Spawning processes that inherit none of our handles.
-//!
-//! Arguments are escaped into a command line by Windows' rules. Every byte those rules care about
-//! (`"`, `\`, space, tab) is ASCII, and ASCII never occurs inside a multi-byte character, so
-//! escaping an `OsStr`'s encoded bytes gives the same result as escaping its UTF-16.
 #![allow(unsafe_code, reason = "win32 API calls all require unsafe.")]
 
 use std::ffi::{OsStr, OsString};
@@ -17,14 +13,11 @@ use super::fallible_do;
 use super::process::Handle;
 use crate::string::NonNulStr;
 
-/// A process builder mirroring [`std::process::Command`], whose child inherits none of our handles.
+/// A process builder mirroring [`std::process::Command`], with control of windows proc creation
+/// flags.
 ///
-/// std always lets the child inherit every inheritable handle, so a long-lived child holds open
-/// pipes such as the one a shell reads our output from. In exchange the child has no stdio,
-/// `program` must be a path with its extension (PATH is not searched), and batch files are
-/// refused, since cmd.exe re-parses their arguments.
 // TODO(markovejnovic): replace with std's Command and `.inherit_handles(false)` once
-// rust-lang/rust#146407 stabilizes.
+//                      rust-lang/rust#146407 stabilizes.
 #[derive(Debug)]
 pub struct Command {
     program: OsString,
@@ -82,17 +75,24 @@ impl Command {
                 ),
             ));
         }
-        let program = Self::non_nul(&self.program)?;
-        let args =
-            self.args.iter().map(|arg| Self::non_nul(arg)).collect::<io::Result<Vec<_>>>()?;
-        let current_dir =
-            self.current_dir.as_deref().map(|dir| Self::non_nul(dir.as_os_str())).transpose()?;
 
-        let application = Self::nul_terminated(program);
-        // Escaping NUL-free arguments adds no NUL.
-        let mut command_line: Vec<u16> =
-            Self::argv_to_command_line(program, &args)?.encode_wide().chain([0]).collect();
-        let current_dir = current_dir.map(Self::nul_terminated);
+        let program = NonNulStr::new(self.program.as_os_str())
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        let current_dir = self
+            .current_dir
+            .as_deref()
+            .map(|dir| {
+                NonNulStr::new(dir.as_os_str())
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
+            })
+            .transpose()?;
+
+        let application: Vec<u16> = program.as_os_str().encode_wide().chain([0]).collect();
+        // `program` has no NUL and `cmdline` refuses one in an argument, so the line has none for
+        // CreateProcessW to stop at.
+        let mut command_line: Vec<u16> = self.cmdline()?.encode_wide().chain([0]).collect();
+        let current_dir =
+            current_dir.map(|dir| dir.as_os_str().encode_wide().chain([0]).collect::<Vec<u16>>());
         let startup_info = STARTUPINFOW {
             cb: u32::try_from(size_of::<STARTUPINFOW>()).expect("STARTUPINFOW is ~100 bytes"),
             ..Default::default()
@@ -131,65 +131,54 @@ impl Command {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("bat") || ext.eq_ignore_ascii_case("cmd"))
     }
 
-    fn non_nul(s: &OsStr) -> io::Result<NonNulStr<&OsStr>> {
-        NonNulStr::new(s).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
-    }
-
-    fn nul_terminated(s: NonNulStr<&OsStr>) -> Vec<u16> {
-        s.as_os_str().encode_wide().chain([0]).collect()
-    }
-
     /// Quote `program` and escape `args` into a command line, as std does.
-    fn argv_to_command_line(
-        program: NonNulStr<&OsStr>,
-        args: &[NonNulStr<&OsStr>],
-    ) -> io::Result<OsString> {
+    fn cmdline(&self) -> io::Result<OsString> {
         // A Windows path cannot contain `"`, so argv[0] is quoted without escaping.
-        if program.as_os_str().as_encoded_bytes().contains(&b'"') {
+        if self.program.as_encoded_bytes().contains(&b'"') {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "program path contains a quote",
             ));
         }
-        let mut line = OsString::from("\"");
-        line.push(program.as_os_str());
-        line.push("\"");
-        for &arg in args {
-            line.push(" ");
-            line.push(Self::escape_arg(arg));
-        }
-        Ok(line)
+
+        let program: OsString =
+            [OsStr::new("\""), self.program.as_os_str(), OsStr::new("\"")].into_iter().collect();
+
+        let args = self.args.iter().map(|arg| {
+            NonNulStr::new(arg.as_os_str())
+                .map(Self::escape_arg)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
+        });
+
+        let argv = iter::once(Ok(program)).chain(args).collect::<io::Result<Vec<_>>>()?;
+        Ok(argv.join(OsStr::new(" ")))
     }
 
     /// Escape `arg` so `CommandLineToArgvW` reads it back, quoting it only if it is empty or
     /// contains whitespace.
     fn escape_arg(arg: NonNulStr<&OsStr>) -> OsString {
         let bytes = arg.as_os_str().as_encoded_bytes();
-        let quote = bytes.is_empty() || bytes.iter().any(|&b| b == b' ' || b == b'\t');
-        let mut escaped = Vec::with_capacity(bytes.len() + 2);
-        if quote {
-            escaped.push(b'"');
-        }
+        let delimiter =
+            (bytes.is_empty() || bytes.iter().any(|&b| b == b' ' || b == b'\t')).then_some(b'"');
 
-        let mut backslashes = 0;
-        for &byte in bytes {
-            match byte {
-                b'\\' => backslashes += 1,
-                // 2n+1 backslashes before an embedded quote: n literal ones and the escape.
-                b'"' => {
-                    escaped.extend(iter::repeat_n(b'\\', backslashes + 1));
-                    backslashes = 0;
-                }
-                _ => backslashes = 0,
-            }
-            escaped.push(byte);
-        }
+        let body = bytes.split_inclusive(|&b| b == b'"').flat_map(|segment| {
+            let (literal, embedded_quote) = match segment.split_last() {
+                Some((&b'"', literal)) => (literal, Some(b'"')),
+                _ => (segment, None),
+            };
 
-        if quote {
-            // Double any trailing backslashes so they don't escape the closing quote.
-            escaped.extend(iter::repeat_n(b'\\', backslashes));
-            escaped.push(b'"');
-        }
+            let backslashes = literal.iter().rev().take_while(|&&b| b == b'\\').count();
+            // Backslashes are literal unless a quote follows them: 2n+1 before an embedded quote
+            // (n literal ones and the escape), 2n before the closing quote.
+            let escapes = match embedded_quote {
+                Some(_) => backslashes + 1,
+                None if delimiter.is_some() => backslashes,
+                None => 0,
+            };
+            literal.iter().copied().chain(iter::repeat_n(b'\\', escapes)).chain(embedded_quote)
+        });
+
+        let escaped: Vec<u8> = delimiter.into_iter().chain(body).chain(delimiter).collect();
         // SAFETY: `escaped` is `arg`'s encoded bytes with ASCII inserted only before a `"` and at
         // the ends, which are boundaries where `from_encoded_bytes_unchecked` allows joining UTF-8.
         unsafe { OsString::from_encoded_bytes_unchecked(escaped) }
@@ -337,8 +326,7 @@ mod tests {
     #[case::trailing_backslash_in_quotes(&[r"a b\\"])]
     #[case::non_ascii(&["é ü"])]
     fn arguments_round_trip(#[case] args: &[&str]) {
-        let argv: Vec<_> = args.iter().copied().map(arg).collect();
-        let line = Command::argv_to_command_line(arg(PROGRAM), &argv).unwrap();
+        let line = Command::new(PROGRAM).args(args).cmdline().unwrap();
         assert_eq!(command_line_to_argv(&line), args);
     }
 
@@ -351,8 +339,7 @@ mod tests {
                 0..6,
             ),
         ) {
-            let argv: Vec<_> = args.iter().map(String::as_str).map(arg).collect();
-            let line = Command::argv_to_command_line(arg(PROGRAM), &argv).unwrap();
+            let line = Command::new(PROGRAM).args(&args).cmdline().unwrap();
             prop_assert_eq!(&parse_args(&line), &args);
             prop_assert_eq!(&command_line_to_argv(&line), &args);
         }
