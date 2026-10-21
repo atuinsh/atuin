@@ -66,12 +66,15 @@ caches:
 
   # .debs apt_install downloaded (libssl-dev, pkg-config, and per-step extras
   # like zsh/fish), installed with dpkg on later jobs. Per step because the
-  # package lists differ. Bump v1 if the hosted image's base packages move
-  # on (dpkg --refuse-downgrade falls back to apt meanwhile).
+  # package lists differ. Bump the version when the hosted image moves to a
+  # new release: dpkg --refuse-downgrade falls back to apt for a newer build
+  # of a package the image has, not for one the image renamed.
   - name: apt_debs
     cache_key:
       - apt-debs
-      - v1
+      # v2: the image moved from Ubuntu 22.04 to 24.04, where 22.04's libssl3
+      # .deb breaks the installed libssl3t64 and leaves apt unable to install.
+      - v2
       - agent: step
       - agent: os
       - agent: arch
