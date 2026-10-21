@@ -58,7 +58,6 @@ login-writing-key = Writing new key
 login-key-load-failed = could not load encryption key for verification
 login-key-mismatch = The encryption key on this machine does not match the data on the server.
 login-key-find-correct = You can find the correct key by running 'atuin key' on a machine that already syncs successfully.
-login-wrong-key-title = Wrong encryption key
 login-wrong-key-body =
     The encryption key on this machine does not match the data on the server. You have been logged out.
 
