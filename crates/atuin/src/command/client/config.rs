@@ -51,7 +51,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    #[instrument(level = "trace", skip_all, err)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match self {
             Self::Get(get) => get.run(settings).await,

@@ -62,13 +62,14 @@ message GetSessionEvent {
 }
 
 message SearchSessionsRequest {
-  string query = 1;
+  // What to find: every term must appear, and the words of a term together, in that order.
+  repeated string terms = 1;
   // Maximum number of distinct sessions to return, most-relevant first. 0 means
   // unbounded: every matching session is ranked and streamed. Ranking is eager
   // (the full match set is scored before the first result), so prefer a bound.
   uint32 limit = 2;
-  // Match messages containing any of the query's terms, each as a prefix, instead of all of them
-  // as whole words.
+  // Match messages containing any of the terms, each as a prefix, instead of all of them as whole
+  // words.
   bool any_term = 3;
   SessionFilter filter = 4;
 }

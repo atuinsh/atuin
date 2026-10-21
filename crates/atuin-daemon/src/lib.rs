@@ -12,6 +12,7 @@ use eyre::Result;
 
 use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
+use crate::service::address::DaemonListener;
 use crate::session_capture::AiHarnessSessionCapture;
 
 pub mod client;
@@ -23,9 +24,9 @@ pub(crate) mod history_journal;
 #[cfg(feature = "octavo")]
 mod octavo;
 mod output_capture;
-pub mod pidfile;
 pub mod search;
 pub mod server;
+pub mod service;
 pub mod session_capture;
 mod sync;
 
@@ -54,9 +55,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Boot the daemon using the new component-based architecture.
 ///
 /// This creates a daemon with the search component, spawns the background sync
-/// engine, starts the gRPC server with their services, and runs the event loop.
+/// engine, starts the gRPC server with their services on `listener`, and runs the event loop.
 pub async fn boot(
     settings: Arc<Settings>,
+    listener: DaemonListener,
     store: SqliteStore,
     history_db: HistoryDatabase,
 ) -> Result<()> {
@@ -196,13 +198,12 @@ pub async fn boot(
 
     // Start the gRPC server in the background
     server::run_grpc_server(
-        &settings,
+        listener,
         history_service,
         search_service.build(handle.clone()),
         ai_session_service,
         handle,
-    )
-    .await?;
+    )?;
 
     // Run the daemon event loop
     daemon.run_event_loop().await?;

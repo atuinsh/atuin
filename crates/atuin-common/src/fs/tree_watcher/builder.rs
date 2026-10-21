@@ -2,8 +2,8 @@ use std::num::{NonZeroU8, NonZeroU64};
 use std::path::Path;
 use std::time::Duration;
 
-use notify::RecursiveMode;
-use notify_debouncer_full::{DebounceEventResult, new_debouncer};
+use notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{DebounceEventResult, NoCache, new_debouncer_opt};
 
 use super::poller::TreeWatcherPoller;
 use super::stat::StatPoller;
@@ -62,7 +62,8 @@ where
 {
     /// Yield only the regular files whose path `filter` accepts (default: every file).
     ///
-    /// `filter` runs on the watcher's task, once per file path that appears, so it must not block.
+    /// `filter` runs on the watcher's task each time a file it has not accepted is seen, so it
+    /// must be a cheap, non-blocking, pure function of the path.
     #[must_use]
     pub fn filter<G>(self, filter: G) -> TreeWatcherBuilder<G>
     where
@@ -139,12 +140,14 @@ where
             RecursiveMode::NonRecursive
         };
 
-        let mut debouncer = new_debouncer(
+        let mut debouncer = new_debouncer_opt::<_, RecommendedWatcher, _>(
             self.debounce_timeout.get(),
             None,
             move |result: DebounceEventResult| {
                 let _ = tx.send(result);
             },
+            NoCache,
+            notify::Config::default(),
         )?;
         debouncer.watch(&root, mode)?;
 

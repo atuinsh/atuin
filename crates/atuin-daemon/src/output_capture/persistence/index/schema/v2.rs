@@ -1,19 +1,20 @@
+use std::sync::Arc;
+
 use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::Sqlite;
 use atuin_common::db::sqlite::fts::{FtsQueryExt, TextHighlighter, match_expression};
 use atuin_common::db::{self};
 use atuin_common::futures::stream::ChunkedStream;
-use atuin_common::string::highlighted::HighlightedString;
 use futures::stream;
 use sqlx::Row;
 
-use super::super::{IndexError, RankedMatch};
+use super::super::{HighlightedCapture, IndexError, RankedMatch};
 use super::{CHUNK, id_from_bytes, store};
 
 pub struct Schema;
 
 impl super::Schema for Schema {
-    const VERSION: i64 = 1;
+    const VERSION: i64 = 2;
 
     async fn setup(db: &Sqlite) -> Result<(), IndexError> {
         let pool = db.pool();
@@ -21,8 +22,11 @@ impl super::Schema for Schema {
             "DROP TABLE IF EXISTS output_fts",
             "DROP TABLE IF EXISTS indexed",
             "CREATE TABLE indexed(id INTEGER PRIMARY KEY, history_id BLOB NOT NULL UNIQUE)",
-            "CREATE VIRTUAL TABLE output_fts USING fts5(body, content = '', contentless_delete = \
-             1, tokenize = 'unicode61')",
+            // A capture's kept head and tail go in separate columns because FTS5 matches a phrase
+            // within one column only, and the words either side of a discarded middle were never
+            // next to each other.
+            "CREATE VIRTUAL TABLE output_fts USING fts5(head, tail, content = '', \
+             contentless_delete = 1, tokenize = 'unicode61')",
         ] {
             db::query(statement).execute(pool).await.map_err(store)?;
         }
@@ -33,7 +37,8 @@ impl super::Schema for Schema {
         db: &Sqlite,
         highlighter: TextHighlighter,
         id: HistoryId,
-        text: &str,
+        head: &str,
+        tail: Option<&str>,
     ) -> Result<(), IndexError> {
         let pool = db.pool();
         let key = id.into_bytes();
@@ -46,9 +51,10 @@ impl super::Schema for Schema {
         .fetch_one(&mut *tx)
         .await
         .map_err(store)?;
-        db::query("INSERT OR REPLACE INTO output_fts(rowid, body) VALUES (?, ?)")
+        db::query("INSERT OR REPLACE INTO output_fts(rowid, head, tail) VALUES (?, ?, ?)")
             .bind(rowid)
-            .bind_highlightable(highlighter, text)
+            .bind_highlightable(highlighter, head)
+            .bind_highlightable(highlighter, tail.unwrap_or_default())
             .execute(&mut *tx)
             .await
             .map_err(store)?;
@@ -71,15 +77,15 @@ impl super::Schema for Schema {
 
     async fn search(
         db: &Sqlite,
-        query: &str,
+        terms: impl IntoIterator<Item = &str>,
         limit: usize,
     ) -> ChunkedStream<Result<RankedMatch, IndexError>> {
         let pool = db.pool().clone();
-        let query = query.to_owned();
+        let terms: Arc<[String]> = terms.into_iter().map(str::to_owned).collect();
 
         ChunkedStream::new(stream::unfold(Some(0usize), move |offset| {
             let pool = pool.clone();
-            let query = query.clone();
+            let terms = terms.clone();
             async move {
                 let offset = offset?;
                 let want = if limit == 0 {
@@ -96,7 +102,7 @@ impl super::Schema for Schema {
                      indexed ON indexed.id = output_fts.rowid WHERE output_fts MATCH ? ORDER BY \
                      score DESC, indexed.history_id LIMIT ? OFFSET ?",
                 );
-                let stmt = stmt.bind_match_query(&query)?;
+                let stmt = stmt.bind_match_query(terms.iter())?;
                 let page = i64::try_from(want).unwrap_or(i64::MAX);
                 let skip = i64::try_from(offset).unwrap_or(i64::MAX);
                 let rows = match stmt.bind(page).bind(skip).fetch_all(&pool).await {
@@ -128,12 +134,12 @@ impl super::Schema for Schema {
     async fn highlight(
         db: &Sqlite,
         highlighter: TextHighlighter,
-        query: &str,
-        body: &str,
-    ) -> Result<HighlightedString, IndexError> {
-        let unhighlighted = || highlighter.as_highlighted(highlighter.sanitize(body).into_owned());
-        let Some(expr) = match_expression(query) else {
-            return Ok(unhighlighted());
+        terms: impl IntoIterator<Item = &str>,
+        head: &str,
+        tail: Option<&str>,
+    ) -> Result<HighlightedCapture, IndexError> {
+        let Some(expr) = match_expression(terms) else {
+            return Ok(HighlightedCapture::unmarked(highlighter, head, tail));
         };
 
         // The index is contentless, so sqlite's `highlight()` cannot run against it; and
@@ -142,21 +148,24 @@ impl super::Schema for Schema {
         // the same MATCH highlights it exactly as it was matched.
         let mut conn = db.pool().acquire().await.map_err(store)?;
         db::query(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS temp.highlights USING fts5(body, tokenize = \
+            "CREATE VIRTUAL TABLE IF NOT EXISTS temp.highlights USING fts5(head, tail, tokenize = \
              'unicode61')",
         )
         .execute(&mut *conn)
         .await
         .map_err(store)?;
         db::query("DELETE FROM temp.highlights").execute(&mut *conn).await.map_err(store)?;
-        db::query("INSERT INTO temp.highlights(rowid, body) VALUES (1, ?)")
-            .bind_highlightable(highlighter, body)
+        db::query("INSERT INTO temp.highlights(rowid, head, tail) VALUES (1, ?, ?)")
+            .bind_highlightable(highlighter, head)
+            .bind_highlightable(highlighter, tail.unwrap_or_default())
             .execute(&mut *conn)
             .await
             .map_err(store)?;
-        let highlighted: Option<String> = db::query_scalar(
-            "SELECT highlight(highlights, 0, ?, ?) FROM temp.highlights WHERE highlights MATCH ?",
+        let highlighted = db::query(
+            "SELECT highlight(highlights, 0, ?, ?), highlight(highlights, 1, ?, ?) FROM \
+             temp.highlights WHERE highlights MATCH ?",
         )
+        .bind_highlight(highlighter)
         .bind_highlight(highlighter)
         .bind(expr)
         .fetch_optional(&mut *conn)
@@ -165,7 +174,15 @@ impl super::Schema for Schema {
 
         // A body that no longer matches (its plaintext changed since it was indexed) is still a
         // hit, just an unhighlighted one.
-        Ok(highlighted.map_or_else(unhighlighted, |h| highlighter.as_highlighted(h)))
+        let Some(row) = highlighted else {
+            return Ok(HighlightedCapture::unmarked(highlighter, head, tail));
+        };
+        let marked_head: String = row.try_get(0).map_err(store)?;
+        let marked_tail: String = row.try_get(1).map_err(store)?;
+        Ok(HighlightedCapture {
+            head: highlighter.as_highlighted(marked_head),
+            tail: tail.map(|_| highlighter.as_highlighted(marked_tail)),
+        })
     }
 
     async fn indexed_ids(db: &Sqlite) -> ChunkedStream<Result<HistoryId, IndexError>> {

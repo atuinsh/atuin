@@ -59,7 +59,7 @@ impl SidecarSource {
     /// The git repository root `cwd` is in, if any.
     fn git_root(&self, cwd: &Path) -> Option<PathBuf> {
         let mut roots = self.git_roots.lock();
-        roots.entry(cwd.to_owned()).or_insert_with(|| in_git_repo(&cwd.to_string_lossy())).clone()
+        roots.entry(cwd.to_owned()).or_insert_with(|| in_git_repo(cwd)).clone()
     }
 
     /// A picker row for `s`.
@@ -143,7 +143,7 @@ impl SessionSource for SidecarSource {
         let limit = u32::try_from(filter.limit).unwrap_or(u32::MAX);
         let matches: Vec<_> = self
             .db
-            .search(&filter.text, SearchTerms::Typed, &filter.db, limit)
+            .search(SearchTerms::Typed(filter.text.clone()), &filter.db, limit)
             .try_collect()
             .await?;
 

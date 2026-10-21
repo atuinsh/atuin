@@ -64,7 +64,7 @@ impl Daemon {
     /// This is the first path in [`Self::potential_socket_paths`] that exists, or if none exist,
     /// the first path.
     ///
-    /// Note: you should almost always use `atuin_daemon::client::socket_path` instead of this
+    /// Note: you should almost always use `atuin_daemon::service::pidfile::Pidfile::socket_path` instead of this
     /// method, as it implements additional logic like checking the pidfile.
     #[must_use]
     pub fn existing_socket_path(&self) -> Cow<'_, Path> {

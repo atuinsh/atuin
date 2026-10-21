@@ -307,9 +307,12 @@ async fn run_non_interactive(
     db: &Sqlite,
 ) -> Result<Vec<History>> {
     let current_dir;
+    let current_dir_str;
+
     let dir = if filter_options.cwd == Some(".") {
         current_dir = utils::get_current_dir();
-        Some(current_dir.as_str())
+        current_dir_str = current_dir.to_string_lossy();
+        Some(&*current_dir_str)
     } else {
         filter_options.cwd
     };

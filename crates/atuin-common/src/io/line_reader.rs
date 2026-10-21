@@ -5,8 +5,10 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::iter;
+use std::ops::Deref;
 use std::path::PathBuf;
 
+use bytes::buf::Writer;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::Stream;
 
@@ -116,13 +118,62 @@ pub trait AsyncReadLines {
     fn lines(&mut self) -> impl Stream<Item = io::Result<Line>> + Send + '_;
 }
 
+/// What a reader has read past its offset but not yet handed out, and whose buffer it is in.
+#[derive(Debug)]
+enum Pending {
+    /// In a buffer of its own.
+    Owned(BytesMut),
+    /// In the buffer the lines before it were split off from: a view, which holds all of that
+    /// buffer, alone once those lines are dropped.
+    View(BytesMut),
+}
+
+impl Default for Pending {
+    fn default() -> Self {
+        Self::Owned(BytesMut::new())
+    }
+}
+
+impl Deref for Pending {
+    type Target = BytesMut;
+
+    fn deref(&self) -> &BytesMut {
+        match self {
+            Self::Owned(bytes) | Self::View(bytes) => bytes,
+        }
+    }
+}
+
+impl Pending {
+    /// Append to it, in whichever buffer it is in.
+    fn writer(&mut self) -> Writer<&mut BytesMut> {
+        let (Self::Owned(bytes) | Self::View(bytes)) = self;
+        bytes.writer()
+    }
+
+    /// Hand out its first `len` bytes, leaving the rest a view into the buffer they share.
+    fn split_to(&mut self, len: usize) -> Bytes {
+        let (Self::Owned(bytes) | Self::View(bytes)) = self;
+        let head = bytes.split_to(len).freeze();
+        *self = Self::View(std::mem::take(bytes));
+        head
+    }
+
+    /// Copy a view into a buffer of its own, letting go of the one it is a view of.
+    fn detach(&mut self) {
+        if let Self::View(bytes) = self {
+            *self = Self::Owned(BytesMut::from(&bytes[..]));
+        }
+    }
+}
+
 /// What a reader keeps between reads.
 #[derive(Debug, Default)]
 struct Cursor {
     /// Just past the last line handed out.
     offset: u64,
     /// Read past `offset` but not yet handed out.
-    pending: BytesMut,
+    pending: Pending,
     /// How much of `pending` is known to hold no newline.
     scanned: usize,
     /// The file `offset` belongs to; `None` before the first read, and always on platforms
@@ -244,6 +295,10 @@ impl Cursor {
                 return Ok(Some(line));
             }
             if self.fill(file)? == 0 {
+                // An empty view of the buffer still holds all of it: idle at the end of the file,
+                // keep only the line read in part. A line still being written is copied once, not
+                // on every read that finds it unfinished.
+                self.pending.detach();
                 return Ok(None);
             }
         }
@@ -262,13 +317,13 @@ impl Cursor {
             };
 
             let len = self.scanned + newline + 1;
-            let mut bytes = self.pending.split_to(len).freeze();
+            let mut bytes = self.pending.split_to(len);
             self.scanned = 0;
             self.offset += u64::try_from(len).expect("a byte count fits u64");
             self.keep_tail(&bytes);
             // A line read whole leaves the buffer it grew to behind: let it go.
             if self.pending.capacity() > RETAINED_BYTES {
-                self.pending = BytesMut::from(&self.pending[..]);
+                self.pending.detach();
             }
             let skipping = std::mem::take(&mut self.skipping);
             if skipping || len - 1 > MAX_LINE_BYTES {
@@ -294,7 +349,7 @@ impl Cursor {
         }
         self.skipping = true;
         self.offset += u64::try_from(self.pending.len()).expect("a byte count fits u64");
-        self.pending = BytesMut::new();
+        self.pending = Pending::default();
         self.scanned = 0;
         // The bytes passed over are not kept, so what precedes the offset is not known.
         self.tail.clear();
@@ -311,7 +366,7 @@ impl Cursor {
     /// Read up to [`READ_CHUNK_BYTES`] past the position into `pending`, returning how many.
     fn fill(&mut self, mut file: &File) -> io::Result<u64> {
         file.seek(SeekFrom::Start(self.position()))?;
-        io::copy(&mut file.take(READ_CHUNK_BYTES), &mut (&mut self.pending).writer())
+        io::copy(&mut file.take(READ_CHUNK_BYTES), &mut self.pending.writer())
     }
 }
 
@@ -607,6 +662,35 @@ mod tests {
         append(&file.path, b"\nc\n");
         let end = end + 2 + long.len() as u64 + 1;
         assert_eq!(drain(reader.lines().unwrap()), [line(end + 2, "c")]);
+    }
+
+    /// A reader at the end of the file holds the line it read in part, not the buffer the lines
+    /// before it were read into.
+    #[rstest]
+    #[case::whole_lines(b"\n")]
+    #[case::a_line_read_in_part(b"\nab")]
+    fn a_reader_at_the_end_holds_no_buffer(#[case] tail: &[u8]) {
+        let long = vec![b'a'; 100_000];
+        let file = file(&[&long[..], tail].concat());
+        let mut reader = LineReader::new(File::open(&file.path).unwrap());
+        let [line] = drain(reader.lines().unwrap()).try_into().unwrap();
+        assert!(line.bytes.is_unique(), "the reader still holds the buffer the line was read into");
+        assert_eq!(*reader.cursor.pending, tail[1..]);
+    }
+
+    /// A line still being written is copied off the buffer the lines before it were read into
+    /// once, not again on every read that finds it unfinished.
+    #[rstest]
+    fn a_line_being_written_is_copied_once(#[with(b"a\nb")] file: TempFile) {
+        let mut reader = PathLineReader::new(&file.path);
+        assert_eq!(drain(reader.lines().unwrap()), [line(2, "a")]);
+        append(&file.path, b"c");
+        assert_eq!(drain(reader.lines().unwrap()), []);
+        let held = reader.cursor.pending.as_ptr();
+        assert_eq!(drain(reader.lines().unwrap()), []);
+        assert_eq!(reader.cursor.pending.as_ptr(), held, "the line read in part was copied again");
+        append(&file.path, b"d\n");
+        assert_eq!(drain(reader.lines().unwrap()), [line(6, "bcd")]);
     }
 
     #[cfg(unix)]

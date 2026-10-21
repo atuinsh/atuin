@@ -2,7 +2,7 @@
 //!
 //! A [`TreeWatcher`] walks a `root` directory and yields a [`WatchedFile`] for each regular file
 //! whose path its filter accepts. Directories and symlinks are never yielded, and a rejected
-//! file is never offered to the filter again while it stays in place.
+//! file is offered to the filter again each time it is seen.
 //!
 //! A [`WatchedFile`]'s [`stat`](WatchedFile::stat) is a [`tokio::sync::watch::Receiver`] holding
 //! the file's latest [`FileStat`]: it changes whenever the file's content does (size, modification
@@ -189,7 +189,7 @@ use std::time::{Duration, SystemTime};
 pub use builder::TreeWatcherBuilder;
 use futures::{Stream, StreamExt};
 use notify::RecommendedWatcher;
-use notify_debouncer_full::{Debouncer, RecommendedCache};
+use notify_debouncer_full::{Debouncer, NoCache};
 use strum_macros::EnumDiscriminants;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -331,7 +331,7 @@ impl WatchedFile {
 pub struct TreeWatcher {
     files: flume::r#async::RecvStream<'static, WatchedFile>,
     task: JoinHandle<()>,
-    _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
+    _debouncer: Debouncer<RecommendedWatcher, NoCache>,
 }
 
 impl TreeWatcher {
@@ -681,12 +681,12 @@ mod tests {
         let from = dir.path().join("from.log");
         let to = dir.path().join("to.log");
         std::fs::write(&from, b"x").unwrap();
-        let mut watcher = watcher(dir.path(), 100, 50);
+        // A 30s scan leaves only events able to deliver either end of the rename in time.
+        let mut watcher = watcher(dir.path(), 30_000, 50);
 
         let stat = found(&mut watcher, "from.log").await.stat;
         std::fs::rename(&from, &to).unwrap();
         closes(stat).await;
-        // The destination may surface as a rename event or via the reconciling scan.
         found(&mut watcher, "to.log").await;
     }
 

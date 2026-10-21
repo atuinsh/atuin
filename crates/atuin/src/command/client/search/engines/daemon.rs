@@ -62,7 +62,7 @@ impl LazyClient {
 
         debug!("daemon not available, attempting auto-start");
         self.0 = None;
-        if let Err(start_error) = daemon::ensure_daemon_running(settings).await {
+        if let Err(start_error) = atuin_daemon::service::ActiveService::ready(settings).await {
             return Err(err.wrap_err(format!("failed to auto-start daemon: {start_error:#}")));
         }
         let client = self.get(settings).await?;

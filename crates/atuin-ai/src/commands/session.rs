@@ -58,10 +58,12 @@ pub enum Cmd {
     Search {
         #[arg(
             value_name = "QUERY",
-            allow_hyphen_values = true,
-            help = "Words to look for in thread titles, message text, reasoning, and tool calls"
+            required = true,
+            help = "Words to look for in thread titles, message text, reasoning, and tool calls; \
+                    all must appear. Quote words to find them together, in that order. Use `--` \
+                    before a query that starts with `-`"
         )]
-        query: String,
+        query: Vec<String>,
         #[arg(long, value_enum, help = "Only search threads from this harness")]
         harness: Option<HarnessArg>,
         #[arg(
@@ -200,7 +202,10 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
             harness,
             limit,
             ..
-        } => search(&mut client, &query, harness.map(HarnessKind::from), limit, style).await,
+        } => {
+            let query = query.iter().map(String::as_str);
+            search(&mut client, query, harness.map(HarnessKind::from), limit, style).await
+        }
         Cmd::Tail { .. } => tail(&mut client, style).await,
         Cmd::Import { harness, .. } => import(&mut client, harness, style, &mut io::stdout()).await,
         Cmd::Resume(_) | Cmd::Enable => unreachable!("returned above"),
@@ -312,15 +317,15 @@ async fn show(client: &mut AiClient, selector: &str, style: Style) -> Result<()>
 
 async fn search(
     client: &mut AiClient,
-    query: &str,
+    query: impl IntoIterator<Item = &str>,
     harness: Option<HarnessKind>,
     limit: u32,
     style: Style,
 ) -> Result<()> {
+    let query: Vec<&str> = query.into_iter().collect();
     let matches: Vec<SessionMatch> = client
         .search_sessions(
-            query,
-            SearchTerms::All,
+            SearchTerms::All(query.iter().copied().map(str::to_owned).collect()),
             &SessionFilter {
                 harness,
                 ..SessionFilter::default()
@@ -349,7 +354,7 @@ async fn search(
         }
         _ => {
             if matches.is_empty() {
-                writeln!(out, "No threads matched `{query}`.")?;
+                writeln!(out, "No threads matched `{}`.", query.join(" "))?;
                 return Ok(());
             }
             writeln!(out, "{:<8} {:<12} {:<16}  MATCH", "ID", "HARNESS", "UPDATED")?;
@@ -1485,13 +1490,12 @@ mod tests {
         assert!(select_session(sessions, "zzz").is_err());
     }
 
-    /// A query starting with `-` is a query, after `--` or not; flags still parse around it.
+    /// Flags parse around the query's words, and a query starting with `-` follows `--`.
     #[rstest]
-    #[case::bare(&["search", "-v"])]
-    #[case::after_dashes(&["search", "--", "-v"])]
-    #[case::before_a_flag(&["search", "-v", "--limit", "3"])]
-    #[case::after_a_flag(&["search", "--limit", "3", "-v"])]
-    fn a_search_query_may_start_with_a_hyphen(#[case] args: &[&str]) {
+    #[case::before_a_flag(&["search", "flaky", "test", "--limit", "3"], &["flaky", "test"])]
+    #[case::after_a_flag(&["search", "--limit", "3", "flaky"], &["flaky"])]
+    #[case::hyphen_after_dashes(&["search", "--limit", "3", "--", "-v"], &["-v"])]
+    fn a_search_query_parses_around_flags(#[case] args: &[&str], #[case] expected: &[&str]) {
         #[derive(clap::Parser)]
         struct Cli {
             #[command(subcommand)]
@@ -1505,7 +1509,7 @@ mod tests {
         let Cmd::Search { query, .. } = cli.cmd else {
             panic!("not a search");
         };
-        assert_eq!(query, "-v");
+        assert_eq!(query, expected);
     }
 
     #[rstest]
@@ -1859,12 +1863,15 @@ mod tests {
 
     /// The match ranges in the JSON are those of what a real search matched.
     #[rstest]
-    #[case::all(SearchTerms::All, "build", json!([[8, 13]]), json!([[4, 9]]))]
-    #[case::any(SearchTerms::Any, "build nothing", json!([[8, 13]]), json!([[4, 9]]))]
+    #[case::all(SearchTerms::All(vec!["build".into()]), json!([[8, 13]]), json!([[4, 9]]))]
+    #[case::any(
+        SearchTerms::Any(vec!["build".into(), "nothing".into()]),
+        json!([[8, 13]]),
+        json!([[4, 9]])
+    )]
     #[tokio::test]
     async fn search_match_json_ranges_come_from_the_search(
-        #[case] mode: SearchTerms,
-        #[case] query: &str,
+        #[case] terms: SearchTerms,
         #[case] title: Value,
         #[case] preview: Value,
     ) {
@@ -1874,7 +1881,7 @@ mod tests {
         db.append(&m).await.unwrap();
 
         let hits: Vec<SessionMatch> =
-            db.search(query, mode, &SessionFilter::default(), 0).try_collect().await.unwrap();
+            db.search(terms, &SessionFilter::default(), 0).try_collect().await.unwrap();
         let [hit] = hits.as_slice() else {
             panic!("one match: {hits:?}");
         };

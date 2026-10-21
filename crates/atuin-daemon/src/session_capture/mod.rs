@@ -320,49 +320,41 @@ impl Sink {
     /// for the first time since the daemon started. A stored call whose input wasn't captured,
     /// or whose written content was withheld, can't be checked, so it counts.
     async fn warm_unsafe_calls(&self, session: &HarnessSession) -> Result<(), AppendError> {
-        let mut rows = Vec::new();
+        // Each call made since its last result, with where the session ran then: only these can
+        // withhold a result still to come, so only they are judged, a few among a long session's
+        // thousands. Few, and held to the payload limit when stored, they are judged here, with
+        // the regex caches capture already keeps on the runtime's thread, rather than across
+        // blocking threads that would each build and keep their own.
+        let mut asked = HashMap::<_, Vec<_>>::new();
         let mut cwd = None;
         let mut stored = std::pin::pin!(self.sidecar.messages(session));
         while let Some(stored) = stored.next().await {
             let stored = stored?;
-            cwd = stored.cwd.clone().or(cwd);
-            rows.push((stored.content, cwd.clone()));
-        }
-
-        let policy = self.policy.clone();
-        let heavy = !rows.is_empty();
-        // Each call and whether it counts, each result: in order.
-        let judged = off_runtime(rows, heavy, move |(content, cwd)| {
-            let ignored = cwd.as_deref().is_some_and(|cwd| policy.ignores_dir(cwd));
-            content
-                .into_iter()
-                .filter_map(|block| match block {
+            cwd = stored.cwd.or(cwd);
+            for block in stored.content {
+                match block {
                     Content::ToolUse(call) => {
-                        let counts = call.input.is_null()
-                            || tools::is_withheld(&call.input)
-                            || ignored
-                            || policy.judge(&call, cwd.as_deref()) != Verdict::Keep;
-                        Some((call.id, Some(counts)))
+                        asked.entry(call.id.clone()).or_default().push((call, cwd.clone()));
                     }
-                    Content::ToolResult(result) => Some((result.call, None)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        })
-        .await;
-
-        let mut unanswered = HashSet::new();
-        for (id, call) in judged.into_iter().flatten() {
-            match call {
-                Some(true) => {
-                    unanswered.insert(id);
-                }
-                Some(false) => {}
-                None => {
-                    unanswered.remove(&id);
+                    Content::ToolResult(result) => {
+                        asked.remove(&result.call);
+                    }
+                    _ => {}
                 }
             }
         }
+
+        let unanswered: HashSet<_> = asked
+            .into_values()
+            .flatten()
+            .filter(|(call, cwd)| {
+                call.input.is_null()
+                    || tools::is_withheld(&call.input)
+                    || cwd.as_deref().is_some_and(|cwd| self.policy.ignores_dir(cwd))
+                    || self.policy.judge(call, cwd.as_deref()) != Verdict::Keep
+            })
+            .map(|(call, _)| call.id)
+            .collect();
         let mut calls = self.unsafe_calls.lock();
         calls.warmed.insert(session.clone());
         calls.pending.extend(unanswered.into_iter().map(|id| (session.clone(), id)));
@@ -1144,12 +1136,11 @@ impl AiHarnessSessionCapture {
 
     pub fn search(
         &self,
-        query: &str,
         terms: SearchTerms,
         filter: &SessionFilter,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
-        self.sink.sidecar.search(query, terms, filter, limit)
+        self.sink.sidecar.search(terms, filter, limit)
     }
 }
 
@@ -1383,8 +1374,7 @@ mod tests {
             "TEXTSECRET",
         ] {
             let mut matches = Box::pin(sink.sidecar.search(
-                query,
-                SearchTerms::Typed,
+                SearchTerms::Typed(query.to_owned()),
                 &SessionFilter::default(),
                 10,
             ));
@@ -1427,8 +1417,12 @@ mod tests {
             );
         }
 
-        let search = |query| {
-            Box::pin(sink.sidecar.search(query, SearchTerms::Typed, &SessionFilter::default(), 10))
+        let search = |query: &str| {
+            Box::pin(sink.sidecar.search(
+                SearchTerms::Typed(query.to_owned()),
+                &SessionFilter::default(),
+                10,
+            ))
         };
         assert!(search("flubber").next().await.is_some(), "input is searchable");
         assert!(search("wibble").next().await.is_none(), "output is not indexed");
@@ -1798,6 +1792,103 @@ mod tests {
             ("there".to_owned(), false),
             ("again".to_owned(), false),
         ]);
+    }
+
+    /// A stored row of a session, for [`warming_finds_the_unsafe_calls_left_unanswered`].
+    enum Stored {
+        /// A row saying where the session runs from here on.
+        Cwd(&'static str),
+        /// A call to a tool, with its input as stored.
+        Call(&'static str, &'static str, serde_json::Value),
+        /// A call's result.
+        Result(&'static str),
+    }
+
+    /// Warming a resumed session finds the stored calls whose results must not be kept and that no
+    /// later row answers: a call counts when one made after its last result does, judged where
+    /// the session ran then.
+    #[rstest]
+    #[case::answered(vec![
+        Stored::Call("key", "Bash", serde_json::json!({"command": "atuin key"})),
+        Stored::Result("key"),
+    ], &[])]
+    #[case::unanswered(vec![
+        Stored::Call("key", "Bash", serde_json::json!({"command": "atuin key"})),
+    ], &["key"])]
+    #[case::unanswered_but_kept(vec![
+        Stored::Call("ls", "Bash", serde_json::json!({"command": "ls"})),
+    ], &[])]
+    #[case::another_answered(vec![
+        Stored::Call("key", "Bash", serde_json::json!({"command": "atuin key"})),
+        Stored::Call("token", "Bash", serde_json::json!({"command": "gh auth token"})),
+        Stored::Result("key"),
+    ], &["token"])]
+    #[case::asked_again_once_answered(vec![
+        Stored::Call("key", "Bash", serde_json::json!({"command": "atuin key"})),
+        Stored::Result("key"),
+        Stored::Call("key", "Bash", serde_json::json!({"command": "atuin key"})),
+    ], &["key"])]
+    #[case::answered_once_asked_again(vec![
+        Stored::Call("key", "Bash", serde_json::json!({"command": "atuin key"})),
+        Stored::Call("key", "Bash", serde_json::json!({"command": "atuin key"})),
+        Stored::Result("key"),
+    ], &[])]
+    #[case::asked_again_safely(vec![
+        Stored::Call("key", "Bash", serde_json::json!({"command": "atuin key"})),
+        Stored::Call("key", "Bash", serde_json::json!({"command": "ls"})),
+    ], &["key"])]
+    #[case::in_an_ignored_dir(vec![
+        Stored::Cwd("/secret/project"),
+        Stored::Call("ls", "Bash", serde_json::json!({"command": "ls"})),
+    ], &["ls"])]
+    #[case::out_of_an_ignored_dir(vec![
+        Stored::Cwd("/secret/project"),
+        Stored::Cwd("/w"),
+        Stored::Call("ls", "Bash", serde_json::json!({"command": "ls"})),
+    ], &[])]
+    #[case::uncaptured(vec![
+        Stored::Call("off", "Bash", serde_json::Value::Null),
+    ], &["off"])]
+    #[case::written_withheld(vec![
+        Stored::Call("write", "Write", serde_json::json!({"file_path": "notes.txt",
+            "content": "[not captured: a file holding credentials]"})),
+    ], &["write"])]
+    #[tokio::test]
+    async fn warming_finds_the_unsafe_calls_left_unanswered(
+        #[case] rows: Vec<Stored>,
+        #[case] want: &[&str],
+    ) {
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.tools = ToolCapture::Payloads;
+        sink.policy = Arc::new(policy::tests::policy());
+        for (n, row) in (0..).zip(rows) {
+            let mut msg = sample_message();
+            msg.id = RecordId(atuin_common::utils::uuid_v7());
+            msg.source_id = SourceId::from(format!("line-{n}"));
+            msg.timestamp += time::Duration::seconds(n);
+            msg.content = match row {
+                Stored::Cwd(cwd) => {
+                    msg.cwd = Some(cwd.into());
+                    Vec::new()
+                }
+                Stored::Call(id, name, input) => vec![Content::ToolUse(ToolUse {
+                    id: ToolCallId::from(id.to_owned()),
+                    name: name.to_owned(),
+                    input,
+                })],
+                Stored::Result(id) => vec![Content::ToolResult(ToolResult {
+                    call: ToolCallId::from(id.to_owned()),
+                    output: serde_json::json!("abandon ability able about above absent"),
+                    error: false,
+                })],
+            };
+            sink.sidecar.append(&msg).await.unwrap();
+        }
+
+        sink.warm_unsafe_calls(&sample_handle()).await.unwrap();
+        let pending: std::collections::BTreeSet<_> =
+            sink.unsafe_calls.lock().pending.iter().map(|(_, id)| id.to_string()).collect();
+        assert_eq!(pending, want.iter().map(|id| (*id).to_owned()).collect());
     }
 
     #[rstest]

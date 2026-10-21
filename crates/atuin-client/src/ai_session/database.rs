@@ -1102,8 +1102,8 @@ impl AiSessionDatabase {
         }
     }
 
-    /// Sessions matching `query` (its terms matching as `terms` says) and passing `filter`, most
-    /// relevant first, at most `limit` (0 is unbounded).
+    /// Sessions matching `terms` and passing `filter`, most relevant first, at most `limit` (0 is
+    /// unbounded).
     ///
     /// Relevance is bm25 at the session's best message, a title match weighing five times a body
     /// one, divided by `1 + age_in_days / 30` so that equally relevant sessions rank newest
@@ -1116,25 +1116,23 @@ impl AiSessionDatabase {
     /// ([`SessionMatch::matched`]), with its title highlighted instead of the root's.
     pub fn search(
         &self,
-        query: &str,
         terms: SearchTerms,
         filter: &SessionFilter,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static + use<> {
         let this = self.clone();
         let pool = self.db.pool().clone();
-        let query = query.to_owned();
         let filter = filter.clone();
 
         async_stream::try_stream! {
             let highlighter = TextHighlighter::default();
-            let expr = match terms {
-                SearchTerms::All => match_expression(&query),
-                SearchTerms::Typed if QueryTerms::prefixes_last(&query) => {
-                    prefix_match_expression(&query)
+            let expr = match &terms {
+                SearchTerms::All(terms) => match_expression(terms),
+                SearchTerms::Typed(line) if QueryTerms::prefixes_last(line) => {
+                    prefix_match_expression(line)
                 }
-                SearchTerms::Typed => match_expression(&query),
-                SearchTerms::Any => match_any_expression(&query),
+                SearchTerms::Typed(line) => match_expression(line.split_whitespace()),
+                SearchTerms::Any(terms) => match_any_expression(terms),
             };
             let Some(expr) = expr else {
                 for session in this.recent_sessions(&filter, limit).await? {
@@ -1212,7 +1210,7 @@ impl AiSessionDatabase {
                 stmt = stmt.bind(i64::from(limit));
             }
 
-            let terms = QueryTerms::parse(&query, terms);
+            let terms = QueryTerms::parse(&terms);
             let mut rows = stmt.fetch(&pool);
             while let Some(row) = rows.try_next().await? {
                 let session = Self::session_from_row(row.session)?;
@@ -1823,10 +1821,10 @@ fn fts_token_spans(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
     spans
 }
 
-/// A search query's terms as the index matches them (see [`SearchTerms`]): each
-/// whitespace-separated term is a phrase of folded tokens that must appear consecutively (so
-/// `app` matches the token `app`, not the word `apple`, and `foo-bar` matches `foo bar` across
-/// words). A phrase's last token also matches as a prefix: every phrase's for
+/// A search's terms as the index matches them (see [`SearchTerms`]): each term (each
+/// whitespace-separated word of a [`SearchTerms::Typed`] line) is a phrase of folded tokens that
+/// must appear consecutively (so `app` matches the token `app`, not the word `apple`, and
+/// `foo-bar` and `foo bar` match `foo bar` across words). A phrase's last token also matches as a prefix: every phrase's for
 /// [`SearchTerms::Any`], and the last term's for [`SearchTerms::Typed`] when
 /// [`Self::prefixes_last`].
 struct QueryTerms {
@@ -1837,12 +1835,17 @@ struct QueryTerms {
 }
 
 impl QueryTerms {
-    fn parse(query: &str, mode: SearchTerms) -> Self {
-        let terms: Vec<&str> = query.split_whitespace().collect();
-        let prefix = |i: usize| match mode {
-            SearchTerms::All => false,
-            SearchTerms::Typed => i + 1 == terms.len() && Self::prefixes_last(query),
-            SearchTerms::Any => true,
+    fn parse(search: &SearchTerms) -> Self {
+        let terms: Vec<&str> = match search {
+            SearchTerms::All(terms) | SearchTerms::Any(terms) => {
+                terms.iter().map(String::as_str).collect()
+            }
+            SearchTerms::Typed(line) => line.split_whitespace().collect(),
+        };
+        let prefix = |i: usize| match search {
+            SearchTerms::All(_) => false,
+            SearchTerms::Typed(line) => i + 1 == terms.len() && Self::prefixes_last(line),
+            SearchTerms::Any(_) => true,
         };
         let phrases = terms
             .iter()
@@ -1852,18 +1855,15 @@ impl QueryTerms {
             .collect();
         Self {
             phrases,
-            any: mode == SearchTerms::Any,
+            any: matches!(search, SearchTerms::Any(_)),
         }
     }
 
-    /// Whether the last term of `query` matches as a prefix: it is still being typed (no
+    /// Whether the last word of a typed `line` matches as a prefix: it is still being typed (no
     /// whitespace after it), and is at least [`MIN_PREFIX_CHARS`] long.
-    fn prefixes_last(query: &str) -> bool {
-        !query.ends_with(char::is_whitespace)
-            && query
-                .split_whitespace()
-                .last()
-                .is_some_and(|t| t.chars().count() >= MIN_PREFIX_CHARS)
+    fn prefixes_last(line: &str) -> bool {
+        !line.ends_with(char::is_whitespace)
+            && line.split_whitespace().last().is_some_and(|t| t.chars().count() >= MIN_PREFIX_CHARS)
     }
 
     /// Where a phrase matches in `tokens`: its first token's index and its length.
@@ -2458,31 +2458,37 @@ mod tests {
         filter: &SessionFilter,
         limit: u32,
     ) -> Vec<SessionMatch> {
-        db.search(query, SearchTerms::Typed, filter, limit).try_collect().await.unwrap()
+        db.search(SearchTerms::Typed(query.to_owned()), filter, limit).try_collect().await.unwrap()
     }
 
-    /// A search as the MCP tools make one: every term as a whole word, or with `any_term` any
+    /// A search as the MCP tools make one: every term as whole words, or with `any_term` any
     /// term as a prefix, in the sessions at or under `cwd` when given.
     fn search_in(
         db: &AiSessionDatabase,
-        query: &str,
+        terms: &[&str],
         cwd: Option<&str>,
         any_term: bool,
     ) -> impl futures::Stream<Item = Result<SessionMatch, DbError>> + use<> {
+        let terms = terms.iter().map(|term| (*term).to_owned()).collect();
         let terms = if any_term {
-            SearchTerms::Any
+            SearchTerms::Any(terms)
         } else {
-            SearchTerms::All
+            SearchTerms::All(terms)
         };
         let filter = SessionFilter {
             workspace: cwd.map(std::path::PathBuf::from),
             ..SessionFilter::default()
         };
-        db.search(query, terms, &filter, 0)
+        db.search(terms, &filter, 0)
+    }
+
+    /// Each whitespace-separated word of `query` as its own term.
+    fn words(query: &str) -> Vec<String> {
+        query.split_whitespace().map(str::to_owned).collect()
     }
 
     async fn search(db: &AiSessionDatabase, query: &str) -> Vec<SessionMatch> {
-        db.search(query, SearchTerms::Typed, &SessionFilter::default(), 0)
+        db.search(SearchTerms::Typed(query.to_owned()), &SessionFilter::default(), 0)
             .try_collect()
             .await
             .unwrap()
@@ -2584,14 +2590,14 @@ mod tests {
         db.append(&message_in(&codex, 1, "shared keyword")).await.unwrap();
 
         let all: Vec<_> = db
-            .search("shared", SearchTerms::Typed, &SessionFilter::default(), 0)
+            .search(SearchTerms::Typed("shared".into()), &SessionFilter::default(), 0)
             .try_collect()
             .await
             .unwrap();
         assert_eq!(all.len(), 2);
 
         let only_codex: Vec<_> = db
-            .search("shared", SearchTerms::Typed, &harness_filter(HarnessKind::Codex), 0)
+            .search(SearchTerms::Typed("shared".into()), &harness_filter(HarnessKind::Codex), 0)
             .try_collect()
             .await
             .unwrap();
@@ -2667,7 +2673,7 @@ mod tests {
             ..SessionFilter::default()
         };
         let found: Vec<SessionMatch> =
-            db.search("needle", SearchTerms::All, &filter, 0).try_collect().await.unwrap();
+            db.search(SearchTerms::All(words("needle")), &filter, 0).try_collect().await.unwrap();
 
         let mut found: Vec<_> = found.iter().map(|m| m.session.handle.session.as_ref()).collect();
         found.sort_unstable();
@@ -2782,7 +2788,7 @@ mod tests {
         expected.sort_unstable();
 
         let searched: Vec<SessionMatch> =
-            db.search("", SearchTerms::All, &filter, 0).try_collect().await.unwrap();
+            db.search(SearchTerms::All(vec![]), &filter, 0).try_collect().await.unwrap();
         let mut searched: Vec<_> =
             searched.iter().map(|m| m.session.handle.session.as_ref().to_owned()).collect();
         searched.sort_unstable();
@@ -2906,7 +2912,7 @@ mod tests {
             .await
             .unwrap();
 
-        let hits: Vec<_> = search_in(&db, "deploy", None, true).try_collect().await.unwrap();
+        let hits: Vec<_> = search_in(&db, &["deploy"], None, true).try_collect().await.unwrap();
         let preview = hits[0].preview.to_plain().text.into_owned();
         assert!(preview.contains("deployment failed"), "{preview}");
     }
@@ -2918,10 +2924,10 @@ mod tests {
         db.append(&message_in(&sample_handle(), 0, "the deployment failed")).await.unwrap();
 
         let strict: Vec<_> =
-            search_in(&db, "deploy broken", None, false).try_collect().await.unwrap();
+            search_in(&db, &["deploy", "broken"], None, false).try_collect().await.unwrap();
         assert!(strict.is_empty(), "no message has both whole words");
         let loose: Vec<_> =
-            search_in(&db, "deploy broken", None, true).try_collect().await.unwrap();
+            search_in(&db, &["deploy", "broken"], None, true).try_collect().await.unwrap();
         assert_eq!(loose.len(), 1, "`deploy` matches `deployment` as a prefix");
     }
 
@@ -2942,7 +2948,7 @@ mod tests {
             db.append(&msg).await.unwrap();
         }
 
-        let mut found: Vec<String> = search_in(&db, "shared", Some("/work/atuin/"), false)
+        let mut found: Vec<String> = search_in(&db, &["shared"], Some("/work/atuin/"), false)
             .map_ok(|m| m.session.handle.session.as_ref().to_owned())
             .try_collect()
             .await
@@ -2961,7 +2967,7 @@ mod tests {
             db.append(&msg).await.unwrap();
         }
 
-        let found: Vec<String> = search_in(&db, "shared", Some(r"C:\work\atuin\"), false)
+        let found: Vec<String> = search_in(&db, &["shared"], Some(r"C:\work\atuin\"), false)
             .map_ok(|m| m.session.handle.session.as_ref().to_owned())
             .try_collect()
             .await
@@ -2980,8 +2986,10 @@ mod tests {
         db.append(&meta).await.unwrap();
         db.append(&message_in(&session, 1, "osc hyperlink bug")).await.unwrap();
 
-        let hits: Vec<_> =
-            search_in(&db, "hyperlink", Some("/work/terminal"), false).try_collect().await.unwrap();
+        let hits: Vec<_> = search_in(&db, &["hyperlink"], Some("/work/terminal"), false)
+            .try_collect()
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 1);
     }
 
@@ -3023,13 +3031,13 @@ mod tests {
         }
 
         let two: Vec<_> = db
-            .search("common", SearchTerms::Typed, &SessionFilter::default(), 2)
+            .search(SearchTerms::Typed("common".into()), &SessionFilter::default(), 2)
             .try_collect()
             .await
             .unwrap();
         assert_eq!(two.len(), 2);
         let all: Vec<_> = db
-            .search("common", SearchTerms::Typed, &SessionFilter::default(), 0)
+            .search(SearchTerms::Typed("common".into()), &SessionFilter::default(), 0)
             .try_collect()
             .await
             .unwrap();
@@ -3111,7 +3119,7 @@ mod tests {
         db.append(&message_in(&quiet, 100, "shared keyword")).await.unwrap();
 
         let two: Vec<_> = db
-            .search("keyword", SearchTerms::Typed, &SessionFilter::default(), 2)
+            .search(SearchTerms::Typed("keyword".into()), &SessionFilter::default(), 2)
             .try_collect()
             .await
             .unwrap();
@@ -3413,66 +3421,69 @@ mod tests {
 
     #[rstest]
     #[case::whole_token(
-        SearchTerms::All,
-        "error",
+        SearchTerms::All(words("error")),
         "An Error and an error.",
         "An [Error] and an [error]."
     )]
-    #[case::no_substring_matches(SearchTerms::All, "app", "apple app", "apple [app]")]
-    #[case::folded_like_the_index(SearchTerms::All, "cafe", "the café opens", "the [café] opens")]
+    #[case::no_substring_matches(SearchTerms::All(words("app")), "apple app", "apple [app]")]
+    #[case::folded_like_the_index(
+        SearchTerms::All(words("cafe")),
+        "the café opens",
+        "the [café] opens"
+    )]
     #[case::phrase_across_words(
-        SearchTerms::All,
-        "foo-bar",
+        SearchTerms::All(words("foo-bar")),
         "foo bar foo baz",
         "[foo] [bar] foo baz"
     )]
     #[case::every_term(
-        SearchTerms::All,
-        "build failed",
+        SearchTerms::All(words("build failed")),
         "the build failed",
         "the [build] [failed]"
     )]
-    #[case::stray_markers_are_stripped(SearchTerms::All, "x", "a\u{E000}b x", "ab [x]")]
+    #[case::stray_markers_are_stripped(SearchTerms::All(words("x")), "a\u{E000}b x", "ab [x]")]
     #[case::typed_prefix_marks_the_whole_token(
-        SearchTerms::Typed,
-        "refac",
+        SearchTerms::Typed("refac".into()),
         "Refactoring it",
         "[Refactoring] it"
     )]
     #[case::typed_only_the_last_term_a_prefix(
-        SearchTerms::Typed,
-        "build fail",
+        SearchTerms::Typed("build fail".into()),
         "the build failed",
         "the [build] [failed]"
     )]
-    #[case::typed_finished_term_is_whole(SearchTerms::Typed, "app ", "apple app", "apple [app]")]
+    #[case::typed_finished_term_is_whole(SearchTerms::Typed("app ".into()), "apple app", "apple [app]")]
     #[case::any_prefix_marks_the_whole_token(
-        SearchTerms::Any,
-        "refac",
+        SearchTerms::Any(words("refac")),
         "Refactoring it",
         "[Refactoring] it"
     )]
-    #[case::any_term(SearchTerms::Any, "build nothing", "the build failed", "the [build] failed")]
+    #[case::any_term(
+        SearchTerms::Any(words("build nothing")),
+        "the build failed",
+        "the [build] failed"
+    )]
     #[case::any_every_term_a_prefix(
-        SearchTerms::Any,
-        "build fail",
+        SearchTerms::Any(words("build fail")),
         "the builder failed",
         "the [builder] [failed]"
     )]
     #[case::any_phrase_last_token_a_prefix(
-        SearchTerms::Any,
-        "foo-ba",
+        SearchTerms::Any(words("foo-ba")),
         "foo bar fob",
         "[foo] [bar] fob"
     )]
+    #[case::words_of_a_term_are_a_phrase(
+        SearchTerms::All(vec!["build failed".into()]),
+        "failed to build, the build failed",
+        "failed to build, the [build] [failed]"
+    )]
     fn highlights_mark_what_the_index_matched(
-        #[case] mode: SearchTerms,
-        #[case] query: &str,
+        #[case] terms: SearchTerms,
         #[case] text: &str,
         #[case] expected: &str,
     ) {
-        let highlighted =
-            QueryTerms::parse(query, mode).highlight(TextHighlighter::default(), text);
+        let highlighted = QueryTerms::parse(&terms).highlight(TextHighlighter::default(), text);
         assert_eq!(marked(&highlighted), expected);
     }
 
@@ -3480,24 +3491,21 @@ mod tests {
     /// API and `atuin threads search --format json` pass on.
     #[rstest]
     #[case::all(
-        SearchTerms::All,
-        "parser",
+        SearchTerms::All(words("parser")),
         "[Parser] refactor",
         (0, 6),
         "we refactored the [parser]",
         "parser"
     )]
     #[case::any(
-        SearchTerms::Any,
-        "refac nothing",
+        SearchTerms::Any(words("refac nothing")),
         "Parser [refactor]",
         (7, 15),
         "we [refactored] the parser",
         "refactored"
     )]
     #[case::typed(
-        SearchTerms::Typed,
-        "refac",
+        SearchTerms::Typed("refac".into()),
         "Parser [refactor]",
         (7, 15),
         "we [refactored] the parser",
@@ -3505,8 +3513,7 @@ mod tests {
     )]
     #[tokio::test]
     async fn search_highlights_the_title_and_snippet(
-        #[case] mode: SearchTerms,
-        #[case] query: &str,
+        #[case] terms: SearchTerms,
         #[case] title: &str,
         #[case] title_span: (usize, usize),
         #[case] snippet: &str,
@@ -3519,7 +3526,7 @@ mod tests {
         db.append(&m).await.unwrap();
 
         let hits: Vec<SessionMatch> =
-            db.search(query, mode, &SessionFilter::default(), 0).try_collect().await.unwrap();
+            db.search(terms, &SessionFilter::default(), 0).try_collect().await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(marked(&hits[0].title), title);
         assert_eq!(spans(&hits[0].title), [title_span]);
@@ -4376,7 +4383,7 @@ mod tests {
                 exclude_subagents,
                 ..SessionFilter::default()
             };
-            db.search("shared", SearchTerms::All, &filter, 0).try_collect::<Vec<_>>()
+            db.search(SearchTerms::All(words("shared")), &filter, 0).try_collect::<Vec<_>>()
         };
 
         let all = found(false).await.unwrap();
@@ -4475,7 +4482,7 @@ mod tests {
 
         // With any term, the root's title holds one, so it is highlighted too.
         let hits: Vec<SessionMatch> = db
-            .search("needle haystack", SearchTerms::Any, &roots_only(), 0)
+            .search(SearchTerms::Any(words("needle haystack")), &roots_only(), 0)
             .try_collect()
             .await
             .unwrap();
@@ -4488,20 +4495,25 @@ mod tests {
     /// Whether a title alone matches the query as the index would: every term, or any with
     /// [`SearchTerms::Any`], each as a prefix, or the last as a prefix while typing.
     #[rstest]
-    #[case::every_term("needle haystack", SearchTerms::All, "a haystack needle", true)]
-    #[case::one_term_short("needle haystack", SearchTerms::All, "haystack plans", false)]
-    #[case::whole_word("needle hay", SearchTerms::All, "needle haystack", false)]
-    #[case::any_term("needle haystack", SearchTerms::Any, "haystack plans", true)]
-    #[case::any_prefix("nee hay", SearchTerms::Any, "haystack plans", true)]
-    #[case::typed_prefix("needle hay", SearchTerms::Typed, "needle haystack", true)]
-    #[case::no_term("needle haystack", SearchTerms::Any, "other plans", false)]
+    #[case::every_term(SearchTerms::All(words("needle haystack")), "a haystack needle", true)]
+    #[case::one_term_short(SearchTerms::All(words("needle haystack")), "haystack plans", false)]
+    #[case::whole_word(SearchTerms::All(words("needle hay")), "needle haystack", false)]
+    #[case::any_term(SearchTerms::Any(words("needle haystack")), "haystack plans", true)]
+    #[case::any_prefix(SearchTerms::Any(words("nee hay")), "haystack plans", true)]
+    #[case::typed_prefix(SearchTerms::Typed("needle hay".into()), "needle haystack", true)]
+    #[case::no_term(SearchTerms::Any(words("needle haystack")), "other plans", false)]
+    #[case::phrase(SearchTerms::All(vec!["haystack needle".into()]), "a haystack needle", true)]
+    #[case::phrase_in_order(
+        SearchTerms::All(vec!["needle haystack".into()]),
+        "a haystack needle",
+        false
+    )]
     fn a_title_matches_the_query_alone(
-        #[case] query: &str,
-        #[case] mode: SearchTerms,
+        #[case] terms: SearchTerms,
         #[case] title: &str,
         #[case] expected: bool,
     ) {
-        assert_eq!(QueryTerms::parse(query, mode).matched_by(title), expected);
+        assert_eq!(QueryTerms::parse(&terms).matched_by(title), expected);
     }
 
     // --- filters --------------------------------------------------------------------------------
@@ -4610,8 +4622,11 @@ mod tests {
             assert_eq!(sorted(listed), expected, "listing");
         }
         for query in ["shared", ""] {
-            let hits: Vec<SessionMatch> =
-                db.search(query, SearchTerms::Typed, &filter, limit).try_collect().await.unwrap();
+            let hits: Vec<SessionMatch> = db
+                .search(SearchTerms::Typed(query.to_owned()), &filter, limit)
+                .try_collect()
+                .await
+                .unwrap();
             let hits = hits.iter().map(|m| m.session.handle.session.to_string()).collect();
             assert_eq!(sorted(hits), expected, "search {query:?}");
         }
@@ -5321,7 +5336,7 @@ mod tests {
         let read = messages[0].timestamp;
         assert!((Message::EARLIEST..=Message::LATEST).contains(&read), "{read}");
         let found: Vec<_> = db
-            .search("odd", SearchTerms::All, &SessionFilter::default(), 0)
+            .search(SearchTerms::All(words("odd")), &SessionFilter::default(), 0)
             .try_collect()
             .await
             .unwrap();

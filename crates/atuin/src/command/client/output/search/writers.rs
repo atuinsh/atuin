@@ -335,6 +335,8 @@ impl std::fmt::Display for PrettyLine<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use atuin_client::theme::ThemeManagerOptions;
     use atuin_common::string::highlighted::{HighlightedString, TextHighlighter};
     use rstest::rstest;
@@ -395,7 +397,7 @@ mod tests {
             .enumerate()
             .map(|(n, line)| OutputLine {
                 line: i64::try_from(n).unwrap(),
-                content: line.map(str::to_owned),
+                content: line.map(Cow::into_owned),
             })
             .collect();
         match_lines(history, lines)

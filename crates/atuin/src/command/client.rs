@@ -196,7 +196,7 @@ impl Cmd {
         if let Self::Daemon(ref cmd) = self
             && cmd.should_daemonize()
         {
-            daemon::daemonize_current_process()?;
+            atuin_daemon::service::Subproc::daemonize()?;
         }
 
         #[cfg(feature = "ai")]
@@ -272,6 +272,9 @@ impl Cmd {
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&Arc::new(settings)).await,
+            // Opens the databases itself, once no other daemon can be using them.
+            #[cfg(feature = "daemon")]
+            Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
             Self::InternalDecoy => {
                 eprintln!("error: this command is not meant to be accessed directly");
                 std::process::exit(1);
@@ -323,9 +326,6 @@ impl Cmd {
 
             Self::Wrapped { year } => wrapped::run(year, &db, &settings, sqlite_store, theme).await,
 
-            #[cfg(feature = "daemon")]
-            Self::Daemon(cmd) => cmd.run(Arc::new(settings), sqlite_store, db).await,
-
             Self::History(_)
             | Self::Hook(_)
             | Self::Init(_)
@@ -338,6 +338,9 @@ impl Cmd {
 
             #[cfg(feature = "self-update")]
             Self::Update(_) => unreachable!(),
+
+            #[cfg(feature = "daemon")]
+            Self::Daemon(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Threads(_) | Self::Resume(_) => unreachable!(),

@@ -420,7 +420,7 @@ fn make_starting_history(
     let h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
         .command(command)
-        .cwd(cwd)
+        .cwd(cwd.to_string_lossy().into_owned())
         .author_opt(author)
         .author_kind_opt(author_kind)
         .intent_opt(intent.map(String::from))
