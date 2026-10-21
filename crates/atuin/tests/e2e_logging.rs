@@ -101,6 +101,19 @@ fn legacy_logs_table_notice(env: FreshEnv, #[case] args: &[&str], #[case] shown:
     assert_eq!(noticed, shown, "{stderr}");
 }
 
+#[rstest]
+fn user_warning_reaches_stderr_without_ansi(env: FreshEnv) {
+    env.write_config("[theme]\nname = \"does-not-exist\"\n");
+    let mut command = env.atuin(&["search", "--limit", "1", "zzz"]);
+    command.env("ATUIN_SESSION", SESSION);
+    // Search loads the theme; it exits non-zero only because nothing matches.
+    let out = Process::spawn(command).wait();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("warning: could not load theme does-not-exist"), "{stderr}");
+    assert!(!stderr.contains('\x1b'), "{stderr}");
+}
+
 #[cfg(feature = "daemon")]
 #[rstest]
 #[tokio::test]

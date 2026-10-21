@@ -650,8 +650,9 @@ async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
         Err(HubCallError::NotLoggedIn) => return,
         Err(err) => {
             warn!(
-                ?err,
-                "failed to learn which hub user is logged in; deletions won't reach octavo"
+                target: USER,
+                "failed to learn which Hub user is logged in, so deletions won't reach Octavo: \
+                 {err}"
             );
             return;
         }
@@ -662,7 +663,7 @@ async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
     let queued =
         async { UploadQueue::open(path).await?.push_deletions(login.user_id(), stored).await };
     if let Err(err) = queued.await {
-        warn!(?err, "failed to queue history deletions for octavo; they will not reach it");
+        warn!(target: USER, "failed to queue history deletions for Octavo, so they won't reach it: {err:#}");
     }
 }
 

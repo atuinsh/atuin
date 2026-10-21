@@ -17,6 +17,7 @@ use std::fmt::Write;
 use std::num::NonZeroU64;
 
 use atuin_common::encryption::paseto_v4;
+use atuin_common::logs::USER;
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::sync::MutEagerFutureCell;
 use atuin_domain::caps::{PackfileCap, PageSizeCap};
@@ -606,10 +607,12 @@ impl Keyed<'_> {
             match result {
                 Ok(expanded) => ids.extend(expanded),
                 Err(e) if e.is_permanent() => error!(
+                    target: USER,
                     manifest_id = %page[i].id,
                     host = %page[i].host.id,
                     idx = page[i].idx,
-                    "skipping unexpandable packfile manifest: {e}. you have lost data."
+                    "skipping a packfile manifest that can't be expanded, so its records are \
+                     lost: {e}"
                 ),
                 Err(e) => {
                     error!("failed to download packfile: {e:?}");
