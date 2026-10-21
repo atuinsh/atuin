@@ -54,6 +54,7 @@ atuin threads search "flaky test"
 ```
 
 - Each word of the query matches a whole word: `atuin threads search "migration"` finds threads mentioning migration, but `"migr"` doesn't. The `atuin resume` picker searches as you type, so there the last word also matches as a prefix once it's at least two characters long.
+- Quoted words, as in the example above, match only together, in that order. Unquoted, `atuin threads search flaky test` finds both words anywhere.
 - An empty query (`atuin threads search ""`) lists the newest threads first, rather than returning nothing.
 - `--harness` limits the search to one agent.
 

@@ -4216,11 +4216,14 @@ Search the output of every captured command. Needs [output capture](https://docs
 atuin output search <words>...
 ```
 
-A command matches when every word appears in its output. Words match whole words, ignoring case: `refused` matches `Refused` but `refuse` doesn't match `refused`. Matches come back most relevant first, each with its command, when and where it ran, and its output.
+A command matches when every word appears in its output. Words match whole words, ignoring case: `refused` matches `Refused` but `refuse` doesn't match `refused`. Quote words to find them together, in that order. Matches come back most relevant first, each with its command, when and where it ran, and its output.
 
 ```
 # The five most relevant captures mentioning both words
 atuin output search connection refused
+
+# Only captures where the two words appear together, in that order
+atuin output search "connection refused"
 
 # Only the matching lines, with two lines either side
 atuin output search -C 2 permission denied
@@ -5927,6 +5930,7 @@ atuin threads search "flaky test"
 ```
 
 - Each word of the query matches a whole word: `atuin threads search "migration"` finds threads mentioning migration, but `"migr"` doesn't. The `atuin resume` picker searches as you type, so there the last word also matches as a prefix once it's at least two characters long.
+- Quoted words, as in the example above, match only together, in that order. Unquoted, `atuin threads search flaky test` finds both words anywhere.
 - An empty query (`atuin threads search ""`) lists the newest threads first, rather than returning nothing.
 - `--harness` limits the search to one agent.
 
@@ -6287,7 +6291,7 @@ Output capture requires the [daemon](https://docs.atuin.sh/reference/daemon/inde
 
 ### `atuin_output_search`
 
-Searches the captured output of every command, for when the agent knows *what* was printed but not *which* command printed it — an error message, a version string, a hostname. It's the same search as `atuin output search`: terms are matched as whole words and all of them must appear.
+Searches the captured output of every command, for when the agent knows *what* was printed but not *which* command printed it — an error message, a version string, a hostname. It's the same search as `atuin output search`, with each term in place of an argument: terms are matched as whole words and all of them must appear, and the words of one term must appear together, in that order.
 
 Each result gives the command and its history metadata, followed by the output lines around each match with their line numbers, so the agent can pass the history ID and a line range to `atuin_output` to read more.
 
