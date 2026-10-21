@@ -1,4 +1,4 @@
-use atuin_common::logs::LogConfig;
+use atuin_common::logs::LogMode;
 use clap::Subcommand;
 use eyre::Result;
 #[cfg(not(windows))]
@@ -50,11 +50,19 @@ impl AtuinCmd {
         #[cfg(not(windows))]
         let prev_umask = umask(Mode::RWXG | Mode::RWXO);
 
-        let _log_guard = match &self {
+        let log_mode = match &self {
+            // Picks its own, per subcommand.
             #[cfg(feature = "client")]
             Self::Client(_) => None,
-            _ => Some(crate::logs::LogCtx::try_enable("atuin", &LogConfig::stderr_only())?),
+            // The shell it spawns owns the terminal.
+            #[cfg(feature = "pty-proxy")]
+            Self::PtyProxy(_) => Some(LogMode::File),
+            Self::Uuid | Self::Contributors | Self::GenCompletions(_) | Self::External(_) => {
+                Some(LogMode::Stderr)
+            }
         };
+        let _log_guard =
+            log_mode.map(|mode| crate::logs::LogCtx::try_enable("atuin", mode)).transpose()?;
 
         match self {
             #[cfg(feature = "client")]

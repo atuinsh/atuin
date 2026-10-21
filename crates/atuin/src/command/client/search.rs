@@ -135,6 +135,10 @@ pub struct Cmd {
     #[arg(long, hide = true, help = fl!("arg-search-result-file"))]
     result_file: Option<String>,
 
+    /// Set by the shells' autosuggestion hooks, which search on every keystroke.
+    #[arg(long, hide = true)]
+    autosuggest: bool,
+
     #[arg(long, help = fl!("arg-search-shell"), long_help = fl!("arg-search-shell", "long"))]
     shell: Vec<String>,
 }
@@ -143,6 +147,11 @@ impl Cmd {
     /// Returns true if this search command will run in interactive (TUI) mode
     pub fn is_interactive(&self) -> bool {
         self.interactive
+    }
+
+    /// Whether a shell's autosuggestion hook runs this search.
+    pub const fn is_autosuggest(&self) -> bool {
+        self.autosuggest
     }
 
     // clippy: please write this instead

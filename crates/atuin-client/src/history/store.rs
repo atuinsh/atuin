@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
 use atuin_common::futures::stream::chunk_by_bounded;
+use atuin_common::logs::USER;
 use atuin_common::rmp::decode::Bytes;
 use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
@@ -333,11 +334,11 @@ impl HistoryStore {
         }
 
         if skipped > 0 {
-            // library code that may run under the TUI or shell hooks, so no stderr here
             warn!(
-                "skipped {skipped} history records that could not be decrypted or decoded. Run \
+                target: USER,
+                "skipped {skipped} history records that could not be decrypted or decoded; run \
                  `atuin store verify` to check your store, and `atuin store purge` to remove \
-                 broken records locally."
+                 broken records locally"
             );
         }
 

@@ -12,7 +12,10 @@ output-search-load-history-failed = could not load history from the local databa
 output-search-write-failed = could not write search results
 log-otel-collector-failed = failed to build the otel collector: { $error }
 log-subscriber-init-failed = failed to initialize subscriber: { $error }
-log-file-name-not-utf8 = log file name must be utf-8
+log-file-failed = couldn't open the log file in { $dir }: { $error }
+log-directive-invalid = ignoring `{ $directive }` in ATUIN_LOG: { $error }
+log-directive-unavailable = ignoring `{ $directive }` in ATUIN_LOG: this build doesn't include trace logging
+logs-config-removed = the [logs] section in your config is no longer used; remove it, and set ATUIN_LOG to change logging (https://docs.atuin.sh/guide/logging/)
 otel-not-compiled = this build of atuin has no OpenTelemetry support: rebuild with the `profiling-traced` feature (e.g. `cargo build-traced`) to export `ATUIN_OTEL` traces
 otel-url-not-utf8 = the given ATUIN_OTEL URL does not appear to be a utf-8 string
 otel-url-invalid = the given ATUIN_OTEL failed to parse as URL: { $error }
@@ -55,7 +58,6 @@ login-writing-key = Writing new key
 login-key-load-failed = could not load encryption key for verification
 login-key-mismatch = The encryption key on this machine does not match the data on the server.
 login-key-find-correct = You can find the correct key by running 'atuin key' on a machine that already syncs successfully.
-login-wrong-key-title = Wrong encryption key
 login-wrong-key-body =
     The encryption key on this machine does not match the data on the server. You have been logged out.
 

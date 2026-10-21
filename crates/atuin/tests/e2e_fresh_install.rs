@@ -90,7 +90,6 @@ fn relative_paths_resolve_next_to_config_toml(env: FreshEnv) {
 #[rstest]
 #[case::relative("db_path = \"relative.db\"", "db_path", "{atuin_home}/relative.db")]
 #[case::variable("[meta]\ndb_path = \"$NAME.db\"", "meta.db_path", "{atuin_home}/atuin-test.db")]
-#[case::log_file("[logs.search]\nfile = \"$NAME.log\"", "logs.search.file", "atuin-test.log")]
 #[case::socket(
     "[daemon]\nsocket_path = \"atuin.sock\"",
     "daemon.socket_path",

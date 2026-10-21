@@ -144,6 +144,7 @@ tokio = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
+tracing-logfmt = { workspace = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true }
 unicode-width = { workspace = true }

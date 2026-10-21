@@ -166,6 +166,7 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
 tracing-appender = "0.2"
 tracing-futures = { version = "0.2", features = ["futures-03"] }
+tracing-logfmt = "0.3"
 tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["ansi", "fmt", "registry", "env-filter", "json"] }
 tracing-tree = "0.4"

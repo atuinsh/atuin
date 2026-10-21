@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::logs::USER;
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
 };
@@ -168,8 +169,10 @@ impl KvStore {
         }
 
         if skipped > 0 {
-            // library code that may run under the TUI or shell hooks, so no stderr here
-            tracing::warn!("skipped {skipped} kv records that could not be decrypted or decoded");
+            tracing::warn!(
+                target: USER,
+                "skipped {skipped} kv records that could not be decrypted or decoded"
+            );
         }
 
         Ok(())
