@@ -437,6 +437,9 @@ impl HistoryJournal {
             ),
         }
 
+        // Publish before removing the active entry and releasing its finalization guard: a delete
+        // must still find that guard until the index has received this command.
+        self.search_index.read().await.add_history(&history);
         drop(recorded);
         drop(lock);
 
@@ -453,10 +456,6 @@ impl HistoryJournal {
             tracing::warn!("packing failed: {e}");
         }
 
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .read() and the subsequent .write() are completely discarded from the new
-        //              index.
-        self.search_index.read().await.add_history(&history);
         #[cfg(feature = "octavo")]
         self.octavo.push_history(&history, history_record_id).await;
 
@@ -625,16 +624,10 @@ impl HistoryJournal {
 
     /// Reload the search index from the history database.
     async fn reload_search_index(&self, search_settings: &Search) {
-        // Clone the shell filter and drop the read guard before the (full) reload, so the scan
-        // doesn't hold the search-index lock across the database load.
-        //
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .read() and the subsequent .write() are completely discarded from the new
-        //              index.
-        let shells = self.search_index.read().await.shells.clone();
-        let rebuilt = SearchIndex::from_db(shells, &self.history_db, search_settings).await;
+        let rebuilt =
+            SearchIndex::reload(&self.search_index, None, &self.history_db, search_settings).await;
         match rebuilt {
-            Ok(new_index) => *self.search_index.write().await = new_index,
+            Ok(_) => {}
             Err(e) => {
                 // TODO(markovejnovic): This is obviously incorrect behavior, keeping the previous
                 //                      index is almost certainly wrong, however, is the legacy
@@ -753,6 +746,7 @@ mod tests {
     use atuin_common::filter::OrFilter;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{CmdOrigin, HostId};
+    use rstest::rstest;
     use tokio::sync::RwLock;
 
     use super::*;
@@ -788,6 +782,7 @@ mod tests {
 
     /// A broken output store must not sink a deletion: the entry the user asked to forget is still
     /// removed rather than the whole delete being refused.
+    #[rstest]
     #[tokio::test]
     async fn delete_survives_a_broken_output_store() {
         let (journal, _tmp) = journal(OutputCaptureEngine::failing()).await;
