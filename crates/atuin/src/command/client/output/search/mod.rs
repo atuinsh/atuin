@@ -154,8 +154,7 @@ impl Cmd {
             return Err(RunError::Disabled);
         }
 
-        let query = self.query.join(" ");
-        if query.trim().is_empty() {
+        if self.query.iter().all(|term| term.trim().is_empty()) {
             return Err(RunError::EmptyQuery);
         }
 
@@ -163,7 +162,7 @@ impl Cmd {
         //                      Existing precedent.
         let open = async || {
             let mut client = SearchClient::from_settings(settings).await?;
-            client.search_command_output(query.clone(), None, self.context).await
+            client.search_command_output(self.query.clone(), None, self.context).await
         };
 
         let matches = match open().await {

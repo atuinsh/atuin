@@ -1117,7 +1117,7 @@ mod tests {
             .collect();
         assert_eq!(listed, std::slice::from_ref(&kept));
         let found: Vec<_> = db
-            .search("zebra", SearchTerms::All, &SessionFilter::default(), 0)
+            .search(SearchTerms::All(vec!["zebra".into()]), &SessionFilter::default(), 0)
             .map_ok(|m| m.session.handle)
             .try_collect()
             .await
@@ -1547,8 +1547,7 @@ mod tests {
             let db = db.clone();
             async move {
                 let matches = db.search(
-                    query,
-                    crate::ai_session::SearchTerms::All,
+                    crate::ai_session::SearchTerms::All(vec![query.to_owned()]),
                     &crate::ai_session::SessionFilter::default(),
                     0,
                 );

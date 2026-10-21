@@ -1144,12 +1144,11 @@ impl AiHarnessSessionCapture {
 
     pub fn search(
         &self,
-        query: &str,
         terms: SearchTerms,
         filter: &SessionFilter,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
-        self.sink.sidecar.search(query, terms, filter, limit)
+        self.sink.sidecar.search(terms, filter, limit)
     }
 }
 
@@ -1383,8 +1382,7 @@ mod tests {
             "TEXTSECRET",
         ] {
             let mut matches = Box::pin(sink.sidecar.search(
-                query,
-                SearchTerms::Typed,
+                SearchTerms::Typed(query.to_owned()),
                 &SessionFilter::default(),
                 10,
             ));
@@ -1427,8 +1425,12 @@ mod tests {
             );
         }
 
-        let search = |query| {
-            Box::pin(sink.sidecar.search(query, SearchTerms::Typed, &SessionFilter::default(), 10))
+        let search = |query: &str| {
+            Box::pin(sink.sidecar.search(
+                SearchTerms::Typed(query.to_owned()),
+                &SessionFilter::default(),
+                10,
+            ))
         };
         assert!(search("flubber").next().await.is_some(), "input is searchable");
         assert!(search("wibble").next().await.is_none(), "output is not indexed");

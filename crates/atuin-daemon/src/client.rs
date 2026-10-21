@@ -363,16 +363,17 @@ impl SearchClient {
         level = Level::TRACE,
         name = "search_command_output",
     )]
-    /// Relevance-ranked hits, each reduced to the lines within `context` of a match, or whole
-    /// when `context` is `None`.
+    /// Relevance-ranked hits for output holding every one of `terms` (a term of several words
+    /// as a phrase), each reduced to the lines within `context` of a match, or whole when
+    /// `context` is `None`.
     pub async fn search_command_output(
         &mut self,
-        query: String,
+        terms: Vec<String>,
         limit: Option<NonZeroU32>,
         context: Option<u32>,
     ) -> Result<impl Stream<Item = Result<OutputMatch>> + Send + use<>> {
         let request = SearchCommandOutputRequest {
-            query,
+            terms,
             limit: limit.map_or(0, NonZeroU32::get),
             context,
         };
@@ -524,23 +525,29 @@ impl AiClient {
         Ok(self.client.tail_sessions(request).await?.into_inner())
     }
 
-    /// Stream the sessions matching `query` (its terms matching as `terms` says) and passing
-    /// `filter`, most relevant first, at most `limit` (0 is unbounded). An empty query streams
-    /// them newest first.
+    /// Stream the sessions matching `terms` and passing `filter`, most relevant first, at most
+    /// `limit` (0 is unbounded). No terms stream them newest first.
     ///
-    /// The daemon matches every term as a whole word, or with [`SearchTerms::Any`] any term as a
-    /// prefix; [`SearchTerms::Typed`] (search as you type) is searched as [`SearchTerms::All`].
+    /// The daemon matches every term as whole words, or with [`SearchTerms::Any`] any term as a
+    /// prefix; a [`SearchTerms::Typed`] line (search as you type) is searched as
+    /// [`SearchTerms::All`] over its words.
     pub async fn search_sessions(
         &mut self,
-        query: &str,
         terms: SearchTerms,
         filter: &SessionFilter,
         limit: u32,
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
+        let (terms, any_term) = match terms {
+            SearchTerms::All(terms) => (terms, false),
+            SearchTerms::Typed(line) => {
+                (line.split_whitespace().map(str::to_owned).collect(), false)
+            }
+            SearchTerms::Any(terms) => (terms, true),
+        };
         let request = SearchSessionsRequest {
-            query: query.to_owned(),
+            terms,
             limit,
-            any_term: terms == SearchTerms::Any,
+            any_term,
             filter: Some(filter.into()),
         };
         Ok(self.client.search_sessions(request).await?.into_inner())

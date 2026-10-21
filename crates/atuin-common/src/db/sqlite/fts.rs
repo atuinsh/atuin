@@ -4,8 +4,8 @@
 //! FTS.
 //!
 //! The [`FtsQueryExt`] extension trait binds FTS5 values into a query: a [`TextHighlighter`]'s
-//! markers, text sanitized on the way into the index, and free-form user input escaped into a
-//! `MATCH` expression. The highlighter itself lives in [`crate::string::highlighted`].
+//! markers, text sanitized on the way into the index, and search terms escaped into a `MATCH`
+//! expression. The highlighter itself lives in [`crate::string::highlighted`].
 
 use sqlx::query::{Query, QueryScalar};
 use sqlx::{Database, Sqlite};
@@ -23,12 +23,14 @@ pub trait FtsQueryExt {
     #[must_use]
     fn bind_highlightable(self, highlighter: TextHighlighter, highlightable: &str) -> Self;
 
-    /// Escape free-form `input` into an FTS5 `MATCH` expression (see `match_expression`) and bind
-    /// it. Returns `None` when `input` has no searchable terms, so the caller can skip the query
+    /// Escape `terms` into an FTS5 `MATCH` expression (see `match_expression`) and bind it.
+    /// Returns `None` when no term has anything to search, so the caller can skip the query
     /// rather than run an empty `MATCH`, which FTS5 rejects as a syntax error.
     #[must_use]
-    fn bind_match_query(self, input: &str) -> Option<Self>
+    fn bind_match_query<I>(self, terms: I) -> Option<Self>
     where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
         Self: Sized;
 }
 
@@ -44,8 +46,12 @@ impl FtsQueryExt for Query<'_, Sqlite, <Sqlite as Database>::Arguments> {
         self.bind(highlighter.sanitize(highlightable).into_owned())
     }
 
-    fn bind_match_query(self, input: &str) -> Option<Self> {
-        match_expression(input).map(|expr| self.bind(expr))
+    fn bind_match_query<I>(self, terms: I) -> Option<Self>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
+        match_expression(terms).map(|expr| self.bind(expr))
     }
 }
 
@@ -59,45 +65,65 @@ impl<O> FtsQueryExt for QueryScalar<'_, Sqlite, O, <Sqlite as Database>::Argumen
         self.bind(highlighter.sanitize(highlightable).into_owned())
     }
 
-    fn bind_match_query(self, input: &str) -> Option<Self> {
-        match_expression(input).map(|expr| self.bind(expr))
+    fn bind_match_query<I>(self, terms: I) -> Option<Self>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
+        match_expression(terms).map(|expr| self.bind(expr))
     }
 }
 
-/// Escape free-form match input into an FTS5 `MATCH` expression.
+/// Escape `terms` into an FTS5 `MATCH` expression in which every term must match. A term of
+/// several words is a phrase, which matches only where they appear together and in that order:
+/// `["T", "K L"]` is translated to `"T" AND "K L"`, effectively.
 ///
-/// The language is minimal: `T K` is translated to `"T" AND "K"`, effectively.
-///
-/// Returns `None` when the input has no searchable terms.
+/// Returns `None` when no term has anything to search.
 #[must_use]
-pub fn match_expression(input: &str) -> Option<String> {
-    input
-        .split_whitespace()
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+pub fn match_expression<I>(terms: I) -> Option<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    terms
+        .into_iter()
+        .filter_map(|term| {
+            let term = term.as_ref().trim();
+            (!term.is_empty()).then(|| format!("\"{}\"", term.replace('"', "\"\"")))
+        })
         .reduce(|expr, term| format!("{expr} {term}"))
 }
 
 /// A looser [`match_expression`]: any term may match, and each as a prefix (`"deploy"*` also
-/// matches `deployment`). For a fallback when no single row contains every term.
+/// matches `deployment`; in a phrase, its last word is the prefix). For a fallback when no single
+/// row contains every term.
 #[must_use]
-pub fn match_any_expression(input: &str) -> Option<String> {
-    input
-        .split_whitespace()
-        .map(|term| format!("\"{}\"*", term.replace('"', "\"\"")))
+pub fn match_any_expression<I>(terms: I) -> Option<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    terms
+        .into_iter()
+        .filter_map(|term| {
+            let term = term.as_ref().trim();
+            (!term.is_empty()).then(|| format!("\"{}\"*", term.replace('"', "\"\"")))
+        })
         .reduce(|expr, term| format!("{expr} OR {term}"))
 }
 
-/// [`match_expression`] for search as you type: the last term also matches as a prefix
-/// (`refac` becomes `"refac"*`), unless the input ends in whitespace, which marks the term as
-/// finished. A term of several tokens (`foo-ba`) is a phrase whose last token is the prefix.
+/// [`match_expression`] over the words of `input`, for search as you type: the last word also
+/// matches as a prefix (`refac` becomes `"refac"*`), unless the input ends in whitespace, which
+/// marks the word as finished. A word of several tokens (`foo-ba`) is a phrase whose last token is
+/// the prefix.
 ///
 /// No `prefix=` index is needed: FTS5 answers a prefix query by merging the doclists of every
 /// indexed term starting with it, which is slower but costs no disk.
 ///
-/// Returns `None` when the input has no searchable terms.
+/// Returns `None` when the input has no searchable words.
 #[must_use]
 pub fn prefix_match_expression(input: &str) -> Option<String> {
-    let expr = match_expression(input)?;
+    let expr = match_expression(input.split_whitespace())?;
     if input.ends_with(char::is_whitespace) {
         Some(expr)
     } else {
@@ -117,12 +143,13 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::single("deploy", Some(r#""deploy"*"#))]
-    #[case::many("key  perms", Some(r#""key"* OR "perms"*"#))]
-    #[case::quote(r#"a"b"#, Some(r#""a""b"*"#))]
-    #[case::blank("   ", None)]
-    fn any_expression_ors_prefix_terms(#[case] input: &str, #[case] want: Option<&str>) {
-        assert_eq!(match_any_expression(input).as_deref(), want);
+    #[case::single(&["deploy"], Some(r#""deploy"*"#))]
+    #[case::many(&["key", "perms"], Some(r#""key"* OR "perms"*"#))]
+    #[case::phrase(&["key perms", "x"], Some(r#""key perms"* OR "x"*"#))]
+    #[case::quote(&[r#"a"b"#], Some(r#""a""b"*"#))]
+    #[case::blank(&["   "], None)]
+    fn any_expression_ors_prefix_terms(#[case] terms: &[&str], #[case] want: Option<&str>) {
+        assert_eq!(match_any_expression(terms).as_deref(), want);
     }
 
     /// Insert `body` (sanitized) into an in-memory FTS5 table, then return the `highlight()` output
@@ -219,19 +246,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::single_term("error", Some("\"error\""))]
-    #[case::terms_are_anded("build failed", Some("\"build\" \"failed\""))]
-    #[case::embedded_quote_is_doubled("a\"b", Some("\"a\"\"b\""))]
-    #[case::surrounding_whitespace_trimmed("  spaced  ", Some("\"spaced\""))]
+    #[case::single_term(&["error"], Some("\"error\""))]
+    #[case::terms_are_anded(&["build", "failed"], Some("\"build\" \"failed\""))]
+    #[case::words_of_a_term_are_a_phrase(&["build failed", "now"], Some(r#""build failed" "now""#))]
+    #[case::embedded_quote_is_doubled(&["a\"b"], Some("\"a\"\"b\""))]
+    #[case::surrounding_whitespace_trimmed(&["  spaced  "], Some("\"spaced\""))]
+    #[case::blank_term_is_skipped(&["x", " "], Some("\"x\""))]
     // `:` would be an FTS5 column filter raw; quoting keeps it a literal.
-    #[case::operator_char_kept_literal("refused:", Some("\"refused:\""))]
-    #[case::empty_is_none("", None)]
-    #[case::whitespace_only_is_none("  \t\n ", None)]
-    fn match_expression_escapes_free_form_input(
-        #[case] input: &str,
-        #[case] expected: Option<&str>,
-    ) {
-        assert_eq!(match_expression(input).as_deref(), expected);
+    #[case::operator_char_kept_literal(&["refused:"], Some("\"refused:\""))]
+    #[case::no_terms_is_none(&[], None)]
+    #[case::whitespace_only_is_none(&["  \t\n "], None)]
+    fn match_expression_escapes_each_term(#[case] terms: &[&str], #[case] expected: Option<&str>) {
+        assert_eq!(match_expression(terms).as_deref(), expected);
     }
 
     #[rstest]
@@ -295,7 +321,7 @@ mod tests {
             .unwrap();
 
         let row = crate::db::query::<Sqlite>("select count(*) as n from docs where docs match ?")
-            .bind_match_query("refused:")
+            .bind_match_query(["refused:"])
             .expect("non-blank query")
             .fetch_one(&mut *conn)
             .await

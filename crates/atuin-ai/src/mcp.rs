@@ -401,11 +401,12 @@ mod tests {
     fn output_search_schema_is_derived_from_the_call_struct() {
         let tools = tool_definitions();
         let schema = &tools[2].input_schema;
-        assert_eq!(schema["required"], json!(["query"]));
-        let query = &schema["properties"]["query"];
-        assert_eq!(query["type"], "string");
-        assert_eq!(query["minLength"], 1);
-        assert!(query["description"].as_str().unwrap().contains("AND-ed"));
+        assert_eq!(schema["required"], json!(["terms"]));
+        let terms = &schema["properties"]["terms"];
+        assert_eq!(terms["type"], "array");
+        assert_eq!(terms["minItems"], 1);
+        assert_eq!(terms["items"]["minLength"], 1);
+        assert!(terms["description"].as_str().unwrap().contains("AND-ed"));
         let limit = &schema["properties"]["limit"];
         assert_eq!(limit["type"], "integer");
         assert_eq!(limit["minimum"], 1);
@@ -421,8 +422,9 @@ mod tests {
         // drift apart (e.g. widening the Clamped bounds without updating the model-visible schema).
         let tools = tool_definitions();
         let schema = &tools[3].input_schema;
-        assert_eq!(schema["required"], json!(["query"]));
-        assert_eq!(schema["properties"]["query"]["minLength"], 1);
+        assert_eq!(schema["required"], json!(["terms"]));
+        assert_eq!(schema["properties"]["terms"]["minItems"], 1);
+        assert_eq!(schema["properties"]["terms"]["items"]["minLength"], 1);
 
         let limit = &schema["properties"]["limit"];
         let min = limit["minimum"].as_u64().unwrap();
@@ -432,22 +434,26 @@ mod tests {
         let parse = |v: Value| serde_json::from_value::<AtuinThreadsSearchToolCall>(v);
         let limit_of = |v: Value| u64::from(parse(v).unwrap().limit.get());
         assert_eq!(
-            limit_of(json!({"query": "x"})),
+            limit_of(json!({"terms": ["x"]})),
             default,
             "omitted limit uses the schema default"
         );
         assert_eq!(
-            limit_of(json!({"query": "x", "limit": max + 1})),
+            limit_of(json!({"terms": ["x"], "limit": max + 1})),
             max,
             "over-max clamps to the schema max"
         );
         assert_eq!(
-            limit_of(json!({"query": "x", "limit": 0})),
+            limit_of(json!({"terms": ["x"], "limit": 0})),
             min,
             "under-min clamps to the schema min"
         );
         assert!(
-            parse(json!({"query": "   "})).is_err(),
+            parse(json!({"terms": []})).is_err(),
+            "the parser enforces the advertised minItems"
+        );
+        assert!(
+            parse(json!({"terms": ["   "]})).is_err(),
             "the parser enforces the advertised minLength"
         );
 
@@ -457,12 +463,12 @@ mod tests {
         for harness in schema["$defs"][name]["enum"].as_array().unwrap() {
             let name = harness.as_str().unwrap();
             assert!(
-                parse(json!({"query": "x", "harness": name})).is_ok(),
+                parse(json!({"terms": ["x"], "harness": name})).is_ok(),
                 "advertised {name:?} must parse"
             );
         }
         assert!(
-            parse(json!({"query": "x", "harness": "copilot"})).is_err(),
+            parse(json!({"terms": ["x"], "harness": "copilot"})).is_err(),
             "an unadvertised harness is rejected"
         );
     }

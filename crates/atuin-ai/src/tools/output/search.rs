@@ -5,7 +5,6 @@ use std::num::NonZeroU32;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::{OutputCapture, Settings};
 use atuin_common::range::Clamped;
-use atuin_common::string::NonBlankString;
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
 use atuin_daemon::grpc::history::pb::ChunkedOutputLineView;
@@ -16,15 +15,18 @@ use serde::Deserialize;
 use super::{NO_OUTPUT_ADVICE, format_chunked_output_line_views_for_llm};
 use crate::history_format::format_history_search_result;
 use crate::tools::ToolOutcome;
+use crate::tools::search_terms::SearchTermsArg;
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema; the
 // struct deliberately has none, as it would become the schema's top-level description.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct AtuinOutputSearchToolCall {
-    /// Words to look for in captured command output. Terms are AND-ed and matched as whole
-    /// words (case-insensitive; no regex, no prefix matching), so use a few distinctive words
-    /// from the text you remember, e.g. 'connection refused' or 'ENOSPC', not a sentence.
-    pub query: NonBlankString,
+    /// What to look for in captured command output. Terms are AND-ed and matched as whole words
+    /// (case-insensitive; no regex, no prefix matching), and the words of one term only together
+    /// and in that order, so give each word its own term unless they must be adjacent. Use a few
+    /// distinctive words from the text you remember, not a sentence, e.g. ["ENOSPC"] or
+    /// ["connection refused", "postgres"].
+    pub terms: SearchTermsArg,
     /// Maximum number of commands to return, most relevant first. Fewer may come back even when
     /// more would match, so an under-full page does not mean the results are exhausted.
     #[serde(default)]
@@ -66,7 +68,11 @@ impl AtuinOutputSearchToolCall {
         let limit = NonZeroU32::new(self.limit.get());
         let hits = async {
             client
-                .search_command_output(self.query.to_string(), limit, Some(self.context.get()))
+                .search_command_output(
+                    self.terms.iter().map(str::to_owned).collect(),
+                    limit,
+                    Some(self.context.get()),
+                )
                 .await
                 .map_err(|e| format!("Output search failed: {e}"))?
                 .map_err(|e| format!("Output search failed: {e}"))
@@ -106,11 +112,11 @@ impl AtuinOutputSearchToolCall {
 
         if formatted.is_empty() {
             return ToolOutcome::Success(format!(
-                "No captured output matched query {:?}. Only commands run in an Atuin-enabled \
-                 terminal while the daemon was running are searchable, and older output may have \
-                 been dropped. Terms are AND-ed and matched as whole words, so try fewer or \
-                 different terms.",
-                self.query.trim()
+                "No captured output matched {:?}. Only commands run in an Atuin-enabled terminal \
+                 while the daemon was running are searchable, and older output may have been \
+                 dropped. Terms are AND-ed and matched as whole words, so try fewer or different \
+                 terms, or split a term into its words.",
+                self.terms
             ));
         }
         ToolOutcome::Success(formatted.join("\n"))
@@ -125,31 +131,32 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::default(json!({"query": "disk full"}), 5)]
-    #[case::clamped_high(json!({"query": "disk", "limit": 100}), 20)]
-    #[case::clamped_low(json!({"query": "disk", "limit": 0}), 1)]
-    #[case::null_limit(json!({"query": "disk", "limit": null}), 5)]
-    fn parses_query_and_clamps_limit(#[case] input: serde_json::Value, #[case] limit: u32) {
+    #[case::default(json!({"terms": ["disk full", "ENOSPC"]}), 5)]
+    #[case::clamped_high(json!({"terms": ["disk"], "limit": 100}), 20)]
+    #[case::clamped_low(json!({"terms": ["disk"], "limit": 0}), 1)]
+    #[case::null_limit(json!({"terms": ["disk"], "limit": null}), 5)]
+    fn parses_terms_and_clamps_limit(#[case] input: serde_json::Value, #[case] limit: u32) {
         let call: AtuinOutputSearchToolCall = serde_json::from_value(input.clone()).unwrap();
-        assert_eq!(call.query.as_str(), input["query"].as_str().unwrap());
+        assert_eq!(json!(call.terms.iter().collect::<Vec<_>>()), input["terms"]);
         assert_eq!(call.limit.get(), limit);
     }
 
     #[rstest]
     #[case::missing(json!({}))]
-    #[case::empty(json!({"query": ""}))]
-    #[case::blank(json!({"query": "   "}))]
-    #[case::not_a_string(json!({"query": 3}))]
-    fn rejects_a_blank_query(#[case] input: serde_json::Value) {
+    #[case::no_terms(json!({"terms": []}))]
+    #[case::empty(json!({"terms": [""]}))]
+    #[case::blank(json!({"terms": ["disk", "   "]}))]
+    #[case::not_a_list(json!({"terms": "disk"}))]
+    fn rejects_missing_or_blank_terms(#[case] input: serde_json::Value) {
         assert!(serde_json::from_value::<AtuinOutputSearchToolCall>(input).is_err());
     }
 
     #[rstest]
-    #[case::default(json!({"query": "disk"}), 1)]
-    #[case::explicit(json!({"query": "disk", "context": 3}), 3)]
-    #[case::zero_is_matching_lines_only(json!({"query": "disk", "context": 0}), 0)]
-    #[case::clamped_high(json!({"query": "disk", "context": 999}), 20)]
-    #[case::null_context(json!({"query": "disk", "context": null}), 1)]
+    #[case::default(json!({"terms": ["disk"]}), 1)]
+    #[case::explicit(json!({"terms": ["disk"], "context": 3}), 3)]
+    #[case::zero_is_matching_lines_only(json!({"terms": ["disk"], "context": 0}), 0)]
+    #[case::clamped_high(json!({"terms": ["disk"], "context": 999}), 20)]
+    #[case::null_context(json!({"terms": ["disk"], "context": null}), 1)]
     fn parses_and_clamps_context(#[case] input: serde_json::Value, #[case] context: u32) {
         let call: AtuinOutputSearchToolCall = serde_json::from_value(input).unwrap();
         assert_eq!(call.context.get(), context);

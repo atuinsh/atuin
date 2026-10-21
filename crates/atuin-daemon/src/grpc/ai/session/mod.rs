@@ -149,7 +149,7 @@ impl GrpcService for Service {
     ) -> Result<Response<Self::SearchSessionsStream>, Status> {
         self.ensure_recovered()?;
         let SearchSessionsRequest {
-            query,
+            terms,
             limit,
             any_term,
             filter,
@@ -157,12 +157,12 @@ impl GrpcService for Service {
         let filter = SessionFilter::try_from(filter.unwrap_or_default())?;
 
         let terms = if any_term {
-            SearchTerms::Any
+            SearchTerms::Any(terms)
         } else {
-            SearchTerms::All
+            SearchTerms::All(terms)
         };
 
-        let stream = self.capture.search(&query, terms, &filter, limit).map(|result| {
+        let stream = self.capture.search(terms, &filter, limit).map(|result| {
             result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
         });
 
@@ -315,7 +315,7 @@ mod tests {
 
         let response = svc
             .search_sessions(Request::new(SearchSessionsRequest {
-                query: "anything".to_owned(),
+                terms: vec!["anything".to_owned()],
                 limit: 0,
                 any_term: false,
                 filter: None,
@@ -335,7 +335,7 @@ mod tests {
 
         let result = svc
             .search_sessions(Request::new(SearchSessionsRequest {
-                query: "x".to_owned(),
+                terms: vec!["x".to_owned()],
                 limit: 0,
                 any_term: false,
                 filter: Some(pb::SessionFilter {
@@ -356,7 +356,7 @@ mod tests {
         let list = || svc.list_sessions(Request::new(ListSessionsRequest { filter: None }));
         let search = || {
             svc.search_sessions(Request::new(SearchSessionsRequest {
-                query: "x".to_owned(),
+                terms: vec!["x".to_owned()],
                 limit: 0,
                 any_term: false,
                 filter: None,

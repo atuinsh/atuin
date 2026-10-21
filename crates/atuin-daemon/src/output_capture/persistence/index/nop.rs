@@ -1,16 +1,20 @@
 use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::ChunkedStream;
-use atuin_common::string::highlighted::HighlightedString;
 
-use super::{Index, IndexError, RankedMatch};
+use super::{HighlightedCapture, Index, IndexError, RankedMatch};
 
 /// An [`Index`] that stores nothing and matches nothing.
 #[derive(Debug, Clone, Copy)]
 pub struct NopIndex;
 
 impl Index for NopIndex {
-    async fn insert(&self, _id: HistoryId, _text: &str) -> Result<(), IndexError> {
+    async fn insert(
+        &self,
+        _id: HistoryId,
+        _head: &str,
+        _tail: Option<&str>,
+    ) -> Result<(), IndexError> {
         Ok(())
     }
 
@@ -20,15 +24,19 @@ impl Index for NopIndex {
 
     async fn search(
         &self,
-        _query: &str,
+        _terms: impl IntoIterator<Item = &str>,
         _limit: usize,
     ) -> ChunkedStream<Result<RankedMatch, IndexError>> {
         ChunkedStream::empty()
     }
 
-    async fn highlight(&self, _query: &str, body: &str) -> Result<HighlightedString, IndexError> {
-        let highlighter = TextHighlighter::default();
-        Ok(highlighter.as_highlighted(highlighter.sanitize(body).into_owned()))
+    async fn highlight(
+        &self,
+        _terms: impl IntoIterator<Item = &str>,
+        head: &str,
+        tail: Option<&str>,
+    ) -> Result<HighlightedCapture, IndexError> {
+        Ok(HighlightedCapture::unmarked(TextHighlighter::default(), head, tail))
     }
 
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>> {

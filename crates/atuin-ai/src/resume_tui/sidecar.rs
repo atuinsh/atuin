@@ -143,7 +143,7 @@ impl SessionSource for SidecarSource {
         let limit = u32::try_from(filter.limit).unwrap_or(u32::MAX);
         let matches: Vec<_> = self
             .db
-            .search(&filter.text, SearchTerms::Typed, &filter.db, limit)
+            .search(SearchTerms::Typed(filter.text.clone()), &filter.db, limit)
             .try_collect()
             .await?;
 

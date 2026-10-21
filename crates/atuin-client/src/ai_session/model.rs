@@ -522,19 +522,19 @@ pub struct SessionFilter {
     pub updated_since: Option<OffsetDateTime>,
 }
 
-/// How a search query's terms match a message.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// What a search looks for, and how it matches a message.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SearchTerms {
-    /// Every term, each as a whole word (`app` finds `app`, not `apple`).
-    #[default]
-    All,
-    /// [`Self::All`] for search as you type: the last term also matches as a prefix, unless
-    /// the query ends in whitespace (see
+    /// Every term, each as whole words (`app` finds `app`, not `apple`). A term of several words
+    /// is a phrase: they must appear together, in that order.
+    All(Vec<String>),
+    /// A line being typed (search as you type): [`Self::All`] over its whitespace-separated
+    /// words, the last also matching as a prefix unless the line ends in whitespace (see
     /// [`atuin_common::db::sqlite::fts::prefix_match_expression`]).
-    Typed,
+    Typed(String),
     /// Any term, each as a prefix: the fallback when no message holds every term (see
     /// [`atuin_common::db::sqlite::fts::match_any_expression`]).
-    Any,
+    Any(Vec<String>),
 }
 
 /// What a session's preview shows, read without the content of every message (see

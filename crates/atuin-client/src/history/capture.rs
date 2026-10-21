@@ -36,18 +36,15 @@ pub struct CommandCapture {
 }
 
 impl CommandCapture {
-    /// Write the command capture as a plaintext string, stripping away all escape codes.
+    /// [`Self::output_start`] as plain text, stripped of all escape codes.
     #[must_use]
-    pub fn plaintext(&self) -> String {
-        let mut out = String::with_capacity(
-            self.output_start.len() + self.output_end.as_ref().map_or(0, |end| end.len() + 1),
-        );
-        out.extend(basic_formatted_to_plain(&self.output_start));
+    pub fn plaintext_start(&self) -> String {
+        basic_formatted_to_plain(&self.output_start).collect()
+    }
 
-        if let Some(end) = &self.output_end {
-            out.push('\n');
-            out.extend(basic_formatted_to_plain(end));
-        }
-        out
+    /// [`Self::output_end`] as plain text, stripped of all escape codes.
+    #[must_use]
+    pub fn plaintext_end(&self) -> Option<String> {
+        self.output_end.as_deref().map(|end| basic_formatted_to_plain(end).collect())
     }
 }
