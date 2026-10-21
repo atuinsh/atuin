@@ -1,8 +1,5 @@
 //! Races between shells, deletes, rebuilds and the search index. Every test states the invariant
-//! a user relies on; tests that document a real, still-unfixed defect are marked `#[ignore]` (with
-//! the defect named in the attribute) rather than weakened, so their assertions stand as the
-//! specification and CI stays green. Run them with `cargo nextest run --run-ignored all` (or
-//! `cargo test -- --ignored`) to watch the defects reproduce.
+//! a user relies on, including updates arriving while a replacement index is loading.
 #![cfg(unix)]
 
 mod common;
@@ -135,8 +132,10 @@ async fn delete_racing_finish_leaves_no_row_anywhere() {
     let env = TestEnv::builder().build().await;
     let mut leaked_local = Vec::new();
     let mut leaked_replay = Vec::new();
+    let mut leaked_index = Vec::new();
     for round in 0..40 {
-        let id = env.journal.start_cmd(history(&format!("race {round}")));
+        let command = format!("race {round}");
+        let id = env.journal.start_cmd(history(&command));
         let j1 = env.journal.clone();
         let j2 = env.journal.clone();
         let finish = tokio::spawn(async move { j1.finish(id, 0, Duration::from_millis(1)).await });
@@ -146,6 +145,9 @@ async fn delete_racing_finish_leaves_no_row_anywhere() {
         assert_eq!(deleted, 1);
         if env.history_db.load(id).await.unwrap().is_some() {
             leaked_local.push((round, finished.is_ok()));
+        }
+        if env.index_hits(&command).await.contains(&id) {
+            leaked_index.push(command);
         }
     }
     let replay = env.fresh_db_from_store().await;
@@ -158,20 +160,16 @@ async fn delete_racing_finish_leaves_no_row_anywhere() {
         "rows survived a delete locally (round, finish_ok): {leaked_local:?}"
     );
     assert!(leaked_replay.is_empty(), "rows resurrected on replay: {leaked_replay:?}");
+    assert!(leaked_index.is_empty(), "deleted commands remain searchable: {leaked_index:?}");
 }
 
 /// Commands that finish while the index is being reloaded (by a delete or a rebuild) are
 /// searchable once everything settles.
 ///
-/// EXPECTED TO FAIL: `HistoryJournal::reload_search_index` builds a fresh index from a paged db
-/// scan and then swaps it in; `finish` adds to the *old* index meanwhile, and ids are time-ordered
-/// so rows saved mid-scan sit past the keyset cursor and are never visited.
+/// Rows saved mid-scan can sit past the keyset cursor, so the reload must replay live updates.
 #[rstest]
 #[case::delete(Reload::Delete)]
 #[case::rebuild(Reload::Rebuild)]
-#[ignore = "documents an unfixed defect (index reload is a lost-update; see report M2, #4052: \
-            https://github.com/atuinsh/atuin/issues/4052); run with \
-            --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commands_finished_during_an_index_reload_are_searchable(#[case] reload: Reload) {
     let env = seeded_env().await;
@@ -223,12 +221,8 @@ enum Reload {
 
 /// Two deletes running at once (two terminals pruning) both take effect in the index.
 ///
-/// EXPECTED TO FAIL: each delete rebuilds the index from its own db snapshot; whichever swap lands
-/// last may predate the other delete's `delete_rows`, resurrecting that command in search.
+/// Reloads must publish in scan order so an older snapshot cannot resurrect deleted commands.
 #[rstest]
-#[ignore = "documents an unfixed defect (concurrent deletes resurrect rows; see report M2, #4052: \
-            https://github.com/atuinsh/atuin/issues/4052); run \
-            with --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_deletes_both_leave_the_index() {
     let env = seeded_env().await;
@@ -320,8 +314,7 @@ async fn disjoint_concurrent_deletes_all_reach_the_store() {
 
 /// Nothing the concurrent deletes removed is still searchable once they have all settled.
 ///
-/// **Expected to fail intermittently due to issue #4052.** `.config/nextest.toml` will retry this
-/// test several times.
+/// No retry: a stale index after both deletes return is a correctness failure.
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn disjoint_concurrent_deletes_leave_the_index_empty() {
@@ -414,12 +407,8 @@ async fn end_history_is_not_starved_by_an_index_reload() {
 
 /// History that arrives from sync while a delete is reloading the index is searchable afterwards.
 ///
-/// EXPECTED TO FAIL: the sync engine adds to whichever index is live under a read guard, which the
-/// reload then discards.
+/// The reload must retain direct index writes from sync as well as writes through the journal.
 #[rstest]
-#[ignore = "documents an unfixed defect (synced history dropped by a racing reload; see report \
-            M2, #4052: https://github.com/atuinsh/atuin/issues/4052); run with --run-ignored. See \
-            module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn synced_history_during_a_reload_is_searchable() {
     let env = TestEnv::builder().seed_rows(RELOAD_ROWS).with_search_component().build().await;
