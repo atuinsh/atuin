@@ -8,7 +8,15 @@ steps:
 1. Delete the `~/.atuin` directory (and `$ATUIN_HOME`, if set).
 2. Delete the `~/.config/atuin` and `~/.local/share/atuin` directories if they
    exist. Older versions of Atuin used to store data there.
-3. Remove the shell integration:
+3. On macOS, remove the daemon's launchd agent, if Atuin started the daemon
+   for you:
+
+   ```shell
+   launchctl bootout gui/$(id -u)/sh.atuin.daemon
+   rm ~/Library/LaunchAgents/sh.atuin.daemon.plist
+   ```
+
+4. Remove the shell integration:
 
    - On Bash, remove the lines referencing `atuin init` and `~/.atuin/bin/env`
      from ~/.profile, ~/.bashrc, and ~/.bash\_login. The installer may have

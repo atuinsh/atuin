@@ -159,18 +159,6 @@ impl Launchd {
         }
     }
 
-    /// Uninstall the agent from within it, if this process is the agent and it is still installed.
-    ///
-    /// A client that doesn't know launchd, such as one downgraded to, stops the agent as it would a
-    /// daemon it forked, and then starts one of its own on the agent's socket. launchd would keep
-    /// that socket, and start the agent again for the client, for as long as the agent is
-    /// installed.
-    pub fn uninstall_from_within() {
-        if Self::is_this_process() && Self::is_installed() {
-            Self::leave();
-        }
-    }
-
     /// Remove the agent, whether or not it runs.
     pub(in crate::service) async fn remove() -> Result<(), BackendError> {
         tokio::task::spawn_blocking(|| {
@@ -186,11 +174,6 @@ impl Launchd {
     /// The label of the launchd job other than the agent that started this process, if one did.
     pub(in crate::service) fn external_job_label() -> Option<String> {
         Self::job_label().filter(|label| *label != Self::label().to_qualified_name())
-    }
-
-    /// Whether launchd started this process as the agent.
-    fn is_this_process() -> bool {
-        Self::job_label().is_some_and(|label| label == Self::label().to_qualified_name())
     }
 
     /// The label of the launchd job that started this process, if one did.
