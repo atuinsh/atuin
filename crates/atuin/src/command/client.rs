@@ -4,7 +4,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme;
-use atuin_common::logs::{self, LogMode};
+use atuin_common::logs::{LogMode, USER};
 use clap::Subcommand;
 use clap_couture::Couture;
 use eyre::{Result, WrapErr};
@@ -258,12 +258,16 @@ impl Cmd {
         };
 
         // Logging doesn't read the settings, so it is up before loading them can warn.
-        let logging = self
-            .log_mode()
+        let log_mode = self.log_mode();
+        let logging = log_mode
             .map(|mode| LogCtx::try_enable("atuin", mode))
             .transpose()
             .wrap_err("failed to enable logging")?;
         let settings = Settings::new().wrap_err("could not load client settings")?;
+        // Only where stderr is the user's to read: not over a TUI, nor on every prompt.
+        if log_mode == Some(LogMode::FileAndStderr) && settings.has_legacy_logs_table() {
+            tracing::warn!(target: USER, "{}", fl!("logs-config-removed"));
+        }
 
         Ok(Some(async move {
             let result = if let Some(func) = run_internal {
@@ -306,7 +310,7 @@ impl Cmd {
             Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
             Self::InternalDecoy => {
                 tracing::error!(
-                    target: logs::USER,
+                    target: USER,
                     "this command is not meant to be accessed directly"
                 );
                 std::process::exit(1);

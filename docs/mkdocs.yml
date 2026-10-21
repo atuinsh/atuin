@@ -150,6 +150,7 @@ plugins:
           - guide/output-capture.md: Capture what each command printed - setup, reading and searching it, what's kept, privacy, and disk retention.
           - guide/delete-history.md: Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
           - guide/theming.md: Customize the TUI with color themes.
+          - guide/logging.md: Where Atuin writes its logs, the ATUIN_LOG variable, and how to filter daemon and CLI lines.
         Configuration:
           - configuration/config.md: Complete reference for ~/.atuin/config.toml - all settings with defaults and examples.
           - configuration/key-binding.md: Custom up-arrow filter mode, disable up-arrow or ctrl-r, vim mode.
@@ -271,6 +272,7 @@ nav:
       - Capturing command output: guide/output-capture.md
       - Deleting history: guide/delete-history.md
       - Theming: guide/theming.md
+      - Logging: guide/logging.md
   - Supported platforms: support.md
   - Configuration:
       - Config: configuration/config.md

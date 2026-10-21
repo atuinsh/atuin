@@ -15,6 +15,7 @@ log-subscriber-init-failed = failed to initialize subscriber: { $error }
 log-file-failed = couldn't open the log file in { $dir }: { $error }
 log-directive-invalid = ignoring `{ $directive }` in ATUIN_LOG: { $error }
 log-directive-unavailable = ignoring `{ $directive }` in ATUIN_LOG: this build doesn't include trace logging
+logs-config-removed = the [logs] section in your config is no longer used; remove it, and set ATUIN_LOG to change logging (https://docs.atuin.sh/guide/logging/)
 otel-not-compiled = this build of atuin has no OpenTelemetry support: rebuild with the `profiling-traced` feature (e.g. `cargo build-traced`) to export `ATUIN_OTEL` traces
 otel-url-not-utf8 = the given ATUIN_OTEL URL does not appear to be a utf-8 string
 otel-url-invalid = the given ATUIN_OTEL failed to parse as URL: { $error }
