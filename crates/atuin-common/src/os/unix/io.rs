@@ -1,9 +1,9 @@
-//! File descriptor write helpers.
+//! File descriptor read and write helpers.
 
 use std::os::fd::{AsFd, BorrowedFd};
 
 use rustix::event::{PollFd, PollFlags, poll};
-use rustix::io::{Errno, write};
+use rustix::io::{Errno, read, write};
 
 /// Write an entire buffer to a file descriptor.
 pub trait WriteAllExt: AsFd {
@@ -23,7 +23,7 @@ pub trait WriteAllExt: AsFd {
                 Ok(0) => return Err(Errno::IO),
                 Ok(n) => buf = &buf[n..],
                 Err(Errno::INTR) => {}
-                Err(Errno::AGAIN) => wait_until_writable(fd)?,
+                Err(Errno::AGAIN) => wait_until(fd, PollFlags::OUT)?,
                 Err(e) => return Err(e),
             }
         }
@@ -34,9 +34,32 @@ pub trait WriteAllExt: AsFd {
 
 impl<Fd: AsFd + ?Sized> WriteAllExt for Fd {}
 
-/// Block until a file descriptor is writable.
-fn wait_until_writable(fd: BorrowedFd<'_>) -> Result<(), Errno> {
-    let mut fds = [PollFd::new(&fd, PollFlags::OUT)];
+/// Read from a file descriptor, waiting for input.
+pub trait ReadRetryingExt: AsFd {
+    /// Read into `buf`, retrying on `EINTR` and `EAGAIN`; `0` means the end of input.
+    ///
+    /// If the file descriptor is in non-blocking mode and has nothing to read yet (`EAGAIN`), this
+    /// function blocks until it does, as a blocking read would. This is unlike [`std::io::Stdin`],
+    /// which immediately returns after receiving `EAGAIN`.
+    fn read_retrying(&self, buf: &mut [u8]) -> Result<usize, Errno> {
+        let fd = self.as_fd();
+
+        loop {
+            match read(fd, &mut *buf) {
+                Ok(n) => return Ok(n),
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => wait_until(fd, PollFlags::IN)?,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+impl<Fd: AsFd + ?Sized> ReadRetryingExt for Fd {}
+
+/// Block until a file descriptor is ready for `events`.
+fn wait_until(fd: BorrowedFd<'_>, events: PollFlags) -> Result<(), Errno> {
+    let mut fds = [PollFd::new(&fd, events)];
 
     loop {
         match poll(&mut fds, None) {
@@ -49,7 +72,7 @@ fn wait_until_writable(fd: BorrowedFd<'_>) -> Result<(), Errno> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, pipe};
+    use std::io::{Read, Write, pipe};
     use std::thread;
     use std::time::Duration;
 
@@ -119,5 +142,32 @@ mod tests {
 
         let err = writer.write_all_retrying(&vec![0u8; BIG]).unwrap_err();
         assert_eq!(err, Errno::PIPE);
+    }
+
+    /// The read-side twin of `waits_out_a_stalled_nonblocking_fd`: an empty non-blocking pipe
+    /// is input that hasn't arrived yet, not the end of it.
+    #[rstest]
+    #[timeout(Duration::from_secs(30))]
+    fn a_read_waits_for_input(#[values(false, true)] nonblocking: bool) {
+        let (reader, mut writer) = pipe().unwrap();
+        ioctl_fionbio(&reader, nonblocking).unwrap();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            writer.write_all(b"typed").unwrap();
+        });
+
+        let mut buf = [0u8; 64];
+        let n = reader.read_retrying(&mut buf).unwrap();
+
+        assert_eq!(&buf[..n], b"typed");
+    }
+
+    #[rstest]
+    fn a_read_at_the_end_of_input_returns_zero(#[values(false, true)] nonblocking: bool) {
+        let (reader, writer) = pipe().unwrap();
+        ioctl_fionbio(&reader, nonblocking).unwrap();
+        drop(writer);
+
+        assert_eq!(reader.read_retrying(&mut [0u8; 64]), Ok(0));
     }
 }

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::str;
 
 use async_trait::async_trait;
+use atuin_common::path::PathBufExt as _;
 use eyre::{Result, eyre};
 use itertools::Itertools;
 use time::{Duration, OffsetDateTime};
@@ -18,7 +19,7 @@ pub struct Bash {
 fn default_histpath() -> Result<PathBuf> {
     let home_dir = dirs::home_dir().ok_or_else(|| eyre!("could not find home directory"))?;
 
-    Ok(home_dir.join(".bash_history"))
+    Ok(home_dir.joined(".bash_history"))
 }
 
 #[async_trait]

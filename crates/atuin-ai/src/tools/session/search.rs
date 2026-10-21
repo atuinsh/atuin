@@ -1,4 +1,4 @@
-//! `atuin_ai_session_search`: full-text search across captured AI-agent session transcripts.
+//! `atuin_threads_search`: full-text search across captured AI-agent session transcripts.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -8,7 +8,6 @@ use atuin_client::ai_session::{
 };
 use atuin_client::settings::Settings;
 use atuin_common::range::Clamped;
-use atuin_common::string::NonBlankString;
 use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::AiClient;
 use futures::{StreamExt, TryStreamExt};
@@ -20,6 +19,7 @@ use super::read::RoleArg;
 use super::{connect, elsewhere_note, one_line, render_session_summary, resolve_cwd};
 use crate::commands::session::HarnessArg;
 use crate::tools::ToolOutcome;
+use crate::tools::search_terms::SearchTermsArg;
 
 /// How many sessions matching anywhere a cwd-filtered search scans to say what the filter left
 /// out.
@@ -27,13 +27,15 @@ const NOTE_SCAN: u32 = 100;
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct AtuinAiSessionSearchToolCall {
-    /// Words to look for across captured AI-agent session transcripts (what the user and agent
+pub struct AtuinThreadsSearchToolCall {
+    /// What to look for across captured AI-agent session transcripts (what the user and agent
     /// wrote, the names of tools used, and session titles), case-insensitive. Sessions with a
-    /// message containing every word rank first; if there are none, sessions matching any of the
-    /// words (as prefixes) are returned instead, and the result says so. Use a few distinctive
-    /// words, e.g. a file name, error text or identifier, not a sentence.
-    pub query: NonBlankString,
+    /// message containing every term rank first; if there are none, sessions matching any term
+    /// (as a prefix) are returned instead, and the result says so. The words of one term match
+    /// only together and in that order, so give each word its own term unless they must be
+    /// adjacent. Use a few distinctive words, e.g. a file name, error text or identifier, not a
+    /// sentence.
+    pub terms: SearchTermsArg,
     /// Maximum number of sessions to return, most relevant first.
     #[serde(default)]
     pub limit: Clamped<u32, 1, 20, 5>,
@@ -57,7 +59,7 @@ pub struct AtuinAiSessionSearchToolCall {
     pub roles: Option<Vec<RoleArg>>,
 }
 
-impl AtuinAiSessionSearchToolCall {
+impl AtuinThreadsSearchToolCall {
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
         self.run(settings, caller).await.map_or_else(|outcome| outcome, ToolOutcome::Success)
     }
@@ -75,23 +77,25 @@ impl AtuinAiSessionSearchToolCall {
         let limit = self.limit.get();
         // One extra, so the page stays full after the caller's own session is dropped.
         let fetch = limit + 1;
-        let query = self.query.as_str();
+        let terms = &self.terms;
 
         // Every term, as whole words, first; when no message anywhere has them all, any term as a
         // prefix, so a near-miss query still finds something instead of costing the model a
         // retry. See `should_loosen` for what keeps the looser search from answering a question
         // nobody asked.
-        let strict = search(&mut client, query, &scope, cwd_str.as_deref(), false, fetch).await?;
+        let strict =
+            search(&mut client, terms.iter(), &scope, cwd_str.as_deref(), false, fetch).await?;
         // With a cwd filter, one unscoped strict search serves both that decision and the note.
         let unscoped = match cwd_str {
-            Some(_) => {
-                Some(search(&mut client, query, &scope, None, false, fetch.max(NOTE_SCAN)).await?)
-            }
+            Some(_) => Some(
+                search(&mut client, terms.iter(), &scope, None, false, fetch.max(NOTE_SCAN))
+                    .await?,
+            ),
             None => None,
         };
         let any_term = should_loosen(&strict, unscoped.as_deref());
         let found = if any_term {
-            search(&mut client, query, &scope, cwd_str.as_deref(), true, fetch).await?
+            search(&mut client, terms.iter(), &scope, cwd_str.as_deref(), true, fetch).await?
         } else {
             strict
         };
@@ -107,7 +111,7 @@ impl AtuinAiSessionSearchToolCall {
         let note = match cwd.as_deref() {
             Some(root) => {
                 let all = if any_term {
-                    search(&mut client, query, &scope, None, true, NOTE_SCAN).await.ok()
+                    search(&mut client, terms.iter(), &scope, None, true, NOTE_SCAN).await.ok()
                 } else {
                     unscoped
                 };
@@ -129,22 +133,21 @@ impl AtuinAiSessionSearchToolCall {
         if hits.is_empty() {
             let scope = cwd.map_or_else(String::new, |c| format!(" under {}", c.display()));
             let note = note.map_or_else(String::new, |n| format!(" {n}"));
-            let query = self.query.trim();
             return Ok(if only_own {
                 format!(
-                    "The only captured AI session{scope} matching {query:?} is this one (the \
-                     session calling this tool).{note}"
+                    "The only captured thread{scope} matching {terms:?} is this one (the thread \
+                     calling this tool).{note}"
                 )
             } else if !any_term {
                 format!(
-                    "No captured AI session{scope} has a message containing every word of \
-                     {query:?}.{note}"
+                    "No captured thread{scope} has a message containing every term of \
+                     {terms:?}.{note}"
                 )
             } else {
                 format!(
-                    "No captured AI sessions{scope} matched any word of {query:?}, even as a \
-                     prefix.{note} Try other words, or atuin_ai_session_list to browse sessions \
-                     by recency and directory."
+                    "No captured threads{scope} matched any term of {terms:?}, even as a \
+                     prefix.{note} Try other words, or atuin_threads_list to browse threads by \
+                     recency and directory."
                 )
             });
         }
@@ -154,7 +157,7 @@ impl AtuinAiSessionSearchToolCall {
         if any_term {
             let _ = writeln!(
                 out,
-                "No single message contained every word, so these sessions match some of them (as \
+                "No single message contained every term, so these threads match some of them (as \
                  prefixes); check the match lines for relevance.\n"
             );
         }
@@ -166,9 +169,9 @@ impl AtuinAiSessionSearchToolCall {
         }
         let _ = write!(
             out,
-            "\nRead around a match with atuin_ai_session_read, e.g. start a few messages before \
-             the matched message number. Each session shows only its best match; to find every \
-             mention in one, read it with query."
+            "\nRead around a match with atuin_threads_read, e.g. start a few messages before the \
+             matched message number. Each thread shows only its best match; to find every mention \
+             in one, read it with query."
         );
         Ok(out)
     }
@@ -183,7 +186,7 @@ struct Scope {
 
 async fn search(
     client: &mut AiClient,
-    query: &str,
+    terms: impl IntoIterator<Item = &str>,
     scope: &Scope,
     cwd: Option<&str>,
     any_term: bool,
@@ -196,19 +199,20 @@ async fn search(
         roles: scope.roles.clone(),
         ..SessionFilter::default()
     };
+    let terms = terms.into_iter().map(str::to_owned).collect();
     let terms = if any_term {
-        SearchTerms::Any
+        SearchTerms::Any(terms)
     } else {
-        SearchTerms::All
+        SearchTerms::All(terms)
     };
     client
-        .search_sessions(query, terms, &filter, limit)
+        .search_sessions(terms, &filter, limit)
         .await
-        .map_err(|e| ToolOutcome::Error(format!("AI session search failed: {e}")))?
+        .map_err(|e| ToolOutcome::Error(format!("Thread search failed: {e}")))?
         .map(|hit| {
-            hit.map_err(|e| format!("AI session search failed: {e}")).and_then(|hit| {
+            hit.map_err(|e| format!("Thread search failed: {e}")).and_then(|hit| {
                 SessionMatch::try_from(hit)
-                    .map_err(|e| format!("AI session search returned a malformed result: {e}"))
+                    .map_err(|e| format!("Thread search returned a malformed result: {e}"))
             })
         })
         .try_collect()
@@ -216,7 +220,7 @@ async fn search(
         .map_err(ToolOutcome::Error)
 }
 
-/// Whether to fall back to any-term matching: only when no message has every word, neither in
+/// Whether to fall back to any-term matching: only when no message has every term, neither in
 /// the requested scope nor, when that scope is a directory, outside it. Counted before the
 /// caller's own session is set aside (its match is still a match), and a strict match elsewhere
 /// wins over loose ones in the directory; the note then points at it.
@@ -251,24 +255,24 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::default(json!({"query": "flaky test"}), 5)]
-    #[case::clamped_high(json!({"query": "x", "limit": 100}), 20)]
-    #[case::clamped_low(json!({"query": "x", "limit": 0}), 1)]
-    #[case::null_limit(json!({"query": "x", "limit": null}), 5)]
-    fn parses_query_and_clamps_limit(#[case] input: serde_json::Value, #[case] limit: u32) {
-        let call: AtuinAiSessionSearchToolCall = serde_json::from_value(input).unwrap();
+    #[case::default(json!({"terms": ["flaky test"]}), 5)]
+    #[case::clamped_high(json!({"terms": ["x"], "limit": 100}), 20)]
+    #[case::clamped_low(json!({"terms": ["x"], "limit": 0}), 1)]
+    #[case::null_limit(json!({"terms": ["x"], "limit": null}), 5)]
+    fn parses_terms_and_clamps_limit(#[case] input: serde_json::Value, #[case] limit: u32) {
+        let call: AtuinThreadsSearchToolCall = serde_json::from_value(input).unwrap();
         assert_eq!(call.limit.get(), limit);
         assert!(!call.include_subagents);
     }
 
     #[rstest]
     #[case::missing(json!({}))]
-    #[case::empty(json!({"query": ""}))]
-    #[case::blank(json!({"query": "   "}))]
-    #[case::unknown_harness(json!({"query": "x", "harness": "emacs"}))]
-    #[case::uncapturable_harness(json!({"query": "x", "harness": "copilot"}))]
+    #[case::no_terms(json!({"terms": []}))]
+    #[case::blank(json!({"terms": ["   "]}))]
+    #[case::unknown_harness(json!({"terms": ["x"], "harness": "emacs"}))]
+    #[case::uncapturable_harness(json!({"terms": ["x"], "harness": "copilot"}))]
     fn rejects_invalid_input(#[case] input: serde_json::Value) {
-        assert!(serde_json::from_value::<AtuinAiSessionSearchToolCall>(input).is_err());
+        assert!(serde_json::from_value::<AtuinThreadsSearchToolCall>(input).is_err());
     }
 
     #[rstest]
@@ -277,8 +281,8 @@ mod tests {
     #[case::opencode("opencode", HarnessKind::Opencode)]
     #[case::pi("pi", HarnessKind::Pi)]
     fn parses_each_harness(#[case] name: &str, #[case] expected: HarnessKind) {
-        let input = json!({"query": "x", "harness": name});
-        let call: AtuinAiSessionSearchToolCall = serde_json::from_value(input).unwrap();
+        let input = json!({"terms": ["x"], "harness": name});
+        let call: AtuinThreadsSearchToolCall = serde_json::from_value(input).unwrap();
         assert_eq!(HarnessKind::from(call.harness.unwrap()), expected);
     }
 

@@ -59,13 +59,19 @@ pub fn parse_harness(s: &str) -> Option<HarnessKind> {
         "codex" | "cx" => Some(HarnessKind::Codex),
         "opencode" | "oc" => Some(HarnessKind::Opencode),
         "pi" => Some(HarnessKind::Pi),
+        "omp" | "om" => Some(HarnessKind::Omp),
         _ => None,
     }
 }
 
 /// The harnesses ctrl-t cycles through, after "all".
-const HARNESS_CYCLE: [HarnessKind; 4] =
-    [HarnessKind::ClaudeCode, HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi];
+const HARNESS_CYCLE: [HarnessKind; 5] = [
+    HarnessKind::ClaudeCode,
+    HarnessKind::Codex,
+    HarnessKind::Opencode,
+    HarnessKind::Pi,
+    HarnessKind::Omp,
+];
 
 /// Whitespace-separated words with their byte ranges.
 fn words(input: &str) -> impl Iterator<Item = (Range<usize>, &str)> {
@@ -311,14 +317,15 @@ mod tests {
     #[case("agent:claude flaky", "agent:codex flaky")]
     #[case("flaky agent:codex", "flaky agent:opencode")]
     #[case("agent:opencode", "agent:pi")]
-    #[case("agent:pi", "")]
-    #[case("a agent:pi b", "a b")]
-    #[case("flaky agent:pi", "flaky")]
+    #[case("agent:pi", "agent:omp")]
+    #[case("agent:omp", "")]
+    #[case("a agent:omp b", "a b")]
+    #[case("flaky agent:omp", "flaky")]
     #[case("agent:codex,pi x", "agent:claude-code x")]
     #[case("agent:vim", "agent:claude-code")]
     #[case("a:claude flaky", "agent:codex flaky")]
     #[case("flaky a:cx", "flaky agent:opencode")]
-    #[case("a:pi", "")]
+    #[case("a:om", "")]
     #[case("a:", "agent:claude-code")]
     #[case("h:codex", "h:codex agent:claude-code")]
     fn alt_a_cycles_the_harness_token(#[case] input: &str, #[case] want: &str) {
@@ -328,7 +335,7 @@ mod tests {
     #[rstest]
     fn alt_a_round_trips() {
         let mut s = String::from("bug");
-        for _ in 0..5 {
+        for _ in 0..6 {
             s = cycle_harness(&s);
         }
         assert_eq!(s, "bug");

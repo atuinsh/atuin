@@ -1,4 +1,4 @@
-//! Turning AI session capture on: `atuin config enable ai-sessions`, and the offer `atuin resume`
+//! Turning thread capture on: `atuin config enable threads`, and the offer `atuin resume`
 //! makes each time it runs while capture is off.
 
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
@@ -113,12 +113,12 @@ impl Drop for Cooked {
     }
 }
 
-/// Offer to turn AI sessions on, as `atuin resume` does while they're off. Returns the settings
+/// Offer to turn threads on, as `atuin resume` does while they're off. Returns the settings
 /// with them on if the user said yes and they could be. Failures are reported on the terminal
 /// rather than returned, so resume still goes on.
 pub async fn offer(settings: &Settings, term: &mut Terminal) -> Option<Settings> {
     let enabled = async {
-        if !term.ask(&fl!("ai-sessions-offer"), &fl!("ai-sessions-offer-description"), None)? {
+        if !term.ask(&fl!("threads-offer"), &fl!("threads-offer-description"), None)? {
             return Ok(None);
         }
         enable(settings, term).await.map(Some)
@@ -128,20 +128,19 @@ pub async fn offer(settings: &Settings, term: &mut Terminal) -> Option<Settings>
     match enabled {
         Ok(settings) => settings,
         Err(e) => {
-            let _ =
-                writeln!(term.output, "{}", fl!("ai-sessions-failed", error = format!("{e:#}")));
+            let _ = writeln!(term.output, "{}", fl!("threads-failed", error = format!("{e:#}")));
             None
         }
     }
 }
 
-/// Turn AI sessions on, with the daemon they need, and offer to import the sessions from before.
+/// Turn threads on, with the daemon they need, and offer to import the threads from before.
 /// Returns the settings as they now are.
 pub async fn enable(settings: &Settings, term: &mut Terminal) -> Result<Settings> {
     let config_file = Settings::get_config_path()?;
     let config_str = tokio::fs::read_to_string(&config_file).await?;
     let updated = EnableCmd {
-        feature: Feature::AiSessions,
+        feature: Feature::Threads,
     }
     .get_updated_config(&config_str, settings.daemon.enabled)?;
     tokio::fs::write(&config_file, &updated).await?;
@@ -150,25 +149,21 @@ pub async fn enable(settings: &Settings, term: &mut Terminal) -> Result<Settings
 
     // A daemon already running picks the change up itself; this starts one that isn't.
     if let Err(e) = daemon::ready_client(&settings).await {
-        writeln!(term.output, "{}", fl!("ai-sessions-no-daemon", error = format!("{e:#}")))?;
+        writeln!(term.output, "{}", fl!("threads-no-daemon", error = format!("{e:#}")))?;
         return Ok(settings);
     }
-    writeln!(term.output, "{}", fl!("ai-sessions-enabled"))?;
+    writeln!(term.output, "{}", fl!("threads-enabled"))?;
 
-    let note = settings.ai.capture_tools.then(|| fl!("ai-sessions-import-tools"));
-    if term.ask(
-        &fl!("ai-sessions-import"),
-        &fl!("ai-sessions-import-description"),
-        note.as_deref(),
-    )? {
+    let note = settings.threads.capture_tools.then(|| fl!("threads-import-tools"));
+    if term.ask(&fl!("threads-import"), &fl!("threads-import-description"), note.as_deref())? {
         // Capture is on whether or not this works, so it's no reason to say it isn't.
         if let Err(e) = atuin_ai::commands::import_all(&settings, &mut term.output, term.live).await
         {
             let error = format!("{e:#}");
-            writeln!(term.output, "{}", fl!("ai-sessions-import-failed", error = error))?;
+            writeln!(term.output, "{}", fl!("threads-import-failed", error = error))?;
         }
     } else {
-        writeln!(term.output, "{}", fl!("ai-sessions-import-later"))?;
+        writeln!(term.output, "{}", fl!("threads-import-later"))?;
     }
 
     Ok(settings)

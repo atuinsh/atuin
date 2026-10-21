@@ -24,38 +24,48 @@ where
     T: Send + 'static,
     F: Fn(Record<EncryptedData>) -> T + Send + Sync + 'static,
 {
-    let threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-    let chunk = records.len().div_ceil(threads).max(MIN_CHUNK);
-    let decode = Arc::new(decode);
+    map_parallel(records, decode).await
+}
 
-    let mut records = records.into_iter();
+/// [`decode_parallel`] for any work as independent: `f` on each of `items`, in their order.
+pub async fn map_parallel<I, T, F>(items: Vec<I>, f: F) -> Vec<T>
+where
+    I: Send + 'static,
+    T: Send + 'static,
+    F: Fn(I) -> T + Send + Sync + 'static,
+{
+    let threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    let chunk = items.len().div_ceil(threads).max(MIN_CHUNK);
+    let f = Arc::new(f);
+
+    let mut items = items.into_iter();
     let mut tasks = Vec::new();
     loop {
-        let part: Vec<_> = records.by_ref().take(chunk).collect();
+        let part: Vec<_> = items.by_ref().take(chunk).collect();
         if part.is_empty() {
             break;
         }
-        let decode = Arc::clone(&decode);
+        let f = Arc::clone(&f);
         let span = tracing::Span::current();
         tasks.push(tokio::task::spawn_blocking(move || {
             let _span = span.enter();
-            part.into_iter().map(|record| decode(record)).collect::<Vec<T>>()
+            part.into_iter().map(|item| f(item)).collect::<Vec<T>>()
         }));
     }
 
-    let mut decoded = Vec::new();
+    let mut done = Vec::new();
     for task in tasks {
         match task.await {
-            Ok(part) => decoded.extend(part),
+            Ok(part) => done.extend(part),
             Err(err) => match err.try_into_panic() {
                 Ok(panic) => std::panic::resume_unwind(panic),
                 // Only a runtime shutting down cancels a blocking task, and nothing is left to
-                // decode for then.
-                Err(err) => panic!("decoding records was cancelled: {err}"),
+                // do for then.
+                Err(err) => panic!("parallel work was cancelled: {err}"),
             },
         }
     }
-    decoded
+    done
 }
 
 #[cfg(test)]

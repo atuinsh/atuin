@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::io::Read;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
@@ -91,14 +92,14 @@ pub enum Commands {
 
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn run(self, settings: Settings, store: SqliteStore) -> Result<()> {
+    pub async fn run(self, settings: &Arc<Settings>, store: SqliteStore) -> Result<()> {
         match self.command {
-            Commands::Login(l) => l.run(&settings, &store).await,
-            Commands::Register(r) => r.run(&settings, &store).await,
-            Commands::Logout => logout::run(&settings).await,
-            Commands::Delete(d) => d.run(&settings).await,
-            Commands::ChangePassword(c) => c.run(&settings).await,
-            Commands::Link => link::run(&settings).await,
+            Commands::Login(l) => l.run(settings, &store).await,
+            Commands::Register(r) => r.run(settings, &store).await,
+            Commands::Logout => logout::run(settings).await,
+            Commands::Delete(d) => d.run(settings).await,
+            Commands::ChangePassword(c) => c.run(settings).await,
+            Commands::Link => link::run(settings).await,
         }
     }
 }

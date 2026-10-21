@@ -14,6 +14,7 @@ fn row(id: &str, parent: Option<&str>) -> RehydrateMessage {
         role: Role::User,
         content: Vec::new(),
         model: None,
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,

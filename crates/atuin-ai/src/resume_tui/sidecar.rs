@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use atuin_client::ai_session::{AiSessionDatabase, Analysis, HarnessSession, SearchTerms, Session};
 use atuin_common::harnesstools::continuation;
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
-use atuin_common::harnesstools::session::{Content, ParentKind};
+use atuin_common::harnesstools::session::{Content, ParentKind, Role};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_common::utils::in_git_repo;
 use eyre::{Result, WrapErr};
@@ -17,7 +17,8 @@ use futures::TryStreamExt;
 use parking_lot::Mutex;
 
 use super::source::{
-    Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet, Stamp,
+    Relation, SessionFilter, SessionPreview, SessionRow, SessionSource, Snippet, Stamp, Transcript,
+    TranscriptBuilder,
 };
 use super::{ResumeContext, title};
 
@@ -35,9 +36,9 @@ pub struct SidecarSource {
 impl SidecarSource {
     /// Open the sidecar at `path`.
     pub async fn open(path: &Path, context: &ResumeContext) -> Result<Self> {
-        let db = AiSessionDatabase::open_read_only(path).await.wrap_err_with(|| {
-            format!("could not open the AI session database {}", path.display())
-        })?;
+        let db = AiSessionDatabase::open_read_only(path)
+            .await
+            .wrap_err_with(|| format!("could not open the threads database {}", path.display()))?;
         let mut wal = OsString::from(path);
         wal.push("-wal");
         Ok(Self {
@@ -58,7 +59,7 @@ impl SidecarSource {
     /// The git repository root `cwd` is in, if any.
     fn git_root(&self, cwd: &Path) -> Option<PathBuf> {
         let mut roots = self.git_roots.lock();
-        roots.entry(cwd.to_owned()).or_insert_with(|| in_git_repo(&cwd.to_string_lossy())).clone()
+        roots.entry(cwd.to_owned()).or_insert_with(|| in_git_repo(cwd)).clone()
     }
 
     /// A picker row for `s`.
@@ -101,6 +102,7 @@ impl SidecarSource {
             usage: s.usage,
             children: u32::try_from(s.child_count).unwrap_or(u32::MAX),
             matched: None,
+            matched_at: None,
             tree: String::new(),
             forks_at: None,
         }
@@ -141,7 +143,7 @@ impl SessionSource for SidecarSource {
         let limit = u32::try_from(filter.limit).unwrap_or(u32::MAX);
         let matches: Vec<_> = self
             .db
-            .search(&filter.text, SearchTerms::Typed, &filter.db, limit)
+            .search(SearchTerms::Typed(filter.text.clone()), &filter.db, limit)
             .try_collect()
             .await?;
 
@@ -165,6 +167,9 @@ impl SessionSource for SidecarSource {
                 }
                 let preview = snippet(&m.preview);
                 row.matched = (!preview.text.is_empty()).then_some(preview);
+                // Where the reader opens: only a match in the session's own messages has a place
+                // in its transcript.
+                row.matched_at = m.matched.is_none().then_some(m.message_index);
             }
             rows.push(row);
         }
@@ -184,6 +189,25 @@ impl SessionSource for SidecarSource {
         })
     }
 
+    async fn transcript(&self, session: &HarnessSession) -> Result<Transcript> {
+        let mut transcript = TranscriptBuilder::default();
+        let conversation = self.db.conversation(session).await?;
+        transcript.counted(conversation.message_count);
+        for (index, role, content) in conversation.messages {
+            transcript.at(index);
+            for c in &content {
+                match (&role, c) {
+                    (_, Content::Summary(t)) => transcript.summary(t),
+                    (Role::User, Content::Text(t)) => transcript.prompt(t),
+                    (Role::Assistant, Content::Text(t)) => transcript.reply(t),
+                    (Role::Assistant, Content::ToolUse(call)) => transcript.tool(&call.name),
+                    _ => {}
+                }
+            }
+        }
+        Ok(transcript.finish())
+    }
+
     async fn children(&self, session: &HarnessSession) -> Result<Vec<SessionRow>> {
         // Newest first, from the query.
         Ok(self
@@ -200,7 +224,7 @@ impl SessionSource for SidecarSource {
         self.db
             .rehydrate_session(session, cwd.to_owned())
             .await?
-            .ok_or_else(|| eyre::eyre!("the session isn't in the AI session database"))
+            .ok_or_else(|| eyre::eyre!("the thread isn't in the threads database"))
     }
 
     async fn analyse(&self, session: &HarnessSession) -> Result<Option<Analysis>> {
@@ -444,7 +468,7 @@ mod tests {
     #[tokio::test]
     async fn the_stamp_moves_only_when_the_database_is_written() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ai_session_sidecar.db");
+        let path = dir.path().join("threads.db");
         let writer = AiSessionDatabase::open(&path).await.unwrap();
         writer.append(&message("root", None, Role::User, "first", 0)).await.unwrap();
         let source = SidecarSource::open(&path, &context()).await.unwrap();

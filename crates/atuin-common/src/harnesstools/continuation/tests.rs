@@ -16,17 +16,18 @@ use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
 use crate::harnesstools::{ccode, codex, opencode, pi};
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 pub const CLAUDE: AnyHarness = AnyHarness::ClaudeCode(Ccode);
 pub const CODEX: AnyHarness = AnyHarness::Codex(Codex);
 pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
-pub const PI: AnyHarness = AnyHarness::Pi(Pi);
+pub const PI: AnyHarness = AnyHarness::Pi(Pi::PI);
 /// The original's atuin id, as the picker passes it.
 const ATUIN_ID: &str = "01a0d147e7457ae280000123456789ab";
 
 fn fixture(path: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(path)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures").joined(path)
 }
 
 pub fn pool() -> BlockingPool {
@@ -42,6 +43,7 @@ fn row_of<M: Message>(n: usize, m: &M) -> RehydrateMessage {
         role: m.role(),
         content: m.content(),
         model: m.model(),
+        provider: None,
         usage: m.usage(),
         stop_reason: m.stop_reason(),
         turn_id: m.turn_id(),
@@ -72,7 +74,7 @@ fn session_of(id: &str, messages: Vec<RehydrateMessage>) -> RehydrateSession {
     }
 }
 
-/// A real session recorded by `source`, as capture holds it (with `ai.capture_tools` on).
+/// A real session recorded by `source`, as capture holds it (with `threads.capture_tools` on).
 pub async fn recorded(source: AnyHarness) -> RehydrateSession {
     let mut session = read(source).await;
     session.messages = testing::synced_as(session.messages, true);
@@ -381,8 +383,13 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
             rows_of(&lines)
         }
         AnyHarness::Pi(_) => {
-            let path =
-                pi::rehydrate::rehydrate_into(root, &root.join("sessions"), session).unwrap();
+            let path = pi::rehydrate::rehydrate_into(
+                pi::Flavour::Pi,
+                root,
+                &root.join("sessions"),
+                session,
+            )
+            .unwrap();
             assert_eq!(pi::session::locate(root, &session.id), Some(path.clone()));
             let lines: Vec<_> =
                 PiSession::open(id, path, pool()).read().try_collect().await.unwrap();
@@ -494,6 +501,7 @@ fn msg(role: Role, content: Vec<Content>, at: i64) -> RehydrateMessage {
         role,
         content,
         model: Some("claude-opus-5".to_owned()),
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,
@@ -560,9 +568,8 @@ fn calls_become_notes_and_turns_merge() {
     assert_eq!(c.flattened, Flattened {
         tool_calls: 2,
         tool_results: 3,
-        reasoning: 1
     });
-    assert_eq!(c.flattened.summary(), "2 tool calls become notes, reasoning dropped");
+    assert_eq!(c.flattened.summary(), "2 tool calls become notes");
     let turns: Vec<(Role, String)> = c.session.messages[1..]
         .iter()
         .map(|m| match m.content.as_slice() {
@@ -840,9 +847,9 @@ fn rows_chain_where_the_target_keeps_a_tree(#[case] target: AnyHarness, #[case] 
 }
 
 #[rstest]
-#[case(Flattened { tool_calls: 42, tool_results: 42, reasoning: 3 }, "42 tool calls become notes, reasoning dropped")]
-#[case(Flattened { tool_calls: 1, tool_results: 1, reasoning: 0 }, "1 tool call becomes a note")]
-#[case(Flattened { tool_calls: 0, tool_results: 2, reasoning: 0 }, "tool output dropped")]
+#[case(Flattened { tool_calls: 42, tool_results: 42 }, "42 tool calls become notes")]
+#[case(Flattened { tool_calls: 1, tool_results: 1 }, "1 tool call becomes a note")]
+#[case(Flattened { tool_calls: 0, tool_results: 2 }, "tool output dropped")]
 #[case(Flattened::default(), "")]
 fn summaries_are_short(#[case] flattened: Flattened, #[case] expected: &str) {
     assert_eq!(flattened.summary(), expected);
@@ -885,7 +892,7 @@ fn layout(s: &RehydrateSession) -> Vec<String> {
         .collect()
 }
 
-/// Calls captured with their input and output (`ai.capture_tools`) are carried over as calls, in
+/// Calls captured with their input and output (`threads.capture_tools`) are carried over as calls, in
 /// the rows the target writes them in, as the target's own tools where it has them.
 #[rstest]
 #[case::claude(CLAUDE, &[
@@ -1036,7 +1043,6 @@ fn calls_that_cant_be_carried_become_notes() {
     assert_eq!(c.flattened, Flattened {
         tool_calls: 3,
         tool_results: 2,
-        reasoning: 0,
     });
 }
 

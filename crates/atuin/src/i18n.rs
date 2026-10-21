@@ -14,6 +14,10 @@ use i18n_embed::unic_langid::LanguageIdentifier;
     clippy::same_name_method,
     reason = "RustEmbed derives inherent `get`/`iter` next to its trait methods, as sibling impls"
 )]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "RustEmbed's derive canonicalizes its folder in debug builds"
+)]
 mod embed {
     #[derive(rust_embed::RustEmbed)]
     #[folder = "i18n"]

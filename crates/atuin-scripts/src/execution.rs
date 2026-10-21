@@ -16,7 +16,7 @@ pub fn build_executable_script(script: &str, shebang: &str) -> String {
     if shebang.is_empty() {
         // Default to bash if no shebang is provided
         format!("#!/usr/bin/env bash\n{script}")
-    } else if script.starts_with("#!") {
+    } else if shebang.starts_with("#!") {
         format!("{shebang}\n{script}")
     } else {
         format!("#!{shebang}\n{script}")
@@ -276,4 +276,26 @@ pub async fn execute_script_interactive(
         stdin_tx,
         exit_code_rx,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::build_executable_script;
+
+    #[rstest]
+    #[case::default_bash("", "#!/usr/bin/env bash")]
+    #[case::bare_interpreter("/usr/bin/env python3", "#!/usr/bin/env python3")]
+    #[case::prefixed_interpreter("#!/usr/bin/env python3", "#!/usr/bin/env python3")]
+    fn builds_executable_script(
+        #[case] shebang: &str,
+        #[case] expected_shebang: &str,
+        #[values("print(1 + 1)\n", "#!/usr/bin/env python3\nprint(1 + 1)\n")] script: &str,
+    ) {
+        assert_eq!(
+            build_executable_script(script, shebang),
+            format!("{expected_shebang}\n{script}")
+        );
+    }
 }

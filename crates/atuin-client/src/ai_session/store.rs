@@ -9,11 +9,11 @@ use atuin_domain::record::{
 use tracing::{debug, warn};
 use typed_builder::TypedBuilder;
 
-use crate::ai_session::Message;
 use crate::ai_session::database::{
     AiSessionDatabase, DbError, Generation, NewRow, PreparedMessage, Watermark,
 };
-use crate::record::decode::decode_parallel;
+use crate::ai_session::{HarnessKind, Message};
+use crate::record::decode::{decode_parallel, map_parallel};
 use crate::record::sqlite_store::SqliteStore;
 
 /// The zstd level of a v2 record's body: on captured messages, higher levels shrink them only a
@@ -58,18 +58,18 @@ pub enum AiSessionRecord {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
-    #[error("empty ai-session record")]
+    #[error("empty thread record")]
     Empty,
-    #[error("unknown ai-session record kind {0}")]
+    #[error("unknown thread record kind {0}")]
     UnknownKind(u8),
-    #[error("unknown ai-session record version {}", .0.as_str())]
+    #[error("unknown thread record version {}", .0.as_str())]
     UnknownVersion(RecordVersion),
     /// Only written by builds from before records stored the session's id.
-    #[error("ai-session record version {} is no longer read", .0.as_str())]
+    #[error("thread record version {} is no longer read", .0.as_str())]
     Retired(RecordVersion),
-    #[error("failed to decode ai-session record body: {0}")]
+    #[error("failed to decode thread record body: {0}")]
     Body(#[from] rmp_serde::decode::Error),
-    #[error("failed to decompress ai-session record body: {0}")]
+    #[error("failed to decompress thread record body: {0}")]
     Decompress(#[source] std::io::Error),
 }
 
@@ -87,13 +87,13 @@ pub enum BuildError {
     Db(#[from] DbError),
     /// Invalidations kept landing in the middle of it: after `REPROJECT_PASSES` passes the
     /// sidecar may still be missing records. The next reprojection replays what this one left.
-    #[error("the ai-session projection kept being invalidated, and is incomplete")]
+    #[error("the threads projection kept being invalidated, and is incomplete")]
     Incomplete,
     /// Only [`AiSessionStore::reproject_beside_capture`]: the host's series was rewritten or
     /// deleted under its watermark, and forgetting what it projected would delete rows of this
     /// host, which capture dedups against. Nothing was forgotten: the caller must have it
     /// forgotten with capture held off, then replay.
-    #[error("the ai-session records of host {0} were rewritten under capture")]
+    #[error("the thread records of host {0} were rewritten under capture")]
     ForgetHeldOff(HostId),
 }
 
@@ -104,6 +104,25 @@ impl AiSessionRecord {
     /// v1's body, compressed with zstd (captured tool payloads compress about 2.4 times). v0
     /// (named msgpack, without [`Message::atuin_id`]) is no longer read.
     pub const VERSION: RecordVersion = RecordVersion::V2;
+
+    /// The version this record is written as: [`Self::VERSION`], or v3 (the same body) for a
+    /// message naming a harness v2 readers don't know (omp), or with a field they don't
+    /// ([`Message::provider`]). Those can't decode it, and skip what they can't decode for good;
+    /// a version they don't know they hold until they're upgraded.
+    #[must_use]
+    pub fn version(&self) -> RecordVersion {
+        match self {
+            Self::Message(msg) => {
+                let mut harnesses = std::iter::once(msg.session.harness)
+                    .chain(msg.parent.as_ref().map(|p| p.harness));
+                if harnesses.any(|h| h == HarnessKind::Omp) || msg.provider.is_some() {
+                    RecordVersion::V3
+                } else {
+                    Self::VERSION
+                }
+            }
+        }
+    }
 
     /// A kind byte, then the zstd-compressed positional msgpack body.
     #[must_use]
@@ -130,7 +149,7 @@ impl AiSessionRecord {
         match version {
             RecordVersion::V0 => Err(DecodeError::Retired(RecordVersion::V0)),
             RecordVersion::V1 => Ok(Self::Message(rmp_serde::from_slice(body)?)),
-            RecordVersion::V2 => {
+            RecordVersion::V2 | RecordVersion::V3 => {
                 let body = zstd::stream::decode_all(body).map_err(DecodeError::Decompress)?;
                 Ok(Self::Message(rmp_serde::from_slice(&body)?))
             }
@@ -155,7 +174,8 @@ impl AiSessionStore {
     pub async fn push(&self, msg: &Message) -> Result<Watermark, PushError> {
         let id = msg.id;
 
-        let bytes = AiSessionRecord::Message(msg.clone()).serialize();
+        let record = AiSessionRecord::Message(msg.clone());
+        let (bytes, version) = (record.serialize(), record.version());
         let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
 
         loop {
@@ -164,7 +184,7 @@ impl AiSessionStore {
             let record = Record::builder()
                 .id(id)
                 .host(Host::new(self.host_id))
-                .version(AiSessionRecord::VERSION)
+                .version(version.clone())
                 .tag(RecordTag::AiSession)
                 .idx(idx)
                 .data(DecryptedData(bytes.clone()))
@@ -176,11 +196,51 @@ impl AiSessionStore {
         }
     }
 
-    /// Move this host's watermark onto `pushed`, a record [`Self::push`] stored and the caller
-    /// has since projected, so the next reprojection (each startup's) doesn't replay what capture
-    /// projected as it went. Only when the watermark stands on the record just before it (still
-    /// the record it was, as a reprojection checks), no invalidation happened since `known`'s
-    /// generation, and no reprojection is running, which moves it itself.
+    /// [`Self::push`] each of `msgs`, in order and in one transaction: all of them or none.
+    /// Returns where the last was stored, `None` for none.
+    pub async fn push_all(&self, msgs: &Arc<[Message]>) -> Result<Option<Watermark>, PushError> {
+        let Some(last) = msgs.last() else {
+            return Ok(None);
+        };
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
+        let first = self.store.last(&series).await?.map_or(0, |r| r.idx + 1);
+        let (all, host, key) = (Arc::clone(msgs), Host::new(self.host_id), self.key.clone());
+        // Serializing and encrypting each is most of what pushing costs: across cores.
+        let records = map_parallel((0..msgs.len()).collect(), move |i| {
+            let record = AiSessionRecord::Message(all[i].clone());
+            Record::builder()
+                .id(all[i].id)
+                .host(host.clone())
+                .version(record.version())
+                .tag(RecordTag::AiSession)
+                .idx(first + i as u64)
+                .data(DecryptedData(record.serialize()))
+                .build()
+                .encrypt(&key)
+        })
+        .await;
+        if self.store.push_batch_unique(records.iter()).await? {
+            let idx = first + msgs.len() as u64 - 1;
+            return Ok(Some(Watermark {
+                idx,
+                record_id: last.id,
+            }));
+        }
+        // A slot taken meanwhile, or a record stored already: one at a time, as `push` retries
+        // the one and takes the other as done.
+        let mut pushed = None;
+        for msg in msgs.iter() {
+            pushed = Some(self.push(msg).await?);
+        }
+        Ok(pushed)
+    }
+
+    /// Move this host's watermark onto `pushed`, the last of `count` records [`Self::push_all`]
+    /// stored and the caller has since projected, so the next reprojection (each startup's)
+    /// doesn't replay what capture projected as it went. Only when the watermark stands on the
+    /// record just before the first of them (still the record it was, as a reprojection checks),
+    /// no invalidation happened since `known`'s generation, and no reprojection is running, which
+    /// moves it itself.
     ///
     /// Returns where it moved it, for the next capture's `known`: one following on from it moves
     /// it with a single write. `None` if it didn't move it: the next capture reads the generation
@@ -190,6 +250,7 @@ impl AiSessionStore {
         db: &AiSessionDatabase,
         known: CaptureMark,
         pushed: Watermark,
+        count: u64,
     ) -> Result<Option<CaptureMark>, BuildError> {
         let Some(_running) = db.try_lock_reprojection() else {
             return Ok(None);
@@ -197,7 +258,7 @@ impl AiSessionStore {
         let series = RecordSeriesKey::new(self.host_id, RecordTag::AiSession);
         let (generation, from) = match known {
             CaptureMark::Moved { generation, mark } => {
-                if mark.idx + 1 != pushed.idx {
+                if mark.idx + count != pushed.idx {
                     return Ok(None);
                 }
                 (generation, Some(mark))
@@ -205,9 +266,9 @@ impl AiSessionStore {
             CaptureMark::Unknown(generation) => {
                 let from = db.reproject_watermarks().await?.remove(&series);
                 let follows = match from {
-                    None => pushed.idx == 0,
+                    None => pushed.idx + 1 == count,
                     Some(mark) => {
-                        mark.idx + 1 == pushed.idx
+                        mark.idx + count == pushed.idx
                             && self
                                 .store
                                 .idx(&series, mark.idx)
@@ -1056,7 +1117,7 @@ mod tests {
             .collect();
         assert_eq!(listed, std::slice::from_ref(&kept));
         let found: Vec<_> = db
-            .search("zebra", SearchTerms::All, &SessionFilter::default(), 0)
+            .search(SearchTerms::All(vec!["zebra".into()]), &SessionFilter::default(), 0)
             .map_ok(|m| m.session.handle)
             .try_collect()
             .await
@@ -1486,8 +1547,7 @@ mod tests {
             let db = db.clone();
             async move {
                 let matches = db.search(
-                    query,
-                    crate::ai_session::SearchTerms::All,
+                    crate::ai_session::SearchTerms::All(vec![query.to_owned()]),
                     &crate::ai_session::SessionFilter::default(),
                     0,
                 );

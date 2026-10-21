@@ -109,6 +109,7 @@ async fn scan_dir(dir: &Path, is_project: bool, out: &mut Vec<RawSkillFile>) {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::path::PathBufExt as _;
     use rstest::rstest;
 
     use super::*;
@@ -193,8 +194,8 @@ mod tests {
         #[case] first_is_project: bool,
     ) {
         let home = tempfile::tempdir().unwrap();
-        let project = home.path().join(".atuin").join("skills");
-        let elsewhere = home.path().join("elsewhere").join("skills");
+        let project = home.path().join(".atuin").joined("skills");
+        let elsewhere = home.path().join("elsewhere").joined("skills");
         for dir in [&project, &elsewhere] {
             setup_skill(dir, "deploy", "---\nname: deploy\n---\nDeploy.");
         }

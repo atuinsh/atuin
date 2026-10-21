@@ -61,6 +61,39 @@ ATUIN_DB_USERNAME=atuin
 ATUIN_DB_PASSWORD=really-insecure
 ```
 
+!!! tip "Secure passwords"
+
+    For extra safety, we recommend using [Docker
+    secrets](https://docs.docker.com/compose/how-tos/use-secrets/). Atuin can
+    read passwords from a file. Pass the path of the password file via the
+    `ATUIN_DB_PASSWORD_FILE` environment variable, and remove the password
+    from `ATUIN_DB_URI`. Postgres reads the same file from
+    `POSTGRES_PASSWORD_FILE`, which replaces `POSTGRES_PASSWORD`; it won't
+    start with both set:
+
+    ```yaml
+    services:
+      atuin:
+        # ...
+        environment:
+          # ...
+          ATUIN_DB_URI: postgres://${ATUIN_DB_USERNAME}@db/${ATUIN_DB_NAME}
+          ATUIN_DB_PASSWORD_FILE: /run/secrets/atuin_db_password
+        secrets:
+          - atuin_db_password
+      db:
+        # ...
+        environment:
+          # ...
+          POSTGRES_PASSWORD_FILE: /run/secrets/atuin_db_password
+        secrets:
+          - atuin_db_password
+
+    secrets:
+      atuin_db_password:
+        file: ./db_password.txt
+    ```
+
 
 Start the services using `docker compose`:
 

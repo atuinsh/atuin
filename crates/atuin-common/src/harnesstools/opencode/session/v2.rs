@@ -675,6 +675,7 @@ impl Full {
             role: Role::Assistant,
             turn: Some(turn(epoch_millis(&data["time"]["created"]), model, of, &data["tokens"])),
             model: model["id"].as_str().map(str::to_owned),
+            provider: model["providerID"].as_str().map(str::to_owned),
             cwd: state.cwd_at(self.seq),
             ..MessageInfo::unknown()
         }

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::db;
+use atuin_common::path::PathBufExt as _;
 use atuin_domain::record::CmdOrigin;
 use easy_cast::{CastFloat, Conv};
 use eyre::{Result, eyre};
@@ -67,15 +68,13 @@ impl HistDbEntry {
 fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Some(d) = xonsh_data_dir {
-        let mut path = PathBuf::from(d);
-        path.push("xonsh-history.sqlite");
-        return Ok(path);
+        return Ok(PathBuf::from(d).joined("xonsh-history.sqlite"));
     }
 
     // otherwise, fall back to default
     let data_dir = dirs::data_dir().ok_or_else(|| eyre!("Could not determine data directory"))?;
 
-    let hist_file = data_dir.join("xonsh/xonsh-history.sqlite");
+    let hist_file = data_dir.joined("xonsh/xonsh-history.sqlite");
     if hist_file.exists() || cfg!(test) {
         Ok(hist_file)
     } else {

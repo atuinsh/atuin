@@ -1,13 +1,14 @@
-use std::io::Write;
 use std::num::NonZeroU16;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::JoinHandle;
 
 use atuin_common::os::unix::tty::TtyId;
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
+use atuin_common::path::PathBufExt as _;
 use easy_cast::Conv;
+use tokio::io::AsyncWriteExt as _;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::capture::{CaptureConfig, CommandCaptureTracker};
 use crate::debug::MarkerDebugHighlighter;
@@ -18,12 +19,12 @@ pub enum Msg {
         rows: u16,
         cols: u16,
     },
-    ScreenRequest(mpsc::Sender<Vec<u8>>),
+    ScreenRequest(oneshot::Sender<Vec<u8>>),
 }
 
 /// The path to the PTY proxy socket for the given terminal.
 pub fn socket_path(tty_id: TtyId) -> Result<PathBuf, SecureTempDirError> {
-    Ok(socket_dir()?.join(socket_name(tty_id)))
+    Ok(socket_dir()?.joined(socket_name(tty_id)))
 }
 
 /// The name of the PTY proxy socket for the given terminal.
@@ -35,7 +36,7 @@ fn socket_name(tty_id: TtyId) -> String {
 /// The directory in which PTY proxy sockets are stored.
 fn socket_dir() -> Result<PathBuf, SecureTempDirError> {
     let uid = atuin_common::os::unix::uid();
-    let dir = atuin_common::os::unix::tmp_dir().join(format!("atuin-{uid}"));
+    let dir = atuin_common::os::unix::tmp_dir().into_path_buf().joined(format!("atuin-{uid}"));
     create_secure_temp_dir(dir)
 }
 
@@ -135,22 +136,32 @@ impl Parser {
     }
 }
 
-pub fn spawn_parser_thread(
+/// Run the emulator, fed by `screen_rx`, on a runtime and thread of its own.
+///
+/// Parsing is the one CPU-bound job in the proxy, and on the I/O runtime it would hold up the
+/// forwarding of keystrokes and output behind it.
+pub fn spawn_parser(
     rows: u16,
     cols: u16,
-    screen_rx: Receiver<Msg>,
+    mut screen_rx: mpsc::Receiver<Msg>,
     options: ParserOptions,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
+) -> std::io::Result<JoinHandle<()>> {
+    // No drivers: the emulator does no I/O and sets no timers, so the runtime sleeps on a condvar
+    // between messages.
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    let parse = async move {
         // `vt100` dimensions can't be 0. Upstream would panic; now our `atuin-vt100` fork requires
         // dimensions to be `NonZeroU16` to ensure we don't hit those panics. Clamp dimensions to 1.
         let rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
         let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
         let mut parser = Parser::new(rows, cols, options);
-        for msg in screen_rx {
+        while let Some(msg) = screen_rx.recv().await {
             parser.handle_msg(msg);
         }
-    })
+    };
+    std::thread::Builder::new()
+        .name("atuin-pty-parser".into())
+        .spawn(move || runtime.block_on(parse))
 }
 
 /// The PTY proxy server.
@@ -161,34 +172,28 @@ pub struct SocketServer {
 impl SocketServer {
     /// Create a new socket server.
     ///
-    /// The server will start running once [`Self::spawn`] is called.
+    /// The server will start answering once [`Self::serve`] is called.
     pub fn new(path: &std::path::Path) -> std::io::Result<Self> {
         Ok(Self {
             listener: UnixListener::bind(path)?,
         })
     }
 
-    /// Start running the socket server on the current thread.
-    pub fn run(self, msg_tx: &SyncSender<Msg>) {
-        for stream in self.listener.incoming() {
-            let Ok(mut stream) = stream else {
-                break;
-            };
+    /// Answer each connection with a snapshot of the screen.
+    pub async fn serve(self, msg_tx: mpsc::Sender<Msg>) -> std::io::Result<()> {
+        self.listener.set_nonblocking(true)?;
+        let listener = tokio::net::UnixListener::from_std(self.listener)?;
+        loop {
+            let (mut stream, _) = listener.accept().await?;
 
-            let (reply_tx, reply_rx) = mpsc::channel();
-            if msg_tx.send(Msg::ScreenRequest(reply_tx)).is_err() {
-                break;
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if msg_tx.send(Msg::ScreenRequest(reply_tx)).await.is_err() {
+                return Ok(());
             }
-            if let Ok(data) = reply_rx.recv() {
-                let _ = stream.write_all(&data);
-                let _ = stream.flush();
+            if let Ok(data) = reply_rx.await {
+                let _ = stream.write_all(&data).await;
             }
         }
-    }
-
-    /// Start running the socket server on a new thread.
-    pub fn spawn(self, msg_tx: SyncSender<Msg>) -> std::thread::JoinHandle<()> {
-        std::thread::spawn(move || self.run(&msg_tx))
     }
 }
 
@@ -229,6 +234,7 @@ fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::Receiver;
     use std::time::Duration;
 
     use atuin_client::history::HistoryId;
@@ -422,21 +428,25 @@ mod tests {
             .collect()
     }
 
-    /// Ask a parser thread for its screen, waiting for it to work through the queue first.
-    fn request_screen(msg_tx: &SyncSender<Msg>) -> Vec<u8> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        msg_tx.send(Msg::ScreenRequest(reply_tx)).expect("parser thread alive");
-        reply_rx.recv_timeout(TIMEOUT).expect("parser thread still answering")
+    /// Ask a parser for its screen, waiting for it to work through the queue first.
+    async fn request_screen(msg_tx: &mpsc::Sender<Msg>) -> Vec<u8> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        msg_tx.send(Msg::ScreenRequest(reply_tx)).await.expect("parser alive");
+        tokio::time::timeout(TIMEOUT, reply_rx)
+            .await
+            .expect("parser still answering")
+            .expect("parser alive")
     }
 
     #[rstest]
-    fn init_small_and_wrap(#[values(0, 1, 2, 3)] rows: u16, #[values(0, 1, 2, 3)] cols: u16) {
-        let (msg_tx, msg_rx) = mpsc::sync_channel(8);
-        spawn_parser_thread(rows, cols, msg_rx, plain());
-        msg_tx.send(Msg::Data(b"hello world".to_vec())).expect("parser thread alive");
+    #[tokio::test]
+    async fn init_small_and_wrap(#[values(0, 1, 2, 3)] rows: u16, #[values(0, 1, 2, 3)] cols: u16) {
+        let (msg_tx, msg_rx) = mpsc::channel(8);
+        spawn_parser(rows, cols, msg_rx, plain()).expect("parser starts");
+        msg_tx.send(Msg::Data(b"hello world".to_vec())).await.expect("parser alive");
 
         // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
-        assert_eq!(size_of(&request_screen(&msg_tx)), (rows.max(1), cols.max(1)));
+        assert_eq!(size_of(&request_screen(&msg_tx).await), (rows.max(1), cols.max(1)));
     }
 
     #[rstest]
@@ -494,25 +504,28 @@ mod tests {
     }
 
     #[rstest]
-    fn the_parser_thread_feeds_the_capture_sink() {
+    #[tokio::test]
+    async fn the_parser_feeds_the_capture_sink() {
         let (sink, captures) = capture_sink();
-        let (msg_tx, msg_rx) = mpsc::sync_channel(8);
-        spawn_parser_thread(24, 80, msg_rx, ParserOptions {
+        let (msg_tx, msg_rx) = mpsc::channel(8);
+        spawn_parser(24, 80, msg_rx, ParserOptions {
             command_capture: Some(CaptureConfig {
                 sink,
                 max_output_bytes: 1024 * 1024,
             }),
             debug_markers: false,
-        });
+        })
+        .expect("parser starts");
 
         msg_tx
             .send(Msg::Data(
                 format!("$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07")
                     .into_bytes(),
             ))
-            .expect("parser thread alive");
+            .await
+            .expect("parser alive");
         // A screen request only comes back once the data above has been handled.
-        let blob = request_screen(&msg_tx);
+        let blob = request_screen(&msg_tx).await;
         assert_eq!(size_of(&blob), (24, 80));
 
         let captures: Vec<_> = captures.try_iter().collect();
@@ -581,7 +594,7 @@ mod tests {
 
     /// A capture sink that funnels every `(history id, capture)` into the returned receiver.
     fn capture_sink() -> (CommandCaptureSink, Receiver<(HistoryId, CommandCapture)>) {
-        let (sender, received) = mpsc::channel();
+        let (sender, received) = std::sync::mpsc::channel();
         let sink = Box::new(move |history_id, capture| {
             sender.send((history_id, capture)).expect("test receiver is still alive");
         });

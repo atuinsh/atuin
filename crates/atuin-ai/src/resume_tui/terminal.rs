@@ -71,6 +71,11 @@ impl Events {
         Self { rx, stop }
     }
 
+    /// Whether more input is waiting: the picker catches up with it before drawing again.
+    pub fn behind(&self) -> bool {
+        !self.rx.is_empty()
+    }
+
     /// The next event; `None` once reading has failed.
     pub async fn next(&mut self) -> Option<io::Result<Event>> {
         self.rx.recv().await
@@ -83,7 +88,7 @@ impl Drop for Events {
     }
 }
 
-/// Stdout, or `/dev/tty` when stdout is captured (`cmd=$(atuin ai resume)`).
+/// Stdout, or `/dev/tty` when stdout is captured (`cmd=$(atuin threads resume)`).
 enum Writer {
     Stdout(io::Stdout),
     #[cfg(unix)]

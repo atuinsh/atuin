@@ -65,7 +65,7 @@ const MAX_QUERY_LEN: usize = 512;
 /// client-side highlighting) must apply this.
 #[must_use]
 pub fn truncate_query(query: &str) -> &str {
-    use atuin_common::string::TruncateCharsExt;
+    use atuin_common::string::StrExt as _;
     query.truncate_chars(MAX_QUERY_LEN)
 }
 

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use atuin_common::path::PathBufExt as _;
 use serde::Deserialize;
 
 use crate::common::FreshEnv;
@@ -71,7 +72,7 @@ impl Setup {
             Some(path)
         } else {
             std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
-                .map(|dir| dir.join(&config.shell))
+                .map(|dir| dir.joined(&config.shell))
                 .find(|path| path.is_file())
         };
         let Some(executable) = executable else {

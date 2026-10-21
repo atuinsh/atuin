@@ -60,18 +60,6 @@ Default: `true`
 
 Display tips in Atuin AI at the bottom of agent turns.
 
-### `capture_sessions`
-
-Default: `false`
-
-Capture the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin ai session import` brings in the rest. `atuin config enable ai-sessions` sets it, along with the daemon it needs. See [Agent sessions](./sessions.md).
-
-### `capture_tools`
-
-Default: `true`
-
-With `capture_sessions`, also capture what each tool call was given and what it returned, and the diff of each edit, so a resumed session has its tool calls and edits back. Set it to `false` to keep only the name of each tool called. See [What's captured](./sessions.md#whats-captured).
-
 ## Capabilities
 
 Settings that control what capabilities are sent to the LLM, which the LLM uses to understand what features the client has available. These are specified under `[ai.capabilities]`.
@@ -136,3 +124,21 @@ Whether to send your previous command as context in the initial request, so the 
 [ai.opening]
 send_last_command = true
 ```
+
+## Threads
+
+Settings for capturing your AI coding agents' sessions as [threads](./threads.md). These are specified under `[threads]`. Before `[threads]`, they were `capture_sessions` and `capture_tools` under `[ai]`, which still work when the `[threads]` setting isn't set.
+
+### `capture`
+
+Default: `false`
+
+Capture the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin config enable threads` sets it, along with the daemon it needs. See [Threads](./threads.md).
+
+### `capture_tools`
+
+Default: `true`
+
+With `capture`, also capture what each tool call was given and what it returned, and the diff of each edit, so a resumed session has its tool calls and edits back. Set it to `false` to keep only the name of each tool called. See [What's captured](./threads.md#whats-captured).
+
+The picker's own settings also go under `[threads]`: see [Settings](./threads.md#settings).

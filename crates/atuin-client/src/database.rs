@@ -1,6 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use atuin_common::db::sqlite::{Sqlite as CommonSqlite, SqliteBuilder};
@@ -31,6 +31,13 @@ pub struct Context {
     pub cmd_origin: CmdOrigin,
     pub host_id: String,
     pub git_root: Option<PathBuf>,
+}
+
+impl Context {
+    fn git_root_str(&self) -> &str {
+        // Existing behavior: fall back to `self.cwd` if there's no Git root.
+        self.git_root.as_deref().and_then(Path::to_str).unwrap_or(&self.cwd)
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -74,12 +81,12 @@ pub async fn query_context(settings: &Settings) -> eyre::Result<Context> {
     let cmd_origin = CmdOrigin::probe_current();
     let cwd = utils::get_current_dir();
     let host_id = settings.host_id().await?;
-    let git_root = utils::in_git_repo(cwd.as_str());
+    let git_root = utils::in_git_repo(&cwd);
 
     Ok(Context {
         session,
         cmd_origin,
-        cwd,
+        cwd: cwd.to_string_lossy().into(),
         git_root,
         host_id: host_id.0.as_simple().to_string(),
     })
@@ -105,7 +112,7 @@ impl Context {
             cwd: entry.cwd.clone(),
             cmd_origin: entry.cmd_origin.clone(),
             host_id: String::new(),
-            git_root: utils::in_git_repo(entry.cwd.as_str()),
+            git_root: utils::in_git_repo(entry.cwd.as_ref()),
         }
     }
 }
@@ -605,12 +612,7 @@ impl Sqlite {
             query.and_where_is_null("deleted_at");
         }
 
-        let git_root = if let Some(git_root) = context.git_root.clone() {
-            git_root.to_str().unwrap_or("/").to_string()
-        } else {
-            context.cwd.clone()
-        };
-
+        let git_root = context.git_root_str();
         let session_start = get_session_start_time(&context.session);
 
         for filter in filters {
@@ -626,7 +628,7 @@ impl Sqlite {
                     &mut query
                 }
                 FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
-                FilterMode::Workspace => query.and_where_like_left("cwd", &git_root),
+                FilterMode::Workspace => query.and_where_like_left("cwd", git_root),
             };
         }
 
@@ -724,12 +726,7 @@ impl Sqlite {
         let mut sql = SqlBuilder::select_from("history");
         sql.field(HISTORY_COLUMNS);
 
-        let git_root = if let Some(git_root) = context.git_root.clone() {
-            git_root.to_str().unwrap_or("/").to_string()
-        } else {
-            context.cwd.clone()
-        };
-
+        let git_root = context.git_root_str();
         let session_start = get_session_start_time(&context.session);
 
         match filter {

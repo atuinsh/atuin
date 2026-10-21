@@ -9,7 +9,7 @@
 //! daemon; output retrieval and output search talk to the daemon and return a
 //! tool error when it is not running.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
@@ -28,9 +28,9 @@ use strum::IntoEnumIterator;
 
 use crate::tools::output::search::AtuinOutputSearchToolCall;
 use crate::tools::session::caller::{Caller, OwnSession};
-use crate::tools::session::list::AtuinAiSessionListToolCall;
-use crate::tools::session::read::AtuinAiSessionReadToolCall;
-use crate::tools::session::search::AtuinAiSessionSearchToolCall;
+use crate::tools::session::list::AtuinThreadsListToolCall;
+use crate::tools::session::read::AtuinThreadsReadToolCall;
+use crate::tools::session::search::AtuinThreadsSearchToolCall;
 use crate::tools::{
     AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
     MAX_HISTORY_RESULTS, ToolOutcome,
@@ -38,7 +38,7 @@ use crate::tools::{
 
 struct AtuinMcp {
     db: Sqlite,
-    settings: Settings,
+    settings: Arc<Settings>,
     own_session: OwnSession,
 }
 
@@ -71,10 +71,10 @@ Do not use `history`, ~/.bash_history, or ~/.zsh_history: they are typically emp
      atuin_output over re-running an expensive or side-effectful command just to see its output \
      again.
 
-Atuin also records AI agent sessions. Use atuin_ai_session_search or atuin_ai_session_list, then \
-     atuin_ai_session_read, whenever a task points at earlier work: 'last time', 'again', \
+Atuin also records AI agent sessions as threads. Use atuin_threads_search or atuin_threads_list, \
+     then atuin_threads_read, whenever a task points at earlier work: 'last time', 'again', \
      'still', 'continue', what was decided, or whether something is a known issue. Otherwise do \
-     one quick search only when earlier sessions would clearly help; skip self-contained tasks.";
+     one quick search only when earlier threads would clearly help; skip self-contained tasks.";
 
 /// The initialize result, separated from the handler so tests can assert on
 /// it without constructing a database-backed server.
@@ -127,18 +127,24 @@ impl ServerHandler for AtuinMcp {
                 Ok(call) => call.execute(&self.db, &self.settings).await,
                 Err(outcome) => outcome,
             },
-            "atuin_ai_session_search" => match parse::<AtuinAiSessionSearchToolCall>(arguments) {
-                Ok(call) => call.execute(&self.settings, &caller).await,
-                Err(outcome) => outcome,
-            },
-            "atuin_ai_session_list" => match parse::<AtuinAiSessionListToolCall>(arguments) {
-                Ok(call) => call.execute(&self.settings, &caller).await,
-                Err(outcome) => outcome,
-            },
-            "atuin_ai_session_read" => match parse::<AtuinAiSessionReadToolCall>(arguments) {
-                Ok(call) => call.execute(&self.settings, &caller).await,
-                Err(outcome) => outcome,
-            },
+            "atuin_threads_search" | "atuin_ai_session_search" => {
+                match parse::<AtuinThreadsSearchToolCall>(arguments) {
+                    Ok(call) => call.execute(&self.settings, &caller).await,
+                    Err(outcome) => outcome,
+                }
+            }
+            "atuin_threads_list" | "atuin_ai_session_list" => {
+                match parse::<AtuinThreadsListToolCall>(arguments) {
+                    Ok(call) => call.execute(&self.settings, &caller).await,
+                    Err(outcome) => outcome,
+                }
+            }
+            "atuin_threads_read" | "atuin_ai_session_read" => {
+                match parse::<AtuinThreadsReadToolCall>(arguments) {
+                    Ok(call) => call.execute(&self.settings, &caller).await,
+                    Err(outcome) => outcome,
+                }
+            }
             name => {
                 return Err(ErrorData::invalid_params(format!("unknown tool: {name}"), None));
             }
@@ -171,10 +177,10 @@ fn invalid_arguments(err: impl std::fmt::Display) -> ToolOutcome {
 ///
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
-pub async fn run(db: &Sqlite, settings: &Settings) -> Result<()> {
+pub async fn run(db: &Sqlite, settings: Arc<Settings>) -> Result<()> {
     let server = AtuinMcp {
         db: db.clone(),
-        settings: settings.clone(),
+        settings,
         own_session: OwnSession::default(),
     }
     .serve(rmcp::transport::stdio())
@@ -313,46 +319,46 @@ fn tool_definitions() -> Vec<Tool> {
         )
         .annotate(ToolAnnotations::with_title("Search past command output").read_only(true)),
         Tool::new(
-            "atuin_ai_session_search",
-            "Full-text search across the transcripts of AI coding-agent sessions Atuin has \
-             captured (Claude Code, Codex, opencode, pi). Reach for it when a task points at \
-             earlier work ('again', 'still', 'continue', a known issue, what was decided): a \
-             previous agent may already have diagnosed or decided it. Finds which session \
-             discussed a topic, hit an error, touched a file, or made a decision — it searches \
-             what the user and agent wrote, tool names, and session titles. Each result gives the \
-             session id, harness, last-active time, title, directory, and the best matching \
-             message's number and snippet; pass the id to atuin_ai_session_read to read around \
-             the match. Requires the Atuin daemon with AI session capture enabled.",
-            schema_for_type::<AtuinAiSessionSearchToolCall>(),
+            "atuin_threads_search",
+            "Full-text search across the transcripts of the threads (AI coding-agent sessions) \
+             Atuin has captured (Claude Code, Codex, opencode, pi). Reach for it when a task \
+             points at earlier work ('again', 'still', 'continue', a known issue, what was \
+             decided): a previous agent may already have diagnosed or decided it. Finds which \
+             thread discussed a topic, hit an error, touched a file, or made a decision — it \
+             searches what the user and agent wrote, tool names, and thread titles. Each result \
+             gives the thread id, harness, last-active time, title, directory, and the best \
+             matching message's number and snippet; pass the id to atuin_threads_read to read \
+             around the match. Requires the Atuin daemon with thread capture enabled.",
+            schema_for_type::<AtuinThreadsSearchToolCall>(),
         )
-        .annotate(ToolAnnotations::with_title("Search AI agent sessions").read_only(true)),
+        .annotate(ToolAnnotations::with_title("Search agent threads").read_only(true)),
         Tool::new(
-            "atuin_ai_session_list",
-            "List captured AI coding-agent sessions (Claude Code, Codex, opencode, pi), most \
-             recently active first, optionally only those in a directory (cwd: '.' for this \
+            "atuin_threads_list",
+            "List captured threads, AI coding-agent sessions (Claude Code, Codex, opencode, pi), \
+             most recently active first, optionally only those in a directory (cwd: '.' for this \
              project) or active since a time (since: 'today'). Use it to pick up where the \
-             previous session on this project left off ('continue', 'last time') or to see what \
+             previous thread on this project left off ('continue', 'last time') or to see what \
              agents worked on recently, when you have no specific words to search for. Each entry \
-             gives the session id, harness, last-active time, message count, title, and \
-             directory. Requires the Atuin daemon with AI session capture enabled.",
-            schema_for_type::<AtuinAiSessionListToolCall>(),
+             gives the thread id, harness, last-active time, message count, title, and directory. \
+             Requires the Atuin daemon with thread capture enabled.",
+            schema_for_type::<AtuinThreadsListToolCall>(),
         )
-        .annotate(ToolAnnotations::with_title("List AI agent sessions").read_only(true)),
+        .annotate(ToolAnnotations::with_title("List agent threads").read_only(true)),
         Tool::new(
-            "atuin_ai_session_read",
-            "Read a captured AI coding-agent session's transcript, a page of messages at a time: \
-             what the user asked, what the agent replied, and which tools it used. Capture keeps \
-             the conversation, not tool arguments or output, so runs of tool calls appear as one \
-             line of tool names. Messages are numbered; page with start (negative counts from the \
-             end, e.g. -10 for how the session ended) and limit. Pages abridge long messages; \
-             read one message (limit: 1) to see it in full; one over 20,000 characters comes in \
-             parts, each giving the offset to read the next from. To find where something was \
-             said in a long session, pass query (only messages with every word) or roles \
-             (['user'] for what the person said) instead of paging through it. Takes a session id \
-             or unique prefix from atuin_ai_session_list or atuin_ai_session_search, or 'latest'.",
-            schema_for_type::<AtuinAiSessionReadToolCall>(),
+            "atuin_threads_read",
+            "Read a captured thread's transcript, a page of messages at a time: what the user \
+             asked, what the agent replied, and which tools it used. Capture keeps the \
+             conversation, not tool arguments or output, so runs of tool calls appear as one line \
+             of tool names. Messages are numbered; page with start (negative counts from the end, \
+             e.g. -10 for how the thread ended) and limit. Pages abridge long messages; read one \
+             message (limit: 1) to see it in full; one over 20,000 characters comes in parts, \
+             each giving the offset to read the next from. To find where something was said in a \
+             long thread, pass query (only messages with every word) or roles (['user'] for what \
+             the person said) instead of paging through it. Takes a thread id or unique prefix \
+             from atuin_threads_list or atuin_threads_search, or 'latest'.",
+            schema_for_type::<AtuinThreadsReadToolCall>(),
         )
-        .annotate(ToolAnnotations::with_title("Read an AI agent session").read_only(true)),
+        .annotate(ToolAnnotations::with_title("Read an agent thread").read_only(true)),
     ]
 }
 
@@ -374,9 +380,9 @@ mod tests {
             "atuin_history",
             "atuin_output",
             "atuin_output_search",
-            "atuin_ai_session_search",
-            "atuin_ai_session_list",
-            "atuin_ai_session_read",
+            "atuin_threads_search",
+            "atuin_threads_list",
+            "atuin_threads_read",
         ]);
 
         for tool in &tools {
@@ -395,11 +401,12 @@ mod tests {
     fn output_search_schema_is_derived_from_the_call_struct() {
         let tools = tool_definitions();
         let schema = &tools[2].input_schema;
-        assert_eq!(schema["required"], json!(["query"]));
-        let query = &schema["properties"]["query"];
-        assert_eq!(query["type"], "string");
-        assert_eq!(query["minLength"], 1);
-        assert!(query["description"].as_str().unwrap().contains("AND-ed"));
+        assert_eq!(schema["required"], json!(["terms"]));
+        let terms = &schema["properties"]["terms"];
+        assert_eq!(terms["type"], "array");
+        assert_eq!(terms["minItems"], 1);
+        assert_eq!(terms["items"]["minLength"], 1);
+        assert!(terms["description"].as_str().unwrap().contains("AND-ed"));
         let limit = &schema["properties"]["limit"];
         assert_eq!(limit["type"], "integer");
         assert_eq!(limit["minimum"], 1);
@@ -410,38 +417,43 @@ mod tests {
 
     #[rstest]
     fn ai_session_search_schema_matches_the_parser() {
-        // The hand-written schema and the AtuinAiSessionSearchToolCall parser are independent
+        // The hand-written schema and the AtuinThreadsSearchToolCall parser are independent
         // sources of truth; drive the parser at the schema's advertised bounds so the two cannot
         // drift apart (e.g. widening the Clamped bounds without updating the model-visible schema).
         let tools = tool_definitions();
         let schema = &tools[3].input_schema;
-        assert_eq!(schema["required"], json!(["query"]));
-        assert_eq!(schema["properties"]["query"]["minLength"], 1);
+        assert_eq!(schema["required"], json!(["terms"]));
+        assert_eq!(schema["properties"]["terms"]["minItems"], 1);
+        assert_eq!(schema["properties"]["terms"]["items"]["minLength"], 1);
 
         let limit = &schema["properties"]["limit"];
         let min = limit["minimum"].as_u64().unwrap();
         let max = limit["maximum"].as_u64().unwrap();
         let default = limit["default"].as_u64().unwrap();
 
-        let parse = |v: Value| serde_json::from_value::<AtuinAiSessionSearchToolCall>(v);
+        let parse = |v: Value| serde_json::from_value::<AtuinThreadsSearchToolCall>(v);
         let limit_of = |v: Value| u64::from(parse(v).unwrap().limit.get());
         assert_eq!(
-            limit_of(json!({"query": "x"})),
+            limit_of(json!({"terms": ["x"]})),
             default,
             "omitted limit uses the schema default"
         );
         assert_eq!(
-            limit_of(json!({"query": "x", "limit": max + 1})),
+            limit_of(json!({"terms": ["x"], "limit": max + 1})),
             max,
             "over-max clamps to the schema max"
         );
         assert_eq!(
-            limit_of(json!({"query": "x", "limit": 0})),
+            limit_of(json!({"terms": ["x"], "limit": 0})),
             min,
             "under-min clamps to the schema min"
         );
         assert!(
-            parse(json!({"query": "   "})).is_err(),
+            parse(json!({"terms": []})).is_err(),
+            "the parser enforces the advertised minItems"
+        );
+        assert!(
+            parse(json!({"terms": ["   "]})).is_err(),
             "the parser enforces the advertised minLength"
         );
 
@@ -451,12 +463,12 @@ mod tests {
         for harness in schema["$defs"][name]["enum"].as_array().unwrap() {
             let name = harness.as_str().unwrap();
             assert!(
-                parse(json!({"query": "x", "harness": name})).is_ok(),
+                parse(json!({"terms": ["x"], "harness": name})).is_ok(),
                 "advertised {name:?} must parse"
             );
         }
         assert!(
-            parse(json!({"query": "x", "harness": "copilot"})).is_err(),
+            parse(json!({"terms": ["x"], "harness": "copilot"})).is_err(),
             "an unadvertised harness is rejected"
         );
     }
@@ -467,9 +479,9 @@ mod tests {
         assert!(instructions.contains("atuin_history"));
         assert!(instructions.contains("atuin_output"));
         assert!(instructions.contains("atuin_output_search"));
-        assert!(instructions.contains("atuin_ai_session_search"));
-        assert!(instructions.contains("atuin_ai_session_list"));
-        assert!(instructions.contains("atuin_ai_session_read"));
+        assert!(instructions.contains("atuin_threads_search"));
+        assert!(instructions.contains("atuin_threads_list"));
+        assert!(instructions.contains("atuin_threads_read"));
         assert!(instructions.len() < MAX_INSTRUCTIONS_LEN, "instructions should stay concise");
     }
 }

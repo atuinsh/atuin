@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::{
     Checkpoint, Content, ParentKind, Role, TitleChange, TitleSource, Usage,
 };
-use atuin_common::string::TruncateCharsExt;
+use atuin_common::string::StrExt as _;
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId};
 use futures::{Stream, TryStreamExt};
@@ -41,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -86,6 +87,15 @@ macro_rules! session_columns {
     };
 }
 
+/// A session's conversation, as [`AiSessionDatabase::conversation`] reads it.
+#[derive(Debug, Clone, Default)]
+pub struct Conversation {
+    /// Each message read: its place among the session's messages, its role and its content.
+    pub messages: Vec<(u64, Role, Vec<Content>)>,
+    /// How many messages the session had, as [`Session::message_count`] counts them.
+    pub message_count: u64,
+}
+
 /// The `messages` columns [`MessageRow`] reads, from a table aliased `m`. A row's parent kind is
 /// its session's: rows do not store one.
 macro_rules! message_columns {
@@ -98,7 +108,8 @@ macro_rules! message_columns {
          AS git_branch, (SELECT value FROM interned WHERE id = m.model) AS model, m.usage_input, \
          m.usage_output, m.usage_cache_read, m.usage_cache_write, m.usage_reasoning, \
          m.stop_reason, m.usage_present, m.turn_id, m.title_change, (SELECT value FROM interned \
-         WHERE id = m.host) AS host_id"
+         WHERE id = m.host) AS host_id, (SELECT value FROM interned WHERE id = m.provider) AS \
+         provider"
     };
 }
 
@@ -188,35 +199,35 @@ pub enum Appended {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
-    #[error("failed to open the ai-session sqlite database: {0}")]
+    #[error("failed to open the threads sqlite database: {0}")]
     Open(#[from] SqliteOpenOrCreateError),
-    #[error("failed to run ai-session sqlite migrations: {0}")]
+    #[error("failed to run threads sqlite migrations: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
-    #[error("ai-session sqlite query failed: {0}")]
+    #[error("threads sqlite query failed: {0}")]
     Query(#[from] sqlx::Error),
-    #[error("ai-session sqlite write failed: {0}")]
+    #[error("threads sqlite write failed: {0}")]
     Write(#[from] rusqlite::Error),
-    #[error("the ai-session sqlite write was cancelled")]
+    #[error("the threads sqlite write was cancelled")]
     WriterCancelled,
-    #[error("the ai-session sqlite database is open read-only")]
+    #[error("the threads sqlite database is open read-only")]
     ReadOnly,
-    #[error("failed to serialize ai-session message: {0}")]
+    #[error("failed to serialize thread message: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("failed to compress ai-session message content: {0}")]
+    #[error("failed to compress thread message content: {0}")]
     Compress(std::io::Error),
-    #[error("unknown ai-session harness discriminant {0}")]
+    #[error("unknown thread harness discriminant {0}")]
     UnknownHarness(i64),
-    #[error("failed to decompress ai-session message content: {0}")]
+    #[error("failed to decompress thread message content: {0}")]
     Decompress(std::io::Error),
-    #[error("stored ai-session content is not valid utf-8")]
+    #[error("stored thread content is not valid utf-8")]
     InvalidContentEncoding,
-    #[error("stored ai-session record id is not a valid uuid")]
+    #[error("stored thread record id is not a valid uuid")]
     InvalidRecordId,
-    #[error("stored ai-session atuin id is missing or not a valid uuid")]
+    #[error("stored thread atuin id is missing or not a valid uuid")]
     InvalidAtuinId,
     /// No daemon has created the sidecar yet.
     #[error(
-        "the AI session database has not been created yet: start the atuin daemon (`atuin daemon \
+        "the threads database has not been created yet: start the atuin daemon (`atuin daemon \
          start`) and try again"
     )]
     Uninitialized {
@@ -225,7 +236,7 @@ pub enum DbError {
     /// The sidecar is at an older schema than this build reads: the daemon that owns it is an
     /// older atuin still running since an upgrade, or is migrating it right now.
     #[error(
-        "the AI session database is at schema version {found}, older than the version {expected} \
+        "the threads database is at schema version {found}, older than the version {expected} \
          this atuin reads: the atuin daemon upgrades it when it starts. If atuin was just \
          updated, restart the daemon (`atuin daemon restart`); if the daemon is starting, try \
          again in a moment"
@@ -239,7 +250,7 @@ pub enum DbError {
     /// failed part way. The sidecar is a projection of the record store, so deleting it is safe:
     /// the daemon rebuilds it from the records when it next starts.
     #[error(
-        "the AI session database at {} cannot be migrated ({source}). It is rebuilt from the \
+        "the threads database at {} cannot be migrated ({source}). It is rebuilt from the \
          record store, so to start it over, stop the daemon (`atuin daemon stop`), delete that \
          file with its -wal and -shm files, and start the daemon again",
         path.display()
@@ -250,7 +261,7 @@ pub enum DbError {
     },
     /// The sidecar is at a newer schema than this build reads: a newer atuin's daemon owns it.
     #[error(
-        "the AI session database is at schema version {found}, newer than the version {expected} \
+        "the threads database is at schema version {found}, newer than the version {expected} \
          this atuin reads: the atuin daemon is newer than this atuin. Update atuin, or check that \
          the shell and the daemon run the same atuin binary"
     )]
@@ -321,6 +332,7 @@ struct MessageRow {
     turn_id: Option<String>,
     title_change: Option<String>,
     host_id: Option<String>,
+    provider: Option<String>,
 }
 
 /// Input, output, cache read, cache write, reasoning: the `usage_*` columns in order.
@@ -587,6 +599,24 @@ impl AiSessionDatabase {
         .await?;
 
         Ok(found.is_some())
+    }
+
+    /// Which of `source_ids` the session holds: [`Self::contains_message`] for many at once.
+    pub async fn stored_source_ids(
+        &self,
+        session: &HarnessSession,
+        source_ids: &[&SourceId],
+    ) -> Result<HashSet<SourceId>, DbError> {
+        let ids: Vec<String> = db::query_scalar(
+            "SELECT source_id FROM messages WHERE session = (SELECT id FROM sessions WHERE \
+             harness = ? AND session_id = ?) AND source_id IN (SELECT value FROM json_each(?))",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .bind(serde_json::to_string(source_ids)?)
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(ids.into_iter().map(SourceId::from).collect())
     }
 
     /// Every title the session's lines set or cleared, oldest first: replayed, they give each
@@ -1008,6 +1038,45 @@ impl AiSessionDatabase {
         path.trim_end_matches(['/', '\\']).to_owned()
     }
 
+    /// A session's conversation for reading: each message's role and content, oldest first (in
+    /// the order [`SessionMatch::message_index`] counts), with its place in that order, and how
+    /// many messages it was as [`Session::message_count`] counts them. Only what reading needs is
+    /// read. A message that can't be decoded (written by a newer atuin, or damaged) is left out
+    /// with a warning rather than failing the rest; its place still counts.
+    pub async fn conversation(&self, session: &HarnessSession) -> Result<Conversation, DbError> {
+        let rows: Vec<(Option<String>, String, Option<Vec<u8>>)> = db::query_as(
+            "SELECT (SELECT value FROM interned WHERE id = m.role), m.content, m.content_z FROM \
+             messages m WHERE m.session = (SELECT id FROM sessions WHERE harness = ? AND \
+             session_id = ?) ORDER BY m.timestamp, m.id",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_all(self.db.pool())
+        .await?;
+        let mut out = Conversation {
+            messages: Vec::with_capacity(rows.len()),
+            message_count: 0,
+        };
+        for (index, (role, content, content_z)) in (0u64..).zip(rows) {
+            let role = role.as_deref().map(serde_json::from_str::<Role>);
+            let content = Self::read_content(content, content_z);
+            // A message with nothing in it (a structural row) isn't counted, as on write; one
+            // that can't be read had something.
+            out.message_count += u64::from(!content.as_ref().is_ok_and(Vec::is_empty));
+            match (role, content) {
+                (Some(Ok(role)), Ok(content)) => out.messages.push((index, role, content)),
+                (role, content) => warn!(
+                    ?session,
+                    index,
+                    role_ok = matches!(role, Some(Ok(_))),
+                    content_ok = content.is_ok(),
+                    "failed to decode ai-session message; leaving it out of the conversation"
+                ),
+            }
+        }
+        Ok(out)
+    }
+
     pub fn messages(
         &self,
         session: &HarnessSession,
@@ -1033,8 +1102,8 @@ impl AiSessionDatabase {
         }
     }
 
-    /// Sessions matching `query` (its terms matching as `terms` says) and passing `filter`, most
-    /// relevant first, at most `limit` (0 is unbounded).
+    /// Sessions matching `terms` and passing `filter`, most relevant first, at most `limit` (0 is
+    /// unbounded).
     ///
     /// Relevance is bm25 at the session's best message, a title match weighing five times a body
     /// one, divided by `1 + age_in_days / 30` so that equally relevant sessions rank newest
@@ -1047,25 +1116,23 @@ impl AiSessionDatabase {
     /// ([`SessionMatch::matched`]), with its title highlighted instead of the root's.
     pub fn search(
         &self,
-        query: &str,
         terms: SearchTerms,
         filter: &SessionFilter,
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static + use<> {
         let this = self.clone();
         let pool = self.db.pool().clone();
-        let query = query.to_owned();
         let filter = filter.clone();
 
         async_stream::try_stream! {
             let highlighter = TextHighlighter::default();
-            let expr = match terms {
-                SearchTerms::All => match_expression(&query),
-                SearchTerms::Typed if QueryTerms::prefixes_last(&query) => {
-                    prefix_match_expression(&query)
+            let expr = match &terms {
+                SearchTerms::All(terms) => match_expression(terms),
+                SearchTerms::Typed(line) if QueryTerms::prefixes_last(line) => {
+                    prefix_match_expression(line)
                 }
-                SearchTerms::Typed => match_expression(&query),
-                SearchTerms::Any => match_any_expression(&query),
+                SearchTerms::Typed(line) => match_expression(line.split_whitespace()),
+                SearchTerms::Any(terms) => match_any_expression(terms),
             };
             let Some(expr) = expr else {
                 for session in this.recent_sessions(&filter, limit).await? {
@@ -1143,7 +1210,7 @@ impl AiSessionDatabase {
                 stmt = stmt.bind(i64::from(limit));
             }
 
-            let terms = QueryTerms::parse(&query, terms);
+            let terms = QueryTerms::parse(&terms);
             let mut rows = stmt.fetch(&pool);
             while let Some(row) = rows.try_next().await? {
                 let session = Self::session_from_row(row.session)?;
@@ -1384,7 +1451,7 @@ impl AiSessionDatabase {
                     }
                 }
             }
-            // Tool output (with `ai.capture_tools`) is most of a session's bytes, and would grow
+            // Tool output (with `threads.capture_tools`) is most of a session's bytes, and would grow
             // the index as much, with files and logs rather than what was said or done. Activity
             // metadata is not conversational text and adds no useful search terms.
             Content::ToolResult(_) | Content::ReasoningSummary { .. } => {}
@@ -1501,6 +1568,7 @@ impl AiSessionDatabase {
             3 => Ok(HarnessKind::Copilot),
             4 => Ok(HarnessKind::Opencode),
             5 => Ok(HarnessKind::Pi),
+            6 => Ok(HarnessKind::Omp),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
@@ -1557,6 +1625,7 @@ impl AiSessionDatabase {
             .cwd(row.cwd.map(PathBuf::from))
             .git_branch(row.git_branch)
             .model(row.model)
+            .provider(row.provider)
             .usage((row.usage_present != 0).then(|| Usage {
                 input: Some(u64::try_from(row.usage_input).unwrap_or(0)),
                 output: Some(u64::try_from(row.usage_output).unwrap_or(0)),
@@ -1752,10 +1821,10 @@ fn fts_token_spans(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
     spans
 }
 
-/// A search query's terms as the index matches them (see [`SearchTerms`]): each
-/// whitespace-separated term is a phrase of folded tokens that must appear consecutively (so
-/// `app` matches the token `app`, not the word `apple`, and `foo-bar` matches `foo bar` across
-/// words). A phrase's last token also matches as a prefix: every phrase's for
+/// A search's terms as the index matches them (see [`SearchTerms`]): each term (each
+/// whitespace-separated word of a [`SearchTerms::Typed`] line) is a phrase of folded tokens that
+/// must appear consecutively (so `app` matches the token `app`, not the word `apple`, and
+/// `foo-bar` and `foo bar` match `foo bar` across words). A phrase's last token also matches as a prefix: every phrase's for
 /// [`SearchTerms::Any`], and the last term's for [`SearchTerms::Typed`] when
 /// [`Self::prefixes_last`].
 struct QueryTerms {
@@ -1766,12 +1835,17 @@ struct QueryTerms {
 }
 
 impl QueryTerms {
-    fn parse(query: &str, mode: SearchTerms) -> Self {
-        let terms: Vec<&str> = query.split_whitespace().collect();
-        let prefix = |i: usize| match mode {
-            SearchTerms::All => false,
-            SearchTerms::Typed => i + 1 == terms.len() && Self::prefixes_last(query),
-            SearchTerms::Any => true,
+    fn parse(search: &SearchTerms) -> Self {
+        let terms: Vec<&str> = match search {
+            SearchTerms::All(terms) | SearchTerms::Any(terms) => {
+                terms.iter().map(String::as_str).collect()
+            }
+            SearchTerms::Typed(line) => line.split_whitespace().collect(),
+        };
+        let prefix = |i: usize| match search {
+            SearchTerms::All(_) => false,
+            SearchTerms::Typed(line) => i + 1 == terms.len() && Self::prefixes_last(line),
+            SearchTerms::Any(_) => true,
         };
         let phrases = terms
             .iter()
@@ -1781,18 +1855,15 @@ impl QueryTerms {
             .collect();
         Self {
             phrases,
-            any: mode == SearchTerms::Any,
+            any: matches!(search, SearchTerms::Any(_)),
         }
     }
 
-    /// Whether the last term of `query` matches as a prefix: it is still being typed (no
+    /// Whether the last word of a typed `line` matches as a prefix: it is still being typed (no
     /// whitespace after it), and is at least [`MIN_PREFIX_CHARS`] long.
-    fn prefixes_last(query: &str) -> bool {
-        !query.ends_with(char::is_whitespace)
-            && query
-                .split_whitespace()
-                .last()
-                .is_some_and(|t| t.chars().count() >= MIN_PREFIX_CHARS)
+    fn prefixes_last(line: &str) -> bool {
+        !line.ends_with(char::is_whitespace)
+            && line.split_whitespace().last().is_some_and(|t| t.chars().count() >= MIN_PREFIX_CHARS)
     }
 
     /// Where a phrase matches in `tokens`: its first token's index and its length.
@@ -1919,6 +1990,40 @@ mod tests {
         assert_eq!(s.message_count, 1);
         let got: Vec<_> = db.messages(&m.session).try_collect().await.unwrap();
         assert_eq!(got[0].turn_id.as_deref(), Some("msg_01"));
+    }
+
+    /// A row's provider is stored and read back, and a row without one has none.
+    #[rstest]
+    #[tokio::test]
+    async fn a_rows_provider_is_kept(#[values(None, Some("openai-codex"))] provider: Option<&str>) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let mut m = sample_message();
+        m.provider = provider.map(str::to_owned);
+        db.append(&m).await.unwrap();
+
+        let got: Vec<_> = db.messages(&m.session).try_collect().await.unwrap();
+        assert_eq!(got[0].provider.as_deref(), provider);
+    }
+
+    /// Migration 3 adds the provider column to a projection already there, keeping its rows.
+    #[rstest]
+    fn the_provider_migration_keeps_the_projection() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("migrations/0001_init.sql")).unwrap();
+        conn.execute_batch(include_str!("migrations/0002_message_blocks.sql")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
+                 VALUES (1, 1, 's', x'00', 0, 0);
+             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
+                 VALUES (x'01', 1, 1, 'a', 0, 1, '[]');",
+        )
+        .unwrap();
+
+        conn.execute_batch(include_str!("migrations/0003_message_provider.sql")).unwrap();
+
+        let provider: Option<i64> =
+            conn.query_row("SELECT provider FROM messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(provider, None);
     }
 
     /// Rows that carry only usage, a title or session context are stored, but are no messages.
@@ -2353,31 +2458,37 @@ mod tests {
         filter: &SessionFilter,
         limit: u32,
     ) -> Vec<SessionMatch> {
-        db.search(query, SearchTerms::Typed, filter, limit).try_collect().await.unwrap()
+        db.search(SearchTerms::Typed(query.to_owned()), filter, limit).try_collect().await.unwrap()
     }
 
-    /// A search as the MCP tools make one: every term as a whole word, or with `any_term` any
+    /// A search as the MCP tools make one: every term as whole words, or with `any_term` any
     /// term as a prefix, in the sessions at or under `cwd` when given.
     fn search_in(
         db: &AiSessionDatabase,
-        query: &str,
+        terms: &[&str],
         cwd: Option<&str>,
         any_term: bool,
     ) -> impl futures::Stream<Item = Result<SessionMatch, DbError>> + use<> {
+        let terms = terms.iter().map(|term| (*term).to_owned()).collect();
         let terms = if any_term {
-            SearchTerms::Any
+            SearchTerms::Any(terms)
         } else {
-            SearchTerms::All
+            SearchTerms::All(terms)
         };
         let filter = SessionFilter {
             workspace: cwd.map(std::path::PathBuf::from),
             ..SessionFilter::default()
         };
-        db.search(query, terms, &filter, 0)
+        db.search(terms, &filter, 0)
+    }
+
+    /// Each whitespace-separated word of `query` as its own term.
+    fn words(query: &str) -> Vec<String> {
+        query.split_whitespace().map(str::to_owned).collect()
     }
 
     async fn search(db: &AiSessionDatabase, query: &str) -> Vec<SessionMatch> {
-        db.search(query, SearchTerms::Typed, &SessionFilter::default(), 0)
+        db.search(SearchTerms::Typed(query.to_owned()), &SessionFilter::default(), 0)
             .try_collect()
             .await
             .unwrap()
@@ -2479,14 +2590,14 @@ mod tests {
         db.append(&message_in(&codex, 1, "shared keyword")).await.unwrap();
 
         let all: Vec<_> = db
-            .search("shared", SearchTerms::Typed, &SessionFilter::default(), 0)
+            .search(SearchTerms::Typed("shared".into()), &SessionFilter::default(), 0)
             .try_collect()
             .await
             .unwrap();
         assert_eq!(all.len(), 2);
 
         let only_codex: Vec<_> = db
-            .search("shared", SearchTerms::Typed, &harness_filter(HarnessKind::Codex), 0)
+            .search(SearchTerms::Typed("shared".into()), &harness_filter(HarnessKind::Codex), 0)
             .try_collect()
             .await
             .unwrap();
@@ -2562,7 +2673,7 @@ mod tests {
             ..SessionFilter::default()
         };
         let found: Vec<SessionMatch> =
-            db.search("needle", SearchTerms::All, &filter, 0).try_collect().await.unwrap();
+            db.search(SearchTerms::All(words("needle")), &filter, 0).try_collect().await.unwrap();
 
         let mut found: Vec<_> = found.iter().map(|m| m.session.handle.session.as_ref()).collect();
         found.sort_unstable();
@@ -2677,7 +2788,7 @@ mod tests {
         expected.sort_unstable();
 
         let searched: Vec<SessionMatch> =
-            db.search("", SearchTerms::All, &filter, 0).try_collect().await.unwrap();
+            db.search(SearchTerms::All(vec![]), &filter, 0).try_collect().await.unwrap();
         let mut searched: Vec<_> =
             searched.iter().map(|m| m.session.handle.session.as_ref().to_owned()).collect();
         searched.sort_unstable();
@@ -2801,7 +2912,7 @@ mod tests {
             .await
             .unwrap();
 
-        let hits: Vec<_> = search_in(&db, "deploy", None, true).try_collect().await.unwrap();
+        let hits: Vec<_> = search_in(&db, &["deploy"], None, true).try_collect().await.unwrap();
         let preview = hits[0].preview.to_plain().text.into_owned();
         assert!(preview.contains("deployment failed"), "{preview}");
     }
@@ -2813,10 +2924,10 @@ mod tests {
         db.append(&message_in(&sample_handle(), 0, "the deployment failed")).await.unwrap();
 
         let strict: Vec<_> =
-            search_in(&db, "deploy broken", None, false).try_collect().await.unwrap();
+            search_in(&db, &["deploy", "broken"], None, false).try_collect().await.unwrap();
         assert!(strict.is_empty(), "no message has both whole words");
         let loose: Vec<_> =
-            search_in(&db, "deploy broken", None, true).try_collect().await.unwrap();
+            search_in(&db, &["deploy", "broken"], None, true).try_collect().await.unwrap();
         assert_eq!(loose.len(), 1, "`deploy` matches `deployment` as a prefix");
     }
 
@@ -2837,7 +2948,7 @@ mod tests {
             db.append(&msg).await.unwrap();
         }
 
-        let mut found: Vec<String> = search_in(&db, "shared", Some("/work/atuin/"), false)
+        let mut found: Vec<String> = search_in(&db, &["shared"], Some("/work/atuin/"), false)
             .map_ok(|m| m.session.handle.session.as_ref().to_owned())
             .try_collect()
             .await
@@ -2856,7 +2967,7 @@ mod tests {
             db.append(&msg).await.unwrap();
         }
 
-        let found: Vec<String> = search_in(&db, "shared", Some(r"C:\work\atuin\"), false)
+        let found: Vec<String> = search_in(&db, &["shared"], Some(r"C:\work\atuin\"), false)
             .map_ok(|m| m.session.handle.session.as_ref().to_owned())
             .try_collect()
             .await
@@ -2875,8 +2986,10 @@ mod tests {
         db.append(&meta).await.unwrap();
         db.append(&message_in(&session, 1, "osc hyperlink bug")).await.unwrap();
 
-        let hits: Vec<_> =
-            search_in(&db, "hyperlink", Some("/work/terminal"), false).try_collect().await.unwrap();
+        let hits: Vec<_> = search_in(&db, &["hyperlink"], Some("/work/terminal"), false)
+            .try_collect()
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 1);
     }
 
@@ -2918,13 +3031,13 @@ mod tests {
         }
 
         let two: Vec<_> = db
-            .search("common", SearchTerms::Typed, &SessionFilter::default(), 2)
+            .search(SearchTerms::Typed("common".into()), &SessionFilter::default(), 2)
             .try_collect()
             .await
             .unwrap();
         assert_eq!(two.len(), 2);
         let all: Vec<_> = db
-            .search("common", SearchTerms::Typed, &SessionFilter::default(), 0)
+            .search(SearchTerms::Typed("common".into()), &SessionFilter::default(), 0)
             .try_collect()
             .await
             .unwrap();
@@ -3006,7 +3119,7 @@ mod tests {
         db.append(&message_in(&quiet, 100, "shared keyword")).await.unwrap();
 
         let two: Vec<_> = db
-            .search("keyword", SearchTerms::Typed, &SessionFilter::default(), 2)
+            .search(SearchTerms::Typed("keyword".into()), &SessionFilter::default(), 2)
             .try_collect()
             .await
             .unwrap();
@@ -3308,91 +3421,91 @@ mod tests {
 
     #[rstest]
     #[case::whole_token(
-        SearchTerms::All,
-        "error",
+        SearchTerms::All(words("error")),
         "An Error and an error.",
         "An [Error] and an [error]."
     )]
-    #[case::no_substring_matches(SearchTerms::All, "app", "apple app", "apple [app]")]
-    #[case::folded_like_the_index(SearchTerms::All, "cafe", "the café opens", "the [café] opens")]
+    #[case::no_substring_matches(SearchTerms::All(words("app")), "apple app", "apple [app]")]
+    #[case::folded_like_the_index(
+        SearchTerms::All(words("cafe")),
+        "the café opens",
+        "the [café] opens"
+    )]
     #[case::phrase_across_words(
-        SearchTerms::All,
-        "foo-bar",
+        SearchTerms::All(words("foo-bar")),
         "foo bar foo baz",
         "[foo] [bar] foo baz"
     )]
     #[case::every_term(
-        SearchTerms::All,
-        "build failed",
+        SearchTerms::All(words("build failed")),
         "the build failed",
         "the [build] [failed]"
     )]
-    #[case::stray_markers_are_stripped(SearchTerms::All, "x", "a\u{E000}b x", "ab [x]")]
+    #[case::stray_markers_are_stripped(SearchTerms::All(words("x")), "a\u{E000}b x", "ab [x]")]
     #[case::typed_prefix_marks_the_whole_token(
-        SearchTerms::Typed,
-        "refac",
+        SearchTerms::Typed("refac".into()),
         "Refactoring it",
         "[Refactoring] it"
     )]
     #[case::typed_only_the_last_term_a_prefix(
-        SearchTerms::Typed,
-        "build fail",
+        SearchTerms::Typed("build fail".into()),
         "the build failed",
         "the [build] [failed]"
     )]
-    #[case::typed_finished_term_is_whole(SearchTerms::Typed, "app ", "apple app", "apple [app]")]
+    #[case::typed_finished_term_is_whole(SearchTerms::Typed("app ".into()), "apple app", "apple [app]")]
     #[case::any_prefix_marks_the_whole_token(
-        SearchTerms::Any,
-        "refac",
+        SearchTerms::Any(words("refac")),
         "Refactoring it",
         "[Refactoring] it"
     )]
-    #[case::any_term(SearchTerms::Any, "build nothing", "the build failed", "the [build] failed")]
+    #[case::any_term(
+        SearchTerms::Any(words("build nothing")),
+        "the build failed",
+        "the [build] failed"
+    )]
     #[case::any_every_term_a_prefix(
-        SearchTerms::Any,
-        "build fail",
+        SearchTerms::Any(words("build fail")),
         "the builder failed",
         "the [builder] [failed]"
     )]
     #[case::any_phrase_last_token_a_prefix(
-        SearchTerms::Any,
-        "foo-ba",
+        SearchTerms::Any(words("foo-ba")),
         "foo bar fob",
         "[foo] [bar] fob"
     )]
+    #[case::words_of_a_term_are_a_phrase(
+        SearchTerms::All(vec!["build failed".into()]),
+        "failed to build, the build failed",
+        "failed to build, the [build] [failed]"
+    )]
     fn highlights_mark_what_the_index_matched(
-        #[case] mode: SearchTerms,
-        #[case] query: &str,
+        #[case] terms: SearchTerms,
         #[case] text: &str,
         #[case] expected: &str,
     ) {
-        let highlighted =
-            QueryTerms::parse(query, mode).highlight(TextHighlighter::default(), text);
+        let highlighted = QueryTerms::parse(&terms).highlight(TextHighlighter::default(), text);
         assert_eq!(marked(&highlighted), expected);
     }
 
     /// A search's title and snippet carry the spans of what the query matched, which the gRPC
-    /// API and `atuin ai session search --format json` pass on.
+    /// API and `atuin threads search --format json` pass on.
     #[rstest]
     #[case::all(
-        SearchTerms::All,
-        "parser",
+        SearchTerms::All(words("parser")),
         "[Parser] refactor",
         (0, 6),
         "we refactored the [parser]",
         "parser"
     )]
     #[case::any(
-        SearchTerms::Any,
-        "refac nothing",
+        SearchTerms::Any(words("refac nothing")),
         "Parser [refactor]",
         (7, 15),
         "we [refactored] the parser",
         "refactored"
     )]
     #[case::typed(
-        SearchTerms::Typed,
-        "refac",
+        SearchTerms::Typed("refac".into()),
         "Parser [refactor]",
         (7, 15),
         "we [refactored] the parser",
@@ -3400,8 +3513,7 @@ mod tests {
     )]
     #[tokio::test]
     async fn search_highlights_the_title_and_snippet(
-        #[case] mode: SearchTerms,
-        #[case] query: &str,
+        #[case] terms: SearchTerms,
         #[case] title: &str,
         #[case] title_span: (usize, usize),
         #[case] snippet: &str,
@@ -3414,7 +3526,7 @@ mod tests {
         db.append(&m).await.unwrap();
 
         let hits: Vec<SessionMatch> =
-            db.search(query, mode, &SessionFilter::default(), 0).try_collect().await.unwrap();
+            db.search(terms, &SessionFilter::default(), 0).try_collect().await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(marked(&hits[0].title), title);
         assert_eq!(spans(&hits[0].title), [title_span]);
@@ -4271,7 +4383,7 @@ mod tests {
                 exclude_subagents,
                 ..SessionFilter::default()
             };
-            db.search("shared", SearchTerms::All, &filter, 0).try_collect::<Vec<_>>()
+            db.search(SearchTerms::All(words("shared")), &filter, 0).try_collect::<Vec<_>>()
         };
 
         let all = found(false).await.unwrap();
@@ -4370,7 +4482,7 @@ mod tests {
 
         // With any term, the root's title holds one, so it is highlighted too.
         let hits: Vec<SessionMatch> = db
-            .search("needle haystack", SearchTerms::Any, &roots_only(), 0)
+            .search(SearchTerms::Any(words("needle haystack")), &roots_only(), 0)
             .try_collect()
             .await
             .unwrap();
@@ -4383,20 +4495,25 @@ mod tests {
     /// Whether a title alone matches the query as the index would: every term, or any with
     /// [`SearchTerms::Any`], each as a prefix, or the last as a prefix while typing.
     #[rstest]
-    #[case::every_term("needle haystack", SearchTerms::All, "a haystack needle", true)]
-    #[case::one_term_short("needle haystack", SearchTerms::All, "haystack plans", false)]
-    #[case::whole_word("needle hay", SearchTerms::All, "needle haystack", false)]
-    #[case::any_term("needle haystack", SearchTerms::Any, "haystack plans", true)]
-    #[case::any_prefix("nee hay", SearchTerms::Any, "haystack plans", true)]
-    #[case::typed_prefix("needle hay", SearchTerms::Typed, "needle haystack", true)]
-    #[case::no_term("needle haystack", SearchTerms::Any, "other plans", false)]
+    #[case::every_term(SearchTerms::All(words("needle haystack")), "a haystack needle", true)]
+    #[case::one_term_short(SearchTerms::All(words("needle haystack")), "haystack plans", false)]
+    #[case::whole_word(SearchTerms::All(words("needle hay")), "needle haystack", false)]
+    #[case::any_term(SearchTerms::Any(words("needle haystack")), "haystack plans", true)]
+    #[case::any_prefix(SearchTerms::Any(words("nee hay")), "haystack plans", true)]
+    #[case::typed_prefix(SearchTerms::Typed("needle hay".into()), "needle haystack", true)]
+    #[case::no_term(SearchTerms::Any(words("needle haystack")), "other plans", false)]
+    #[case::phrase(SearchTerms::All(vec!["haystack needle".into()]), "a haystack needle", true)]
+    #[case::phrase_in_order(
+        SearchTerms::All(vec!["needle haystack".into()]),
+        "a haystack needle",
+        false
+    )]
     fn a_title_matches_the_query_alone(
-        #[case] query: &str,
-        #[case] mode: SearchTerms,
+        #[case] terms: SearchTerms,
         #[case] title: &str,
         #[case] expected: bool,
     ) {
-        assert_eq!(QueryTerms::parse(query, mode).matched_by(title), expected);
+        assert_eq!(QueryTerms::parse(&terms).matched_by(title), expected);
     }
 
     // --- filters --------------------------------------------------------------------------------
@@ -4505,8 +4622,11 @@ mod tests {
             assert_eq!(sorted(listed), expected, "listing");
         }
         for query in ["shared", ""] {
-            let hits: Vec<SessionMatch> =
-                db.search(query, SearchTerms::Typed, &filter, limit).try_collect().await.unwrap();
+            let hits: Vec<SessionMatch> = db
+                .search(SearchTerms::Typed(query.to_owned()), &filter, limit)
+                .try_collect()
+                .await
+                .unwrap();
             let hits = hits.iter().map(|m| m.session.handle.session.to_string()).collect();
             assert_eq!(sorted(hits), expected, "search {query:?}");
         }
@@ -4780,6 +4900,32 @@ mod tests {
         .execute(db.db.pool())
         .await
         .unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_conversation_leaves_out_a_message_it_cant_decode_and_keeps_the_rest_in_place() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        let messages = [
+            message_with(&s, 0, Role::User, vec![text("first prompt")]),
+            message_with(&s, 1, Role::Assistant, vec![text("a reply")]),
+            message_with(&s, 2, Role::User, vec![text("second prompt")]),
+        ];
+        for m in &messages {
+            db.append(m).await.unwrap();
+        }
+        corrupt(&db, &s, 1).await;
+        let conversation = db.conversation(&s).await.unwrap();
+        let read: Vec<(u64, Role)> =
+            conversation.messages.iter().map(|(i, r, _)| (*i, r.clone())).collect();
+        // The broken reply is left out; the prompt after it keeps its place, as the search counts.
+        assert_eq!(read, [(0, Role::User), (2, Role::User)]);
+        assert_eq!(conversation.messages[1].2, vec![text("second prompt")]);
+        // Counted as the session counts its messages: the broken one had something in it.
+        assert_eq!(conversation.message_count, 3);
+        let session = db.get_session(&s).await.unwrap().unwrap();
+        assert_eq!(conversation.message_count, session.message_count);
     }
 
     #[rstest]
@@ -5190,7 +5336,7 @@ mod tests {
         let read = messages[0].timestamp;
         assert!((Message::EARLIEST..=Message::LATEST).contains(&read), "{read}");
         let found: Vec<_> = db
-            .search("odd", SearchTerms::All, &SessionFilter::default(), 0)
+            .search(SearchTerms::All(words("odd")), &SessionFilter::default(), 0)
             .try_collect()
             .await
             .unwrap();

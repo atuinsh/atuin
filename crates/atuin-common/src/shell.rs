@@ -6,6 +6,8 @@ use std::process::ExitStatus;
 use sysinfo::{Process, System, get_current_pid};
 use thiserror::Error;
 
+use crate::path::PathBufExt as _;
+
 #[derive(PartialEq, Eq, derive_more::Debug, derive_more::Display)]
 pub enum Shell {
     #[display("sh")]
@@ -74,18 +76,16 @@ impl Shell {
 
     #[must_use]
     pub fn config_file(&self) -> Option<PathBuf> {
-        let mut path = dirs::home_dir()?;
-
         // TODO: handle all shells
-        match self {
-            Self::Bash => path.push(".bashrc"),
-            Self::Zsh => path.push(".zshrc"),
-            Self::Fish => path.push(".config/fish/config.fish"),
+        let file = match self {
+            Self::Bash => ".bashrc",
+            Self::Zsh => ".zshrc",
+            Self::Fish => ".config/fish/config.fish",
 
             _ => return None,
         };
 
-        Some(path)
+        Some(dirs::home_dir()?.joined(file))
     }
 
     /// Best-effort attempt to determine the default shell.
@@ -101,7 +101,7 @@ impl Shell {
         #[cfg(unix)]
         if cfg!(target_os = "macos") {
             let user = crate::env::var_os("USER").ok_or(ShellLookupError::MissingEnv("USER"))?;
-            let path = PathBuf::from("/Local/Default/Users").join(user);
+            let path = PathBuf::from("/Local/Default/Users").joined(user);
             return shell_from_command(
                 "dscl".as_ref(),
                 &["localhost".as_ref(), "-read".as_ref(), path.as_ref(), "shell".as_ref()],

@@ -118,10 +118,10 @@ If you don't wish to use the installer, the manual installation steps are as fol
     Atuin is installable from github-releases directly:
 
     ```shell
-    # line 1: `atuin` binary as command, from github release, only look at .tar.gz files, use the `atuin` file from the extracted archive
+    # line 1: `atuin` binary as command, from github release, only look at .tar.gz files (excluding server), use the `atuin` file from the extracted archive
     # line 2: setup at clone(create init.zsh, completion)
     # line 3: pull behavior same as clone, source init.zsh
-    zinit ice as"command" from"gh-r" bpick"atuin-*.tar.gz" mv"atuin*/atuin -> atuin" \
+    zinit ice as"command" from"gh-r" bpick"atuin-*.tar.gz~*server*" mv"atuin*/atuin -> atuin" \
         atclone"./atuin init zsh > init.zsh; ./atuin gen-completions --shell zsh > _atuin" \
         atpull"%atclone" src"init.zsh"
     zinit light atuinsh/atuin
@@ -306,6 +306,12 @@ After installing, remember to restart your shell.
 ## Upgrade
 
 Run `atuin update`, and if that command isn't available, run the install script again.
+
+If GitHub's API rate limit prevents the update, set `ATUIN_GITHUB_TOKEN` to a GitHub token. For example, if you use the GitHub CLI:
+
+```shell
+ATUIN_GITHUB_TOKEN="$(gh auth token)" atuin update
+```
 
 If you used a package manager to install Atuin, then you should also use your package manager to update Atuin.
 

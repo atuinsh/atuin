@@ -15,7 +15,7 @@
 //!   result as an ordinary tool call and result, losing the block types the API needs to replay
 //!   them, and a bare `tool_use` with no `tool_result` after it is invalid. Both are dropped
 //!   (one captured without its input becomes a note, as below).
-//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it): the API rejects a `tool_use` whose `input` is not an object, so each becomes a note in its turn's
 //!   text (`[ran a shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its `tool_result` is dropped.
 //!   The run of assistant lines the dropped results stood between is merged into its last line,
@@ -59,6 +59,7 @@ use crate::harnesstools::resume;
 use crate::harnesstools::session::{
     Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
 };
+use crate::path::PathBufExt as _;
 
 /// The longest project directory name Claude Code writes before shortening it with a hash
 /// (`Kne` in CC 2.1.283).
@@ -90,7 +91,7 @@ pub(crate) fn rehydrate_into(
     }
     let dir = root.join(project_dir_name(&session.cwd));
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.jsonl", session.id));
+    let path = dir.joined(format!("{}.jsonl", session.id));
     crate::fs::write_new(&path, transcript(session).as_bytes()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::AlreadyExists {
             RehydrateError::AlreadyExists(path.clone())

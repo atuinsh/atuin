@@ -19,7 +19,7 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::caps::CapClient;
 use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
 use crate::components::SearchComponent;
 use crate::events::DaemonEvent;
@@ -37,7 +37,7 @@ pub struct DaemonState {
     event_tx: broadcast::Sender<DaemonEvent>,
 
     // Configuration (mutable - can be reloaded)
-    settings: RwLock<Settings>,
+    settings: RwLock<Arc<Settings>>,
 
     // Encryption key (immutable - derived at startup)
     encryption_key: paseto_v4::Key,
@@ -116,9 +116,9 @@ impl DaemonHandle {
 
     /// Get the current settings.
     ///
-    /// This acquires a read lock on the settings. For most use cases, clone
-    /// the settings if you need to hold onto them.
-    pub async fn settings(&self) -> tokio::sync::RwLockReadGuard<'_, Settings> {
+    /// This acquires a read lock on the settings. Clone the `Arc` if you
+    /// need to hold onto them.
+    pub async fn settings(&self) -> RwLockReadGuard<'_, Arc<Settings>> {
         self.state.settings.read().await
     }
 
@@ -126,7 +126,7 @@ impl DaemonHandle {
     ///
     /// Components listening for `SettingsReloaded` can then re-read settings via
     /// `handle.settings()` to pick up the changes.
-    pub async fn apply_settings(&self, settings: Settings) {
+    pub async fn apply_settings(&self, settings: Arc<Settings>) {
         *self.state.settings.write().await = settings;
         self.emit(DaemonEvent::SettingsReloaded);
         tracing::info!("settings applied");
@@ -281,7 +281,7 @@ pub struct Daemon {
 impl Daemon {
     /// Create a new daemon builder.
     #[must_use]
-    pub fn builder(settings: Settings) -> DaemonBuilder {
+    pub fn builder(settings: Arc<Settings>) -> DaemonBuilder {
         DaemonBuilder::new(settings)
     }
 
@@ -397,7 +397,7 @@ impl Daemon {
 /// daemon.run().await?;
 /// ```
 pub struct DaemonBuilder {
-    settings: Settings,
+    settings: Arc<Settings>,
     store: Option<SqliteStore>,
     history_db: Option<HistoryDatabase>,
     components: Vec<AnyComponent>,
@@ -406,7 +406,7 @@ pub struct DaemonBuilder {
 impl DaemonBuilder {
     /// Create a new daemon builder with the given settings.
     #[must_use]
-    pub fn new(settings: Settings) -> Self {
+    pub fn new(settings: Arc<Settings>) -> Self {
         Self {
             settings,
             store: None,

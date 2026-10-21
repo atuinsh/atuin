@@ -177,7 +177,7 @@ impl Worker {
     }
 
     /// Run one [`Self::sync_once`], log any failure, and translate it into a retry decision.
-    async fn sync_tick(&self, settings: &Settings) -> ControlFlow<()> {
+    async fn sync_tick(&self, settings: &Arc<Settings>) -> ControlFlow<()> {
         match self.sync_once(settings).await {
             Ok(()) => ControlFlow::Break(()),
             Err(err) => {
@@ -189,11 +189,18 @@ impl Worker {
 
     /// Attempt a single sync.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn sync_once(&self, settings: &Settings) -> Result<(), SyncTickError> {
+    async fn sync_once(&self, settings: &Arc<Settings>) -> Result<(), SyncTickError> {
         let logged_in = settings.logged_in().await.map_err(SyncTickError::LoginCheck)?;
 
         if !logged_in {
             return Err(SyncTickError::NotLoggedIn);
+        }
+
+        let caps = self.handle.caps();
+        if !caps.is_fetched()
+            && let Err(e) = caps.refresh().await
+        {
+            tracing::warn!("failed to fetch the server's capabilities: {e}");
         }
 
         // Perform the sync

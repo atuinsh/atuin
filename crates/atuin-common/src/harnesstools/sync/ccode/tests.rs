@@ -147,6 +147,7 @@ fn row(id: &str, parent: &str, role: Role, at: i64) -> RehydrateMessage {
         role,
         content,
         model: Some("claude-x".to_owned()),
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,

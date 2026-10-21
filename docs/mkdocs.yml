@@ -79,6 +79,7 @@ plugins:
         - github-actions[bot]
   - redirects:
       redirect_maps:
+        "ai/sessions.md": "ai/threads.md"
         "cli/ai/command-output.md": "ai/command-output.md"
         "cli/ai/introduction.md": "ai/introduction.md"
         "cli/ai/mcp.md": "ai/mcp.md"
@@ -145,7 +146,7 @@ plugins:
           - guide/advanced-usage.md: Filter modes (global, host, session, directory, workspace) and search modes (prefix, fulltext, fuzzy, daemon-fuzzy).
           - guide/shell-integration.md: How shell hooks work, environment variables, and embedded terminals.
           - guide/agent-hooks.md: Capture commands from AI coding agents (Claude Code, Codex, opencode, pi) and filter by author.
-          - guide/excluding-commands.md: Keep commands, their output, credential files and your own secrets out of history, captured output and AI sessions, by goal - ignorespace, history_filter, cwd_filter, command_filter, sensitive_files, redact_patterns, capture_tools.
+          - guide/excluding-commands.md: Keep commands, their output, credential files and your own secrets out of history, captured output and threads, by goal - ignorespace, history_filter, cwd_filter, command_filter, sensitive_files, redact_patterns, capture_tools.
           - guide/output-capture.md: Capture what each command printed - setup, reading and searching it, what's kept, privacy, and disk retention.
           - guide/delete-history.md: Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
           - guide/theming.md: Customize the TUI with color themes.
@@ -185,7 +186,7 @@ plugins:
           - ai/skills.md: Reusable instruction sets (skills) for Atuin AI - playbooks, conventions, workflows.
           - ai/tools-permissions.md: Tools the AI can use (shell, filesystem) and permission files to control access.
           - ai/command-output.md: Let Atuin AI read command outputs - capture via pty-proxy and the daemon.
-          - ai/sessions.md: Search and resume the AI coding-agent sessions the daemon captures, and rebuild their index.
+          - ai/threads.md: Threads - search and resume the AI coding-agent sessions the daemon captures, and rebuild their index.
           - ai/mcp.md: Built-in MCP server exposing history search and command output to Claude Code, Cursor, and other AI tools.
           - ai/self-hosting.md: Self-hosting the Atuin AI backend.
         Misc:

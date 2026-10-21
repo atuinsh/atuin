@@ -120,6 +120,7 @@ async fn load_permissions_file(file_path: &Path) -> Result<Option<RuleFile>> {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::path::PathBufExt as _;
     use rstest::rstest;
 
     use super::*;
@@ -136,8 +137,8 @@ mod tests {
         #[case] expected: usize,
     ) {
         let home = tempfile::tempdir().unwrap();
-        let dotfile = home.path().join(".atuin").join("permissions.ai.toml");
-        let elsewhere = home.path().join("elsewhere").join("permissions.ai.toml");
+        let dotfile = home.path().join(".atuin").joined("permissions.ai.toml");
+        let elsewhere = home.path().join("elsewhere").joined("permissions.ai.toml");
         for file in [&dotfile, &elsewhere] {
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
             std::fs::write(file, "[permissions]\nallow = []\n").unwrap();

@@ -7,6 +7,7 @@
 
 #[cfg(unix)]
 mod unix {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use atuin_client::database::{Context, Sqlite};
@@ -90,7 +91,7 @@ mod unix {
         // nop.
         let search_service = search_component.grpc_service(OutputCaptureEngine::nop().store());
 
-        let mut daemon = Daemon::builder(settings)
+        let mut daemon = Daemon::builder(Arc::new(settings))
             .store(store)
             .history_db(history_db)
             .component(search_component)

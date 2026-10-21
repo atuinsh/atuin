@@ -2,28 +2,25 @@
 use std::borrow::Cow;
 use std::num::NonZeroU32;
 #[cfg(unix)]
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
+#[cfg(unix)]
+use atuin_client::settings::Daemon as DaemonSettings;
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
 use easy_cast::Conv;
-use eyre::{Context as EyreContext, Result};
+use eyre::Result;
 use futures::{Stream, StreamExt};
-use hyper_util::rt::TokioIo;
 use itertools::Itertools;
 use time::OffsetDateTime;
-#[cfg(windows)]
-use tokio::net::TcpStream;
-#[cfg(unix)]
-use tokio::net::UnixStream;
 use tonic::Code;
-use tonic::transport::{Channel, Endpoint, Uri};
-use tower::service_fn;
-use tracing::{Level, instrument, span};
+use tonic::service::interceptor::InterceptedService;
+use tonic::transport::Channel;
+use tracing::{Level, instrument, span, warn};
 
 use crate::grpc::ai::agent::pb::Session as AiSession;
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
@@ -41,149 +38,49 @@ use crate::grpc::history::pb::{
     StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
     TailHistoryRequest,
 };
+use crate::grpc::versioning::{StrictVersionInterceptor, VersionMatchError, VersionedExt as _};
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
     FilterMode as RpcFilterMode, PrepareIndexRequest, SearchCommandOutputRequest,
     SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
-
-#[cfg(unix)]
-#[derive(Debug, thiserror::Error)]
-pub enum SocketPathError {
-    /// The socket is in use by another program.
-    ///
-    /// This error can be returned when `ATUIN_HOME` is set. Atuin started storing the socket path
-    /// in the pidfile before `ATUIN_HOME` was introduced, so if there's no socket path in the
-    /// pidfile but the socket already exists, it's an indication that the socket is in use by
-    /// another program (potentially another Atuin daemon running with a different value of
-    /// `ATUIN_HOME`).
-    #[error("{}", Self::display_in_use(.path, *.user_defined))]
-    InUse {
-        /// The path to the socket.
-        path: PathBuf,
-        /// Whether the path came from `daemon.socket_path` in config.toml.
-        user_defined: bool,
-    },
-}
-
-#[cfg(unix)]
-impl SocketPathError {
-    /// Helper for displaying [`Self::InUse`].
-    fn display_in_use(path: &Path, user_defined: bool) -> impl std::fmt::Display + use<'_> {
-        std::fmt::from_fn(move |f| {
-            writeln!(f, "daemon socket '{}' is in use by another program", path.display())?;
-            let config_path = atuin_common::dirs::config_path("config.toml");
-            if user_defined {
-                write!(
-                    f,
-                    "please ensure `daemon.socket_path` has a unique value in {}",
-                    config_path.display(),
-                )
-            } else {
-                write!(
-                    f,
-                    "please set an explicit `daemon.socket_path` in {}",
-                    config_path.display()
-                )
-            }
-        })
-    }
-}
-
-/// The path to the daemon's socket.
-///
-/// If the daemon is running and has recorded its socket path in the pidfile, this function returns
-/// that. Otherwise:
-///
-/// * If `ATUIN_HOME` is unset (the default), [`settings.daemon.existing_socket_path()`][0] is
-///   returned, which will check for existing sockets in legacy locations.
-///
-/// * If `ATUIN_HOME` is set, [`settings.daemon.preferred_socket_path()`][1] is returned, which does
-///   not check for legacy sockets, as Atuin stopped using them before `ATUIN_HOME` was introduced.
-///   In addition, an error is returned if that socket already exists: Atuin started storing the
-///   socket path in the pidfile before `ATUIN_HOME`, so if an existing socket isn't in our pidfile,
-///   it almost certainly isn't ours. This behavior is intended to reduce the chance of the client
-///   connecting to the wrong daemon.
-///
-/// As an exception, if [`systemd_socket`][2] is true, the pidfile isn't consulted, as the socket
-/// path comes from systemd directly through a file descriptor.
-///
-/// [0]: atuin_client::settings::Daemon::existing_socket_path
-/// [1]: atuin_client::settings::Daemon::preferred_socket_path
-/// [2]: atuin_client::settings::Daemon::systemd_socket
-#[cfg(unix)]
-pub fn socket_path(settings: &Settings) -> Result<PathBuf, SocketPathError> {
-    use crate::pidfile::{self, PidfileInfo};
-
-    let existing_socket_path = || settings.daemon.existing_socket_path().into_owned();
-    if settings.daemon.systemd_socket {
-        return Ok(existing_socket_path());
-    }
-
-    let pidfile_path: &Path = settings.daemon.pidfile_path.as_ref();
-    let socket_path = PidfileInfo::read(pidfile_path).and_then(|info| info.socket_path);
-
-    if !atuin_common::dirs::atuin_home_is_set() {
-        return Ok(socket_path.unwrap_or_else(existing_socket_path));
-    }
-
-    // If `ATUIN_HOME` is set, require the pidfile to be live to avoid connecting to the wrong
-    // daemon. This should potentially be done even when `ATUIN_HOME` isn't set, but that would be a
-    // larger and possibly riskier change. For now, scope the check to when `ATUIN_HOME` is set,
-    // which is when we would most expect there to be multiple daemons running on the user's system.
-    if let Some(path) = socket_path.filter(|_| pidfile::is_live(pidfile_path)) {
-        return Ok(path);
-    }
-
-    // If there's no socket path in the pidfile (or the pidfile was missing/stale) and `ATUIN_HOME`
-    // is set, don't look for or connect to existing sockets. Atuin switched to storing the socket
-    // path in the pidfile before `ATUIN_HOME` was introduced, so an existing socket is almost
-    // certainly that of another program, potentially another daemon running with a different value
-    // of `ATUIN_HOME`, which is conceptually a separate profile that we should not connect to.
-    let path = settings.daemon.preferred_socket_path().into_owned();
-
-    // Avoid connecting to an existing, in-use socket. We match on `Ok(true)` rather than
-    // `Ok(true) | Err(_)` because an error doesn't necessarily mean the socket is in use (e.g.,
-    // `EACCES`), and many such errors will be encountered again later in the pipeline and handled
-    // better there.
-    if path.exists() && matches!(atuin_common::os::unix::socket_in_use(&path), Ok(true)) {
-        return Err(SocketPathError::InUse {
-            path,
-            user_defined: settings.daemon.socket_path.is_some(),
-        });
-    }
-    Ok(path)
-}
+use crate::service::address::{ConnectError, DaemonAddress};
+use crate::service::{ActiveService, FindError};
 
 /// The paths that should be checked when looking for existing daemon sockets.
 ///
-/// For the same reasons explained in [`socket_path`], when `ATUIN_HOME` is set, this function will
+/// For the same reasons explained in [`Pidfile::socket_path`][1], when `ATUIN_HOME` is set, this function will
 /// only yield the [preferred socket path][0] instead of also including the legacy paths.
 ///
 /// [0]: atuin_client::settings::Daemon::preferred_socket_path
+/// [1]: crate::service::pidfile::Pidfile::socket_path
 #[cfg(unix)]
 pub fn potential_socket_paths(
-    settings: &Settings,
+    daemon: &DaemonSettings,
 ) -> impl Iterator<Item = Cow<'_, Path>> + use<'_> {
     if atuin_common::dirs::atuin_home_is_set() {
-        itertools::Either::Left(std::iter::once(settings.daemon.preferred_socket_path()))
+        itertools::Either::Left(std::iter::once(daemon.preferred_socket_path()))
     } else {
-        itertools::Either::Right(settings.daemon.potential_socket_paths())
+        itertools::Either::Right(daemon.potential_socket_paths())
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum FromSettingsError {
-    #[cfg(unix)]
     #[error(transparent)]
-    SocketPath(#[from] SocketPathError),
+    Find(#[from] FindError),
     #[error(transparent)]
-    CreateClient(#[from] eyre::Report),
+    Connect(#[from] ConnectError),
 }
 
+/// A connection to the daemon that stamps every request with this client's
+/// [`BUILD_STR`](crate::grpc::versioning::BUILD_STR).
+type DaemonChannel = InterceptedService<Channel, StrictVersionInterceptor>;
+
+#[derive(Clone)]
 pub struct HistoryClient {
-    client: HistoryServiceClient<Channel>,
+    client: HistoryServiceClient<DaemonChannel>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -191,6 +88,8 @@ pub enum DaemonClientErrorKind {
     Connect,
     Unavailable,
     Unimplemented,
+    /// The daemon is another build and refused the call.
+    BuildMismatch,
     OtherGrpc,
     NonGrpc,
 }
@@ -203,6 +102,17 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
         }
 
         if let Some(status) = cause.downcast_ref::<tonic::Status>() {
+            // A status with no build isn't a refusal: tonic makes one up when a call never reaches
+            // the daemon, and a daemon from before builds were exchanged sends none.
+            if let Err(
+                mismatch @ (VersionMatchError::Mismatched { .. }
+                | VersionMatchError::Malformed { .. }),
+            ) = status.check_version()
+            {
+                warn!(err = ?mismatch, "daemon version mismatch");
+                return DaemonClientErrorKind::BuildMismatch;
+            }
+
             return match status.code() {
                 Code::Unavailable => DaemonClientErrorKind::Unavailable,
                 Code::Unimplemented => DaemonClientErrorKind::Unimplemented,
@@ -214,63 +124,22 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
     DaemonClientErrorKind::NonGrpc
 }
 
+impl From<Channel> for HistoryClient {
+    fn from(channel: Channel) -> Self {
+        Self {
+            client: HistoryServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+        }
+    }
+}
+
 // Wrap the grpc client
 impl HistoryClient {
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        use eyre::Context;
-
-        let log_path = path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")?
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
-
-        let client = HistoryServiceClient::new(channel);
-
-        Ok(Self { client })
-    }
-
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        let client = HistoryServiceClient::new(channel);
-
-        Ok(HistoryClient { client })
+    pub async fn new(address: impl Into<DaemonAddress>) -> Result<Self, ConnectError> {
+        Ok(Self::from(address.into().channel().await?))
     }
 
     pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
-        #[cfg(unix)]
-        let address = socket_path(settings)?;
-        #[cfg(not(unix))]
-        let address = settings.daemon.tcp_port;
-        Self::new(address).await.map_err(Into::into)
+        Ok(Self::new(ActiveService::locate(&settings.daemon)?).await?)
     }
 
     pub async fn start_history(&mut self, h: History) -> Result<StartHistoryReply> {
@@ -348,15 +217,32 @@ impl HistoryClient {
         Ok(self.client.compact_store(CompactStoreRequest {}).await?.into_inner())
     }
 
-    pub async fn status(&mut self) -> Result<StatusReply> {
+    pub async fn status(&mut self) -> Result<StatusReply, tonic::Status> {
         Ok(self.client.status(StatusRequest {}).await?.into_inner())
+    }
+
+    /// Checks the daemon's build against ours. `Err` means the daemon couldn't be asked.
+    ///
+    /// A daemon of another build refuses `Status`, stamping the refusal with its build. One from
+    /// before builds were exchanged answers, unstamped.
+    pub async fn check_daemon_version(
+        &mut self,
+    ) -> Result<Result<(), VersionMatchError>, tonic::Status> {
+        match self.client.status(StatusRequest {}).await {
+            Ok(response) => Ok(response.check_version()),
+            Err(status) => match status.check_version() {
+                // Not a refusal: the daemon is our build and failed, or the call never reached it.
+                Ok(()) | Err(VersionMatchError::Unannounced) => Err(status),
+                mismatch => Ok(mismatch),
+            },
+        }
     }
 
     pub async fn tail_history(&mut self) -> Result<tonic::Streaming<TailHistoryReply>> {
         Ok(self.client.tail_history(TailHistoryRequest {}).await?.into_inner())
     }
 
-    pub async fn shutdown(&mut self) -> Result<bool> {
+    pub async fn shutdown(&mut self) -> Result<bool, tonic::Status> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
     }
@@ -433,63 +319,24 @@ impl From<SearchParams> for SearchRequest {
 }
 
 pub struct SearchClient {
-    client: SearchServiceClient<Channel>,
+    client: SearchServiceClient<DaemonChannel>,
+}
+
+impl From<Channel> for SearchClient {
+    fn from(channel: Channel) -> Self {
+        Self {
+            client: SearchServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+        }
+    }
 }
 
 impl SearchClient {
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        let log_path = path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")?
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
-
-        let client = SearchServiceClient::new(channel);
-
-        Ok(Self { client })
-    }
-
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        let client = SearchServiceClient::new(channel);
-
-        Ok(SearchClient { client })
+    pub async fn new(address: impl Into<DaemonAddress>) -> Result<Self, ConnectError> {
+        Ok(Self::from(address.into().channel().await?))
     }
 
     pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
-        #[cfg(unix)]
-        let address = socket_path(settings)?;
-        #[cfg(not(unix))]
-        let address = settings.daemon.tcp_port;
-        Self::new(address).await.map_err(Into::into)
+        Ok(Self::new(ActiveService::locate(&settings.daemon)?).await?)
     }
 
     #[instrument(
@@ -516,16 +363,17 @@ impl SearchClient {
         level = Level::TRACE,
         name = "search_command_output",
     )]
-    /// Relevance-ranked hits, each reduced to the lines within `context` of a match, or whole
-    /// when `context` is `None`.
+    /// Relevance-ranked hits for output holding every one of `terms` (a term of several words
+    /// as a phrase), each reduced to the lines within `context` of a match, or whole when
+    /// `context` is `None`.
     pub async fn search_command_output(
         &mut self,
-        query: String,
+        terms: Vec<String>,
         limit: Option<NonZeroU32>,
         context: Option<u32>,
     ) -> Result<impl Stream<Item = Result<OutputMatch>> + Send + use<>> {
         let request = SearchCommandOutputRequest {
-            query,
+            terms,
             limit: limit.map_or(0, NonZeroU32::get),
             context,
         };
@@ -580,70 +428,26 @@ const REBUILD_POLL_MAX: std::time::Duration = std::time::Duration::from_secs(5);
 /// way [`HistoryClient`] and [`SearchClient`] do, returning the raw protobuf messages so callers can
 /// render them however they like.
 pub struct AiClient {
-    client: AiSessionServiceClient<Channel>,
+    client: AiSessionServiceClient<DaemonChannel>,
 }
 
 impl AiClient {
     /// The stub over `channel`, taking messages of any size: a message the daemon streams holds
     /// one captured message, as big as the prompt or reply in it, past tonic's default 4 MiB.
     /// The daemon is local and trusted (the server encodes any size by default).
-    fn service(channel: Channel) -> AiSessionServiceClient<Channel> {
-        AiSessionServiceClient::new(channel).max_decoding_message_size(usize::MAX)
+    fn service(channel: Channel) -> AiSessionServiceClient<DaemonChannel> {
+        AiSessionServiceClient::with_interceptor(channel, StrictVersionInterceptor)
+            .max_decoding_message_size(usize::MAX)
     }
 
-    #[cfg(unix)]
-    pub async fn new(path: PathBuf) -> Result<Self> {
-        let log_path = path.clone();
-        let channel =
-            Endpoint::try_from("http://atuin_local_daemon:0")?
-                .connect_with_connector(service_fn(move |_: Uri| {
-                    let path = path.clone();
-
-                    async move {
-                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
-                    }
-                }))
-                .await
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to connect to local atuin daemon at {}. Is it running?",
-                        log_path.display()
-                    )
-                })?;
-
+    pub async fn new(address: impl Into<DaemonAddress>) -> Result<Self, ConnectError> {
         Ok(Self {
-            client: Self::service(channel),
-        })
-    }
-
-    #[cfg(not(unix))]
-    pub async fn new(port: u64) -> Result<Self> {
-        let channel = Endpoint::try_from("http://atuin_local_daemon:0")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let url = format!("127.0.0.1:{port}");
-
-                async move {
-                    Ok::<_, std::io::Error>(TokioIo::new(TcpStream::connect(url.clone()).await?))
-                }
-            }))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to connect to local atuin daemon at 127.0.0.1:{port}. Is it running?"
-                )
-            })?;
-
-        Ok(Self {
-            client: Self::service(channel),
+            client: Self::service(address.into().channel().await?),
         })
     }
 
     pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
-        #[cfg(unix)]
-        let address = socket_path(settings)?;
-        #[cfg(not(unix))]
-        let address = settings.daemon.tcp_port;
-        Self::new(address).await.map_err(Into::into)
+        Ok(Self::new(ActiveService::locate(&settings.daemon)?).await?)
     }
 
     /// Wait while the daemon is still rebuilding AI sessions after starting: until then every
@@ -721,23 +525,29 @@ impl AiClient {
         Ok(self.client.tail_sessions(request).await?.into_inner())
     }
 
-    /// Stream the sessions matching `query` (its terms matching as `terms` says) and passing
-    /// `filter`, most relevant first, at most `limit` (0 is unbounded). An empty query streams
-    /// them newest first.
+    /// Stream the sessions matching `terms` and passing `filter`, most relevant first, at most
+    /// `limit` (0 is unbounded). No terms stream them newest first.
     ///
-    /// The daemon matches every term as a whole word, or with [`SearchTerms::Any`] any term as a
-    /// prefix; [`SearchTerms::Typed`] (search as you type) is searched as [`SearchTerms::All`].
+    /// The daemon matches every term as whole words, or with [`SearchTerms::Any`] any term as a
+    /// prefix; a [`SearchTerms::Typed`] line (search as you type) is searched as
+    /// [`SearchTerms::All`] over its words.
     pub async fn search_sessions(
         &mut self,
-        query: &str,
         terms: SearchTerms,
         filter: &SessionFilter,
         limit: u32,
     ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
+        let (terms, any_term) = match terms {
+            SearchTerms::All(terms) => (terms, false),
+            SearchTerms::Typed(line) => {
+                (line.split_whitespace().map(str::to_owned).collect(), false)
+            }
+            SearchTerms::Any(terms) => (terms, true),
+        };
         let request = SearchSessionsRequest {
-            query: query.to_owned(),
+            terms,
             limit,
-            any_term: terms == SearchTerms::Any,
+            any_term,
             filter: Some(filter.into()),
         };
         Ok(self.client.search_sessions(request).await?.into_inner())
@@ -772,201 +582,28 @@ impl AiClient {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::path::Path;
-
-    use atuin_common::env::MockEnv;
     use rstest::rstest;
 
     use super::*;
-    use crate::pidfile::PidfileGuard;
+    use crate::grpc::versioning::{BUILD_HEADER_KEY, BUILD_STR};
 
-    /// Settings for a client whose daemon socket is configured at `socket_path`.
-    fn settings(pidfile: &Path, socket_path: &Path, systemd_socket: bool) -> Settings {
-        let mut settings = Settings::default();
-        settings.daemon.pidfile_path = pidfile.to_str().unwrap().to_string();
-        settings.daemon.socket_path = Some(socket_path.to_owned());
-        settings.daemon.systemd_socket = systemd_socket;
-        settings
-    }
-
-    /// A daemon configured for `old.sock` has exited, leaving its pidfile behind, and the client is
-    /// now configured for `new.sock`.
+    /// Services return `FAILED_PRECONDITION` for their own reasons too: a refusal is known by the
+    /// other build on it.
     #[rstest]
-    #[case::pidfile_path_is_used(false, false, "old.sock")]
-    #[case::systemd_client_ignores_pidfile(false, true, "new.sock")]
-    #[case::systemd_daemon_records_no_path(true, false, "new.sock")]
-    #[case::both_systemd(true, true, "new.sock")]
-    fn test_socket_path_with_stale_pidfile(
-        #[case] daemon_systemd_socket: bool,
-        #[case] client_systemd_socket: bool,
-        #[case] expected: &str,
+    #[case::other_build(Some("0.0.0"), DaemonClientErrorKind::BuildMismatch)]
+    #[case::our_build(Some(BUILD_STR), DaemonClientErrorKind::OtherGrpc)]
+    #[case::no_build(None, DaemonClientErrorKind::OtherGrpc)]
+    fn a_refusal_is_known_by_its_build(
+        #[case] build: Option<&'static str>,
+        #[case] expected: DaemonClientErrorKind,
     ) {
-        let dir = tempfile::tempdir().unwrap();
-        let _env = env(dir.path(), false);
-
-        let pidfile = dir.path().join("atuin-daemon.pid");
-
-        let old = settings(&pidfile, &dir.path().join("old.sock"), daemon_systemd_socket);
-        drop(PidfileGuard::acquire(&old.daemon).unwrap());
-
-        let new = settings(&pidfile, &dir.path().join("new.sock"), client_systemd_socket);
-        assert_eq!(socket_path(&new).unwrap(), dir.path().join(expected));
-    }
-
-    #[rstest]
-    fn test_socket_path_without_pidfile(#[values(false, true)] systemd_socket: bool) {
-        let dir = tempfile::tempdir().unwrap();
-        let settings = settings(
-            &dir.path().join("atuin-daemon.pid"),
-            &dir.path().join("a.sock"),
-            systemd_socket,
-        );
-        assert_eq!(socket_path(&settings).unwrap(), dir.path().join("a.sock"));
-    }
-
-    /// A mock environment with `HOME` and `TMPDIR` in `dir`, and `ATUIN_HOME` too if
-    /// `atuin_home_set`, so that neither the settings nor the default socket path involve the
-    /// real home or `/tmp`.
-    fn env(dir: &Path, atuin_home_set: bool) -> MockEnv {
-        let env = MockEnv::install();
-        env.set("HOME", dir.join("home"));
-        env.set("TMPDIR", dir.join("tmp"));
-        if atuin_home_set {
-            env.set("ATUIN_HOME", dir.join("profile"));
+        let mut status = tonic::Status::failed_precondition("refused");
+        if let Some(build) = build {
+            status
+                .metadata_mut()
+                .insert(BUILD_HEADER_KEY, tonic::metadata::MetadataValue::from_static(build));
         }
-        env
-    }
-
-    /// Listen on a Unix socket at `path`, as a running daemon does, until the listener is
-    /// dropped. Dropping it leaves the socket file behind with nothing listening, as a daemon that
-    /// was killed does.
-    fn listen(path: &Path) -> std::os::unix::net::UnixListener {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::os::unix::net::UnixListener::bind(path).unwrap()
-    }
-
-    /// The default socket path for `dir` as [`env`] sets it up, or the configured one.
-    fn preferred_path(dir: &Path, configured: bool) -> PathBuf {
-        if configured {
-            dir.join("configured.sock")
-        } else {
-            dir.join("tmp")
-                .join(format!("atuin-{}", atuin_common::os::unix::uid()))
-                .join("atuin.sock")
-        }
-    }
-
-    /// Settings with the socket at [`preferred_path`], and a pidfile in `dir`.
-    fn settings_in(dir: &Path, configured: bool) -> Settings {
-        let mut settings =
-            settings(&dir.join("atuin-daemon.pid"), &dir.join("configured.sock"), false);
-        if !configured {
-            settings.daemon.socket_path = None;
-        }
-        assert_eq!(settings.daemon.preferred_socket_path(), preferred_path(dir, configured));
-        settings
-    }
-
-    /// With `ATUIN_HOME` set, a live socket that the pidfile doesn't name belongs to something
-    /// else, such as a daemon for another `ATUIN_HOME`, so the client refuses it rather than
-    /// connect. Without `ATUIN_HOME`, an existing socket is connected to as before.
-    #[rstest]
-    fn an_unrecorded_live_socket_is_refused_only_with_atuin_home(
-        #[values(false, true)] atuin_home_set: bool,
-        #[values(false, true)] configured: bool,
-    ) {
-        let dir = tempfile::tempdir().unwrap();
-        let _env = env(dir.path(), atuin_home_set);
-        let settings = settings_in(dir.path(), configured);
-        let path = preferred_path(dir.path(), configured);
-
-        // Nothing's there yet, so it's free for this profile's daemon. (Without `ATUIN_HOME`, the
-        // client would also fall back to sockets elsewhere, like the real `/tmp/atuin-$UID`.)
-        if atuin_home_set {
-            assert_eq!(socket_path(&settings).unwrap(), path);
-        }
-
-        let _listener = listen(&path);
-        let result = socket_path(&settings);
-        if !atuin_home_set {
-            assert_eq!(result.unwrap(), path);
-            return;
-        }
-        let err = result.unwrap_err();
-        let message = err.to_string();
-        let SocketPathError::InUse {
-            path: in_use,
-            user_defined,
-        } = err;
-        assert_eq!(in_use, path);
-        assert_eq!(user_defined, configured);
-        assert!(message.contains(&path.display().to_string()), "{message}");
-        let hint = if configured {
-            "has a unique value"
-        } else {
-            "set an explicit"
-        };
-        assert!(message.contains(hint), "{message}");
-    }
-
-    /// With `ATUIN_HOME` set, a socket left behind with nothing listening, as by a daemon that was
-    /// killed, is free: the client uses it, and autostart replaces it.
-    #[rstest]
-    fn with_atuin_home_a_stale_socket_is_free(#[values(false, true)] configured: bool) {
-        let dir = tempfile::tempdir().unwrap();
-        let _env = env(dir.path(), true);
-        let settings = settings_in(dir.path(), configured);
-        let path = preferred_path(dir.path(), configured);
-
-        drop(listen(&path));
-        assert!(path.exists(), "the stale socket should be left behind");
-        assert_eq!(socket_path(&settings).unwrap(), path);
-    }
-
-    /// With `ATUIN_HOME` set, the socket the pidfile names is used while its daemon is running,
-    /// whatever else exists.
-    #[rstest]
-    fn with_atuin_home_the_recorded_socket_is_used() {
-        let dir = tempfile::tempdir().unwrap();
-        let _env = env(dir.path(), true);
-        let pidfile = dir.path().join("atuin-daemon.pid");
-
-        let daemon = settings(&pidfile, &dir.path().join("daemon.sock"), false);
-        let _guard = PidfileGuard::acquire(&daemon.daemon).unwrap();
-
-        let client = settings(&pidfile, &dir.path().join("other.sock"), false);
-        let _listener = listen(&dir.path().join("other.sock"));
-        assert_eq!(socket_path(&client).unwrap(), dir.path().join("daemon.sock"));
-    }
-
-    /// With `ATUIN_HOME` set, a socket recorded by a daemon that has since exited isn't trusted:
-    /// another profile's daemon may be using that path now. The client goes by its own settings,
-    /// and refuses the path if something is live there.
-    #[rstest]
-    fn with_atuin_home_a_stale_pidfile_is_not_trusted(#[values(false, true)] live: bool) {
-        let dir = tempfile::tempdir().unwrap();
-        let _env = env(dir.path(), true);
-        let pidfile = dir.path().join("atuin-daemon.pid");
-
-        // A daemon recorded `daemon.sock`, then exited, leaving its pidfile behind. Its path is
-        // now live, as if another profile's daemon had taken it.
-        let daemon = settings(&pidfile, &dir.path().join("daemon.sock"), false);
-        drop(PidfileGuard::acquire(&daemon.daemon).unwrap());
-        let _taken = listen(&dir.path().join("daemon.sock"));
-
-        let client = settings_in(dir.path(), true);
-        let path = preferred_path(dir.path(), true);
-        let _listener = live.then(|| listen(&path));
-        match socket_path(&client) {
-            Ok(found) => {
-                assert!(!live, "a live socket at {} was accepted", path.display());
-                assert_eq!(found, path);
-            }
-            Err(SocketPathError::InUse { path: in_use, .. }) => {
-                assert!(live, "a free socket path was refused");
-                assert_eq!(in_use, path);
-            }
-        }
+        assert_eq!(classify_error(&status.into()), expected);
     }
 }
 

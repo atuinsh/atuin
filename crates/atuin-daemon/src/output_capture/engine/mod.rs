@@ -40,6 +40,7 @@ impl OutputCaptureEngine {
         };
 
         // The index is derived, so a failure to open it leaves capture working; only search is lost.
+        SqliteIndex::remove_stale(path).await;
         let (store, searchable) = match SqliteIndex::open(&SqliteIndex::path(path)).await {
             Ok(index) => {
                 (OutputStore::new(AnyBlobStore::Fjall(storage), AnyIndex::Sqlite(index)), true)
@@ -135,6 +136,7 @@ impl OutputCaptureEngine {
 #[cfg(test)]
 mod tests {
     use easy_cast::Conv;
+    use rstest::rstest;
     use uuid::Uuid;
 
     use super::*;
@@ -161,18 +163,24 @@ mod tests {
         (store, dir)
     }
 
-    async fn search_hits(store: &OutputStore, query: &str, limit: usize) -> Vec<OutputMatch> {
-        store.search(query, limit, Some(0)).await.try_collect().await.expect("search")
+    async fn search_hits(
+        store: &OutputStore,
+        terms: impl IntoIterator<Item = &str>,
+        limit: usize,
+    ) -> Vec<OutputMatch> {
+        store.search(terms, limit, Some(0)).await.try_collect().await.expect("search")
     }
 
+    #[rstest]
     #[tokio::test]
     async fn open_uses_the_fjall_backend_when_the_path_is_usable() {
         let (store, _dir) = temp_store().await;
         store.capture(hid(1), cap("hello")).await.expect("capture");
         assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "hello");
-        assert_eq!(search_hits(&store.store(), "hello", 10).await.len(), 1);
+        assert_eq!(search_hits(&store.store(), ["hello"], 10).await.len(), 1);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn open_falls_back_to_nop_when_fjall_cannot_open() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -184,6 +192,7 @@ mod tests {
         assert!(store.get(hid(1)).await.expect("get").is_none());
     }
 
+    #[rstest]
     #[tokio::test]
     async fn open_keeps_capturing_when_only_the_index_cannot_open() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -194,13 +203,14 @@ mod tests {
         let store = OutputCaptureEngine::open(&path, DiskUsageLimit::Unlimited).await;
         store.capture(hid(1), cap("stored but unsearchable")).await.expect("capture");
         assert!(store.get(hid(1)).await.expect("get").is_some());
-        assert!(search_hits(&store.store(), "unsearchable", 10).await.is_empty());
+        assert!(search_hits(&store.store(), ["unsearchable"], 10).await.is_empty());
     }
 
     #[allow(
         clippy::used_underscore_binding,
         reason = "reading the field is how this test observes whether the reconciler was spawned"
     )]
+    #[rstest]
     #[tokio::test]
     async fn the_reconciler_is_spawned_only_when_the_index_opens() {
         // A real index is reconciled against the store...
@@ -215,6 +225,7 @@ mod tests {
         assert!(engine._reconciler.is_none(), "a Nop index is not reconciled");
     }
 
+    #[rstest]
     #[tokio::test]
     async fn nop_constructor_discards_everything() {
         let store = OutputCaptureEngine::nop();
@@ -223,6 +234,7 @@ mod tests {
         assert!(store.get(hid(1)).await.expect("get").is_none());
     }
 
+    #[rstest]
     #[tokio::test]
     async fn remove_forgets_captured_output() {
         let (store, _dir) = temp_store().await;
@@ -231,30 +243,33 @@ mod tests {
         assert!(store.get(hid(1)).await.expect("get").is_none());
     }
 
+    #[rstest]
     #[tokio::test]
     async fn remove_on_the_nop_backend_is_ok() {
         let store = OutputCaptureEngine::nop();
         store.remove([hid(1), hid(2)]).await.expect("remove is discarded, not failed");
     }
 
+    #[rstest]
     #[tokio::test]
     async fn searcher_sees_what_the_store_captures() {
         let (store, _dir) = temp_store().await;
         let searcher = store.store();
         store.capture(hid(1), cap("compilation error: missing semicolon")).await.expect("capture");
 
-        let hits = search_hits(&searcher, "semicolon", 10).await;
+        let hits = search_hits(&searcher, ["semicolon"], 10).await;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].history_id, hid(1));
 
         store.remove([hid(1)]).await.expect("remove");
-        assert!(search_hits(&searcher, "semicolon", 10).await.is_empty());
+        assert!(search_hits(&searcher, ["semicolon"], 10).await.is_empty());
     }
 
+    #[rstest]
     #[tokio::test]
     async fn search_on_a_nop_store_is_empty() {
         let store = OutputCaptureEngine::nop();
         store.capture(hid(1), cap("nothing is indexed here")).await.expect("capture");
-        assert!(search_hits(&store.store(), "nothing", 10).await.is_empty());
+        assert!(search_hits(&store.store(), ["nothing"], 10).await.is_empty());
     }
 }

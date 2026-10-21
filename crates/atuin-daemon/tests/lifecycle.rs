@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::history::{History, HistoryId};
@@ -18,17 +19,6 @@ use rstest::*;
 #[fixture]
 async fn env() -> TestEnv {
     TestEnv::builder().build().await
-}
-
-#[rstest]
-#[tokio::test]
-async fn test_status(#[future(awt)] env: TestEnv) {
-    let mut client = env.history_client().await;
-    let status = client.status().await.unwrap();
-    assert!(status.healthy);
-    assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(status.protocol, 5);
-    assert!(status.pid > 0);
 }
 
 #[rstest]
@@ -111,12 +101,12 @@ async fn output_command_filter_drops_output_but_keeps_history(
     #[case] stored: bool,
     #[values(false, true)] ended_before_capture: bool,
 ) {
-    let mut settings = env.settings.clone();
+    let mut settings = env.reload_settings();
     settings.output = OutputCapture::Enabled(CaptureLimits {
         command_filter: CommandFilter::from(RegexSet::new(["^cat "]).unwrap()),
         ..CaptureLimits::default()
     });
-    env.handle.apply_settings(settings).await;
+    env.handle.apply_settings(Arc::new(settings)).await;
 
     let mut client = env.history_client().await;
     let id: HistoryId =
@@ -148,14 +138,15 @@ async fn disabling_output_on_a_live_daemon_stores_no_captures(
     #[future(awt)] env: TestEnv,
     #[case] command: &str,
 ) {
-    let mut settings = env.settings.clone();
+    let mut settings = env.reload_settings();
     settings.output = OutputCapture::Enabled(CaptureLimits {
         command_filter: CommandFilter::from(RegexSet::new(["^cat "]).unwrap()),
         ..CaptureLimits::default()
     });
-    env.handle.apply_settings(settings.clone()).await;
+    env.handle.apply_settings(Arc::new(settings)).await;
+    let mut settings = env.reload_settings();
     settings.output = OutputCapture::default();
-    env.handle.apply_settings(settings).await;
+    env.handle.apply_settings(Arc::new(settings)).await;
 
     let mut client = env.history_client().await;
     let id: HistoryId =
@@ -365,7 +356,6 @@ async fn test_delete_history_removes_entry(#[future(awt)] env: TestEnv) {
 
     let reply = client.delete_history(vec![id]).await.unwrap();
     assert_eq!(reply.deleted, 1);
-    assert_eq!(reply.protocol, 5);
     assert_eq!(env.active_rows().await, 0);
 
     // Deleting an already-deleted id still succeeds (idempotent), counting the record write.
@@ -379,8 +369,7 @@ async fn test_rebuild_history(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     env.record(&mut client, "echo before-rebuild").await;
 
-    let reply = client.rebuild_history().await.unwrap();
-    assert_eq!(reply.protocol, 5);
+    client.rebuild_history().await.unwrap();
 
     // The journal keeps working after a rebuild.
     let id = env.record(&mut client, "echo after-rebuild").await;

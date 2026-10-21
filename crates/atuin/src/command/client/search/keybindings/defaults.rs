@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use atuin_client::settings::{KeyBindingConfig, Settings};
+use atuin_client::settings::{KeyBindingConfig, Keys, Settings};
 use tracing::warn;
 
 use super::actions::Action;
@@ -88,17 +88,20 @@ fn accept_action(settings: &Settings) -> Action {
 /// Build the default emacs keymap. This encodes the behavior from
 /// `handle_key_input` common section + `handle_search_input` shared section.
 ///
+/// The `keys` parameter is used for:
+/// - `prefix` — which ctrl-key enters prefix mode
+/// - `scroll_exits` — scroll-at-boundary exit behavior
+/// - `accept_past_line_end` — right arrow at end of line accepts
+/// - `exit_past_line_start` — left arrow at start of line exits
+/// - `accept_past_line_start` — left arrow at start accepts (overrides exit)
+/// - `accept_with_backspace` — backspace at start of line accepts
+///
 /// The `settings` parameter is used for:
-/// - `keys.prefix` — which ctrl-key enters prefix mode
-/// - `keys.scroll_exits`, `invert` — scroll-at-boundary exit behavior
-/// - `keys.accept_past_line_end` — right arrow at end of line accepts
-/// - `keys.exit_past_line_start` — left arrow at start of line exits
-/// - `keys.accept_past_line_start` — left arrow at start accepts (overrides exit)
-/// - `keys.accept_with_backspace` — backspace at start of line accepts
+/// - `invert` — scroll-at-boundary exit behavior
 /// - `ctrl_n_shortcuts` — whether alt or ctrl is used for numeric shortcuts
 // Keymap builder that enumerates every default binding; not worth splitting.
 #[allow(clippy::too_many_lines)]
-pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
+pub fn default_emacs_keymap(settings: &Settings, keys: &Keys) -> Keymap {
     let mut km = Keymap::new();
     add_common_bindings(&mut km);
 
@@ -109,13 +112,13 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
     km.bind(key("ctrl-["), Action::Exit);
 
     // Prefix key: ctrl-<prefix_char> → enter prefix mode
-    let prefix_char = settings.keys.prefix.chars().next().unwrap_or('a');
+    let prefix_char = keys.prefix.chars().next().unwrap_or('a');
     km.bind(key(&format!("ctrl-{prefix_char}")), Action::EnterPrefixMode);
 
     // --- Accept / navigation edge behaviors (from [keys] settings) ---
 
     // right: behavior at end of line
-    if settings.keys.accept_past_line_end {
+    if keys.accept_past_line_end {
         km.bind_conditional(key("right"), vec![
             KeyRule::when(ConditionAtom::CursorAtEnd, Action::ReturnSelection),
             KeyRule::always(Action::CursorRight),
@@ -126,12 +129,12 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
 
     // left: behavior at start of line
     // accept_past_line_start takes precedence over exit_past_line_start
-    if settings.keys.accept_past_line_start {
+    if keys.accept_past_line_start {
         km.bind_conditional(key("left"), vec![
             KeyRule::when(ConditionAtom::CursorAtStart, Action::ReturnSelection),
             KeyRule::always(Action::CursorLeft),
         ]);
-    } else if settings.keys.exit_past_line_start {
+    } else if keys.exit_past_line_start {
         km.bind_conditional(key("left"), vec![
             KeyRule::when(ConditionAtom::CursorAtStart, Action::Exit),
             KeyRule::always(Action::CursorLeft),
@@ -143,13 +146,13 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
     // down/up: scroll with optional exit at boundary.
     // Non-inverted: down moves toward index 0 (can exit); up moves away (no exit).
     // Inverted: up moves toward index 0 (can exit); down moves away (no exit).
-    let scroll_exits = settings.keys.scroll_exits;
+    let scroll_exits = keys.scroll_exits;
     let invert = settings.invert;
     bind_scroll_key(&mut km, "down", Action::SelectNext, !invert, scroll_exits);
     bind_scroll_key(&mut km, "up", Action::SelectPrevious, invert, scroll_exits);
 
     // backspace: behavior at start of line
-    if settings.keys.accept_with_backspace {
+    if keys.accept_with_backspace {
         km.bind_conditional(key("backspace"), vec![
             KeyRule::when(ConditionAtom::CursorAtStart, Action::ReturnSelection),
             KeyRule::always(Action::DeleteCharBefore),
@@ -233,7 +236,7 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
 // ---------------------------------------------------------------------------
 
 /// Build the default vim-normal keymap.
-pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
+pub fn default_vim_normal_keymap(settings: &Settings, keys: &Keys) -> Keymap {
     let mut km = Keymap::new();
     add_common_bindings(&mut km);
 
@@ -242,12 +245,12 @@ pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
     km.bind(key("ctrl-["), Action::Exit);
 
     // Prefix key
-    let prefix_char = settings.keys.prefix.chars().next().unwrap_or('a');
+    let prefix_char = keys.prefix.chars().next().unwrap_or('a');
     km.bind(key(&format!("ctrl-{prefix_char}")), Action::EnterPrefixMode);
 
     // --- Vim navigation ---
     // j/k: scroll with optional exit at boundary.
-    let scroll_exits = settings.keys.scroll_exits;
+    let scroll_exits = keys.scroll_exits;
     let invert = settings.invert;
     bind_scroll_key(&mut km, "j", Action::SelectNext, !invert, scroll_exits);
     bind_scroll_key(&mut km, "k", Action::SelectPrevious, invert, scroll_exits);
@@ -314,8 +317,8 @@ pub fn default_vim_normal_keymap(settings: &Settings) -> Keymap {
 
 /// Build the default vim-insert keymap. This clones the emacs keymap and
 /// overlays vim-insert-specific bindings (esc → enter normal mode).
-pub fn default_vim_insert_keymap(settings: &Settings) -> Keymap {
-    let mut km = default_emacs_keymap(settings);
+pub fn default_vim_insert_keymap(settings: &Settings, keys: &Keys) -> Keymap {
+    let mut km = default_emacs_keymap(settings, keys);
 
     // Override esc and ctrl-[ to enter normal mode instead of exiting
     km.bind(key("esc"), Action::VimEnterNormal);
@@ -334,7 +337,7 @@ pub fn default_vim_insert_keymap(settings: &Settings) -> Keymap {
 /// text input, so we build a minimal keymap with only inspector-relevant
 /// bindings. We respect the user's `keymap_mode` to provide vim-style j/k
 /// navigation for vim users.
-pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
+pub fn default_inspector_keymap(settings: &Settings, keys: &Keys) -> Keymap {
     use atuin_client::settings::KeymapMode;
 
     let mut km = Keymap::new();
@@ -348,7 +351,7 @@ pub fn default_inspector_keymap(settings: &Settings) -> Keymap {
     km.bind(key("ctrl-o"), Action::ToggleTab);
 
     // Prefix key: ctrl-<prefix_char> → enter prefix mode
-    let prefix_char = settings.keys.prefix.chars().next().unwrap_or('a');
+    let prefix_char = keys.prefix.chars().next().unwrap_or('a');
     km.bind(key(&format!("ctrl-{prefix_char}")), Action::EnterPrefixMode);
 
     // Inspection is non-executing: Enter opens output; Tab returns the command for editing.
@@ -460,11 +463,15 @@ fn apply_config_to_keymap(keymap: &mut Keymap, overrides: &HashMap<String, KeyBi
 impl KeymapSet {
     /// Build the complete set of default keymaps from settings.
     pub fn defaults(settings: &Settings) -> Self {
+        Self::with_keys(settings, &settings.keys)
+    }
+
+    fn with_keys(settings: &Settings, keys: &Keys) -> Self {
         KeymapSet {
-            emacs: default_emacs_keymap(settings),
-            vim_normal: default_vim_normal_keymap(settings),
-            vim_insert: default_vim_insert_keymap(settings),
-            inspector: default_inspector_keymap(settings),
+            emacs: default_emacs_keymap(settings, keys),
+            vim_normal: default_vim_normal_keymap(settings, keys),
+            vim_insert: default_vim_insert_keymap(settings, keys),
+            inspector: default_inspector_keymap(settings, keys),
             prefix: default_prefix_keymap(),
         }
     }
@@ -478,16 +485,12 @@ impl KeymapSet {
     /// - If `[keymap]` is empty/absent, `[keys]` customizes the defaults
     ///   (current behavior for backward compatibility).
     pub fn from_settings(settings: &Settings) -> Self {
-        use atuin_client::settings::Keys;
-
         if settings.keymap.is_empty() {
             // No [keymap] section → use [keys] to customize defaults
             Self::defaults(settings)
         } else {
             // [keymap] present → ignore [keys], use standard defaults as base
-            let mut base_settings = settings.clone();
-            base_settings.keys = Keys::standard_defaults();
-            let mut set = Self::defaults(&base_settings);
+            let mut set = Self::with_keys(settings, &Keys::standard_defaults());
             set.apply_config(settings);
             set
         }
@@ -578,7 +581,8 @@ mod tests {
         #[case] len: usize,
         #[case] expected: Action,
     ) {
-        let km = default_emacs_keymap(&default_settings());
+        let settings = default_settings();
+        let km = default_emacs_keymap(&settings, &settings.keys);
         let ctx = make_ctx(cursor, width, selected, len);
         assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
@@ -587,7 +591,7 @@ mod tests {
     fn emacs_enter_accept_true_uses_accept() {
         let mut settings = default_settings();
         settings.enter_accept = true;
-        let km = default_emacs_keymap(&settings);
+        let km = default_emacs_keymap(&settings, &settings.keys);
         let ctx = make_ctx(0, 0, 0, 10);
         assert_eq!(km.resolve(&key("enter"), &ctx), Some(Action::Accept));
         assert_eq!(km.resolve(&key("tab"), &ctx), Some(Action::ReturnSelection));
@@ -620,7 +624,8 @@ mod tests {
         #[case] len: usize,
         #[case] expected: Action,
     ) {
-        let km = default_vim_normal_keymap(&default_settings());
+        let settings = default_settings();
+        let km = default_vim_normal_keymap(&settings, &settings.keys);
         let ctx = make_ctx(cursor, width, selected, len);
         assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
@@ -629,7 +634,7 @@ mod tests {
     fn vim_normal_enter_accept_true_uses_accept() {
         let mut settings = default_settings();
         settings.enter_accept = true;
-        let km = default_vim_normal_keymap(&settings);
+        let km = default_vim_normal_keymap(&settings, &settings.keys);
         let ctx = make_ctx(0, 0, 0, 10);
         assert_eq!(km.resolve(&key("enter"), &ctx), Some(Action::Accept));
     }
@@ -651,7 +656,8 @@ mod tests {
         #[case] len: usize,
         #[case] expected: Action,
     ) {
-        let km = default_vim_insert_keymap(&default_settings());
+        let settings = default_settings();
+        let km = default_vim_insert_keymap(&settings, &settings.keys);
         let ctx = make_ctx(cursor, width, selected, len);
         assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
@@ -680,7 +686,8 @@ mod tests {
         #[case] len: usize,
         #[case] expected: Action,
     ) {
-        let km = default_inspector_keymap(&default_settings());
+        let settings = default_settings();
+        let km = default_inspector_keymap(&settings, &settings.keys);
         let ctx = make_ctx(cursor, width, selected, len);
         assert_eq!(km.resolve(&key(k), &ctx), Some(expected));
     }
@@ -740,7 +747,7 @@ mod tests {
     fn custom_prefix_char() {
         let mut settings = default_settings();
         settings.keys.prefix = "x".to_string();
-        let km = default_emacs_keymap(&settings);
+        let km = default_emacs_keymap(&settings, &settings.keys);
         let ctx = make_ctx(0, 0, 0, 10);
 
         // ctrl-x should be prefix mode
@@ -753,7 +760,7 @@ mod tests {
     fn ctrl_n_shortcuts_changes_numeric_modifier() {
         let mut settings = default_settings();
         settings.ctrl_n_shortcuts = true;
-        let km = default_emacs_keymap(&settings);
+        let km = default_emacs_keymap(&settings, &settings.keys);
         let ctx = make_ctx(0, 0, 0, 10);
 
         // ctrl-1 should work
@@ -765,7 +772,7 @@ mod tests {
     #[rstest]
     fn default_alt_numeric_shortcuts() {
         let settings = default_settings();
-        let km = default_emacs_keymap(&settings);
+        let km = default_emacs_keymap(&settings, &settings.keys);
         let ctx = make_ctx(0, 0, 0, 10);
 
         // alt-1 should work by default

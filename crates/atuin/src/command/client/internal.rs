@@ -1,5 +1,7 @@
 //! Internal subcommands, not for direct use by users.
 
+use std::sync::Arc;
+
 use atuin_client::settings::Settings;
 use atuin_common::logs::LogConfig;
 
@@ -23,7 +25,7 @@ impl Cmd {
     pub fn run(&self) -> Option<impl AsyncFnOnce(Settings) -> eyre::Result<()> + use<>> {
         match self {
             Self::PrepareSearchIndex => {
-                Some(async |settings| super::search::prepare_index(&settings).await)
+                Some(async |settings| super::search::prepare_index(&Arc::new(settings)).await)
             }
             Self::PtyProxyActive => {
                 #[cfg(all(unix, feature = "pty-proxy"))]

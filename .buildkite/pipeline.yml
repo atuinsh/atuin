@@ -359,7 +359,9 @@ steps:
     command:
       - source .buildkite/scripts/lib.sh
       - 'section ":nix: Install Nix" install_nix'
-      - 'section ":nix: nix fmt --ci" nix fmt -- --ci'
+      # treefmt starts from the git root, which in mono is the whole monorepo;
+      # mono checks its own .nix files in ci/pipelines/pipeline.yml.
+      - 'section ":nix: nix fmt --ci" nix fmt -- --ci --tree-root .'
 
   - label: ":pencil2: Codespell"
     key: codespell

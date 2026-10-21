@@ -22,6 +22,8 @@ atuin hook install pi
 
 That's it. Commands the agent runs will now appear in your Atuin history, tagged with the agent's name.
 
+To let the agent search your history too, connect it to Atuin's [MCP server](../ai/mcp.md) with `atuin mcp install <agent>`.
+
 ## How It Works
 
 AI coding agents support hook systems that notify external tools when they're about to run a shell command and when the command finishes. Atuin uses these hooks to record each command as a history entry, just like commands you type yourself.

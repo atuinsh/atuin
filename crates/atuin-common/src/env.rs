@@ -2,7 +2,8 @@
 
 use std::env::VarError;
 use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
+
+use crate::path::AbsPathBuf;
 
 /// Wrapper around [`std::env::var_os`] that can be mocked in tests.
 #[must_use]
@@ -40,13 +41,11 @@ pub fn var_nonempty(name: &str) -> Option<OsString> {
 ///
 /// This is usually done in the name of XDG-compliance which requires that paths given through
 /// environment variables are absolute.
-pub fn var_abspath(name: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(var_nonempty(name)?);
-    if !path.is_absolute() {
-        tracing::warn!("ignoring relative path in {name}: {}", path.display());
-        return None;
-    }
-    Some(path)
+#[must_use]
+pub fn var_abspath(name: &str) -> Option<AbsPathBuf> {
+    AbsPathBuf::new(var_nonempty(name)?)
+        .inspect_err(|err| tracing::warn!("ignoring {name}: {err}"))
+        .ok()
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -131,6 +130,8 @@ pub(crate) mod mock {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use rstest::{fixture, rstest};
 
     use super::*;
@@ -204,6 +205,6 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         env.set("ATUIN_TEST_VAR", value);
-        assert_eq!(var_abspath("ATUIN_TEST_VAR"), expected.map(PathBuf::from));
+        assert_eq!(var_abspath("ATUIN_TEST_VAR").map(PathBuf::from), expected.map(PathBuf::from));
     }
 }

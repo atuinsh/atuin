@@ -2,7 +2,7 @@
 //!
 //! Plans come from the harness tools ([`atuin_common::harnesstools::resume`]); this layer adds
 //! what only the picker knows: whether the session's transcript is on this machine, where to
-//! resume one that isn't, and the user's `[ai.sessions.resume]` templates. Planning may walk the
+//! resume one that isn't, and the user's `[threads.resume]` templates. Planning may walk the
 //! harness's session directories, so the picker asks only for the selected session, never per
 //! row.
 //!
@@ -30,6 +30,7 @@ use atuin_common::harnesstools::sync::{
     AppendOptions, AppendOutcome, Liveness, LocalTip, ReplaceOutcome, SessionSync as _, SyncError,
 };
 use atuin_common::harnesstools::{AnyHarness, Harness as _, fork};
+use atuin_common::path::PathBufExt as _;
 
 use super::ResumeContext;
 use super::catchup::{self, CatchUp, Held, Step, Why};
@@ -121,8 +122,8 @@ pub struct Continued {
 }
 
 impl Continued {
-    /// The status line: `continuing in Codex: 42 tool calls become notes, reasoning dropped`, and
-    /// whose branch it carries (`; along @3f9a12bc's branch`) when it carries one of several.
+    /// The status line: `continuing in Codex: 42 tool calls become notes`, and whose branch it
+    /// carries (`; along @3f9a12bc's branch`) when it carries one of several.
     pub fn status(&self) -> String {
         let status = continuing(self.target, Some(&self.flattened));
         match &self.along {
@@ -368,8 +369,8 @@ pub trait Machine: Send + Sync {
 /// where it does, when that isn't where it ran.
 fn restored(restore: &Restore) -> String {
     match &restore.note {
-        Some(note) => format!("restored the session from sync; {note}"),
-        None => "restored the session from sync".to_owned(),
+        Some(note) => format!("restored the thread from sync; {note}"),
+        None => "restored the thread from sync".to_owned(),
     }
 }
 
@@ -444,12 +445,12 @@ pub struct HarnessResumer {
 /// Where copies switched to another branch are kept as they were: `ai/switched` in atuin's data
 /// directory (`data_dir`, `ATUIN_DATA_DIR`), which no agent lists sessions from.
 pub fn switched_dir(settings: &Settings) -> PathBuf {
-    settings.data_dir.join("ai").join("switched")
+    settings.data_dir.join("ai").joined("switched")
 }
 
 impl HarnessResumer {
     pub fn new(context: ResumeContext, settings: &Settings) -> Self {
-        let templates = settings.ai.sessions.resume.clone();
+        let templates = settings.threads.resume.clone();
         Self::on(context, templates, ThisMachine, switched_dir(settings))
     }
 
@@ -1049,7 +1050,7 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
         return runnable(Path::new(program));
     }
     let paths = env::var_os("PATH")?;
-    std::env::split_paths(&paths).find_map(|dir| runnable(&dir.join(program)))
+    std::env::split_paths(&paths).find_map(|dir| runnable(&dir.joined(program)))
 }
 
 /// The program a plan runs, as [`on_path`] should check it: a relative path such as

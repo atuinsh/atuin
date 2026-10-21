@@ -36,8 +36,7 @@ async fn rebuild_rederives_rows_from_the_store(#[future(awt)] env: TestEnv) {
     env.history_db.delete_rows([lost]).await.unwrap();
     *env.index.write().await = SearchIndex::default();
 
-    let reply = client.rebuild_history().await.unwrap();
-    assert_eq!(reply.protocol, 5);
+    client.rebuild_history().await.unwrap();
 
     assert_eq!(env.active_ids().await, HashSet::from([lost, db_only.id]));
     assert_eq!(env.index_hits("lost-from-db").await, vec![lost]);

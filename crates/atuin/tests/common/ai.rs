@@ -45,6 +45,7 @@ impl SyncServer {
                 db_uri: format!("sqlite://{}", dir.path().join("server.db").display())
                     .parse()
                     .unwrap(),
+                db_password_file: None,
             },
             metrics: atuin_server::settings::Metrics::default(),
             fake_version: None,
@@ -125,18 +126,18 @@ pub fn shared_dir() -> TempDir {
 impl Machine {
     /// A machine on its own, syncing nowhere.
     pub fn new() -> Self {
-        Self::with_config("", "capture_sessions = true\n")
+        Self::with_config("", "capture = true\n")
     }
 
     /// A machine syncing nowhere with the settings `top` (top-level keys, then any tables) and
-    /// the `[ai]` settings `ai`.
-    pub fn with_config(top: &str, ai: &str) -> Self {
-        Self::configured(None, top, ai)
+    /// the `[threads]` settings `threads`.
+    pub fn with_config(top: &str, threads: &str) -> Self {
+        Self::configured(None, top, threads)
     }
 
-    /// A machine with the settings `top` and `[ai]` settings `ai`, syncing through the server at
+    /// A machine with the settings `top` and `[threads]` settings `threads`, syncing through the server at
     /// `sync`, if any: its daemon syncing every so many seconds, or (0) never.
-    fn configured(sync: Option<(&str, u32)>, top: &str, ai: &str) -> Self {
+    fn configured(sync: Option<(&str, u32)>, top: &str, threads: &str) -> Self {
         let env = FreshEnv::new();
         let bin = tempfile::Builder::new().prefix("bin-").tempdir_in(target_tmp()).unwrap();
         install_fakes(bin.path(), &Agent::ALL);
@@ -153,7 +154,7 @@ impl Machine {
         };
         env.write_config(&format!(
             "auto_sync = {auto_sync}\n{address}{top}[daemon]\nenabled = true\nautostart = \
-             false\n{frequency}[ai]\n{ai}"
+             false\n{frequency}[threads]\n{threads}"
         ));
         // Finish migrations before the daemon and the commands race for the databases.
         env.run(&["store", "status"]);
@@ -167,29 +168,29 @@ impl Machine {
     /// Two machines of one account on `server`, their daemons running and syncing as often as
     /// they can.
     pub fn pair(server: &SyncServer) -> (Self, Self) {
-        Self::pair_syncing(server, 1, "capture_sessions = true\n")
+        Self::pair_syncing(server, 1, "capture = true\n")
     }
 
-    /// Two machines of one account on `server` with the `[ai]` settings `ai`, their daemons
+    /// Two machines of one account on `server` with the `[threads]` settings `threads`, their daemons
     /// running: the first's syncing as often as it can, the second's every `sync_frequency`
     /// seconds, or (0) never.
-    pub fn pair_syncing(server: &SyncServer, sync_frequency: u32, ai: &str) -> (Self, Self) {
-        let one = Self::syncing(server, None, 1, ai);
+    pub fn pair_syncing(server: &SyncServer, sync_frequency: u32, threads: &str) -> (Self, Self) {
+        let one = Self::syncing(server, None, 1, threads);
         let key = one.run(&["key", "--base64"]).trim().to_owned();
-        let two = Self::syncing(server, Some((&one, &key)), sync_frequency, ai);
+        let two = Self::syncing(server, Some((&one, &key)), sync_frequency, threads);
         (one, two)
     }
 
     /// A machine syncing through `server`, its daemon every `sync_frequency` seconds, with the
-    /// `[ai]` settings `ai`: registering a new account, or logging into `login`'s with its key.
+    /// `[threads]` settings `threads`: registering a new account, or logging into `login`'s with its key.
     /// Logged in before its daemon starts, which keeps the key it starts with.
     fn syncing(
         server: &SyncServer,
         login: Option<(&Self, &str)>,
         sync_frequency: u32,
-        ai: &str,
+        threads: &str,
     ) -> Self {
-        let mut machine = Self::configured(Some((&server.address, sync_frequency)), "", ai);
+        let mut machine = Self::configured(Some((&server.address, sync_frequency)), "", threads);
         match login {
             None => {
                 let user = machine.user();
@@ -251,7 +252,7 @@ impl Machine {
         let socket = self.env.socket();
         wait("the daemon", || socket.exists());
         self.daemon = Some(daemon);
-        // `ai session` commands wait for its first replay of the store, so once one answers, the
+        // `threads` commands wait for its first replay of the store, so once one answers, the
         // daemon is capturing.
         self.sessions();
     }
@@ -269,20 +270,20 @@ impl Machine {
         self.daemon.as_ref().map(Process::logs).unwrap_or_default()
     }
 
-    /// Every session the daemon has, as `atuin ai session list` gives them.
+    /// Every session the daemon has, as `atuin threads list` gives them.
     pub fn sessions(&self) -> Vec<Value> {
-        let list = self.run(&["ai", "session", "list", "--style", "json"]);
+        let list = self.run(&["threads", "list", "--style", "json"]);
         serde_json::from_str::<Value>(&list).unwrap().as_array().unwrap().clone()
     }
 
-    /// The session `id` (the agent's), as `atuin ai session list` gives it.
+    /// The session `id` (the agent's), as `atuin threads list` gives it.
     pub fn session(&self, id: &str) -> Option<Value> {
         self.sessions().into_iter().find(|s| s["session_id"] == id)
     }
 
-    /// The session `id` and its messages, as `atuin ai session show` gives them.
+    /// The session `id` and its messages, as `atuin threads show` gives them.
     pub fn show(&self, id: &str) -> Value {
-        let show = self.run(&["ai", "session", "show", id, "--style", "json"]);
+        let show = self.run(&["threads", "show", id, "--style", "json"]);
         serde_json::from_str(&show).unwrap()
     }
 
@@ -341,10 +342,10 @@ impl Machine {
         })
     }
 
-    /// `atuin ai resume args`, run from `cwd` as a shell there would, without a terminal: never
+    /// `atuin threads resume args`, run from `cwd` as a shell there would, without a terminal: never
     /// the picker, which a test can't answer.
     pub fn resume(&self, args: &[&str], cwd: &Path) -> Output {
-        let mut command = self.atuin(&[&["ai", "resume"], args].concat());
+        let mut command = self.atuin(&[&["threads", "resume"], args].concat());
         command.current_dir(cwd).env("PWD", cwd);
         // SAFETY: `setsid` is async-signal-safe and touches no memory of this process.
         unsafe {
@@ -383,7 +384,7 @@ impl Drop for Machine {
     }
 }
 
-/// The text of each message of `show` (`atuin ai session show --style json`) that says something
+/// The text of each message of `show` (`atuin threads show --style json`) that says something
 /// in conversation: a prompt, or a reply.
 pub fn said_in(show: &Value) -> Vec<String> {
     show["messages"]
@@ -397,7 +398,7 @@ pub fn said_in(show: &Value) -> Vec<String> {
         .collect()
 }
 
-/// One tool call of a session, as `atuin ai session show --style json` gives it.
+/// One tool call of a session, as `atuin threads show --style json` gives it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Call {
     pub name: String,

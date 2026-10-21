@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
 use ratatui::text::{Line, Span, Text};
@@ -22,7 +24,7 @@ impl Capture {
         }
     }
 
-    pub async fn poll(&mut self, id: HistoryId, settings: &Settings) -> bool {
+    pub async fn poll(&mut self, id: HistoryId, settings: &Arc<Settings>) -> bool {
         let changed = self.id != Some(id);
         if changed {
             if let Some(task) = self.task.take() {
@@ -31,7 +33,7 @@ impl Capture {
 
             self.id = Some(id);
             self.ready = None;
-            let settings = settings.clone();
+            let settings = Arc::clone(settings);
             self.task = Some(tokio::spawn(async move { load_output(id, &settings).await }));
         }
 
@@ -234,7 +236,7 @@ mod tests {
             task: Some(tokio::spawn(async move { receiver.await.unwrap() })),
             ready: None,
         };
-        let settings = Settings::utc();
+        let settings = Arc::new(Settings::utc());
         assert!(
             !tokio::time::timeout(
                 std::time::Duration::from_millis(100),
@@ -286,11 +288,8 @@ mod tests {
         };
         tokio::task::yield_now().await;
         if replace {
-            assert!(
-                capture
-                    .poll(HistoryId::new(atuin_common::utils::uuid_v7()), &Settings::utc())
-                    .await
-            );
+            let settings = Arc::new(Settings::utc());
+            assert!(capture.poll(HistoryId::new(atuin_common::utils::uuid_v7()), &settings).await);
         }
         drop(capture);
         assert!(receiver.await.is_err());

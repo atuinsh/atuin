@@ -11,14 +11,14 @@
 //! The conversation, and the work done in it:
 //!
 //! - What the user said, and what the model answered.
-//! - **Tool calls, as calls.** A call captured with its input and its result (`ai.capture_tools`)
+//! - **Tool calls, as calls.** A call captured with its input and its result (`threads.capture_tools`)
 //!   is carried over as a call of the target, with its result: as the target's own tool where it
 //!   has one that does the same (a shell command, a file read, written or edited, a search: see
 //!   `tools`), else as the tool it was. A model reads a call to a tool it doesn't have like any
 //!   other; it just can't make it again.
 //! - **Other calls, as notes**: a short line of text in the assistant's turn saying what was
 //!   called (see [`tool_note`]): `[ran a shell command]`, ``[edited `src/store.rs`]``. That is a
-//!   call captured without its input (`ai.capture_tools` off, or a policy withheld it), one with no
+//!   call captured without its input (`threads.capture_tools` off, or a policy withheld it), one with no
 //!   result (interrupted, or a Codex web search), and one the model's provider ran itself (a
 //!   Claude Code web search), whose result only that provider reads.
 //! - Summaries (compactions, abandoned branches), as text of the user's turn. A compaction
@@ -58,6 +58,7 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use super::note::{Part, clip, render, tool_note};
+use super::pi::Flavour;
 use super::rehydrate::{RehydrateMessage, RehydrateSession};
 use super::resume::is_plain_name;
 use super::{AnyHarness, Harness as _, opencode};
@@ -115,13 +116,11 @@ pub struct Flattened {
     pub tool_calls: usize,
     /// Tool results dropped: those of calls turned into notes, and any answering no call.
     pub tool_results: usize,
-    /// Messages whose reasoning was dropped.
-    pub reasoning: usize,
 }
 
 impl Flattened {
-    /// What was left out, for a status line: `42 tool calls become notes, reasoning
-    /// dropped`. Empty when nothing was.
+    /// What changes for the agent continuing it, for a status line: `42 tool calls become
+    /// notes`. Empty when nothing does.
     #[must_use]
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
@@ -133,9 +132,6 @@ impl Flattened {
         if self.tool_calls == 0 && self.tool_results > 0 {
             parts.push("tool output dropped".to_owned());
         }
-        if self.reasoning > 0 {
-            parts.push("reasoning dropped".to_owned());
-        }
         parts.join(", ")
     }
 }
@@ -146,7 +142,10 @@ fn label(harness: AnyHarness) -> &'static str {
         AnyHarness::ClaudeCode(_) => "Claude Code",
         AnyHarness::Codex(_) => "Codex",
         AnyHarness::Opencode(_) => "opencode",
-        AnyHarness::Pi(_) => "Pi",
+        AnyHarness::Pi(pi) => match pi.flavour() {
+            Flavour::Pi => "Pi",
+            Flavour::Omp => "omp",
+        },
     }
 }
 
@@ -418,6 +417,7 @@ impl Rows {
             role,
             content,
             model: None,
+            provider: None,
             usage: None,
             stop_reason: stop,
             turn_id: self.step.clone(),
@@ -677,12 +677,10 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
     for m in messages {
         let mut user = Vec::new();
         let mut assistant = Vec::new();
-        let mut reasoned = false;
         // A continuation's own marker: the new one names this session instead.
         let marker = usize::from(m.role == Role::User && opens_with_marker(&m.content));
         for content in &m.content[marker..] {
             match content {
-                Content::Reasoning(_) | Content::ReasoningSummary { .. } => reasoned = true,
                 // Said by the note the continuation opens with.
                 Content::Summary(summary) if summary == UNREADABLE_SUMMARY => {}
                 Content::Summary(summary) if !summary.trim().is_empty() => user.push(Part::Text(
@@ -714,7 +712,6 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
                 _ => {}
             }
         }
-        flattened.reasoning += usize::from(reasoned);
         if m.role != Role::Assistant
             && m.content.iter().any(|c| matches!(c, Content::ToolResult(_)))
         {

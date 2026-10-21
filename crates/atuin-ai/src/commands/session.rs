@@ -1,7 +1,7 @@
-//! `atuin ai session` -- a client for the daemon's `ai.session.AiSession` service.
+//! `atuin threads` -- a client for the daemon's `ai.session.AiSession` service, and resume.
 //!
 //! Thin wrappers around [`AiClient`] plus rendering. Every subcommand resolves a selector to a
-//! session, calls the matching RPC, decodes what the daemon streams into the domain types, and
+//! thread, calls the matching RPC, decodes what the daemon streams into the domain types, and
 //! renders them either as human-readable text or as JSON/NDJSON for scripting.
 
 use std::borrow::Cow;
@@ -26,58 +26,80 @@ use futures::{StreamExt, TryStreamExt};
 use serde::Serialize;
 use time::OffsetDateTime;
 
+/// How a subcommand's output is rendered.
 #[derive(Args, Debug)]
-pub struct Cmd {
-    #[command(subcommand)]
-    cmd: SubCmd,
-
+pub struct Output {
     /// How output is rendered.
-    #[arg(long, value_enum, default_value_t = Style::Auto, global = true)]
+    #[arg(long, value_enum, default_value_t = Style::Auto)]
     style: Style,
 }
 
+/// `atuin threads`.
 #[derive(Subcommand, Debug)]
-enum SubCmd {
-    /// List captured sessions, newest first.
-    List,
-
-    /// Show a session and its messages. Accepts an id, a harness id or `latest`.
-    Show {
-        /// Id (its last 8 digits, as `list` shows them, are enough) or harness id (a unique prefix
-        /// is enough), or `latest` for the most recently active session.
-        #[arg(value_name = "ID|latest")]
-        session: String,
+pub enum Cmd {
+    /// List captured threads, newest first.
+    List {
+        #[command(flatten)]
+        output: Output,
     },
 
-    #[command(about = "Full-text search across captured sessions, most relevant first.")]
+    /// Show a thread and its messages. Accepts an id, a harness id or `latest`.
+    Show {
+        /// Id (its last 8 digits, as `list` shows them, are enough) or harness id (a unique prefix
+        /// is enough), or `latest` for the most recently active thread.
+        #[arg(value_name = "ID|latest")]
+        thread: String,
+
+        #[command(flatten)]
+        output: Output,
+    },
+
+    #[command(about = "Full-text search across captured threads, most relevant first.")]
     Search {
         #[arg(
             value_name = "QUERY",
-            allow_hyphen_values = true,
-            help = "Words to look for in session titles, message text, reasoning, and tool calls"
+            required = true,
+            help = "Words to look for in thread titles, message text, reasoning, and tool calls; \
+                    all must appear. Quote words to find them together, in that order. Use `--` \
+                    before a query that starts with `-`"
         )]
-        query: String,
-        #[arg(long, value_enum, help = "Only search sessions from this harness")]
+        query: Vec<String>,
+        #[arg(long, value_enum, help = "Only search threads from this harness")]
         harness: Option<HarnessArg>,
         #[arg(
             long,
             default_value_t = 10,
             value_name = "N",
-            help = "Maximum sessions to return; 0 for unbounded"
+            help = "Maximum threads to return; 0 for unbounded"
         )]
         limit: u32,
+
+        #[command(flatten)]
+        output: Output,
     },
 
-    /// Follow sessions and messages as they are recorded (until interrupted).
-    Tail,
+    /// Follow threads and messages as they are recorded (until interrupted).
+    Tail {
+        #[command(flatten)]
+        output: Output,
+    },
 
-    /// Import every session the agents have on this machine, including those capture leaves
+    /// Import every thread the agents have on this machine, including those capture leaves
     /// alone: the ones nobody has gone on with since it was turned on.
     Import {
-        /// Only import sessions from this harness.
+        /// Only import threads from this harness.
         #[arg(long, value_parser = parse_harness)]
         harness: Option<HarnessKind>,
+
+        #[command(flatten)]
+        output: Output,
     },
+
+    /// Pick a captured thread and resume it.
+    Resume(super::resume::Cmd),
+
+    /// Turn thread capture on (short for `atuin config enable threads`).
+    Enable,
 }
 
 // Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
@@ -90,6 +112,7 @@ pub enum HarnessArg {
     Codex,
     Opencode,
     Pi,
+    Omp,
 }
 
 impl From<HarnessArg> for HarnessKind {
@@ -99,6 +122,7 @@ impl From<HarnessArg> for HarnessKind {
             HarnessArg::Codex => Self::Codex,
             HarnessArg::Opencode => Self::Opencode,
             HarnessArg::Pi => Self::Pi,
+            HarnessArg::Omp => Self::Omp,
         }
     }
 }
@@ -130,27 +154,36 @@ impl Style {
     }
 }
 
-pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
-    if !settings.ai.capture_sessions {
+pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
+    let style = match cmd {
+        Cmd::Resume(cmd) => return super::resume::run(cmd, settings).await,
+        // The atuin binary runs it as `atuin config enable threads`, which needs the daemon.
+        Cmd::Enable => return Err(eyre!("threads need the daemon, which this build leaves out")),
+        Cmd::List { ref output }
+        | Cmd::Show { ref output, .. }
+        | Cmd::Search { ref output, .. }
+        | Cmd::Tail { ref output }
+        | Cmd::Import { ref output, .. } => output.style.resolve(),
+    };
+
+    if !settings.threads.capture {
         // stderr so it never pollutes piped stdout (json/ndjson).
         eprintln!(
-            "note: AI session capture is off. Run `atuin config enable ai-sessions` to record new \
-             sessions."
+            "note: thread capture is off. Run `atuin config enable threads` to record new threads."
         );
     }
 
-    let style = cmd.style.resolve();
-    let mut client = AiClient::from_settings(settings).await?;
+    let mut client = AiClient::from_settings(&settings).await?;
 
     // Right after the daemon starts, and when a store command asks it to, it rebuilds its AI
     // sessions and refuses reads until done, rather than answer from a partial set. Tail only
     // streams what happens from now on.
-    if !matches!(cmd.cmd, SubCmd::Tail) {
+    if !matches!(cmd, Cmd::Tail { .. }) {
         let mut reported = None;
         client
             .wait_for_sessions(|progress| {
                 if reported.is_none() {
-                    eprintln!("AI sessions are being rebuilt from the record store; waiting...");
+                    eprintln!("Threads are being rebuilt from the record store; waiting...");
                 }
                 let (replayed, pending) = progress;
                 if reported != Some(progress) && pending > 0 {
@@ -161,19 +194,24 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
             .await?;
     }
 
-    let result = match cmd.cmd {
-        SubCmd::List => list(&mut client, style).await,
-        SubCmd::Show { session } => show(&mut client, &session, style).await,
-        SubCmd::Search {
+    let result = match cmd {
+        Cmd::List { .. } => list(&mut client, style).await,
+        Cmd::Show { thread, .. } => show(&mut client, &thread, style).await,
+        Cmd::Search {
             query,
             harness,
             limit,
-        } => search(&mut client, &query, harness.map(HarnessKind::from), limit, style).await,
-        SubCmd::Tail => tail(&mut client, style).await,
-        SubCmd::Import { harness } => import(&mut client, harness, style, &mut io::stdout()).await,
+            ..
+        } => {
+            let query = query.iter().map(String::as_str);
+            search(&mut client, query, harness.map(HarnessKind::from), limit, style).await
+        }
+        Cmd::Tail { .. } => tail(&mut client, style).await,
+        Cmd::Import { harness, .. } => import(&mut client, harness, style, &mut io::stdout()).await,
+        Cmd::Resume(_) | Cmd::Enable => unreachable!("returned above"),
     };
 
-    // A downstream reader that closes the pipe (e.g. `atuin ai session list | head`) makes the next
+    // A downstream reader that closes the pipe (e.g. `atuin threads list | head`) makes the next
     // write fail with BrokenPipe. That's a clean end of output, not an error, so swallow it rather
     // than print a scary message and exit non-zero.
     match result {
@@ -219,7 +257,7 @@ async fn list(client: &mut AiClient, style: Style) -> Result<()> {
         }
         _ => {
             if sessions.is_empty() {
-                writeln!(out, "No sessions captured yet.")?;
+                writeln!(out, "No threads captured yet.")?;
                 return Ok(());
             }
             writeln!(out, "{:<8} {:<12} {:<16} {:>5}  TITLE", "ID", "HARNESS", "UPDATED", "MSGS")?;
@@ -279,15 +317,15 @@ async fn show(client: &mut AiClient, selector: &str, style: Style) -> Result<()>
 
 async fn search(
     client: &mut AiClient,
-    query: &str,
+    query: impl IntoIterator<Item = &str>,
     harness: Option<HarnessKind>,
     limit: u32,
     style: Style,
 ) -> Result<()> {
+    let query: Vec<&str> = query.into_iter().collect();
     let matches: Vec<SessionMatch> = client
         .search_sessions(
-            query,
-            SearchTerms::All,
+            SearchTerms::All(query.iter().copied().map(str::to_owned).collect()),
             &SessionFilter {
                 harness,
                 ..SessionFilter::default()
@@ -316,7 +354,7 @@ async fn search(
         }
         _ => {
             if matches.is_empty() {
-                writeln!(out, "No sessions matched `{query}`.")?;
+                writeln!(out, "No threads matched `{}`.", query.join(" "))?;
                 return Ok(());
             }
             writeln!(out, "{:<8} {:<12} {:<16}  MATCH", "ID", "HARNESS", "UPDATED")?;
@@ -547,7 +585,7 @@ async fn import(
                 }
                 writeln!(
                     out,
-                    "done: {} sessions, {} imported, {} skipped, {} failed",
+                    "done: {} threads, {} imported, {} skipped, {} failed",
                     s.sessions, s.imported, s.skipped, s.failed,
                 )?;
             }
@@ -582,23 +620,23 @@ async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession
         stream.try_collect().await?
     };
     select_session(sessions, selector).map_err(|e| match e {
-        SelectError::NotFound(_) => eyre!("{e}. Run `atuin ai session list`."),
+        SelectError::NotFound(_) => eyre!("{e}. Run `atuin threads list`."),
         e => eyre!(e),
     })
 }
 
 /// Why a selector matched no single session. Callers word the next step themselves: the CLI
-/// points at `atuin ai session list`, the MCP tool at its own list tool.
+/// points at `atuin threads list`, the MCP tool at its own list tool.
 #[derive(Debug, thiserror::Error)]
 pub enum SelectError {
-    #[error("no sessions captured yet")]
+    #[error("no threads captured yet")]
     NoSessions,
-    #[error("no session with id `{0}`")]
+    #[error("no thread with id `{0}`")]
     NotFound(String),
-    #[error("id `{0}` matches more than one session; use a longer or full id")]
+    #[error("id `{0}` matches more than one thread; use a longer or full id")]
     Ambiguous(String),
     /// Several agents' sessions have the id (a session continued in another agent can keep it).
-    #[error("id `{id}` names a session in more than one agent; use its id:{choices}")]
+    #[error("id `{id}` names a thread in more than one agent; use its id:{choices}")]
     Shared {
         id: String,
         choices: String,
@@ -940,6 +978,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
         HarnessKind::Copilot => Ansi::Blue,
         HarnessKind::Opencode => Ansi::Cyan,
         HarnessKind::Pi => Ansi::Yellow,
+        HarnessKind::Omp => Ansi::Red,
         HarnessKind::Unknown => Ansi::Dim,
     }
 }
@@ -1006,9 +1045,10 @@ fn parse_harness(value: &str) -> Result<HarnessKind, String> {
         "codex" => Ok(HarnessKind::Codex),
         "opencode" => Ok(HarnessKind::Opencode),
         "pi" => Ok(HarnessKind::Pi),
-        other => {
-            Err(format!("unknown harness `{other}` (expected claude-code, codex, opencode, or pi)"))
-        }
+        "omp" => Ok(HarnessKind::Omp),
+        other => Err(format!(
+            "unknown harness `{other}` (expected claude-code, codex, opencode, pi, or omp)"
+        )),
     }
 }
 
@@ -1022,6 +1062,7 @@ pub fn harness_name(harness: HarnessKind) -> &'static str {
         HarnessKind::Copilot => "copilot",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "pi",
+        HarnessKind::Omp => "omp",
         HarnessKind::Unknown => "unknown",
     }
 }
@@ -1364,6 +1405,7 @@ mod tests {
     #[case("codex", HarnessKind::Codex)]
     #[case("opencode", HarnessKind::Opencode)]
     #[case("pi", HarnessKind::Pi)]
+    #[case("omp", HarnessKind::Omp)]
     fn parse_harness_maps_names(#[case] input: &str, #[case] want: HarnessKind) {
         assert_eq!(parse_harness(input).unwrap(), want);
     }
@@ -1448,27 +1490,26 @@ mod tests {
         assert!(select_session(sessions, "zzz").is_err());
     }
 
-    /// A query starting with `-` is a query, after `--` or not; flags still parse around it.
+    /// Flags parse around the query's words, and a query starting with `-` follows `--`.
     #[rstest]
-    #[case::bare(&["search", "-v"])]
-    #[case::after_dashes(&["search", "--", "-v"])]
-    #[case::before_a_flag(&["search", "-v", "--limit", "3"])]
-    #[case::after_a_flag(&["search", "--limit", "3", "-v"])]
-    fn a_search_query_may_start_with_a_hyphen(#[case] args: &[&str]) {
+    #[case::before_a_flag(&["search", "flaky", "test", "--limit", "3"], &["flaky", "test"])]
+    #[case::after_a_flag(&["search", "--limit", "3", "flaky"], &["flaky"])]
+    #[case::hyphen_after_dashes(&["search", "--limit", "3", "--", "-v"], &["-v"])]
+    fn a_search_query_parses_around_flags(#[case] args: &[&str], #[case] expected: &[&str]) {
         #[derive(clap::Parser)]
         struct Cli {
-            #[command(flatten)]
+            #[command(subcommand)]
             cmd: Cmd,
         }
 
         let cli = <Cli as clap::Parser>::try_parse_from(
-            std::iter::once("session").chain(args.iter().copied()),
+            std::iter::once("threads").chain(args.iter().copied()),
         )
         .unwrap();
-        let SubCmd::Search { query, .. } = cli.cmd.cmd else {
+        let Cmd::Search { query, .. } = cli.cmd else {
             panic!("not a search");
         };
-        assert_eq!(query, "-v");
+        assert_eq!(query, expected);
     }
 
     #[rstest]
@@ -1822,12 +1863,15 @@ mod tests {
 
     /// The match ranges in the JSON are those of what a real search matched.
     #[rstest]
-    #[case::all(SearchTerms::All, "build", json!([[8, 13]]), json!([[4, 9]]))]
-    #[case::any(SearchTerms::Any, "build nothing", json!([[8, 13]]), json!([[4, 9]]))]
+    #[case::all(SearchTerms::All(vec!["build".into()]), json!([[8, 13]]), json!([[4, 9]]))]
+    #[case::any(
+        SearchTerms::Any(vec!["build".into(), "nothing".into()]),
+        json!([[8, 13]]),
+        json!([[4, 9]])
+    )]
     #[tokio::test]
     async fn search_match_json_ranges_come_from_the_search(
-        #[case] mode: SearchTerms,
-        #[case] query: &str,
+        #[case] terms: SearchTerms,
         #[case] title: Value,
         #[case] preview: Value,
     ) {
@@ -1837,7 +1881,7 @@ mod tests {
         db.append(&m).await.unwrap();
 
         let hits: Vec<SessionMatch> =
-            db.search(query, mode, &SessionFilter::default(), 0).try_collect().await.unwrap();
+            db.search(terms, &SessionFilter::default(), 0).try_collect().await.unwrap();
         let [hit] = hits.as_slice() else {
             panic!("one match: {hits:?}");
         };

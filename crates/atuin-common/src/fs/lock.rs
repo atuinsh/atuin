@@ -146,6 +146,7 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::*;
+    use crate::path::PathBufExt as _;
 
     struct Lock {
         _dir: tempfile::TempDir,
@@ -156,7 +157,7 @@ mod tests {
     #[fixture]
     fn lock() -> Lock {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("sub").join("test.lock");
+        let path = dir.path().join("sub").joined("test.lock");
         Lock { _dir: dir, path }
     }
 

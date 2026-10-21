@@ -1696,8 +1696,10 @@ mod tests {
 
     #[rstest]
     fn tips_disabled_in_settings_suppresses_the_tip_line() {
+        let mut settings = Settings::utc();
+        settings.ai.tips = Some(false);
         let mut app = app_with(AgentFsm::new(vec![], "t".into()));
-        Arc::make_mut(&mut app.settings).ai.tips = Some(false);
+        app.settings = Arc::new(settings);
         let mut h = Harness::new(app);
         h.type_str("hello");
         h.press(KeyCode::Enter);

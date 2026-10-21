@@ -13,6 +13,14 @@ Additionally, if set, `ATUIN_CONFIG_DIR` will override the location of
 `config.toml` and [`server.toml`](../self-hosting/server-setup.md): Atuin will
 look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
 
+Paths in the config may start with `~` and refer to environment variables, as
+in `$XDG_RUNTIME_DIR/atuin.sock`; write `$$` for a literal `$`. A relative path
+is relative to the directory holding `config.toml`, whatever directory Atuin
+runs in: with the default config, `socket_path = "atuin.sock"` is
+`~/.atuin/atuin.sock`. This holds for paths set through `ATUIN_*` environment
+variables too. A database path must name a file: SQLite's `:memory:` isn't
+accepted, and neither is a `sqlite:` or `file:` URI.
+
 ??? note "Upgrading from older versions"
 
     Older versions of Atuin stored data in `~/.config/atuin` (or
@@ -436,7 +444,7 @@ history_filter = [
 A filtered command's output isn't captured either. To keep a command in history
 but not its output, use [`command_filter`](#command_filter) in `[output]`. The
 filter applies to the commands your AI agents run too: a matching call is
-[captured](../ai/sessions.md#whats-captured) with its tool's name only.
+[captured](../ai/threads.md#whats-captured) with its tool's name only.
 
 ### `cwd_filter`
 
@@ -454,7 +462,7 @@ This supports regular expressions, so you can hide pretty much whatever you want
 
 After updating that parameter, you can run [the prune command](../reference/prune.md) to remove old history entries that match the new filters.
 
-An [AI session](../ai/sessions.md#whats-captured) captured in a matching
+A [thread](../ai/threads.md#whats-captured) captured in a matching
 directory keeps only the names of the tools its agent called there.
 
 ### `store_failed`
@@ -489,6 +497,7 @@ to save it if any of them match. The patterns currently cover:
 | Slack | Bot, user, app and config tokens, and webhook URLs |
 | Stripe | Live, test and restricted keys |
 | Package registries | npm, PyPI, RubyGems, Clojars, Docker Hub and Artifactory tokens |
+| HashiCorp | Commands setting `NOMAD_TOKEN`, `CONSUL_HTTP_TOKEN` or `VAULT_TOKEN`, passing `-token` to `nomad` or `consul`, or sending an `X-Nomad-Token`, `X-Consul-Token` or `X-Vault-Token` header, each with the token itself rather than a reference like `$NOMAD_TOKEN` |
 | Infrastructure | DigitalOcean, Terraform Cloud, HashiCorp Vault, Fly.io, Heroku, Cloudflare origin CA, Databricks, PlanetScale, Supabase, Tailscale, Dynatrace, Grafana, Sentry, Doppler and OpenShift tokens |
 | Other services | Netlify, Pulumi, Atlassian, Linear, Notion, Postman, Shopify, SendGrid, Brevo, Square, EasyPost, Duffel, Frame.io, ReadMe, Prefect, Infracost and Telegram tokens, Discord and Microsoft Teams webhooks, 1Password service account tokens and age secret keys |
 | Atuin | `atuin login`, which takes your password and encryption key as arguments |
@@ -498,7 +507,7 @@ For the exact expressions, see
 [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-common/src/secrets.rs).
 
 The same patterns are applied to captured command output, and to
-[AI sessions](../ai/sessions.md#whats-captured). A command whose own text is
+[threads](../ai/threads.md#whats-captured). A command whose own text is
 clean can still print a credential, so recognised values in the captured
 output are replaced with `****` before storage. Only the value is replaced; the
 variable name or flag beside it stays. Output is also checked for credentials
@@ -527,7 +536,7 @@ stored at all. Add patterns of your own with
 
 ### macOS Ctrl-n key shortcuts
 
-Default: `true`
+Default: `false`
 
 macOS doesn't have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. _However_, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
 
@@ -1214,7 +1223,7 @@ environment (`printenv`, `env`); and commands that name a
 
 The filter also applies to the commands your AI agents run, whether or not
 output capture is enabled: a matching call is
-[captured](../ai/sessions.md#whats-captured) without its output.
+[captured](../ai/threads.md#whats-captured) without its output.
 
 ### `sync`
 
@@ -1228,7 +1237,7 @@ set to.
 
 Settings under `[security]` add to Atuin's built-in rules for keeping
 credentials out of what it stores: captured command output and
-[AI sessions](../ai/sessions.md#whats-captured). For which setting to reach for,
+[threads](../ai/threads.md#whats-captured). For which setting to reach for,
 see [Keeping Secrets Out of Atuin](../guide/excluding-commands.md).
 
 ```toml

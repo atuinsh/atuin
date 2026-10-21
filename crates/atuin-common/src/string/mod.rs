@@ -35,35 +35,61 @@ pub use non_nul_str::{ContainsNul, NonNulStr};
 pub use normalize::normalize;
 pub use trim::TrimExt;
 
-pub trait TruncateCharsExt: AsRef<str> {
-    fn truncate_chars(&self, max_chars: usize) -> &str {
-        let s = self.as_ref();
-        if s.len() <= max_chars {
-            return s;
-        }
+pub trait StrExt {
+    /// Like [`str::lines`], but also returns the byte index of each line.
+    fn line_indices(&self) -> impl Iterator<Item = (usize, &str)>;
 
-        match s.char_indices().nth(max_chars) {
-            Some((end, _)) => &s[..end],
-            None => s,
-        }
-    }
-}
+    /// Truncate the string to a specified number of Unicode scalar values.
+    fn truncate_chars(&self, max_chars: usize) -> &str;
 
-impl<T: AsRef<str> + ?Sized> TruncateCharsExt for T {}
-
-/// Extension trait adding diacritic normalization to string slices.
-pub trait NormalizeDiacriticsExt: AsRef<str> {
     /// Normalize Latin diacritics to their ASCII equivalents (`é` -> `e`).
-    fn normalize_diacritics(&self) -> Cow<'_, str> {
-        let s = self.as_ref();
-        if s.is_ascii() || !s.chars().any(|c| normalize(c) != c) {
-            return Cow::Borrowed(s);
-        }
-        Cow::Owned(s.chars().map(normalize).collect())
-    }
+    fn normalize_diacritics(&self) -> Cow<'_, str>;
+
+    /// Check whether the string consists entirely of whitespace or is empty.
+    fn is_space_or_empty(&self) -> bool;
 }
 
-impl<T: AsRef<str> + ?Sized> NormalizeDiacriticsExt for T {}
+#[allow(clippy::use_self, reason = "`str` is more readable")]
+impl StrExt for str {
+    fn line_indices(&self) -> impl Iterator<Item = (usize, &str)> {
+        let mut newlines = self.match_indices('\n').map(|(i, _)| i);
+        let mut start = 0;
+
+        std::iter::from_fn(move || {
+            let (line, next) = if let Some(i) = newlines.next() {
+                let line = &self[start..i];
+                (line.strip_suffix('\r').unwrap_or(line), i + 1)
+            } else if start < self.len() {
+                (&self[start..], self.len())
+            } else {
+                return None;
+            };
+            Some((std::mem::replace(&mut start, next), line))
+        })
+    }
+
+    fn truncate_chars(&self, max_chars: usize) -> &str {
+        if self.len() <= max_chars {
+            return self;
+        }
+
+        match self.char_indices().nth(max_chars) {
+            Some((end, _)) => &self[..end],
+            None => self,
+        }
+    }
+
+    fn normalize_diacritics(&self) -> Cow<'_, str> {
+        if self.is_ascii() || !self.chars().any(|c| normalize(c) != c) {
+            return Cow::Borrowed(self);
+        }
+        Cow::Owned(self.chars().map(normalize).collect())
+    }
+
+    fn is_space_or_empty(&self) -> bool {
+        self.chars().all(char::is_whitespace)
+    }
+}
 
 /// Extension trait for owned strings providing an empty-string fallback.
 pub trait NonEmptyOrExt: Sized {
@@ -174,10 +200,43 @@ impl Measure {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
     use rstest::rstest;
     use url::Url;
 
-    use super::{FormatSafeUrlExt, NonEmptyOrExt, NormalizeDiacriticsExt, TruncateCharsExt};
+    use super::{FormatSafeUrlExt, NonEmptyOrExt, StrExt};
+
+    #[rstest]
+    #[case::empty("", &[])]
+    #[case::one_line("a", &[(0, "a")])]
+    #[case::trailing_newline("a\n", &[(0, "a")])]
+    #[case::two_lines("a\nbc", &[(0, "a"), (2, "bc")])]
+    #[case::blank_lines("\n\na\n", &[(0, ""), (1, ""), (2, "a")])]
+    #[case::crlf("a\r\nb\r\n", &[(0, "a"), (3, "b")])]
+    #[case::bare_carriage_return("a\rb\r", &[(0, "a\rb\r")])]
+    #[case::multibyte("é\nü", &[(0, "é"), (3, "ü")])]
+    fn line_indices(#[case] input: &str, #[case] expected: &[(usize, &str)]) {
+        // Bounded so a non-terminating iterator fails rather than exhausting memory.
+        let indexed: Vec<_> = input.line_indices().take(expected.len() + 1).collect();
+        assert_eq!(indexed, expected);
+    }
+
+    proptest! {
+        /// The lines are those of [`str::lines`], each at the index it starts at.
+        #[test]
+        fn line_indices_are_the_lines_and_where_they_start(input in "[a\r\n é]{0,20}") {
+            // A string has at most one line per byte; the bound stops a
+            // non-terminating iterator from exhausting memory.
+            let indexed: Vec<_> = input.line_indices().take(input.len() + 1).collect();
+            let lines: Vec<_> = indexed.iter().map(|&(_, line)| line).collect();
+            prop_assert_eq!(lines, input.lines().collect::<Vec<_>>());
+
+            for (i, line) in indexed {
+                prop_assert!(input[i..].starts_with(line));
+                prop_assert!(i == 0 || input[..i].ends_with('\n'));
+            }
+        }
+    }
 
     #[rstest]
     #[case::empty("", "")]

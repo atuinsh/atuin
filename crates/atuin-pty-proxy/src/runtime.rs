@@ -1,14 +1,18 @@
-use std::io::{Read, Write};
+use std::os::fd::{AsFd as _, OwnedFd};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_common::os::unix::io::WriteAllExt;
-use atuin_common::os::unix::tty::TtyId;
+use atuin_common::os::unix::io::{ReadRetryingExt as _, WriteAllExt as _};
+use atuin_common::os::unix::tty::{Access, AsyncTty, TtyId};
 use crossterm::terminal;
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use rustix::termios::SpecialCodeIndex;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::mpsc;
 
-use crate::cwd_updater::CwdUpdater;
+use crate::cwd_updater::{CwdUpdater, pty_parent_fd};
 use crate::debug::{MarkerDebugHighlighter, RESET};
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg, SocketServer};
@@ -28,10 +32,29 @@ const PROTOCOL_VERSION: &str = "2";
 const SOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_mins(1);
 
 pub fn main(options: RuntimeOptions) {
-    if let Err(e) = run(options) {
-        let _ = terminal::disable_raw_mode();
-        eprintln!("atuin pty-proxy: {e:#}");
-        std::process::exit(1);
+    // Everything but the emulator waits on I/O, so it all runs on this one thread: a multi-threaded
+    // scheduler would start a worker per core in a process that sits under every interactive shell.
+    // Only the I/O and timer drivers are enabled, and the blocking pool starts no thread unless a
+    // terminal cannot be reopened.
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .map_err(Error::from)
+        .and_then(|runtime| {
+            let result = runtime.block_on(run(options));
+            // An ordinary drop waits for blocking tasks, and a blocking read of stdin never returns.
+            runtime.shutdown_background();
+            result
+        });
+
+    match result {
+        Ok(code) => std::process::exit(code),
+        Err(e) => {
+            let _ = terminal::disable_raw_mode();
+            eprintln!("atuin pty-proxy: {e:#}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -73,15 +96,13 @@ enum Error {
     OpenPty(Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("failed to spawn child process: {0}")]
     SpawnCommand(Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error("failed to clone pty reader: {0}")]
-    CloneReader(Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error("failed to obtain pty writer: {0}")]
-    TakeWriter(Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("failed to obtain a descriptor for the pty")]
+    MasterFd,
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 
-fn run(options: RuntimeOptions) -> Result<(), Error> {
+async fn run(options: RuntimeOptions) -> Result<i32, Error> {
     let (cols, rows) = terminal::size()?;
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -120,14 +141,14 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
         })
         .ok();
 
-    let (msg_tx, msg_rx) = mpsc::sync_channel::<Msg>(64);
-    let _parser_handle = screen::spawn_parser_thread(rows, cols, msg_rx, screen::ParserOptions {
-        command_capture: options.command_capture,
+    let (msg_tx, msg_rx) = mpsc::channel::<Msg>(64);
+    let _parser_handle = screen::spawn_parser(rows, cols, msg_rx, screen::ParserOptions {
+        command_capture: (options.command_capture)(),
         debug_markers: options.debug_markers,
-    });
+    })?;
 
     let socket_path = if let Some((server, path)) = server_and_path {
-        server.spawn(msg_tx.clone());
+        tokio::spawn(server.serve(msg_tx.clone()));
         spawn_socket_updater(path.to_path_buf());
         Some(path)
     } else {
@@ -160,32 +181,40 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| Error::SpawnCommand(e.into()))?;
     drop(pair.slave);
 
-    let mut pty_reader =
-        pair.master.try_clone_reader().map_err(|e| Error::CloneReader(e.into()))?;
-    let mut pty_writer = pair.master.take_writer().map_err(|e| Error::TakeWriter(e.into()))?;
+    let master = pty_parent_fd(pair.master.as_ref()).ok_or(Error::MasterFd)?;
+    let mut pty_reader = AsyncTty::new(master.try_clone()?)?;
+    let mut pty_writer = AsyncTty::new(master)?;
+
+    // A terminal we cannot open afresh (one owned by another user after `su`, say) is read and
+    // written on tokio's blocking threads instead.
+    let mut stdin = match AsyncTty::reopen(rustix::stdio::stdin(), Access::Read) {
+        Ok(tty) => Stdin::Reopened(tty),
+        Err(_) => Stdin::Inherited(Arc::new(std::io::stdin().as_fd().try_clone_to_owned()?)),
+    };
+    let mut stdout = match AsyncTty::reopen(rustix::stdio::stdout(), Access::Write) {
+        Ok(tty) => Stdout::Reopened(tty),
+        Err(_) => Stdout::Inherited(Arc::new(std::io::stdout().as_fd().try_clone_to_owned()?)),
+    };
 
     let child_pid =
         child.process_id().and_then(|pid| rustix::process::Pid::from_raw(pid.cast_signed()));
     // Update this process's CWD to match the child's CWD. This is necessary to enable programs like
     // tmux to track the child's CWD.
     let cwd_updater = CwdUpdater::new(pair.master.as_ref(), child_pid);
+    let mut sigchld = signal(SignalKind::child())?;
     spawn_resize_handler(pair.master, msg_tx.clone())?;
     terminal::enable_raw_mode()?;
 
-    let stdout_thread = std::thread::spawn(move || {
-        let stdout = rustix::stdio::stdout();
-
-        let mut highlighter = options.debug_markers.then(MarkerDebugHighlighter::new);
+    let debug_markers = options.debug_markers;
+    let output = tokio::spawn(async move {
+        let mut highlighter = debug_markers.then(MarkerDebugHighlighter::new);
         let mut buf = [0u8; 8192];
 
         loop {
-            match pty_reader.read(&mut buf) {
+            match pty_reader.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let raw_data = &buf[..n];
-                    let _ = msg_tx.send(Msg::Data(raw_data.to_vec()));
-                    cwd_updater.update();
-
                     let highlighted;
                     let data: &[u8] = if let Some(highlighter) = &mut highlighter {
                         highlighted = highlighter.render(raw_data);
@@ -194,47 +223,126 @@ fn run(options: RuntimeOptions) -> Result<(), Error> {
                         raw_data
                     };
 
-                    if stdout.write_all_retrying(data).is_err() {
+                    if stdout.write_all(data).await.is_err() {
                         break;
                     }
+
+                    // Only after the terminal has the chunk: handing it to the parser wakes the
+                    // parser's thread, a syscall that would otherwise delay every echoed keystroke.
+                    let _ = msg_tx.send(Msg::Data(raw_data.to_vec())).await;
+                    cwd_updater.update();
                 }
             }
         }
 
         if highlighter.is_some() {
-            let _ = stdout.write_all_retrying(RESET);
+            let _ = stdout.write_all(RESET).await;
         }
     });
 
-    std::thread::spawn(move || {
-        let mut stdin = std::io::stdin();
+    tokio::spawn(async move {
         let mut buf = [0u8; 8192];
         loop {
-            match stdin.read(&mut buf) {
+            match stdin.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if pty_writer.write_all(&buf[..n]).is_err() {
+                    if pty_writer.write_all(&buf[..n]).await.is_err() {
                         break;
                     }
                 }
             }
         }
+        // Hand the end of our input on to the shell, so that piped input ends the session. EOF
+        // only counts at the start of a line, hence the newline.
+        if let Ok(termios) = rustix::termios::tcgetattr(&pty_writer)
+            && let eof = termios.special_codes[SpecialCodeIndex::VEOF]
+            && eof != 0
+        {
+            let _ = pty_writer.write_all(&[b'\n', eof]).await;
+        }
     });
 
-    let status = child.wait()?;
-    let _ = stdout_thread.join();
+    // Checked once before the first wait, since the child may have exited before the handler was
+    // installed.
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        sigchld.recv().await;
+    };
+    let _ = output.await;
 
     let _ = terminal::disable_raw_mode();
     drop(socket_path); // delete the socket
-    std::process::exit(process_exit_code(status.exit_code()));
+    Ok(process_exit_code(status.exit_code()))
 }
 
-/// Spawn a thread that periodically updates the socket's modification time so it doesn't get
+/// Where the user's input comes from.
+enum Stdin {
+    /// The user's terminal, opened afresh and driven by the reactor.
+    Reopened(AsyncTty),
+    /// The inherited stdin, read on the blocking pool.
+    ///
+    /// Whatever else shares its description may have made it non-blocking, so having nothing to
+    /// read yet is waited out rather than taken for the end of input.
+    Inherited(Arc<OwnedFd>),
+}
+
+impl Stdin {
+    /// Read some input into `buf`; `0` means the end of input.
+    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Reopened(tty) => tty.read(buf).await,
+            Self::Inherited(fd) => {
+                let (fd, len) = (Arc::clone(fd), buf.len());
+                let chunk = tokio::task::spawn_blocking(move || {
+                    let mut chunk = vec![0; len];
+                    let read = fd.read_retrying(&mut chunk)?;
+                    chunk.truncate(read);
+                    Ok::<_, rustix::io::Errno>(chunk)
+                })
+                .await
+                .map_err(std::io::Error::other)??;
+                buf[..chunk.len()].copy_from_slice(&chunk);
+                Ok(chunk.len())
+            }
+        }
+    }
+}
+
+/// Where the child's output goes.
+enum Stdout {
+    /// The user's terminal, opened afresh and driven by the reactor.
+    Reopened(AsyncTty),
+    /// The inherited stdout, written on the blocking pool.
+    ///
+    /// Whatever else shares its description may have made it non-blocking, so a full buffer is
+    /// waited out rather than taken as an error (#4217).
+    Inherited(Arc<OwnedFd>),
+}
+
+impl Stdout {
+    /// Write all of `data`, waiting for as long as the terminal takes to accept it.
+    async fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::Reopened(tty) => tty.write_all(data).await,
+            Self::Inherited(fd) => {
+                let (fd, data) = (Arc::clone(fd), data.to_vec());
+                tokio::task::spawn_blocking(move || fd.write_all_retrying(&data))
+                    .await
+                    .map_err(std::io::Error::other)?
+                    .map_err(std::io::Error::from)
+            }
+        }
+    }
+}
+
+/// Spawn a task that periodically updates the socket's modification time so it doesn't get
 /// automatically deleted by temporary file cleaners.
-fn spawn_socket_updater(path: PathBuf) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
+fn spawn_socket_updater(path: PathBuf) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
         loop {
-            std::thread::sleep(SOCKET_KEEPALIVE_INTERVAL);
+            tokio::time::sleep(SOCKET_KEEPALIVE_INTERVAL).await;
             if let Err(e) = atuin_common::os::unix::touch_file(&path)
                 && e.kind() == std::io::ErrorKind::NotFound
             {
@@ -245,16 +353,13 @@ fn spawn_socket_updater(path: PathBuf) -> std::thread::JoinHandle<()> {
 }
 
 fn spawn_resize_handler(
-    master: Box<dyn portable_pty::MasterPty + Send>,
-    resize_tx: mpsc::SyncSender<Msg>,
+    master: Box<dyn MasterPty + Send>,
+    resize_tx: mpsc::Sender<Msg>,
 ) -> std::io::Result<()> {
-    use signal_hook::consts::SIGWINCH;
-    use signal_hook::iterator::Signals;
+    let mut signals = signal(SignalKind::window_change())?;
 
-    let mut signals = Signals::new([SIGWINCH])?;
-
-    std::thread::spawn(move || {
-        for _ in signals.forever() {
+    tokio::spawn(async move {
+        while signals.recv().await.is_some() {
             if let Ok((cols, rows)) = terminal::size() {
                 let _ = master.resize(PtySize {
                     rows,
@@ -262,7 +367,7 @@ fn spawn_resize_handler(
                     pixel_width: 0,
                     pixel_height: 0,
                 });
-                let _ = resize_tx.send(Msg::Resize { rows, cols });
+                let _ = resize_tx.send(Msg::Resize { rows, cols }).await;
             }
         }
     });
@@ -277,12 +382,15 @@ fn process_exit_code(code: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
+    use std::io::{Read as _, Write as _};
     use std::path::Path;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use easy_cast::Conv;
     use rstest::rstest;
 
-    use super::{CommandBuilder, process_exit_code, set_child_env};
+    use super::{CommandBuilder, Stdin, Stdout, process_exit_code, set_child_env};
 
     #[rstest]
     #[case::zero(0, 0)]
@@ -314,5 +422,47 @@ mod tests {
         set_child_env(&mut cmd, Some(Path::new("/tmp/atuin-test/pty-proxy-1-2-3.sock")));
 
         assert_eq!(cmd.get_env("ATUIN_PTY_PROXY_FAILED"), None);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn inherited_stdout_waits_out_a_full_non_blocking_pipe() {
+        // Whatever shares the inherited description can leave it non-blocking (#4217). A full
+        // buffer has to hold the output back, not end it.
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        rustix::io::ioctl_fionbio(&writer, true).unwrap();
+        let mut stdout = Stdout::Inherited(Arc::new(writer.into()));
+        let collector = std::thread::spawn(move || {
+            // Long enough for the write to fill the pipe and find it full.
+            std::thread::sleep(Duration::from_millis(200));
+            let mut got = Vec::new();
+            reader.read_to_end(&mut got).unwrap();
+            got
+        });
+
+        let data = vec![0xAC; 512 * 1024];
+        stdout.write_all(&data).await.unwrap();
+        drop(stdout); // EOF for the reader
+
+        assert_eq!(collector.join().unwrap(), data);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn inherited_stdin_waits_for_input_on_a_non_blocking_pipe() {
+        // Whatever shares the inherited description can leave it non-blocking. Nothing to read
+        // yet is not the end of input, which would hand the shell an EOF and end the session.
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        rustix::io::ioctl_fionbio(&reader, true).unwrap();
+        let mut stdin = Stdin::Inherited(Arc::new(reader.into()));
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            writer.write_all(b"typed").unwrap();
+        });
+
+        let mut buf = [0u8; 64];
+        let n = stdin.read(&mut buf).await.unwrap();
+
+        assert_eq!(&buf[..n], b"typed");
     }
 }

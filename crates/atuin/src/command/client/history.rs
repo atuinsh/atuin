@@ -1,5 +1,6 @@
 use std::fmt::{self, Display};
 use std::io::{self, IsTerminal, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::database::{Sqlite, current_context};
@@ -419,7 +420,7 @@ fn make_starting_history(
     let h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
         .command(command)
-        .cwd(cwd)
+        .cwd(cwd.to_string_lossy().into_owned())
         .author_opt(author)
         .author_kind_opt(author_kind)
         .intent_opt(intent.map(String::from))
@@ -451,7 +452,7 @@ async fn handle_end(
     db: &Sqlite,
     store: SqliteStore,
     history_store: HistoryStore,
-    settings: &Settings,
+    settings: &Arc<Settings>,
     id: HistoryId,
     exit: i64,
     duration: Option<u64>,
@@ -565,7 +566,7 @@ pub(super) async fn start_history_entry(
 
 #[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 pub(super) async fn end_history_entry(
-    settings: &Settings,
+    settings: &Arc<Settings>,
     id: HistoryId,
     exit: i64,
     duration: Option<u64>,
@@ -1114,7 +1115,7 @@ impl Cmd {
 
     #[allow(clippy::too_many_lines)]
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match self {
             Self::Start {
                 cmd_env,
@@ -1397,6 +1398,7 @@ mod tests {
         #[case] rows_left: i64,
     ) {
         use atuin_client::record::sqlite_store::SqliteStore;
+        use atuin_common::path::AbsPathBuf;
         use atuin_common::utils::uuid_v7;
         use atuin_domain::record::HostId;
 
@@ -1404,15 +1406,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = SqliteStore::in_memory(Duration::from_secs(2)).await.unwrap();
         let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
-        let settings = Settings {
-            daemon: atuin_client::settings::Daemon {
-                enabled: daemon_enabled,
-                autostart: false,
-                socket_path: Some(tmp.path().join("no-daemon-here.sock")),
-                ..Default::default()
-            },
-            ..Settings::utc()
-        };
+        let mut settings = Settings::utc();
+        settings.daemon.enabled = daemon_enabled;
+        settings.daemon.autostart = false;
+        settings.daemon.socket_path = AbsPathBuf::new(tmp.path().join("no-daemon-here.sock")).ok();
         let entries: Vec<History> = ["echo one", "echo two"]
             .into_iter()
             .map(|cmd| {

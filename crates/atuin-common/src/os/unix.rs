@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use rustix::fs;
 
+use crate::path::AbsPathBuf;
+
 pub mod disk;
 pub mod io;
 pub mod process;
@@ -38,11 +40,13 @@ pub fn touch_file(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Get the global temporary directory.
-pub fn tmp_dir() -> PathBuf {
+/// Get the global temporary directory: `$TMPDIR`, or `/tmp` if that is unset or relative.
+#[must_use]
+pub fn tmp_dir() -> AbsPathBuf {
     // TODO: We should perhaps use `std::env::temp_dir()` instead, but that would be a breaking
     // change and could cause clients to fail to connect to an older running daemon.
-    crate::env::var_nonempty("TMPDIR").map_or_else(|| "/tmp".into(), Into::into)
+    crate::env::var_abspath("TMPDIR")
+        .unwrap_or_else(|| AbsPathBuf::new("/tmp").expect("/tmp is absolute"))
 }
 
 /// Error returned by [`create_secure_temp_dir`].

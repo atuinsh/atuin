@@ -1,5 +1,5 @@
 use atuin_client::history::History;
-use atuin_common::string::TruncateCharsExt;
+use atuin_common::string::StrExt as _;
 use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use time::UtcOffset;
 

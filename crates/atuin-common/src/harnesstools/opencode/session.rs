@@ -71,7 +71,7 @@
 //!   (`packages/schema/src/session-event.ts`) is still moving.
 //! - **What the event log does not hold**: a session's messages from before its log began --
 //!   opencode's log is younger than its sessions, one of its migrations empties it, and its
-//!   `import` (which `atuin ai resume` writes a session with) writes none -- are read from
+//!   `import` (which `atuin threads resume` writes a session with) writes none -- are read from
 //!   opencode's `session`/`message`/`part` projection, ahead of the log: by [`Session::read`], and
 //!   by the live tail when it takes a session up with no checkpoint in it. [`Sessions::existing`]
 //!   lists the sessions only the projection holds (see `Backlog`).
@@ -121,6 +121,7 @@ use crate::harnesstools::session::{
     RuntimeError, Session, SessionId, Sessions, WatchError,
 };
 use crate::os::fs::FdIdentity;
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 pub(crate) mod projection;
@@ -142,8 +143,8 @@ pub struct OpencodeSessions {
 impl OpencodeSessions {
     fn data_dir() -> PathBuf {
         var_nonempty("XDG_DATA_HOME")
-            .map_or_else(|| home_dir().join(".local").join("share"), PathBuf::from)
-            .join("opencode")
+            .map_or_else(|| home_dir().joined(".local").joined("share"), PathBuf::from)
+            .joined("opencode")
     }
 
     /// When a database was last written: the newer of its file and `-wal` mtimes. `-shm` is
@@ -196,16 +197,16 @@ impl OpencodeSessions {
             return Ok(if path.is_absolute() {
                 path
             } else {
-                Self::data_dir().join(path)
+                Self::data_dir().joined(path)
             });
         }
         let data = Self::data_dir();
         if var_nonempty("OPENCODE_DISABLE_CHANNEL_DB")
             .is_some_and(|v| matches!(v.to_str(), Some("1" | "true")))
         {
-            return Ok(data.join("opencode.db"));
+            return Ok(data.joined("opencode.db"));
         }
-        Ok(Self::discover(&data).unwrap_or_else(|| data.join("opencode.db")))
+        Ok(Self::discover(&data).unwrap_or_else(|| data.joined("opencode.db")))
     }
 }
 
@@ -798,6 +799,7 @@ impl Reader {
                     role: Role::Assistant,
                     turn: Some(id.clone()),
                     model: data["model"]["id"].as_str().map(str::to_owned),
+                    provider: data["model"]["providerID"].as_str().map(str::to_owned),
                     ..MessageInfo::unknown()
                 };
                 self.infos.insert(&id, info);
@@ -1032,6 +1034,8 @@ struct MessageInfo {
     parent: Option<String>,
     /// `modelID`, of an assistant message.
     model: Option<String>,
+    /// `providerID`, of an assistant message.
+    provider: Option<String>,
     /// `path.cwd`, of an assistant message.
     cwd: Option<String>,
     /// A compaction summary (`summary: true`), whose text stands in for the conversation before
@@ -1046,6 +1050,7 @@ impl MessageInfo {
             turn: None,
             parent: None,
             model: None,
+            provider: None,
             cwd: None,
             summary: false,
         }
@@ -1067,6 +1072,7 @@ impl MessageInfo {
             turn: Some(Self::turn_of(id, info)),
             parent: text(&info["parentID"]),
             model: text(&info["modelID"]),
+            provider: text(&info["providerID"]),
             cwd: text(&info["path"]["cwd"]),
             summary: info["summary"].as_bool().unwrap_or_default(),
         })
@@ -2511,6 +2517,10 @@ impl Message for OpencodeMessage {
 
     fn model(&self) -> Option<String> {
         self.assistant()?.model.clone()
+    }
+
+    fn provider(&self) -> Option<String> {
+        self.assistant()?.provider.clone()
     }
 
     /// A step's usage, from its `step-finish` part: one per model call, which is what opencode
@@ -4294,6 +4304,7 @@ mod tests {
             let reply = find(&messages, "prt_a1");
             assert_eq!(reply.role(), Role::Assistant);
             assert_eq!(reply.model().as_deref(), Some("claude-sonnet-4"));
+            assert_eq!(reply.provider().as_deref(), Some("anthropic"));
             assert_eq!(reply.cwd(), Some(PathBuf::from("/work/proj/sub")));
             assert_eq!(reply.parent_id(), Some(MessageId::from("msg_u1".to_owned())));
             assert_eq!(reply.turn_id().as_deref(), Some("1700000001000:anthropic/claude-sonnet-4"));
@@ -4920,7 +4931,7 @@ mod tests {
         }
 
         /// The live tail delivers what the projection holds of a session ahead of its log, as a
-        /// one-shot read does: a session `opencode import` wrote (`atuin ai resume --in
+        /// one-shot read does: a session `opencode import` wrote (`atuin threads resume --in
         /// opencode`) has no log of its history, nor of the marker naming its parent. A restart
         /// from a checkpoint in the backlog delivers the backlog again, for the consumer to keep
         /// the first of each id; one from a checkpoint in the log resumes in the log.

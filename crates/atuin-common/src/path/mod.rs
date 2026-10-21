@@ -1,10 +1,16 @@
 //! Filesystem path utilities and extension traits.
 
+mod absolute;
 pub mod display_rich;
+mod serde_with;
 
 use std::path::{Path, PathBuf};
 
+pub use absolute::{AbsPath, AbsPathBuf, NotAbsoluteError};
 pub use display_rich::{DisplayRichExt, RichDisplay};
+
+// `self::`, or this reads as a re-export from the `serde_with` crate.
+pub use self::serde_with::{PathAnchor, RelativeTo, ShellExpanded};
 
 /// Utility extensions for paths in atuin.
 pub trait PathExt {
@@ -32,10 +38,29 @@ impl<P: AsRef<Path>> PathExt for P {
             // Fast path: avoids calling `canonicalize`.
             return true;
         }
-        let (Ok(this), Ok(other)) = (this.canonicalize(), other.canonicalize()) else {
+        let (Ok(this), Ok(other)) =
+            (AbsPathBuf::canonicalize(this), AbsPathBuf::canonicalize(other))
+        else {
             return false;
         };
         this == other
+    }
+}
+
+/// Extension trait for [`PathBuf`].
+pub trait PathBufExt: Sized + PathExt {
+    /// Like [`Path::join`], but reuses the [`PathBuf`].
+    ///
+    /// When you have a [`PathBuf`], prefer this method to [`Path::join`], unless you need to keep
+    /// the original [`PathBuf`] around.
+    #[must_use]
+    fn joined(self, path: impl AsRef<Path>) -> Self;
+}
+
+impl PathBufExt for PathBuf {
+    fn joined(mut self, path: impl AsRef<Path>) -> Self {
+        self.push(path);
+        self
     }
 }
 
@@ -48,12 +73,12 @@ pub struct EnvDependentPathBuf {
     /// The primary form of the path.
     ///
     /// For example, `$TMPDIR/example.txt`.
-    pub primary: PathBuf,
+    pub primary: AbsPathBuf,
 
     /// The path that would be used if none of the relevant environment variables were set.
     ///
     /// For example, `/tmp/example.txt` even when `$TMPDIR` is set.
-    pub envless: Option<PathBuf>,
+    pub envless: Option<AbsPathBuf>,
 }
 
 #[cfg(test)]
@@ -71,7 +96,7 @@ mod tests {
         std::fs::create_dir(&b).unwrap();
 
         assert!(a.is_same_path(&a));
-        assert!(a.is_same_path(dir.path().join("b").join("..").join("a")));
+        assert!(a.is_same_path(dir.path().join("b").joined("..").joined("a")));
         assert!(!a.is_same_path(&b));
         // Paths that don't exist are only the same if they're equal.
         assert!(dir.path().join("x").is_same_path(dir.path().join("x")));

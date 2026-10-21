@@ -25,7 +25,7 @@ pub use capture::CommandCapture;
 /// Known AI agent author values. Used by [`History::is_agent`] to guess who ran a command when the
 /// entry does not state it, and so when matching against [`AuthorPattern::AllAgent`] and
 /// [`AuthorPattern::AllUser`].
-pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "opencode", "pi"];
+pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "omp", "opencode", "pi"];
 
 /// The spelling of [`AuthorPattern::AllUser`] on the command line and in the MCP tool schema.
 pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";

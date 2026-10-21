@@ -570,6 +570,7 @@ fn a_call_s_content_is_its_text_reasoning_and_tools() {
     let message = normalised("assistant", &data).unwrap();
     assert_eq!(message.role(), Role::Assistant);
     assert_eq!(message.model().as_deref(), Some("mock-model"));
+    assert_eq!(message.provider().as_deref(), Some("mock"));
     assert_eq!(message.cwd(), Some(PathBuf::from("/work/proj")));
     assert_eq!(message.timestamp().unwrap().unix_timestamp_nanos(), 2_000_000_000);
     let content = message.content();

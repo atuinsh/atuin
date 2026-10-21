@@ -314,8 +314,9 @@ impl AiSessionDatabase {
                 id, harness, session, source_id, parent_harness, parent_session_id,
                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
                 usage_input, usage_output, usage_cache_read, usage_cache_write,
-                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host, blocks
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host, blocks,
+                provider
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session, source_id) DO NOTHING",
         )
         .bind(id)
@@ -343,6 +344,7 @@ impl AiSessionDatabase {
         .bind(prepared.title_change.as_deref())
         .bind(interned.id(conn, host.as_deref())?)
         .bind(prepared.blocks.0)
+        .bind(interned.id(conn, msg.provider.as_deref())?)
         .execute(conn)?;
 
         if inserted.rows_affected() == 0 {

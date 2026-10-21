@@ -35,10 +35,10 @@ impl Rebuild {
                 self.rebuild_scripts(settings, store.clone()).await?;
             }
 
-            // The daemon owns the sidecar, and rebuilds it.
-            "ai-session" => {
+            // The daemon owns the sidecar, and rebuilds it. `ai-session` is the threads' record tag.
+            "threads" | "ai-session" => {
                 super::reset_ai_sessions(settings).await?;
-                println!("The daemon is rebuilding the ai session index");
+                println!("The daemon is rebuilding the threads index");
             }
 
             tag => {

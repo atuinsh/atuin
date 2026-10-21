@@ -54,8 +54,8 @@ const REBUILDING_METADATA: &str = "atuin-ai-sessions-rebuilding";
 
 fn rebuilding_status((replayed, pending): (u64, u64)) -> Status {
     let mut status = Status::unavailable(format!(
-        "AI sessions are being rebuilt from the record store ({replayed} of {pending} records); \
-         try again shortly"
+        "Threads are being rebuilt from the record store ({replayed} of {pending} records); try \
+         again shortly"
     ));
     let progress = MetadataValue::try_from(format!("{replayed}/{pending}"))
         .expect("digits and a slash are valid metadata");
@@ -149,7 +149,7 @@ impl GrpcService for Service {
     ) -> Result<Response<Self::SearchSessionsStream>, Status> {
         self.ensure_recovered()?;
         let SearchSessionsRequest {
-            query,
+            terms,
             limit,
             any_term,
             filter,
@@ -157,12 +157,12 @@ impl GrpcService for Service {
         let filter = SessionFilter::try_from(filter.unwrap_or_default())?;
 
         let terms = if any_term {
-            SearchTerms::Any
+            SearchTerms::Any(terms)
         } else {
-            SearchTerms::All
+            SearchTerms::All(terms)
         };
 
-        let stream = self.capture.search(&query, terms, &filter, limit).map(|result| {
+        let stream = self.capture.search(terms, &filter, limit).map(|result| {
             result.map(SearchSessionsMatch::from).map_err(|e| Status::internal(e.to_string()))
         });
 
@@ -248,7 +248,7 @@ impl GrpcService for Service {
         // the caller sees it is unavailable.
         if !self.capture.is_available() {
             return Err(Status::failed_precondition(
-                "AI session capture is unavailable: the session store failed to open or recover",
+                "Thread capture is unavailable: the threads store failed to open or recover",
             ));
         }
 
@@ -315,7 +315,7 @@ mod tests {
 
         let response = svc
             .search_sessions(Request::new(SearchSessionsRequest {
-                query: "anything".to_owned(),
+                terms: vec!["anything".to_owned()],
                 limit: 0,
                 any_term: false,
                 filter: None,
@@ -335,7 +335,7 @@ mod tests {
 
         let result = svc
             .search_sessions(Request::new(SearchSessionsRequest {
-                query: "x".to_owned(),
+                terms: vec!["x".to_owned()],
                 limit: 0,
                 any_term: false,
                 filter: Some(pb::SessionFilter {
@@ -356,7 +356,7 @@ mod tests {
         let list = || svc.list_sessions(Request::new(ListSessionsRequest { filter: None }));
         let search = || {
             svc.search_sessions(Request::new(SearchSessionsRequest {
-                query: "x".to_owned(),
+                terms: vec!["x".to_owned()],
                 limit: 0,
                 any_term: false,
                 filter: None,

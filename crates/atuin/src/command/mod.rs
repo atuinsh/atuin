@@ -94,16 +94,19 @@ fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
     let child_umask = Some(u32::from(prev_umask.bits()));
 
     #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_config(), child_umask);
+    proxy.run(semantic_command_capture_config, child_umask);
 
     #[cfg(not(feature = "daemon"))]
-    proxy.run(None, child_umask);
+    proxy.run(|| None, child_umask);
 }
 
+/// Capture command output and forward it to the daemon.
+///
+/// Called on the proxy's runtime: the forwarder is a task there, not a thread of its own.
 #[cfg(all(feature = "daemon", feature = "pty-proxy", unix))]
 fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
     use std::borrow::Cow;
-    use std::sync::mpsc;
+    use std::sync::Arc;
 
     if is_truthy_env("ATUIN_TERMINAL") {
         return None;
@@ -112,62 +115,68 @@ fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
     let settings = atuin_client::settings::Settings::new().ok()?;
     let max_output_bytes =
         usize::try_from(settings.output.limits()?.max_output_size.as_u64()).unwrap_or(usize::MAX);
-    let (tx, rx) = mpsc::sync_channel::<(
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(
         atuin_client::history::HistoryId,
         atuin_pty_proxy::CommandCapture,
     )>(128);
 
-    std::thread::spawn(move || {
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+    tokio::spawn(async move {
+        let Ok(mut client) = atuin_daemon::HistoryClient::from_settings(&settings).await else {
             return;
         };
 
-        runtime.block_on(async move {
-            let Ok(mut client) = atuin_daemon::HistoryClient::from_settings(&settings).await else {
-                return;
-            };
-
-            let redactor = settings.security.redactor(settings.secrets_filter);
-            while let Ok((history_id, capture)) = rx.recv() {
-                // Output can carry credentials the command line never showed, e.g. `cat .env`.
-                // Swap the string only when something was actually taken out, so that clean
-                // output -- nearly all of it -- reaches the daemon without being copied. Output
-                // that can't be redacted quickly is not kept at all.
-                let redact = |output: &mut String| {
-                    match redactor.redact_within(output, atuin_common::secrets::REDACT_BUDGET) {
-                        Some(Cow::Borrowed(_)) => true,
-                        Some(Cow::Owned(redacted)) => {
-                            *output = redacted;
-                            true
-                        }
-                        None => false,
+        let redactor = Arc::new(settings.security.redactor(settings.secrets_filter));
+        while let Some((history_id, capture)) = rx.recv().await {
+            // Output can carry credentials the command line never showed, e.g. `cat .env`.
+            // Swap the string only when something was actually taken out, so that clean
+            // output -- nearly all of it -- reaches the daemon without being copied. Output
+            // that can't be redacted quickly is not kept at all. Redacting is CPU-bound for up
+            // to REDACT_BUDGET, so it stays off the proxy's I/O thread.
+            let redactor = Arc::clone(&redactor);
+            let redacted = tokio::task::spawn_blocking(move || {
+                let redact = |output: &mut String| match redactor
+                    .redact_within(output, atuin_common::secrets::REDACT_BUDGET)
+                {
+                    Some(Cow::Borrowed(_)) => true,
+                    Some(Cow::Owned(redacted)) => {
+                        *output = redacted;
+                        true
                     }
+                    None => false,
                 };
 
-                let mut output_start = capture.output_start;
-                let mut output_end = capture.output_end;
-                let redacted = redact(&mut output_start)
-                    && output_end.as_mut().is_none_or(redact);
-                if !redacted {
+                let mut capture = capture;
+                (redact(&mut capture.output_start)
+                    && capture.output_end.as_mut().is_none_or(redact))
+                .then_some(capture)
+            })
+            .await;
+            let capture = match redacted {
+                Ok(Some(capture)) => capture,
+                Ok(None) => {
                     tracing::debug!(%history_id, "output took too long to redact; dropping it");
                     continue;
                 }
-
-                if let Err(err) = client
-                    .register_command_output(
-                        history_id,
-                        output_start,
-                        output_end,
-                        capture.output_observed_bytes,
-                        capture.terminal_width,
-                        capture.terminal_height,
-                    )
-                    .await
-                {
-                    tracing::debug!(%history_id, ?err, "could not record command output; dropping it");
+                Err(err) => {
+                    tracing::debug!(%history_id, ?err, "could not redact output; dropping it");
+                    continue;
                 }
+            };
+
+            if let Err(err) = client
+                .register_command_output(
+                    history_id,
+                    capture.output_start,
+                    capture.output_end,
+                    capture.output_observed_bytes,
+                    capture.terminal_width,
+                    capture.terminal_height,
+                )
+                .await
+            {
+                tracing::debug!(%history_id, ?err, "could not record command output; dropping it");
             }
-        });
+        }
     });
 
     let sink: atuin_pty_proxy::CommandCaptureSink = Box::new(move |history_id, capture| {

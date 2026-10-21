@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::database::Sqlite;
 use atuin_client::logs::FromSettings;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -33,6 +35,8 @@ mod info;
 mod init;
 mod internal;
 mod kv;
+#[cfg(feature = "ai")]
+mod mcp;
 #[cfg(feature = "daemon")]
 mod output;
 mod scripts;
@@ -113,13 +117,18 @@ pub enum Cmd {
     #[command(subcommand)]
     Ai(atuin_ai::commands::Command),
 
-    /// Pick a captured AI coding-agent session and resume it (short for `atuin ai resume`)
+    /// Search, read and resume your coding agents' captured threads
+    #[cfg(feature = "ai")]
+    #[command(subcommand)]
+    Threads(atuin_ai::commands::ThreadsCmd),
+
+    /// Pick a captured coding-agent thread and resume it (short for `atuin threads resume`)
     #[cfg(feature = "ai")]
     Resume(atuin_ai::commands::ResumeCmd),
 
     #[cfg(feature = "ai")]
     #[command(about = fl!("cmd-mcp"))]
-    Mcp,
+    Mcp(mcp::Cmd),
 
     #[command(about = fl!("cmd-wrapped"))]
     Wrapped {
@@ -164,10 +173,21 @@ pub enum Cmd {
 
 impl Cmd {
     pub fn run(self) -> Result<()> {
-        // `atuin resume` is `atuin ai resume`, so it runs exactly as that does.
+        // `atuin threads` and `atuin resume` are `atuin ai`'s, so they run exactly as those do, and
+        // `atuin threads enable` is `atuin config enable threads`.
         #[cfg(feature = "ai")]
-        if let Self::Resume(cmd) = self {
-            return Self::Ai(atuin_ai::commands::Command::Resume(cmd)).run();
+        match self {
+            #[cfg(feature = "daemon")]
+            Self::Threads(atuin_ai::commands::ThreadsCmd::Enable)
+            | Self::Ai(atuin_ai::commands::Command::Threads(
+                atuin_ai::commands::ThreadsCmd::Enable,
+            )) => {
+                let feature = config::Feature::Threads;
+                return Self::Config(config::Cmd::Enable(config::EnableCmd { feature })).run();
+            }
+            Self::Threads(cmd) => return Self::Ai(cmd.into()).run(),
+            Self::Resume(cmd) => return Self::Ai(atuin_ai::commands::Command::Resume(cmd)).run(),
+            _ => {}
         }
 
         // Daemonize before creating the async runtime – fork() inside a live
@@ -176,7 +196,7 @@ impl Cmd {
         if let Self::Daemon(ref cmd) = self
             && cmd.should_daemonize()
         {
-            daemon::daemonize_current_process()?;
+            atuin_daemon::service::Subproc::daemonize()?;
         }
 
         #[cfg(feature = "ai")]
@@ -245,13 +265,16 @@ impl Cmd {
         // This is a pretty hot path, as it runs before and after every single command the user
         // runs
         match self {
-            Self::History(history) => return history.run(&settings).await,
-            Self::Hook(hook) => return hook.run(&settings).await,
+            Self::History(history) => return history.run(&Arc::new(settings)).await,
+            Self::Hook(hook) => return hook.run(&Arc::new(settings)).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
-            Self::Config(config) => return config.run(&settings).await,
+            Self::Config(config) => return config.run(&Arc::new(settings)).await,
+            // Opens the databases itself, once no other daemon can be using them.
+            #[cfg(feature = "daemon")]
+            Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
             Self::InternalDecoy => {
                 eprintln!("error: this command is not meant to be accessed directly");
                 std::process::exit(1);
@@ -272,20 +295,20 @@ impl Cmd {
             Self::Setup => setup::run(&settings).await,
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
-            Self::Search(search) => search.run(db, &mut settings, sqlite_store, theme).await,
+            Self::Search(search) => search.run(db, settings, sqlite_store, theme).await,
 
             #[cfg(feature = "daemon")]
             Self::Output(cmd) => cmd.run(&db, &settings, theme).await,
 
             #[cfg(feature = "sync")]
-            Self::Sync(sync) => sync.run(settings, &db, sqlite_store).await,
+            Self::Sync(sync) => sync.run(&Arc::new(settings), &db, sqlite_store).await,
 
             #[cfg(feature = "sync")]
-            Self::Account(account) => account.run(settings, sqlite_store).await,
+            Self::Account(account) => account.run(&Arc::new(settings), sqlite_store).await,
 
             Self::Kv(kv) => kv.run(&settings, &sqlite_store).await,
 
-            Self::Store(store) => store.run(&settings, &db, sqlite_store).await,
+            Self::Store(store) => store.run(&Arc::new(settings), &db, sqlite_store).await,
 
             Self::Dotfiles(dotfiles) => dotfiles.run(&settings, sqlite_store).await,
 
@@ -303,9 +326,6 @@ impl Cmd {
 
             Self::Wrapped { year } => wrapped::run(year, &db, &settings, sqlite_store, theme).await,
 
-            #[cfg(feature = "daemon")]
-            Self::Daemon(cmd) => cmd.run(settings, sqlite_store, db).await,
-
             Self::History(_)
             | Self::Hook(_)
             | Self::Init(_)
@@ -319,16 +339,19 @@ impl Cmd {
             #[cfg(feature = "self-update")]
             Self::Update(_) => unreachable!(),
 
+            #[cfg(feature = "daemon")]
+            Self::Daemon(_) => unreachable!(),
+
             #[cfg(feature = "ai")]
-            Self::Resume(_) => unreachable!(),
+            Self::Threads(_) | Self::Resume(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => {
-                // Resume is what sessions are for, so while capture is off it offers to turn it
+                // Resume is what threads are for, so while capture is off it offers to turn it
                 // on, every time.
                 #[cfg(feature = "daemon")]
                 if let atuin_ai::commands::Command::Resume(cmd) = &cli
-                    && !settings.ai.capture_sessions
+                    && !settings.threads.capture
                     && cmd.is_interactive()
                     && let Some(mut term) = ai_sessions::Terminal::tty()
                     && let Some(enabled) = ai_sessions::offer(&settings, &mut term).await
@@ -336,7 +359,7 @@ impl Cmd {
                     settings = enabled;
                 }
 
-                // Resume reads the session database itself, which a daemon of an older build
+                // Resume reads the threads database itself, which a daemon of an older build
                 // keeps at an older schema: replace one, as history does, when Atuin manages it.
                 #[cfg(feature = "daemon")]
                 if matches!(cli, atuin_ai::commands::Command::Resume(_))
@@ -347,18 +370,18 @@ impl Cmd {
                     tracing::debug!(?e, "couldn't make the daemon ready before resuming");
                 }
 
-                // Session commands talk to the daemon: start or replace it as history does,
+                // Threads commands talk to the daemon: start or replace it as history does,
                 // instead of failing against a stopped or stale one.
                 #[cfg(feature = "daemon")]
-                if matches!(cli, atuin_ai::commands::Command::Session(_)) {
+                if matches!(cli, atuin_ai::commands::Command::Threads(_)) {
                     daemon::ready_client(&settings).await?;
                 }
 
-                atuin_ai::commands::run(cli, &settings).await
+                atuin_ai::commands::run(cli, settings).await
             }
 
             #[cfg(feature = "ai")]
-            Self::Mcp => Box::pin(atuin_ai::mcp::run(&db, &settings)).await,
+            Self::Mcp(cmd) => cmd.run(&db, settings).await,
         }
     }
 
@@ -424,12 +447,27 @@ mod tests {
         assert!(!format!("{:?}", cli.cmd).contains(SECRET));
     }
 
-    /// `atuin resume` takes what `atuin ai resume` does.
+    /// `atuin resume`, `atuin threads resume` and (as it was) `atuin ai resume` take the same.
     #[cfg(feature = "ai")]
     #[rstest]
-    fn resume_is_short_for_ai_resume() {
-        let cli = Cli::try_parse_from(["atuin", "resume", "0199abcdef", "--in", "codex"])
+    #[case::short(&["resume"])]
+    #[case::threads(&["threads", "resume"])]
+    #[case::ai(&["ai", "resume"])]
+    fn resume_parses_everywhere(#[case] command: &[&str]) {
+        let args = std::iter::once(&"atuin").chain(command).chain(&["0199abcdef", "--in", "codex"]);
+        Cli::try_parse_from(args).expect("the argv parses");
+    }
+
+    /// `atuin ai session` is still `atuin threads`.
+    #[cfg(feature = "ai")]
+    #[rstest]
+    fn ai_session_is_still_threads() {
+        let cli = Cli::try_parse_from(["atuin", "ai", "session", "list", "--style", "json"])
             .expect("the argv parses");
-        assert!(matches!(cli.cmd, Cmd::Resume(_)), "{:?}", cli.cmd);
+        assert!(
+            matches!(cli.cmd, Cmd::Ai(atuin_ai::commands::Command::Threads(_))),
+            "{:?}",
+            cli.cmd
+        );
     }
 }

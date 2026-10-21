@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
@@ -78,7 +79,7 @@ pub struct Resh {
 fn default_histpath() -> Result<PathBuf> {
     let home_dir = dirs::home_dir().ok_or_else(|| eyre!("could not find home directory"))?;
 
-    Ok(home_dir.join(".resh_history.json"))
+    Ok(home_dir.joined(".resh_history.json"))
 }
 
 #[async_trait]

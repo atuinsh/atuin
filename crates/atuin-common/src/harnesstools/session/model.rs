@@ -54,7 +54,7 @@ pub enum Content {
 pub const UNREADABLE_SUMMARY: &str =
     "[the conversation before this was compacted; its summary can't be read]";
 
-/// Human-readable breadcrumb shared by the transcript and `atuin ai session` rendering.
+/// Human-readable breadcrumb shared by the transcript and `atuin threads` rendering.
 #[must_use]
 pub fn reasoning_label(tokens: Option<u64>) -> String {
     tokens.map_or_else(|| "Reasoned".to_owned(), |n| format!("Reasoning · {n} tokens"))

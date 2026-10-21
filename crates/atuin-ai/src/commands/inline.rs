@@ -1,7 +1,10 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
+use atuin_client::settings::Settings;
 use atuin_common::dirs;
+use atuin_common::path::PathBufExt as _;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -17,7 +20,7 @@ pub async fn run(
     initial_command: Option<String>,
     api_endpoint: Option<String>,
     api_token: Option<SecretString>,
-    settings: &atuin_client::settings::Settings,
+    settings: &Arc<Settings>,
     output_for_hook: bool,
 ) -> Result<()> {
     if settings.ai.enabled == Some(false) {
@@ -76,9 +79,8 @@ pub async fn run(
         None
     };
 
-    let git_root = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| atuin_common::utils::in_git_repo(cwd.to_str()?));
+    let git_root =
+        std::env::current_dir().ok().and_then(|cwd| atuin_common::utils::in_git_repo(&cwd));
 
     let ctx = AppContext {
         endpoint,
@@ -87,7 +89,7 @@ pub async fn run(
         token_from_hub_session,
         send_cwd,
         last_command,
-        history_db: std::sync::Arc::new(history_db),
+        history_db: Arc::new(history_db),
         git_root,
         capabilities: settings.ai.capabilities.clone(),
         daemon_enabled: settings.daemon.enabled,
@@ -100,7 +102,7 @@ pub async fn run(
     Ok(())
 }
 
-async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Result<SecretString> {
+async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
     if let Some(token) = atuin_client::hub::get_session_token(settings).await? {
         debug!("Found Hub session, using existing token");
         return Ok(token);
@@ -173,32 +175,27 @@ async fn ensure_hub_session(settings: &atuin_client::settings::Settings) -> Resu
 /// and return it if it exists, unless `ATUIN_HOME` is set.
 ///
 /// [legacy data dir]: dirs::legacy_data_dir
-/// [`data_dir`]: field@atuin_client::settings::Settings::data_dir
-fn snapshots_dir(settings: &atuin_client::settings::Settings) -> PathBuf {
-    fn push_snapshots(path: &mut PathBuf) {
-        path.push("ai");
-        path.push("snapshots");
+/// [`data_dir`]: field@Settings::data_dir
+fn snapshots_dir(settings: &Settings) -> PathBuf {
+    fn join_snapshots(path: impl Into<PathBuf>) -> PathBuf {
+        path.into().joined("ai").joined("snapshots")
     }
 
-    let mut path = settings.data_dir.clone();
-    push_snapshots(&mut path);
-
+    let path = join_snapshots(&settings.data_dir);
     if !path.exists() && !dirs::atuin_home_is_set() {
         // Check the legacy path, but only if `ATUIN_HOME` isn't set.
-        let mut legacy = dirs::legacy_data_dir();
-        push_snapshots(&mut legacy);
+        let legacy = join_snapshots(dirs::legacy_data_dir());
         if legacy.exists() {
             return legacy;
         }
     }
-
     path
 }
 
 async fn run_inline_tui(
     ctx: AppContext,
     initial_prompt: Option<String>,
-    settings: &atuin_client::settings::Settings,
+    settings: &Arc<Settings>,
 ) -> Result<ExitOutcome> {
     let client_ctx = ClientContext::detect();
 
@@ -311,7 +308,7 @@ async fn run_inline_tui(
         settings.ai.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
 
     // ─── Snapshot store ─────────────────────────────────────────
-    let snapshot_dir = snapshots_dir(settings).join(session_mgr.session_id());
+    let snapshot_dir = snapshots_dir(settings).joined(session_mgr.session_id());
     let snapshot_store = crate::snapshots::SnapshotStore::open(snapshot_dir).ok();
 
     // ─── Discover skills ───────────────────────────────────────
@@ -365,7 +362,7 @@ async fn run_inline_tui(
         cached_usage,
         initial_prompt,
         !usage_is_fresh,
-        settings.clone(),
+        Arc::clone(settings),
     );
     let options =
         eye_declare::RunOptions::default().keyboard(eye_declare::KeyboardProtocol::Enhanced);
@@ -477,7 +474,7 @@ fn render_setup_options(
 }
 
 async fn set_ai_enabled(enabled: bool) -> Result<()> {
-    let config_file = atuin_client::settings::Settings::get_config_path()?;
+    let config_file = Settings::get_config_path()?;
     let config_str = tokio::fs::read_to_string(&config_file).await?;
     let mut doc = config_str.parse::<toml_edit::DocumentMut>()?;
 

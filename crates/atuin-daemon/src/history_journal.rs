@@ -99,6 +99,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::field::Empty;
 use tracing::{Instrument, Span};
 
+#[cfg(feature = "octavo")]
 use crate::octavo::Octavo;
 use crate::output_capture::{CaptureError, GetOutputError, OutputCaptureEngine};
 use crate::search::SearchIndex;
@@ -238,6 +239,7 @@ pub struct HistoryJournal {
     /// Durable store for captured command output.
     output_capture: OutputCaptureEngine,
 
+    #[cfg(feature = "octavo")]
     octavo: Octavo,
 
     /// Ids a [`Self::delete`] is currently tearing down, reference-counted across concurrent
@@ -310,7 +312,6 @@ impl HistoryJournal {
         history_db: HistoryDatabase,
         search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
         output_capture: OutputCaptureEngine,
-        octavo: Octavo,
     ) -> Self {
         const DEFAULT_LIFECYCLE_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
@@ -324,10 +325,17 @@ impl HistoryJournal {
             search_index,
             broadcast,
             output_capture,
-            octavo,
+            #[cfg(feature = "octavo")]
+            octavo: Octavo::nop(),
             deleting: DashMap::new(),
             lifecycle_mutex: AsyncShardedMutex::new(DEFAULT_LIFECYCLE_SHARDS),
         }
+    }
+
+    /// Sends what this journal records to `octavo`, which [`Self::new`] leaves as a nop.
+    #[cfg(feature = "octavo")]
+    pub(crate) fn with_octavo(self, octavo: Octavo) -> Self {
+        Self { octavo, ..self }
     }
 
     /// Notify the registry that a command has been started.
@@ -449,6 +457,7 @@ impl HistoryJournal {
         //              .read() and the subsequent .write() are completely discarded from the new
         //              index.
         self.search_index.read().await.add_history(&history);
+        #[cfg(feature = "octavo")]
         self.octavo.push_history(&history, history_record_id).await;
 
         if self.broadcast.receiver_count() > 0 {
@@ -582,6 +591,7 @@ impl HistoryJournal {
         }
 
         // The tombstones commit the deletion, so Octavo hears of it even if a chunk below fails.
+        #[cfg(feature = "octavo")]
         self.octavo.delete_history(&to_delete).await;
 
         // The tombstones were just written above, so replaying them through
@@ -713,6 +723,7 @@ impl HistoryJournal {
 
         self.output_capture.capture(id, capture).await?;
         // Only once stored, since the upload reads the output back from the store.
+        #[cfg(feature = "octavo")]
         self.octavo.push_output(id).await;
         Ok(())
     }
@@ -757,14 +768,8 @@ mod tests {
         let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
         let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
         let caps = CapClient::new("http://127.0.0.1:1".parse().unwrap(), reqwest::Client::new());
-        let journal = HistoryJournal::new(
-            caps,
-            history_store,
-            history_db,
-            search_index,
-            output_capture,
-            Octavo::nop(),
-        );
+        let journal =
+            HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);
         (journal, tmp)
     }
 

@@ -5,6 +5,7 @@ use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget}
 use super::{Harness, InstallHookError, json_hooks};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
+use crate::path::PathBufExt as _;
 
 mod hook_trust;
 pub mod rehydrate;
@@ -13,7 +14,7 @@ pub(crate) mod state_db;
 
 /// Codex's home: `$CODEX_HOME`, else `~/.codex`.
 pub(crate) fn home() -> PathBuf {
-    var_nonempty("CODEX_HOME").map_or_else(|| home_dir().join(".codex"), PathBuf::from)
+    var_nonempty("CODEX_HOME").map_or_else(|| home_dir().joined(".codex"), PathBuf::from)
 }
 
 #[derive(Debug, Clone, Copy, Default)]

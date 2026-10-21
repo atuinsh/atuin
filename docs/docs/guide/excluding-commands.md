@@ -2,7 +2,7 @@
 
 Atuin records your commands, and can also record
 [what they print](output-capture.md) and your
-[AI agents' sessions](../ai/sessions.md). This page covers how to keep secrets,
+AI agents' sessions as [threads](../ai/threads.md). This page covers how to keep secrets,
 and anything else you don't want stored, out of all three.
 
 | You want to keep out | Use |
@@ -124,7 +124,7 @@ sensitive_files = [
 ## Your own secrets: `redact_patterns`
 
 Atuin replaces the credentials it recognises with `****` in captured output and
-AI sessions. If you have secrets in a format it doesn't know, such as internal
+threads. If you have secrets in a format it doesn't know, such as internal
 tokens, give it their pattern:
 
 ```toml
@@ -140,13 +140,13 @@ command out instead, use [`history_filter`](#commands-history_filter).
 
 ## AI agents' tool calls: `capture_tools`
 
-When Atuin [captures your AI agents' sessions](../ai/sessions.md), it keeps
+When Atuin [captures your AI agents' sessions as threads](../ai/threads.md), it keeps
 their tool calls with what each was given and what it returned, after applying
 everything on this page. To keep only the name of each tool the agent called,
 turn that off:
 
 ```toml
-[ai]
+[threads]
 capture_tools = false
 ```
 
@@ -178,8 +178,8 @@ Without any of the settings above, Atuin:
 - **doesn't record commands containing a credential** it recognises, such as
   AWS, GitHub, OpenAI or Anthropic keys, while
   [`secrets_filter`](../configuration/config.md#secrets_filter) is on (the
-  default). It also leaves those commands out of AI sessions.
-- **redacts credentials in captured output and AI sessions**, replacing them
+  default). It also leaves those commands out of threads.
+- **redacts credentials in captured output and threads**, replacing them
   with `****`: the same formats, plus private keys, passwords in connection
   strings, and values assigned to names like `DB_PASSWORD` or `api_key`.
 - **never stores the output of commands that print a credential**: Atuin's own
@@ -211,5 +211,5 @@ This deletes existing entries matching your current `history_filter` and
 `cwd_filter`. For deleting entries that don't match a filter, see [Deleting
 History](delete-history.md).
 
-AI sessions and captured output already stored keep what they had. Changes to
-these settings apply to AI sessions once the daemon restarts.
+Threads and captured output already stored keep what they had. Changes to
+these settings apply to threads once the daemon restarts.
