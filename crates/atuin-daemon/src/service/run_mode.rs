@@ -22,9 +22,7 @@ pub enum RunMode {
     DaemonizeForked,
     /// Atuin's launchd agent, `sh.atuin.daemon`.
     LaunchdAgent,
-    /// Something other than Atuin started it. [`None`] when the daemon couldn't tell what: a
-    /// terminal, `nohup`, a test harness, or a manager it doesn't detect, such as runit. Nothing is
-    /// known to start that one again, so clients stop and replace it as they would one of Atuin's.
+    /// Something other than Atuin started it. [`None`] when the daemon couldn't tell what.
     External(Option<ExternalManager>),
 }
 

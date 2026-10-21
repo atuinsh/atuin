@@ -1071,11 +1071,6 @@ Switched off there, Atuin leaves it off and works without the daemon until you
 switch it back on. If the agent won't start, `daemon.stderr.log` in Atuin's
 logs directory says why.
 
-The agent gets only the environment variables Atuin reads, such as its
-`ATUIN_*` settings, the XDG directories, `PATH` and proxy settings, as they
-were when it was installed. A path in your config that names any other variable
-doesn't resolve, and `atuin daemon restart` picks up a changed one.
-
 `atuin daemon stop` stops the agent until your next login, and `atuin config
 disable daemon` turns the daemon off and removes the agent.
 
