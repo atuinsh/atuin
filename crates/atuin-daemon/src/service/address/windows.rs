@@ -1,6 +1,8 @@
 use std::io;
+use std::net::SocketAddr;
 
-use tokio::net::TcpStream;
+use atuin_common::os::windows::socket::TcpSocketExt as _;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio_stream::wrappers::TcpListenerStream;
 
 /// A connection to the daemon.
@@ -17,7 +19,19 @@ pub struct DaemonListener(std::net::TcpListener);
 
 impl DaemonAddress {
     pub async fn connect(&self) -> io::Result<DaemonStream> {
-        TcpStream::connect(self.to_string()).await
+        let address: SocketAddr = self
+            .to_string()
+            .parse()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        let socket = TcpSocket::new_v4()?;
+        // Otherwise every probe for a daemon that isn't running waits out ~2s of SYN retransmits.
+        if let Err(err) = socket.disable_syn_retransmissions() {
+            tracing::warn!(
+                ?err,
+                "could not disable SYN retransmits; finding no daemon will be slow"
+            );
+        }
+        socket.connect(address).await
     }
 
     pub fn bind(&self) -> io::Result<DaemonListener> {
