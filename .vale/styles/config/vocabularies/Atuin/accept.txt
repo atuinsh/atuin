@@ -57,6 +57,8 @@ IDE
 ignorespace
 Infracost
 LLM
+lnav
+logfmt
 loopback
 matcher
 musl

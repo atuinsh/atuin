@@ -44,13 +44,11 @@ This also works for table keys, showing all resolved children as flat
 dotted key=value pairs:
 
 ```console
-$ atuin config get logs --resolved
-logs.ai.file = ai.log
-logs.daemon.file = daemon.log
-logs.dir = /home/user/.atuin/logs
-logs.enabled = true
-logs.level = info
-logs.search.file = search.log
+$ atuin config get output --resolved
+output.enabled = false
+output.max_disk_usage = 10%
+output.max_output_size = 976.6 KiB
+output.sync = false
 ```
 
 #### `--verbose` / `-v`

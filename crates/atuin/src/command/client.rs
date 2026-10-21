@@ -4,7 +4,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme;
-use atuin_common::logs::LogMode;
+use atuin_common::logs::{LogMode, USER};
 use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
@@ -237,11 +237,15 @@ impl Cmd {
         };
 
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        let logging = self
-            .log_mode()
+        let log_mode = self.log_mode();
+        let logging = log_mode
             .map(|mode| LogCtx::try_enable("atuin", mode))
             .transpose()
             .wrap_err("failed to enable logging")?;
+        // Only where stderr is the user's to read: not over a TUI, nor on every prompt.
+        if log_mode == Some(LogMode::FileAndStderr) && settings.has_legacy_logs_table() {
+            tracing::warn!(target: USER, "{}", fl!("logs-config-removed"));
+        }
 
         Ok(Some(async move {
             let result = if let Some(func) = run_internal {

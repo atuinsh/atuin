@@ -1,7 +1,5 @@
 //! Logging policy shared by the commands that choose it.
 
-use serde::{Deserialize, Serialize};
-
 /// Target for messages meant for the user, as opposed to diagnostics.
 ///
 /// `warn!(target: USER, ...)` prints `warning: ...` on stderr wherever the process has a terminal
@@ -41,32 +39,6 @@ impl LogMode {
         match self {
             Self::Stderr | Self::FileAndStderr | Self::Daemon { .. } => true,
             Self::File => false,
-        }
-    }
-}
-
-/// Log level for file logging. Maps to tracing's LevelFilter.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    #[default]
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    #[must_use]
-    pub fn to_tracing(&self) -> tracing::Level {
-        use tracing::Level;
-        match self {
-            Self::Trace => Level::TRACE,
-            Self::Debug => Level::DEBUG,
-            Self::Info => Level::INFO,
-            Self::Warn => Level::WARN,
-            Self::Error => Level::ERROR,
         }
     }
 }
