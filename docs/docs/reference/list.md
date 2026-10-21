@@ -10,7 +10,8 @@
 | `--human`        | Use human-readable formatting for the timestamp and duration (default: false) |
 | `--cmd-only`     | Show only the text of the command (default: false)                            |
 | `--reverse`      | Reverse the order of the output (default: true)                               |
-| `--format`       | Specify the formatting of a command (see below)                               |
+| `--timezone`/`--tz` | Display command times in a timezone other than the configured default; accepts `local`, `l`, or an offset from UTC such as `+9` or `-2:30` |
+| `--format`/`-f`  | Specify the formatting of a command (see below)                               |
 | `--print0`       | Terminate the output with a null, for better multiline support                                                                              |
 
 
