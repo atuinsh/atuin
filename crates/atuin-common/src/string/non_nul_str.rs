@@ -1,12 +1,16 @@
 //! A string proven to contain no NUL bytes.
 
 use std::borrow::Cow;
+use std::ffi::OsStr;
 use std::fmt;
 use std::ops::Deref;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A string proven to contain no NUL byte.
+///
+/// Wraps a `str` or an [`OsStr`], owned or borrowed. The `str` accessors, [`Display`](fmt::Display)
+/// and serde need the inner value to be a `str`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NonNulStr<T = String>(T);
 
@@ -18,15 +22,21 @@ pub struct ContainsNul {
     pub index: usize,
 }
 
-impl<T: AsRef<str>> NonNulStr<T> {
+impl<T: AsRef<OsStr>> NonNulStr<T> {
     /// Wrap `inner`, or fail if it contains a NUL byte.
     pub fn new(inner: T) -> Result<Self, ContainsNul> {
-        match inner.as_ref().find('\0') {
+        match memchr::memchr(0, inner.as_ref().as_encoded_bytes()) {
             Some(index) => Err(ContainsNul { index }),
             None => Ok(Self(inner)),
         }
     }
 
+    pub fn as_os_str(&self) -> &OsStr {
+        self.0.as_ref()
+    }
+}
+
+impl<T: AsRef<str>> NonNulStr<T> {
     /// The wrapped string as a slice.
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
@@ -76,7 +86,7 @@ impl<T: AsRef<str>> Serialize for NonNulStr<T> {
 
 impl<'de, T> Deserialize<'de> for NonNulStr<T>
 where
-    T: Deserialize<'de> + AsRef<str>,
+    T: Deserialize<'de> + AsRef<str> + AsRef<OsStr>,
 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let inner = T::deserialize(deserializer)?;
@@ -86,6 +96,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use proptest::prelude::*;
     use rstest::rstest;
 
@@ -143,6 +155,12 @@ mod tests {
                 }
                 Some(index) => prop_assert_eq!(result.unwrap_err().index, index),
             }
+        }
+
+        /// An `OsStr` is held to exactly the contract of the `str` it came from.
+        #[rstest]
+        fn os_str_agrees_with_str(s in r"(?s).*") {
+            prop_assert_eq!(NonNulStr::new(OsStr::new(&s)).err(), NonNulStr::new(s.as_str()).err());
         }
 
         /// A NUL-free command serialize → deserialize round-trips unchanged.

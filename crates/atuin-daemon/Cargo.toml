@@ -63,6 +63,9 @@ daemonix = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [dev-dependencies]
 atuin-common = { workspace = true, features = ["test-utils"] }
 divan = { workspace = true }

@@ -104,6 +104,9 @@ rustix = { workspace = true, optional = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, optional = true }
 
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Pipes", "Win32_UI_Shell"] }
+
 [dev-dependencies]
 divan = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -6,8 +6,10 @@
 
 use windows_sys::Win32::Foundation::GetLastError;
 
+pub mod command;
 pub mod disk;
 pub mod process;
+pub mod socket;
 
 /// Query the system for the last set error.
 #[must_use]
