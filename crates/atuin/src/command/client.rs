@@ -238,18 +238,26 @@ impl Cmd {
         };
 
         let settings = Settings::new().wrap_err("could not load client settings")?;
-        let _logging = self
+        let logging = self
             .log_config(&settings)
             .map(|c| LogCtx::try_enable("atuin", &c))
             .transpose()
             .wrap_err("failed to enable logging")?;
 
-        Ok(Some(async {
-            if let Some(func) = run_internal {
+        Ok(Some(async move {
+            let result = if let Some(func) = run_internal {
                 func(settings).await
             } else {
                 Box::pin(self.run_async(settings)).await
-            }
+            };
+            // Dropping the guard flushes and shuts down the OTEL exporter, so it must outlive the
+            // command rather than this function.
+            #[allow(
+                clippy::drop_non_drop,
+                reason = "LogCtx has drop glue only with OTEL compiled in"
+            )]
+            drop(logging);
+            result
         }))
     }
 
