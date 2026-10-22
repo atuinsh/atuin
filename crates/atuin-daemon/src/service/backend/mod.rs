@@ -9,15 +9,11 @@ use atuin_client::settings::Daemon as DaemonSettings;
 use enum_dispatch::enum_dispatch;
 #[cfg(unix)]
 pub use external_systemd::ExternalSystemd;
-#[cfg(unix)]
-pub use subproc::DaemonizeError;
-pub use subproc::Subproc;
+pub use subproc::{DaemonizeError, Subproc};
 
 use crate::service::PidfileWaitError;
-use crate::service::address::{DaemonAddress, DaemonListener};
+use crate::service::address::{DaemonAddress, DaemonListener, SocketFile};
 use crate::service::connection::{Connection, FindError};
-#[cfg(unix)]
-use crate::service::socket_file::SocketFile;
 
 /// An error from a [`Backend`], each of which fails in its own ways.
 #[derive(Debug, thiserror::Error)]
@@ -56,7 +52,6 @@ pub enum StopError {
 pub struct Listening {
     pub listener: DaemonListener,
     /// The socket file the service bound itself, which it owns until it exits.
-    #[cfg(unix)]
     pub socket: Option<SocketFile>,
 }
 

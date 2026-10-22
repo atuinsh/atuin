@@ -37,7 +37,7 @@ impl ExternalSystemd {
     #[must_use]
     pub fn new(daemon: &DaemonSettings) -> Self {
         Self {
-            address: DaemonAddress::from(daemon.existing_socket_path().into_owned()),
+            address: DaemonAddress::existing(daemon),
             daemon: daemon.clone(),
         }
     }

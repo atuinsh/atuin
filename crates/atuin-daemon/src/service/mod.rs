@@ -7,22 +7,16 @@ mod backend;
 mod claim;
 mod connection;
 pub mod pidfile;
-#[cfg(unix)]
-mod socket_file;
 mod startup_lock;
 
 use std::time::Duration;
 
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
-#[cfg(unix)]
-pub use backend::DaemonizeError;
-pub use backend::{SpawnError, StopError, Subproc};
+pub use backend::{DaemonizeError, SpawnError, StopError, Subproc};
 pub use claim::{ClaimError, ServiceClaim};
 pub use connection::FindError;
 use pidfile::Pidfile;
 pub use pidfile::PidfileWaitError;
-#[cfg(unix)]
-pub use socket_file::RemoveSocketError;
 use startup_lock::StartupLock;
 pub use startup_lock::StartupLockError;
 

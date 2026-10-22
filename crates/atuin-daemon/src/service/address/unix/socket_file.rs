@@ -6,9 +6,11 @@ use std::time::Duration;
 use atuin_client::settings::Daemon as DaemonSettings;
 use tokio::task::JoinHandle;
 
+use super::DaemonAddress;
+
 /// The socket file a daemon bound itself, kept fresh against temporary file cleaners and removed
 /// when dropped.
-pub(super) struct SocketFile {
+pub struct SocketFile {
     path: PathBuf,
     keepalive: JoinHandle<()>,
 }
@@ -26,8 +28,11 @@ impl SocketFile {
     /// by temporary file cleaners.
     const KEEPALIVE_INTERVAL: Duration = Duration::from_mins(1);
 
-    /// Own the socket bound at `path`, keeping it fresh from the current Tokio runtime.
-    pub(super) fn new(path: PathBuf) -> Self {
+    /// The socket the daemon bound at `address`, which it owns until it exits, kept fresh from the
+    /// current Tokio runtime.
+    #[expect(clippy::unnecessary_wraps, reason = "a daemon listening on TCP has no socket file")]
+    pub(crate) fn of(address: &DaemonAddress) -> Option<Self> {
+        let path = address.0.clone();
         let touched = path.clone();
         let keepalive = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Self::KEEPALIVE_INTERVAL);
@@ -38,43 +43,56 @@ impl SocketFile {
                 }
             }
         });
-        Self { path, keepalive }
+        Some(Self { path, keepalive })
     }
 
-    /// Remove the daemon's socket from every path it may be at, subject to `should_remove`.
-    pub(super) fn remove_all(
-        daemon: &DaemonSettings,
-        should_remove: impl Fn(&Path) -> bool,
-    ) -> Result<(), RemoveSocketError> {
-        let mut error = None;
-        for socket_path in crate::client::potential_socket_paths(daemon) {
-            if !socket_path.exists() || !should_remove(&socket_path) {
-                continue;
-            }
-
-            if let Err(e) = std::fs::remove_file(&socket_path)
-                && e.kind() != ErrorKind::NotFound
-            {
-                // Log the error because we only return the first error when multiple occur.
-                tracing::error!("failed to remove daemon socket {}: {e}", socket_path.display());
-                error.get_or_insert_with(|| RemoveSocketError {
-                    path: socket_path.into_owned(),
-                    source: e,
-                });
-            }
-        }
-
-        error.map_or(Ok(()), Err)
+    /// Remove the socket of the daemon `daemon` describes from every path it may be at.
+    pub(crate) fn remove_all(daemon: &DaemonSettings) -> Result<(), RemoveSocketError> {
+        Self::first_error(DaemonAddress::candidates(daemon).map(|path| Self::remove(&path)))
     }
 
-    /// Remove any socket left behind by a daemon that is no longer listening.
+    /// Remove the sockets that a daemon `daemon` describes left behind when it stopped listening.
     pub(super) fn remove_stale(daemon: &DaemonSettings) -> Result<(), RemoveSocketError> {
-        Self::remove_all(daemon, |socket_path| {
-            matches!(atuin_common::os::unix::socket_in_use(socket_path), Ok(false))
-                // Ensure file is a socket; `socket_in_use` can return `Ok(false)` for regular files.
-                && std::fs::symlink_metadata(socket_path)
-                    .is_ok_and(|meta| meta.file_type().is_socket())
-        })
+        Self::first_error(
+            DaemonAddress::candidates(daemon).map(|path| Self::remove_if_stale(&path)),
+        )
+    }
+
+    /// Remove the socket at `path` if nothing listens on it any more.
+    fn remove_if_stale(path: &Path) -> Result<(), RemoveSocketError> {
+        if !Self::is_stale(path) {
+            return Ok(());
+        }
+        Self::remove(path)
+    }
+
+    fn remove(path: &Path) -> Result<(), RemoveSocketError> {
+        match std::fs::remove_file(path) {
+            Err(source) if source.kind() != ErrorKind::NotFound => Err(RemoveSocketError {
+                path: path.to_owned(),
+                source,
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// The first of `removals` that failed, after logging each, since only one is returned.
+    fn first_error(
+        removals: impl Iterator<Item = Result<(), RemoveSocketError>>,
+    ) -> Result<(), RemoveSocketError> {
+        let mut first = None;
+        for err in removals.filter_map(Result::err) {
+            tracing::error!("{err}");
+            first.get_or_insert(err);
+        }
+        first.map_or(Ok(()), Err)
+    }
+
+    /// Whether the file at `path` is a socket that nothing listens on.
+    fn is_stale(path: &Path) -> bool {
+        matches!(atuin_common::os::unix::socket_in_use(path), Ok(false))
+            // Ensure file is a socket; `socket_in_use` can return `Ok(false)` for regular files.
+            && std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_socket())
     }
 }
 
@@ -92,8 +110,6 @@ impl Drop for SocketFile {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::settings::Settings;
-    use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
 
     use super::*;
@@ -118,9 +134,7 @@ mod tests {
         if !listening {
             drop(listener);
         }
-        let mut daemon = Settings::default().daemon;
-        daemon.socket_path = AbsPathBuf::new(path.clone()).ok();
-        SocketFile::remove_stale(&daemon).unwrap();
+        SocketFile::remove_if_stale(&path).unwrap();
         assert_eq!(path.exists(), kept);
     }
 }

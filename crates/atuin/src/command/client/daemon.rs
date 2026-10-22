@@ -53,7 +53,6 @@ pub enum SubCmd {
 impl Cmd {
     /// Returns `true` when the process should daemonize before creating the
     /// async runtime or opening any database connections.
-    #[cfg(unix)]
     pub fn should_daemonize(&self) -> bool {
         match &self.subcmd {
             Some(SubCmd::Start { daemonize, .. }) => *daemonize,
