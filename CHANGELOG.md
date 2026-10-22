@@ -2,6 +2,87 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.24.2
+
+### Bug Fixes
+
+- *(ai)* Import IntoStaticStr from strum_macros, not strum ([#4480](https://github.com/atuinsh/atuin/issues/4480))
+- *(ai)* Improve detection of git repositories ([#4450](https://github.com/atuinsh/atuin/issues/4450))
+- *(client)* Resolve relative config paths beside config.toml, not the cwd ([#4479](https://github.com/atuinsh/atuin/issues/4479))
+- *(config)* Don't print errors twice ([#4501](https://github.com/atuinsh/atuin/issues/4501))
+- *(daemon)* Fetch the server's capabilities until a fetch succeeds
+- *(daemon)* Spare a stale pidfile's PID when evicting ([#4512](https://github.com/atuinsh/atuin/issues/4512))
+- *(daemon)* Handle daemons not spawned by atuin ([#4516](https://github.com/atuinsh/atuin/issues/4516))
+- *(output)* Keep quoted words together in output search ([#4502](https://github.com/atuinsh/atuin/issues/4502))
+- *(packfile)* Load only the records inside a manifest's range
+- *(pty-proxy)* Standalone init with `atuin pty-proxy init` ([#4449](https://github.com/atuinsh/atuin/issues/4449))
+- *(pty-proxy)* Wait for input on a non-blocking inherited stdin ([#4486](https://github.com/atuinsh/atuin/issues/4486))
+- *(pty-proxy)* Don't re-exec shells running commands from a string or file ([#4414](https://github.com/atuinsh/atuin/issues/4414))
+- *(search)* Don't panic when copying with no results ([#4426](https://github.com/atuinsh/atuin/issues/4426))
+- *(server)* Let `ATUIN_*` environment variables override server.toml ([#4456](https://github.com/atuinsh/atuin/issues/4456))
+- *(update)* Accept ATUIN_GITHUB_TOKEN ([#4262](https://github.com/atuinsh/atuin/issues/4262))
+- Remove duplicated word in the no-history stats message ([#4451](https://github.com/atuinsh/atuin/issues/4451))
+- Error printing in `?` handler ([#4448](https://github.com/atuinsh/atuin/issues/4448))
+- Normalize relative gitdir paths in worktree resolution ([#4506](https://github.com/atuinsh/atuin/issues/4506))
+- Upgrade regressions found in release QA ([#4519](https://github.com/atuinsh/atuin/issues/4519))
+
+
+### Documentation
+
+- Fix ctrl_n_shortcuts default value ([#4458](https://github.com/atuinsh/atuin/issues/4458))
+- List all history list --format variables ([#4460](https://github.com/atuinsh/atuin/issues/4460))
+- Fix the --reverse default for history list ([#4472](https://github.com/atuinsh/atuin/issues/4472))
+- Mention December default in wrapped --year help ([#4476](https://github.com/atuinsh/atuin/issues/4476))
+
+
+### Features
+
+- *(common)* AbsPath and AbsPathBuf, Path and PathBuf checked to be absolute ([#4481](https://github.com/atuinsh/atuin/issues/4481))
+- *(common)* Find a process's cgroup under cgroup v1 and v2 ([#4513](https://github.com/atuinsh/atuin/issues/4513))
+- *(daemon)* Run the daemon as a launchd agent on macOS ([#4517](https://github.com/atuinsh/atuin/issues/4517))
+- *(pty-proxy)* Window title follows child process ([#4447](https://github.com/atuinsh/atuin/issues/4447))
+- *(secrets)* Keep HashiCorp tokens out of history ([#4445](https://github.com/atuinsh/atuin/issues/4445))
+
+
+### Miscellaneous Tasks
+
+- Give mono its own nixfmt step and scope atuin's to atuin/
+- Say a /merge's landed commit gets CI on main
+- Rebuild the apt .deb cache for Ubuntu 24.04 ([#4504](https://github.com/atuinsh/atuin/issues/4504))
+- Remove the benchmarks ([#4511](https://github.com/atuinsh/atuin/issues/4511))
+
+
+### Performance
+
+- *(common)* Compile the vendor regexes once ([#4485](https://github.com/atuinsh/atuin/issues/4485))
+- *(common)* Drop the tree watcher's file-id cache ([#4492](https://github.com/atuinsh/atuin/issues/4492))
+- *(common)* Release a line reader's buffer at the end of the file ([#4494](https://github.com/atuinsh/atuin/issues/4494))
+- *(common)* Keep no tree watcher entry for a rejected file ([#4493](https://github.com/atuinsh/atuin/issues/4493))
+- *(daemon)* Warm up only a resumed session's unanswered calls ([#4490](https://github.com/atuinsh/atuin/issues/4490))
+- *(packfile)* Compress packs in one shot ([#4484](https://github.com/atuinsh/atuin/issues/4484))
+
+
+### Refactor
+
+- *(daemon)* Managed daemon service with multiple backends ([#4488](https://github.com/atuinsh/atuin/issues/4488))
+- *(daemon)* Move daemon startup into the service module ([#4503](https://github.com/atuinsh/atuin/issues/4503))
+- *(daemon)* Keep where the daemon listens behind service::address ([#4514](https://github.com/atuinsh/atuin/issues/4514))
+- *(daemon)* Take up the daemon's socket in SocketHolder, not Backend ([#4515](https://github.com/atuinsh/atuin/issues/4515))
+- *(deps)* Bump clap_complete_nushell from 4.6.0 to 4.6.2 ([#4473](https://github.com/atuinsh/atuin/issues/4473))
+- *(deps)* Bump clap_complete from 4.6.9 to 4.6.11 ([#4396](https://github.com/atuinsh/atuin/issues/4396))
+- *(deps)* Bump ratatui from 0.30.0 to 0.30.2 ([#4474](https://github.com/atuinsh/atuin/issues/4474))
+- *(deps)* Bump certifi from 2025.11.12 to 2026.10.19 in /docs in the uv group across 1 directory ([#4500](https://github.com/atuinsh/atuin/issues/4500))
+- *(pty-proxy)* Run on tokio with the parser on its own runtime ([#4482](https://github.com/atuinsh/atuin/issues/4482))
+- *(pty-proxy)* Forward captures to the daemon on the proxy's runtime ([#4487](https://github.com/atuinsh/atuin/issues/4487))
+- *(pty-proxy)* Rename the screen's parser to Emulator ([#4510](https://github.com/atuinsh/atuin/issues/4510))
+- *(pty-proxy)* Migrate output parsing to vte ([#4518](https://github.com/atuinsh/atuin/issues/4518))
+
+
+### Testing
+
+- *(daemon)* Run the output index tests under rstest ([#4496](https://github.com/atuinsh/atuin/issues/4496))
+
+
 ## 18.24.1
 
 ### Bug Fixes
