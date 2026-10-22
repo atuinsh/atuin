@@ -183,7 +183,10 @@ impl Backend for Subproc {
 
         let pidfile_path = self.daemon.pidfile_path.as_path();
         if pidfile_path.exists() {
-            if let Some(pid) = Pidfile::new(pidfile_path).pid()
+            let pidfile = Pidfile::new(pidfile_path);
+            // The PID of a pidfile nobody holds may since have gone to another process.
+            if pidfile.is_live()
+                && let Some(pid) = pidfile.pid()
                 && pid != 0
                 && let Err(e) = atuin_common::os::process::force_terminate(pid, GRACE).await
             {
@@ -202,5 +205,38 @@ impl Backend for Subproc {
             .map_err(|err| BackendError::new(SubprocError::from(err)))?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::settings::Settings;
+    use atuin_common::path::AbsPathBuf;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::service::pidfile::PidfileInfo;
+
+    /// A pidfile that no daemon holds names a PID that may since have gone to another process,
+    /// here this test's own: had evicting signalled it, the test would have died.
+    #[rstest]
+    #[tokio::test]
+    async fn evicting_spares_the_pid_of_a_stale_pidfile() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        settings.daemon.pidfile_path =
+            AbsPathBuf::new(dir.path().join("atuin-daemon.pid")).unwrap();
+        // Evicting removes the daemon's socket wherever it may be, which would be the real one.
+        settings.daemon.socket_path = AbsPathBuf::new(dir.path().join("atuin.sock")).ok();
+        let info = PidfileInfo {
+            pid: std::process::id(),
+            version: crate::VERSION.to_string(),
+            socket_path: None,
+        };
+        drop(Pidfile::new(&settings.daemon.pidfile_path).acquire(&info).unwrap());
+
+        Subproc::new(&settings.daemon).evict().await.unwrap();
+
+        assert!(!settings.daemon.pidfile_path.exists(), "the stale pidfile is still there");
     }
 }
