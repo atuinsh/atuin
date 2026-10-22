@@ -8,11 +8,14 @@ Search the output of every captured command. Needs [output capture](https://docs
 atuin output search <words>...
 ```
 
-A command matches when every word appears in its output. Words match whole words, ignoring case: `refused` matches `Refused` but `refuse` doesn't match `refused`. Matches come back most relevant first, each with its command, when and where it ran, and its output.
+A command matches when every word appears in its output. Words match whole words, ignoring case: `refused` matches `Refused` but `refuse` doesn't match `refused`. Quote words to find them together, in that order. Matches come back most relevant first, each with its command, when and where it ran, and its output.
 
 ```
 # The five most relevant captures mentioning both words
 atuin output search connection refused
+
+# Only captures where the two words appear together, in that order
+atuin output search "connection refused"
 
 # Only the matching lines, with two lines either side
 atuin output search -C 2 permission denied

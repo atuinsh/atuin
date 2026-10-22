@@ -6,6 +6,8 @@ You can configure Atuin to use a different directory by setting the `ATUIN_HOME`
 
 Additionally, if set, `ATUIN_CONFIG_DIR` will override the location of `config.toml` and [`server.toml`](https://docs.atuin.sh/self-hosting/server-setup/index.md): Atuin will look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
 
+Paths in the config may start with `~` and refer to environment variables, as in `$XDG_RUNTIME_DIR/atuin.sock`, or `${XDG_RUNTIME_DIR:-/tmp}/atuin.sock` to fall back to `/tmp` where the variable isn't set; write `$$` for a literal `$`. Atuin warns about a path that refers to a variable that isn't set, and uses it as written. An empty path is the setting's default. A relative path is relative to the directory holding `config.toml`, whatever directory Atuin runs in: with the default config, `socket_path = "atuin.sock"` is `~/.atuin/atuin.sock`. This holds for paths set through `ATUIN_*` environment variables too. A database path may also be SQLite's `:memory:`, or a `sqlite:` or `file:` URI, which SQLite opens as written.
+
 Upgrading from older versions
 
 Older versions of Atuin stored data in `~/.config/atuin` (or `$XDG_CONFIG_HOME/atuin`) and `~/.local/share/atuin` (or `$XDG_DATA_HOME/atuin`). If `ATUIN_HOME` is unset (the default), Atuin will continue to look for data in the old locations if it doesn't find it in `~/.atuin`, so existing installations will keep working without any modifications.
@@ -424,20 +426,21 @@ secrets_filter = true
 
 Matches each command against a set of built-in regular expressions, and refuses to save it if any of them match. The patterns currently cover:
 
-| Service            | Matches                                                                                                                                                                                                                                                       |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AWS                | Access key IDs, commands setting `AWS_SECRET_ACCESS_KEY` or `AWS_SESSION_TOKEN`, and Amazon Bedrock API keys                                                                                                                                                  |
-| Azure              | Commands setting `AZURE_*_KEY`, and Entra ID client secrets                                                                                                                                                                                                   |
-| Google Cloud       | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY`, and API keys                                                                                                                                                                                                   |
-| GitHub             | Personal access tokens (old and new), OAuth access tokens (app and user), app installation tokens, and refresh tokens                                                                                                                                         |
-| GitLab             | Personal, deploy, runner, CI/CD job, feed, SCIM, agent and OAuth tokens                                                                                                                                                                                       |
-| AI providers       | Anthropic, OpenAI, OpenRouter, Groq, xAI, Perplexity, Pinecone, LangSmith and Hugging Face keys                                                                                                                                                               |
-| Slack              | Bot, user, app and config tokens, and webhook URLs                                                                                                                                                                                                            |
-| Stripe             | Live, test and restricted keys                                                                                                                                                                                                                                |
-| Package registries | npm, PyPI, RubyGems, Clojars, Docker Hub and Artifactory tokens                                                                                                                                                                                               |
-| Infrastructure     | DigitalOcean, Terraform Cloud, HashiCorp Vault, Fly.io, Heroku, Cloudflare origin CA, Databricks, PlanetScale, Supabase, Tailscale, Dynatrace, Grafana, Sentry, Doppler and OpenShift tokens                                                                  |
-| Other services     | Netlify, Pulumi, Atlassian, Linear, Notion, Postman, Shopify, SendGrid, Brevo, Square, EasyPost, Duffel, Frame.io, ReadMe, Prefect, Infracost and Telegram tokens, Discord and Microsoft Teams webhooks, 1Password service account tokens and age secret keys |
-| Atuin              | `atuin login`, which takes your password and encryption key as arguments                                                                                                                                                                                      |
+| Service            | Matches                                                                                                                                                                                                                                                          |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AWS                | Access key IDs, commands setting `AWS_SECRET_ACCESS_KEY` or `AWS_SESSION_TOKEN`, and Amazon Bedrock API keys                                                                                                                                                     |
+| Azure              | Commands setting `AZURE_*_KEY`, and Entra ID client secrets                                                                                                                                                                                                      |
+| Google Cloud       | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY`, and API keys                                                                                                                                                                                                      |
+| GitHub             | Personal access tokens (old and new), OAuth access tokens (app and user), app installation tokens, and refresh tokens                                                                                                                                            |
+| GitLab             | Personal, deploy, runner, CI/CD job, feed, SCIM, agent and OAuth tokens                                                                                                                                                                                          |
+| AI providers       | Anthropic, OpenAI, OpenRouter, Groq, xAI, Perplexity, Pinecone, LangSmith and Hugging Face keys                                                                                                                                                                  |
+| Slack              | Bot, user, app and config tokens, and webhook URLs                                                                                                                                                                                                               |
+| Stripe             | Live, test and restricted keys                                                                                                                                                                                                                                   |
+| Package registries | npm, PyPI, RubyGems, Clojars, Docker Hub and Artifactory tokens                                                                                                                                                                                                  |
+| HashiCorp          | Commands setting `NOMAD_TOKEN`, `CONSUL_HTTP_TOKEN` or `VAULT_TOKEN`, passing `-token` to `nomad` or `consul`, or sending an `X-Nomad-Token`, `X-Consul-Token` or `X-Vault-Token` header, each with the token itself rather than a reference like `$NOMAD_TOKEN` |
+| Infrastructure     | DigitalOcean, Terraform Cloud, HashiCorp Vault, Fly.io, Heroku, Cloudflare origin CA, Databricks, PlanetScale, Supabase, Tailscale, Dynatrace, Grafana, Sentry, Doppler and OpenShift tokens                                                                     |
+| Other services     | Netlify, Pulumi, Atlassian, Linear, Notion, Postman, Shopify, SendGrid, Brevo, Square, EasyPost, Duffel, Frame.io, ReadMe, Prefect, Infracost and Telegram tokens, Discord and Microsoft Teams webhooks, 1Password service account tokens and age secret keys    |
+| Atuin              | `atuin login`, which takes your password and encryption key as arguments                                                                                                                                                                                         |
 
 Many of these come from the rules of [gitleaks](https://github.com/gitleaks/gitleaks). For the exact expressions, see [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-common/src/secrets.rs).
 
@@ -455,7 +458,7 @@ This is a safety net, not a guarantee. It only catches credentials in recognized
 
 ### macOS Ctrl-n key shortcuts
 
-Default: `true`
+Default: `false`
 
 macOS doesn't have an `Alt` key, although terminal emulators can often be configured to map the `Option` key to be used as `Alt`. *However*, remapping `Option` this way may prevent typing some characters, such as using `Option`+`3` to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace `Alt`+`0` to `Alt`+`9` shortcuts with `Ctrl`+`0` to `Ctrl`+`9` instead:
 
@@ -920,7 +923,11 @@ enabled = true
 
 Default: `false`
 
-Automatically start and manage the daemon when needed. This isn't compatible with `systemd_socket = true`. If a legacy experimental daemon is already running, restart it manually once before using autostart.
+Automatically start and manage the daemon when needed. This isn't compatible with `systemd_socket = true`. If a legacy experimental daemon is already running, restart it manually once before using autostart. On macOS, when you're logged in graphically, Atuin runs the daemon as a launchd agent at `~/Library/LaunchAgents/sh.atuin.daemon.plist`, and macOS tells you it added a background item the first time. With `ATUIN_HOME` or `ATUIN_CONFIG_DIR` set, Atuin starts the daemon itself instead.
+
+The agent is listed as `atuin` in System Settings, under General > Login Items. Switched off there, Atuin leaves it off and works without the daemon until you switch it back on. If the agent won't start, `daemon.stderr.log` in Atuin's logs directory says why. The agent gets the environment variables your config's paths use, such as `HISTDIR` for `db_path = "$HISTDIR/history.db"`, with the values they had when Atuin installed it. After you add one, run `atuin daemon restart`.
+
+`atuin daemon stop` stops the agent, but with `autostart` on, the next command that needs the daemon starts it again. `atuin config disable daemon` turns the daemon off and removes the agent.
 
 ```
 autostart = false

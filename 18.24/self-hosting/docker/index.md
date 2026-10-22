@@ -53,6 +53,8 @@ services:
       PGTZ: Europe/London
 ```
 
+The `ATUIN_*` variables under `environment` override the same keys in `./config/server.toml`. An empty one counts as unset.
+
 Create a `.env` file next to `docker-compose.yml` with contents like this:
 
 ```

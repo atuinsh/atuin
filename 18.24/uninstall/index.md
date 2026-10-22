@@ -6,6 +6,13 @@ If you used the Atuin installer, you can totally delete it by following these st
 
 1. Delete the `~/.atuin` directory (and `$ATUIN_HOME`, if set).
 1. Delete the `~/.config/atuin` and `~/.local/share/atuin` directories if they exist. Older versions of Atuin used to store data there.
+1. On macOS, remove the daemon's launchd agent:
+
+```
+launchctl bootout gui/$(id -u)/sh.atuin.daemon
+rm -f ~/Library/LaunchAgents/sh.atuin.daemon.plist
+```
+
 1. Remove the shell integration:
 1. On Bash, remove the lines referencing `atuin init` and `~/.atuin/bin/env` from ~/.profile, ~/.bashrc, and ~/.bash_login. The installer may have installed bash-preexec; if you wish to remove it too, delete ~/.bash-preexec.sh and remove the line referencing it from ~/.bashrc.
 1. On Zsh, remove the lines referencing `atuin init` and `~/.atuin/bin/env` from ~/.zshrc and ~/.zshenv.
