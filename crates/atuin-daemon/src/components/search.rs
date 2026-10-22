@@ -390,10 +390,10 @@ fn convert_filter_mode(
             IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
         }
         (FilterMode::Workspace, Some(ctx)) => {
-            if let Some(ref git_root) = ctx.git_root {
-                IndexFilterMode::Workspace(git_root.display_rich().trailing_slash(true).to_string())
+            if let Some(ref vcs_root) = ctx.vcs_root {
+                IndexFilterMode::Workspace(vcs_root.display_rich().trailing_slash(true).to_string())
             } else {
-                // Fall back to directory if no git root
+                // Fall back to directory if no repo root
                 IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
             }
         }

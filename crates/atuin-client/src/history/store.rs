@@ -723,7 +723,7 @@ mod tests {
             cwd: "/".to_owned(),
             cmd_origin: CmdOrigin::try_from("test:test").unwrap(),
             host_id: "test".to_owned(),
-            git_root: None,
+            vcs_root: None,
         }
     }
 
