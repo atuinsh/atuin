@@ -1476,7 +1476,7 @@ You can configure Atuin to use a different directory by setting the `ATUIN_HOME`
 
 Additionally, if set, `ATUIN_CONFIG_DIR` will override the location of `config.toml` and [`server.toml`](https://docs.atuin.sh/self-hosting/server-setup/index.md): Atuin will look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
 
-Paths in the config may start with `~` and refer to environment variables, as in `$XDG_RUNTIME_DIR/atuin.sock`; write `$$` for a literal `$`. A relative path is relative to the directory holding `config.toml`, whatever directory Atuin runs in: with the default config, `socket_path = "atuin.sock"` is `~/.atuin/atuin.sock`. This holds for paths set through `ATUIN_*` environment variables too. A database path must name a file: SQLite's `:memory:` isn't accepted, and neither is a `sqlite:` or `file:` URI.
+Paths in the config may start with `~` and refer to environment variables, as in `$XDG_RUNTIME_DIR/atuin.sock`, or `${XDG_RUNTIME_DIR:-/tmp}/atuin.sock` to fall back to `/tmp` where the variable isn't set; write `$$` for a literal `$`. Atuin warns about a path that refers to a variable that isn't set, and uses it as written. An empty path is the setting's default. A relative path is relative to the directory holding `config.toml`, whatever directory Atuin runs in: with the default config, `socket_path = "atuin.sock"` is `~/.atuin/atuin.sock`. This holds for paths set through `ATUIN_*` environment variables too. A database path may also be SQLite's `:memory:`, or a `sqlite:` or `file:` URI, which SQLite opens as written.
 
 Upgrading from older versions
 
@@ -4665,6 +4665,8 @@ ATUIN_OPEN_REGISTRATION=true
 ATUIN_DB_URI="postgres://user:password@hostname/database"
 ```
 
+An `ATUIN_*` environment variable overrides the same key in `server.toml`. An empty one, such as `ATUIN_DB_URI=` left in a compose file, counts as unset. `ATUIN_PORT` in the `tcp://10.96.0.12:8888` form, which Kubernetes sets for a Service named `atuin`, is ignored with a warning; see [Kubernetes](https://docs.atuin.sh/self-hosting/kubernetes/#service-links).
+
 | Parameter           | Description                                                                |
 | ------------------- | -------------------------------------------------------------------------- |
 | `db_uri`            | A valid database URI, for saving history (required, no default)            |
@@ -4814,6 +4816,8 @@ services:
       TZ: Europe/London
       PGTZ: Europe/London
 ```
+
+The `ATUIN_*` variables under `environment` override the same keys in `./config/server.toml`. An empty one counts as unset.
 
 Create a `.env` file next to `docker-compose.yml` with contents like this:
 
@@ -5186,6 +5190,19 @@ Deploy the Atuin server using `kubectl`:
 ```
 
 The sample files above are also in the [k8s folder](https://github.com/atuinsh/atuin/tree/main/k8s) of the `atuin` repository.
+
+## Service links
+
+Kubernetes gives each pod environment variables for every [Service](https://kubernetes.io/docs/concepts/services-networking/service/#environment-variables) in its namespace. For the Service named `atuin` above, that includes `ATUIN_PORT=tcp://<cluster IP>:8888`, which isn't a port number. Since `ATUIN_*` variables override `server.toml`, the server ignores an `ATUIN_PORT` of that form with a warning, and uses `port` from `server.toml` or the default, 8888. The other variables a service link sets, such as `ATUIN_SERVICE_HOST`, match no setting.
+
+To choose the port yourself, set `ATUIN_PORT` in the container's `env`, as `atuin.yaml` does, which takes precedence over the service link. Or turn service links off for the pod:
+
+```
+spec:
+  template:
+    spec:
+      enableServiceLinks: false
+```
 
 ## Creating backups of the Postgres database
 
