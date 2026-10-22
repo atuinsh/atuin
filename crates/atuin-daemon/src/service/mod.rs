@@ -7,10 +7,12 @@ mod backend;
 mod claim;
 mod connection;
 pub mod pidfile;
+mod run_mode;
 mod socket_holder;
 mod startup_lock;
 mod systemd;
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
@@ -19,6 +21,7 @@ pub use claim::{ClaimError, ServiceClaim};
 pub use connection::FindError;
 use pidfile::Pidfile;
 pub use pidfile::PidfileWaitError;
+pub use run_mode::{ExternalManager, Launch, RunMode};
 pub use socket_holder::ListenError;
 use startup_lock::StartupLock;
 pub use startup_lock::StartupLockError;
@@ -31,7 +34,10 @@ use crate::service::connection::Connection;
 
 /// Represents an active service.
 pub struct ActiveService {
-    backend: AnyBackend,
+    daemon: DaemonSettings,
+    /// Worked out when first needed to launch or stop the service, which most clients never do:
+    /// that asks the pidfile what runs the service.
+    backend: OnceLock<AnyBackend>,
     connection: Connection,
     pidfile: Pidfile,
     startup: StartupLock,
@@ -47,13 +53,11 @@ pub enum ServiceFindError {
     Find(#[from] FindError),
     #[error(transparent)]
     Spawn(#[from] SpawnError),
-    /// Stopping an outdated service to replace it failed.
+    /// Replacing an outdated service failed.
     #[error(transparent)]
-    Replace(#[from] StopError),
+    Replace(#[from] ReplaceError),
     #[error("daemon is newer than this client; leaving it running: {0}")]
     Newer(VersionMatchError),
-    #[error(transparent)]
-    Mismatch(#[from] VersionMatchError),
 }
 
 /// Errors returned by [`ActiveService::restart`].
@@ -62,11 +66,16 @@ pub enum RestartError {
     #[error(transparent)]
     StartupLock(#[from] StartupLockError),
     #[error(transparent)]
+    Replace(#[from] ReplaceError),
+}
+
+/// Errors from replacing a service with one of this client's build.
+#[derive(Debug, thiserror::Error)]
+pub enum ReplaceError {
+    #[error(transparent)]
     Stop(#[from] StopError),
     #[error(transparent)]
     Spawn(#[from] SpawnError),
-    #[error(transparent)]
-    Mismatch(#[from] VersionMatchError),
 }
 
 /// Errors returned by [`ActiveService::ready`].
@@ -124,14 +133,20 @@ impl ActiveService {
             match found.ensure_our_build() {
                 Ok(()) => return Ok(found),
                 Err(newer) if newer.peer_is_newer() => return Err(ServiceFindError::Newer(newer)),
-                Err(_outdated) => found.halt().await?,
+                Err(_outdated) => {
+                    let connection = found.replace().await?;
+                    return Ok(Self {
+                        connection,
+                        ..found
+                    });
+                }
             }
         }
 
         let connection = Self::launch(&backend, &pidfile, timeout).await?;
-        connection.ensure_our_build()?;
         Ok(Self {
-            backend,
+            daemon: settings.daemon.clone(),
+            backend: OnceLock::from(backend),
             connection,
             pidfile,
             startup,
@@ -143,9 +158,8 @@ impl ActiveService {
     ///
     /// TODO(markovejnovic): Do not use the global Settings but pass DaemonSettings.
     pub async fn find(settings: &Settings) -> Result<Option<Self>, ServiceFindError> {
-        let backend = AnyBackend::new(&settings.daemon);
-        let Some(connection) = Connection::at(backend.locate().map_err(FindError::from)?).await?
-        else {
+        let address = AnyBackend::locate(&settings.daemon).map_err(FindError::from)?;
+        let Some(connection) = Connection::at(address).await? else {
             return Ok(None);
         };
 
@@ -153,7 +167,8 @@ impl ActiveService {
         let timeout = Self::timeout(settings.local_timeout);
         let startup = pidfile.startup_lock(timeout);
         Ok(Some(Self {
-            backend,
+            daemon: settings.daemon.clone(),
+            backend: OnceLock::new(),
             connection,
             pidfile,
             startup,
@@ -164,16 +179,16 @@ impl ActiveService {
     /// Kill the service `daemon` describes, whether or not it answers, and remove what it left
     /// behind, as far as its backend allows.
     ///
-    /// Best effort: what it can't kill or remove, it logs.
-    pub async fn evict(daemon: &DaemonSettings) {
-        if let Err(e) = AnyBackend::new(daemon).evict().await {
-            tracing::warn!("{e}");
-        }
+    /// Fails only when its backend can't stop it at all: what it can't kill or remove, it logs.
+    pub async fn evict(daemon: &DaemonSettings) -> Result<(), StopError> {
+        // A daemon that takes the pidfile in the instant between choosing the backend and evicting
+        // may be evicted however it runs.
+        Ok(AnyBackend::new(daemon).evict().await?)
     }
 
     /// Where the running service `daemon` describes listens, whichever started it.
     pub fn locate(daemon: &DaemonSettings) -> Result<DaemonAddress, FindError> {
-        Ok(AnyBackend::new(daemon).locate()?)
+        Ok(AnyBackend::locate(daemon)?)
     }
 
     /// Check that the service is this client's build.
@@ -201,10 +216,7 @@ impl ActiveService {
         //                      service meanwhile at another socket (e.g. another `TMPDIR`) leaves
         //                      this shutting down the dead old one and timing out on the pidfile
         //                      the replacement holds. Look the service up again under the lock.
-        self.halt().await?;
-
-        let connection = Self::launch(&self.backend, &self.pidfile, self.timeout).await?;
-        connection.ensure_our_build()?;
+        let connection = self.replace().await?;
         Ok(Self { connection, ..self })
     }
 
@@ -213,11 +225,34 @@ impl ActiveService {
         self.halt().await
     }
 
+    /// Replace the service with one of this client's build, and connect to that.
+    async fn replace(&self) -> Result<Connection, ReplaceError> {
+        let backend = self.backend();
+        match backend {
+            // Stopped, it would be started again behind the back of one launched here.
+            AnyBackend::External(external) => {
+                external.restart().await.map_err(SpawnError::from)?;
+                // Where the manager runs it, which needn't be where this client would, the new one
+                // says in the pidfile once it holds it.
+                let locate = || Self::locate(&self.daemon);
+                Ok(Connection::connect_when_ready(locate, self.timeout).await?)
+            }
+            AnyBackend::Subproc(_) => {
+                self.halt().await?;
+                Ok(Self::launch(backend, &self.pidfile, self.timeout).await?)
+            }
+        }
+    }
+
     /// Equivalent to [`Self::stop`], but keeps `self` to launch the next service with.
     async fn halt(&self) -> Result<(), StopError> {
-        self.backend.stop(&self.connection).await?;
+        self.backend().stop(&self.connection).await?;
         self.pidfile.released(self.timeout).await?;
         Ok(())
+    }
+
+    fn backend(&self) -> &AnyBackend {
+        self.backend.get_or_init(|| AnyBackend::new(&self.daemon))
     }
 
     /// How long a client waits on the service: for the previous one to exit, for a new one to
@@ -242,6 +277,6 @@ impl ActiveService {
         // launched before then would find the pidfile taken and exit itself.
         pidfile.released(timeout).await?;
         backend.launch().await?;
-        Connection::connect_when_ready(&backend.address(), timeout).await
+        Connection::connect_when_ready(|| Ok(backend.address()), timeout).await
     }
 }

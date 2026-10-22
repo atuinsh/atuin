@@ -113,11 +113,13 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::service::RunMode;
     use crate::service::pidfile::{AcquireGuardError, PidfileGuard, PidfileInfo};
 
     /// Lock the pidfile `daemon` configures, as a daemon started with it does.
     fn acquire(daemon: &DaemonSettings) -> Result<PidfileGuard, AcquireGuardError> {
-        Pidfile::new(&daemon.pidfile_path).acquire(&PidfileInfo::current(daemon))
+        Pidfile::new(&daemon.pidfile_path)
+            .acquire(&PidfileInfo::current(daemon, RunMode::DaemonizeForked))
     }
 
     /// Where the pidfile `daemon` configures says the daemon listens.

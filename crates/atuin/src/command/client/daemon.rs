@@ -7,7 +7,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::grpc::versioning::BUILD_STR;
-use atuin_daemon::service::{ActiveService, PidfileWaitError, ServiceClaim, StopError};
+use atuin_daemon::service::{ActiveService, Launch, PidfileWaitError, ServiceClaim, StopError};
 use clap::Subcommand;
 use eyre::{Result, WrapErr, bail};
 
@@ -61,6 +61,15 @@ impl Cmd {
         }
     }
 
+    /// How `daemon start` was asked to run: forked off the client that ran it, or in place.
+    fn launch(&self) -> Launch {
+        if self.should_daemonize() {
+            Launch::Daemonize
+        } else {
+            Launch::InPlace
+        }
+    }
+
     /// Returns `true` when logs should also be written to the console.
     pub fn show_logs(&self) -> bool {
         match &self.subcmd {
@@ -71,12 +80,13 @@ impl Cmd {
     }
 
     pub async fn run(self, settings: Arc<Settings>) -> Result<()> {
+        let launch = self.launch();
         match self.subcmd {
             None => {
                 eprintln!("Warning: `atuin daemon` is deprecated, use `atuin daemon start`");
-                run(settings, false).await
+                run(settings, false, launch).await
             }
-            Some(SubCmd::Start { force, .. }) => run(settings, force).await,
+            Some(SubCmd::Start { force, .. }) => run(settings, force, launch).await,
             Some(SubCmd::Status) => status_cmd(&settings).await,
             Some(SubCmd::Stop) => stop_cmd(&settings).await,
             Some(SubCmd::Restart) => restart_cmd(&settings, false).await,
@@ -289,12 +299,12 @@ pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> R
     Ok(())
 }
 
-async fn run(settings: Arc<Settings>, force: bool) -> Result<()> {
-    if force {
-        ActiveService::evict(&settings.daemon).await;
+async fn run(settings: Arc<Settings>, force: bool, launch: Launch) -> Result<()> {
+    if force && let Err(e) = ActiveService::evict(&settings.daemon).await {
+        tracing::warn!("{e}");
     }
 
-    let (_claim, listener) = ServiceClaim::take(&settings.daemon)?;
+    let (_claim, listener) = ServiceClaim::take(&settings.daemon, launch)?;
 
     let history_db = Sqlite::new(&settings.db_path, settings.local_timeout).await?;
     let store = SqliteStore::new(&settings.record_store_path, settings.local_timeout).await?;

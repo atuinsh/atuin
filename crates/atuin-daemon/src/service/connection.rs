@@ -55,16 +55,25 @@ impl Connection {
         }
     }
 
-    /// Wait for a just-launched service to answer at `address`.
+    /// Wait for a just-launched service of this client's build to answer where `locate` says it
+    /// listens, past one of another build that is still on its way out.
     pub(super) async fn connect_when_ready(
-        address: &DaemonAddress,
+        locate: impl Fn() -> Result<DaemonAddress, FindError>,
         timeout: Duration,
     ) -> Result<Self, SpawnError> {
+        let locate = &locate;
         let poll = Backoff::Constant(Self::READY_POLL).retry(
             || async move {
-                match Self::at(address.clone()).await {
-                    Ok(Some(connection)) => ControlFlow::Break(Ok(connection)),
-                    Ok(None) => ControlFlow::Continue(()),
+                let address = match locate() {
+                    Ok(address) => address,
+                    Err(err) => return ControlFlow::Break(Err(err.into())),
+                };
+                match Self::at(address).await {
+                    Ok(Some(connection)) => match connection.ensure_our_build() {
+                        Ok(()) => ControlFlow::Break(Ok(connection)),
+                        Err(other) => ControlFlow::Continue(Some(other)),
+                    },
+                    Ok(None) => ControlFlow::Continue(None),
                     Err(err) => ControlFlow::Break(Err(err.into())),
                 }
             },
@@ -75,7 +84,8 @@ impl Connection {
         // but has yet to answer.
         match tokio::time::timeout(timeout, poll).await {
             Ok(Ok(answered)) => answered,
-            Ok(Err(())) | Err(_) => Err(SpawnError::NotReady(timeout)),
+            Ok(Err(Some(other))) => Err(SpawnError::Mismatch(other)),
+            Ok(Err(None)) | Err(_) => Err(SpawnError::NotReady(timeout)),
         }
     }
 

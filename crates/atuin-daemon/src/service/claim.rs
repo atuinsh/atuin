@@ -2,6 +2,7 @@ use atuin_client::settings::Daemon as DaemonSettings;
 
 use crate::service::address::{DaemonListener, SocketFile};
 use crate::service::pidfile::{AcquireGuardError, Pidfile, PidfileGuard, PidfileInfo};
+use crate::service::run_mode::{Launch, RunMode};
 use crate::service::socket_holder::{ListenError, SocketHolder};
 
 /// What a daemon holds while it is the service: the pidfile, and the socket it serves on.
@@ -22,13 +23,19 @@ pub enum ClaimError {
 }
 
 impl ServiceClaim {
-    /// Make this process the service `daemon` describes, returning the listener to serve it on.
+    /// Make this process, `launch`ed so, the service `daemon` describes, returning the listener to
+    /// serve it on.
     ///
     /// Call it from within the Tokio runtime, which keeps a socket it binds fresh until the claim
     /// is dropped.
-    pub fn take(daemon: &DaemonSettings) -> Result<(Self, DaemonListener), ClaimError> {
+    pub fn take(
+        daemon: &DaemonSettings,
+        launch: Launch,
+    ) -> Result<(Self, DaemonListener), ClaimError> {
+        let run_mode = RunMode::detect(daemon, launch);
         // Only the pidfile's holder may clear the sockets a dead daemon left behind.
-        let pidfile = Pidfile::new(&daemon.pidfile_path).acquire(&PidfileInfo::current(daemon))?;
+        let pidfile =
+            Pidfile::new(&daemon.pidfile_path).acquire(&PidfileInfo::current(daemon, run_mode))?;
         let listening = SocketHolder::configured(daemon).listen(daemon)?;
 
         let claim = Self {

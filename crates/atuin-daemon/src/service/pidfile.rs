@@ -23,10 +23,10 @@
 //! used for anything, so it will not impact older clients to have something else there.
 //!
 //! To ensure that clients don't read the pidfile in a half-written state, there is an additional
-//! file, the *pidfile lock*, which is held whenever the pidfile is being written to or read from.
-//! It has the same path as the pidfile but with `.lock` appended. Unlike the pidfile itself, which
-//! is locked for long periods of time by the daemon, the pidfile lock should be held for the
-//! minimum amount of time necessary -- only when reading from or writing to the pidfile.
+//! file, the *pidfile lock*, which is held whenever the pidfile is being taken, written to or read
+//! from. It has the same path as the pidfile but with `.lock` appended. Unlike the pidfile itself,
+//! which is locked for long periods of time by the daemon, the pidfile lock should be held for the
+//! minimum amount of time necessary -- only while taking, reading from or writing to the pidfile.
 
 use std::fmt::{self, Display};
 use std::fs::File;
@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use crate::service::address::DaemonAddress;
+use crate::service::run_mode::RunMode;
 use crate::service::startup_lock::StartupLock;
 
 const FORMAT_V1: &str = "v1";
@@ -61,12 +62,23 @@ pub struct PidfileInfo {
     /// This is [`None`] on Windows, or if `daemon.systemd_socket` is true in `config.toml`.
     #[serde_as(as = "Option<AutoOsString>")]
     pub socket_path: Option<PathBuf>,
+
+    /// How the daemon runs, and so who starts and stops it. [`None`] for a daemon from before it
+    /// was recorded.
+    #[serde(default)]
+    pub run_mode: Option<RunMode>,
+
+    /// The path the daemon was run as, which what runs it runs again to restart it. [`None`] if
+    /// that path was relative, or for a daemon from before it was recorded.
+    #[serde_as(as = "Option<AutoOsString>")]
+    pub program: Option<PathBuf>,
 }
 
 impl PidfileInfo {
-    /// Create a [`PidfileInfo`] for the current process (assuming this process is the daemon).
+    /// Create a [`PidfileInfo`] for the current process (assuming this process is the daemon),
+    /// which runs as `run_mode`.
     #[must_use]
-    pub fn current(settings: &DaemonSettings) -> Self {
+    pub fn current(settings: &DaemonSettings, run_mode: RunMode) -> Self {
         Self {
             pid: std::process::id(),
             version: crate::VERSION.to_string(),
@@ -76,6 +88,11 @@ impl PidfileInfo {
             } else {
                 DaemonAddress::configured(settings).into_socket_path()
             },
+            run_mode: Some(run_mode),
+            program: std::env::args_os()
+                .next()
+                .map(PathBuf::from)
+                .filter(|program| program.is_absolute()),
         }
     }
 
@@ -210,6 +227,19 @@ impl Pidfile {
     /// to use `windows-sys` to lock a single byte well past the actual contents of the file. SQLite
     /// uses this approach; its locks start at 0x40000000.
     pub fn acquire(&self, info: &PidfileInfo) -> Result<PidfileGuard, AcquireGuardError> {
+        // Taken before the pidfile, so that no client reads a pidfile that is held but still names
+        // the daemon before, and signals that one's PID or leaves this one to the wrong manager.
+        let lock_path = self.lock_path();
+        let _lock = LockOptions {
+            create: true,
+            mode: LockMode::Exclusive,
+        }
+        .open(&lock_path)
+        .map_err(|e| WritePidfileError::Lock {
+            path: lock_path,
+            inner: e,
+        })?;
+
         let mut file = LockOptions {
             create: true,
             mode: LockMode::Exclusive,
@@ -225,21 +255,9 @@ impl Pidfile {
         Ok(PidfileGuard { _file: file })
     }
 
-    /// Replace the contents of the pidfile, open as `file`, with `info`.
+    /// Replace the contents of the pidfile, open as `file`, with `info`, under the pidfile lock.
     fn write(&self, file: &mut File, info: &PidfileInfo) -> Result<(), WritePidfileError> {
         let json = serde_json::to_string(info)?;
-        let lock_path = self.lock_path();
-
-        let _lock = LockOptions {
-            create: true,
-            mode: LockMode::Exclusive,
-        }
-        .open(&lock_path)
-        .map_err(|e| WritePidfileError::Lock {
-            path: lock_path,
-            inner: e,
-        })?;
-
         file.set_len(0)
             .and_then(|()| {
                 // `set_len` doesn't move the cursor; we need to do that separately.
@@ -379,7 +397,6 @@ impl Pidfile {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::OpenOptions;
     use std::path::Path;
 
     use atuin_common::path::AbsPathBuf;
@@ -391,18 +408,6 @@ mod tests {
     struct Pidfile {
         _dir: tempfile::TempDir,
         path: PathBuf,
-    }
-
-    impl Pidfile {
-        fn create(&self) -> File {
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&self.path)
-                .unwrap()
-        }
     }
 
     #[fixture]
@@ -418,6 +423,8 @@ mod tests {
             pid: std::process::id(),
             version: crate::VERSION.to_string(),
             socket_path: socket_path.map(PathBuf::from),
+            run_mode: Some(RunMode::DaemonizeForked),
+            program: Some(PathBuf::from("/opt/homebrew/opt/atuin/bin/atuin")),
         }
     }
 
@@ -487,7 +494,7 @@ mod tests {
 
     #[rstest]
     fn test_write_format(pidfile: Pidfile) {
-        at(&pidfile).write(&mut pidfile.create(), &info()).unwrap();
+        drop(at(&pidfile).acquire(&info()).unwrap());
 
         let contents = std::fs::read_to_string(&pidfile.path).unwrap();
         let lines: Vec<&str> = contents.lines().collect();
@@ -500,10 +507,9 @@ mod tests {
 
     #[rstest]
     fn test_write_replaces_longer_contents(pidfile: Pidfile) {
-        let mut file = pidfile.create();
         let long = info_with(Some("/a/much/longer/path/than/the/next/one.sock"));
-        at(&pidfile).write(&mut file, &long).unwrap();
-        at(&pidfile).write(&mut file, &info()).unwrap();
+        drop(at(&pidfile).acquire(&long).unwrap());
+        drop(at(&pidfile).acquire(&info()).unwrap());
 
         assert_eq!(at(&pidfile).info(), Some(info()));
     }
@@ -513,13 +519,13 @@ mod tests {
     #[case::none(None)]
     fn test_round_trip(pidfile: Pidfile, #[case] socket_path: Option<&str>) {
         let info = info_with(socket_path);
-        at(&pidfile).write(&mut pidfile.create(), &info).unwrap();
+        drop(at(&pidfile).acquire(&info).unwrap());
         assert_eq!(at(&pidfile).info(), Some(info));
     }
 
     #[rstest]
     fn test_read_without_lock_file(pidfile: Pidfile) {
-        at(&pidfile).write(&mut pidfile.create(), &info()).unwrap();
+        drop(at(&pidfile).acquire(&info()).unwrap());
         std::fs::remove_file(at(&pidfile).lock_path()).unwrap();
 
         assert_eq!(at(&pidfile).info(), None);
@@ -557,20 +563,32 @@ mod tests {
             Some(PidfileInfo {
                 pid: 1234,
                 version: "1.2.3".into(),
-                socket_path: None
+                socket_path: None,
+                run_mode: None,
+                program: None,
             })
         );
     }
 
     proptest! {
-        #[test]
+        #[rstest]
         fn prop_parse_round_trip(
             pid in any::<u32>(),
             version in ".*",
             // `AutoOsString`'s own tests round-trip the paths that aren't UTF-8.
             socket_path in proptest::option::of(".*".prop_map(PathBuf::from)),
+            run_mode in proptest::option::of(prop_oneof![
+                Just(RunMode::DaemonizeForked),
+                proptest::option::of(prop_oneof![
+                    Just(crate::service::ExternalManager::SystemdSocket),
+                    ".*".prop_map(|name| crate::service::ExternalManager::SystemdUnit { name }),
+                    ".*".prop_map(|label| crate::service::ExternalManager::LaunchdJob { label }),
+                ])
+                .prop_map(RunMode::External),
+            ]),
+            program in proptest::option::of(".*".prop_map(PathBuf::from)),
         ) {
-            let info = PidfileInfo { pid, version, socket_path };
+            let info = PidfileInfo { pid, version, socket_path, run_mode, program };
             let contents = format!(
                 "{pid}\n{FORMAT_V1}\n{}\n",
                 serde_json::to_string(&info).unwrap()
@@ -598,6 +616,7 @@ mod tests {
 
     /// Lock the pidfile `daemon` configures, as a daemon started with it does.
     fn acquire(daemon: &DaemonSettings) -> Result<PidfileGuard, AcquireGuardError> {
-        super::Pidfile::new(&daemon.pidfile_path).acquire(&PidfileInfo::current(daemon))
+        super::Pidfile::new(&daemon.pidfile_path)
+            .acquire(&PidfileInfo::current(daemon, RunMode::DaemonizeForked))
     }
 }

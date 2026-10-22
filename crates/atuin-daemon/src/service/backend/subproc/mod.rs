@@ -44,16 +44,17 @@ impl Subproc {
             daemon: daemon.clone(),
         }
     }
+
+    /// Where the running service listens, as its pidfile says.
+    pub(super) fn locate(&self) -> Result<DaemonAddress, BackendError> {
+        DaemonAddress::locate(&self.daemon, &Pidfile::new(&self.daemon.pidfile_path))
+            .map_err(|err| BackendError::new(SubprocError::from(err)))
+    }
 }
 
 impl Backend for Subproc {
     fn address(&self) -> DaemonAddress {
         DaemonAddress::configured(&self.daemon)
-    }
-
-    fn locate(&self) -> Result<DaemonAddress, BackendError> {
-        DaemonAddress::locate(&self.daemon, &Pidfile::new(&self.daemon.pidfile_path))
-            .map_err(|err| BackendError::new(SubprocError::from(err)))
     }
 
     async fn launch(&self) -> Result<(), BackendError> {
@@ -110,6 +111,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::service::RunMode;
     use crate::service::pidfile::PidfileInfo;
 
     /// A pidfile that no daemon holds names a PID that may since have gone to another process,
@@ -127,6 +129,8 @@ mod tests {
             pid: std::process::id(),
             version: crate::VERSION.to_string(),
             socket_path: None,
+            run_mode: Some(RunMode::DaemonizeForked),
+            program: None,
         };
         drop(Pidfile::new(&settings.daemon.pidfile_path).acquire(&info).unwrap());
 
