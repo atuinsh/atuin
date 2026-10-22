@@ -11,10 +11,10 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::capture::{CaptureConfig, CommandCaptureTracker};
-use crate::debug::MarkerDebugHighlighter;
+use crate::parser::Output;
 
 pub enum Msg {
-    Data(Vec<u8>),
+    Data(Output),
     Resize {
         rows: u16,
         cols: u16,
@@ -76,7 +76,7 @@ struct Emulator {
     /// The screen the socket hands out.
     screen: vt100::Parser,
     tracker: Option<CommandCaptureTracker>,
-    highlighter: Option<MarkerDebugHighlighter>,
+    debug_markers: bool,
 }
 
 impl Emulator {
@@ -99,25 +99,18 @@ impl Emulator {
         Self {
             screen: vt100::Parser::new(rows, cols, Self::SCROLLBACK_CAPACITY),
             tracker: options.command_capture.map(|c| CommandCaptureTracker::new(rows, cols, c)),
-            highlighter: options.debug_markers.then(MarkerDebugHighlighter::new),
+            debug_markers: options.debug_markers,
         }
     }
 
     fn handle_msg(&mut self, msg: Msg) {
         match msg {
-            Msg::Data(raw_data) => {
+            Msg::Data(output) => {
                 if let Some(tracker) = &mut self.tracker {
-                    tracker.push(&raw_data);
+                    tracker.push(&output);
                 }
-
-                let highlighted;
-                let data: &[u8] = if let Some(highlighter) = &mut self.highlighter {
-                    highlighted = highlighter.render(&raw_data);
-                    &highlighted
-                } else {
-                    &raw_data
-                };
-                self.screen.process(data);
+                let labelled = self.debug_markers.then(|| output.with_marker_labels());
+                self.screen.process(labelled.as_deref().unwrap_or(output.data()));
             }
             Msg::Resize { rows, cols } => {
                 // `vt100` dimensions can't be 0. Upstream would panic; now our `atuin-vt100` fork
@@ -244,6 +237,7 @@ mod tests {
 
     use super::*;
     use crate::capture::{CommandCapture, CommandCaptureSink};
+    use crate::parser::Parser;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -444,7 +438,7 @@ mod tests {
     async fn init_small_and_wrap(#[values(0, 1, 2, 3)] rows: u16, #[values(0, 1, 2, 3)] cols: u16) {
         let (msg_tx, msg_rx) = mpsc::channel(8);
         spawn_emulator(rows, cols, msg_rx, plain()).expect("emulator starts");
-        msg_tx.send(Msg::Data(b"hello world".to_vec())).await.expect("emulator alive");
+        msg_tx.send(output(b"hello world")).await.expect("emulator alive");
 
         // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
         assert_eq!(size_of(&request_screen(&msg_tx).await), (rows.max(1), cols.max(1)));
@@ -457,7 +451,7 @@ mod tests {
         #[values(0, 1, 2, 3)] cols: u16,
     ) {
         emulator.handle_msg(Msg::Resize { rows, cols });
-        emulator.handle_msg(Msg::Data(b"hello world".to_vec()));
+        emulator.handle_msg(output(b"hello world"));
 
         // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
         assert_eq!(size_of(&encode_screen(&emulator.screen)), (rows.max(1), cols.max(1)));
@@ -465,7 +459,7 @@ mod tests {
 
     #[rstest]
     fn encodes_the_screen_contents_and_cursor(#[with(3, 10)] mut emulator: Emulator) {
-        emulator.handle_msg(Msg::Data(b"one\r\ntwo".to_vec()));
+        emulator.handle_msg(output(b"one\r\ntwo"));
 
         let blob = encode_screen(&emulator.screen);
         assert_eq!(size_of(&blob), (3, 10));
@@ -488,9 +482,9 @@ mod tests {
             debug_markers: false,
         });
 
-        emulator.handle_msg(Msg::Data(format!("\x1b]18188735;C;{HID}\x07abcdefghij").into_bytes()));
+        emulator.handle_msg(output(format!("\x1b]18188735;C;{HID}\x07abcdefghij")));
         emulator.handle_msg(Msg::Resize { rows: 6, cols: 5 });
-        emulator.handle_msg(Msg::Data(format!("klmno\r\n\x1b]18188735;D;{HID}\x07").into_bytes()));
+        emulator.handle_msg(output(format!("klmno\r\n\x1b]18188735;D;{HID}\x07")));
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
@@ -519,10 +513,9 @@ mod tests {
         .expect("emulator starts");
 
         msg_tx
-            .send(Msg::Data(
-                format!("$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07")
-                    .into_bytes(),
-            ))
+            .send(output(format!(
+                "$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07"
+            )))
             .await
             .expect("emulator alive");
         // A screen request only comes back once the data above has been handled.
@@ -550,10 +543,9 @@ mod tests {
             debug_markers: true,
         });
 
-        emulator.handle_msg(Msg::Data(
-            format!("$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07")
-                .into_bytes(),
-        ));
+        emulator.handle_msg(output(format!(
+            "$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07"
+        )));
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
@@ -568,9 +560,9 @@ mod tests {
 
     #[rstest]
     fn an_emulator_without_a_sink_still_tracks_the_screen(#[with(6, 20)] mut emulator: Emulator) {
-        emulator.handle_msg(Msg::Data(
-            format!("\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07").into_bytes(),
-        ));
+        emulator.handle_msg(output(format!(
+            "\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07"
+        )));
 
         assert!(rows_of(&encode_screen(&emulator.screen))[0].contains("hi"));
     }
@@ -583,6 +575,11 @@ mod tests {
     #[fixture]
     fn emulator(#[default(24)] rows: u16, #[default(80)] cols: u16) -> Emulator {
         Emulator::new(nonzero(rows), nonzero(cols), plain())
+    }
+
+    /// The child printing `data`, read with a parser of its own, so `data` must be whole.
+    fn output(data: impl Into<Vec<u8>>) -> Msg {
+        Msg::Data(Parser::new().read(data.into()))
     }
 
     /// Emulator options with nothing enabled.

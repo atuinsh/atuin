@@ -5,7 +5,7 @@ mod cwd_updater;
 #[cfg(unix)]
 mod debug;
 #[cfg(unix)]
-mod markers;
+mod parser;
 #[cfg(unix)]
 mod pty_proxy;
 #[cfg(unix)]

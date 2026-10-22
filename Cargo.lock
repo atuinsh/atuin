@@ -718,11 +718,11 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-vt100",
+ "atuin-vte",
  "clap",
  "crossterm",
  "easy-cast",
  "libc",
- "memchr",
  "parking_lot",
  "portable-pty",
  "proptest",
@@ -803,13 +803,23 @@ dependencies = [
 
 [[package]]
 name = "atuin-vt100"
-version = "0.19.1"
+version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6541b562687e0c6682aa49aec5b7fc21aae2d57e1e228d492dcde84d3925059a"
+checksum = "9546310339d212a866db36a2d5f8eb9ad947cc6e0dfe74d6374a61404c580783"
 dependencies = [
+ "atuin-vte",
  "itoa",
  "unicode-width 0.2.2",
- "vte",
+]
+
+[[package]]
+name = "atuin-vte"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b550bb2a697dda1aa6db51a4163fbb356554b20bbabd65bb52a6664ea416f67e"
+dependencies = [
+ "arrayvec",
+ "memchr",
 ]
 
 [[package]]

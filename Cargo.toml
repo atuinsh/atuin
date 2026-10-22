@@ -26,6 +26,7 @@ atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.24.1", defaul
 atuin-scripts = { path = "crates/atuin-scripts", version = "18.24.1" }
 atuin-server = { path = "crates/atuin-server", version = "18.24.1" }
 atuin-vt100 = "0.19"
+atuin-vte = "0.15"
 
 ansi-to-tui = { version = "8", default-features = false }
 arboard = { version = "3", default-features = false }
