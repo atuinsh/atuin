@@ -8,25 +8,20 @@ mod claim;
 mod connection;
 pub mod pidfile;
 mod run_mode;
-#[cfg(unix)]
-mod socket_file;
 mod socket_holder;
 mod startup_lock;
+mod systemd;
 
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
-#[cfg(unix)]
-pub use backend::DaemonizeError;
-pub use backend::{SpawnError, StopError, Subproc};
+pub use backend::{DaemonizeError, SpawnError, StopError, Subproc};
 pub use claim::{ClaimError, ServiceClaim};
 pub use connection::FindError;
 use pidfile::Pidfile;
 pub use pidfile::PidfileWaitError;
 pub use run_mode::{ExternalManager, Launch, RunMode};
-#[cfg(unix)]
-pub use socket_file::RemoveSocketError;
 pub use socket_holder::ListenError;
 use startup_lock::StartupLock;
 pub use startup_lock::StartupLockError;

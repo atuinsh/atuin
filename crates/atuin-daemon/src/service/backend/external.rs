@@ -17,7 +17,7 @@ impl External {
     #[must_use]
     pub fn new(daemon: &DaemonSettings, manager: ExternalManager) -> Self {
         Self {
-            address: DaemonAddress::from(daemon.existing_socket_path().into_owned()),
+            address: DaemonAddress::existing(daemon),
             manager,
         }
     }

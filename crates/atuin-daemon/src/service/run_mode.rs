@@ -2,6 +2,7 @@ use atuin_client::settings::Daemon as DaemonSettings;
 use serde::{Deserialize, Serialize};
 
 use crate::service::backend::Launchd;
+use crate::service::systemd::Systemd;
 
 /// How `atuin daemon start` was run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,28 +69,9 @@ impl ExternalManager {
         if daemon.systemd_socket {
             return Some(Self::SystemdSocket);
         }
-        Launchd::external_job_label().map(|label| Self::LaunchdJob { label }).or_else(|| {
-            // Only Linux has one.
-            let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-            Self::systemd_unit(&cgroup)
-        })
-    }
-
-    /// The systemd user service that `cgroup`, the contents of `/proc/self/cgroup`, puts this
-    /// process in, such as `atuin-daemon.service` in
-    /// `0::/user.slice/user-1000.slice/user@1000.service/app.slice/atuin-daemon.service`.
-    fn systemd_unit(cgroup: &str) -> Option<Self> {
-        // cgroup v2's one hierarchy, or v1's systemd one.
-        let path = cgroup.lines().find_map(|line| {
-            line.strip_prefix("0::")
-                .or_else(|| line.split_once(":name=systemd:").map(|(_, path)| path))
-        })?;
-        let (slice, unit) = path.rsplit_once('/')?;
-        // Only a user's unit is one `systemctl --user` reaches. A shell in a terminal, and what it
-        // runs, is in a `.scope`.
-        (slice.contains("/user@") && unit.ends_with(".service")).then(|| Self::SystemdUnit {
-            name: unit.to_owned(),
-        })
+        Launchd::external_job_label()
+            .map(|label| Self::LaunchdJob { label })
+            .or_else(|| Systemd::unit_of_this_process().map(|name| Self::SystemdUnit { name }))
     }
 
     /// The refusal for the launchd job `label`, with the command that restarts it.
@@ -112,31 +94,6 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-
-    #[rstest]
-    #[case::user_service(
-        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/atuin-daemon.service\n",
-        Some("atuin-daemon.service")
-    )]
-    #[case::cgroup_v1(
-        "12:pids:/user.slice\n1:name=systemd:/user.slice/user-1000.slice/user@1000.service/\
-         atuin-daemon.service\n",
-        Some("atuin-daemon.service")
-    )]
-    #[case::terminal(
-        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.gnome.Terminal.slice/\
-         vte-spawn-1.scope\n",
-        None
-    )]
-    #[case::login_session("0::/user.slice/user-1000.slice/session-2.scope\n", None)]
-    #[case::system_service("0::/system.slice/atuin.service\n", None)]
-    #[case::empty("", None)]
-    fn only_a_user_service_runs_the_daemon(#[case] cgroup: &str, #[case] unit: Option<&str>) {
-        let expected = unit.map(|name| ExternalManager::SystemdUnit {
-            name: name.to_owned(),
-        });
-        assert_eq!(ExternalManager::systemd_unit(cgroup), expected);
-    }
 
     #[rstest]
     #[case::brew_services("homebrew.mxcl.atuin", "`brew services restart atuin`")]

@@ -19,10 +19,9 @@ use service_manager::{
 };
 use tracing::warn;
 
-use crate::service::address::{DaemonAddress, DaemonListener};
+use crate::service::address::{DaemonAddress, DaemonListener, SocketFile};
 use crate::service::backend::{Backend, BackendError, Subproc};
 use crate::service::connection::Connection;
-use crate::service::socket_file::SocketFile;
 use crate::service::socket_holder::{Listening, SocketHolder};
 
 /// Represents a backend that runs atuin-daemon as a launchd agent in the user's `gui/<uid>`
@@ -319,7 +318,7 @@ impl Launchd {
 
 impl Backend for Launchd {
     fn address(&self) -> DaemonAddress {
-        DaemonAddress::from(self.daemon.socket_path().into_owned())
+        DaemonAddress::configured(&self.daemon)
     }
 
     async fn launch(&self) -> Result<(), BackendError> {
@@ -341,7 +340,7 @@ impl Backend for Launchd {
         // launchd leaves its socket's file behind, unlike an agent started outside launchd, which
         // removes it as it exits. Where the agent was found, which the config may have moved the
         // socket from since.
-        if let Err(err) = SocketFile::remove_stale([service.address()]) {
+        if let Err(err) = SocketFile::remove_if_stale(service.address().as_ref()) {
             warn!("{err}");
         }
         Ok(())

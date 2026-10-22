@@ -1,18 +1,15 @@
 use atuin_client::settings::Daemon as DaemonSettings;
 
-use crate::service::address::DaemonListener;
+use crate::service::address::{DaemonListener, SocketFile};
 use crate::service::backend::{BackendError, Launchd};
 use crate::service::pidfile::{AcquireGuardError, Pidfile, PidfileGuard, PidfileInfo};
 use crate::service::run_mode::{ExternalManager, Launch, RunMode};
-#[cfg(unix)]
-use crate::service::socket_file::SocketFile;
 use crate::service::socket_holder::{ListenError, SocketHolder};
 
 /// What a daemon holds while it is the service: the pidfile, and the socket it serves on.
 pub struct ServiceClaim {
     // Fields drop in order, and the socket has to go first: a daemon launched once the pidfile is
     // free binds the same path, and would lose its socket to this one.
-    #[cfg(unix)]
     _socket: Option<SocketFile>,
     _pidfile: PidfileGuard,
 }
@@ -54,7 +51,6 @@ impl ServiceClaim {
             launchd.unwrap_or_else(|| SocketHolder::configured(daemon)).listen(daemon)?;
 
         let claim = Self {
-            #[cfg(unix)]
             _socket: listening.socket,
             _pidfile: pidfile,
         };

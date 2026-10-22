@@ -1,14 +1,8 @@
-#[cfg(unix)]
-use std::borrow::Cow;
 use std::num::NonZeroU32;
-#[cfg(unix)]
-use std::path::Path;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
-#[cfg(unix)]
-use atuin_client::settings::Daemon as DaemonSettings;
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
@@ -47,24 +41,6 @@ use crate::search::{
 };
 use crate::service::address::{ConnectError, DaemonAddress};
 use crate::service::{ActiveService, FindError};
-
-/// The paths that should be checked when looking for existing daemon sockets.
-///
-/// For the same reasons explained in [`Pidfile::socket_path`][1], when `ATUIN_HOME` is set, this function will
-/// only yield the [preferred socket path][0] instead of also including the legacy paths.
-///
-/// [0]: atuin_client::settings::Daemon::preferred_socket_path
-/// [1]: crate::service::pidfile::Pidfile::socket_path
-#[cfg(unix)]
-pub fn potential_socket_paths(
-    daemon: &DaemonSettings,
-) -> impl Iterator<Item = Cow<'_, Path>> + use<'_> {
-    if atuin_common::dirs::atuin_home_is_set() {
-        itertools::Either::Left(std::iter::once(daemon.preferred_socket_path()))
-    } else {
-        itertools::Either::Right(daemon.potential_socket_paths())
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum FromSettingsError {

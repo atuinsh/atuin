@@ -1,20 +1,24 @@
+//! Forking off the client, as Unix does; on Windows, a spawned process already outlives its
+//! client. Each platform's module defines the same names.
+
 #[cfg(unix)]
-use std::path::PathBuf;
+mod unix;
+#[cfg(unix)]
+use unix as platform;
+#[cfg(not(unix))]
+mod windows;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use atuin_client::settings::Daemon as DaemonSettings;
-#[cfg(unix)]
-use daemonix::Daemonize;
+pub use platform::DaemonizeError;
+#[cfg(not(unix))]
+use windows as platform;
 
-use crate::service::address::DaemonAddress;
+use crate::service::address::{DaemonAddress, LocateError, RemoveSocketError, SocketFile};
 use crate::service::backend::{Backend, BackendError};
 use crate::service::connection::Connection;
 use crate::service::pidfile::Pidfile;
-#[cfg(unix)]
-use crate::service::pidfile::SocketPathError;
-#[cfg(unix)]
-use crate::service::socket_file::{RemoveSocketError, SocketFile};
 
 /// Represents a backend that manages atuin-daemon as a background task by forking a user's regular
 /// `atuin` process.
@@ -27,27 +31,10 @@ pub struct Subproc {
 pub enum SubprocError {
     #[error("failed to launch the daemon: {0}")]
     Launch(std::io::Error),
-    #[cfg(unix)]
     #[error(transparent)]
-    SocketPath(#[from] SocketPathError),
-    #[cfg(unix)]
+    Locate(#[from] LocateError),
     #[error(transparent)]
     RemoveSocket(#[from] RemoveSocketError),
-}
-
-/// Errors from [`Subproc::daemonize`].
-#[cfg(unix)]
-#[derive(Debug, thiserror::Error)]
-pub enum DaemonizeError {
-    #[error(transparent)]
-    AtuinHome(#[from] atuin_common::dirs::HomeError),
-    #[error("could not create the daemon's working directory {}: {source}", .path.display())]
-    WorkingDir {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    #[error("failed to daemonize process: {0}")]
-    Daemonize(daemonix::Error),
 }
 
 impl Subproc {
@@ -58,55 +45,16 @@ impl Subproc {
         }
     }
 
-    /// Detach this process, as the service `launch` started.
-    ///
-    /// Call it before creating the async runtime or opening database connections, since `fork()`
-    /// inside an async runtime corrupts its internal state.
-    #[cfg(unix)]
-    pub fn daemonize() -> Result<(), DaemonizeError> {
-        let working_directory = PathBuf::from(atuin_common::dirs::try_atuin_home()?);
-
-        // TODO(markovejnovic): We should have some sort of DirsProvider or something like that
-        //                      which would guarantee that the directory would exist.
-        std::fs::create_dir_all(&working_directory).map_err(|source| {
-            DaemonizeError::WorkingDir {
-                path: working_directory.clone(),
-                source,
-            }
-        })?;
-
-        Daemonize::new()
-            .working_directory(working_directory)
-            .umask(0o077)
-            .start()
-            .map_err(DaemonizeError::Daemonize)
-    }
-
     /// Where the running service listens, as its pidfile says.
     pub(super) fn locate(&self) -> Result<DaemonAddress, BackendError> {
-        #[cfg(unix)]
-        {
-            let pidfile = Pidfile::new(&self.daemon.pidfile_path);
-            let socket = pidfile.socket_path(&self.daemon).map_err(SubprocError::from);
-            Ok(DaemonAddress::from(socket.map_err(BackendError::new)?))
-        }
-        #[cfg(not(unix))]
-        {
-            Ok(DaemonAddress::from(self.daemon.tcp_port))
-        }
+        DaemonAddress::locate(&self.daemon, &Pidfile::new(&self.daemon.pidfile_path))
+            .map_err(|err| BackendError::new(SubprocError::from(err)))
     }
 }
 
 impl Backend for Subproc {
     fn address(&self) -> DaemonAddress {
-        #[cfg(unix)]
-        {
-            DaemonAddress::from(self.daemon.socket_path().into_owned())
-        }
-        #[cfg(not(unix))]
-        {
-            DaemonAddress::from(self.daemon.tcp_port)
-        }
+        DaemonAddress::configured(&self.daemon)
     }
 
     async fn launch(&self) -> Result<(), BackendError> {
@@ -114,14 +62,10 @@ impl Backend for Subproc {
 
         let mut service = Command::new(exe);
         service
-            .args(["daemon", "start"])
+            .args(["daemon", "start", "--daemonize"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-
-        #[cfg(unix)]
-        service.arg("--daemonize");
-
         service.spawn().map_err(|err| BackendError::new(SubprocError::Launch(err)))?;
         Ok(())
     }
@@ -153,8 +97,7 @@ impl Backend for Subproc {
             }
         }
 
-        #[cfg(unix)]
-        SocketFile::remove_all(crate::client::potential_socket_paths(&self.daemon), |_| true)
+        SocketFile::remove_all(&self.daemon)
             .map_err(|err| BackendError::new(SubprocError::from(err)))?;
 
         Ok(())

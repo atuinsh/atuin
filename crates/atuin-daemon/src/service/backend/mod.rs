@@ -1,5 +1,4 @@
 //! The backend used to manage the daemon service.
-#[cfg(unix)]
 mod external;
 mod launchd;
 mod subproc;
@@ -8,17 +7,13 @@ use std::time::Duration;
 
 use atuin_client::settings::Daemon as DaemonSettings;
 use enum_dispatch::enum_dispatch;
-#[cfg(unix)]
 pub use external::External;
 pub use launchd::Launchd;
-#[cfg(unix)]
-pub use subproc::DaemonizeError;
-pub use subproc::Subproc;
+pub use subproc::{DaemonizeError, Subproc};
 
 use crate::service::PidfileWaitError;
 use crate::service::address::DaemonAddress;
 use crate::service::connection::{Connection, FindError};
-#[cfg(unix)]
 use crate::service::run_mode::ExternalManager;
 
 /// An error from a [`Backend`], each of which fails in its own ways.
@@ -75,7 +70,6 @@ pub trait Backend {
 
 #[enum_dispatch(Backend)]
 pub enum AnyBackend {
-    #[cfg(unix)]
     External(External),
     Launchd(Launchd),
     Subproc(Subproc),
@@ -85,7 +79,6 @@ impl AnyBackend {
     /// The backend that manages the service `daemon` describes: [`External`] while a daemon that
     /// something other than Atuin runs holds the pidfile.
     pub fn new(daemon: &DaemonSettings) -> Self {
-        #[cfg(unix)]
         if let Some(external) = External::for_client(daemon) {
             return external.into();
         }
@@ -100,7 +93,6 @@ impl AnyBackend {
     /// Unlike [`Self::new`], it doesn't ask whether the launchd agent is installed, which costs
     /// every command a few lookups in the user database.
     pub fn locate(daemon: &DaemonSettings) -> Result<DaemonAddress, BackendError> {
-        #[cfg(unix)]
         if daemon.systemd_socket {
             return Ok(External::new(daemon, ExternalManager::SystemdSocket).address());
         }

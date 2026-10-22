@@ -3,11 +3,14 @@ use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use atuin_client::settings::Daemon as DaemonSettings;
 use tokio::task::JoinHandle;
+
+use super::DaemonAddress;
 
 /// The socket file a daemon listens on, kept fresh against temporary file cleaners and, if the
 /// daemon bound it itself, removed when dropped.
-pub(super) struct SocketFile {
+pub struct SocketFile {
     keepalive: JoinHandle<()>,
     /// The file to remove when the daemon exits, unless it outlives the daemon as launchd's does.
     remove_on_drop: Option<PathBuf>,
@@ -26,16 +29,18 @@ impl SocketFile {
     /// by temporary file cleaners.
     const KEEPALIVE_INTERVAL: Duration = Duration::from_mins(1);
 
-    /// Own the socket bound at `path`, keeping it fresh from the current Tokio runtime.
-    pub(super) fn new(path: PathBuf) -> Self {
-        let mut socket = Self::kept_fresh(path.clone());
-        socket.remove_on_drop = Some(path);
-        socket
+    /// The socket the daemon bound at `address`, which it owns until it exits, kept fresh from the
+    /// current Tokio runtime.
+    #[expect(clippy::unnecessary_wraps, reason = "a daemon listening on TCP has no socket file")]
+    pub(crate) fn of(address: &DaemonAddress) -> Option<Self> {
+        let mut socket = Self::kept_fresh(address.0.clone());
+        socket.remove_on_drop = Some(address.0.clone());
+        Some(socket)
     }
 
     /// Keep fresh the socket at `path`, which goes on listening once the daemon exits, as
     /// launchd's does.
-    pub(super) fn kept_fresh(path: PathBuf) -> Self {
+    pub(crate) fn kept_fresh(path: PathBuf) -> Self {
         Self {
             keepalive: Self::keep_fresh(path),
             remove_on_drop: None,
@@ -54,38 +59,46 @@ impl SocketFile {
         })
     }
 
-    /// Remove the daemon's socket from each of `paths` it is at, subject to `should_remove`.
-    pub(super) fn remove_all(
-        paths: impl IntoIterator<Item = impl AsRef<Path>>,
-        should_remove: impl Fn(&Path) -> bool,
-    ) -> Result<(), RemoveSocketError> {
-        let mut error = None;
-        for socket_path in paths {
-            let socket_path = socket_path.as_ref();
-            if !socket_path.exists() || !should_remove(socket_path) {
-                continue;
-            }
-
-            if let Err(e) = std::fs::remove_file(socket_path)
-                && e.kind() != ErrorKind::NotFound
-            {
-                // Log the error because we only return the first error when multiple occur.
-                tracing::error!("failed to remove daemon socket {}: {e}", socket_path.display());
-                error.get_or_insert_with(|| RemoveSocketError {
-                    path: socket_path.to_owned(),
-                    source: e,
-                });
-            }
-        }
-
-        error.map_or(Ok(()), Err)
+    /// Remove the socket of the daemon `daemon` describes from every path it may be at.
+    pub(crate) fn remove_all(daemon: &DaemonSettings) -> Result<(), RemoveSocketError> {
+        Self::first_error(DaemonAddress::candidates(daemon).map(|path| Self::remove(&path)))
     }
 
-    /// Remove the sockets at `paths` that a daemon no longer listening left behind.
-    pub(super) fn remove_stale(
-        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+    /// Remove the sockets that a daemon `daemon` describes left behind when it stopped listening.
+    pub(super) fn remove_stale(daemon: &DaemonSettings) -> Result<(), RemoveSocketError> {
+        Self::first_error(
+            DaemonAddress::candidates(daemon).map(|path| Self::remove_if_stale(&path)),
+        )
+    }
+
+    /// Remove the socket at `path` if nothing listens on it any more.
+    pub(crate) fn remove_if_stale(path: &Path) -> Result<(), RemoveSocketError> {
+        if !Self::is_stale(path) {
+            return Ok(());
+        }
+        Self::remove(path)
+    }
+
+    fn remove(path: &Path) -> Result<(), RemoveSocketError> {
+        match std::fs::remove_file(path) {
+            Err(source) if source.kind() != ErrorKind::NotFound => Err(RemoveSocketError {
+                path: path.to_owned(),
+                source,
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// The first of `removals` that failed, after logging each, since only one is returned.
+    fn first_error(
+        removals: impl Iterator<Item = Result<(), RemoveSocketError>>,
     ) -> Result<(), RemoveSocketError> {
-        Self::remove_all(paths, Self::is_stale)
+        let mut first = None;
+        for err in removals.filter_map(Result::err) {
+            tracing::error!("{err}");
+            first.get_or_insert(err);
+        }
+        first.map_or(Ok(()), Err)
     }
 
     /// Whether the file at `path` is a socket that nothing listens on.
@@ -137,7 +150,7 @@ mod tests {
         if !listening {
             drop(listener);
         }
-        SocketFile::remove_stale([&path]).unwrap();
+        SocketFile::remove_if_stale(&path).unwrap();
         assert_eq!(path.exists(), kept);
     }
 }
