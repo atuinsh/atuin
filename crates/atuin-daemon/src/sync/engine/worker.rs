@@ -303,10 +303,11 @@ impl Worker {
         }
 
         for chunk in built_ids.chunks(INDEX_CHUNK) {
-            match self.handle.history_db().load_active(chunk.iter().copied()).await {
-                Ok(active) if !active.is_empty() => self.index.read().await.add_histories(&active),
-                Ok(_) => {}
-                Err(e) => tracing::error!("failed to load synced history for indexing: {e}"),
+            if let Err(e) =
+                SearchIndex::add_synced_histories(&self.index, self.handle.history_db(), chunk)
+                    .await
+            {
+                tracing::error!("failed to load synced history for indexing: {e}");
             }
         }
     }

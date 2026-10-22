@@ -598,12 +598,16 @@ impl HistoryJournal {
         // Chunked like `build_all` is: one transaction over the whole set would hold the history
         // db's write lock for seconds at 100k+ ids, past the busy timeout a concurrent
         // `finish()` is willing to wait.
+        // A sync batch fetched before this deletion must reach the old index before we remove
+        // its database rows, or the reload could replay it and resurrect the deleted command.
+        let sync_guard = SearchIndex::deletion_guard(&self.search_index).await;
         for chunk in to_delete.chunks(DELETE_ROWS_BATCH_SIZE) {
             self.history_db
                 .delete_rows(chunk.iter().copied())
                 .await
                 .map_err(|e| CmdDeleteError::HistoryDbFailed(e.into()))?;
         }
+        drop(sync_guard);
 
         self.reload_search_index(search_settings).await;
 

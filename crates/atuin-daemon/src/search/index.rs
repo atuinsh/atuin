@@ -10,6 +10,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::pin::pin;
 use std::sync::{Arc, Weak};
 
@@ -23,7 +24,10 @@ use futures::{Stream, TryStreamExt, stream};
 use lasso::{Spur, ThreadedRodeo};
 use parking_lot::{Mutex, RwLock};
 use time::OffsetDateTime;
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, RwLock as AsyncRwLock, RwLockReadGuard};
+use tokio::sync::{
+    Mutex as AsyncMutex, OwnedMutexGuard, OwnedRwLockWriteGuard, RwLock as AsyncRwLock,
+    RwLockReadGuard,
+};
 use tracing::{Level, instrument};
 use uuid::Uuid;
 
@@ -427,6 +431,9 @@ pub struct SearchIndex {
     /// Shared by successive generations so reloads cannot publish out of order.
     reload_lock: Arc<AsyncMutex<()>>,
 
+    /// A sync batch must reach the index before a journal deletion can remove its database rows.
+    sync_lock: Arc<AsyncRwLock<()>>,
+
     /// Updates to replay into the replacement. Only a running reload owns the log.
     reload_updates: Weak<HistoryUpdates>,
 }
@@ -441,6 +448,7 @@ impl SearchIndex {
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
             reload_lock: Arc::new(AsyncMutex::new(())),
+            sync_lock: Arc::new(AsyncRwLock::new(())),
             reload_updates: Weak::new(),
         }
     }
@@ -457,6 +465,33 @@ impl SearchIndex {
         search_settings: &Search,
     ) -> Result<RwLockReadGuard<'a, Self>, LoadFromDbError> {
         Self::reload_from_pages(index, shells, Self::history_pages(db), search_settings).await
+    }
+
+    /// Load synced rows and publish them as one operation with respect to journal deletions.
+    pub(crate) async fn add_synced_histories(
+        index: &AsyncRwLock<Self>,
+        db: &Sqlite,
+        ids: &[HistoryId],
+    ) -> eyre::Result<()> {
+        Self::add_synced_from(index, async { Ok(db.load_active(ids.iter().copied()).await?) }).await
+    }
+
+    async fn add_synced_from(
+        index: &AsyncRwLock<Self>,
+        load: impl Future<Output = eyre::Result<Vec<History>>>,
+    ) -> eyre::Result<()> {
+        let sync_lock = index.read().await.sync_lock.clone();
+        let _sync = sync_lock.read().await;
+        let active = load.await?;
+        index.read().await.add_histories(&active);
+        Ok(())
+    }
+
+    /// Drain fetched sync batches before removing rows. No live-index guard is held while waiting
+    /// for sync or deleting from the database. Release this guard before reloading the index.
+    pub(crate) async fn deletion_guard(index: &AsyncRwLock<Self>) -> OwnedRwLockWriteGuard<()> {
+        let sync_lock = index.read().await.sync_lock.clone();
+        sync_lock.write_owned().await
     }
 
     /// Prepare a progressive load into the initially empty index. Reserve it before spawning the
@@ -526,6 +561,7 @@ impl SearchIndex {
             }
         }
         replacement.reload_lock = reload_lock.clone();
+        replacement.sync_lock = active.sync_lock.clone();
         *active = replacement;
         Ok(active.downgrade())
     }
@@ -785,6 +821,102 @@ mod tests {
     #[fixture]
     fn live_index() -> Arc<AsyncRwLock<SearchIndex>> {
         Arc::new(AsyncRwLock::new(SearchIndex::default()))
+    }
+
+    #[rstest]
+    #[case::same_generation(false)]
+    #[case::replacement_published(true)]
+    #[tokio::test]
+    async fn a_deleted_row_fetched_by_sync_cannot_be_replayed(
+        live_index: Arc<AsyncRwLock<SearchIndex>>,
+        #[case] replace: bool,
+    ) {
+        let db = Arc::new(Sqlite::in_memory(std::time::Duration::from_secs(5)).await.unwrap());
+        let history = make_history("echo deleted", "/old", datetime!(2024-01-01 10:00 UTC));
+        db.save(&history).await.unwrap();
+        live_index.read().await.add_history(&history);
+
+        let (fetched_tx, fetched) = oneshot::channel();
+        let (resume, resume_rx) = oneshot::channel();
+        let index = live_index.clone();
+        let sync_db = db.clone();
+        let id = history.id;
+        let sync = tokio::spawn(async move {
+            SearchIndex::add_synced_from(&index, async {
+                let rows = sync_db.load_active([id]).await?;
+                assert_eq!(rows.len(), 1, "sync fetched the row before deletion");
+                fetched_tx.send(()).unwrap();
+                resume_rx.await.unwrap();
+                Ok(rows)
+            })
+            .await
+        });
+        fetched.await.unwrap();
+        if replace {
+            drop(SearchIndex::reload(&live_index, None, &db, &Search::default()).await.unwrap());
+        }
+        let mut deleting = pin!(SearchIndex::deletion_guard(&live_index));
+        assert!(poll!(&mut deleting).is_pending());
+        resume.send(()).unwrap();
+        sync.await.unwrap().unwrap();
+
+        let guard = deleting.await;
+        db.delete_rows([id]).await.unwrap();
+        drop(guard);
+        let settings = Search::default();
+        let index = SearchIndex::reload(&live_index, None, &db, &settings).await.unwrap();
+
+        assert!(db.load(id).await.unwrap().is_none());
+        assert_eq!(index.command_count(), 0, "sync must not resurrect the deleted row");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sync_waiting_for_a_delete_reads_the_database_after_it_finishes(
+        live_index: Arc<AsyncRwLock<SearchIndex>>,
+    ) {
+        let db = Sqlite::in_memory(std::time::Duration::from_secs(5)).await.unwrap();
+        let history = make_history("echo deleted", "/old", datetime!(2024-01-01 10:00 UTC));
+        db.save(&history).await.unwrap();
+        let deleting = SearchIndex::deletion_guard(&live_index).await;
+
+        let mut sync = pin!(SearchIndex::add_synced_histories(
+            &live_index,
+            &db,
+            std::slice::from_ref(&history.id)
+        ));
+        assert!(poll!(&mut sync).is_pending());
+        db.delete_rows([history.id]).await.unwrap();
+        drop(deleting);
+        sync.await.unwrap();
+
+        assert_eq!(live_index.read().await.command_count(), 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn synced_rows_scanned_during_reload_are_counted_once(
+        live_index: Arc<AsyncRwLock<SearchIndex>>,
+    ) {
+        let db = Sqlite::in_memory(std::time::Duration::from_secs(5)).await.unwrap();
+        let history = make_history("echo synced", "/new", datetime!(2024-01-01 10:00 UTC));
+        db.save(&history).await.unwrap();
+        let (pages, gate) = paused_pages(Vec::new());
+        let reload = spawn_reload(live_index.clone(), None, pages);
+        gate.scanned.await.unwrap();
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            SearchIndex::add_synced_histories(&live_index, &db, &[history.id]),
+        )
+        .await
+        .expect("sync must progress during the paused reload")
+        .unwrap();
+        gate.resume.send(Ok(vec![history])).unwrap();
+        reload.await.unwrap().unwrap();
+
+        let index = live_index.read().await;
+        assert_eq!(command(&index, "echo synced").count, 1);
     }
 
     struct ReloadGate {
