@@ -1,23 +1,20 @@
 //! The backend used to manage the daemon service.
-#[cfg(unix)]
-mod external_systemd;
+mod external;
+mod launchd;
 mod subproc;
 
 use std::time::Duration;
 
 use atuin_client::settings::Daemon as DaemonSettings;
 use enum_dispatch::enum_dispatch;
-#[cfg(unix)]
-pub use external_systemd::ExternalSystemd;
-#[cfg(unix)]
-pub use subproc::DaemonizeError;
-pub use subproc::Subproc;
+pub use external::External;
+pub use launchd::Launchd;
+pub use subproc::{DaemonizeError, Subproc};
 
 use crate::service::PidfileWaitError;
-use crate::service::address::{DaemonAddress, DaemonListener};
+use crate::service::address::DaemonAddress;
 use crate::service::connection::{Connection, FindError};
-#[cfg(unix)]
-use crate::service::socket_file::SocketFile;
+use crate::service::run_mode::ExternalManager;
 
 /// An error from a [`Backend`], each of which fails in its own ways.
 #[derive(Debug, thiserror::Error)]
@@ -52,14 +49,6 @@ pub enum StopError {
     Backend(#[from] BackendError),
 }
 
-/// The socket a backend hands the service it runs.
-pub struct Listening {
-    pub listener: DaemonListener,
-    /// The socket file the service bound itself, which it owns until it exits.
-    #[cfg(unix)]
-    pub socket: Option<SocketFile>,
-}
-
 /// How a service is started and stopped, and where it listens.
 ///
 /// Waiting for one to exit or answer is the same whatever runs it, and is left to the caller.
@@ -68,12 +57,6 @@ pub struct Listening {
 pub trait Backend {
     /// Where the services this backend launches listen.
     fn address(&self) -> DaemonAddress;
-
-    /// Where the running service listens, whichever started it.
-    fn locate(&self) -> Result<DaemonAddress, BackendError>;
-
-    /// Take up the socket to serve on, from within a service this backend runs.
-    fn listen(&self) -> Result<Listening, BackendError>;
 
     /// Start a service, without waiting for it to answer.
     async fn launch(&self) -> Result<(), BackendError>;
@@ -87,19 +70,34 @@ pub trait Backend {
 
 #[enum_dispatch(Backend)]
 pub enum AnyBackend {
-    #[cfg(unix)]
-    ExternalSystemd(ExternalSystemd),
+    External(External),
+    Launchd(Launchd),
     Subproc(Subproc),
 }
 
 impl AnyBackend {
-    /// The backend that manages the service `daemon` describes.
+    /// The backend that manages the service `daemon` describes: [`External`] while a daemon that
+    /// something other than Atuin runs holds the pidfile.
     pub fn new(daemon: &DaemonSettings) -> Self {
-        #[cfg(unix)]
+        if let Some(external) = External::for_client(daemon) {
+            return external.into();
+        }
+        if let Some(launchd) = Launchd::for_client(daemon) {
+            return launchd.into();
+        }
+        Subproc::new(daemon).into()
+    }
+
+    /// Where the running service `daemon` describes listens, whichever backend started it.
+    ///
+    /// Unlike [`Self::new`], it doesn't ask whether the launchd agent is installed, which costs
+    /// every command a few lookups in the user database.
+    pub fn locate(daemon: &DaemonSettings) -> Result<DaemonAddress, BackendError> {
         if daemon.systemd_socket {
-            return ExternalSystemd::new(daemon).into();
+            return Ok(External::new(daemon, ExternalManager::SystemdSocket).address());
         }
 
-        Subproc::new(daemon).into()
+        // The launchd agent publishes its socket in the pidfile, as a forked daemon does.
+        Subproc::new(daemon).locate()
     }
 }

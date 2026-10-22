@@ -63,6 +63,10 @@ daemonix = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = { workspace = true }
+service-manager = { workspace = true }
+
 [dev-dependencies]
 atuin-common = { workspace = true, features = ["test-utils"] }
 divan = { workspace = true }

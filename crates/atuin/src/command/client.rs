@@ -192,7 +192,7 @@ impl Cmd {
 
         // Daemonize before creating the async runtime – fork() inside a live
         // tokio runtime corrupts its internal state.
-        #[cfg(all(unix, feature = "daemon"))]
+        #[cfg(feature = "daemon")]
         if let Self::Daemon(ref cmd) = self
             && cmd.should_daemonize()
         {
