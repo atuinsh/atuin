@@ -6,6 +6,8 @@ use getrandom::fill;
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox, SecretString};
 use uuid::Uuid;
 
+use crate::path::AbsPathBuf;
+
 /// Generate N random bytes, using a cryptographically secure source
 #[must_use]
 pub fn crypto_random_bytes<const N: usize>() -> SecretBox<[u8; N]> {
@@ -38,10 +40,17 @@ pub fn has_git_dir(path: &Path) -> bool {
     path.join(".git").exists()
 }
 
-// in a git worktree, .git is a file containing "gitdir: <path>" pointing
-// to the main repo's .git/worktrees/<name> directory. follow the pointer
-// back to the main repo root so all worktrees share a workspace.
-fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
+/// in a linked worktree, .git is a file containing `gitdir: <path>` pointing to the main repo's
+/// `.git/worktrees/<name>` directory, whose `commondir` file points on to the main repo's .git.
+/// follow both back to the main repo root so all worktrees share a workspace. like git, resolve a
+/// relative pointer from the real location of its file: the `..` applies after symlinks.
+///
+/// TODO(markovejnovic): This is slop that should really not live here. It would be much better if
+/// we used some correct git library.
+///
+/// There are also bugs with this implementation---without shelling out to git, there's no correct
+/// way to actually resolve the git worktree. PR #3850 was supposed to fix this, but never landed.
+fn resolve_git_worktree(path: &Path) -> Option<AbsPathBuf> {
     let git_path = path.join(".git");
 
     if !git_path.is_file() {
@@ -49,25 +58,18 @@ fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
     }
 
     let contents = std::fs::read_to_string(&git_path).ok()?;
-    let gitdir_str = contents.strip_prefix("gitdir: ")?.trim();
+    let gitdir = contents.strip_prefix("gitdir: ")?.trim();
+    let gitdir = AbsPathBuf::canonicalize(path.join(gitdir)).ok()?;
 
-    let gitdir = PathBuf::from(gitdir_str);
-    let gitdir = if gitdir.is_absolute() {
-        gitdir
-    } else {
-        path.join(gitdir_str)
-    };
+    // a submodule's gitdir is a repository of its own, with no `commondir`
+    let commondir = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let commondir = AbsPathBuf::canonicalize(gitdir.join(commondir.trim())).ok()?;
 
-    // walk up from e.g. /repo/.git/worktrees/feature to find /repo
-    let mut candidate = gitdir.as_path();
-    while let Some(parent) = candidate.parent() {
-        if parent.join(".git").is_dir() {
-            return Some(parent.to_path_buf());
-        }
-        candidate = parent;
+    // a bare repository has no main worktree to share
+    if commondir.file_name()? != ".git" {
+        return None;
     }
-
-    None
+    commondir.parent().map(ToOwned::to_owned)
 }
 
 // detect if any parent dir has a git repo in it
@@ -79,8 +81,7 @@ fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
 #[must_use]
 pub fn in_git_repo(path: &Path) -> Option<PathBuf> {
     let root = git_checkout_root(path)?;
-    // if .git is a file (worktree), resolve to the main repo root
-    Some(resolve_git_worktree(&root).unwrap_or(root))
+    Some(resolve_git_worktree(&root).map_or(root, AbsPathBuf::into_path_buf))
 }
 
 /// The root of the checkout `path` is in: the nearest directory, `path` or above, with a `.git`
@@ -163,55 +164,91 @@ where
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_ne;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use super::*;
-    use crate::path::{AbsPathBuf, PathBufExt as _};
+    use crate::path::PathBufExt as _;
 
-    #[cfg(not(windows))]
-    #[rstest]
-    fn in_git_repo_regular() {
-        // regular git repo should resolve to the directory containing .git
-        let tmp = std::env::temp_dir().joined("atuin-test-regular-git");
-        let _ = std::fs::remove_dir_all(&tmp);
-        let subdir = tmp.join("src").joined("deep");
-        std::fs::create_dir_all(&subdir).unwrap();
-        std::fs::create_dir_all(tmp.join(".git")).unwrap();
-
-        let result = in_git_repo(&subdir);
-        assert_eq!(result, Some(tmp.clone()));
-
-        std::fs::remove_dir_all(&tmp).unwrap();
+    #[cfg(unix)]
+    #[fixture]
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
-    #[cfg(not(windows))]
+    /// The layouts are the ones git 2.56 writes. A `.git` at the top stands for an unrelated
+    /// repository above the checkouts, like dotfiles in `$HOME`, which a pointer resolved the wrong
+    /// way lands in.
+    #[cfg(unix)]
     #[rstest]
-    fn in_git_repo_worktree_resolves_to_main_repo() {
-        // worktree .git is a file pointing back to the main repo —
-        // in_git_repo should follow it so all worktrees share a workspace
-        let tmp = std::env::temp_dir().joined("atuin-test-worktree-git");
-        let _ = std::fs::remove_dir_all(&tmp);
+    #[case::repository(&[("repo/.git/HEAD", "")], &[], "repo/src", "repo")]
+    #[case::worktree_with_a_relative_gitdir(
+        &[
+            ("main/.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../main/.git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        "main",
+    )]
+    // Git applies the `..` after following the symlink, so it leads out of `data/`, not `home/`.
+    #[case::worktree_with_a_relative_gitdir_through_a_symlink(
+        &[
+            (".git/HEAD", ""),
+            ("data/main/.git/worktrees/wt/commondir", "../..\n"),
+            ("data/wt/.git", "gitdir: ../main/.git/worktrees/wt\n"),
+        ],
+        &[("home/wt", "../data/wt")],
+        "home/wt/src",
+        "data/main",
+    )]
+    #[case::worktree_of_a_bare_repository(
+        &[
+            (".git/HEAD", ""),
+            ("repo.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../repo.git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        "wt",
+    )]
+    #[case::submodule(
+        &[
+            ("super/.git/modules/sub/HEAD", ""),
+            ("super/sub/.git", "gitdir: ../.git/modules/sub\n"),
+        ],
+        &[],
+        "super/sub/src",
+        "super/sub",
+    )]
+    #[case::dangling_gitdir(
+        &[(".git/HEAD", ""), ("wt/.git", "gitdir: ../gone/.git/worktrees/wt\n")],
+        &[],
+        "wt/src",
+        "wt",
+    )]
+    fn only_a_linked_worktree_resolves_to_its_main_repository(
+        tmp: tempfile::TempDir,
+        #[case] files: &[(&str, &str)],
+        #[case] symlinks: &[(&str, &str)],
+        #[case] cwd: &str,
+        #[case] workspace: &str,
+    ) {
+        // Resolved like the pointers are (on macOS, /var is /private/var).
+        let root = AbsPathBuf::canonicalize(tmp.path()).unwrap();
+        for (path, contents) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        for (link, target) in symlinks {
+            let link = root.join(link);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(target, link).unwrap();
+        }
+        let cwd = root.join(cwd);
+        std::fs::create_dir_all(&cwd).unwrap();
 
-        // main repo at tmp/main with a real .git directory
-        let main_repo = tmp.join("main");
-        let worktree_git_dir = main_repo.join(".git").joined("worktrees").joined("feature");
-        std::fs::create_dir_all(&worktree_git_dir).unwrap();
-
-        // worktree at tmp/worktree with a .git file
-        let worktree = tmp.join("worktree");
-        let worktree_subdir = worktree.join("src");
-        std::fs::create_dir_all(&worktree_subdir).unwrap();
-        std::fs::write(
-            worktree.join(".git"),
-            format!("gitdir: {}", worktree_git_dir.to_str().unwrap()),
-        )
-        .unwrap();
-
-        // should resolve to the main repo root, not the worktree root
-        let result = in_git_repo(&worktree_subdir);
-        assert_eq!(result, Some(main_repo));
-
-        std::fs::remove_dir_all(&tmp).unwrap();
+        assert_eq!(in_git_repo(&cwd), Some(root.join(workspace)));
     }
 
     /// Runs `git` in `dir`, failing the test if it fails.
@@ -230,8 +267,7 @@ mod tests {
 
     #[cfg(unix)]
     #[rstest]
-    fn a_real_worktree_is_its_own_checkout_in_the_main_repository() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn a_real_worktree_is_its_own_checkout_in_the_main_repository(tmp: tempfile::TempDir) {
         let main = tmp.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
         git(&main, &["init", "-q", "-b", "trunk"]);
