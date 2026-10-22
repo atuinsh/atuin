@@ -1059,7 +1059,24 @@ Default: `false`
 
 Automatically start and manage the daemon when needed.
 This isn't compatible with `systemd_socket = true`.
-If a legacy experimental daemon is already running, restart it manually once before using autostart.
+If a legacy experimental daemon is already running, restart it manually once
+before using autostart.
+On macOS, when you're logged in graphically, Atuin runs the daemon as a launchd
+agent at `~/Library/LaunchAgents/sh.atuin.daemon.plist`, and macOS tells you it
+added a background item the first time. With `ATUIN_HOME` or `ATUIN_CONFIG_DIR`
+set, Atuin starts the daemon itself instead.
+
+The agent is listed as `atuin` in System Settings, under General > Login Items.
+Switched off there, Atuin leaves it off and works without the daemon until you
+switch it back on. If the agent won't start, `daemon.stderr.log` in Atuin's
+logs directory says why. The agent gets the environment variables your
+config's paths use, such as `HISTDIR` for `db_path = "$HISTDIR/history.db"`,
+with the values they had when Atuin installed it. After you add one, run
+`atuin daemon restart`.
+
+`atuin daemon stop` stops the agent, but with `autostart` on, the next command
+that needs the daemon starts it again. `atuin config disable daemon` turns the
+daemon off and removes the agent.
 
 ```toml
 autostart = false

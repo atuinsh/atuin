@@ -84,6 +84,13 @@ pub fn atuin_home_is_set() -> bool {
     var_abspath("ATUIN_HOME").is_some()
 }
 
+/// Check whether `ATUIN_CONFIG_DIR` is set, moving `config.toml` and `server.toml` out of Atuin's
+/// home.
+#[must_use]
+pub fn atuin_config_dir_is_set() -> bool {
+    var_nonempty("ATUIN_CONFIG_DIR").is_some()
+}
+
 /// Top-level config items affected by the `ATUIN_CONFIG_DIR` environment variable.
 const ATUIN_CONFIG_DIR_ITEMS: [&str; 2] = ["config.toml", "server.toml"];
 

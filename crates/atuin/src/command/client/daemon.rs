@@ -7,7 +7,9 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::grpc::versioning::BUILD_STR;
-use atuin_daemon::service::{ActiveService, Launch, PidfileWaitError, ServiceClaim, StopError};
+use atuin_daemon::service::{
+    ActiveService, FindError, Launch, PidfileWaitError, ServiceClaim, ServiceFindError, StopError,
+};
 use clap::Subcommand;
 use eyre::{Result, WrapErr, bail};
 
@@ -126,7 +128,8 @@ where
 
 /// Send a request to an already-running daemon of our build.
 ///
-/// This function never starts or restarts the daemon.
+/// This function never starts or restarts the daemon, though launchd starts its agent for the
+/// connection.
 async fn try_without_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
 where
     F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
@@ -200,8 +203,9 @@ const PROJECT_SYNCED_WAIT: Duration = Duration::from_secs(10);
 
 /// Have a running daemon project the AI session records this process synced into the record
 /// store, returning once they are listed or, after [`PROJECT_SYNCED_WAIT`], leaving the daemon to
-/// finish on its own. Never starts or replaces one: a daemon started later, or replacing one too
-/// old to be asked, projects them as it starts.
+/// finish on its own. Never starts or replaces one, though launchd starts its agent for the
+/// connection: a daemon started later, or replacing one too old to be asked, projects them as it
+/// starts.
 pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
     let found = tokio::time::timeout(PROJECT_SYNCED_PROBE_TIMEOUT, ActiveService::find(settings));
     let Ok(Ok(Some(service))) = found.await else {
@@ -257,9 +261,19 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
 }
 
 pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
-    let Some(service) = ActiveService::find(settings).await? else {
-        println!("Daemon is not running");
-        return Ok(());
+    let service = match ActiveService::find(settings).await {
+        Ok(Some(service)) => service,
+        Ok(None) => {
+            println!("Daemon is not running");
+            return Ok(());
+        }
+        // One that can't answer can't be asked to stop either.
+        Err(ServiceFindError::Find(FindError::Unresponsive(_))) => {
+            ActiveService::evict(&settings.daemon).await?;
+            println!("Daemon stopped");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
     };
 
     match service.stop().await {
@@ -274,20 +288,26 @@ pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
 }
 
 pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> Result<()> {
-    let service = match ActiveService::find(settings).await? {
-        Some(service) => {
+    let service = match ActiveService::find(settings).await {
+        Ok(Some(service)) => {
             println!("Restarting daemon...");
             service.restart().await?
         }
-        None if only_if_running => {
+        Ok(None) if only_if_running => {
             println!("No daemon running");
             return Ok(());
         }
-        None => {
+        Ok(None) => {
             println!("No daemon running");
             println!("Starting daemon...");
             ActiveService::find_or_spawn(settings).await?
         }
+        Err(ServiceFindError::Find(FindError::Unresponsive(_))) => {
+            println!("Daemon isn't answering, replacing it...");
+            ActiveService::evict(&settings.daemon).await?;
+            ActiveService::find_or_spawn(settings).await?
+        }
+        Err(err) => return Err(err.into()),
     };
 
     let status = service.into_client().status().await?;
@@ -304,7 +324,7 @@ async fn run(settings: Arc<Settings>, force: bool, launch: Launch) -> Result<()>
         tracing::warn!("{e}");
     }
 
-    let (_claim, listener) = ServiceClaim::take(&settings.daemon, launch)?;
+    let (_claim, listener) = ServiceClaim::take(&settings.daemon, launch).await?;
 
     let history_db = Sqlite::new(&settings.db_path, settings.local_timeout).await?;
     let store = SqliteStore::new(&settings.record_store_path, settings.local_timeout).await?;
@@ -317,6 +337,8 @@ async fn run(settings: Arc<Settings>, force: bool, launch: Launch) -> Result<()>
 #[cfg(test)]
 mod tests {
     use atuin_common::path::AbsPathBuf;
+    use atuin_daemon::service::RunMode;
+    use atuin_daemon::service::pidfile::{Pidfile, PidfileInfo};
     use rstest::rstest;
 
     use super::*;
@@ -333,6 +355,10 @@ mod tests {
         settings.daemon.socket_path = AbsPathBuf::new(socket).ok();
         settings.daemon.pidfile_path = AbsPathBuf::new(dir.path().join("d.pid")).unwrap();
         settings.daemon.autostart = false;
+        // Stopped, it still holds its pidfile, so clients take it for a slow daemon to wait on,
+        // not a socket with nothing behind it to give up on.
+        let info = PidfileInfo::current(&settings.daemon, RunMode::DaemonizeForked);
+        let _stopped = Pidfile::new(&settings.daemon.pidfile_path).acquire(&info).unwrap();
         let history = History::import()
             .timestamp(time::OffsetDateTime::now_utc())
             .command("true")

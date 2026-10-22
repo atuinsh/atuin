@@ -63,12 +63,17 @@ daemonix = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = { workspace = true }
+service-manager = { workspace = true }
+
 [dev-dependencies]
 atuin-common = { workspace = true, features = ["test-utils"] }
 proptest = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
 protox = { workspace = true }

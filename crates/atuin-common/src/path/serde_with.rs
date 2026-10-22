@@ -5,6 +5,7 @@
 //! daemon started from `~` than for a client running in a project. [`RelativeTo`] resolves it
 //! once, at deserialization, against a directory fixed by its [`PathAnchor`].
 
+use std::collections::BTreeSet;
 use std::io;
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -33,6 +34,18 @@ impl ShellExpanded {
     #[must_use]
     pub fn escape(path: &str) -> String {
         path.replace('$', "$$")
+    }
+
+    /// The variables expanding `raw` reads, such as `HISTDIR` for `$HISTDIR/history.db`: those
+    /// another process needs the same values of to expand it to the same path.
+    #[must_use]
+    pub fn variables(raw: &str) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        shellexpand::env_with_context_no_errors(raw, |name| {
+            names.insert(name.to_owned());
+            None::<&str>
+        });
+        names
     }
 
     fn expand<E: de::Error>(raw: &str) -> Result<PathBuf, E> {
@@ -97,6 +110,18 @@ mod tests {
     use crate::env::MockEnv;
 
     struct Anchor;
+
+    /// The variables a path reads are those its expansion looks up, which an escaped `$` isn't.
+    #[rstest]
+    #[case::bare("$HISTDIR/history.db", &["HISTDIR"])]
+    #[case::braced("${HISTDIR}/history.db", &["HISTDIR"])]
+    #[case::several("$A/${B}/$A", &["A", "B"])]
+    #[case::escaped("$$HISTDIR/history.db", &[])]
+    #[case::home("~/history.db", &[])]
+    fn variables_are_those_expansion_reads(#[case] raw: &str, #[case] names: &[&str]) {
+        let names: BTreeSet<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        assert_eq!(ShellExpanded::variables(raw), names);
+    }
 
     impl PathAnchor for Anchor {
         fn dir() -> io::Result<AbsPathBuf> {

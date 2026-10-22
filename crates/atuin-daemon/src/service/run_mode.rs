@@ -20,6 +20,8 @@ pub enum Launch {
 pub enum RunMode {
     /// A client forked it, with `daemon start --daemonize`.
     DaemonizeForked,
+    /// Atuin's launchd agent, `sh.atuin.daemon`.
+    LaunchdAgent,
     /// Something other than Atuin started it. [`None`] when the daemon couldn't tell what.
     External(Option<ExternalManager>),
 }
@@ -43,7 +45,7 @@ pub enum ExternalManager {
     SystemdUnit {
         name: String,
     },
-    /// A launchd job, such as `brew services`' `homebrew.mxcl.atuin`.
+    /// A launchd job other than Atuin's agent, such as `brew services`' `homebrew.mxcl.atuin`.
     #[error("{}", Self::launchd_job_refusal(label))]
     LaunchdJob {
         label: String,
@@ -51,7 +53,8 @@ pub enum ExternalManager {
 }
 
 impl RunMode {
-    /// How this process runs as the daemon `daemon` describes, `launch`ed so.
+    /// How this process runs as the daemon `daemon` describes, `launch`ed so, when launchd didn't
+    /// check it in as Atuin's agent.
     pub(crate) fn detect(daemon: &DaemonSettings, launch: Launch) -> Self {
         match launch {
             Launch::Daemonize => Self::DaemonizeForked,

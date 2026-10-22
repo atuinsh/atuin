@@ -1,8 +1,9 @@
 use atuin_client::settings::Daemon as DaemonSettings;
 
 use crate::service::address::{DaemonListener, SocketFile};
+use crate::service::backend::{BackendError, Launchd};
 use crate::service::pidfile::{AcquireGuardError, Pidfile, PidfileGuard, PidfileInfo};
-use crate::service::run_mode::{Launch, RunMode};
+use crate::service::run_mode::{ExternalManager, Launch, RunMode};
 use crate::service::socket_holder::{ListenError, SocketHolder};
 
 /// What a daemon holds while it is the service: the pidfile, and the socket it serves on.
@@ -17,6 +18,8 @@ pub struct ServiceClaim {
 #[derive(Debug, thiserror::Error)]
 pub enum ClaimError {
     #[error(transparent)]
+    CheckIn(#[from] BackendError),
+    #[error(transparent)]
     Pidfile(#[from] AcquireGuardError),
     #[error(transparent)]
     Listen(#[from] ListenError),
@@ -26,17 +29,26 @@ impl ServiceClaim {
     /// Make this process, `launch`ed so, the service `daemon` describes, returning the listener to
     /// serve it on.
     ///
-    /// Call it from within the Tokio runtime, which keeps a socket it binds fresh until the claim
-    /// is dropped.
-    pub fn take(
+    /// The runtime it runs on keeps a socket it binds fresh until the claim is dropped.
+    pub async fn take(
         daemon: &DaemonSettings,
         launch: Launch,
     ) -> Result<(Self, DaemonListener), ClaimError> {
-        let run_mode = RunMode::detect(daemon, launch);
+        // Before the pidfile, which records how this process runs.
+        let launchd = Launchd::check_in(daemon)?;
+        let run_mode = match launchd {
+            Some(_) => RunMode::LaunchdAgent,
+            None => RunMode::detect(daemon, launch),
+        };
+        if let RunMode::External(Some(ExternalManager::LaunchdJob { label })) = &run_mode {
+            Launchd::make_way_for(label).await;
+        }
+
         // Only the pidfile's holder may clear the sockets a dead daemon left behind.
         let pidfile =
             Pidfile::new(&daemon.pidfile_path).acquire(&PidfileInfo::current(daemon, run_mode))?;
-        let listening = SocketHolder::configured(daemon).listen(daemon)?;
+        let listening =
+            launchd.unwrap_or_else(|| SocketHolder::configured(daemon)).listen(daemon)?;
 
         let claim = Self {
             _socket: listening.socket,

@@ -75,6 +75,7 @@ pub trait Backend {
 #[enum_dispatch(Backend)]
 pub enum AnyBackend {
     External(External),
+    Launchd(Launchd),
     Subproc(Subproc),
 }
 
@@ -85,13 +86,17 @@ impl AnyBackend {
         if let Some(external) = External::for_client(daemon) {
             return external.into();
         }
+        if let Some(launchd) = Launchd::for_client(daemon) {
+            return launchd.into();
+        }
         Subproc::new(daemon).into()
     }
 
     /// Where the running service `daemon` describes listens, whichever backend started it.
     ///
-    /// Unlike [`Self::new`], it doesn't ask the pidfile what runs the service, which only
-    /// launching and stopping it need.
+    /// Unlike [`Self::new`], it asks neither the pidfile what runs the service nor whether the
+    /// launchd agent is installed, which would cost every command a few lookups in the user
+    /// database.
     pub fn locate(daemon: &DaemonSettings) -> Result<DaemonAddress, BackendError> {
         if daemon.systemd_socket {
             return Ok(External::new(daemon, ExternalManager::SystemdSocket).address());

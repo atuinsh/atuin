@@ -1,5 +1,5 @@
-//! launchd, which only macOS has. Elsewhere, the same API answers that launchd isn't there, so
-//! callers need no `cfg` of their own.
+//! Atuin's launchd agent, which only macOS has. Elsewhere, the same API answers that there is no
+//! agent, so callers need no `cfg` of their own.
 
 #[cfg(target_os = "macos")]
 mod macos;

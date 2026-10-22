@@ -321,13 +321,28 @@ impl EnableCmd {
         // up. A running daemon with autostart off may be externally managed (systemd, launchd),
         // so leave that one alone and tell the user instead.
         #[cfg(feature = "daemon")]
-        if settings.daemon.enabled && !settings.daemon.autostart {
-            println!("Restart the Atuin daemon and your shell for the change to take effect.");
-            return backfilled;
-        } else if let Err(e) = daemon::restart_cmd(settings, false).await {
-            eprintln!(
-                "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
-            );
+        {
+            // `settings` predates the edit, which may have switched the daemon and its autostart
+            // on: with them off, the restart would fork the daemon rather than install the launchd
+            // agent.
+            let settings = match Settings::new() {
+                Ok(settings) => settings,
+                Err(e) => {
+                    eprintln!(
+                        "Could not read the new config to restart the Atuin daemon: {e}\nRun \
+                         `atuin daemon restart` manually."
+                    );
+                    return backfilled;
+                }
+            };
+            if settings.daemon.enabled && !settings.daemon.autostart {
+                println!("Restart the Atuin daemon and your shell for the change to take effect.");
+                return backfilled;
+            } else if let Err(e) = daemon::restart_cmd(&settings, false).await {
+                eprintln!(
+                    "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
+                );
+            }
         }
 
         println!("Restart your shell for the change to take effect.");
@@ -474,6 +489,10 @@ impl DisableCmd {
                         "Could not stop the Atuin daemon: {e}\nRun `atuin daemon stop` manually."
                     );
                     return Ok(());
+                }
+                // Only stopped, the launchd agent would start again at the next login.
+                if let Err(e) = atuin_daemon::service::ActiveService::remove_launchd_agent().await {
+                    eprintln!("Could not remove the Atuin daemon's launchd agent: {e}");
                 }
             }
             Feature::OutputCapture => restart_autostarted_daemon(settings).await,

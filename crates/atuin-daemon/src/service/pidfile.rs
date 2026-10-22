@@ -579,6 +579,7 @@ mod tests {
             socket_path in proptest::option::of(".*".prop_map(PathBuf::from)),
             run_mode in proptest::option::of(prop_oneof![
                 Just(RunMode::DaemonizeForked),
+                Just(RunMode::LaunchdAgent),
                 proptest::option::of(prop_oneof![
                     Just(crate::service::ExternalManager::SystemdSocket),
                     ".*".prop_map(|name| crate::service::ExternalManager::SystemdUnit { name }),

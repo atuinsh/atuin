@@ -8,11 +8,12 @@ use tokio::task::JoinHandle;
 
 use super::DaemonAddress;
 
-/// The socket file a daemon bound itself, kept fresh against temporary file cleaners and removed
-/// when dropped.
+/// The socket file a daemon listens on, kept fresh against temporary file cleaners and, if the
+/// daemon bound it itself, removed when dropped.
 pub struct SocketFile {
-    path: PathBuf,
     keepalive: JoinHandle<()>,
+    /// The file to remove when the daemon exits, unless it outlives the daemon as launchd's does.
+    remove_on_drop: Option<PathBuf>,
 }
 
 /// An error that occurred while trying to remove a socket.
@@ -32,18 +33,30 @@ impl SocketFile {
     /// current Tokio runtime.
     #[expect(clippy::unnecessary_wraps, reason = "a daemon listening on TCP has no socket file")]
     pub(crate) fn of(address: &DaemonAddress) -> Option<Self> {
-        let path = address.0.clone();
-        let touched = path.clone();
-        let keepalive = tokio::spawn(async move {
+        let mut socket = Self::kept_fresh(address.0.clone());
+        socket.remove_on_drop = Some(address.0.clone());
+        Some(socket)
+    }
+
+    /// Keep fresh the socket at `path`, which goes on listening once the daemon exits, as
+    /// launchd's does.
+    pub(crate) fn kept_fresh(path: PathBuf) -> Self {
+        Self {
+            keepalive: Self::keep_fresh(path),
+            remove_on_drop: None,
+        }
+    }
+
+    fn keep_fresh(path: PathBuf) -> JoinHandle<()> {
+        tokio::spawn(async move {
             let mut interval = tokio::time::interval(Self::KEEPALIVE_INTERVAL);
             loop {
                 interval.tick().await;
-                if let Err(e) = atuin_common::os::unix::touch_file(&touched) {
-                    tracing::warn!("failed to refresh {}: {e}", touched.display());
+                if let Err(e) = atuin_common::os::unix::touch_file(&path) {
+                    tracing::warn!("failed to refresh {}: {e}", path.display());
                 }
             }
-        });
-        Some(Self { path, keepalive })
+        })
     }
 
     /// Remove the socket of the daemon `daemon` describes from every path it may be at.
@@ -59,7 +72,7 @@ impl SocketFile {
     }
 
     /// Remove the socket at `path` if nothing listens on it any more.
-    fn remove_if_stale(path: &Path) -> Result<(), RemoveSocketError> {
+    pub(crate) fn remove_if_stale(path: &Path) -> Result<(), RemoveSocketError> {
         if !Self::is_stale(path) {
             return Ok(());
         }
@@ -99,11 +112,14 @@ impl SocketFile {
 impl Drop for SocketFile {
     fn drop(&mut self) {
         self.keepalive.abort();
-        tracing::info!("removing socket {}", self.path.display());
-        if let Err(e) = std::fs::remove_file(&self.path)
+        let Some(path) = &self.remove_on_drop else {
+            return;
+        };
+        tracing::info!("removing socket {}", path.display());
+        if let Err(e) = std::fs::remove_file(path)
             && e.kind() != ErrorKind::NotFound
         {
-            tracing::warn!("failed to remove socket {}: {e}", self.path.display());
+            tracing::warn!("failed to remove socket {}: {e}", path.display());
         }
     }
 }

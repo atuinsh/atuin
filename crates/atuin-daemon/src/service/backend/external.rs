@@ -179,6 +179,7 @@ mod tests {
     )]
     #[case::undetected(Some(RunMode::External(None)), true, false)]
     #[case::forked(Some(RunMode::DaemonizeForked), true, false)]
+    #[case::agent(Some(RunMode::LaunchdAgent), true, false)]
     #[case::older_daemon(None, true, false)]
     fn external_only_while_something_else_runs_the_daemon(
         #[case] run_mode: Option<RunMode>,
