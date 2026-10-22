@@ -2,9 +2,11 @@
 
 use core::fmt;
 
-use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
+use time::{Date, Month, OffsetDateTime, Time};
+
+use crate::time::UtcOffsetSpec;
 
 /// Lowest `time::OffsetDateTime` can represent (unix) `-9999-01-01 00:00:00 UTC`.
 const MIN_UNIX_NANOS: i128 = -377_705_116_800 * 1_000_000_000;
@@ -44,8 +46,10 @@ pub trait OffsetDateTimeExt {
     /// datetime.display().ymd_hm()   // 2024-01-22 14:35
     /// ```
     fn display(self) -> OffsetDateTimeDisplay;
-}
 
+    /// Get the midpoint of a year in the given timezone.
+    fn get_mid_year(year: i32, timezone: UtcOffsetSpec) -> OffsetDateTime;
+}
 /// How an [`OffsetDateTimeDisplay`] renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OffsetDateTimeStyle {
@@ -145,6 +149,12 @@ impl OffsetDateTimeExt for OffsetDateTime {
             datetime: self,
             style: OffsetDateTimeStyle::default(),
         }
+    }
+    /// The cutoff between the first and second calendar halves of a year is July 1st at midnight.
+    fn get_mid_year(year: i32, timezone: UtcOffsetSpec) -> OffsetDateTime {
+        let date = Date::from_calendar_date(year, Month::July, 1)
+            .expect("Valid year and month should create a valid date");
+        Self::new_in_offset(date, Time::MIDNIGHT, timezone.0)
     }
 }
 
