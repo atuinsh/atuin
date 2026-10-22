@@ -15,10 +15,8 @@ pub use platform::DaemonizeError;
 #[cfg(not(unix))]
 use windows as platform;
 
-use crate::service::address::{
-    DaemonAddress, DaemonListener, LocateError, PrepareError, RemoveSocketError, SocketFile,
-};
-use crate::service::backend::{Backend, BackendError, Listening};
+use crate::service::address::{DaemonAddress, LocateError, RemoveSocketError, SocketFile};
+use crate::service::backend::{Backend, BackendError};
 use crate::service::connection::Connection;
 use crate::service::pidfile::Pidfile;
 
@@ -37,13 +35,6 @@ pub enum SubprocError {
     Locate(#[from] LocateError),
     #[error(transparent)]
     RemoveSocket(#[from] RemoveSocketError),
-    #[error(transparent)]
-    Prepare(#[from] PrepareError),
-    #[error("could not listen on {address}: {source}")]
-    Listen {
-        address: DaemonAddress,
-        source: std::io::Error,
-    },
 }
 
 impl Subproc {
@@ -51,16 +42,6 @@ impl Subproc {
     pub fn new(daemon: &DaemonSettings) -> Self {
         Self {
             daemon: daemon.clone(),
-        }
-    }
-
-    fn bind(address: DaemonAddress) -> Result<DaemonListener, SubprocError> {
-        match address.bind() {
-            Ok(listener) => {
-                tracing::info!("listening on {address}");
-                Ok(listener)
-            }
-            Err(source) => Err(SubprocError::Listen { address, source }),
         }
     }
 }
@@ -73,16 +54,6 @@ impl Backend for Subproc {
     fn locate(&self) -> Result<DaemonAddress, BackendError> {
         DaemonAddress::locate(&self.daemon, &Pidfile::new(&self.daemon.pidfile_path))
             .map_err(|err| BackendError::new(SubprocError::from(err)))
-    }
-
-    fn listen(&self) -> Result<Listening, BackendError> {
-        let address = DaemonAddress::prepare(&self.daemon)
-            .map_err(|err| BackendError::new(SubprocError::from(err)))?;
-        let listener = Self::bind(address.clone()).map_err(BackendError::new)?;
-        Ok(Listening {
-            listener,
-            socket: SocketFile::of(&address),
-        })
     }
 
     async fn launch(&self) -> Result<(), BackendError> {

@@ -7,7 +7,9 @@ mod backend;
 mod claim;
 mod connection;
 pub mod pidfile;
+mod socket_holder;
 mod startup_lock;
+mod systemd;
 
 use std::time::Duration;
 
@@ -17,6 +19,7 @@ pub use claim::{ClaimError, ServiceClaim};
 pub use connection::FindError;
 use pidfile::Pidfile;
 pub use pidfile::PidfileWaitError;
+pub use socket_holder::ListenError;
 use startup_lock::StartupLock;
 pub use startup_lock::StartupLockError;
 

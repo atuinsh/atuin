@@ -12,7 +12,7 @@ pub use external_systemd::ExternalSystemd;
 pub use subproc::{DaemonizeError, Subproc};
 
 use crate::service::PidfileWaitError;
-use crate::service::address::{DaemonAddress, DaemonListener, SocketFile};
+use crate::service::address::DaemonAddress;
 use crate::service::connection::{Connection, FindError};
 
 /// An error from a [`Backend`], each of which fails in its own ways.
@@ -48,13 +48,6 @@ pub enum StopError {
     Backend(#[from] BackendError),
 }
 
-/// The socket a backend hands the service it runs.
-pub struct Listening {
-    pub listener: DaemonListener,
-    /// The socket file the service bound itself, which it owns until it exits.
-    pub socket: Option<SocketFile>,
-}
-
 /// How a service is started and stopped, and where it listens.
 ///
 /// Waiting for one to exit or answer is the same whatever runs it, and is left to the caller.
@@ -66,9 +59,6 @@ pub trait Backend {
 
     /// Where the running service listens, whichever started it.
     fn locate(&self) -> Result<DaemonAddress, BackendError>;
-
-    /// Take up the socket to serve on, from within a service this backend runs.
-    fn listen(&self) -> Result<Listening, BackendError>;
 
     /// Start a service, without waiting for it to answer.
     async fn launch(&self) -> Result<(), BackendError>;
