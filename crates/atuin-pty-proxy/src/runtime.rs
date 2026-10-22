@@ -142,7 +142,7 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
         .ok();
 
     let (msg_tx, msg_rx) = mpsc::channel::<Msg>(64);
-    let _parser_handle = screen::spawn_parser(rows, cols, msg_rx, screen::ParserOptions {
+    let _emulator_handle = screen::spawn_emulator(rows, cols, msg_rx, screen::EmulatorOptions {
         command_capture: (options.command_capture)(),
         debug_markers: options.debug_markers,
     })?;
@@ -227,8 +227,9 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
                         break;
                     }
 
-                    // Only after the terminal has the chunk: handing it to the parser wakes the
-                    // parser's thread, a syscall that would otherwise delay every echoed keystroke.
+                    // Only after the terminal has the chunk: handing it to the emulator wakes the
+                    // emulator's thread, a syscall that would otherwise delay every echoed
+                    // keystroke.
                     let _ = msg_tx.send(Msg::Data(raw_data.to_vec())).await;
                     cwd_updater.update();
                 }
