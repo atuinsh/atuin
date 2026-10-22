@@ -52,7 +52,6 @@ daemonix = "0.1"
 dashmap = "6"
 derive_more = { version = "2", features = ["add", "add_assign", "as_ref", "deref", "display", "error", "from", "into", "debug"] }
 dirs = "6"
-divan = "0.1"
 # easy-cast 0.5.5+ raises its MSRV to 1.96.
 #
 # The assert_nonzero feature patches a bug fixed in:

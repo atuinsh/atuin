@@ -2,7 +2,6 @@
 name = "atuin-client"
 edition = "2024"
 description = "client library for atuin"
-autobenches = false
 
 authors.workspace = true
 homepage.workspace = true
@@ -93,7 +92,6 @@ zstd = { workspace = true }
 [dev-dependencies]
 # This crate's tests require the `test-utils` feature in atuin-common.
 atuin-common = { workspace = true, features = ["test-utils"] }
-divan = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rmp-serde = { workspace = true }
@@ -102,10 +100,6 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 wiremock = { workspace = true }
-
-[[bench]]
-name = "benchmarks"
-harness = false
 
 [lints]
 workspace = true

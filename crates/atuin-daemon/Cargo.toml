@@ -65,7 +65,6 @@ listenfd = { workspace = true }
 
 [dev-dependencies]
 atuin-common = { workspace = true, features = ["test-utils"] }
-divan = { workspace = true }
 proptest = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
@@ -74,10 +73,6 @@ tempfile = { workspace = true }
 [build-dependencies]
 protox = { workspace = true }
 tonic-prost-build = { workspace = true }
-
-[[bench]]
-name = "output_index"
-harness = false
 
 [lints]
 workspace = true

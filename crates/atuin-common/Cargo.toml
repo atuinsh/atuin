@@ -105,17 +105,11 @@ rustix = { workspace = true, optional = true }
 windows-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
-divan = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
-
-[[bench]]
-name = "onlcr"
-harness = false
-required-features = ["ansi"]
 
 [lints]
 workspace = true

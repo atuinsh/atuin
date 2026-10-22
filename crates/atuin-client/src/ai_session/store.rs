@@ -773,7 +773,6 @@ enum Pass {
 mod tests {
     use std::ops::Range;
 
-    use atuin_common::env;
     use atuin_common::harnesstools::session::{Content, Role};
     use atuin_domain::record::HostId;
     use futures::TryStreamExt;
@@ -1751,46 +1750,6 @@ mod tests {
         assert_eq!(count(&db, &session_named("v0")).await, None);
         assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(3));
         assert_eq!(s.reproject(&db).await.unwrap().replayed, 0);
-    }
-
-    /// Startup reprojection cost on a large store, before (a full replay into an already
-    /// populated sidecar, what every startup used to do) and after (watermarks in place, a few
-    /// new records). `cargo test -p atuin-client --release -- --ignored --nocapture reproject_timing`
-    #[rstest]
-    #[tokio::test]
-    #[ignore = "benchmark"]
-    async fn reproject_timing() {
-        let records: i64 = env::var("REPROJECT_RECORDS").map_or(20_000, |n| n.parse().unwrap());
-        let dir = tempfile::tempdir().unwrap();
-        let store =
-            SqliteStore::new(dir.path().join("records.db"), test_local_timeout()).await.unwrap();
-        let [local, remote] = <[_; 2]>::try_from(writers(&store, 2)).ok().unwrap();
-        for i in 0..records {
-            let (s, n) = if i % 4 == 0 {
-                (&remote, i / 4)
-            } else {
-                (&local, i)
-            };
-            let session = session_named(&format!("session-{}", n / 50));
-            s.push(&message_in(&session, i, &"lorem ipsum dolor ".repeat(20))).await.unwrap();
-        }
-        let db = AiSessionDatabase::open(dir.path().join("sessions.db")).await.unwrap();
-
-        let t = std::time::Instant::now();
-        local.build(&db).await.unwrap();
-        println!("initial full build of {records} records: {:?}", t.elapsed());
-
-        let t = std::time::Instant::now();
-        local.build(&db).await.unwrap();
-        println!("startup before (full replay, populated sidecar): {:?}", t.elapsed());
-        let t = std::time::Instant::now();
-        let stats = local.reproject(&db).await.unwrap();
-        println!("startup after, nothing new ({stats:?}): {:?}", t.elapsed());
-
-        push_range(&local, &session_named("new"), 0..100).await;
-        let t = std::time::Instant::now();
-        let stats = local.reproject(&db).await.unwrap();
-        println!("startup after, 100 new ({stats:?}): {:?}", t.elapsed());
     }
 
     /// A reproject takes each row's host from its record's envelope, which the body never

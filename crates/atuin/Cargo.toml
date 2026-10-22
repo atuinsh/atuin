@@ -173,7 +173,6 @@ windows-sys = { workspace = true }
 atuin-common = { workspace = true, features = ["test-utils"] }
 # An in-process sync server for the AI session e2e tests (tests/e2e_ai_sessions.rs).
 atuin-server = { workspace = true }
-divan = { workspace = true }
 parking_lot = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
@@ -181,10 +180,6 @@ rstest = { workspace = true }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
-
-[[bench]]
-name = "render_char"
-harness = false
 
 # for the PTY e2e tests (tests/e2e_pty.rs)
 [target.'cfg(unix)'.dev-dependencies]
