@@ -65,6 +65,8 @@ listenfd = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = { workspace = true }
+# Tells a launchd job's own process from what it runs.
+rustix = { workspace = true }
 service-manager = { workspace = true }
 
 [dev-dependencies]

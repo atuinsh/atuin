@@ -4,16 +4,24 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use atuin_client::settings::Daemon as DaemonSettings;
+use atuin_common::os::fs::FdIdentity;
 use tokio::task::JoinHandle;
 
 use super::DaemonAddress;
 
 /// The socket file a daemon listens on, kept fresh against temporary file cleaners and, if the
-/// daemon bound it itself, removed when dropped.
+/// daemon bound it itself, removed when dropped, unless another socket has taken its path since.
 pub struct SocketFile {
     keepalive: JoinHandle<()>,
     /// The file to remove when the daemon exits, unless it outlives the daemon as launchd's does.
-    remove_on_drop: Option<PathBuf>,
+    remove_on_drop: Option<Bound>,
+}
+
+/// A socket file a daemon bound.
+struct Bound {
+    path: PathBuf,
+    /// Tells the file apart from a socket put at its path since, as launchd's agent's is at login.
+    identity: FdIdentity,
 }
 
 /// An error that occurred while trying to remove a socket.
@@ -34,7 +42,10 @@ impl SocketFile {
     #[expect(clippy::unnecessary_wraps, reason = "a daemon listening on TCP has no socket file")]
     pub(crate) fn of(address: &DaemonAddress) -> Option<Self> {
         let mut socket = Self::kept_fresh(address.0.clone());
-        socket.remove_on_drop = Some(address.0.clone());
+        socket.remove_on_drop = Self::identity(&address.0).map(|identity| Bound {
+            path: address.0.clone(),
+            identity,
+        });
         Some(socket)
     }
 
@@ -107,14 +118,26 @@ impl SocketFile {
             // Ensure file is a socket; `socket_in_use` can return `Ok(false)` for regular files.
             && std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_socket())
     }
+
+    /// The identity of the file at `path`, if there is one.
+    fn identity(path: &Path) -> Option<FdIdentity> {
+        std::fs::symlink_metadata(path).ok().as_ref().map(FdIdentity::from_metadata)
+    }
 }
 
 impl Drop for SocketFile {
     fn drop(&mut self) {
         self.keepalive.abort();
-        let Some(path) = &self.remove_on_drop else {
+        let Some(Bound { path, identity }) = &self.remove_on_drop else {
             return;
         };
+        // launchd puts its agent's socket at the path at login, even over a daemon listening there,
+        // and that one is the agent's to keep. Doing so between this check and the removal, it
+        // would still lose it, but launchd only does as the user logs in.
+        if Self::identity(path) != Some(*identity) {
+            tracing::info!("leaving {}, which is no longer this daemon's socket", path.display());
+            return;
+        }
         tracing::info!("removing socket {}", path.display());
         if let Err(e) = std::fs::remove_file(path)
             && e.kind() != ErrorKind::NotFound
@@ -126,9 +149,23 @@ impl Drop for SocketFile {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use std::os::unix::net::UnixListener;
+
+    use rstest::{fixture, rstest};
 
     use super::*;
+
+    struct Socket {
+        _dir: tempfile::TempDir,
+        address: DaemonAddress,
+    }
+
+    #[fixture]
+    fn socket() -> Socket {
+        let dir = tempfile::tempdir().unwrap();
+        let address = DaemonAddress::from(dir.path().join("atuin.sock"));
+        Socket { _dir: dir, address }
+    }
 
     /// A socket nothing listens on is removed; one a daemon listens on, and a file that is no
     /// socket (a `socket_path` set wrong), are not.
@@ -152,5 +189,25 @@ mod tests {
         }
         SocketFile::remove_if_stale(&path).unwrap();
         assert_eq!(path.exists(), kept);
+    }
+
+    /// launchd puts its agent's socket at the path of a daemon that still runs, and the daemon
+    /// mustn't take launchd's socket with it as it exits.
+    #[rstest]
+    #[case::its_own(false)]
+    #[case::replaced_by_launchd(true)]
+    #[tokio::test]
+    async fn a_daemon_removes_only_its_own_socket(socket: Socket, #[case] replaced: bool) {
+        let path = socket.address.as_ref();
+        let _bound = socket.address.bind().unwrap();
+        let file = SocketFile::of(&socket.address).unwrap();
+        let launchds = replaced.then(|| {
+            std::fs::remove_file(path).unwrap();
+            UnixListener::bind(path).unwrap()
+        });
+
+        drop(file);
+
+        assert_eq!(path.exists(), launchds.is_some());
     }
 }

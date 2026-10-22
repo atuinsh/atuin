@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_client::database::Sqlite;
-use atuin_client::settings::Settings;
+use atuin_client::settings::{DbLocation, Settings};
 use atuin_common::env;
 use atuin_common::path::{AbsPathBuf, PathExt};
 use atuin_common::shell::{Shell, shell_name};
@@ -293,8 +293,8 @@ impl SyncInfo {
 
 #[derive(Debug)]
 struct SettingPaths {
-    db: AbsPathBuf,
-    record_store: AbsPathBuf,
+    db: DbLocation,
+    record_store: DbLocation,
     key: AbsPathBuf,
 }
 
@@ -308,13 +308,16 @@ impl SettingPaths {
     }
 
     pub fn verify(&self) {
-        let paths = vec![
-            ("ATUIN_DB_PATH", &self.db),
-            ("ATUIN_RECORD_STORE", &self.record_store),
-            ("ATUIN_KEY", &self.key),
+        let paths = [
+            ("ATUIN_DB_PATH", self.db.file()),
+            ("ATUIN_RECORD_STORE", self.record_store.file()),
+            ("ATUIN_KEY", Some(self.key.as_abs_path())),
         ];
 
         for (path_env_var, path) in paths {
+            let Some(path) = path else {
+                continue;
+            };
             if path.as_path().is_dangling_symlink() {
                 eprintln!(
                     "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin.",

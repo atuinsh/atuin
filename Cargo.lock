@@ -581,6 +581,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rstest",
+ "rustix",
  "semver",
  "serde",
  "serde_json",

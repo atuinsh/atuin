@@ -1,11 +1,12 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use atuin_common::logs::LogLevel;
-use atuin_common::path::{AbsPathBuf, PathAnchor, PathExt, RelativeTo, ShellExpanded};
+use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeTo, ShellExpanded};
 // `AsDuration`/`AsDisableableDuration` are deprecated.
 #[allow(deprecated)]
 use atuin_common::time::{
@@ -20,9 +21,8 @@ use fs_err::{File, create_dir_all};
 use regex::RegexSet;
 use secrecy::SecretString;
 use semver::Version;
-use serde::de::IntoDeserializer as _;
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use serde_with::{DeserializeAs, SerializeAs, serde_as};
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::OnceCell;
@@ -32,6 +32,7 @@ use url::Url;
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
 pub mod daemon;
+mod db_location;
 pub mod disk_usage_limit;
 mod kv;
 pub mod meta;
@@ -43,6 +44,7 @@ pub mod threads;
 pub mod watcher;
 
 pub use daemon::Daemon;
+pub use db_location::DbLocation;
 pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
 use output::OutputCaptureConfig;
 pub use output::{CaptureLimits, CommandFilter, OutputCapture};
@@ -68,31 +70,6 @@ impl PathAnchor for ConfigDir {
         // A relative `ATUIN_CONFIG_DIR` is relative to the working directory, like the config.toml
         // read from it.
         AbsPathBuf::from_current_dir(path)
-    }
-}
-
-/// [`RelativeTo<ConfigDir>`] for a SQLite database, which has to be a file: SQLite would also take
-/// `:memory:` or a `sqlite:` or `file:` URI, which resolving beside config.toml would turn into a
-/// file name.
-// TODO(markovejnovic): Type these settings as `atuin_common::db::DbUrl`'s `SqliteDbUrl`, as the
-// server's `db_uri` is, so they take `:memory:` and `sqlite:` URLs again instead of refusing them.
-// That first needs a `serde_with` converter for it, one that turns a plain file path into a URL
-// resolved beside config.toml as `RelativeTo` does, since `DbUrl` only parses `sqlite:` ones.
-struct DbFile;
-
-impl<'de> DeserializeAs<'de, AbsPathBuf> for DbFile {
-    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<AbsPathBuf, D::Error> {
-        let raw = String::deserialize(deserializer)?;
-        if raw == ":memory:" || raw.starts_with("sqlite:") || raw.starts_with("file:") {
-            return Err(de::Error::custom(format!("{raw:?} is not a file path")));
-        }
-        RelativeTo::<ConfigDir>::deserialize_as(raw.into_deserializer())
-    }
-}
-
-impl SerializeAs<AbsPathBuf> for DbFile {
-    fn serialize_as<S: Serializer>(source: &AbsPathBuf, serializer: S) -> Result<S::Ok, S::Error> {
-        source.serialize(serializer)
     }
 }
 
@@ -726,8 +703,8 @@ pub struct Ai {
     pub api_token: Option<SecretString>,
 
     /// Path to the AI sessions database.
-    #[serde_as(as = "DbFile")]
-    pub db_path: AbsPathBuf,
+    #[serde_as(as = "RelativeTo<ConfigDir>")]
+    pub db_path: DbLocation,
 
     /// The maximum time an AI session can be automatically resumed (a bare number is minutes).
     /// `0` disables auto-resume.
@@ -1076,10 +1053,10 @@ pub struct Settings {
 
     #[serde_as(as = "AsDuration<Seconds>")]
     pub sync_frequency: Duration,
-    #[serde_as(as = "DbFile")]
-    pub db_path: AbsPathBuf,
-    #[serde_as(as = "DbFile")]
-    pub record_store_path: AbsPathBuf,
+    #[serde_as(as = "RelativeTo<ConfigDir>")]
+    pub db_path: DbLocation,
+    #[serde_as(as = "RelativeTo<ConfigDir>")]
+    pub record_store_path: DbLocation,
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub key_path: AbsPathBuf,
     #[serde(rename = "search_mode")]
@@ -1540,31 +1517,76 @@ impl Settings {
         Ok(Self::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())?)
     }
 
+    /// The default of each path setting, for `data_dir`, [escaped](ShellExpanded::escape) as
+    /// config.toml would write it. An empty value of a path setting falls back to its default
+    /// here, so every path setting needs one.
+    fn path_defaults(data_dir: &Path) -> [(&'static str, Option<String>); 14] {
+        let path = |path: &Path| path.to_str().map(ShellExpanded::escape);
+        [
+            ("data_dir", path(data_dir)),
+            ("db_path", path(&data_dir.join("history.db"))),
+            ("record_store_path", path(&data_dir.join("records.db"))),
+            ("key_path", path(&data_dir.join("key"))),
+            ("daemon.socket_path", None),
+            ("daemon.pidfile_path", path(&data_dir.join("atuin-daemon.pid"))),
+            ("logs.dir", path(&atuin_common::dirs::logs_dir())),
+            ("logs.search.file", Some("search.log".to_owned())),
+            ("logs.daemon.file", Some("daemon.log".to_owned())),
+            ("logs.ai.file", Some("ai.log".to_owned())),
+            ("kv.db_path", path(&data_dir.join("kv.db"))),
+            ("scripts.db_path", path(&data_dir.join("scripts.db"))),
+            ("meta.db_path", path(&data_dir.join("meta.db"))),
+            ("ai.db_path", path(&data_dir.join("ai_sessions.db"))),
+        ]
+    }
+
+    /// `config`, with each path setting in `defaults` that is empty set to its default instead.
+    /// Warns about those, and about each that names a variable that isn't set, which loads as
+    /// written.
+    fn with_lenient_paths(
+        config: Config,
+        defaults: impl IntoIterator<Item = (&'static str, Option<String>)>,
+    ) -> Result<Config, config::ConfigError> {
+        let mut emptied = Vec::new();
+        for (key, default) in defaults {
+            let Ok(raw) = config.get_string(key) else {
+                continue;
+            };
+            match ShellExpanded::expand(&raw) {
+                Ok(_) => {}
+                Err(ExpandError::Empty) => {
+                    tracing::warn!("{key} is empty, so Atuin uses its default");
+                    emptied.push((key, default));
+                }
+                Err(err @ ExpandError::Variable { .. }) => tracing::warn!(
+                    "{key}: failed to expand {raw:?} ({err}), so Atuin uses it as written; write \
+                     $$ for a literal $"
+                ),
+            }
+        }
+        if emptied.is_empty() {
+            return Ok(config);
+        }
+
+        emptied
+            .into_iter()
+            .try_fold(Config::builder().add_source(config), |builder, (key, default)| {
+                builder.set_override(key, default)
+            })?
+            .build()
+    }
+
     fn builder_with_data_dir(
         data_dir: &std::path::Path,
     ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
-        let db_path = data_dir.join("history.db");
-        let record_store_path = data_dir.join("records.db");
-        let kv_path = data_dir.join("kv.db");
-        let scripts_path = data_dir.join("scripts.db");
-        let ai_sessions_path = data_dir.join("ai_sessions.db");
-        let pidfile_path = data_dir.join("atuin-daemon.pid");
-        let logs_dir = atuin_common::dirs::logs_dir();
-
-        let key_path = data_dir.join("key");
-        let meta_path = data_dir.join("meta.db");
-
         let output = OutputCaptureConfig::default();
 
-        let builder = Config::builder()
+        let builder = Self::path_defaults(data_dir)
+            .into_iter()
+            .try_fold(Config::builder(), |builder, (key, default)| {
+                builder.set_default(key, default)
+            })?
             .set_default("history_format", "{time}\t{command}\t{duration}")?
-            .set_default("data_dir", data_dir.to_str().map(ShellExpanded::escape))?
-            .set_default("db_path", db_path.to_str().map(ShellExpanded::escape))?
-            .set_default(
-                "record_store_path",
-                record_store_path.to_str().map(ShellExpanded::escape),
-            )?
-            .set_default("key_path", key_path.to_str().map(ShellExpanded::escape))?
             .set_default("dialect", "us")?
             .set_default("timezone", "local")?
             .set_default("auto_sync", true)?
@@ -1621,8 +1643,6 @@ impl Settings {
             .set_default("daemon.sync_frequency", 300)?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.autostart", false)?
-            .set_default("daemon.socket_path", None::<String>)?
-            .set_default("daemon.pidfile_path", pidfile_path.to_str().map(ShellExpanded::escape))?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
             .set_default("output.enabled", output.enabled)?
@@ -1630,19 +1650,11 @@ impl Settings {
             .set_default("output.sync", output.sync)?
             .set_default("output.max_disk_usage", output.max_disk_usage.to_string())?
             .set_default("logs.enabled", true)?
-            .set_default("logs.dir", logs_dir.to_str().map(ShellExpanded::escape))?
             .set_default("logs.level", "info")?
-            .set_default("logs.search.file", "search.log")?
-            .set_default("logs.daemon.file", "daemon.log")?
-            .set_default("logs.ai.file", "ai.log")?
-            .set_default("kv.db_path", kv_path.to_str().map(ShellExpanded::escape))?
-            .set_default("scripts.db_path", scripts_path.to_str().map(ShellExpanded::escape))?
             .set_default("search.recency_score_multiplier", 1.0)?
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("search.shells", "auto")?
-            .set_default("meta.db_path", meta_path.to_str().map(ShellExpanded::escape))?
-            .set_default("ai.db_path", ai_sessions_path.to_str().map(ShellExpanded::escape))?
             .set_default("ai.session_continue_minutes", 60)?
             .set_default("ai.send_cwd", false)?
             .set_default("ai.opening.send_cwd", false)?
@@ -1727,7 +1739,11 @@ impl Settings {
                 .add_source(Self::environment())
                 .build()
             {
-                Ok(partial) => partial.try_deserialize::<DataDirOnly>()?.data_dir,
+                Ok(partial) => {
+                    Self::with_lenient_paths(partial, [("data_dir", None)])?
+                        .try_deserialize::<DataDirOnly>()?
+                        .data_dir
+                }
                 Err(_) => None,
             };
 
@@ -1768,7 +1784,10 @@ impl Settings {
         let config_builder = config_builder
             .set_override("data_dir", effective_data_dir.to_str().map(ShellExpanded::escape))?;
 
-        Ok(Self::with_legacy_threads(config_builder.build()?)?)
+        Ok(Self::with_lenient_paths(
+            Self::with_legacy_threads(config_builder.build()?)?,
+            Self::path_defaults(&effective_data_dir),
+        )?)
     }
 
     /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`: read them
@@ -1827,14 +1846,18 @@ impl Settings {
         #[cfg(not(unix))]
         let socket_path = self.daemon.socket_path.clone().map(AbsPathBuf::into_path_buf);
 
+        // Loading `self` warned about its paths already.
+        let config = tracing::subscriber::with_default(
+            tracing::subscriber::NoSubscriber::default(),
+            Self::build_config,
+        )?;
         let config = self
             .resolved_paths()
             .into_iter()
-            .chain(socket_path.as_deref().map(|path| ("daemon.socket_path", path)))
-            .try_fold(
-                Config::builder().add_source(Self::build_config()?),
-                |builder, (key, path)| builder.set_override(key, path.display().to_string()),
-            )?
+            .chain(socket_path.as_deref().map(|path| ("daemon.socket_path", path.as_os_str())))
+            .try_fold(Config::builder().add_source(config), |builder, (key, path)| {
+                builder.set_override(key, path.to_string_lossy().into_owned())
+            })?
             .build()?;
 
         let value: Value =
@@ -1846,21 +1869,21 @@ impl Settings {
     /// The path settings by key, as deserialization resolved them; the merged [`Config`] holds
     /// them as written, with Atuin's own defaults [escaped](ShellExpanded::escape). A new path
     /// setting belongs here too, or `atuin config get --resolved` shows it as written.
-    fn resolved_paths(&self) -> [(&'static str, &Path); 13] {
+    fn resolved_paths(&self) -> [(&'static str, &OsStr); 13] {
         [
-            ("data_dir", self.data_dir.as_path()),
-            ("db_path", self.db_path.as_path()),
-            ("record_store_path", self.record_store_path.as_path()),
-            ("key_path", self.key_path.as_path()),
-            ("daemon.pidfile_path", self.daemon.pidfile_path.as_path()),
-            ("logs.dir", self.logs.dir.as_path()),
-            ("logs.search.file", self.logs.search.file.as_path()),
-            ("logs.daemon.file", self.logs.daemon.file.as_path()),
-            ("logs.ai.file", self.logs.ai.file.as_path()),
-            ("kv.db_path", self.kv.db_path.as_path()),
-            ("scripts.db_path", self.scripts.db_path.as_path()),
-            ("meta.db_path", self.meta.db_path.as_path()),
-            ("ai.db_path", self.ai.db_path.as_path()),
+            ("data_dir", self.data_dir.as_os_str()),
+            ("db_path", self.db_path.as_os_str()),
+            ("record_store_path", self.record_store_path.as_os_str()),
+            ("key_path", self.key_path.as_os_str()),
+            ("daemon.pidfile_path", self.daemon.pidfile_path.as_os_str()),
+            ("logs.dir", self.logs.dir.as_os_str()),
+            ("logs.search.file", self.logs.search.file.as_os_str()),
+            ("logs.daemon.file", self.logs.daemon.file.as_os_str()),
+            ("logs.ai.file", self.logs.ai.file.as_os_str()),
+            ("kv.db_path", self.kv.db_path.as_os_str()),
+            ("scripts.db_path", self.scripts.db_path.as_os_str()),
+            ("meta.db_path", self.meta.db_path.as_os_str()),
+            ("ai.db_path", self.ai.db_path.as_os_str()),
         ]
     }
 
@@ -1931,21 +1954,27 @@ impl Settings {
 
     #[must_use]
     pub fn paths_ok(&self) -> bool {
-        let paths: [&Path; 4] = [
-            self.db_path.as_path(),
-            self.record_store_path.as_path(),
-            self.key_path.as_path(),
-            self.meta.db_path.as_path(),
-        ];
-        paths.iter().all(|p| !p.is_dangling_symlink())
+        [
+            self.db_path.file(),
+            self.record_store_path.file(),
+            Some(self.key_path.as_abs_path()),
+            self.meta.db_path.file(),
+        ]
+        .into_iter()
+        .flatten()
+        .all(|path| !path.is_dangling_symlink())
     }
 
     /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
     pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
-        let config = Self::with_legacy_threads(
-            Self::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())?
-                .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
-                .build()?,
+        let data_dir = atuin_common::dirs::unconfigured_data_dir();
+        let config = Self::with_lenient_paths(
+            Self::with_legacy_threads(
+                Self::builder_with_data_dir(&data_dir)?
+                    .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+                    .build()?,
+            )?,
+            Self::path_defaults(&data_dir),
         )?;
 
         let settings: Self = config.try_deserialize()?;
@@ -1990,18 +2019,20 @@ pub(crate) fn test_local_timeout() -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::str::FromStr;
 
+    use atuin_common::db::SqliteDbUrl;
     use atuin_common::env::MockEnv;
     use atuin_common::path::{AbsPathBuf, PathBufExt as _};
+    use config::{Config, ValueKind};
     use eyre::Result;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use url::Url;
 
     use super::{
-        AiEndpointProtocol, ConfigFile, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
-        Settings, UtcOffsetSpec,
+        AiEndpointProtocol, ConfigFile, DbLocation, FileFormat, FilterMode, RequestedSearchMode,
+        SearchMode, Settings, UtcOffsetSpec,
     };
 
     #[rstest]
@@ -2166,6 +2197,9 @@ mod tests {
     #[case::valid_config("search_mode = \"fuzzy\"\n")]
     #[case::empty_config("")]
     #[case::plain_data_dir("data_dir = \"/tmp/atuin-test\"\n")]
+    #[case::path_with_an_unset_variable("data_dir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin\"\n")]
+    #[case::empty_path("db_path = \"\"\n")]
+    #[case::sqlite_url("db_path = \"sqlite:///tmp/atuin-test.db\"\n")]
     fn validate_accepts(#[case] toml: &str) {
         assert!(Settings::validate_str(toml).is_ok());
     }
@@ -2175,10 +2209,6 @@ mod tests {
     #[case::invalid_enum_variant("search_mode = \"invalid\"\n", "search_mode")]
     #[case::value_of_the_wrong_type("auto_sync = \"banana\"\n", "auto_sync")]
     #[case::invalid_nested_value("[search]\nfilters = [\"nope\"]\n", "search.filters")]
-    #[case::data_dir_with_an_unexpandable_variable(
-        "data_dir = \"${DEFINITELY_UNSET_VAR_XYZ}/atuin\"\n",
-        "data_dir"
-    )]
     #[case::more_than_one_expanding_column(
         "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = \
          true }]\n",
@@ -2215,20 +2245,26 @@ mod tests {
     /// A relative path in config.toml resolves beside config.toml, whatever directory Atuin runs
     /// in.
     #[rstest]
-    #[case::data_dir("data_dir", |s: &Settings| s.data_dir.clone())]
-    #[case::db_path("db_path", |s: &Settings| s.db_path.clone())]
-    #[case::record_store_path("record_store_path", |s: &Settings| s.record_store_path.clone())]
-    #[case::key_path("key_path", |s: &Settings| s.key_path.clone())]
-    #[case::socket_path("daemon.socket_path", |s: &Settings| s.daemon.socket_path.clone().unwrap())]
-    #[case::pidfile_path("daemon.pidfile_path", |s: &Settings| s.daemon.pidfile_path.clone())]
-    #[case::logs_dir("logs.dir", |s: &Settings| s.logs.dir.clone())]
-    #[case::kv_db_path("kv.db_path", |s: &Settings| s.kv.db_path.clone())]
-    #[case::scripts_db_path("scripts.db_path", |s: &Settings| s.scripts.db_path.clone())]
-    #[case::meta_db_path("meta.db_path", |s: &Settings| s.meta.db_path.clone())]
-    #[case::ai_db_path("ai.db_path", |s: &Settings| s.ai.db_path.clone())]
+    #[case::data_dir("data_dir", |s: &Settings| s.data_dir.to_path_buf())]
+    #[case::db_path("db_path", |s: &Settings| s.db_path.file().unwrap().to_path_buf())]
+    #[case::record_store_path("record_store_path", |s: &Settings| {
+        s.record_store_path.file().unwrap().to_path_buf()
+    })]
+    #[case::key_path("key_path", |s: &Settings| s.key_path.to_path_buf())]
+    #[case::socket_path("daemon.socket_path", |s: &Settings| {
+        s.daemon.socket_path.as_deref().unwrap().to_path_buf()
+    })]
+    #[case::pidfile_path("daemon.pidfile_path", |s: &Settings| s.daemon.pidfile_path.to_path_buf())]
+    #[case::logs_dir("logs.dir", |s: &Settings| s.logs.dir.to_path_buf())]
+    #[case::kv_db_path("kv.db_path", |s: &Settings| s.kv.db_path.file().unwrap().to_path_buf())]
+    #[case::scripts_db_path("scripts.db_path", |s: &Settings| {
+        s.scripts.db_path.file().unwrap().to_path_buf()
+    })]
+    #[case::meta_db_path("meta.db_path", |s: &Settings| s.meta.db_path.file().unwrap().to_path_buf())]
+    #[case::ai_db_path("ai.db_path", |s: &Settings| s.ai.db_path.file().unwrap().to_path_buf())]
     fn relative_paths_resolve_next_to_config_toml(
         #[case] key: &str,
-        #[case] path: fn(&Settings) -> AbsPathBuf,
+        #[case] path: fn(&Settings) -> PathBuf,
         #[values("/config", "config")] config_dir: &str,
     ) {
         let env = MockEnv::install();
@@ -2246,35 +2282,170 @@ mod tests {
         // A relative `ATUIN_CONFIG_DIR`, like `/config` on Windows, is relative to the working
         // directory.
         let expected = std::env::current_dir().unwrap().joined(config_dir).joined("relative/path");
-        assert_eq!(path(&settings).as_path(), expected);
+        assert_eq!(path(&settings), expected);
     }
 
-    /// A database setting names a file: SQLite's `:memory:` and URI forms are refused rather than
-    /// resolved beside config.toml into odd file names.
+    /// A database setting takes SQLite's `:memory:` and URIs as written, rather than resolving
+    /// them beside config.toml into odd file names.
     #[rstest]
-    fn database_paths_refuse_sqlite_uris(
+    #[case::db_path("db_path", |s: &Settings| s.db_path.clone())]
+    #[case::record_store_path("record_store_path", |s: &Settings| s.record_store_path.clone())]
+    #[case::kv_db_path("kv.db_path", |s: &Settings| s.kv.db_path.clone())]
+    #[case::scripts_db_path("scripts.db_path", |s: &Settings| s.scripts.db_path.clone())]
+    #[case::meta_db_path("meta.db_path", |s: &Settings| s.meta.db_path.clone())]
+    #[case::ai_db_path("ai.db_path", |s: &Settings| s.ai.db_path.clone())]
+    fn database_paths_take_sqlite_urls_as_written(
+        #[case] key: &str,
+        #[case] location: fn(&Settings) -> DbLocation,
+        #[values(":memory:", "sqlite:///tmp/history.db", "file:history.db?mode=memory")]
+        value: &str,
+    ) {
+        let settings: Settings = Settings::builder_with_data_dir(Path::new("/data"))
+            .unwrap()
+            .set_override(key, value)
+            .unwrap()
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(location(&settings), DbLocation::Url(SqliteDbUrl(value.to_owned())));
+    }
+
+    /// A mock environment with config.toml in `config` under the working directory.
+    #[fixture]
+    fn config_env() -> MockEnv {
+        let env = MockEnv::install();
+        env.set("HOME", std::env::current_dir().unwrap().joined("home"));
+        env.set("ATUIN_CONFIG_DIR", std::env::current_dir().unwrap().joined("config"));
+        env
+    }
+
+    /// Settings with `key` set to `value`, if given, loaded as `Settings::new` loads them, in the
+    /// mock environment `_env`.
+    fn load(_env: &MockEnv, key: &str, value: Option<&str>) -> Settings {
+        let data_dir = std::env::current_dir().unwrap().joined("data");
+        let config = Settings::builder_with_data_dir(&data_dir)
+            .unwrap()
+            .set_override_option(key, value)
+            .unwrap()
+            .build()
+            .unwrap();
+        Settings::with_lenient_paths(config, Settings::path_defaults(&data_dir))
+            .unwrap()
+            .try_deserialize()
+            .unwrap()
+    }
+
+    /// An empty path setting is its default, as one left unset is.
+    #[rstest]
+    fn an_empty_path_setting_is_its_default(
+        config_env: MockEnv,
         #[values(
+            "data_dir",
             "db_path",
             "record_store_path",
+            "key_path",
+            "daemon.pidfile_path",
+            "logs.dir",
+            "logs.search.file",
+            "logs.daemon.file",
+            "logs.ai.file",
             "kv.db_path",
             "scripts.db_path",
             "meta.db_path",
             "ai.db_path"
         )]
         key: &str,
-        #[values(":memory:", "sqlite:///tmp/history.db", "file:history.db?mode=memory")]
-        value: &str,
     ) {
-        let err = Settings::builder_with_data_dir(Path::new("/data"))
-            .unwrap()
-            .set_override(key, value)
-            .unwrap()
-            .build()
-            .unwrap()
-            .try_deserialize::<Settings>()
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("is not a file path"), "{key} = {value:?}: {err}");
+        assert_eq!(
+            load(&config_env, key, Some("")).resolved_paths(),
+            load(&config_env, key, None).resolved_paths()
+        );
+    }
+
+    /// A path setting naming a variable that isn't set loads as written, resolved as any other.
+    #[rstest]
+    #[case::data_dir("data_dir", true)]
+    #[case::db_path("db_path", true)]
+    #[case::record_store_path("record_store_path", true)]
+    #[case::key_path("key_path", true)]
+    #[case::pidfile_path("daemon.pidfile_path", true)]
+    #[case::logs_dir("logs.dir", true)]
+    #[case::search_log_file("logs.search.file", false)]
+    #[case::daemon_log_file("logs.daemon.file", false)]
+    #[case::ai_log_file("logs.ai.file", false)]
+    #[case::kv_db_path("kv.db_path", true)]
+    #[case::scripts_db_path("scripts.db_path", true)]
+    #[case::meta_db_path("meta.db_path", true)]
+    #[case::ai_db_path("ai.db_path", true)]
+    fn a_path_setting_with_an_unset_variable_loads_as_written(
+        config_env: MockEnv,
+        #[case] key: &str,
+        #[case] beside_config_toml: bool,
+    ) {
+        let written = Path::new("$UNSET/${ALSO_UNSET}");
+        let expected = if beside_config_toml {
+            std::env::current_dir().unwrap().joined("config").joined(written)
+        } else {
+            written.to_path_buf()
+        };
+
+        let settings = load(&config_env, key, written.to_str());
+        let (_, resolved) =
+            settings.resolved_paths().into_iter().find(|(resolved, _)| *resolved == key).unwrap();
+        assert_eq!(resolved, expected.as_os_str());
+    }
+
+    /// `daemon.socket_path` is optional, so empty it is unset rather than a default path.
+    #[rstest]
+    #[case::empty("", None)]
+    #[case::unset_variable("$UNSET/atuin.sock", Some("$UNSET/atuin.sock"))]
+    fn socket_path_loads_leniently(
+        config_env: MockEnv,
+        #[case] value: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let expected =
+            expected.map(|path| std::env::current_dir().unwrap().joined("config").joined(path));
+        let socket_path = load(&config_env, "daemon.socket_path", Some(value)).daemon.socket_path;
+        assert_eq!(socket_path.map(AbsPathBuf::into_path_buf), expected);
+    }
+
+    /// Every path setting has a default in `path_defaults`, which an empty value falls back to:
+    /// without one, an empty value would stop Atuin from loading its settings at all.
+    #[rstest]
+    fn every_path_setting_has_a_default() {
+        fn leaves(prefix: &str, value: config::Value) -> Vec<String> {
+            match value.kind {
+                ValueKind::Table(table) => table
+                    .into_iter()
+                    .flat_map(|(key, value)| leaves(&format!("{prefix}{key}."), value))
+                    .collect(),
+                _ => vec![prefix.trim_end_matches('.').to_owned()],
+            }
+        }
+
+        let data_dir = std::env::current_dir().unwrap().joined("data");
+        let defaults = Settings::builder_with_data_dir(&data_dir).unwrap().build().unwrap();
+        let without_default: Vec<String> = leaves("", defaults.cache.clone())
+            .into_iter()
+            .filter(|key| {
+                let emptied = Config::builder()
+                    .add_source(defaults.clone())
+                    .set_override(key.as_str(), "")
+                    .unwrap()
+                    .build()
+                    .unwrap();
+                Settings::with_lenient_paths(emptied, Settings::path_defaults(&data_dir))
+                    .unwrap()
+                    .try_deserialize::<Settings>()
+                    .is_err_and(|err| err.to_string().contains("path is empty"))
+            })
+            .collect();
+        assert!(
+            without_default.is_empty(),
+            "path settings missing from `path_defaults`: {without_default:?}"
+        );
     }
 
     /// A path Atuin works out itself, here from a data dir with a `$` in its name, isn't expanded a
@@ -2292,7 +2463,10 @@ mod tests {
             .try_deserialize()
             .unwrap();
         assert_eq!(settings.data_dir, data_dir);
-        assert_eq!(settings.scripts.db_path, data_dir.join("scripts.db"));
+        assert_eq!(
+            settings.scripts.db_path,
+            DbLocation::File(AbsPathBuf::new(data_dir.join("scripts.db")).unwrap())
+        );
     }
 
     #[rstest]

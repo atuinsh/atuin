@@ -50,6 +50,22 @@ impl Subproc {
         DaemonAddress::locate(&self.daemon, &Pidfile::new(&self.daemon.pidfile_path))
             .map_err(|err| BackendError::new(SubprocError::from(err)))
     }
+
+    /// Kill the daemon holding the pidfile, if one does, leaving behind what it doesn't remove as
+    /// it exits.
+    pub(in crate::service) async fn terminate(&self) {
+        const GRACE: Duration = Duration::from_secs(2);
+
+        let pidfile = Pidfile::new(&self.daemon.pidfile_path);
+        // The PID of a pidfile nobody holds may since have gone to another process.
+        if pidfile.is_live()
+            && let Some(pid) = pidfile.pid()
+            && pid != 0
+            && let Err(e) = atuin_common::os::process::force_terminate(pid, GRACE).await
+        {
+            tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
+        }
+    }
 }
 
 impl Backend for Subproc {
@@ -76,19 +92,9 @@ impl Backend for Subproc {
     }
 
     async fn evict(&self) -> Result<(), BackendError> {
-        const GRACE: Duration = Duration::from_secs(2);
-
         let pidfile_path = self.daemon.pidfile_path.as_path();
         if pidfile_path.exists() {
-            let pidfile = Pidfile::new(pidfile_path);
-            // The PID of a pidfile nobody holds may since have gone to another process.
-            if pidfile.is_live()
-                && let Some(pid) = pidfile.pid()
-                && pid != 0
-                && let Err(e) = atuin_common::os::process::force_terminate(pid, GRACE).await
-            {
-                tracing::warn!("could not terminate existing daemon (pid {pid}): {e}");
-            }
+            self.terminate().await;
 
             if let Err(e) = std::fs::remove_file(pidfile_path)
                 && e.kind() != std::io::ErrorKind::NotFound

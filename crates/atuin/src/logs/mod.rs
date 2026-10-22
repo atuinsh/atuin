@@ -8,7 +8,9 @@ use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::TryInitError;
 
+mod held;
 mod otel;
+pub use held::HeldEvents;
 use otel::OtelCtx;
 pub use otel::OtelCtxEnableError;
 

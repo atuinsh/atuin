@@ -10,7 +10,7 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr};
 
 use crate::i18n::fl;
-use crate::logs::LogCtx;
+use crate::logs::{HeldEvents, LogCtx};
 
 #[cfg(feature = "sync")]
 mod sync;
@@ -237,12 +237,15 @@ impl Cmd {
             None
         };
 
-        let settings = Settings::new().wrap_err("could not load client settings")?;
+        // Logging is set up from the settings, so what loading them logs waits for it.
+        let (settings, held) = HeldEvents::hold(Settings::new);
+        let settings = settings.wrap_err("could not load client settings")?;
         let _logging = self
             .log_config(&settings)
             .map(|c| LogCtx::try_enable("atuin", &c))
             .transpose()
             .wrap_err("failed to enable logging")?;
+        held.emit();
 
         Ok(Some(async {
             if let Some(func) = run_internal {

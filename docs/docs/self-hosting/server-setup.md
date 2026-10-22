@@ -48,6 +48,12 @@ ATUIN_OPEN_REGISTRATION=true
 ATUIN_DB_URI="postgres://user:password@hostname/database"
 ```
 
+An `ATUIN_*` environment variable overrides the same key in `server.toml`. An
+empty one, such as `ATUIN_DB_URI=` left in a compose file, counts as unset.
+`ATUIN_PORT` in the `tcp://10.96.0.12:8888` form, which Kubernetes sets for a
+Service named `atuin`, is ignored with a warning; see
+[Kubernetes](kubernetes.md#service-links).
+
 | Parameter           | Description                                                                |
 | ------------------- | -------------------------------------------------------------------------- |
 | `db_uri`            | A valid database URI, for saving history (required, no default)            |

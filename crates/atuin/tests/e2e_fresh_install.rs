@@ -210,6 +210,44 @@ fn init_zsh_registers_hooks(env: FreshEnv) {
     assert!(stdout(&out).contains("autoload -U add-zsh-hook"));
 }
 
+/// A path setting Atuin can't use as written, or a SQLite URI in a database one, costs at most a
+/// warning when the shell starts, never the shell's integration: `init` still prints it, and the
+/// hooks it installs still record, quietly.
+#[rstest]
+#[case::unset_variable("[kv]\ndb_path = \"$ATUIN_E2E_UNSET/kv.db\"\n", Some("kv.db_path"))]
+#[case::empty_path("[daemon]\npidfile_path = \"\"\n", Some("daemon.pidfile_path"))]
+#[case::sqlite_memory("db_path = \":memory:\"\n", None)]
+#[case::sqlite_uri("record_store_path = \"sqlite::memory:\"\n", None)]
+fn unusual_path_settings_keep_the_shell_integration(
+    env: FreshEnv,
+    #[case] config: &str,
+    #[case] warns_about: Option<&str>,
+) {
+    env.write_config(config);
+
+    let init = Process::spawn(env.atuin(&["init", "zsh"])).wait();
+    let init_stderr = String::from_utf8_lossy(&init.stderr);
+    assert!(init.status.success(), "stderr: {init_stderr}");
+    assert!(stdout(&init).contains("autoload -U add-zsh-hook"));
+    match warns_about {
+        Some(key) => {
+            assert!(init_stderr.contains(key), "expected a warning about {key}: {init_stderr}");
+        }
+        None => assert!(init_stderr.is_empty(), "expected no warning: {init_stderr}"),
+    }
+
+    let mut start = env.atuin(&["history", "start", "--hook", "--", "ls"]);
+    start.env("ATUIN_SESSION", SESSION);
+    let start = Process::spawn(start).wait();
+    assert!(start.status.success(), "stderr: {}", String::from_utf8_lossy(&start.stderr));
+    assert!(!stdout(&start).trim().is_empty(), "the hook printed no history id");
+    assert!(
+        start.stderr.is_empty(),
+        "the hook wasn't quiet: {}",
+        String::from_utf8_lossy(&start.stderr)
+    );
+}
+
 #[rstest]
 fn doctor_runs_on_fresh_install(env: FreshEnv) {
     let out = Process::spawn(env.atuin(&["doctor"])).wait();

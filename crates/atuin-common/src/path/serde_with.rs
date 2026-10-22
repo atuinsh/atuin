@@ -5,7 +5,9 @@
 //! daemon started from `~` than for a client running in a project. [`RelativeTo`] resolves it
 //! once, at deserialization, against a directory fixed by its [`PathAnchor`].
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
+use std::env::VarError;
 use std::io;
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -21,12 +23,28 @@ pub trait PathAnchor {
 }
 
 /// [`serde_with`] converter for a path that expands a leading `~` and `$VAR`, `${VAR}` or
-/// `${VAR:-default}`, reads `$$` as a literal `$`, and rejects an empty path or an unset variable.
-/// That is all it takes from the shell: no globbing or command substitution.
+/// `${VAR:-default}`, and reads `$$` as a literal `$`. That is all it takes from the shell: no
+/// globbing or command substitution.
+///
+/// A path naming a variable that isn't set is taken as written, unexpanded, so that a `$` in a
+/// directory's name keeps naming that directory; [`ShellExpanded::expand`] tells which paths those
+/// are, for the caller to warn about. An empty path is rejected.
 ///
 /// A relative path stays relative; see [`RelativeTo`] for one that must not depend on the working
 /// directory.
 pub struct ShellExpanded;
+
+/// Errors returned by [`ShellExpanded::expand`].
+#[derive(Debug, thiserror::Error)]
+pub enum ExpandError {
+    #[error("path is empty")]
+    Empty,
+    #[error("${var}: {error}")]
+    Variable {
+        var: String,
+        error: VarError,
+    },
+}
 
 impl ShellExpanded {
     /// `path`, written so that it expands back to itself: a path Atuin worked out, which must not
@@ -48,21 +66,29 @@ impl ShellExpanded {
         names
     }
 
-    fn expand<E: de::Error>(raw: &str) -> Result<PathBuf, E> {
+    /// `raw`, expanded.
+    pub fn expand(raw: &str) -> Result<String, ExpandError> {
         if raw.is_empty() {
-            return Err(E::custom("path is empty"));
+            return Err(ExpandError::Empty);
         }
         let home = || crate::dirs::try_home_dir().ok()?.into_os_string().into_string().ok();
-        let expanded =
-            shellexpand::full_with_context(raw, home, |var| crate::env::var(var).map(Some))
-                .map_err(|err| E::custom(format!("failed to expand {raw:?}: {err}")))?;
-        Ok(expanded.into_owned().into())
+        shellexpand::full_with_context(raw, home, |var| crate::env::var(var).map(Some))
+            .map(Cow::into_owned)
+            .map_err(|err| ExpandError::Variable {
+                var: err.var_name,
+                error: err.cause,
+            })
     }
 }
 
 impl<'de> DeserializeAs<'de, PathBuf> for ShellExpanded {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<PathBuf, D::Error> {
-        Self::expand(&String::deserialize(deserializer)?)
+        let raw = String::deserialize(deserializer)?;
+        match Self::expand(&raw) {
+            Ok(expanded) => Ok(expanded.into()),
+            Err(ExpandError::Variable { .. }) => Ok(raw.into()),
+            Err(err @ ExpandError::Empty) => Err(de::Error::custom(err)),
+        }
     }
 }
 
@@ -77,17 +103,25 @@ impl SerializeAs<PathBuf> for ShellExpanded {
 /// every process.
 pub struct RelativeTo<A>(PhantomData<A>);
 
-impl<'de, A: PathAnchor> DeserializeAs<'de, AbsPathBuf> for RelativeTo<A> {
-    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<AbsPathBuf, D::Error> {
-        let relative = match AbsPathBuf::new(ShellExpanded::deserialize_as(deserializer)?) {
+impl<A: PathAnchor> RelativeTo<A> {
+    /// `path`, resolved against `A`'s directory if it is relative: the second half of
+    /// deserializing it, after [expanding](ShellExpanded) it.
+    pub fn resolve<E: de::Error>(path: PathBuf) -> Result<AbsPathBuf, E> {
+        let relative = match AbsPathBuf::new(path) {
             Ok(path) => return Ok(path),
             Err(err) => err.into_path_buf(),
         };
-        let dir = A::dir()
-            .map_err(|err| de::Error::custom(format!("failed to resolve {relative:?}: {err}")))?;
+        let dir =
+            A::dir().map_err(|err| E::custom(format!("failed to resolve {relative:?}: {err}")))?;
         dir.resolve(&relative).map_err(|_| {
-            de::Error::custom(format!("failed to resolve {relative:?} against {:?}", dir.as_path()))
+            E::custom(format!("failed to resolve {relative:?} against {:?}", dir.as_path()))
         })
+    }
+}
+
+impl<'de, A: PathAnchor> DeserializeAs<'de, AbsPathBuf> for RelativeTo<A> {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<AbsPathBuf, D::Error> {
+        Self::resolve(ShellExpanded::deserialize_as(deserializer)?)
     }
 }
 
@@ -173,18 +207,39 @@ mod tests {
     #[case::unset_variable_with_a_default("${UNSET:-/tmp}/atuin.sock", "/tmp/atuin.sock")]
     #[case::lone_dollar("a$/atuin.sock", "/anchor/a$/atuin.sock")]
     #[case::escaped_dollar("$$NAME.sock", "/anchor/$NAME.sock")]
+    #[case::unset_variable("$UNSET/atuin.sock", "/anchor/$UNSET/atuin.sock")]
+    #[case::unset_braced_variable("${UNSET}/atuin.sock", "/anchor/${UNSET}/atuin.sock")]
+    #[case::unset_variable_in_an_absolute_path("/tmp/a$b/atuin.sock", "/tmp/a$b/atuin.sock")]
+    #[case::unset_variable_beside_a_tilde("~/$UNSET.sock", "/anchor/~/$UNSET.sock")]
     fn relative_to_resolves(env: MockEnv, #[case] raw: &str, #[case] expected: &str) {
         assert_eq!(deserialize::<RelativeTo<Anchor>, _>(&env, raw).unwrap(), Path::new(expected));
     }
 
     #[rstest]
     #[case::empty("", "path is empty")]
-    #[case::unset_variable("$UNSET/atuin.sock", "UNSET")]
-    #[case::unset_braced_variable("${UNSET}/atuin.sock", "UNSET")]
     #[cfg_attr(windows, case::drive_relative("D:atuin.sock", "failed to resolve"))]
     fn relative_to_rejects(env: MockEnv, #[case] raw: &str, #[case] expected: &str) {
         let err = deserialize::<RelativeTo<Anchor>, _>(&env, raw).unwrap_err().to_string();
         assert!(err.contains(expected), "error should mention {expected:?}, got: {err}");
+    }
+
+    /// `expand` names the variable that leaves a path as written, for the caller's warning.
+    #[rstest]
+    #[case::empty("", None)]
+    #[case::unset_variable("$UNSET/atuin.sock", Some("UNSET"))]
+    #[case::unset_braced_variable("${UNSET}/atuin.sock", Some("UNSET"))]
+    #[case::unset_after_a_set_one("$NAME/$UNSET.sock", Some("UNSET"))]
+    fn expand_names_the_unset_variable(
+        env: MockEnv,
+        #[case] raw: &str,
+        #[case] unset: Option<&str>,
+    ) {
+        env.remove("UNSET");
+        match (ShellExpanded::expand(raw), unset) {
+            (Err(ExpandError::Empty), None) => {}
+            (Err(ExpandError::Variable { var, .. }), Some(unset)) => assert_eq!(var, unset),
+            (expanded, unset) => panic!("expected {unset:?} to be unset, got {expanded:?}"),
+        }
     }
 
     /// Only a relative path needs the anchor, so only a relative path fails without one.
@@ -221,8 +276,7 @@ mod tests {
         /// A path Atuin hands back to the config, escaped, comes out of it as it went in.
         #[test]
         fn escaped_paths_expand_to_themselves(path in "[^~].*") {
-            let expanded = ShellExpanded::expand::<serde_json::Error>(&ShellExpanded::escape(&path));
-            prop_assert_eq!(expanded.unwrap(), PathBuf::from(path));
+            prop_assert_eq!(ShellExpanded::expand(&ShellExpanded::escape(&path)).unwrap(), path);
         }
     }
 }

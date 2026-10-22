@@ -14,6 +14,7 @@ use atuin_common::os::macos::login_items::LoginItem;
 use atuin_common::os::unix::SecureTempDirError;
 use atuin_common::path::{PathBufExt as _, ShellExpanded};
 use plist::{Dictionary, Value};
+use rustix::process::Pid;
 use service_manager::{
     LaunchdServiceManager, RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceManager,
     ServiceStopCtx, ServiceUninstallCtx,
@@ -238,8 +239,11 @@ impl Launchd {
 
     /// The label of the launchd job that started this process, if one did.
     fn job_label() -> Option<String> {
-        // launchd names the job only to the process it started, and anything that process forks
-        // sees `0`.
+        // launchd names the job to the process it spawns, but what that process runs inherits the
+        // name, such as the shells of a terminal app launched from the Dock.
+        if !Lineage::of_this_process().is_launchd_job() {
+            return None;
+        }
         let label = atuin_common::env::var_os("XPC_SERVICE_NAME")?.into_string().ok()?;
         (label != "0").then_some(label)
     }
@@ -384,6 +388,35 @@ impl Backend for Launchd {
         // in its place has to bind.
         Self::bootout().await.map_err(BackendError::new)?;
         Subproc::new(&self.daemon).evict().await
+    }
+}
+
+/// Where a process stands among the others, as far as telling a launchd job's own process from what
+/// it runs.
+#[derive(Debug, Clone, Copy)]
+struct Lineage {
+    pid: Pid,
+    /// [`None`] for a process with no parent, as only the kernel's are.
+    parent: Option<Pid>,
+    group: Pid,
+}
+
+impl Lineage {
+    fn of_this_process() -> Self {
+        Self {
+            pid: rustix::process::getpid(),
+            parent: rustix::process::getppid(),
+            group: rustix::process::getpgrp(),
+        }
+    }
+
+    /// Whether launchd spawned the process as a job's.
+    ///
+    /// launchd spawns a job's process as its child, leading a process group of its own. It also
+    /// adopts a process whose parent exited, as `(atuin daemon start &)` leaves one, but that one
+    /// stays in the group it was started in.
+    fn is_launchd_job(self) -> bool {
+        self.parent.is_some_and(Pid::is_init) && self.group == self.pid
     }
 }
 
@@ -639,6 +672,37 @@ mod tests {
             >::new(pinned))
             .unwrap();
         assert_eq!(expanded, socket);
+    }
+
+    #[rstest]
+    #[case::launchd_job(500, 1, 500, true)]
+    #[case::run_from_a_shell(500, 400, 500, false)]
+    #[case::adopted_by_launchd(500, 1, 400, false)]
+    fn only_a_process_launchd_spawned_is_a_job(
+        #[case] pid: i32,
+        #[case] parent: i32,
+        #[case] group: i32,
+        #[case] job: bool,
+    ) {
+        let lineage = Lineage {
+            pid: Pid::from_raw(pid).unwrap(),
+            parent: Pid::from_raw(parent),
+            group: Pid::from_raw(group).unwrap(),
+        };
+        assert_eq!(lineage.is_launchd_job(), job);
+    }
+
+    /// An app launched from the Dock passes its launchd label on to what it runs, such as its
+    /// terminal's shells, and so does a job that runs a tmux server. Taken for the daemon's job,
+    /// `atuin daemon restart` would restart the app.
+    #[rstest]
+    #[case::app("application.com.microsoft.VSCode.81468291.81468297")]
+    #[case::job("local.tmux")]
+    fn a_label_this_process_inherited_is_no_job_of_its_own(#[case] label: &str) {
+        let env = atuin_common::env::MockEnv::install();
+        env.set("XPC_SERVICE_NAME", label);
+        // The test runner spawned this test, not launchd.
+        assert_eq!(Launchd::external_job_label(), None);
     }
 
     /// A lossy path would point launchd at an executable that doesn't exist.

@@ -13,6 +13,10 @@
 //! The preamble must also leave alone a Bash or Zsh started as `<shell> -ic <command>` or
 //! `<shell> -i <file>`: the shell the proxy would start never gets the command or the file, so it
 //! sits waiting on the terminal for input instead of running them.
+//!
+//! Nor may it exec the proxy unless `atuin` ran by name and said this terminal has none: an init
+//! loaded by absolute path may find no `atuin` on `PATH`, or a shim that fails, and a failed
+//! `exec` ends a Bash or Zsh still reading its rc.
 
 #![cfg(all(unix, feature = "pty-proxy"))]
 
@@ -26,7 +30,7 @@ mod pty;
 mod shell;
 
 use std::collections::BTreeMap;
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -46,9 +50,8 @@ enum Sourced {
     FromFile,
 }
 
-/// `config.fish` for `sourced`, minus the line that loads the preamble.
-const CONFIG_FISH: &str = r#"atuin init fish | source
-function fish_prompt
+/// The `config.fish` lines that set the prompt the harness waits for.
+const FISH_PROMPT: &str = r#"function fish_prompt
     echo -n "{prompt} "
 end
 function fish_mode_prompt
@@ -102,8 +105,11 @@ fn fish_keeps_its_keyboard_however_the_preamble_is_sourced(
     };
     let config = env.home().join(".config/fish/config.fish");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    std::fs::write(&config, format!("{load}\n{}", CONFIG_FISH.replace("{prompt}", PROMPT)))
-        .unwrap();
+    std::fs::write(
+        &config,
+        format!("{load}\natuin init fish | source\n{}", FISH_PROMPT.replace("{prompt}", PROMPT)),
+    )
+    .unwrap();
 
     let pty = PtyShell::spawn(&fish, &[], &env, &BTreeMap::new());
     pty.wait_for_prompt();
@@ -261,4 +267,90 @@ fn posix_shells_run_their_command_or_file_instead_of_a_proxy(
         // A proxied shell would never print this: it would be waiting at a prompt instead.
         pty.wait_for_line("proxy=");
     }
+}
+
+/// The lines of shell config that load the pty-proxy preamble.
+#[derive(Clone, Copy, Debug)]
+enum Preamble {
+    /// `atuin pty-proxy init` alone.
+    Standalone,
+    /// `atuin init` with `pty_proxy.enabled`, then a leftover `atuin pty-proxy init`.
+    Twice,
+    /// `atuin init` without `pty_proxy.enabled`, which sets `__atuin_pty_proxy_owns_tty` before
+    /// `atuin pty-proxy init` runs.
+    AfterInit,
+}
+
+/// What `atuin` names on the shell's `PATH`.
+#[derive(Clone, Copy, Debug)]
+enum OnPath {
+    Atuin,
+    Nothing,
+    /// A version-manager shim with no version selected, which fails whatever it is asked.
+    FailingShim,
+}
+
+#[rstest]
+fn proxy_starts_only_when_atuin_runs_by_name(
+    #[values("bash", "zsh", "fish")] name: &str,
+    #[values(Preamble::Standalone, Preamble::Twice, Preamble::AfterInit)] preamble: Preamble,
+    #[values(OnPath::Atuin, OnPath::Nothing, OnPath::FailingShim)] on_path: OnPath,
+) {
+    const SYSTEM_PATH: &str = "/usr/bin:/bin";
+
+    let Some(shell) = find_shell(name) else {
+        return;
+    };
+
+    let env = FreshEnv::new();
+    if let Preamble::Twice = preamble {
+        env.write_config("[pty_proxy]\nenabled = true\n");
+    }
+    let inits: &[&str] = match preamble {
+        Preamble::Standalone => &["pty-proxy init"],
+        Preamble::Twice | Preamble::AfterInit => {
+            // Finish migrations before background shell hooks can open the databases.
+            env.run(&["store", "status"]);
+            &["init", "pty-proxy init"]
+        }
+    };
+    let atuin = env!("CARGO_BIN_EXE_atuin");
+    let (rc, prompt) = match name {
+        "fish" => (".config/fish/config.fish".to_string(), FISH_PROMPT.replace("{prompt}", PROMPT)),
+        _ => (format!(".{name}rc"), format!("PS1='{PROMPT} '\n")),
+    };
+    let load: String = inits
+        .iter()
+        .map(|init| match name {
+            "fish" => format!("'{atuin}' {init} {name} | source\n"),
+            _ => format!("eval \"$('{atuin}' {init} {name})\"\n"),
+        })
+        .collect();
+    let rc = env.home().join(rc);
+    std::fs::create_dir_all(rc.parent().unwrap()).unwrap();
+    std::fs::write(rc, format!("{load}{prompt}")).unwrap();
+
+    let path = match on_path {
+        OnPath::Atuin => env.path_var(),
+        OnPath::Nothing => SYSTEM_PATH.to_string(),
+        OnPath::FailingShim => {
+            let shims = env.home().join("shims");
+            std::fs::create_dir_all(&shims).unwrap();
+            let shim = shims.join("atuin");
+            std::fs::write(&shim, "#!/bin/sh\necho 'atuin: no version selected' >&2\nexit 1\n")
+                .unwrap();
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+            format!("{}:{SYSTEM_PATH}", shims.display())
+        }
+    };
+    let expected = match on_path {
+        OnPath::Atuin => "proxy=1",
+        OnPath::Nothing | OnPath::FailingShim => "proxy=0",
+    };
+
+    let vars = BTreeMap::from([("PATH".to_string(), path)]);
+    let pty = PtyShell::spawn(&shell, &["-i".to_string()], &env, &vars);
+    pty.wait_for_prompt();
+    pty.send_line(r#"test -n "$ATUIN_PTY_PROXY_ACTIVE" && echo proxy=1 || echo proxy=0"#);
+    pty.wait_for_line(expected);
 }

@@ -14,12 +14,15 @@ Additionally, if set, `ATUIN_CONFIG_DIR` will override the location of
 look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
 
 Paths in the config may start with `~` and refer to environment variables, as
-in `$XDG_RUNTIME_DIR/atuin.sock`; write `$$` for a literal `$`. A relative path
-is relative to the directory holding `config.toml`, whatever directory Atuin
-runs in: with the default config, `socket_path = "atuin.sock"` is
-`~/.atuin/atuin.sock`. This holds for paths set through `ATUIN_*` environment
-variables too. A database path must name a file: SQLite's `:memory:` isn't
-accepted, and neither is a `sqlite:` or `file:` URI.
+in `$XDG_RUNTIME_DIR/atuin.sock`, or `${XDG_RUNTIME_DIR:-/tmp}/atuin.sock` to
+fall back to `/tmp` where the variable isn't set; write `$$` for a literal `$`.
+Atuin warns about a path that refers to a variable that isn't set, and uses it
+as written. An empty path is the setting's default. A relative path is relative
+to the directory holding `config.toml`, whatever directory Atuin runs in: with
+the default config, `socket_path = "atuin.sock"` is `~/.atuin/atuin.sock`. This
+holds for paths set through `ATUIN_*` environment variables too. A database
+path may also be SQLite's `:memory:`, or a `sqlite:` or `file:` URI, which
+SQLite opens as written.
 
 ??? note "Upgrading from older versions"
 

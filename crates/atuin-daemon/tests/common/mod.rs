@@ -12,6 +12,7 @@ pub mod scale;
 pub mod strategies;
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -487,12 +488,12 @@ pub struct WriteLock {
 impl WriteLock {
     /// `no_op_write` must be a statement that writes nothing but still needs the writer lock
     /// (sqlx's `query` wants a `'static` string, hence a literal per database).
-    async fn hold(path: impl AsRef<Path>, no_op_write: &'static str) -> Self {
+    async fn hold(path: impl AsRef<OsStr>, no_op_write: &'static str) -> Self {
         let path = path.as_ref().to_owned();
         let (release_tx, release_rx) = oneshot::channel::<()>();
         let (locked_tx, locked_rx) = oneshot::channel::<()>();
         let task = tokio::spawn(async move {
-            let db = CommonSqlite::builder(path.as_os_str())
+            let db = CommonSqlite::builder(&path)
                 .timeout(Duration::from_secs(5))
                 .open()
                 .await

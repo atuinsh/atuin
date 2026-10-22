@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 use clap::Parser;
 use eyre::{Context, Result};
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -30,7 +31,11 @@ enum Cmd {
 async fn main() -> Result<()> {
     let cmd = Cmd::parse();
 
-    tracing_subscriber::registry().with(fmt::layer()).with(EnvFilter::from_default_env()).init();
+    // Warnings show without RUST_LOG, since that is how loading the settings reports what it
+    // ignored.
+    let filter =
+        EnvFilter::builder().with_default_directive(LevelFilter::WARN.into()).from_env_lossy();
+    tracing_subscriber::registry().with(fmt::layer()).with(filter).init();
 
     tracing::trace!(command = ?cmd, "server command");
 
