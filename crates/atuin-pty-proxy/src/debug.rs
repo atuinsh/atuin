@@ -9,18 +9,21 @@ impl Output {
         let mut labelled = Vec::with_capacity(self.data().len());
         for chunk in self.chunks() {
             labelled.extend_from_slice(chunk.data);
-            labelled.extend_from_slice(event_label(chunk.event));
-            labelled.extend_from_slice(RESET);
+            if let Some(label) = event_label(chunk.event) {
+                labelled.extend_from_slice(label);
+                labelled.extend_from_slice(RESET);
+            }
         }
         labelled.extend_from_slice(self.trailing_data());
         labelled
     }
 }
 
-fn event_label(event: Event) -> &'static [u8] {
+fn event_label(event: Event) -> Option<&'static [u8]> {
     match event {
-        Event::OutputStart(_) => b"\x1b[1;30;46m[atuin: output start]\x1b[0m",
-        Event::OutputEnd(_) => b"\x1b[1;37;44m[atuin: output end]\x1b[0m",
+        Event::OutputStart(_) => Some(b"\x1b[1;30;46m[atuin: output start]\x1b[0m"),
+        Event::OutputEnd(_) => Some(b"\x1b[1;37;44m[atuin: output end]\x1b[0m"),
+        Event::Title => None,
     }
 }
 
@@ -38,13 +41,17 @@ mod tests {
         HID.parse().expect("valid history id")
     }
 
+    fn label(event: Event) -> &'static [u8] {
+        event_label(event).expect("markers are labelled")
+    }
+
     /// Strip every debug label (and the reset that follows it) back out of rendered output.
     fn without_labels(rendered: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut rest = rendered;
         'outer: while !rest.is_empty() {
             for event in [Event::OutputStart(hid()), Event::OutputEnd(hid())] {
-                let label = [event_label(event), RESET].concat();
+                let label = [label(event), RESET].concat();
                 if let Some(remainder) = rest.strip_prefix(label.as_slice()) {
                     rest = remainder;
                     continue 'outer;
@@ -85,7 +92,7 @@ mod tests {
         #[case] event: Event,
     ) {
         let mut expected = marker.clone().into_bytes();
-        expected.extend_from_slice(event_label(event));
+        expected.extend_from_slice(label(event));
         expected.extend_from_slice(RESET);
 
         assert_eq!(labelled(&mut parser, marker.as_bytes()), expected);
@@ -100,7 +107,7 @@ mod tests {
         // tracker sees the highlighted stream, not the raw one) still work.
         assert_eq!(without_labels(&rendered), data.as_bytes());
         for event in [Event::OutputStart(hid()), Event::OutputEnd(hid())] {
-            let label = event_label(event);
+            let label = label(event);
             assert!(
                 rendered.windows(label.len()).any(|window| window == label),
                 "missing label for {event:?}"
@@ -116,7 +123,7 @@ mod tests {
 
         let second = labelled(&mut parser, format!("{tail}\x07more").as_bytes());
         let mut expected = format!("{tail}\x07").into_bytes();
-        expected.extend_from_slice(event_label(Event::OutputEnd(hid())));
+        expected.extend_from_slice(label(Event::OutputEnd(hid())));
         expected.extend_from_slice(RESET);
         expected.extend_from_slice(b"more");
         assert_eq!(second, expected);
@@ -124,6 +131,6 @@ mod tests {
 
     #[rstest]
     fn start_and_end_get_distinct_labels() {
-        assert_ne!(event_label(Event::OutputStart(hid())), event_label(Event::OutputEnd(hid())));
+        assert_ne!(label(Event::OutputStart(hid())), label(Event::OutputEnd(hid())));
     }
 }

@@ -1,10 +1,10 @@
-//! `atuin pty-proxy` follows the working directory of the shell it hosts.
+//! `atuin pty-proxy` follows the program in the foreground of the shell it hosts.
 //!
-//! Terminal multiplexers report a pane's working directory by reading it off the process in the
-//! foreground of the pane's terminal — tmux calls `tcgetpgrp` on the pane's pty, then reads that
-//! process's working directory. Inside a proxy that process is the proxy itself, so unless the
-//! proxy follows its shell, a `cd` is invisible and the pane stays pinned to wherever the proxy
-//! was launched.
+//! Terminals and multiplexers learn what runs in them from the process in the foreground of their
+//! pty. tmux calls `tcgetpgrp` on a pane's pty and reads that process's working directory, and a
+//! terminal names a tab after it. Inside a proxy that process is the proxy itself, so unless the
+//! proxy follows its shell, a `cd` is invisible, the pane stays pinned to wherever the proxy was
+//! launched, and every tab is called `atuin`.
 
 #![cfg(unix)]
 
@@ -129,4 +129,14 @@ fn the_proxy_follows_its_shell_between_directories() {
     // And back again: following is not a one-time reading.
     proxy.send_line(&format!("cd '{}'", home.display()));
     proxy.wait_for_cwd(&home);
+}
+
+#[rstest]
+fn the_proxy_titles_the_terminal_after_the_program_in_the_foreground() {
+    let env = FreshEnv::new();
+    let mut proxy = Proxy::start(&env);
+    wait_until("a shell prompt inside the proxy", || proxy.saw(PROMPT));
+
+    proxy.send_line("sleep 30");
+    wait_until("the proxy to title the terminal after sleep", || proxy.saw("\x1b]0;sleep\x07"));
 }

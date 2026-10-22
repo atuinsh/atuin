@@ -1,6 +1,7 @@
-//! Updates this PTY proxy's CWD to match the CWD of its child.
+//! Follows the program in the foreground of the PTY proxy child's pty.
 //!
-//! This is necessary to enable programs like tmux to detect the CWD of the child.
+//! The proxy moves into that program's CWD, which enables programs like tmux to detect the CWD of
+//! the child, and names the program for the terminal's title (see [`crate::title`]).
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::PathBuf;
@@ -9,17 +10,19 @@ use std::time::Duration;
 use atuin_common::os::unix::process;
 use portable_pty::MasterPty;
 use rustix::process::Pid;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
-/// The minimum amount of time between successive CWD updates.
+use crate::title::Leader;
+
+/// The minimum amount of time between successive CWD and title updates.
 ///
-/// Updating the CWD requires a syscall, so this is used to reduce the performance impact.
+/// Each update takes a few syscalls, so this is used to reduce the performance impact.
 const MIN_UPDATE_DELAY: Duration = Duration::from_millis(100);
 
-/// The maximum amount of time between successive CWD updates.
+/// The maximum amount of time between successive CWD and title updates.
 ///
-/// The CWD will be updated at least this often, even if the updater receives no explicit signal to
-/// perform an update.
+/// The CWD and the title will be updated at least this often, even if the updater receives no
+/// explicit signal to perform an update, so a program that prints nothing is still named.
 const MAX_UPDATE_DELAY: Duration = Duration::from_secs(1);
 
 /// Get an [`OwnedFd`] from a [`MasterPty`].
@@ -58,10 +61,32 @@ fn tcgetpgrp(terminal: BorrowedFd<'_>) -> Option<Pid> {
     Pid::from_raw(pid)
 }
 
+/// The PTY proxy child's pty, as seen from its master side.
+pub struct Foreground {
+    parent: Option<OwnedFd>,
+    /// The PTY proxy child, which leads the shell's process group.
+    child: Option<Pid>,
+}
+
+impl Foreground {
+    /// `master` is the PTY proxy's master PTY. `child` is the PID of the PTY's child process, if
+    /// available.
+    pub fn new(master: &dyn MasterPty, child: Option<Pid>) -> Self {
+        Self {
+            parent: pty_parent_fd(master),
+            child,
+        }
+    }
+
+    /// The process group in the foreground, if any.
+    pub fn group(&self) -> Option<Pid> {
+        self.parent.as_ref().and_then(|parent| tcgetpgrp(parent.as_fd()))
+    }
+}
+
 /// Moves this process into the PTY proxy child's CWD.
 struct Follower {
-    parent: Option<OwnedFd>,
-    child: Option<Pid>,
+    foreground: Foreground,
     /// The CWD this process last moved into, if any.
     cwd: Option<PathBuf>,
 }
@@ -71,7 +96,8 @@ impl Follower {
     ///
     /// Blocks: looking up the CWD and moving into it can both wait on a slow filesystem.
     fn follow(&mut self) {
-        let Some(new_cwd) = pty_cwd(self.parent.as_ref().map(AsFd::as_fd), self.child) else {
+        let parent = self.foreground.parent.as_ref().map(AsFd::as_fd);
+        let Some(new_cwd) = pty_cwd(parent, self.foreground.child) else {
             return;
         };
         if self.cwd.as_ref() == Some(&new_cwd) {
@@ -83,27 +109,32 @@ impl Follower {
     }
 }
 
-/// Updates this process's CWD to match the PTY proxy child's CWD.
-pub struct CwdUpdater {
-    /// Used to tell the update task to update the CWD now.
+/// Updates this process's CWD to match the PTY proxy child's, and names the program in the
+/// foreground for the terminal's title.
+pub struct ForegroundUpdater {
+    /// Used to tell the update task to update now.
     tx: mpsc::Sender<()>,
 }
 
-impl CwdUpdater {
-    /// Start updating this process's CWD to match the PTY proxy child's.
+impl ForegroundUpdater {
+    /// Start updating this process's CWD to match the PTY proxy child's, and keeping `leaders` on
+    /// the latest leader of the process group in the foreground, for the terminal's title.
     ///
-    /// `master` is the PTY proxy's master PTY. `shell` is the PID of the PTY's child process, if
+    /// `master` is the PTY proxy's master PTY. `child` is the PID of the PTY's child process, if
     /// available.
     ///
-    /// Returns a [`CwdUpdater`] that can be used to signal the update task to update the CWD now.
-    pub fn new(master: &dyn MasterPty, child: Option<Pid>) -> Self {
+    /// Returns a [`ForegroundUpdater`] that can be used to signal the update task to update now.
+    pub fn new(
+        master: &dyn MasterPty,
+        child: Option<Pid>,
+        leaders: watch::Sender<Option<Leader>>,
+    ) -> Self {
         let (tx, mut rx) = mpsc::channel(1);
-        let parent = pty_parent_fd(master);
+        let foreground = Foreground::new(master, child);
 
         tokio::spawn(async move {
             let mut follower = Follower {
-                parent,
-                child,
+                foreground,
                 cwd: None,
             };
 
@@ -117,15 +148,24 @@ impl CwdUpdater {
 
                 loop {
                     // Off the runtime thread: a hung NFS or FUSE mount must stall only this task,
-                    // never the forwarding of keystrokes and output.
+                    // never the forwarding of keystrokes and output. The title is looked up in the
+                    // same call, so the blocking pool needs only the one thread.
                     let following = tokio::task::spawn_blocking(move || {
                         follower.follow();
-                        follower
+                        let leader = Leader::of(&follower.foreground);
+                        (follower, leader)
                     });
-                    let Ok(followed) = following.await else {
+                    let Ok((followed, leader)) = following.await else {
                         return;
                     };
                     follower = followed;
+                    // A look replaces one the output task hasn't taken yet, so a terminal that has
+                    // stopped reading holds up neither this task nor the title it gets next.
+                    if let Some(leader) = leader
+                        && leaders.send(Some(leader)).is_err()
+                    {
+                        return;
+                    }
 
                     tokio::time::sleep(MIN_UPDATE_DELAY).await;
                     if rx.try_recv().is_err() {
@@ -139,7 +179,8 @@ impl CwdUpdater {
         Self { tx }
     }
 
-    /// Tell the updater to update this process's CWD to match that of the PTY proxy child.
+    /// Tell the updater to update this process's CWD to match that of the PTY proxy child, and the
+    /// title.
     pub fn update(&self) {
         // A full channel isn't an error; it means the updater has already been signaled to run.
         let _ = self.tx.try_send(());

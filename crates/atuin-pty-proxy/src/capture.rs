@@ -228,6 +228,7 @@ impl CommandCaptureTracker {
         match chunk.event {
             Event::OutputStart(history_id) => self.start_capture(history_id),
             Event::OutputEnd(history_id) => self.end_capture(history_id, chunk.osc_len),
+            Event::Title => {}
         }
     }
 
