@@ -5,11 +5,23 @@ on:
     branches: [main]
     tags:
       - 'v*'
+  # Republishes a release's image as <version>-<revision> (e.g. 18.24.2-1) to pick up Debian
+  # security updates without a new release. The release's own tags never move, since hosts
+  # that already pulled them would not refetch.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to rebuild, e.g. v18.24.2
+        required: true
+      revision:
+        description: Image revision, published as <version>-<revision>
+        required: true
+        type: number
 
 jobs:
   publish:
     concurrency:
-      group: ${{ github.ref }}-docker
+      group: ${{ inputs.tag || github.ref }}-docker
       cancel-in-progress: true
     permissions:
       packages: write
@@ -19,6 +31,9 @@ jobs:
     runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        id: checkout
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Get Repo Owner
         id: get_repo_owner
@@ -41,10 +56,14 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=ref,event=branch
-            type=sha,prefix=
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch,enable=${{ github.event_name == 'push' }}
+            type=sha,prefix=,enable=${{ github.event_name == 'push' }}
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'push' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' }}
+            type=semver,pattern={{version}},value=${{ inputs.tag }},suffix=-${{ inputs.revision }},enable=${{ github.event_name == 'workflow_dispatch' }}
+          # A dispatch runs from main, so the default revision would be main's head.
+          labels: |
+            org.opencontainers.image.revision=${{ steps.checkout.outputs.commit }}
 
       - name: Build and push
         uses: depot/build-push-action@v1
@@ -54,6 +73,9 @@ jobs:
           file: ./Dockerfile
           context: .
           provenance: false
+          # A cached runtime stage keeps the ca-certificates and libssl3 of whenever the
+          # layer was first built, so security updates would wait for a base image bump.
+          no-cache-filters: runtime
           build-args: |
             Version=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] || 'dev' }}
             GitCommit=${{ github.sha }}
