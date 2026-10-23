@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use atuin_client::settings::Settings;
-use atuin_common::logs::LogConfig;
+use atuin_common::logs::LogMode;
 
 use crate::i18n::fl;
 
@@ -39,7 +39,7 @@ impl Cmd {
         }
     }
 
-    pub fn log_config(&self) -> Option<LogConfig> {
+    pub const fn log_mode(&self) -> Option<LogMode> {
         match self {
             // These commands are called from the shell hooks with no stderr; there's no point in
             // initializing logging. Also, commands that are handled synchronously
