@@ -15,6 +15,7 @@ mod metrics;
 mod router;
 mod trace;
 
+pub mod admin;
 pub mod db;
 
 pub use settings::{Settings, example_config};

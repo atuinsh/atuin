@@ -1,3 +1,4 @@
+use std::process::Stdio;
 use std::time::Duration;
 
 use atuin_client::api_client;
@@ -5,12 +6,20 @@ use atuin_common::utils::uuid_v7;
 use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
 use futures_util::TryFutureExt;
+use tokio::io::AsyncWriteExt as _;
 use tokio::net::TcpListener;
+use tokio::process::Command;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::{Dispatch, dispatcher};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
+
+/// The database the tests run against: `ATUIN_DB_URI`, or a local Postgres.
+fn db_uri() -> String {
+    atuin_common::env::var("ATUIN_DB_URI")
+        .unwrap_or_else(|_| "postgres://atuin:pass@localhost:5432/atuin".to_owned())
+}
 
 pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHandle<()>) {
     let formatting_layer = tracing_tree::HierarchicalLayer::default()
@@ -25,9 +34,6 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
         .with(EnvFilter::new("atuin_server=debug,atuin_client=debug,info"))
         .into();
 
-    let db_uri = atuin_common::env::var("ATUIN_DB_URI")
-        .unwrap_or_else(|_| "postgres://atuin:pass@localhost:5432/atuin".to_owned());
-
     let server_settings = ServerSettings {
         host: "127.0.0.1".to_owned(),
         port: 0,
@@ -37,7 +43,7 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
-            db_uri: db_uri.parse().expect("invalid ATUIN_DB_URI"),
+            db_uri: db_uri().parse().expect("invalid ATUIN_DB_URI"),
             db_password_file: None,
         },
         metrics: atuin_server::settings::Metrics::default(),
@@ -125,4 +131,28 @@ pub async fn register(address: &url::Url) -> api_client::Client {
     let username = uuid_v7().as_simple().to_string();
     let password = uuid_v7().as_simple().to_string();
     register_inner(address, &username, &password).await
+}
+
+/// Run the `atuin-server` binary with `args` against the test database, with `stdin` as its input.
+#[allow(dead_code)]
+pub async fn run_server_command(args: &[&str], stdin: &str) {
+    let config_dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_atuin-server"))
+        .args(args)
+        .env("ATUIN_CONFIG_DIR", config_dir.path())
+        .env("ATUIN_DB_URI", db_uri())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(stdin.as_bytes()).await.unwrap();
+    let output = child.wait_with_output().await.unwrap();
+
+    assert!(
+        output.status.success(),
+        "atuin-server {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

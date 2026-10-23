@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 
+use atuin_server::admin::AdminCmd;
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 use clap::Parser;
 use eyre::{Context, Result};
@@ -25,6 +26,10 @@ enum Cmd {
 
     /// Print server example configuration
     DefaultConfig,
+
+    /// Manage the server by hand
+    #[clap(subcommand)]
+    Admin(AdminCmd),
 }
 
 #[tokio::main]
@@ -58,6 +63,10 @@ async fn main() -> Result<()> {
         Cmd::DefaultConfig => {
             println!("{}", example_config());
             Ok(())
+        }
+        Cmd::Admin(cmd) => {
+            let settings = Settings::new().wrap_err("could not load server settings")?;
+            cmd.run(&settings.db_settings).await
         }
     }
 }

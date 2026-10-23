@@ -142,6 +142,27 @@ unlike a password in `db_uri` it doesn't need escaping. `db_uri` must name the
 host, and must not contain a password as well. This works with PostgreSQL and
 MySQL; SQLite has no password.
 
+## Administration
+
+`atuin-server` supports some administration tools.
+
+### User Management
+
+While `open_registration` is `true`, anyone who can reach the server can
+register. To keep a server private, leave it `false` and create accounts on the
+server instead:
+
+```shell
+atuin-server admin user create --email alice@example.com alice
+```
+
+You can also delete users as well as change their passwords.
+
+```shell
+atuin-server admin user set-password alice
+atuin-server admin user delete alice
+```
+
 ## TLS
 
 We strongly urge you enable TLS with Atuin. Without TLS, passwords are sent
