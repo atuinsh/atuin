@@ -9,6 +9,8 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use tracing::warn;
 
+use crate::logs::USER;
+
 /// Extensions to [`UtcOffset`].
 pub trait UtcOffsetExt {
     /// The system's current local UTC offset, falling back to UTC if it cannot be
@@ -27,7 +29,7 @@ pub trait UtcOffsetExt {
 impl UtcOffsetExt for UtcOffset {
     fn local_or_utc() -> UtcOffset {
         Self::current_local_offset().unwrap_or_else(|e| {
-            warn!("could not determine local UTC offset, falling back to UTC: {e}");
+            warn!(target: USER, "could not determine local UTC offset, falling back to UTC: {e}");
             Self::UTC
         })
     }

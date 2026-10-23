@@ -7,6 +7,7 @@ use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
+use atuin_common::logs::USER;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
@@ -177,7 +178,7 @@ impl Cmd {
     }
 
     async fn ensure_hub_session(&self, settings: &Settings, hub_address: &url::Url) -> Result<()> {
-        tracing::info!("Authenticating with Atuin Hub...");
+        tracing::info!(target: USER, "Authenticating with Atuin Hub...");
 
         let mut session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
 
@@ -201,7 +202,7 @@ impl Cmd {
             )
             .await?;
 
-        tracing::info!("Authentication complete, saving session token");
+        tracing::info!(target: USER, "Authentication complete, saving session token");
 
         atuin_client::hub::save_session(&token, settings).await?;
 
@@ -342,7 +343,7 @@ async fn verify_key_against_remote(
                 // Non-key error (e.g. transient network issue). Don't fail the
                 // login — the user is authenticated and can sync later when the
                 // network recovers.
-                tracing::warn!("could not verify encryption key against remote: {e}");
+                tracing::warn!(target: USER, "could not verify encryption key against remote: {e}");
                 return Ok(());
             }
         }

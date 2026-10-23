@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use atuin_client::settings::{KeyBindingConfig, Keys, Settings};
+use atuin_common::logs::USER;
 use tracing::warn;
 
 use super::actions::Action;
@@ -445,7 +446,7 @@ fn apply_config_to_keymap(keymap: &mut Keymap, overrides: &HashMap<String, KeyBi
         let key = match KeyInput::parse(key_str) {
             Ok(k) => k,
             Err(e) => {
-                warn!("invalid key in keymap config: {key_str:?}: {e}");
+                warn!(target: USER, "invalid key in keymap config: {key_str:?}: {e}");
                 continue;
             }
         };
@@ -454,7 +455,7 @@ fn apply_config_to_keymap(keymap: &mut Keymap, overrides: &HashMap<String, KeyBi
                 keymap.bindings.insert(key, binding);
             }
             Err(e) => {
-                warn!("invalid binding for {key_str:?} in keymap config: {e}");
+                warn!(target: USER, "invalid binding for {key_str:?} in keymap config: {e}");
             }
         }
     }

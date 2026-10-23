@@ -13,6 +13,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use atuin_common::futures::Backoff;
+use atuin_common::logs::USER;
 use atuin_common::url::UrlAppendExt;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse, ErrorResponse,
@@ -326,7 +327,7 @@ pub async fn link_account(
 
     handle_resp_error(resp).await?;
 
-    info!("Successfully linked CLI account to Hub");
+    info!(target: USER, "Successfully linked CLI account to Hub");
     Ok(())
 }
 
