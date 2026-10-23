@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::str;
 
 use async_trait::async_trait;
+use atuin_common::logs::USER;
 use atuin_common::path::PathBufExt as _;
 use eyre::{Result, eyre};
 use itertools::Itertools;
@@ -76,8 +77,9 @@ impl Importer for Bash {
                 LineType::Timestamp(t) => {
                     if t < next_timestamp {
                         warn!(
-                            "Time reversal detected in Bash history! Commands may be ordered \
-                             incorrectly."
+                            target: USER,
+                            "time reversal detected in Bash history; commands may be ordered \
+                             incorrectly"
                         );
                     }
                     next_timestamp = t;
