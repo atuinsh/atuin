@@ -1,4 +1,4 @@
-//! Where logs go: the shared log file, and warnings on stderr.
+//! Where logs go: the shared log file, and user messages on stderr.
 
 #![cfg(unix)]
 
@@ -62,7 +62,7 @@ fn unwritable_log_dir_warns_and_continues(env: FreshEnv) {
     let out = env.list_history("debug");
 
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("couldn't open the log file"), "{stderr}");
+    assert!(stderr.contains("warning: couldn't open the log file"), "{stderr}");
 }
 
 /// Commands the shell runs on every prompt or keystroke don't pay for the log file, nor print
@@ -101,6 +101,19 @@ fn legacy_logs_table_notice(env: FreshEnv, #[case] args: &[&str], #[case] shown:
     assert!(out.status.success(), "{stderr}");
     let noticed = stderr.contains("the [logs] section in your config is no longer used");
     assert_eq!(noticed, shown, "{stderr}");
+}
+
+#[rstest]
+fn user_warning_reaches_stderr_without_ansi(env: FreshEnv) {
+    env.write_config("[theme]\nname = \"does-not-exist\"\n");
+    let mut command = env.atuin(&["search", "--limit", "1", "zzz"]);
+    command.env("ATUIN_SESSION", SESSION);
+    // Search loads the theme; it exits non-zero only because nothing matches.
+    let out = Process::spawn(command).wait();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("warning: could not load theme does-not-exist"), "{stderr}");
+    assert!(!stderr.contains('\x1b'), "{stderr}");
 }
 
 #[cfg(feature = "daemon")]

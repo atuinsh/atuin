@@ -191,6 +191,9 @@ ATUIN_LOG=debug atuin search                   # Everything at debug
 ATUIN_LOG=warn,atuin_daemon=trace atuin daemon  # Trace needs a debug build
 ```
 
+Diagnostics never reach the terminal; send a message the user should see with
+`target: atuin_common::logs::USER`.
+
 ### Profiling
 
 The team mostly profiles Atuin through either instrumented profiling or
