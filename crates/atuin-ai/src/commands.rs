@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use atuin_client::logs::FromSettings;
 use atuin_client::settings::Settings;
-use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
+use atuin_common::logs::LogMode;
 use atuin_common::shell::Shell;
 use clap::{Args, Subcommand};
 use secrecy::SecretString;
@@ -15,8 +14,11 @@ pub use session::{Cmd as ThreadsCmd, import_all};
 
 #[derive(Args, Debug)]
 pub struct AiArgs {
-    /// Enable verbose logging
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, hide = true)]
+    #[allow(
+        dead_code,
+        reason = "accepted so existing invocations keep working; logging is set by ATUIN_LOG"
+    )]
     verbose: bool,
 
     /// Custom API endpoint; defaults to reading from the `ai.endpoint` setting.
@@ -71,18 +73,13 @@ impl From<session::Cmd> for Command {
 }
 
 impl Command {
-    pub fn log_config(&self, settings: &Settings) -> Option<LogConfig> {
+    #[must_use]
+    pub const fn log_mode(&self) -> Option<LogMode> {
         match self {
-            Self::Inline { args, .. } => Some(LogConfig {
-                file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
-                stderr: args.verbose.then(StderrConfig::default),
-            }),
-            // File only: the shell widget reads the result from stderr.
-            Self::Resume(_) => Some(LogConfig {
-                file: FileConfig::from_settings(&settings.logs, &settings.logs.ai),
-                stderr: None,
-            }),
-            Self::Init { .. } | Self::Threads(_) => None,
+            // Their TUIs own the terminal, and the shell widget reads resume's result from stderr.
+            Self::Inline { .. } | Self::Resume(_) => Some(LogMode::File),
+            Self::Threads(cmd) => Some(cmd.log_mode()),
+            Self::Init { .. } => Some(LogMode::Stderr),
         }
     }
 }

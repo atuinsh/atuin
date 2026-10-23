@@ -12,7 +12,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::FilterMode::{Directory, Global, Session};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
-use atuin_common::logs::{LogConfig, USER};
+use atuin_common::logs::{LogMode, USER};
 use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
@@ -1260,8 +1260,8 @@ impl Cmd {
         }
     }
 
-    pub fn log_config(&self) -> Option<LogConfig> {
-        self.logs_enabled().then(LogConfig::stderr_only)
+    pub fn log_mode(&self) -> Option<LogMode> {
+        self.logs_enabled().then_some(LogMode::FileAndStderr)
     }
 }
 

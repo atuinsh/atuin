@@ -5,13 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use atuin_common::logs::{LogLevel, USER};
+use atuin_common::logs::USER;
 use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeTo, ShellExpanded};
 // `AsDuration`/`AsDisableableDuration` are deprecated.
 #[allow(deprecated)]
-use atuin_common::time::{
-    AsDisableableDuration, AsDuration, Days, Minutes, NonZeroDuration, Seconds,
-};
+use atuin_common::time::{AsDisableableDuration, AsDuration, Minutes, NonZeroDuration, Seconds};
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::builder::DefaultState;
@@ -598,71 +596,6 @@ pub struct Tmux {
     pub height: String,
 }
 
-/// Configuration for a specific log type (search or daemon).
-#[allow(deprecated)]
-#[serde_as]
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct LogConfig {
-    /// Log file name (relative to dir) or absolute path.
-    #[serde_as(as = "ShellExpanded")]
-    pub file: PathBuf,
-
-    /// Override global enabled setting for this log type.
-    pub enabled: Option<bool>,
-
-    /// Override global level setting for this log type.
-    pub level: Option<LogLevel>,
-
-    /// Override the global retention for this log type (a bare number is days). `0` keeps nothing.
-    #[serde_as(as = "Option<AsDuration<Days>>")]
-    pub retention: Option<Duration>,
-}
-
-impl LogConfig {
-    pub fn new(file: impl Into<PathBuf>) -> Self {
-        Self {
-            file: file.into(),
-            ..Default::default()
-        }
-    }
-}
-
-#[allow(deprecated)]
-#[serde_as]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Logs {
-    /// Enable file logging globally. Defaults to true.
-    #[serde(default = "Logs::default_enabled")]
-    pub enabled: bool,
-
-    /// Directory for log files. Defaults to ~/.atuin/logs
-    #[serde_as(as = "RelativeTo<ConfigDir>")]
-    pub dir: AbsPathBuf,
-
-    /// Default log level for file logging. Defaults to "info".
-    /// Note: ATUIN_LOG environment variable overrides this.
-    #[serde(default)]
-    pub level: LogLevel,
-
-    /// Default retention for log files (a bare number is days). Defaults to 4 days. `0` keeps
-    /// nothing (prunes every rotated log).
-    #[serde(default = "Logs::default_retention")]
-    #[serde_as(as = "AsDuration<Days>")]
-    pub retention: Duration,
-
-    /// Search log settings; only used with `--interactive`
-    #[serde(default)]
-    pub search: LogConfig,
-
-    /// Daemon log settings
-    #[serde(default)]
-    pub daemon: LogConfig,
-
-    /// AI log settings
-    #[serde(default)]
-    pub ai: LogConfig,
-}
-
 /// Endpoint protocol for Atuin AI.
 ///
 /// When set to "auto" (default), the protocol is inferred from `ai.endpoint`:
@@ -770,16 +703,6 @@ impl Default for Theme {
             debug: None::<bool>,
             max_depth: Some(10),
         }
-    }
-}
-
-impl Logs {
-    fn default_enabled() -> bool {
-        true
-    }
-
-    fn default_retention() -> Duration {
-        Duration::from_secs(4 * 86_400)
     }
 }
 
@@ -1159,7 +1082,9 @@ pub struct Settings {
     #[serde(default)]
     pub tmux: Tmux,
 
-    pub logs: Logs,
+    /// The removed `[logs]` table, if a config still sets it; only its presence matters.
+    #[serde(rename = "logs", default, skip_serializing)]
+    pub legacy_logs: Option<serde::de::IgnoredAny>,
 
     pub meta: meta::Settings,
 
@@ -1504,6 +1429,12 @@ impl Settings {
             .unwrap_or(FilterMode::Global)
     }
 
+    /// Whether the config still sets the removed `[logs]` table, which `ATUIN_LOG` replaced.
+    #[must_use]
+    pub const fn has_legacy_logs_table(&self) -> bool {
+        self.legacy_logs.is_some()
+    }
+
     #[cfg(not(feature = "check-update"))]
     #[allow(
         clippy::unused_async,
@@ -1520,7 +1451,7 @@ impl Settings {
     /// The default of each path setting, for `data_dir`, [escaped](ShellExpanded::escape) as
     /// config.toml would write it. An empty value of a path setting falls back to its default
     /// here, so every path setting needs one.
-    fn path_defaults(data_dir: &Path) -> [(&'static str, Option<String>); 14] {
+    fn path_defaults(data_dir: &Path) -> [(&'static str, Option<String>); 10] {
         let path = |path: &Path| path.to_str().map(ShellExpanded::escape);
         [
             ("data_dir", path(data_dir)),
@@ -1529,10 +1460,6 @@ impl Settings {
             ("key_path", path(&data_dir.join("key"))),
             ("daemon.socket_path", None),
             ("daemon.pidfile_path", path(&data_dir.join("atuin-daemon.pid"))),
-            ("logs.dir", path(&atuin_common::dirs::logs_dir())),
-            ("logs.search.file", Some("search.log".to_owned())),
-            ("logs.daemon.file", Some("daemon.log".to_owned())),
-            ("logs.ai.file", Some("ai.log".to_owned())),
             ("kv.db_path", path(&data_dir.join("kv.db"))),
             ("scripts.db_path", path(&data_dir.join("scripts.db"))),
             ("meta.db_path", path(&data_dir.join("meta.db"))),
@@ -1650,8 +1577,6 @@ impl Settings {
             .set_default("output.max_output_size", output.max_output_size.to_string())?
             .set_default("output.sync", output.sync)?
             .set_default("output.max_disk_usage", output.max_disk_usage.to_string())?
-            .set_default("logs.enabled", true)?
-            .set_default("logs.level", "info")?
             .set_default("search.recency_score_multiplier", 1.0)?
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
@@ -1870,17 +1795,13 @@ impl Settings {
     /// The path settings by key, as deserialization resolved them; the merged [`Config`] holds
     /// them as written, with Atuin's own defaults [escaped](ShellExpanded::escape). A new path
     /// setting belongs here too, or `atuin config get --resolved` shows it as written.
-    fn resolved_paths(&self) -> [(&'static str, &OsStr); 13] {
+    fn resolved_paths(&self) -> [(&'static str, &OsStr); 9] {
         [
             ("data_dir", self.data_dir.as_os_str()),
             ("db_path", self.db_path.as_os_str()),
             ("record_store_path", self.record_store_path.as_os_str()),
             ("key_path", self.key_path.as_os_str()),
             ("daemon.pidfile_path", self.daemon.pidfile_path.as_os_str()),
-            ("logs.dir", self.logs.dir.as_os_str()),
-            ("logs.search.file", self.logs.search.file.as_os_str()),
-            ("logs.daemon.file", self.logs.daemon.file.as_os_str()),
-            ("logs.ai.file", self.logs.ai.file.as_os_str()),
             ("kv.db_path", self.kv.db_path.as_os_str()),
             ("scripts.db_path", self.scripts.db_path.as_os_str()),
             ("meta.db_path", self.meta.db_path.as_os_str()),
@@ -2256,7 +2177,6 @@ mod tests {
         s.daemon.socket_path.as_deref().unwrap().to_path_buf()
     })]
     #[case::pidfile_path("daemon.pidfile_path", |s: &Settings| s.daemon.pidfile_path.to_path_buf())]
-    #[case::logs_dir("logs.dir", |s: &Settings| s.logs.dir.to_path_buf())]
     #[case::kv_db_path("kv.db_path", |s: &Settings| s.kv.db_path.file().unwrap().to_path_buf())]
     #[case::scripts_db_path("scripts.db_path", |s: &Settings| {
         s.scripts.db_path.file().unwrap().to_path_buf()
@@ -2347,10 +2267,6 @@ mod tests {
             "record_store_path",
             "key_path",
             "daemon.pidfile_path",
-            "logs.dir",
-            "logs.search.file",
-            "logs.daemon.file",
-            "logs.ai.file",
             "kv.db_path",
             "scripts.db_path",
             "meta.db_path",
@@ -2371,10 +2287,6 @@ mod tests {
     #[case::record_store_path("record_store_path", true)]
     #[case::key_path("key_path", true)]
     #[case::pidfile_path("daemon.pidfile_path", true)]
-    #[case::logs_dir("logs.dir", true)]
-    #[case::search_log_file("logs.search.file", false)]
-    #[case::daemon_log_file("logs.daemon.file", false)]
-    #[case::ai_log_file("logs.ai.file", false)]
     #[case::kv_db_path("kv.db_path", true)]
     #[case::scripts_db_path("scripts.db_path", true)]
     #[case::meta_db_path("meta.db_path", true)]
@@ -2610,17 +2522,15 @@ mod tests {
         assert!(config.get_bool("threads.capture_tools").unwrap());
     }
 
+    /// A config written for the removed `[logs]` table still loads, and is noticed.
     #[rstest]
-    fn zero_log_retention_is_accepted() {
-        // `retention = 0` = keep for zero seconds (prune everything); it must load, not error.
-        Settings::validate_str("[logs]\nretention = 0\n").expect("retention 0 must load");
-
-        let settings = parse_settings("[logs]\nretention = 0\n");
-        assert_eq!(settings.logs.retention, std::time::Duration::ZERO);
-        // an unset per-type override inherits the global; an explicit 0 override is accepted too
-        assert_eq!(settings.logs.search.retention, None);
-        let overridden = parse_settings("[logs.search]\nretention = 0\n");
-        assert_eq!(overridden.logs.search.retention, Some(std::time::Duration::ZERO));
+    #[case::absent("", false)]
+    #[case::table("[logs]\nlevel = \"debug\"\n", true)]
+    #[case::subtable("[logs.daemon]\nfile = \"x.log\"\n", true)]
+    #[case::zero_retention("[logs]\nretention = 0\n", true)]
+    fn legacy_logs_table(#[case] toml: &str, #[case] present: bool) {
+        Settings::validate_str(toml).expect("the config loads");
+        assert_eq!(parse_settings(toml).has_legacy_logs_table(), present);
     }
 
     #[rstest]

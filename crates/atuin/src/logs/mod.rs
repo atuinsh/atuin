@@ -1,16 +1,28 @@
-use std::io::IsTerminal;
+//! Logging for every atuin process: one logfmt file, and warnings on stderr.
+//!
+//! Each command picks a [`LogMode`]. Events go to `~/.atuin/logs/atuin.<date>.log`, one line per
+//! event starting with `process=daemon|cli pid=<n>`, filtered by `ATUIN_LOG` (`EnvFilter`
+//! directives, `warn,atuin=info` when unset). Warnings and errors also print on stderr, unless the
+//! process owns the terminal.
 
-use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
-use tracing::Level;
-use tracing_appender::rolling::{self, RollingFileAppender, Rotation};
-use tracing_subscriber::filter::{self, EnvFilter};
-use tracing_subscriber::fmt;
+use std::io::IsTerminal;
+use std::time::SystemTime;
+
+use atuin_common::logs::{LogMode, USER};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::fmt::{self, MakeWriter};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::TryInitError;
+use tracing_subscriber::{EnvFilter, Registry};
 
-mod held;
+mod file;
+mod filter;
+mod format;
 mod otel;
-pub use held::HeldEvents;
+
+use file::LogFile;
+use filter::FileFilter;
+use format::ProcessTagged;
 use otel::OtelCtx;
 pub use otel::OtelCtxEnableError;
 
@@ -22,6 +34,24 @@ pub enum LogCtxEnableError {
     OtelCtx(#[from] OtelCtxEnableError),
     #[error("{}", fl!("log-subscriber-init-failed", error = .0.to_string()))]
     Subscriber(#[from] TryInitError),
+}
+
+/// Which kind of process wrote a log line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display)]
+enum Process {
+    #[display("daemon")]
+    Daemon,
+    #[display("cli")]
+    Cli,
+}
+
+impl From<LogMode> for Process {
+    fn from(mode: LogMode) -> Self {
+        match mode {
+            LogMode::Daemon { .. } => Self::Daemon,
+            LogMode::Stderr | LogMode::FileAndStderr | LogMode::File => Self::Cli,
+        }
+    }
 }
 
 /// Application-level log context.
@@ -48,138 +78,264 @@ pub struct LogCtx {
 }
 
 impl LogCtx {
-    /// Try to enable the logging for atuin.
+    /// Try to enable the logging for atuin, as `mode` asks.
     ///
-    /// TODO(markovejnovic): Clean up this [`LogConfig`] structure. It feels very out-of-place where
-    /// it is.
+    /// The log file's filter comes from the `ATUIN_LOG` environment variable. A log file that
+    /// can't be opened is not an error: logging goes on without it and says so on stderr.
     #[must_use = "returns an RAII guard which is required for tracing support"]
     pub fn try_enable(
         service_name: &'static str,
-        config: &LogConfig,
+        mode: LogMode,
     ) -> Result<Self, LogCtxEnableError> {
-        // ATUIN_LOG env var overrides config file level settings
-        let filter: EnvFilter = atuin_common::env::var("ATUIN_LOG")
-            .map_or_else(|_| get_base_filter(config), |s| filter::Builder::default().parse_lossy(s))
-            .add_directive("sqlx_sqlite::regexp=off".parse().unwrap());
+        // Only a process that writes the file reads ATUIN_LOG. The others run at shell startup and
+        // on hooks, where a warning about it would print every time.
+        let FileFilter { filter, warnings } = if mode.has_file() {
+            FileFilter::from_env()
+        } else {
+            FileFilter {
+                filter: EnvFilter::default(),
+                warnings: Vec::new(),
+            }
+        };
 
-        if let Some(file_config) = &config.file {
-            clean_up_old_logs(file_config);
-        }
-
-        // A misconfigured log file is non-fatal: drop the file layer and warn once
-        // the subscriber is up, so logging still works via stderr / otel.
-        let file_layer = config.file.as_ref().map(|file| {
-            let writer = make_file_writer(file)?;
-            Ok::<_, FileWriterError>(
-                fmt::layer().with_writer(writer).with_ansi(false).with_filter(filter.clone()),
-            )
-        });
-        let (file_layer, file_error) = match file_layer.transpose() {
-            Ok(layer) => (layer, None),
+        let file =
+            (mode.has_file() && filter.max_level_hint() != Some(LevelFilter::OFF)).then(|| {
+                let dir = atuin_common::dirs::logs_dir();
+                let log_file = LogFile::new(dir.clone());
+                log_file.prune(SystemTime::now());
+                log_file.appender().map_err(|e| (dir, e))
+            });
+        let (file, file_error) = match file.transpose() {
+            Ok(file) => (file, None),
             Err(e) => (None, Some(e)),
         };
 
         let otel = OtelCtx::try_enable(service_name)?;
-        let otel_layer = otel.as_ref().map(|ctx| ctx.layer(service_name));
-
-        // The stderr layer is added last because its type varies with the timer
-        // dispatch below; the file and otel layers must be layered first so `base`
-        // has a single type shared by both branches (otherwise the otel layer's
-        // subscriber type `S` can't unify across the two stderr layer types).
-        let base = tracing_subscriber::registry().with(file_layer).with(otel_layer);
-        let show_time = matches!(
-            config.stderr,
-            Some(StderrConfig {
-                show_time: true,
-                ..
-            })
-        );
-        if show_time {
-            base.with(
-                config.stderr.as_ref().map(|c| stderr_layer::<_, fmt::time::SystemTime>(c, filter)),
-            )
-            .try_init()?;
-        } else {
-            base.with(config.stderr.as_ref().map(|c| stderr_layer::<_, ()>(c, filter)))
-                .try_init()?;
+        let mut layers =
+            Self::layers(mode, &filter, file, std::io::stderr, std::io::stderr().is_terminal());
+        if let Some(otel) = &otel {
+            layers.push(otel.layer(service_name).boxed());
         }
+        tracing_subscriber::registry().with(layers).try_init()?;
 
-        // Non-fatal: the subscriber is live now, so this reaches stderr/otel if configured.
-        if let Some(e) = file_error {
-            tracing::warn!("failed to initialize the log file: {e}");
+        // Only now is there a subscriber to report these to.
+        for warning in warnings {
+            tracing::warn!(target: USER, "{warning}");
+        }
+        if let Some((dir, e)) = file_error {
+            tracing::warn!(
+                target: USER,
+                "{}",
+                fl!("log-file-failed", dir = dir.display().to_string(), error = e.to_string())
+            );
         }
 
         Ok(Self { _otel: otel })
     }
-}
 
-/// [`tracing_subscriber::Layer`] is generic, so we need a monomorphic helper here.
-///
-/// See <https://github.com/tokio-rs/tracing/issues/3180> for more details.
-fn stderr_layer<S, T>(config: &StderrConfig, filter: EnvFilter) -> impl tracing_subscriber::Layer<S>
-where
-    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
-    T: fmt::time::FormatTime + Default + 'static,
-{
-    fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_ansi(std::io::stderr().is_terminal())
-        .with_target(config.show_target)
-        .map_event_format(|f| f.with_timer(T::default()))
-        .with_filter(filter)
-}
+    /// The layers `mode` asks for, each with its own filter: the log file, warnings on `stderr`,
+    /// and the daemon's `--show-logs` copy of every event.
+    fn layers<F, E>(
+        mode: LogMode,
+        filter: &EnvFilter,
+        file: Option<F>,
+        stderr: E,
+        ansi: bool,
+    ) -> Vec<Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync>>
+    where
+        F: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+        E: for<'w> MakeWriter<'w> + Clone + Send + Sync + 'static,
+    {
+        let process = Process::from(mode);
+        let mut layers = Vec::new();
 
-fn get_base_filter(config: &LogConfig) -> EnvFilter {
-    let level = config.file.as_ref().map_or(Level::WARN, |f| f.level.to_tracing());
-    EnvFilter::default().add_directive(level.into())
-}
-
-fn clean_up_old_logs(config: &FileConfig) {
-    let Some(cutoff) = std::time::SystemTime::now().checked_sub(config.retention) else {
-        return;
-    };
-
-    let Ok(entries) = std::fs::read_dir(config.directory()) else {
-        return;
-    };
-
-    let Some(prefix) = config.name().to_str() else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-
-        // Match files like "search.log.2024-02-23" or "daemon.log.2024-02-23"
-        if !name.starts_with(prefix) || name == prefix {
-            continue;
-        }
-
-        if let Ok(metadata) = entry.metadata()
-            && let Ok(modified) = metadata.modified()
-            && modified < cutoff
+        if mode.has_file()
+            && let Some(file) = file
         {
-            let _ = std::fs::remove_file(&path);
+            layers.push(
+                tracing_logfmt::builder()
+                    .layer()
+                    .map_event_format(|inner| ProcessTagged::new(process, inner))
+                    .with_ansi(false)
+                    .with_writer(file)
+                    .with_filter(filter.clone())
+                    .boxed(),
+            );
         }
+
+        if mode.has_stderr() {
+            layers.push(
+                fmt::layer()
+                    .without_time()
+                    .with_target(false)
+                    .with_writer(stderr.clone())
+                    .with_ansi(ansi)
+                    .with_filter(LevelFilter::WARN)
+                    .boxed(),
+            );
+        }
+
+        if mode == (LogMode::Daemon { show_logs: true }) {
+            layers.push(
+                fmt::layer()
+                    .with_writer(stderr)
+                    .with_ansi(ansi)
+                    .with_filter(filter.clone())
+                    .boxed(),
+            );
+        }
+
+        layers
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-enum FileWriterError {
-    #[error("{}", fl!("log-file-name-not-utf8"))]
-    NonUtf8Filename,
-    #[error("{0}")]
-    RollingFileAppender(#[from] rolling::InitError),
-}
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::sync::Arc;
 
-fn make_file_writer(config: &FileConfig) -> Result<RollingFileAppender, FileWriterError> {
-    let prefix = config.name().to_str().ok_or(FileWriterError::NonUtf8Filename)?;
-    let writer = RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix(prefix)
-        .build(config.directory())?;
-    Ok(writer)
+    use atuin_common::logs::LogMode;
+    use parking_lot::Mutex;
+    use rstest::rstest;
+    use tracing::dispatcher::{self, Dispatch};
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::prelude::*;
+
+    use super::LogCtx;
+    use super::filter::FileFilter;
+
+    /// An in-memory writer to assert on what a layer wrote.
+    #[derive(Clone, Default)]
+    pub(in crate::logs) struct Capture(Arc<Mutex<Vec<u8>>>);
+
+    impl Capture {
+        pub(in crate::logs) fn text(&self) -> String {
+            String::from_utf8(self.0.lock().clone()).expect("logs are utf-8")
+        }
+    }
+
+    impl io::Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl MakeWriter<'_> for Capture {
+        type Writer = Self;
+
+        fn make_writer(&self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// The layers of one mode, with the file and stderr captured.
+    struct Logged {
+        file: Capture,
+        stderr: Capture,
+        dispatch: Dispatch,
+    }
+
+    impl Logged {
+        fn new(mode: LogMode) -> Self {
+            let file = Capture::default();
+            let stderr = Capture::default();
+            let filter = FileFilter::parse(None, LevelFilter::TRACE).filter;
+            let layers = LogCtx::layers(mode, &filter, Some(file.clone()), stderr.clone(), false);
+            Self {
+                file,
+                stderr,
+                dispatch: Dispatch::new(Registry::default().with(layers)),
+            }
+        }
+
+        fn emit(&self, events: impl FnOnce()) {
+            dispatcher::with_default(&self.dispatch, events);
+        }
+    }
+
+    #[rstest]
+    #[case::file_and_stderr(LogMode::FileAndStderr, true, true, false)]
+    #[case::file(LogMode::File, true, false, false)]
+    #[case::stderr(LogMode::Stderr, false, true, false)]
+    #[case::daemon(LogMode::Daemon { show_logs: false }, true, false, false)]
+    #[case::daemon_show_logs(LogMode::Daemon { show_logs: true }, true, true, true)]
+    fn routes_by_mode(
+        #[case] mode: LogMode,
+        #[case] in_file: bool,
+        #[case] warning_on_stderr: bool,
+        #[case] info_on_stderr: bool,
+    ) {
+        let logged = Logged::new(mode);
+
+        logged.emit(|| {
+            tracing::warn!(target: "atuin_client::sync", "worrying");
+            tracing::info!(target: "atuin_client::sync", "chatter");
+        });
+
+        let file = logged.file.text();
+        let stderr = logged.stderr.text();
+        assert_eq!(file.contains("worrying") && file.contains("chatter"), in_file, "file: {file}");
+        assert_eq!(
+            stderr.matches("worrying").count(),
+            usize::from(warning_on_stderr),
+            "stderr: {stderr}"
+        );
+        assert_eq!(stderr.contains("chatter"), info_on_stderr, "stderr: {stderr}");
+    }
+
+    #[rstest]
+    #[case::cli(LogMode::FileAndStderr, "cli")]
+    #[case::daemon(LogMode::Daemon { show_logs: false }, "daemon")]
+    fn file_lines_are_tagged_from_any_thread(#[case] mode: LogMode, #[case] process: &str) {
+        let logged = Logged::new(mode);
+
+        logged.emit(|| tracing::warn!(target: "atuin_client::sync", "from the test thread"));
+        let dispatch = logged.dispatch.clone();
+        std::thread::spawn(move || {
+            dispatcher::with_default(&dispatch, || {
+                tracing::warn!(target: "atuin_client::sync", "from another thread");
+            });
+        })
+        .join()
+        .expect("the logging thread finishes");
+
+        let file = logged.file.text();
+        let prefix = format!("process={process} pid={} ", std::process::id());
+        let lines: Vec<&str> = file.lines().collect();
+        assert_eq!(lines.len(), 2, "{file}");
+        assert!(lines.iter().all(|line| line.starts_with(&prefix)), "{file}");
+    }
+
+    #[rstest]
+    fn multi_line_message_is_one_file_line() {
+        let logged = Logged::new(LogMode::File);
+
+        logged.emit(|| tracing::warn!(target: "atuin_client::sync", "first\nsecond"));
+
+        let file = logged.file.text();
+        assert_eq!(file.lines().count(), 1, "{file}");
+    }
+
+    #[rstest]
+    fn default_filter_drops_third_party_info() {
+        let logged = Logged::new(LogMode::File);
+
+        logged.emit(|| {
+            tracing::info!(target: "lsm_tree::tree", "noisy");
+            tracing::warn!(target: "lsm_tree::tree", "worrying");
+            tracing::info!(target: "atuin_daemon::daemon", "ours");
+        });
+
+        let file = logged.file.text();
+        assert!(!file.contains("noisy"), "{file}");
+        assert!(file.contains("worrying"), "{file}");
+        assert!(file.contains("ours"), "{file}");
+    }
 }

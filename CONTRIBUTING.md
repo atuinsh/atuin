@@ -176,19 +176,19 @@ bodies yourself.
 
 ### Log Files
 
-Atuin writes logs to `~/.atuin/logs` unless configured otherwise. Log files are rotated daily and retained for 4 days by default:
-
-- `search.log.*` - Interactive search session logs
-- `daemon.log.*` - Background daemon logs
+The daemon and every `atuin` command append to one file a day,
+`~/.atuin/logs/atuin.<date>.log`, in logfmt. Each line starts with
+`process=daemon` or `process=cli` and the `pid`. See the
+[logging guide](https://docs.atuin.sh/guide/logging/) for reading and filtering
+it.
 
 ### Log Levels
 
-You can set the `ATUIN_LOG` environment variable to override log verbosity from
-the config file:
+`ATUIN_LOG` sets what the file records, as `EnvFilter` directives:
 
 ```shell
-ATUIN_LOG=debug atuin search  # Enable debug logging
-ATUIN_LOG=trace atuin search  # Enable trace logging (very verbose)
+ATUIN_LOG=debug atuin search                   # Everything at debug
+ATUIN_LOG=warn,atuin_daemon=trace atuin daemon  # Trace needs a debug build
 ```
 
 ### Profiling
