@@ -63,7 +63,12 @@ impl AsyncTty {
     /// turns non-blocking too. See [`Self::reopen`] for a descriptor someone else may share.
     pub fn new(fd: OwnedFd) -> io::Result<Self> {
         rustix::io::ioctl_fionbio(&fd, true)?;
-        Ok(Self(AsyncFd::new(File::from(fd))?))
+        let file = File::from(fd);
+        // SAFETY: `file` owns the descriptor, and `AsyncTty` never hands out a mutable reference
+        // to it, so it stays open and unchanged for as long as the `AsyncFd` lives.
+        #[allow(unsafe_code, reason = "registering an owned descriptor with the reactor")]
+        let inner = unsafe { AsyncFd::register(file) }?;
+        Ok(Self(inner))
     }
 
     /// Open the terminal behind `fd` afresh, so that making it non-blocking leaves `fd` alone.
