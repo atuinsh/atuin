@@ -242,7 +242,7 @@ fn resolve_in_path(
 /// fallback as before this resolution existed (see [`EditorCommand`]).
 fn resolve_program(program: &str) -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_default();
-    resolve_in_path(program, std::env::var_os("PATH").as_deref(), &cwd)
+    resolve_in_path(program, atuin_common::env::var_os("PATH").as_deref(), &cwd)
         .unwrap_or_else(|| std::path::PathBuf::from(program))
 }
 
@@ -294,7 +294,7 @@ fn get_visual_editor() -> std::result::Result<EditorCommand, VisualEditorError> 
     // FCEDIT is the fc-specific override; $VISUAL is for full-screen editors,
     // $EDITOR is the fallback for any editor.
     for var in ["FCEDIT", "VISUAL", "EDITOR"] {
-        if let Ok(val) = std::env::var(var)
+        if let Ok(val) = atuin_common::env::var(var)
             && !val.is_empty()
         {
             return parse_editor_var(val);
@@ -319,7 +319,7 @@ fn get_visual_editor() -> std::result::Result<EditorCommand, VisualEditorError> 
     // set $VISUAL/$EDITOR, so this ordering only affects the
     // nothing-configured-at-all case.
     let cwd = std::env::current_dir().unwrap_or_default();
-    let path = std::env::var_os("PATH");
+    let path = atuin_common::env::var_os("PATH");
     for name in ["nano", "nano-tiny", "vim", "vi"] {
         if let Some(program) = resolve_in_path(name, path.as_deref(), &cwd) {
             return Ok(EditorCommand {
