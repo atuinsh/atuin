@@ -15,7 +15,7 @@ use atuin_client::ai_session::{
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
-use atuin_common::logs::USER;
+use atuin_common::logs::{LogMode, USER};
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::{import_sessions_event, tail_sessions_event};
@@ -101,6 +101,22 @@ pub enum Cmd {
 
     /// Turn thread capture on (short for `atuin config enable threads`).
     Enable,
+}
+
+impl Cmd {
+    #[must_use]
+    pub const fn log_mode(&self) -> LogMode {
+        match self {
+            // The picker owns the terminal, and the shell widget reads the result from stderr.
+            Self::Resume(_) => LogMode::File,
+            Self::List { .. }
+            | Self::Show { .. }
+            | Self::Search { .. }
+            | Self::Tail { .. }
+            | Self::Import { .. }
+            | Self::Enable => LogMode::FileAndStderr,
+        }
+    }
 }
 
 // Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);

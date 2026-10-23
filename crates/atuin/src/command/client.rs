@@ -1,17 +1,16 @@
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
-use atuin_client::logs::FromSettings;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme;
-use atuin_common::logs::{self, LogConfig};
+use atuin_common::logs::{self, LogMode};
 use clap::Subcommand;
 use clap_couture::Couture;
 use eyre::{Result, WrapErr};
 
 use crate::i18n::fl;
-use crate::logs::{HeldEvents, LogCtx};
+use crate::logs::LogCtx;
 
 #[cfg(feature = "sync")]
 mod sync;
@@ -258,15 +257,13 @@ impl Cmd {
             None
         };
 
-        // Logging is set up from the settings, so what loading them logs waits for it.
-        let (settings, held) = HeldEvents::hold(Settings::new);
-        let settings = settings.wrap_err("could not load client settings")?;
+        // Logging doesn't read the settings, so it is up before loading them can warn.
         let logging = self
-            .log_config(&settings)
-            .map(|c| LogCtx::try_enable("atuin", &c))
+            .log_mode()
+            .map(|mode| LogCtx::try_enable("atuin", mode))
             .transpose()
             .wrap_err("failed to enable logging")?;
-        held.emit();
+        let settings = Settings::new().wrap_err("could not load client settings")?;
 
         Ok(Some(async move {
             let result = if let Some(func) = run_internal {
@@ -420,32 +417,58 @@ impl Cmd {
         }
     }
 
-    fn log_config(&self, settings: &Settings) -> Option<LogConfig> {
+    fn log_mode(&self) -> Option<LogMode> {
         match self {
-            Self::History(cmd) => cmd.log_config(),
+            Self::History(cmd) => cmd.log_mode(),
+            Self::Internal(cmd) => cmd.log_mode(),
 
-            Self::Search(cmd) if cmd.is_interactive() => {
-                Some(LogConfig::from_settings(&settings.logs, &settings.logs.search))
-            }
+            // The TUI owns the terminal.
+            Self::Search(cmd) if cmd.is_interactive() => Some(LogMode::File),
 
             #[cfg(feature = "daemon")]
-            Self::Daemon(cmd) => Some(LogConfig {
-                file: logs::FileConfig::from_settings(&settings.logs, &settings.logs.daemon),
-                stderr: cmd.show_logs().then(logs::StderrConfig::verbose),
+            Self::Daemon(cmd) if cmd.runs_daemon() => Some(LogMode::Daemon {
+                show_logs: cmd.show_logs(),
             }),
 
             #[cfg(feature = "ai")]
-            Self::Ai(cmd) => cmd.log_config(settings),
+            Self::Ai(cmd) => cmd.log_mode(),
+            #[cfg(feature = "ai")]
+            Self::Threads(cmd) => Some(cmd.log_mode()),
+            #[cfg(feature = "ai")]
+            Self::Resume(_) => Some(LogMode::File),
 
-            Self::Internal(cmd) => cmd.log_config(),
+            // Shell startup and prompt hooks: a log file costs time on every prompt.
+            Self::Init(_) | Self::Hook(_) => Some(LogMode::Stderr),
 
-            _ => Some(LogConfig::stderr_only()),
+            Self::Search(_)
+            | Self::Stats(_)
+            | Self::Setup
+            | Self::Import(_)
+            | Self::Doctor
+            | Self::Kv(_)
+            | Self::Store(_)
+            | Self::Dotfiles(_)
+            | Self::Scripts(_)
+            | Self::Wrapped { .. }
+            | Self::DefaultConfig
+            | Self::Config(_)
+            | Self::Info
+            | Self::InternalDecoy => Some(LogMode::FileAndStderr),
+            #[cfg(feature = "daemon")]
+            Self::Output(_) | Self::Daemon(_) => Some(LogMode::FileAndStderr),
+            #[cfg(feature = "sync")]
+            Self::Sync(_) | Self::Account(_) => Some(LogMode::FileAndStderr),
+            #[cfg(feature = "self-update")]
+            Self::Update(_) => Some(LogMode::FileAndStderr),
+            #[cfg(feature = "ai")]
+            Self::Mcp(_) => Some(LogMode::FileAndStderr),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::logs::LogMode;
     use clap::Parser;
     use rstest::rstest;
 
@@ -480,6 +503,48 @@ mod tests {
         let cli = Cli::try_parse_from(std::iter::once("atuin").chain(args.iter().copied()))
             .expect("the argv parses");
         assert!(!format!("{:?}", cli.cmd).contains(SECRET));
+    }
+
+    #[rstest]
+    #[case::search_interactive(&["search", "-i"], Some(LogMode::File))]
+    #[case::search(&["search", "foo"], Some(LogMode::FileAndStderr))]
+    #[case::history_hook(&["history", "start", "--hook", "--", "ls"], None)]
+    #[case::history_list(&["history", "list"], Some(LogMode::FileAndStderr))]
+    #[case::init(&["init", "zsh"], Some(LogMode::Stderr))]
+    #[case::doctor(&["doctor"], Some(LogMode::FileAndStderr))]
+    #[cfg_attr(
+        feature = "daemon",
+        case::daemon(&["daemon"], Some(LogMode::Daemon { show_logs: false }))
+    )]
+    #[cfg_attr(
+        feature = "daemon",
+        case::daemon_show_logs(
+            &["daemon", "start", "--show-logs"],
+            Some(LogMode::Daemon { show_logs: true })
+        )
+    )]
+    #[cfg_attr(
+        feature = "daemon",
+        case::daemon_status(&["daemon", "status"], Some(LogMode::FileAndStderr))
+    )]
+    #[cfg_attr(
+        feature = "daemon",
+        case::daemon_restart(&["daemon", "restart"], Some(LogMode::FileAndStderr))
+    )]
+    #[cfg_attr(feature = "ai", case::ai_inline(&["ai", "inline"], Some(LogMode::File)))]
+    #[cfg_attr(feature = "ai", case::resume(&["resume"], Some(LogMode::File)))]
+    #[cfg_attr(
+        feature = "ai",
+        case::threads_resume(&["threads", "resume"], Some(LogMode::File))
+    )]
+    #[cfg_attr(
+        feature = "ai",
+        case::threads_list(&["threads", "list"], Some(LogMode::FileAndStderr))
+    )]
+    fn log_mode_per_command(#[case] args: &[&str], #[case] expected: Option<LogMode>) {
+        let cli = Cli::try_parse_from(std::iter::once("atuin").chain(args.iter().copied()))
+            .expect("the argv parses");
+        assert_eq!(cli.cmd.log_mode(), expected);
     }
 
     /// `atuin resume`, `atuin threads resume` and (as it was) `atuin ai resume` take the same.
