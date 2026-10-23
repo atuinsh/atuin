@@ -8,6 +8,7 @@ use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::record::{RecordId, RecordTag};
 use clap::Subcommand;
+use clap_couture::Couture;
 use easy_cast::Conv;
 use eyre::{Result, WrapErr};
 use tracing::instrument;
@@ -19,31 +20,38 @@ use crate::command::client::account;
 use crate::command::client::daemon;
 use crate::i18n::fl;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Couture)]
 #[command(infer_subcommands = true)]
+#[couture(inherit = ["sync", "advanced"])]
 pub enum Cmd {
     #[command(about = fl!("cmd-sync"))]
+    #[couture(category = "sync")]
     Sync {
         #[arg(long, short, help = fl!("arg-sync-force"))]
         force: bool,
     },
 
     #[command(about = fl!("cmd-login"))]
+    #[couture(category = "sync")]
     Login(account::login::Cmd),
 
     #[command(about = fl!("cmd-logout"))]
+    #[couture(category = "sync")]
     Logout,
 
     #[command(about = fl!("cmd-register"))]
+    #[couture(category = "sync")]
     Register(account::register::Cmd),
 
     #[command(about = fl!("cmd-key"))]
+    #[couture(category = "advanced")]
     Key {
         #[arg(long, help = fl!("arg-key-base64"))]
         base64: bool,
     },
 
     #[command(about = fl!("cmd-status"))]
+    #[couture(category = "sync")]
     Status,
 }
 

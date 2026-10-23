@@ -43,6 +43,7 @@ bytesize = { version = "2", features = ["serde"] }
 chrono = "0.4"
 chrono-humanize = "0.2"
 clap = { version = "4", features = ["derive"] }
+clap-couture = { version = "0.1", default-features = false, features = ["derive", "markdown"] }
 clap_complete = "4"
 clap_complete_nushell = "4"
 colored = "3"
