@@ -102,14 +102,9 @@ async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteSt
         })
         .build()
         .connect()
-        .await
-        .map_err(crate::print_error::format_sync_error)?;
+        .await?;
 
-    let (uploaded, downloaded) = session
-        .keyed(&encryption_key)
-        .sync()
-        .await
-        .map_err(crate::print_error::format_sync_error)?;
+    let (uploaded, downloaded) = session.keyed(&encryption_key).sync().await?;
 
     build(settings, &store, db, &downloaded).await?;
 
@@ -133,11 +128,7 @@ async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteSt
 
         // we'll want to run sync once more, as there will now be stuff to upload -- re-key the same
         // session rather than reconnecting.
-        let (uploaded, downloaded) = session
-            .keyed(&encryption_key)
-            .sync()
-            .await
-            .map_err(crate::print_error::format_sync_error)?;
+        let (uploaded, downloaded) = session.keyed(&encryption_key).sync().await?;
 
         build(settings, &store, db, &downloaded).await?;
 
