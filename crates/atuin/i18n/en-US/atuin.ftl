@@ -352,9 +352,9 @@ cmd-store-purge = Delete all records in the store that cannot be decrypted with 
 cmd-store-verify = Verify that all records in the store can be decrypted with the current key
 cmd-store-push = Push all records to the remote sync server (one way sync)
 cmd-store-pull = Pull records from the remote sync server (one way sync)
-arg-store-pull-force = Force push records
+arg-store-pull-force = Force pull records
     .long = 
-        Force push records
+        Force pull records
 
         This will first wipe the local store, and then download all records from the remote
 arg-store-pull-page = Page Size
