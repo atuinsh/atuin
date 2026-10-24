@@ -82,10 +82,7 @@ impl AtuinCmd {
             Self::Client(client) => client.run(),
 
             #[cfg(all(feature = "pty-proxy", unix))]
-            Self::PtyProxy(proxy) => {
-                run_pty_proxy(proxy, prev_umask);
-                Ok(())
-            }
+            Self::PtyProxy(proxy) => run_pty_proxy(proxy, prev_umask),
 
             #[cfg(all(feature = "pty-proxy", not(unix)))]
             Self::PtyProxy(_) => {
@@ -107,17 +104,18 @@ impl AtuinCmd {
 }
 
 #[cfg(all(feature = "pty-proxy", unix))]
-fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
+fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) -> Result<()> {
     // `Mode::bits()` returns u16 on macOS/BSD but u32 on Linux, where this
     // conversion is a no-op.
     #[allow(clippy::useless_conversion)]
     let child_umask = Some(u32::from(prev_umask.bits()));
 
     #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_config, child_umask);
-
+    let command_capture = semantic_command_capture_config;
     #[cfg(not(feature = "daemon"))]
-    proxy.run(|| None, child_umask);
+    let command_capture = || None;
+
+    Ok(proxy.run(command_capture, child_umask)?)
 }
 
 /// Capture command output and forward it to the daemon.

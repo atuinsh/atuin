@@ -20,7 +20,7 @@ mod title;
 #[cfg(unix)]
 pub use capture::{CaptureConfig, CommandCapture, CommandCaptureSink};
 #[cfg(unix)]
-pub use pty_proxy::{PtyProxy, Shell, init_script};
+pub use pty_proxy::{PtyProxy, RunError, Shell, init_script};
 #[cfg(unix)]
 pub use screen::{is_pty_proxy_child, parent_socket_path};
 

@@ -6,6 +6,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use crate::{CaptureConfig, runtime};
 
 #[derive(Args, Debug)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct PtyProxy {
     /// Highlight `OSC 18188735` escape sequences used to mark the start and end of command output.
     #[arg(long)]
@@ -21,6 +22,15 @@ pub struct PtyProxy {
 
     #[command(subcommand)]
     cmd: Option<Cmd>,
+}
+
+/// Why `atuin pty-proxy` failed.
+#[derive(Debug, thiserror::Error)]
+pub enum RunError {
+    #[error("{0}")]
+    Init(String),
+    #[error(transparent)]
+    Runtime(#[from] runtime::Error),
 }
 
 #[derive(Subcommand, Debug)]
@@ -80,32 +90,24 @@ impl PtyProxy {
     /// `child_umask` is the umask to restore in the spawned shell. Atuin sets
     /// a restrictive process-wide umask early in startup, which the shell
     /// would otherwise inherit (#3695).
-    #[expect(
-        clippy::disallowed_macros,
-        reason = "the terminal must show why pty-proxy failed, wherever it logs"
-    )]
+    ///
+    /// Without a subcommand, the process exits with the shell's status once it ends.
     pub fn run(
         self,
         command_capture: impl FnOnce() -> Option<CaptureConfig> + 'static,
         child_umask: Option<u32>,
-    ) {
-        if self.cmd.is_some() && !self.shell.is_empty() {
-            eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");
-            std::process::exit(2);
-        }
+    ) -> Result<(), RunError> {
         match self.cmd {
-            Some(Cmd::Init(init)) => {
-                if let Err(err) = init.run() {
-                    eprintln!("atuin pty-proxy: {err}");
-                    std::process::exit(1);
-                }
+            Some(Cmd::Init(init)) => init.run().map_err(RunError::Init),
+            None => {
+                let code = runtime::main(RuntimeOptions::new(
+                    self.debug_markers,
+                    self.shell,
+                    Box::new(command_capture),
+                    child_umask,
+                ))?;
+                std::process::exit(code)
             }
-            None => runtime::main(RuntimeOptions::new(
-                self.debug_markers,
-                self.shell,
-                Box::new(command_capture),
-                child_umask,
-            )),
         }
     }
 }

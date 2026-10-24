@@ -33,16 +33,13 @@ const PROTOCOL_VERSION: &str = "2";
 /// temporary file cleaners.
 const SOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_mins(1);
 
-#[expect(
-    clippy::disallowed_macros,
-    reason = "the terminal must show why pty-proxy failed, wherever it logs"
-)]
-pub fn main(options: RuntimeOptions) {
+/// Runs the shell under the proxy, returning its exit status.
+pub fn main(options: RuntimeOptions) -> Result<i32, Error> {
     // Everything but the emulator waits on I/O, so it all runs on this one thread: a multi-threaded
     // scheduler would start a worker per core in a process that sits under every interactive shell.
     // Only the I/O and timer drivers are enabled, and the blocking pool starts no thread unless a
     // terminal cannot be reopened.
-    let result = tokio::runtime::Builder::new_current_thread()
+    tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
         .build()
@@ -52,16 +49,10 @@ pub fn main(options: RuntimeOptions) {
             // An ordinary drop waits for blocking tasks, and a blocking read of stdin never returns.
             runtime.shutdown_background();
             result
-        });
-
-    match result {
-        Ok(code) => std::process::exit(code),
-        Err(e) => {
+        })
+        .inspect_err(|_| {
             let _ = terminal::disable_raw_mode();
-            eprintln!("atuin pty-proxy: {e:#}");
-            std::process::exit(1);
-        }
-    }
+        })
 }
 
 /// An error that occurred while setting up the PTY server.
@@ -97,7 +88,7 @@ fn set_child_env(cmd: &mut CommandBuilder, socket_path: Option<&std::path::Path>
 }
 
 #[derive(Debug, thiserror::Error)]
-enum Error {
+pub enum Error {
     #[error("failed to open pty: {0}")]
     OpenPty(Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("failed to spawn child process: {0}")]
