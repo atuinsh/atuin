@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
@@ -90,9 +90,8 @@ fn implicit() -> Item {
     Item::Table(table)
 }
 
-/// The hooks running `atuin hook <harness>` in a `hooks.json`, as atuin installs them (a
-/// command alone): each one's event, as the trust key names it, where it is (its group and its
-/// place in it), and the hash Codex trusts it by.
+/// The Atuin command hooks, including their preserved Codex settings: each one's event,
+/// group and handler position, and the hash Codex trusts it by.
 fn atuin_hooks(hooks: &Value, harness: &str) -> Vec<(&'static str, usize, usize, String)> {
     let mut found = Vec::new();
     for (event, key) in EVENTS {
@@ -104,12 +103,14 @@ fn atuin_hooks(hooks: &Value, harness: &str) -> Vec<(&'static str, usize, usize,
                 continue;
             };
             for (h, handler) in handlers.iter().enumerate() {
-                let Some(command) = handler["command"].as_str() else {
+                if handler["type"].as_str() != Some("command") {
+                    continue;
+                }
+                let Ok(handler) = serde_json::from_value::<CommandHook>(handler.clone()) else {
                     continue;
                 };
-                let installed = *handler == json!({"type": "command", "command": command});
-                if installed && invokes_atuin_hook(command, harness) {
-                    found.push((*key, g, h, hash(key, &group["matcher"], command)));
+                if invokes_atuin_hook(handler.command(), harness) {
+                    found.push((*key, g, h, hash(key, &group["matcher"], &handler)));
                 }
             }
         }
@@ -117,14 +118,59 @@ fn atuin_hooks(hooks: &Value, harness: &str) -> Vec<(&'static str, usize, usize,
     found
 }
 
-/// What Codex trusts a hook by: the SHA-256 of the JSON of its event, matcher and handler (its
-/// defaults filled in), keys sorted.
-fn hash(event: &str, matcher: &Value, command: &str) -> String {
-    let hook = json!({
-        "event_name": event,
-        "hooks": [{"async": false, "command": command, "timeout": 600, "type": "command"}],
-        "matcher": matcher,
-    });
+/// Command settings read by Codex 0.160.1. Unknown fields do not enter its trust identity.
+#[derive(serde::Deserialize)]
+struct CommandHook {
+    command: String,
+    #[serde(default, rename = "commandWindows", alias = "command_windows")]
+    command_windows: Option<String>,
+    #[serde(default)]
+    timeout: Option<u64>,
+    #[serde(default)]
+    r#async: bool,
+    #[serde(default, rename = "statusMessage")]
+    status_message: Option<String>,
+    #[serde(default, rename = "additionalContextLimit")]
+    additional_context_limit: Option<usize>,
+}
+
+impl CommandHook {
+    fn command(&self) -> &str {
+        if cfg!(windows) {
+            self.command_windows.as_deref().unwrap_or(&self.command)
+        } else {
+            &self.command
+        }
+    }
+}
+
+/// Codex 0.160.1 hashes the normalized event, matcher and command handler with sorted keys.
+/// These are tool-use events: timeout defaults to 600 seconds with a one-second floor,
+/// and the default additional-context limit (2,500 tokens) is omitted from the identity.
+fn hash(event: &str, matcher: &Value, handler: &CommandHook) -> String {
+    let mut normalized = Map::from_iter([
+        ("async".to_owned(), json!(handler.r#async)),
+        ("command".to_owned(), json!(handler.command())),
+        ("timeout".to_owned(), json!(handler.timeout.unwrap_or(600).max(1))),
+        ("type".to_owned(), json!("command")),
+    ]);
+    if let Some(status) = &handler.status_message {
+        normalized.insert("statusMessage".to_owned(), json!(status));
+    }
+    if let Some(limit) = handler.additional_context_limit.filter(|limit| *limit != 2_500) {
+        normalized.insert("additionalContextLimit".to_owned(), json!(limit));
+    }
+    // serde_json may have preserve_order enabled elsewhere in the workspace.
+    normalized.sort_keys();
+    let mut identity = Map::from_iter([
+        ("event_name".to_owned(), json!(event)),
+        ("hooks".to_owned(), json!([normalized])),
+    ]);
+    if let Some(matcher) = matcher.as_str() {
+        identity.insert("matcher".to_owned(), json!(matcher));
+    }
+    identity.sort_keys();
+    let hook = Value::Object(identity);
     format!("sha256:{:x}", Sha256::digest(hook.to_string()))
 }
 
@@ -163,11 +209,73 @@ mod tests {
         "sha256:274cc2128367ee69da364e7677ebe7489cc8f29de94635225f2e40735e09e642"
     )]
     fn hashes_are_codexs(#[case] event: &str, #[case] command: &str, #[case] expected: &str) {
-        assert_eq!(hash(event, &json!("^Bash$"), command), expected);
+        assert_eq!(hash(event, &json!("^Bash$"), &command_hook(command)), expected);
+    }
+
+    fn command_hook(command: &str) -> CommandHook {
+        serde_json::from_value(json!({"command": command})).unwrap()
     }
 
     fn installed() -> Value {
         json!({"matcher": "^Bash$", "hooks": [{"type": "command", "command": COMMAND}]})
+    }
+
+    /// Golden identities follow Codex 0.160.1's command normalization, not the raw JSON.
+    #[rstest]
+    #[case::timeout(json!({"timeout":30}), "sha256:29dc1b3a621a1c5aedfd6a8f61961e44b0cb6243e7a957a54b5347578f2ef2f2")]
+    #[case::timeout_floor(json!({"timeout":0}), "sha256:e72943f4b7d067333f3a65c175ac3ae683a759876ee07db21ff03a2e3b78c2a1")]
+    #[case::asynchronous(json!({"async":true}), "sha256:c6a2e5227ffe10af0adabc0e349511707f6afbe168e58a61e29596440ce91489")]
+    #[case::empty_status(json!({"statusMessage":""}), "sha256:68e0dc5f9a5d8e8c596e2e0394b894287e9791d2ccd2aadde3ed36f750cd1d81")]
+    #[case::default_context_limit(json!({"additionalContextLimit":2500}), "sha256:3b981b43c4878ddcca45ed5c03b71b76508a73e7c8492cdb3266c0867adade82")]
+    #[case::custom_context_limit(json!({"additionalContextLimit":4096}), "sha256:ada83ccad31af778dd7e3a69a1d9c4df2e758b57c241c5a299268148901d76f0")]
+    #[case::combined(json!({"timeout":30,"async":true,"statusMessage":"Recording command","additionalContextLimit":0}), "sha256:9c4b6250f2eb317714ddffa742e4005df2c2bebf2e5aac6402678e1b2744986c")]
+    fn custom_hashes_follow_codex_normalization(#[case] extras: Value, #[case] expected: &str) {
+        let mut handler = json!({"type": "command", "command": COMMAND});
+        handler.as_object_mut().unwrap().extend(extras.as_object().unwrap().clone());
+        let handler = serde_json::from_value(handler).unwrap();
+        assert_eq!(hash("pre_tool_use", &json!("^Bash$"), &handler), expected);
+    }
+
+    #[rstest]
+    fn missing_matchers_and_ignored_fields_follow_codexs_identity() {
+        let hooks = json!({"hooks": {"PreToolUse": [{"hooks": [{
+            "type": "command", "command": COMMAND, "timeout": 30, "shell": "bash"
+        }]}]}});
+        let trusted = atuin_hooks(&hooks, "codex");
+        assert_eq!(trusted.len(), 1);
+        assert_eq!(
+            trusted[0].3,
+            "sha256:63eea776b805f3df375ced6364309975e816180dd463d07bb7778d89e3d5e377"
+        );
+    }
+
+    #[rstest]
+    #[case::other_command(json!({"type": "command", "command": "echo other", "timeout": 30}))]
+    #[case::other_harness(json!({"type": "command", "command": "atuin hook claude-code"}))]
+    #[case::other_type(json!({"type": "prompt", "command": COMMAND}))]
+    #[case::invalid_timeout(json!({"type": "command", "command": COMMAND, "timeout": -1}))]
+    fn unrelated_or_invalid_handlers_are_not_trusted(#[case] handler: Value) {
+        let hooks = json!({"hooks": {"PreToolUse": [{"hooks": [handler]}]}});
+        assert!(atuin_hooks(&hooks, "codex").is_empty());
+    }
+
+    #[rstest]
+    #[case::camel_case("commandWindows")]
+    #[case::snake_case("command_windows")]
+    fn windows_overrides_are_checked_before_trusting(#[case] field: &str) {
+        let mut handler = json!({"type": "command", "command": COMMAND, "timeout": 30});
+        handler[field] = json!("echo other");
+        let hooks = json!({"hooks": {"PreToolUse": [{"matcher": "^Bash$", "hooks": [handler]}]}});
+        let trusted = atuin_hooks(&hooks, "codex");
+        if cfg!(windows) {
+            assert!(trusted.is_empty());
+        } else {
+            assert_eq!(trusted.len(), 1);
+            assert_eq!(
+                trusted[0].3,
+                "sha256:29dc1b3a621a1c5aedfd6a8f61961e44b0cb6243e7a957a54b5347578f2ef2f2"
+            );
+        }
     }
 
     /// Atuin's hooks are trusted where they are, beside the user's, which are left untrusted;
@@ -203,14 +311,60 @@ mod tests {
         pretty_assertions::assert_eq!(trusted, [
             (
                 format!("{}:pre_tool_use:1:0", path.display()),
-                hash("pre_tool_use", &json!("^Bash$"), COMMAND)
+                hash("pre_tool_use", &json!("^Bash$"), &command_hook(COMMAND))
             ),
             (
                 format!("{}:post_tool_use:0:0", path.display()),
-                hash("post_tool_use", &json!("^Bash$"), COMMAND)
+                hash("post_tool_use", &json!("^Bash$"), &command_hook(COMMAND))
             ),
         ]);
         assert!(text.starts_with(before.lines().next().unwrap()), "{text}");
+    }
+
+    /// Reinstalling a customized command must renew its trust without enabling disabled hooks.
+    #[rstest]
+    #[tokio::test]
+    async fn customized_hooks_are_retrusted_after_command_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let hooks = json!({"hooks": {"PreToolUse": [{
+            "matcher": "Bash|Shell",
+            "hooks": [{"type": "command", "command": COMMAND, "timeout": 30,
+                "async": true, "statusMessage": "Recording command", "additionalContextLimit": 0}]
+        }]}});
+        let hooks_path = home.path().join("hooks.json");
+        std::fs::write(&hooks_path, hooks.to_string()).unwrap();
+        let key = format!(
+            "{}:pre_tool_use:0:0",
+            std::fs::canonicalize(home.path()).unwrap().join("hooks.json").display()
+        );
+        let mut before = DocumentMut::new();
+        before["hooks"]["state"][&key]["enabled"] = toml_edit::value(false);
+        let old_hash = "sha256:be6eee6c4df7a484ae37b85e9c4be021578df42255fc308fcc3bab527eb86102";
+        before["hooks"]["state"][&key]["trusted_hash"] = toml_edit::value(old_hash);
+        std::fs::write(home.path().join("config.toml"), before.to_string()).unwrap();
+
+        let config = config(home.path()).await.unwrap();
+        let mut changed_hooks = hooks.clone();
+        changed_hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"] =
+            json!("/opt/atuin-upgrade/bin/atuin hook codex");
+        std::fs::write(&hooks_path, changed_hooks.to_string()).unwrap();
+        assert!(trust(home.path(), "codex", config).await.unwrap());
+        let installed: Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        let handler = &installed["hooks"]["PreToolUse"][0]["hooks"][0];
+        let expected = "sha256:f82a42488fc67cc8c1cc04a7fda677bd1fc9e8a23d6fe999eca24594e2c439ed";
+        let text = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+        let after: DocumentMut = text.parse().unwrap();
+        assert_eq!(after["hooks"]["state"][&key]["trusted_hash"].as_str(), Some(expected));
+        assert_eq!(after["hooks"]["state"][&key]["enabled"].as_bool(), Some(false));
+        assert_eq!(handler["timeout"], 30);
+        assert_eq!(handler["async"], true);
+        assert_eq!(handler["statusMessage"], "Recording command");
+        assert_eq!(handler["additionalContextLimit"], 0);
+        assert!(
+            !trust(home.path(), "codex", super::config(home.path()).await.unwrap()).await.unwrap()
+        );
+        assert_eq!(std::fs::read_to_string(home.path().join("config.toml")).unwrap(), text);
     }
 
     /// Codex keys a hook by its home's real path, `hooks.json` itself as it is named there, even
