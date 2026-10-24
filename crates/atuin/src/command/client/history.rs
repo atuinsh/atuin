@@ -651,8 +651,8 @@ async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
         Err(err) => {
             warn!(
                 target: USER,
-                "failed to learn which Hub user is logged in, so deletions won't reach Octavo: \
-                 {err}"
+                "failed to learn which Hub user is logged in, so deletions won't reach Octavo: {:#}",
+                eyre::Report::new(err)
             );
             return;
         }
@@ -663,7 +663,11 @@ async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
     let queued =
         async { UploadQueue::open(path).await?.push_deletions(login.user_id(), stored).await };
     if let Err(err) = queued.await {
-        warn!(target: USER, "failed to queue history deletions for Octavo, so they won't reach it: {err:#}");
+        warn!(
+            target: USER,
+            "failed to queue history deletions for Octavo, so they won't reach it: {:#}",
+            eyre::Report::new(err)
+        );
     }
 }
 
