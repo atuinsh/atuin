@@ -8,6 +8,7 @@ use easy_cast::Conv;
 /// Print a prominent error to stderr. Colored and box-bordered when stderr is
 /// a TTY, plain "Error: ..." header otherwise. The description is word-wrapped
 /// to the terminal width (capped at 100 columns) so the message stays readable.
+#[expect(clippy::disallowed_macros, reason = "draws a formatted banner on stderr")]
 pub fn print_error(title: &str, description: &str) {
     let is_tty = std::io::stderr().is_terminal();
     let width = if is_tty {

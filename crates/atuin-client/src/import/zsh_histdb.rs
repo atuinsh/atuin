@@ -267,16 +267,6 @@ mod test {
         db::query(db_sql).execute(&pool).await.unwrap();
 
         // test histdb iterator
-        let histdb_vec = hist_from_db_conn(pool).await.unwrap();
-        let histdb = ZshHistDb {
-            histdb: histdb_vec,
-            username: CmdUser::probe_current(),
-        };
-
-        println!("h: {:#?}", histdb.histdb);
-        println!("counter: {:?}", histdb.histdb.len());
-        for i in histdb.histdb {
-            println!("{i:?}");
-        }
+        hist_from_db_conn(pool).await.unwrap();
     }
 }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 #[cfg(feature = "octavo")]
 use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
+use atuin_common::logs::USER;
 use atuin_common::string::StrExt;
 #[cfg(feature = "octavo")]
 use atuin_domain::caps::OctavoCap;
@@ -77,6 +78,7 @@ pub struct GetCmd {
     pub verbose: bool,
 }
 
+#[expect(clippy::disallowed_macros, reason = "prints the config value")]
 impl GetCmd {
     pub async fn run(&self, settings: &Settings) -> Result<()> {
         let key = self.key.trim();
@@ -291,7 +293,7 @@ impl EnableCmd {
         let octavo = match self.feature {
             Feature::Octavo => {
                 let Some(onboarding) = onboard_octavo(settings).await? else {
-                    println!("{}", fl!("config-enable-octavo-declined"));
+                    tracing::info!(target: USER, "{}", fl!("config-enable-octavo-declined"));
                     return Ok(());
                 };
                 Some(onboarding)
@@ -305,7 +307,7 @@ impl EnableCmd {
         let updated = self.get_updated_config(&config_str, settings.daemon.enabled)?;
         tokio::fs::write(&config_file, &updated).await?;
 
-        println!("Enabled.");
+        tracing::info!(target: USER, "Enabled.");
 
         // Queued before the restart below so the daemon starts on it, and reported after it so a
         // failure still leaves the daemon on the new config.
@@ -328,24 +330,29 @@ impl EnableCmd {
             let settings = match Settings::new() {
                 Ok(settings) => settings,
                 Err(e) => {
-                    eprintln!(
-                        "Could not read the new config to restart the Atuin daemon: {e}\nRun \
-                         `atuin daemon restart` manually."
+                    tracing::warn!(
+                        target: USER,
+                        "could not read the new config to restart the Atuin daemon: {e}; run \
+                         `atuin daemon restart` manually"
                     );
                     return backfilled;
                 }
             };
             if settings.daemon.enabled && !settings.daemon.autostart {
-                println!("Restart the Atuin daemon and your shell for the change to take effect.");
+                tracing::info!(
+                    target: USER,
+                    "Restart the Atuin daemon and your shell for the change to take effect."
+                );
                 return backfilled;
             } else if let Err(e) = daemon::restart_cmd(&settings, false).await {
-                eprintln!(
-                    "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
+                tracing::warn!(
+                    target: USER,
+                    "could not restart the Atuin daemon: {e}; run `atuin daemon restart` manually"
                 );
             }
         }
 
-        println!("Restart your shell for the change to take effect.");
+        tracing::info!(target: USER, "Restart your shell for the change to take effect.");
 
         backfilled
     }
@@ -401,10 +408,18 @@ impl OctavoOnboarding {
                 "failed to queue your history for upload; run `atuin config enable octavo` again \
                  to retry",
             )?;
-            println!("{}", fl!("config-enable-octavo-backfilled", count = queued));
+            tracing::info!(
+                target: USER,
+                "{}",
+                fl!("config-enable-octavo-backfilled", count = queued)
+            );
         }
         if self.old > 0 {
-            println!("{}", fl!("config-enable-octavo-backfill-old", count = self.old));
+            tracing::info!(
+                target: USER,
+                "{}",
+                fl!("config-enable-octavo-backfill-old", count = self.old)
+            );
         }
 
         Ok(())
@@ -479,20 +494,24 @@ impl DisableCmd {
         let updated = self.get_updated_config(&config_str)?;
         tokio::fs::write(&config_file, &updated).await?;
 
-        println!("Disabled.");
+        tracing::info!(target: USER, "Disabled.");
 
         #[cfg(feature = "daemon")]
         match self.feature {
             Feature::Daemon => {
                 if let Err(e) = daemon::stop_cmd(settings).await {
-                    eprintln!(
-                        "Could not stop the Atuin daemon: {e}\nRun `atuin daemon stop` manually."
+                    tracing::warn!(
+                        target: USER,
+                        "could not stop the Atuin daemon: {e}; run `atuin daemon stop` manually"
                     );
                     return Ok(());
                 }
                 // Only stopped, the launchd agent would start again at the next login.
                 if let Err(e) = atuin_daemon::service::ActiveService::remove_launchd_agent().await {
-                    eprintln!("Could not remove the Atuin daemon's launchd agent: {e}");
+                    tracing::warn!(
+                        target: USER,
+                        "could not remove the Atuin daemon's launchd agent: {e}"
+                    );
                 }
             }
             Feature::OutputCapture => restart_autostarted_daemon(settings).await,
@@ -503,7 +522,7 @@ impl DisableCmd {
             Feature::Threads => return Ok(()),
         }
 
-        println!("Restart your shell for the change to take effect.");
+        tracing::info!(target: USER, "Restart your shell for the change to take effect.");
 
         Ok(())
     }
@@ -541,7 +560,10 @@ async fn restart_autostarted_daemon(settings: &Settings) {
         && settings.daemon.autostart
         && let Err(e) = daemon::restart_cmd(settings, true).await
     {
-        eprintln!("Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually.");
+        tracing::warn!(
+            target: USER,
+            "could not restart the Atuin daemon: {e}; run `atuin daemon restart` manually"
+        );
     }
 }
 
@@ -551,6 +573,7 @@ pub struct PrintCmd {
     pub key: Option<String>,
 }
 
+#[expect(clippy::disallowed_macros, reason = "prints the config")]
 impl PrintCmd {
     pub async fn run(&self, _settings: &Settings) -> Result<()> {
         let config_file = Settings::get_config_path()?;
@@ -582,6 +605,7 @@ impl PrintCmd {
     }
 }
 
+#[expect(clippy::disallowed_macros, reason = "prints the config")]
 fn dump_table(table: &dyn TableLike, prefix: &str, stack: &mut Vec<String>) -> Result<()> {
     for (key, value) in table.iter() {
         if value.is_table() || value.is_inline_table() {

@@ -55,6 +55,7 @@ async fn main() -> Result<()> {
 
             launch(settings, addr).await
         }
+        #[expect(clippy::disallowed_macros, reason = "prints the example config")]
         Cmd::DefaultConfig => {
             println!("{}", example_config());
             Ok(())

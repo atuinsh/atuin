@@ -1,5 +1,6 @@
 use std::error::Error;
 
+#[expect(clippy::disallowed_macros, reason = "cargo reads build script directives from stdout")]
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo::rerun-if-changed=proto");
     println!("cargo::rerun-if-changed=migrations");

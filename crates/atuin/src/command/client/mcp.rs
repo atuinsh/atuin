@@ -3,6 +3,7 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::{AnyHarness, Harness, mcp};
+use atuin_common::logs::USER;
 use clap::{Parser, Subcommand};
 use eyre::Result;
 
@@ -36,8 +37,9 @@ impl Cmd {
 async fn install(agent: &str) -> Result<()> {
     let harness = AnyHarness::from_name(agent)?;
     mcp::install(harness).await?;
-    eprintln!("Restart {} to load it.", harness.name());
-    eprintln!(
+    tracing::info!(target: USER, "Restart {} to load it.", harness.name());
+    tracing::info!(
+        target: USER,
         "To let it search command output and agent threads too, run `atuin config enable \
          output-capture` and `atuin config enable threads`."
     );

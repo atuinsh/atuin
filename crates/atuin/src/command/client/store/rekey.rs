@@ -1,9 +1,11 @@
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::logs::USER;
 use clap::Args;
 use eyre::{Context as _, Result};
 use secrecy::{ExposeSecret, SecretString};
+use tracing::info;
 
 use crate::i18n::fl;
 
@@ -16,11 +18,11 @@ pub struct Rekey {
 impl Rekey {
     pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         let key: paseto_v4::Key = if let Some(key_str) = &self.key {
-            println!("Re-encrypting store with specified key");
+            info!(target: USER, "Re-encrypting store with specified key");
 
             paseto_v4::Key::try_from_mnemonic(key_str.expose_secret())?
         } else {
-            println!("Re-encrypting store with freshly-generated key");
+            info!(target: USER, "Re-encrypting store with freshly-generated key");
             paseto_v4::Key::generate()
         };
 
@@ -30,7 +32,7 @@ impl Rekey {
         store.re_encrypt(&current_key, &key).await?;
         super::invalidate_ai_sessions(settings).await;
 
-        println!("Store rewritten. Saving new key");
+        info!(target: USER, "Store rewritten. Saving new key");
         key.overwrite_path(&settings.key_path)?;
 
         Ok(())

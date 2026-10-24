@@ -62,6 +62,7 @@ end
 ///
 /// Mirrors the lookup in [`shell::Shell::start`]: `ATUIN_E2E_<NAME>` overrides the binary, and a
 /// missing shell is a hard error only when `ATUIN_E2E_REQUIRE_SHELLS` is set.
+#[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why one is skipped")]
 fn find_shell(name: &str) -> Option<PathBuf> {
     if let Some(path) = atuin_common::env::var_os(format!("ATUIN_E2E_{}", name.to_uppercase())) {
         let path = PathBuf::from(path);
@@ -197,6 +198,7 @@ fn posix_shells_run_their_command_or_file_instead_of_a_proxy(
     };
 
     let env = FreshEnv::new();
+    #[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why it is skipped")]
     if let Invocation::Login | Invocation::LoginPath = invocation
         && name == "bash"
         && !login_bash_is(&shell)
@@ -204,6 +206,7 @@ fn posix_shells_run_their_command_or_file_instead_of_a_proxy(
         eprintln!("skipping: a login bash's $BASH is the passwd shell, not {}", shell.display());
         return;
     }
+    #[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why it is skipped")]
     if let Invocation::File = invocation
         && name == "bash"
         && !bash_names_script_in_rc(&shell)

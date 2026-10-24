@@ -27,6 +27,7 @@ impl Cmd {
             Self::PrepareSearchIndex => {
                 Some(async |settings| super::search::prepare_index(&Arc::new(settings)).await)
             }
+            #[expect(clippy::disallowed_macros, reason = "the shell hook reads the answer")]
             Self::PtyProxyActive => {
                 #[cfg(all(unix, feature = "pty-proxy"))]
                 let is_proxy_child = atuin_pty_proxy::is_pty_proxy_child();

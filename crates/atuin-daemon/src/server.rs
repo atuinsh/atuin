@@ -41,7 +41,7 @@ pub fn run_grpc_server(
                 Err(_) => break, // Channel closed
             }
         }
-        eprintln!("Shutting down gRPC server...");
+        tracing::info!("Shutting down gRPC server...");
     };
 
     // Spawn the server in the background

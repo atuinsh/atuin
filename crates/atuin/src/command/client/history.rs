@@ -36,7 +36,7 @@ use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 #[cfg(feature = "daemon")]
 use serde::Serialize;
 use time::OffsetDateTime;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 #[cfg(feature = "daemon")]
 use super::daemon;
@@ -238,7 +238,7 @@ pub fn print_list(
 
         // Check for formatting errors before attempting to write
         if let Err(err) = args.status() {
-            eprintln!("ERROR: history output failed with: {err}");
+            error!(target: USER, "history output failed with: {err}");
             std::process::exit(1);
         }
 
@@ -252,17 +252,19 @@ pub fn print_list(
             }
             Ok(Err(err)) => {
                 if err.kind() != io::ErrorKind::BrokenPipe {
-                    eprintln!("ERROR: Failed to write history output: {err}");
+                    error!(target: USER, "failed to write history output: {err}");
                     std::process::exit(1);
                 }
             }
             Err(_) => {
-                eprintln!("ERROR: Format string caused a formatting error.");
-                eprintln!(
+                error!(target: USER, "format string caused a formatting error");
+                info!(
+                    target: USER,
                     "This may be due to an unsupported format string containing special \
                      characters."
                 );
-                eprintln!(
+                info!(
+                    target: USER,
                     "Please check your format string syntax and ensure literal braces are \
                      properly escaped."
                 );
@@ -283,7 +285,7 @@ fn check_for_write_errors(write: Result<(), io::Error>) {
     if let Err(err) = write {
         // Ignore broken pipe (issue #626)
         if err.kind() != io::ErrorKind::BrokenPipe {
-            eprintln!("ERROR: History output failed with the following error: {err}");
+            error!(target: USER, "history output failed with the following error: {err}");
             std::process::exit(1);
         }
     }
@@ -351,18 +353,25 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
     match ParsedFmt::new(format) {
         Ok(fmt) => fmt,
         Err(err) => {
-            eprintln!("ERROR: History formatting failed with the following error: {err}");
+            error!(target: USER, "history formatting failed with the following error: {err}");
 
             if format.contains('"') && (format.contains(":{") || format.contains(",{")) {
-                eprintln!("It looks like you're trying to create JSON output.");
-                eprintln!("For JSON, you need to escape literal braces by doubling them:");
-                eprintln!("Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'");
+                info!(target: USER, "It looks like you're trying to create JSON output.");
+                info!(
+                    target: USER,
+                    "For JSON, you need to escape literal braces by doubling them:"
+                );
+                info!(
+                    target: USER,
+                    "Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'"
+                );
             } else {
-                eprintln!(
+                info!(
+                    target: USER,
                     "If your formatting string contains literal curly braces, you need to escape \
                      them by doubling:"
                 );
-                eprintln!("Use {{{{ for literal {{ and }}}} for literal }}");
+                info!(target: USER, "Use {{{{ for literal {{ and }}}} for literal }}");
             }
             std::process::exit(1)
         }
@@ -960,8 +969,9 @@ impl Cmd {
 
         while let Some(reply) = stream.message().await? {
             if let Some(TailEventProto::Lagged(lagged)) = &reply.event {
-                eprintln!(
-                    "WARNING: atuin daemon dropped {} history events; tail fell behind",
+                warn!(
+                    target: USER,
+                    "atuin daemon dropped {} history events; tail fell behind",
                     lagged.dropped
                 );
                 continue;
@@ -1041,11 +1051,11 @@ impl Cmd {
 
         match matches.len() {
             0 => {
-                println!("No entries to prune.");
+                info!(target: USER, "No entries to prune.");
                 return Ok(());
             }
-            1 => println!("Found 1 entry to prune."),
-            n => println!("Found {n} entries to prune."),
+            1 => info!(target: USER, "Found 1 entry to prune."),
+            n => info!(target: USER, "Found {n} entries to prune."),
         }
 
         if dry_run {
@@ -1064,7 +1074,7 @@ impl Cmd {
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             for entry in &matches {
-                eprintln!("deleting {}", entry.id);
+                info!(target: USER, "deleting {}", entry.id);
             }
 
             delete_history_entries(settings, &history_store, db, matches).await?;
@@ -1082,9 +1092,10 @@ impl Cmd {
         dry_run: bool,
     ) -> Result<()> {
         if dupkeep == 0 {
-            eprintln!(
+            error!(
+                target: USER,
                 "\"--dupkeep 0\" would keep 0 copies of duplicate commands and thus delete all of \
-                 them! Use \"atuin search --delete ...\" if you really want that."
+                 them; use \"atuin search --delete ...\" if you really want that"
             );
             std::process::exit(1);
         }
@@ -1093,11 +1104,11 @@ impl Cmd {
 
         match matches.len() {
             0 => {
-                println!("No duplicates to delete.");
+                info!(target: USER, "No duplicates to delete.");
                 return Ok(());
             }
-            1 => println!("Found 1 duplicate to delete."),
-            n => println!("Found {n} duplicates to delete."),
+            1 => info!(target: USER, "Found 1 duplicate to delete."),
+            n => info!(target: USER, "Found {n} duplicates to delete."),
         }
 
         if dry_run {
@@ -1116,7 +1127,7 @@ impl Cmd {
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             for entry in &matches {
-                eprintln!("deleting {}", entry.id);
+                info!(target: USER, "deleting {}", entry.id);
             }
 
             delete_history_entries(settings, &history_store, db, matches).await?;
@@ -1128,6 +1139,7 @@ impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match self {
+            #[expect(clippy::disallowed_macros, reason = "the shell hook reads the id from stdout")]
             Self::Start {
                 cmd_env,
                 author,

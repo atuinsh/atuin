@@ -6,9 +6,11 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, Operation, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::logs::USER;
 use atuin_domain::record::RecordTag;
 use clap::Args;
 use eyre::{Context as _, Result};
+use tracing::{error, info};
 
 use crate::i18n::fl;
 
@@ -45,8 +47,8 @@ impl Pull {
             return self.pull(settings, store, db).await;
         }
 
-        println!("Forcing local overwrite!");
-        println!("Clearing local store");
+        info!(target: USER, "Forcing local overwrite!");
+        info!(target: USER, "Clearing local store");
         store.delete_all().await?;
         let pulled = self.pull(settings, store, db).await;
         // Records only this machine had are gone, and the threads index must forget what
@@ -54,7 +56,7 @@ impl Pull {
         let reset = super::reset_ai_sessions_after(settings).await;
         match (pulled, reset) {
             (Err(pull), Err(reset)) => {
-                eprintln!("{reset:?}");
+                error!(target: USER, "{reset:#}");
                 Err(pull)
             }
             (pulled, reset) => pulled.and(reset),
@@ -118,7 +120,7 @@ impl Pull {
 
         let (_, downloaded) = keyed.sync_remote(operations).await?;
 
-        println!("Downloaded {} records", downloaded.len());
+        info!(target: USER, "Downloaded {} records", downloaded.len());
 
         // On --force the daemon rebuilds the AI sessions from scratch after this.
         if self.force {

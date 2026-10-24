@@ -58,6 +58,7 @@ async fn captured(env: &FreshEnv, client: &mut HistoryClient) -> Vec<(String, St
 }
 
 /// `bash`, honouring the same override and skip rules as the other shell tests.
+#[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why one is skipped")]
 fn bash() -> Option<PathBuf> {
     let found = match atuin_common::env::var_os("ATUIN_E2E_BASH") {
         Some(path) => Some(PathBuf::from(path)),

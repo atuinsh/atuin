@@ -95,14 +95,16 @@ impl OtelCtx {
 }
 
 impl Drop for OtelCtx {
+    #[expect(
+        clippy::disallowed_macros,
+        reason = "tracing can't be used safely while the OTEL provider shuts down"
+    )]
     fn drop(&mut self) {
         if let Err(err) = self.provider.force_flush() {
-            // Intentional eprintln! here since we cannot safely use error!
             eprintln!("Unexpected error flushing OTEL spans: {err}");
         }
 
         if let Err(err) = self.provider.shutdown() {
-            // Intentional eprintln! here since we cannot safely use error!
             eprintln!("Unexpected error shutting down the OTEL tracc provider: {err}");
         }
     }

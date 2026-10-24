@@ -56,6 +56,7 @@ pub enum Cmd {
 
 impl Cmd {
     #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::disallowed_macros, reason = "prints the vars")]
     async fn list(
         &self,
         store: VarStore,

@@ -1,3 +1,5 @@
+#![expect(clippy::disallowed_macros, reason = "an interactive wizard the user answers on stdin")]
+
 use std::io::{self, Write};
 
 use atuin_client::settings::Settings;

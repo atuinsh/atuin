@@ -88,14 +88,14 @@ impl AtuinCmd {
 
             #[cfg(all(feature = "pty-proxy", not(unix)))]
             Self::PtyProxy(_) => {
-                eprintln!("atuin pty-proxy currently supports unix platforms");
-                std::process::exit(1);
+                Err(eyre::eyre!("atuin pty-proxy currently supports unix platforms"))
             }
 
             Self::Contributors => {
                 contributors::run();
                 Ok(())
             }
+            #[expect(clippy::disallowed_macros, reason = "the shell init reads the uuid")]
             Self::Uuid => {
                 println!("{}", atuin_common::utils::uuid_v7().as_simple());
                 Ok(())

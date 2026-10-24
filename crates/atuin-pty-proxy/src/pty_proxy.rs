@@ -79,6 +79,10 @@ impl PtyProxy {
     /// `child_umask` is the umask to restore in the spawned shell. Atuin sets
     /// a restrictive process-wide umask early in startup, which the shell
     /// would otherwise inherit (#3695).
+    #[expect(
+        clippy::disallowed_macros,
+        reason = "the terminal must show why pty-proxy failed, wherever it logs"
+    )]
     pub fn run(
         self,
         command_capture: impl FnOnce() -> Option<CaptureConfig> + 'static,
@@ -106,6 +110,7 @@ impl PtyProxy {
 }
 
 impl Init {
+    #[expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
     fn run(self) -> Result<(), String> {
         let shell = detect_shell(self.shell)?;
         let script = init_script(shell);

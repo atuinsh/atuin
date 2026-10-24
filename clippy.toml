@@ -94,3 +94,23 @@ reason = "use atuin_common::path::AbsPathBuf::canonicalize, whose type says the 
 [[disallowed-methods]]
 path = "tokio::fs::canonicalize"
 reason = "use atuin_common::path::AbsPathBuf::canonicalize_async, whose type says the path is absolute"
+
+[[disallowed-macros]]
+path = "std::println"
+reason = """log with `tracing`, and send a message the user should read to \
+    `target: atuin_common::logs::USER`; only a command's own output belongs on stdout, under an \
+    `#[expect]` that says what it is"""
+
+[[disallowed-macros]]
+path = "std::print"
+reason = "see the note on std::println"
+
+[[disallowed-macros]]
+path = "std::eprintln"
+reason = """log with `tracing`, and send a message the user should read to \
+    `target: atuin_common::logs::USER`; write stderr directly only where no logging is set up, \
+    under an `#[expect]` that says why"""
+
+[[disallowed-macros]]
+path = "std::eprint"
+reason = "see the note on std::eprintln"
