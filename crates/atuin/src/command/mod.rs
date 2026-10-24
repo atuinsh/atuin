@@ -1,4 +1,5 @@
 use atuin_common::logs::LogConfig;
+use atuin_common::out::outln;
 use clap::Subcommand;
 use clap_couture::Couture;
 use eyre::Result;
@@ -95,9 +96,8 @@ impl AtuinCmd {
                 contributors::run();
                 Ok(())
             }
-            #[expect(clippy::disallowed_macros, reason = "the shell init reads the uuid")]
             Self::Uuid => {
-                println!("{}", atuin_common::utils::uuid_v7().as_simple());
+                outln!("{}", atuin_common::utils::uuid_v7().as_simple());
                 Ok(())
             }
             Self::GenCompletions(gen_completions) => gen_completions.run(),

@@ -19,6 +19,7 @@ pub mod json;
 pub mod logs;
 #[cfg(feature = "os")]
 pub mod os;
+pub mod out;
 pub mod path;
 pub mod range;
 pub mod rmp;

@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use atuin_client::history::History;
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
+use atuin_common::out::{out, outln};
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use easy_cast::Conv;
 use serde::{Deserialize, Serialize};
@@ -176,7 +177,6 @@ fn strip_leading_env_vars(command: &str) -> &str {
     command[token_start_pos..].trim()
 }
 
-#[expect(clippy::disallowed_macros, reason = "prints the `atuin stats` report")]
 pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
     let max = stats.top.iter().map(|x| x.1).max().unwrap();
     let num_pad = usize::conv(max.ilog10()) + 1;
@@ -199,8 +199,8 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
 
         let in_ten = 10 * count / max;
 
-        print!("[");
-        print!(
+        out!("[");
+        out!(
             "{}",
             SetForegroundColor(match theme.get_error().foreground_color {
                 Some(color) => color,
@@ -210,7 +210,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
 
         for i in 0..in_ten {
             if i == 2 {
-                print!(
+                out!(
                     "{}",
                     SetForegroundColor(match theme.get_warning().foreground_color {
                         Some(color) => color,
@@ -220,7 +220,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             }
 
             if i == 5 {
-                print!(
+                out!(
                     "{}",
                     SetForegroundColor(match theme.get_info().foreground_color {
                         Some(color) => color,
@@ -229,11 +229,11 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
                 );
             }
 
-            print!("▮");
+            out!("▮");
         }
 
         for _ in in_ten..10 {
-            print!(" ");
+            out!(" ");
         }
 
         let formatted_command = command
@@ -243,13 +243,13 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             .collect::<Vec<_>>()
             .join(" | ");
 
-        println!(
+        outln!(
             "{ResetColor}] {gray}{count:num_pad$}{ResetColor} \
              {bold}{formatted_command}{ResetColor}"
         );
     }
-    println!("Total commands:   {}", stats.total_commands);
-    println!("Unique commands:  {}", stats.unique_commands);
+    outln!("Total commands:   {}", stats.total_commands);
+    outln!("Unique commands:  {}", stats.unique_commands);
 }
 
 #[must_use]

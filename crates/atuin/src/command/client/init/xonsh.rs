@@ -1,4 +1,4 @@
-#![expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
+use atuin_common::out::outln;
 
 use super::StaticInitOptions;
 
@@ -10,7 +10,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
     };
 
     // TODO: tmux popup for xonsh
-    println!(
+    outln!(
         "_ATUIN_BIND_CTRL_R={}",
         if bind_ctrl_r {
             "True"
@@ -18,7 +18,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
             "False"
         }
     );
-    println!(
+    outln!(
         "_ATUIN_BIND_UP_ARROW={}",
         if bind_up_arrow {
             "True"
@@ -26,5 +26,5 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
             "False"
         }
     );
-    println!("{}", crate::shell::XONSH);
+    outln!("{}", crate::shell::XONSH);
 }

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use atuin_common::string::StrExt;
 #[cfg(feature = "octavo")]
 use atuin_domain::caps::OctavoCap;
@@ -78,7 +79,6 @@ pub struct GetCmd {
     pub verbose: bool,
 }
 
-#[expect(clippy::disallowed_macros, reason = "prints the config value")]
 impl GetCmd {
     pub async fn run(&self, settings: &Settings) -> Result<()> {
         let key = self.key.trim();
@@ -87,9 +87,9 @@ impl GetCmd {
         }
 
         if self.verbose {
-            println!("Config file:");
+            outln!("Config file:");
             self.print_current_value(key, "  ").await?;
-            println!("\nResolved:");
+            outln!("\nResolved:");
             Self::print_effective_value(settings, key, "  ");
             return Ok(());
         }
@@ -114,16 +114,16 @@ impl GetCmd {
             Some(item) if item.is_table() || item.is_inline_table() => {
                 let table =
                     item.as_table_like().expect("is_table()/is_inline_table() but no table");
-                println!("{prefix}[{key}]");
+                outln!("{prefix}[{key}]");
                 dump_table(table, prefix, &mut vec![key.to_string()])?;
             }
             Some(item) => {
                 let val = item.to_string();
                 let val = val.trim().trim_matches('"');
-                println!("{prefix}{val}");
+                outln!("{prefix}{val}");
             }
             None => {
-                println!("{prefix}(not set in config file)");
+                outln!("{prefix}(not set in config file)");
             }
         }
 
@@ -134,11 +134,11 @@ impl GetCmd {
         match settings.get_config_value(key) {
             Ok(value) => {
                 for line in value.lines() {
-                    println!("{prefix}{line}");
+                    outln!("{prefix}{line}");
                 }
             }
             Err(_) => {
-                println!("{prefix}(unknown key)");
+                outln!("{prefix}(unknown key)");
             }
         }
     }
@@ -573,7 +573,6 @@ pub struct PrintCmd {
     pub key: Option<String>,
 }
 
-#[expect(clippy::disallowed_macros, reason = "prints the config")]
 impl PrintCmd {
     pub async fn run(&self, _settings: &Settings) -> Result<()> {
         let config_file = Settings::get_config_path()?;
@@ -585,17 +584,17 @@ impl PrintCmd {
 
             if let Some(current) = current {
                 if current.is_table() || current.is_inline_table() {
-                    println!("[{key}]");
+                    outln!("[{key}]");
                     dump_table(
                         current.as_table_like().expect("is_table()/is_inline_table() but no table"),
                         "",
                         &mut vec![key.clone()],
                     )?;
                 } else {
-                    println!("{}", current.to_string().trim().trim_matches('"'));
+                    outln!("{}", current.to_string().trim().trim_matches('"'));
                 }
             } else {
-                println!("key not found");
+                outln!("key not found");
             }
         } else {
             dump_table(doc.as_table(), "", &mut Vec::new())?;
@@ -605,7 +604,6 @@ impl PrintCmd {
     }
 }
 
-#[expect(clippy::disallowed_macros, reason = "prints the config")]
 fn dump_table(table: &dyn TableLike, prefix: &str, stack: &mut Vec<String>) -> Result<()> {
     for (key, value) in table.iter() {
         if value.is_table() || value.is_inline_table() {
@@ -613,13 +611,13 @@ fn dump_table(table: &dyn TableLike, prefix: &str, stack: &mut Vec<String>) -> R
 
             let table = value.as_table_like().expect("is_table()/is_inline_table() but no table");
 
-            println!("\n{}[{}]", prefix, stack.join("."));
+            outln!("\n{}[{}]", prefix, stack.join("."));
 
             dump_table(table, prefix, stack)?;
 
             stack.pop();
         } else {
-            println!("{prefix}{key} = {value}");
+            outln!("{prefix}{key} = {value}");
         }
     }
 

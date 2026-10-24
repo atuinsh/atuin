@@ -1,5 +1,6 @@
 use atuin_client::settings::{Settings, UpdateChannel};
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use axoupdater::{AxoUpdater, UpdateRequest};
 use clap::Parser;
 use eyre::{Result, bail, eyre};
@@ -80,15 +81,13 @@ impl Cmd {
         if self.check {
             info!(target: USER, "Checking for updates on the {channel} channel...");
             return match updater.query_new_version().await? {
-                #[expect(clippy::disallowed_macros, reason = "prints the check's answer")]
                 Some(new) if new > &current.parse()? => {
-                    println!("Update available: v{current} -> v{new}");
+                    outln!("Update available: v{current} -> v{new}");
                     info!(target: USER, "Run `atuin update` to install it");
                     Ok(())
                 }
-                #[expect(clippy::disallowed_macros, reason = "prints the check's answer")]
                 _ => {
-                    println!("atuin v{current} is up to date");
+                    outln!("atuin v{current} is up to date");
                     Ok(())
                 }
             };

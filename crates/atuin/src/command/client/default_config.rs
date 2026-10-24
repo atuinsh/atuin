@@ -1,6 +1,6 @@
 use atuin_client::settings::Settings;
+use atuin_common::out::outln;
 
-#[expect(clippy::disallowed_macros, reason = "prints the default config")]
 pub fn run() {
-    println!("{}", Settings::example_config());
+    outln!("{}", Settings::example_config());
 }

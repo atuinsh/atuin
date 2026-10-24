@@ -7,6 +7,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::USER;
+use atuin_common::out::{out, outln};
 use atuin_scripts::execution::{
     build_executable_script, execute_script_interactive, template_script, template_variables,
 };
@@ -363,7 +364,6 @@ impl Cmd {
         Ok(())
     }
 
-    #[expect(clippy::disallowed_macros, reason = "prints the script listing")]
     async fn handle_list(
         _settings: &Settings,
         _list: List,
@@ -374,17 +374,17 @@ impl Cmd {
         if scripts.is_empty() {
             info!(target: USER, "No scripts found");
         } else {
-            println!("Available scripts:");
+            outln!("Available scripts:");
             for script in scripts {
                 if script.tags.is_empty() {
-                    println!("- {} ", script.name);
+                    outln!("- {} ", script.name);
                 } else {
-                    println!("- {} [tags: {}]", script.name, script.tags.join(", "));
+                    outln!("- {} [tags: {}]", script.name, script.tags.join(", "));
                 }
 
                 // Print description if it's not empty
                 if !script.description.is_empty() {
-                    println!("  Description: {}", script.description);
+                    outln!("  Description: {}", script.description);
                 }
             }
         }
@@ -392,7 +392,6 @@ impl Cmd {
         Ok(())
     }
 
-    #[expect(clippy::disallowed_macros, reason = "prints the script")]
     async fn handle_get(
         _settings: &Settings,
         get: Get,
@@ -403,40 +402,40 @@ impl Cmd {
         if let Some(script) = script {
             if get.script {
                 // Just print the executable script with shebang
-                print!("{}", build_executable_script(&script.script, &script.shebang));
+                out!("{}", build_executable_script(&script.script, &script.shebang));
                 return Ok(());
             }
 
             // Create a YAML representation of the script
-            println!("---");
-            println!("name: {}", script.name);
-            println!("id: {}", script.id);
+            outln!("---");
+            outln!("name: {}", script.name);
+            outln!("id: {}", script.id);
 
             if script.description.is_empty() {
-                println!("description: \"\"");
+                outln!("description: \"\"");
             } else {
-                println!("description: |");
+                outln!("description: |");
                 // Indent multiline descriptions properly for YAML
                 for line in script.description.lines() {
-                    println!("  {line}");
+                    outln!("  {line}");
                 }
             }
 
             if script.tags.is_empty() {
-                println!("tags: []");
+                outln!("tags: []");
             } else {
-                println!("tags:");
+                outln!("tags:");
                 for tag in &script.tags {
-                    println!("  - {tag}");
+                    outln!("  - {tag}");
                 }
             }
 
-            println!("shebang: {}", script.shebang);
+            outln!("shebang: {}", script.shebang);
 
-            println!("script: |");
+            outln!("script: |");
             // Indent the script content for proper YAML multiline format
             for line in script.script.lines() {
-                println!("  {line}");
+                outln!("  {line}");
             }
 
             Ok(())

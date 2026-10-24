@@ -4,6 +4,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
 use atuin_domain::record::RecordSeriesKey;
 use clap::Subcommand;
@@ -151,7 +152,6 @@ impl Cmd {
         }
     }
 
-    #[expect(clippy::disallowed_macros, reason = "prints the store status")]
     pub async fn status(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         let host_id = settings.host_id().await?;
         let offset = time::UtcOffset::local_or_utc();
@@ -166,35 +166,35 @@ impl Cmd {
                 format!("host: {}", host.0.as_hyphenated())
             };
 
-            println!("{host_string}");
+            outln!("{host_string}");
 
             for (tag, idx) in st.iter().sorted_by_key(|(tag, _)| *tag) {
-                println!("\tstore: {tag}");
+                outln!("\tstore: {tag}");
 
                 let series = RecordSeriesKey::new(*host, tag.clone());
                 let first = store.first(&series).await?;
                 let last = store.last(&series).await?;
 
-                println!("\t\tidx: {idx}");
+                outln!("\t\tidx: {idx}");
 
                 if let Some(first) = first {
-                    println!("\t\tfirst: {}", first.id.0.as_hyphenated());
+                    outln!("\t\tfirst: {}", first.id.0.as_hyphenated());
 
                     let time =
                         OffsetDateTime::from_unix_nanos_u64(first.timestamp).to_offset(offset);
-                    println!("\t\t\tcreated: {time}");
+                    outln!("\t\t\tcreated: {time}");
                 }
 
                 if let Some(last) = last {
-                    println!("\t\tlast: {}", last.id.0.as_hyphenated());
+                    outln!("\t\tlast: {}", last.id.0.as_hyphenated());
 
                     let time =
                         OffsetDateTime::from_unix_nanos_u64(last.timestamp).to_offset(offset);
-                    println!("\t\t\tcreated: {time}");
+                    outln!("\t\t\tcreated: {time}");
                 }
             }
 
-            println!();
+            outln!();
         }
 
         Ok(())

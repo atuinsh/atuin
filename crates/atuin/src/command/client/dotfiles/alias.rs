@@ -1,6 +1,7 @@
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::out::outln;
 use atuin_dotfiles::store::AliasStore;
 use clap::{Subcommand, ValueEnum};
 use eyre::{Context, Result};
@@ -41,7 +42,6 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    #[expect(clippy::disallowed_macros, reason = "prints the aliases")]
     async fn list(
         &self,
         store: &AliasStore,
@@ -78,7 +78,7 @@ impl Cmd {
         }
 
         for i in aliases {
-            println!("{}={}", i.name, i.value);
+            outln!("{}={}", i.name, i.value);
         }
 
         Ok(())

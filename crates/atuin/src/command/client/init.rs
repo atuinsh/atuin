@@ -1,5 +1,6 @@
 use atuin_client::settings::{Settings, Tmux};
 use atuin_common::logs::USER;
+use atuin_common::out::out;
 use clap::{Parser, ValueEnum};
 use eyre::Result;
 use tracing::{instrument, warn};
@@ -104,7 +105,6 @@ impl Cmd {
     /// won't spawn another, so users who still have the standalone line keep working: whichever
     /// copy runs first wins and the other no-ops.
     #[cfg(all(feature = "pty-proxy", unix))]
-    #[expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
     fn pty_proxy_init(&self, settings: &Settings) {
         if !settings.pty_proxy.enabled {
             return;
@@ -124,7 +124,7 @@ impl Cmd {
             }
         };
 
-        print!("{}", atuin_pty_proxy::init_script(shell));
+        out!("{}", atuin_pty_proxy::init_script(shell));
     }
 
     #[cfg(not(all(feature = "pty-proxy", unix)))]

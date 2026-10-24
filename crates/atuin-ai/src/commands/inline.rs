@@ -4,6 +4,7 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
+use atuin_common::out::outln;
 use atuin_common::path::PathBufExt as _;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
@@ -533,7 +534,7 @@ fn wait_for_login_confirmation() -> Result<bool> {
     }
 }
 
-#[expect(clippy::disallowed_macros, reason = "the shell widget reads the outcome from this output")]
+#[expect(clippy::disallowed_macros, reason = "the shell widget reads the outcome from stderr")]
 fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) {
     if output_for_hook {
         match outcome {
@@ -544,7 +545,7 @@ fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) {
     } else {
         match outcome {
             ExitOutcome::Execute(output) | ExitOutcome::Insert(output) => {
-                println!("{output}");
+                outln!("{output}");
             }
             ExitOutcome::Cancel => {}
         }

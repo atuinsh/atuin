@@ -1,9 +1,9 @@
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 
 use crate::{SHA, VERSION};
 
-#[expect(clippy::disallowed_macros, reason = "prints the info report")]
 pub fn run(settings: &Settings) {
     let config_file = atuin_common::dirs::config_path("config.toml");
     let sever_config = atuin_common::dirs::config_path("server.toml");
@@ -30,7 +30,7 @@ pub fn run(settings: &Settings) {
 
     let print_out = format!("{config_paths}\n\n{env_vars}\n{general_info}");
 
-    println!("{print_out}");
+    outln!("{print_out}");
 
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
         tracing::warn!(target: USER, "{}", shadowed_config_warning(&legacy, &config_file));

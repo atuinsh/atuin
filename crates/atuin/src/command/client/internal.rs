@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use atuin_client::settings::Settings;
 use atuin_common::logs::LogConfig;
+use atuin_common::out::outln;
 
 use crate::i18n::fl;
 
@@ -27,14 +28,13 @@ impl Cmd {
             Self::PrepareSearchIndex => {
                 Some(async |settings| super::search::prepare_index(&Arc::new(settings)).await)
             }
-            #[expect(clippy::disallowed_macros, reason = "the shell hook reads the answer")]
             Self::PtyProxyActive => {
                 #[cfg(all(unix, feature = "pty-proxy"))]
                 let is_proxy_child = atuin_pty_proxy::is_pty_proxy_child();
                 #[cfg(not(all(unix, feature = "pty-proxy")))]
                 let is_proxy_child = false;
 
-                println!("{}", u8::from(is_proxy_child));
+                outln!("{}", u8::from(is_proxy_child));
                 None
             }
         }

@@ -1,15 +1,14 @@
-#![expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
-
 use atuin_client::settings::Tmux;
+use atuin_common::out::outln;
 
 use super::StaticInitOptions;
 
 fn print_tmux_config(tmux: &Tmux) {
     if tmux.enabled {
-        println!("set -gx ATUIN_TMUX_POPUP_WIDTH '{}'", tmux.width);
-        println!("set -gx ATUIN_TMUX_POPUP_HEIGHT '{}'", tmux.height);
+        outln!("set -gx ATUIN_TMUX_POPUP_WIDTH '{}'", tmux.width);
+        outln!("set -gx ATUIN_TMUX_POPUP_HEIGHT '{}'", tmux.height);
     } else {
-        println!("set -gx ATUIN_TMUX_POPUP false");
+        outln!("set -gx ATUIN_TMUX_POPUP false");
     }
 }
 
@@ -22,20 +21,20 @@ fn print_bindings(
     bind_up_arrow_ins: &str,
 ) {
     if options.enable_ctrl_r {
-        println!("{indent}{bind_ctrl_r}");
-        println!("{indent}{bind_ctrl_r_ins}");
+        outln!("{indent}{bind_ctrl_r}");
+        outln!("{indent}{bind_ctrl_r_ins}");
     }
     if options.enable_up_arrow {
-        println!("{indent}{bind_up_arrow}");
-        println!("{indent}{bind_up_arrow_ins}");
+        outln!("{indent}{bind_up_arrow}");
+        outln!("{indent}{bind_up_arrow_ins}");
     }
 }
 
 /// ctrl-] opens `atuin threads resume`, in the default and insert modes.
 fn print_ai_resume_bindings(indent: &str, options: &StaticInitOptions<'_>, key: &str) {
     if cfg!(feature = "ai") && options.enable_ai_resume {
-        println!("{indent}bind {key} _atuin_ai_resume");
-        println!("{indent}bind -M insert {key} _atuin_ai_resume");
+        outln!("{indent}bind {key} _atuin_ai_resume");
+        outln!("{indent}bind -M insert {key} _atuin_ai_resume");
     }
 }
 
@@ -43,10 +42,10 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
     let indent = " ".repeat(4);
 
     print_tmux_config(options.tmux);
-    println!("{}", crate::shell::FISH);
+    outln!("{}", crate::shell::FISH);
 
     if atuin_common::env::var("ATUIN_NOBIND").is_err() {
-        println!("if string match -q '4.*' $version");
+        outln!("if string match -q '4.*' $version");
 
         // In fish 4.0 and above the option bind -k doesn't exist anymore,
         // instead we can use key names and modifiers directly.
@@ -60,7 +59,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
         );
         print_ai_resume_bindings(&indent, options, "ctrl-]");
 
-        println!("else");
+        outln!("else");
 
         // We keep these for compatibility with fish 3.x
         print_bindings(
@@ -83,11 +82,11 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
         );
         print_ai_resume_bindings(&indent, options, r"\c]");
 
-        println!("end");
+        outln!("end");
 
         #[cfg(feature = "ai")]
         if options.enable_ai {
-            println!("{}", atuin_ai::shell::FISH_INIT);
+            outln!("{}", atuin_ai::shell::FISH_INIT);
         }
     }
 }
