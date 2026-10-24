@@ -53,13 +53,167 @@ pub fn split_common_prefix<'a>(
     None
 }
 
+/// Short flags for sudo/doas that take a separate value word (`-u nobody`).
+/// Anything not listed here or in the boolean sets below is unknown to us.
+fn flag_takes_value(tool: &str, short: char) -> bool {
+    match tool {
+        "sudo" => matches!(short, 'C' | 'D' | 'g' | 'p' | 'R' | 'r' | 'T' | 't' | 'U' | 'u'),
+        "doas" => matches!(short, 'C' | 'a' | 'u'),
+        _ => false,
+    }
+}
+
+/// Short flags for sudo/doas that take no value (`-E`, `-s`).
+fn is_boolean_short(tool: &str, short: char) -> bool {
+    match tool {
+        "sudo" => matches!(
+            short,
+            'A' | 'b'
+                | 'B'
+                | 'E'
+                | 'e'
+                | 'H'
+                | 'h'
+                | 'i'
+                | 'K'
+                | 'k'
+                | 'l'
+                | 'n'
+                | 'P'
+                | 'S'
+                | 's'
+                | 'V'
+                | 'v'
+        ),
+        "doas" => matches!(short, 'L' | 'n' | 's'),
+        _ => false,
+    }
+}
+
+/// Long flags that take a value (`--user nobody`, `--user=nobody`).
+fn long_flag_takes_value(tool: &str, name: &str) -> bool {
+    match tool {
+        "sudo" => matches!(
+            name,
+            "close-from"
+                | "chdir"
+                | "group"
+                | "prompt"
+                | "chroot"
+                | "role"
+                | "command-timeout"
+                | "type"
+                | "other-user"
+                | "user"
+        ),
+        // doas has no long options
+        _ => false,
+    }
+}
+
+/// Long flags that take no value (`--background`).
+fn is_boolean_long(tool: &str, name: &str) -> bool {
+    match tool {
+        "sudo" => matches!(
+            name,
+            "askpass"
+                | "background"
+                | "bell"
+                | "edit"
+                | "preserve-env"
+                | "set-home"
+                | "help"
+                | "remove-timestamp"
+                | "reset-timestamp"
+                | "list"
+                | "login"
+                | "non-interactive"
+                | "preserve-groups"
+                | "stdin"
+                | "shell"
+                | "version"
+                | "validate"
+        ),
+        _ => false,
+    }
+}
+
+/// Skip a stripped common prefix's own flags so they are not mistaken for
+/// the command. Only known boolean flags are skipped outright, known
+/// value-taking flags are skipped together with their value. Stops at the
+/// first non-flag word (the command). Returns None when it hits a flag it
+/// does not know, or when nothing but flags follows the prefix, so callers
+/// can fall back to the prefix instead of counting a flag or a flag value
+/// (like a username after `-u`) as a command.
+fn strip_prefix_flags<'a>(tool: &str, mut command: &'a str) -> Option<&'a str> {
+    loop {
+        let word = command.split_ascii_whitespace().next()?;
+        if word == "--" {
+            // end of flags, the command follows verbatim
+            command = command[word.len()..].trim_start();
+            return if command.is_empty() {
+                None
+            } else {
+                Some(command)
+            };
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            if long.is_empty() {
+                return None;
+            }
+            let name = long.split('=').next().unwrap_or(long);
+            if is_boolean_long(tool, name) {
+                command = command[word.len()..].trim_start();
+            } else if long_flag_takes_value(tool, name) {
+                command = command[word.len()..].trim_start();
+                if !long.contains('=') {
+                    // value is the next word, skip it too
+                    let value = command.split_ascii_whitespace().next()?;
+                    command = command[value.len()..].trim_start();
+                }
+            } else {
+                return None;
+            }
+        } else if word.len() > 1 && word.starts_with('-') {
+            let shorts: Vec<char> = word[1..].chars().collect();
+            if shorts.iter().all(|c| is_boolean_short(tool, *c)) {
+                command = command[word.len()..].trim_start();
+            } else if shorts.len() == 1 && flag_takes_value(tool, shorts[0]) {
+                // value is the next word, skip it too
+                command = command[word.len()..].trim_start();
+                let value = command.split_ascii_whitespace().next()?;
+                command = command[value.len()..].trim_start();
+            } else if shorts.len() > 1
+                && flag_takes_value(tool, shorts[0])
+                && !is_boolean_short(tool, shorts[0])
+            {
+                // attached value (`-unobody`), the whole word is flag + value
+                command = command[word.len()..].trim_start();
+            } else {
+                return None;
+            }
+        } else {
+            return Some(command);
+        }
+        if command.is_empty() {
+            return None;
+        }
+    }
+}
+
 fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
     if let Some((prefix, remainder)) = split_common_prefix(settings, command) {
         if remainder.is_empty() {
             // no commands following, just use the prefix
             return prefix;
         }
-        command = remainder;
+        // the tool is the first word of the prefix (`sudo` in `sudo test`)
+        let tool = prefix.split_ascii_whitespace().next().unwrap_or(prefix);
+        match strip_prefix_flags(tool, remainder) {
+            Some(rest) => command = rest,
+            // only flags, or flags we do not understand, followed the prefix
+            None => return prefix,
+        }
     }
 
     // Sort the common_subcommands by length so that we match the longest subcommand first
@@ -73,10 +227,37 @@ fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str
             if p.len() == command.len() {
                 return command;
             }
+            // Skip global flags with attached values between the base command
+            // and the subcommand, so `kubectl --kubecontext=ctx get` keeps the
+            // `get` subcommand instead of stopping at the flag. Only the
+            // `--flag=value` form is skipped: a bare `--flag` may take the
+            // next word as its value, and we cannot know without per-tool
+            // flag tables, so those are left alone.
+            let mut rest = &command[p.len()..];
+            loop {
+                let trimmed = rest.trim_start();
+                if trimmed.is_empty() {
+                    // only flags followed the base command
+                    return command[..p.len()].trim_end();
+                }
+                let end = first_whitespace(trimmed);
+                let word = &trimmed[..end];
+                if word == "--" {
+                    // end of flags, the subcommand follows verbatim
+                    rest = &trimmed[end..];
+                    break;
+                }
+                if word.len() > 1 && word.starts_with('-') && word.contains('=') {
+                    rest = &trimmed[end..];
+                } else {
+                    break;
+                }
+            }
             // otherwise we need to use the subcommand + the next word
-            let non_whitespace = first_non_whitespace(&command[p.len()..]).unwrap_or(0);
-            let j =
-                p.len() + non_whitespace + first_whitespace(&command[p.len() + non_whitespace..]);
+            let non_whitespace = first_non_whitespace(rest).unwrap_or(0);
+            let j = command.len() - rest.len()
+                + non_whitespace
+                + first_whitespace(&rest[non_whitespace..]);
             return &command[..j];
         }
     }
@@ -387,6 +568,25 @@ mod tests {
     #[case::with_subcommand("cargo build foo bar", "cargo build")]
     #[case::with_prefix("sudo   cargo build foo bar", "cargo build")]
     #[case::prefix_only("sudo", "sudo")]
+    #[case::prefix_flag("sudo -E make install", "make")]
+    #[case::prefix_long_flag("sudo --background updatedb", "updatedb")]
+    #[case::prefix_flag_with_arg("sudo -u nobody iperf3 -s", "iperf3")]
+    #[case::prefix_long_flag_with_arg("sudo --user=nobody iperf3 -s", "iperf3")]
+    #[case::prefix_long_flag_split_arg("sudo --user nobody iperf3 -s", "iperf3")]
+    #[case::prefix_flag_value_and_bool("sudo -u nobody -E iperf3 -s", "iperf3")]
+    #[case::prefix_combined_bools("sudo -En make install", "make")]
+    #[case::prefix_end_of_flags("sudo -- iperf3 -s", "iperf3")]
+    #[case::prefix_unknown_flag("sudo --unknown-thing foo", "sudo")]
+    #[case::prefix_flags_only("sudo -E", "sudo")]
+    #[case::prefix_flag_value_only("sudo -u nobody", "sudo")]
+    #[case::doas_flag_with_arg("doas -u nobody iperf3", "iperf3")]
+    #[case::subcommand_global_flag("kubectl --kubecontext=prod get pods", "kubectl --kubecontext=prod get")]
+    #[case::subcommand_short_flag("kubectl -n=kube-system get pods", "kubectl -n=kube-system get")]
+    #[case::subcommand_two_flags("kubectl --as=admin --kubecontext=prod get pods", "kubectl --as=admin --kubecontext=prod get")]
+    #[case::subcommand_only_flags("kubectl --kubecontext=prod", "kubectl")]
+    #[case::subcommand_plain("kubectl get pods", "kubectl get")]
+    #[case::subcommand_bare_flag_kept("kubectl --kubecontext prod get", "kubectl --kubecontext")]
+    #[case::prefix_subcommand_flag("sudo kubectl --kubecontext=prod get pods", "kubectl --kubecontext=prod get")]
     fn interesting_commands(#[case] input: &str, #[case] expected: &str) {
         let settings = Settings::utc();
         assert_eq!(interesting_command(&settings, input), expected);
