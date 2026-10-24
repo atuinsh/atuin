@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::disallowed_macros, reason = "tests may print"))]
+
 pub mod commands;
 pub(crate) mod context;
 pub(crate) mod context_window;

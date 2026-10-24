@@ -341,7 +341,6 @@ mod tests {
     #[cfg(unix)]
     /// Run `script` in `shell` without its startup files, returning its stdout; `None` when the
     /// shell is not installed here.
-    #[expect(clippy::disallowed_macros, reason = "says why the test is skipped")]
     fn run_in(shell: &str, script: &str) -> Option<String> {
         let no_rc: &[&str] = match shell {
             "bash" => &["--norc", "--noprofile"],
