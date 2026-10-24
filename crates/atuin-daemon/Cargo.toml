@@ -78,6 +78,7 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
+build-rs = { workspace = true }
 protox = { workspace = true }
 tonic-prost-build = { workspace = true }
 

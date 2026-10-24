@@ -89,5 +89,8 @@ eye_declare_engine = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 
+[build-dependencies]
+build-rs = { workspace = true }
+
 [lints]
 workspace = true

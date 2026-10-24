@@ -101,5 +101,8 @@ tokio = { workspace = true }
 toml = { workspace = true }
 wiremock = { workspace = true }
 
+[build-dependencies]
+build-rs = { workspace = true }
+
 [lints]
 workspace = true

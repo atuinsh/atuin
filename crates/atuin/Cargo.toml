@@ -187,5 +187,8 @@ toml_edit = { workspace = true, features = ["serde"] }
 nix-pty = { package = "nix", version = "0.28", features = ["term"] }
 portable-pty = "0.9"
 
+[build-dependencies]
+build-rs = { workspace = true }
+
 [lints]
 workspace = true

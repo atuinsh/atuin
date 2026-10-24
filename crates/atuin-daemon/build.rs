@@ -1,10 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
 use std::process::Command;
-use std::{env, fs};
 
 use protox::prost::Message;
 
-#[expect(clippy::disallowed_macros, reason = "cargo reads build script directives from stdout")]
 fn main() -> std::io::Result<()> {
     let git = |args: &[&str]| {
         let output = Command::new("git").args(args).output().ok()?;
@@ -15,9 +14,9 @@ fn main() -> std::io::Result<()> {
     let version = env!("CARGO_PKG_VERSION");
     let build = git(&["rev-parse", "HEAD"])
         .map_or_else(|| version.to_owned(), |sha| format!("{version}+{sha}"));
-    println!("cargo::rustc-env=ATUIN_BUILD_SHA={build}");
+    build_rs::output::rustc_env("ATUIN_BUILD_SHA", &build);
 
-    println!("cargo::rerun-if-changed=proto");
+    build_rs::output::rerun_if_changed("proto");
     let branch = git(&["symbolic-ref", "-q", "HEAD"]);
     for name in
         ["HEAD", "logs/HEAD", "packed-refs", "reftable"].into_iter().chain(branch.as_deref())
@@ -25,7 +24,7 @@ fn main() -> std::io::Result<()> {
         if let Some(path) =
             git(&["rev-parse", "--git-path", name]).filter(|p| Path::new(p).exists())
         {
-            println!("cargo::rerun-if-changed={path}");
+            build_rs::output::rerun_if_changed(path);
         }
     }
 
@@ -40,12 +39,7 @@ fn main() -> std::io::Result<()> {
 
     let file_descriptors = protox::compile(proto_paths, proto_include_dirs).unwrap();
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "build scripts can't use atuin_common, and Cargo sets OUT_DIR for them"
-    )]
-    let out_dir = env::var_os("OUT_DIR").expect("OUT_DIR not set");
-    let file_descriptor_path = PathBuf::from(out_dir).join("file_descriptor_set.bin");
+    let file_descriptor_path = build_rs::input::out_dir().join("file_descriptor_set.bin");
     fs::write(&file_descriptor_path, file_descriptors.encode_to_vec()).unwrap();
 
     tonic_prost_build::configure()

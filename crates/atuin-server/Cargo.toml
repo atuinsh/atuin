@@ -69,5 +69,8 @@ tempfile = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 tracing-tree = { workspace = true }
 
+[build-dependencies]
+build-rs = { workspace = true }
+
 [lints]
 workspace = true

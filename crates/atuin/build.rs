@@ -1,6 +1,5 @@
 use std::process::Command;
 
-#[expect(clippy::disallowed_macros, reason = "cargo reads build script directives from stdout")]
 fn main() {
     let output = Command::new("git").args(["rev-parse", "HEAD"]).output();
 
@@ -9,5 +8,5 @@ fn main() {
         _ => String::from("NO_GIT"),
     };
 
-    println!("cargo:rustc-env=GIT_HASH={sha}");
+    build_rs::output::rustc_env("GIT_HASH", sha.trim());
 }
