@@ -2,11 +2,11 @@
 
 use std::str::FromStr;
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_with::DeserializeFromStr;
-use time::UtcOffset;
 use time::format_description::FormatItem;
 use time::macros::format_description;
+use time::{OffsetDateTime, UtcOffset};
 use tracing::warn;
 
 /// Extensions to [`UtcOffset`].
@@ -14,14 +14,6 @@ pub trait UtcOffsetExt {
     /// The system's current local UTC offset, falling back to UTC if it cannot be
     /// determined.
     fn local_or_utc() -> UtcOffset;
-
-    /// Resolve a user-supplied timezone spec.
-    ///
-    /// Accepts `local`/`l`, queried from the system; `utc`/`0`; or an offset from UTC
-    /// such as `+09:30` or `-2:30`.
-    ///
-    /// Named zones are deliberately not accepted -- see the note in the implementation.
-    fn resolve_spec(spec: impl AsRef<str>) -> Result<UtcOffset, TimezoneDecodingError>;
 }
 
 impl UtcOffsetExt for UtcOffset {
@@ -31,57 +23,82 @@ impl UtcOffsetExt for UtcOffset {
             Self::UTC
         })
     }
+}
 
-    fn resolve_spec(spec: impl AsRef<str>) -> Result<UtcOffset, TimezoneDecodingError> {
-        let spec = spec.as_ref().to_lowercase();
+/// A user-supplied timezone spec.
+///
+/// Unlike a plain [`UtcOffset`], `Local` is not resolved until [`UtcOffsetSpec::offset_at`] is
+/// called for a specific instant. Resolving it once up front -- as this type used to, by
+/// immediately collapsing into a bare [`UtcOffset`] -- freezes whichever DST period happened to
+/// be active at that moment, which is simply wrong for any instant in the other period. `Fixed`
+/// carries its offset unconditionally: asking for a fixed offset means "ignore DST".
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DeserializeFromStr, derive_more::Display)]
+pub enum UtcOffsetSpec {
+    /// Follow the system's local offset, resolved fresh for whatever instant it is asked about.
+    #[display("local")]
+    Local,
+    /// A fixed offset from UTC, applied uniformly regardless of DST.
+    #[display("{_0}")]
+    Fixed(UtcOffset),
+}
+
+impl UtcOffsetSpec {
+    /// The offset that applies at a given instant.
+    ///
+    /// `Local` re-queries the system for `at`'s own offset (DST-correct for `at`, not just for
+    /// "now"), falling back to UTC if it cannot be determined. `Fixed` returns its pinned offset
+    /// unconditionally, ignoring `at`.
+    #[must_use]
+    pub fn offset_at(self, at: OffsetDateTime) -> UtcOffset {
+        match self {
+            Self::Local => UtcOffset::local_offset_at(at).unwrap_or_else(|e| {
+                warn!("could not determine local UTC offset, falling back to UTC: {e}");
+                UtcOffset::UTC
+            }),
+            Self::Fixed(offset) => offset,
+        }
+    }
+}
+
+impl FromStr for UtcOffsetSpec {
+    type Err = TimezoneDecodingError;
+
+    /// Accepts `local`/`l`, resolved per-instant against the system; `utc`/`0`; or a fixed
+    /// offset from UTC such as `+09:30` or `-2:30`.
+    ///
+    /// Named zones are deliberately not accepted -- see the note below.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let spec = s.to_lowercase();
 
         if matches!(spec.as_str(), "l" | "local") {
-            return Ok(Self::current_local_offset()?);
+            return Ok(Self::Local);
         }
 
         if matches!(spec.as_str(), "0" | "utc") {
-            return Ok(Self::UTC);
+            return Ok(Self::Fixed(UtcOffset::UTC));
         }
 
         // IDEA: Currently named timezones are not supported, because the well-known crate for this
         // is `chrono_tz`, which is not really interoperable with the datetime crate that we
         // currently use - `time`. If ever we migrate to using `chrono`, this would be a good
         // feature to add.
-        Ok(Self::parse(&spec, OFFSET_FMT)?)
-    }
-}
-
-/// A user-supplied timezone spec, resolved to a [`UtcOffset`].
-///
-/// [`UtcOffset`] is foreign, so it cannot implement `FromStr`/`Deserialize` here. This
-/// newtype carries those impls for the config file and CLI flags; convert with
-/// [`From`]/[`Into`] or read the wrapped offset directly.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    DeserializeFromStr,
-    Serialize,
-    derive_more::Display,
-    derive_more::From,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-pub struct UtcOffsetSpec(pub UtcOffset);
-
-impl FromStr for UtcOffsetSpec {
-    type Err = TimezoneDecodingError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(UtcOffset::resolve_spec(s)?.into())
+        Ok(Self::Fixed(UtcOffset::parse(&spec, OFFSET_FMT)?))
     }
 }
 
 impl Default for UtcOffsetSpec {
     fn default() -> Self {
-        Self(UtcOffset::UTC)
+        Self::Fixed(UtcOffset::UTC)
+    }
+}
+
+// Serialized as the same plain string the config file and CLI flags accept -- `"local"` or an
+// offset like `"+09:30"` -- via the `Display` impl above, rather than the tagged representation
+// `#[derive(Serialize)]` would give an enum. Paired with `DeserializeFromStr` above, this keeps
+// the round trip through TOML/JSON symmetric with `FromStr`.
+impl Serialize for UtcOffsetSpec {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 
@@ -102,24 +119,26 @@ pub enum TimezoneDecodingError {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use time::macros::datetime;
 
     use super::*;
 
     #[rstest]
     #[case::no_sign("09:30")]
     #[case::garbage("not-a-timezone")]
-    fn resolve_spec_rejects_invalid(#[case] spec: &str) {
-        assert!(UtcOffset::resolve_spec(spec).is_err());
+    fn from_str_rejects_invalid(#[case] spec: &str) {
         assert!(UtcOffsetSpec::from_str(spec).is_err());
     }
 
     #[rstest]
-    fn spec_wraps_the_resolved_offset() {
-        let spec = UtcOffsetSpec::from_str("+09:30").unwrap();
-        assert_eq!(spec.0.as_hms(), (9, 30, 0));
-        // derive_more gives the conversion both ways
-        let offset: UtcOffset = spec.into();
-        assert_eq!(UtcOffsetSpec::from(offset), spec);
+    #[case::lowercase("local")]
+    #[case::short("l")]
+    #[case::uppercase("LOCAL")]
+    fn from_str_local_stays_symbolic(#[case] spec: &str) {
+        // `Local` must not be eagerly resolved to a concrete offset here -- that eager
+        // resolution, at settings-load time, was the root cause of the DST bug this type
+        // exists to prevent (see `offset_at`'s tests below).
+        assert_eq!(UtcOffsetSpec::from_str(spec).unwrap(), UtcOffsetSpec::Local);
     }
 
     #[rstest]
@@ -130,25 +149,40 @@ mod tests {
     #[case::with_seconds("+01:23:45", 1, 23, 45)]
     // specs are case-insensitive
     #[case::uppercase("UTC", 0, 0, 0)]
-    fn resolve_spec_returns_the_offset(
+    fn from_str_returns_a_fixed_offset(
         #[case] spec: &str,
         #[case] h: i8,
         #[case] m: i8,
         #[case] s: i8,
     ) {
-        assert_eq!(UtcOffset::resolve_spec(spec).unwrap().as_hms(), (h, m, s));
+        let UtcOffsetSpec::Fixed(offset) = UtcOffsetSpec::from_str(spec).unwrap() else {
+            panic!("{spec:?} should resolve to a fixed offset");
+        };
+        assert_eq!(offset.as_hms(), (h, m, s));
     }
 
     #[rstest]
-    fn resolve_spec_accepts_anything_stringlike() {
-        // the point of `impl AsRef<str>`: borrowed or owned, no dance at the call site
-        assert!(UtcOffset::resolve_spec("utc").is_ok());
-        assert!(UtcOffset::resolve_spec(String::from("utc")).is_ok());
+    fn display_round_trips_through_from_str() {
+        for spec in ["local", "utc", "+09:30", "-02:30:00"] {
+            let parsed = UtcOffsetSpec::from_str(spec).unwrap();
+            assert_eq!(UtcOffsetSpec::from_str(&parsed.to_string()).unwrap(), parsed);
+        }
     }
 
     #[rstest]
-    fn resolve_spec_local_queries_the_system() {
-        // cannot assert the value -- it depends on the machine -- but it must resolve
-        assert!(UtcOffset::resolve_spec("local").is_ok());
+    fn fixed_offset_at_ignores_the_instant() {
+        let spec = UtcOffsetSpec::Fixed(UtcOffset::from_hms(-5, 0, 0).unwrap());
+        assert_eq!(spec.offset_at(datetime!(2026-01-15 00:00 UTC)).as_hms(), (-5, 0, 0));
+        assert_eq!(spec.offset_at(datetime!(2026-08-15 00:00 UTC)).as_hms(), (-5, 0, 0));
+    }
+
+    #[rstest]
+    fn local_offset_at_queries_the_system_for_the_given_instant() {
+        // Cannot assert a specific value -- it depends on the machine running the test -- but
+        // it must resolve, and must not panic, for an arbitrary instant in either direction from
+        // "now", which is the whole point of taking `at` instead of always querying "now".
+        let _ = UtcOffsetSpec::Local.offset_at(datetime!(2026-01-15 00:00 UTC));
+        let _ = UtcOffsetSpec::Local.offset_at(datetime!(2026-08-15 00:00 UTC));
+        let _ = UtcOffsetSpec::Local.offset_at(OffsetDateTime::now_utc());
     }
 }
