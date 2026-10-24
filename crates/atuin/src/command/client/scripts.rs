@@ -8,6 +8,7 @@ use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::USER;
 use atuin_common::out::{out, outln};
+use atuin_common::prompt::{DefaultAnswer, Prompt};
 use atuin_scripts::execution::{
     build_executable_script, execute_script_interactive, template_script, template_variables,
 };
@@ -288,10 +289,6 @@ impl Cmd {
         Ok(())
     }
 
-    #[expect(
-        clippy::disallowed_macros,
-        reason = "prompts the user for the script's template variables"
-    )]
     async fn handle_run(
         _settings: &Settings,
         run: Run,
@@ -325,24 +322,18 @@ impl Cmd {
 
             // If there are variables in the template that weren't specified on the command line, prompt for them
             if !remaining_vars.is_empty() {
-                println!("This script contains template variables that need values:");
-
-                let stdin = std::io::stdin();
-                let mut input = String::new();
+                info!(target: USER, "This script contains template variables that need values:");
 
                 for var in remaining_vars {
-                    input.clear();
-
-                    println!("Enter value for '{var}': ");
-
-                    if stdin.read_line(&mut input).is_err() {
-                        warn!(target: USER, "failed to read input for variable '{var}'");
-                        // Provide an empty string as fallback
-                        variable_values.insert(var, serde_json::Value::String(String::new()));
-                        continue;
-                    }
-
-                    let value = input.trim().to_string();
+                    let question = format!("Enter value for '{var}': ");
+                    let value = Prompt::new(&question).ask::<String>().map_or_else(
+                        |_| {
+                            warn!(target: USER, "failed to read input for variable '{var}'");
+                            // Provide an empty string as fallback
+                            String::new()
+                        },
+                        |value| value.unwrap_or_default().trim().to_string(),
+                    );
                     variable_values.insert(var, serde_json::Value::String(value));
                 }
             }
@@ -519,7 +510,6 @@ impl Cmd {
         }
     }
 
-    #[expect(clippy::disallowed_macros, reason = "the user confirms the deletion on stdin")]
     async fn handle_delete(
         _settings: &Settings,
         delete: Delete,
@@ -532,12 +522,8 @@ impl Cmd {
         if let Some(script) = script {
             // If not force, confirm deletion
             if !delete.force {
-                println!("Are you sure you want to delete script '{}'? [y/N]", delete.name);
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-
-                let input = input.trim().to_lowercase();
-                if input != "y" && input != "yes" {
+                let question = format!("Are you sure you want to delete script '{}'?", delete.name);
+                if !Prompt::new(&question).confirm(DefaultAnswer::No)? {
                     info!(target: USER, "Deletion cancelled");
                     return Ok(());
                 }

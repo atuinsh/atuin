@@ -5,6 +5,8 @@ use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
 use atuin_common::out::outln;
+#[cfg(feature = "octavo")]
+use atuin_common::prompt::DefaultAnswer;
 use atuin_common::string::StrExt;
 #[cfg(feature = "octavo")]
 use atuin_domain::caps::OctavoCap;
@@ -449,7 +451,7 @@ async fn onboard_octavo(settings: &Arc<Settings>) -> Result<Option<OctavoOnboard
         "Octavo",
         &fl!("config-enable-octavo-description"),
         Some(&fl!("config-enable-octavo-disclaimer")),
-        super::setup::DefaultAnswer::No,
+        DefaultAnswer::No,
     )?;
     if !accepted {
         return Ok(None);
@@ -464,7 +466,7 @@ async fn onboard_octavo(settings: &Arc<Settings>) -> Result<Option<OctavoOnboard
         "history backfill",
         &fl!("config-enable-octavo-backfill", count = ids.len()),
         None,
-        super::setup::DefaultAnswer::No,
+        DefaultAnswer::No,
     )?;
 
     let (backfill, old) = if backfill {

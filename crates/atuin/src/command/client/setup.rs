@@ -1,12 +1,10 @@
-#![expect(clippy::disallowed_macros, reason = "an interactive wizard the user answers on stdin")]
-
-use std::io::{self, Write};
-
 use atuin_client::settings::Settings;
+use atuin_common::logs::USER;
+use atuin_common::prompt::{DefaultAnswer, Prompt};
 use colored::Colorize;
 use eyre::Result;
 use toml_edit::{DocumentMut, value};
-use tracing::instrument;
+use tracing::{info, instrument};
 
 #[instrument(level = "trace", skip_all, err)]
 pub async fn run(_settings: &Settings) -> Result<()> {
@@ -53,19 +51,12 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     if changed {
         tokio::fs::write(config_file, doc.to_string()).await?;
 
-        println!("{check} Settings updated successfully", check = "✓".bold().bright_green());
+        info!(target: USER, "Settings updated successfully");
     } else {
-        println!("{check} No settings changed", check = "✓".bold().bright_green());
+        info!(target: USER, "No settings changed");
     }
 
     Ok(())
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum DefaultAnswer {
-    Yes,
-    #[cfg_attr(not(feature = "octavo"), expect(dead_code))]
-    No,
 }
 
 pub fn prompt(
@@ -74,26 +65,8 @@ pub fn prompt(
     note: Option<&str>,
     default: DefaultAnswer,
 ) -> Result<bool> {
-    let q = match default {
-        DefaultAnswer::Yes => "[Y/n]",
-        DefaultAnswer::No => "[y/N]",
-    };
-
-    println!("> Enable {feature}?", feature = feature.bold().bright_blue());
-    if let Some(note) = note {
-        println!("  {description}");
-        print!("  {note} {q} ", q = q.bold());
-    } else {
-        print!("  {description} {q} ", q = q.bold());
-    }
-
-    io::stdout().flush().ok();
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(match input.trim().to_lowercase().as_str() {
-        "" => matches!(default, DefaultAnswer::Yes),
-        "y" | "yes" => true,
-        _ => false,
-    })
+    let feature = feature.bold().bright_blue();
+    let note = note.map(|note| format!("\n  {note}")).unwrap_or_default();
+    let question = format!("> Enable {feature}?\n  {description}{note}");
+    Ok(Prompt::new(&question).confirm(default)?)
 }
