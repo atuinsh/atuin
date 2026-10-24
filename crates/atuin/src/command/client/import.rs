@@ -14,11 +14,12 @@ use atuin_client::import::zsh::Zsh;
 use atuin_client::import::zsh_histdb::ZshHistDb;
 use atuin_client::import::{Importer, Loader};
 use atuin_common::env;
+use atuin_common::logs::USER;
 use clap::Parser;
 use easy_cast::Conv;
 use eyre::Result;
 use indicatif::ProgressBar;
-use tracing::instrument;
+use tracing::{error, info, instrument};
 
 use crate::i18n::fl;
 
@@ -58,24 +59,27 @@ impl Cmd {
     #[allow(clippy::cognitive_complexity)]
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(&self, db: &Sqlite) -> Result<()> {
-        println!("        Atuin         ");
-        println!("======================");
-        println!("          \u{1f30d}          ");
-        println!("       \u{1f418}\u{1f418}\u{1f418}\u{1f418}       ");
-        println!("          \u{1f422}          ");
-        println!("======================");
-        println!("Importing history...");
+        const BANNER: &str = concat!(
+            "        Atuin         \n",
+            "======================\n",
+            "          \u{1f30d}          \n",
+            "       \u{1f418}\u{1f418}\u{1f418}\u{1f418}       \n",
+            "          \u{1f422}          \n",
+            "======================",
+        );
+        info!(target: USER, "{BANNER}");
+        info!(target: USER, "Importing history...");
 
         match self {
             Self::Auto => {
                 if cfg!(windows) {
                     return if env::var("PSModulePath").is_ok() {
-                        println!("Detected PowerShell");
+                        info!(target: USER, "Detected PowerShell");
                         import::<PowerShell>(db).await
                     } else {
-                        println!("Could not detect the current shell.");
-                        println!("Please run atuin import <SHELL>.");
-                        println!("To view a list of shells, run atuin import.");
+                        error!(target: USER, "could not detect the current shell");
+                        info!(target: USER, "Please run atuin import <SHELL>.");
+                        info!(target: USER, "To view a list of shells, run atuin import.");
                         Ok(())
                     };
                 }
@@ -86,38 +90,46 @@ impl Cmd {
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
 
                 if xonsh_histfile.to_lowercase().ends_with(".json") {
-                    println!("Detected Xonsh");
+                    info!(target: USER, "Detected Xonsh");
                     import::<Xonsh>(db).await
                 } else if xonsh_histfile.to_lowercase().ends_with(".sqlite") {
-                    println!("Detected Xonsh (SQLite backend)");
+                    info!(target: USER, "Detected Xonsh (SQLite backend)");
                     import::<XonshSqlite>(db).await
                 } else if shell.ends_with("/zsh") {
                     if let Ok(path) = ZshHistDb::histpath() {
-                        println!("Detected Zsh-HistDb, using :{}", path.to_string_lossy());
+                        info!(
+                            target: USER,
+                            "Detected Zsh-HistDb, using :{}",
+                            path.to_string_lossy()
+                        );
                         import::<ZshHistDb>(db).await
                     } else {
-                        println!("Detected ZSH");
+                        info!(target: USER, "Detected ZSH");
                         import::<Zsh>(db).await
                     }
                 } else if shell.ends_with("/fish") {
-                    println!("Detected Fish");
+                    info!(target: USER, "Detected Fish");
                     import::<Fish>(db).await
                 } else if shell.ends_with("/bash") {
-                    println!("Detected Bash");
+                    info!(target: USER, "Detected Bash");
                     import::<Bash>(db).await
                 } else if shell.ends_with("/nu") {
                     if let Ok(path) = NuHistDb::histpath() {
-                        println!("Detected Nu-HistDb, using :{}", path.to_string_lossy());
+                        info!(
+                            target: USER,
+                            "Detected Nu-HistDb, using :{}",
+                            path.to_string_lossy()
+                        );
                         import::<NuHistDb>(db).await
                     } else {
-                        println!("Detected Nushell");
+                        info!(target: USER, "Detected Nushell");
                         import::<Nu>(db).await
                     }
                 } else if shell.ends_with("/pwsh") {
-                    println!("Detected PowerShell");
+                    info!(target: USER, "Detected PowerShell");
                     import::<PowerShell>(db).await
                 } else {
-                    println!("cannot import {shell} history");
+                    error!(target: USER, "cannot import {shell} history");
                     Ok(())
                 }
             }
@@ -173,7 +185,7 @@ impl Loader for HistoryImporter<'_> {
 }
 
 async fn import<I: Importer + Send>(db: &Sqlite) -> Result<()> {
-    println!("Importing history from {}", I::NAME);
+    info!(target: USER, "Importing history from {}", I::NAME);
 
     let mut importer = I::new().await?;
     let len = importer.entries().await?;
@@ -181,6 +193,6 @@ async fn import<I: Importer + Send>(db: &Sqlite) -> Result<()> {
     importer.load(&mut loader).await?;
     loader.flush().await?;
 
-    println!("Import complete!");
+    info!(target: USER, "Import complete!");
     Ok(())
 }

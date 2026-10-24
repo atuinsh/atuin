@@ -3,10 +3,12 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::logs::USER;
 use atuin_domain::record::RecordId;
 use atuin_kv::store::KvStore;
 use atuin_scripts::store::ScriptStore;
 use eyre::{Context, Result};
+use tracing::warn;
 
 // This is the only crate that ties together all other crates.
 // Therefore, it's the only crate where functions tying together all stores can live
@@ -40,11 +42,11 @@ pub async fn build(
     // A failure in one store should not stop the others from building - build as much as
     // possible, and warn about the rest.
     if let Err(e) = history_store.build_all(db, downloaded).await {
-        eprintln!("Warning: failed to build history: {e}");
+        warn!(target: USER, "failed to build history: {e}");
     }
 
     if let Err(e) = kv_store.build().await {
-        eprintln!("Warning: failed to build kv: {e}");
+        warn!(target: USER, "failed to build kv: {e}");
     }
 
     let script_db = atuin_scripts::database::Database::new(
@@ -54,7 +56,7 @@ pub async fn build(
     .await?;
 
     if let Err(e) = script_store.build(&script_db).await {
-        eprintln!("Warning: failed to build scripts: {e}");
+        warn!(target: USER, "failed to build scripts: {e}");
     }
 
     Ok(())

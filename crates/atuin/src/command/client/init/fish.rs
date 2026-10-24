@@ -1,3 +1,5 @@
+#![expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
+
 use atuin_client::settings::Tmux;
 
 use super::StaticInitOptions;

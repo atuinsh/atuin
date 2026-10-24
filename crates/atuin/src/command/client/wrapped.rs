@@ -1,14 +1,17 @@
+#![expect(clippy::disallowed_macros, reason = "prints the wrapped report")]
+
 use std::collections::{HashMap, HashSet};
 
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
+use atuin_common::logs::USER;
 use atuin_history::stats::{Stats, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
 use time::{Date, Duration, Month, OffsetDateTime, Time};
-use tracing::instrument;
+use tracing::{info, instrument};
 
 #[derive(Debug)]
 struct WrappedStats {
@@ -311,7 +314,8 @@ pub async fn run(
 
     let history = db.range(start, end).await?;
     if history.is_empty() {
-        println!(
+        info!(
+            target: USER,
             "Your history for {year} is empty!\nMaybe 'atuin import' could help you import your \
              previous history 🪄"
         );
@@ -319,7 +323,8 @@ pub async fn run(
     }
 
     let Some(stats) = compute(settings, &history, 10, 1) else {
-        println!(
+        info!(
+            target: USER,
             "No commands found in your {year} history. Run a command or check your config for \
              commands ignored by stats.ignored_commands."
         );

@@ -2982,6 +2982,10 @@ mod tests {
             .output()
         {
             Ok(output) => output,
+            #[expect(
+                clippy::disallowed_macros,
+                reason = "tells whoever runs the tests why one is skipped"
+            )]
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && !required => {
                 eprintln!("skipping: {program} not installed");
                 return;

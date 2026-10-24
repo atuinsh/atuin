@@ -416,6 +416,7 @@ async fn direct_target(
     Ok(Some((row, note)))
 }
 
+#[expect(clippy::disallowed_macros, reason = "resume logs only to its file")]
 pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
     startup("started");
     if let Some(mode) = cmd.filter_mode {
@@ -748,6 +749,7 @@ fn direct_outcome(plan: ResumePlan, output: Output, enter_accept: bool) -> Outco
     }
 }
 
+#[expect(clippy::disallowed_macros, reason = "the shell widget reads the command from stderr")]
 fn finish(outcome: Outcome, output: Output) -> Result<()> {
     let (plan, run) = match outcome {
         Outcome::Cancelled => return Ok(()),

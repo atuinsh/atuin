@@ -33,6 +33,10 @@ const PROTOCOL_VERSION: &str = "2";
 /// temporary file cleaners.
 const SOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_mins(1);
 
+#[expect(
+    clippy::disallowed_macros,
+    reason = "the terminal must show why pty-proxy failed, wherever it logs"
+)]
 pub fn main(options: RuntimeOptions) {
     // Everything but the emulator waits on I/O, so it all runs on this one thread: a multi-threaded
     // scheduler would start a worker per core in a process that sits under every interactive shell.
@@ -104,6 +108,10 @@ enum Error {
     Io(#[from] std::io::Error),
 }
 
+#[expect(
+    clippy::disallowed_macros,
+    reason = "the terminal must show why pty-proxy failed, wherever it logs"
+)]
 async fn run(options: RuntimeOptions) -> Result<i32, Error> {
     let (cols, rows) = terminal::size()?;
     let pty_system = native_pty_system();

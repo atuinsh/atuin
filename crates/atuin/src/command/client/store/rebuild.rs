@@ -3,9 +3,11 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::logs::USER;
 use atuin_scripts::store::ScriptStore;
 use clap::Args;
 use eyre::{Context as _, Result, bail};
+use tracing::info;
 
 #[cfg(feature = "daemon")]
 use crate::command::client::daemon;
@@ -38,7 +40,7 @@ impl Rebuild {
             // The daemon owns the sidecar, and rebuilds it. `ai-session` is the threads' record tag.
             "threads" | "ai-session" => {
                 super::reset_ai_sessions(settings).await?;
-                println!("The daemon is rebuilding the threads index");
+                info!(target: USER, "The daemon is rebuilding the threads index");
             }
 
             tag => {

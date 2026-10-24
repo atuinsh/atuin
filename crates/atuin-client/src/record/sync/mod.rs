@@ -356,7 +356,8 @@ impl Keyed<'_> {
             .progress_chars("#>-"),
         );
 
-        println!(
+        info!(
+            target: USER,
             "Uploading {} records to {}/{}",
             expected,
             series.host_id.0.as_simple(),
@@ -484,7 +485,8 @@ impl Keyed<'_> {
 
         let expected = (remote + 1).saturating_sub(first_missing_local);
 
-        println!(
+        info!(
+            target: USER,
             "Downloading {} records from {}/{}",
             expected,
             series.host_id.0.as_simple(),
@@ -1621,6 +1623,7 @@ mod packfile_sync_tests {
             .unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
     async fn upload_packfiles_transfers_every_item() {
         // Two items each drive create -> put -> confirm exactly once (asserted via `.expect(2)`), so

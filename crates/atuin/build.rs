@@ -1,4 +1,6 @@
 use std::process::Command;
+
+#[expect(clippy::disallowed_macros, reason = "cargo reads build script directives from stdout")]
 fn main() {
     let output = Command::new("git").args(["rev-parse", "HEAD"]).output();
 

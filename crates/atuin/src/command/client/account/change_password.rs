@@ -1,5 +1,6 @@
 use atuin_client::auth::{self, AuthClient, MutateResponse};
 use atuin_client::settings::Settings;
+use atuin_common::logs::USER;
 use clap::Parser;
 use eyre::{Result, bail};
 use secrecy::{ExposeSecret, SecretString};
@@ -61,7 +62,7 @@ impl Cmd {
             }
         }
 
-        println!("{}", fl!("change-password-success"));
+        tracing::info!(target: USER, "{}", fl!("change-password-success"));
 
         Ok(())
     }

@@ -98,6 +98,7 @@ impl Cmd {
 
             Self::Delete { keys, namespace } => kv_store.delete(namespace, keys).await,
 
+            #[expect(clippy::disallowed_macros, reason = "prints the value")]
             Self::Get { key, namespace } => {
                 let kv = kv_store.get(namespace, key).await?;
 
@@ -108,6 +109,7 @@ impl Cmd {
                 Ok(())
             }
 
+            #[expect(clippy::disallowed_macros, reason = "prints the keys")]
             Self::List {
                 namespace,
                 all_namespaces,

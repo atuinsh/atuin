@@ -1,3 +1,4 @@
+#[expect(clippy::disallowed_macros, reason = "cargo reads build script directives from stdout")]
 fn main() {
     // sqlx::migrate!() embeds this directory at compile time, but cargo only reruns the macro
     // when a tracked file changes - without this, adding a new migration file does not trigger

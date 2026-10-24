@@ -11,11 +11,12 @@ use atuin_client::theme::Theme;
 use atuin_client::tui::cursor;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::filter::OrFilter;
+use atuin_common::logs::USER;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::utils;
 use clap::Parser;
-use eyre::{Context as _, Result};
-use tracing::instrument;
+use eyre::{Context as _, Result, bail};
+use tracing::{info, instrument};
 
 use super::history::ListMode;
 
@@ -174,23 +175,18 @@ impl Cmd {
             // when running the equivalent search, but deleting those entries that are
             // displayed with the search would leave any duplicates of those lines which may
             // or may not have been intended to be deleted.
-            eprintln!("\"--limit\" is not compatible with deletion.");
-            return Ok(());
+            bail!("\"--limit\" is not compatible with deletion");
         }
 
         if self.delete && query.is_empty() {
-            eprintln!(
-                "Please specify a query to match the items you wish to delete. If you wish to \
+            bail!(
+                "please specify a query to match the items you wish to delete; if you wish to \
                  delete all history, pass --delete-it-all"
             );
-            return Ok(());
         }
 
         if self.delete_it_all && !query.is_empty() {
-            eprintln!(
-                "--delete-it-all will delete ALL of your history! It does not require a query."
-            );
-            return Ok(());
+            bail!("--delete-it-all will delete ALL of your history; it does not require a query");
         }
 
         if let Some(search_mode) = self.search_mode {
@@ -220,6 +216,10 @@ impl Cmd {
         let host_id = settings.host_id().await?;
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
+        #[expect(
+            clippy::disallowed_macros,
+            reason = "the shell reads the picked command from stdout or stderr"
+        )]
         if self.interactive {
             let item = interactive::history(&query, &settings, db, &history_store, theme).await?;
 
@@ -273,7 +273,7 @@ impl Cmd {
                 // sorry
                 while !entries.is_empty() {
                     for entry in &entries {
-                        eprintln!("deleting {}", entry.id);
+                        info!(target: USER, "deleting {}", entry.id);
                     }
 
                     super::history::delete_history_entries(&settings, &history_store, &db, entries)

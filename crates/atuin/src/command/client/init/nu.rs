@@ -1,3 +1,5 @@
+#![expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
+
 use super::StaticInitOptions;
 
 const BIND_CTRL_R: &str = r"$env.config = (

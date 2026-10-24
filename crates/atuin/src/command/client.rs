@@ -308,7 +308,10 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
             Self::InternalDecoy => {
-                eprintln!("error: this command is not meant to be accessed directly");
+                tracing::error!(
+                    target: logs::USER,
+                    "this command is not meant to be accessed directly"
+                );
                 std::process::exit(1);
             }
             _ => {}

@@ -1,8 +1,9 @@
 use atuin_client::settings::{Settings, UpdateChannel};
+use atuin_common::logs::USER;
 use axoupdater::{AxoUpdater, UpdateRequest};
 use clap::Parser;
 use eyre::{Result, bail, eyre};
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use crate::i18n::fl;
 
@@ -77,13 +78,15 @@ impl Cmd {
         };
 
         if self.check {
-            println!("Checking for updates on the {channel} channel...");
+            info!(target: USER, "Checking for updates on the {channel} channel...");
             return match updater.query_new_version().await? {
+                #[expect(clippy::disallowed_macros, reason = "prints the check's answer")]
                 Some(new) if new > &current.parse()? => {
                     println!("Update available: v{current} -> v{new}");
-                    println!("Run `atuin update` to install it");
+                    info!(target: USER, "Run `atuin update` to install it");
                     Ok(())
                 }
+                #[expect(clippy::disallowed_macros, reason = "prints the check's answer")]
                 _ => {
                     println!("atuin v{current} is up to date");
                     Ok(())
@@ -91,23 +94,25 @@ impl Cmd {
             };
         }
 
-        match &self.version {
-            Some(version) => println!("Updating to atuin v{version}..."),
-            None => println!("Checking for updates on the {channel} channel..."),
+        if let Some(version) = &self.version {
+            info!(target: USER, "Updating to atuin v{version}...");
+        } else {
+            info!(target: USER, "Checking for updates on the {channel} channel...");
         }
 
         match updater.run().await? {
             Some(result) => {
-                println!(
+                info!(
+                    target: USER,
                     "Updated atuin v{current} -> v{} ({})",
                     result.new_version, result.new_version_tag
                 );
-                println!("Restart your shell sessions to pick up the new version");
+                info!(target: USER, "Restart your shell sessions to pick up the new version");
                 Ok(())
             }
             None if self.version.is_some() => Err(eyre!("update did not run")),
             None => {
-                println!("atuin v{current} is up to date");
+                info!(target: USER, "atuin v{current} is up to date");
                 Ok(())
             }
         }
