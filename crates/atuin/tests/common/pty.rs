@@ -3,10 +3,11 @@ use std::io::{Read, Write};
 use std::num::NonZeroU16;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use nix_pty::sys::termios::LocalFlags;
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Condvar, Mutex, MutexGuard};
+use vt100::MouseProtocolMode;
 
 use crate::common::{FreshEnv, TIMEOUT, wait_until};
 use crate::shell::PROMPT;
@@ -223,6 +224,36 @@ impl PtyShell {
         self.wait_for_line(&format!("{PROMPT} #"));
         self.send(b"\x7f");
         self.wait_for_prompt();
+    }
+
+    /// Move the mouse, reporting motion as a terminal does while the application asks for it, until
+    /// it stops asking; returns how many reports were sent.
+    ///
+    /// Meanwhile output is processed only between frames, as by a terminal drawing on a frame
+    /// clock (VTE), and each report is written under the screen's lock: none follows a mode change
+    /// or a query the terminal has processed.
+    pub fn move_mouse(&self) -> usize {
+        const INTERVAL: Duration = Duration::from_micros(50);
+        // Long enough for an application to exit before the terminal reads that it stopped
+        // tracking, short enough that the reports fit in the PTY's input queue.
+        const FRAME: Duration = Duration::from_millis(2);
+        let mut sent = 0;
+        loop {
+            let state = self.state.0.lock();
+            if state.closed
+                || state.parser.screen().mouse_protocol_mode() != MouseProtocolMode::AnyMotion
+            {
+                return sent;
+            }
+            let frame = Instant::now() + FRAME;
+            while Instant::now() < frame {
+                self.send(format!("\x1b[<35;{};1M", sent % 80 + 1).as_bytes());
+                sent += 1;
+                std::thread::sleep(INTERVAL);
+            }
+            // Hand the lock to the output waiting on it, or this could take it straight back.
+            MutexGuard::unlock_fair(state);
+        }
     }
 
     pub fn send_ctrl_r(&self) {

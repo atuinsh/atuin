@@ -132,6 +132,23 @@ fn empty_history_search_can_be_cancelled(#[files("tests/shells/*.toml")] setup: 
     run_echo_marker(pty, &marker());
 }
 
+/// Mouse motion the terminal reports while the search closes is read by the search, not left for
+/// the line editor to take as typed text (`35;12;1M`).
+#[rstest]
+fn mouse_motion_as_search_closes_stays_off_the_command_line(
+    #[files("tests/shells/*.toml")] setup: PathBuf,
+) {
+    let Some(shell) = Shell::start(&setup, None) else {
+        return;
+    };
+    let pty = &shell.pty;
+    pty.send_ctrl_r();
+    pty.wait_for(": exit");
+    pty.send(&[0x03]);
+    assert!(pty.move_mouse() > 0, "the search stopped tracking the mouse before it moved");
+    pty.wait_for_line_editor();
+}
+
 #[rstest]
 fn selection_preserves_multiline_and_shell_quoting(
     #[files("tests/shells/*.toml")] setup: PathBuf,
@@ -255,7 +272,7 @@ fn filter_switching_changes_results(
         });
     }
     pty.send(&[0x03]);
-    pty.wait_for_screen("filter search closed", |s| !s.contains(": exit"));
+    pty.wait_for_prompt();
     run_echo_marker(pty, &format!("{marker}-resumed"));
 }
 

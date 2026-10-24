@@ -173,6 +173,14 @@ fn restore(writer: &mut Writer, inline_mode: bool, no_mouse: bool) {
     }
     if !no_mouse {
         let _ = execute!(writer, event::DisableMouseCapture);
+        // The terminal reports mouse motion until it reads the mode change, and the line editor
+        // takes what is left unread as typed text (`35;12;1M`). It answers queries in order, so
+        // reading up to its answer to one reads every report sent before it. crossterm asks on
+        // stdout, so only when that is the terminal.
+        #[cfg(unix)]
+        if matches!(writer, Writer::Stdout(_)) {
+            let _ = crossterm::cursor::position();
+        }
     }
     let _ = execute!(writer, event::DisableBracketedPaste);
     let _ = terminal::disable_raw_mode();
