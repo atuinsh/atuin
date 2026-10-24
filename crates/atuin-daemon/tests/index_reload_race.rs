@@ -2,9 +2,9 @@
 //! via `SearchIndex::add_histories` under a *read* guard, exactly as the sync worker does -- and an
 //! index reload (a delete or a rebuild) that scans the db into a fresh index and swaps it in.
 //!
-//! `reload_search_index` reads the shell filter, drops the guard, scans the db newest-first with a
+//! The original reload read the shell filter, dropped the guard, and scanned newest-first with a
 //! keyset cursor (`order by id desc`, then `id < last_id`), and finally takes the write guard to
-//! swap the new index in. Two windows swallow a synced row:
+//! swap the new index in. Two windows used to swallow a synced row:
 //!   * it is added to the *old* index, which the swap then discards; and
 //!   * its id is the largest in the db (uuid_v7 is time-ordered), so once the scan has read its
 //!     first page the keyset cursor has already moved below it and it is never visited.
@@ -12,12 +12,8 @@
 //! The row is still committed to the history db, so the durable layer is fine -- only the live
 //! index loses it.
 //!
-//! Tests that document this still-unfixed defect (report M2, #4052) are `#[ignore]`d with the
-//! defect named; their assertions state the *correct* behavior, so they fail under
-//! `cargo nextest run --run-ignored all` (or `cargo test -- --ignored`) rather than passing
-//! vacuously. These attack angles are distinct from `concurrency.rs`, which covers the single-batch
-//! delete-vs-add case; here the adds are continuous across the whole reload, cover the rebuild
-//! trigger too, and separate the durable db layer from the live index.
+//! These regressions cover continuous synced additions and distinguish durable database writes
+//! from the live index. Reloads retain concurrent updates and replay them before publication.
 #![cfg(unix)]
 
 mod common;
@@ -60,17 +56,10 @@ fn spawn_reload(env: &TestEnv, reload: Reload) -> tokio::task::JoinHandle<()> {
 /// machine: nothing that downloaded while a delete or a rebuild happened to be running silently
 /// vanishes from search.
 ///
-/// EXPECTED TO FAIL: every batch is added to whichever index is live under a read guard; the swap
-/// discards the old one, and the fresh index's keyset scan never revisits rows saved after its
-/// first page (their ids are the largest in the db). Both the delete and the rebuild trigger the
-/// same reload path.
+/// Both delete and rebuild must replay batches that land past the scan's keyset cursor.
 #[rstest]
 #[case::delete(Reload::Delete)]
 #[case::rebuild(Reload::Rebuild)]
-#[ignore = "documents an unfixed defect (synced adds dropped by a racing reload; see report M2, \
-            #4052: https://github.com/atuinsh/atuin/issues/4052); run with --run-ignored. \
-            Continuous add_histories under a read guard is lost by \
-            the index swap and the keyset scan. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn synced_batches_across_an_index_reload_stay_searchable(#[case] reload: Reload) {
     let env = TestEnv::builder().seed_rows(RELOAD_ROWS).with_search_component().build().await;
@@ -121,14 +110,10 @@ async fn synced_batches_across_an_index_reload_stay_searchable(#[case] reload: R
 /// can't find a command that is provably present. A guard assertion on the db layer keeps the test
 /// honest (it fails loudly rather than vacuously if the row was never persisted).
 ///
-/// EXPECTED TO FAIL on the index assertion: the row is added to the old index (discarded by the
-/// swap) and, saved after the scan's first page, sits past the keyset cursor forever.
+/// The row sits past the scan's keyset cursor, so retaining the live update is essential.
 #[rstest]
-#[ignore = "documents an unfixed defect (synced row durable in the db but dropped from the index; \
-            see report M2, #4052: https://github.com/atuinsh/atuin/issues/4052); run with \
-            --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_synced_row_survives_in_the_db_but_the_reload_drops_it_from_the_index() {
+async fn a_synced_row_stays_searchable_after_a_reload() {
     let env = TestEnv::builder().seed_rows(RELOAD_ROWS).with_search_component().build().await;
     let reload_task = spawn_reload(&env, Reload::Delete);
     // Let the reload's paged scan get past its first page before the row lands, so the row's id
