@@ -111,7 +111,7 @@ async fn a_session_reads_back_as_it_was_captured(sessions: TempDir, #[case] json
     let synced = testing::synced_as(captured(jsonl), true);
     let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", &cwd, synced);
     let dir = sessions.path().join("--here--");
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), &dir, &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, None, sessions.path(), &dir, &session).unwrap();
     assert_eq!(path.parent(), Some(dir.as_path()));
     assert_eq!(locate(sessions.path(), &session.id), Some(path.clone()));
 
@@ -177,7 +177,8 @@ fn entries_are_linked_named_and_compacted(sessions: TempDir) {
         })]),
         message("c1", Some("r1"), Role::System, vec![Content::Summary("so far".to_owned())]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, None, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let by_id = |id: &str| lines.iter().find(|l| l["id"] == id).cloned().unwrap();
 
@@ -209,7 +210,8 @@ fn the_tree_is_relinked_whatever_the_order(sessions: TempDir) {
         message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]),
         message("a1", Some("x1"), Role::Assistant, vec![Content::Text("hello".to_owned())]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, None, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
     assert_eq!(parent("a0"), "u1");
@@ -227,7 +229,8 @@ fn a_parent_cycle_hangs_from_the_entry_before(sessions: TempDir) {
         message("x1", Some("u2"), Role::Other("label".to_owned()), vec![]),
         message("u2", Some("a1"), Role::User, vec![Content::Text("again".to_owned())]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, None, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
 
@@ -246,7 +249,8 @@ fn a_cycle_closed_by_clock_skew_is_cut(sessions: TempDir) {
         message("c", Some("d"), Role::User, vec![Content::Text("cycle".to_owned())]),
         message("d", Some("c"), Role::Other("label".to_owned()), vec![]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, None, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
 
@@ -261,9 +265,9 @@ fn never_overwrites_a_session(sessions: TempDir) {
     let messages = vec![message("u1", None, Role::User, vec![Content::Text("hi".to_owned())])];
     let s = session("s-once", sessions.path(), messages);
     let path =
-        rehydrate_into(Flavour::Pi, sessions.path(), &sessions.path().join("a"), &s).unwrap();
-    let err =
-        rehydrate_into(Flavour::Pi, sessions.path(), &sessions.path().join("b"), &s).unwrap_err();
+        rehydrate_into(Flavour::Pi, None, sessions.path(), &sessions.path().join("a"), &s).unwrap();
+    let err = rehydrate_into(Flavour::Pi, None, sessions.path(), &sessions.path().join("b"), &s)
+        .unwrap_err();
     assert!(matches!(&err, RehydrateError::AlreadyExists(p) if *p == path), "{err:?}");
     assert!(!sessions.path().join("b").exists());
 }
@@ -279,7 +283,8 @@ fn a_bang_command_is_a_bash_execution(sessions: TempDir) {
             error: true,
         }),
     ])]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, None, sessions.path(), sessions.path(), &session).unwrap();
     let entry = &lines(&path)[1];
     assert_eq!(entry["message"]["role"], "bashExecution");
     assert_eq!(entry["message"]["command"], "echo hi");
@@ -349,7 +354,8 @@ async fn synced_calls_come_back_as_notes_the_api_takes(sessions: TempDir, #[case
         }
     }
     let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", sessions.path(), synced.clone());
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, None, sessions.path(), sessions.path(), &session).unwrap();
     let written = lines(&path);
     assert_the_api_takes(&written);
     assert!(!written.iter().any(|l| l["message"]["content"].to_string().contains("toolCall")));
@@ -396,7 +402,8 @@ fn output_not_captured_says_so(sessions: TempDir) {
             error: false,
         })]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, None, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     assert_the_api_takes(&lines);
     assert_eq!(lines[1]["message"]["output"], UNCAPTURED_OUTPUT);
@@ -444,7 +451,8 @@ fn an_edits_result_gets_its_details_back(sessions: TempDir) {
             Content::Patch(patch.clone()),
         ]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, None, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let result = lines.iter().find(|l| l["id"] == "r1").unwrap();
     assert_eq!(
@@ -471,7 +479,8 @@ fn a_reply_names_its_provider(
     reply.model = Some(model.to_owned());
     reply.provider = provider.map(str::to_owned);
     let session = session("s-provider", sessions.path(), vec![reply]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, None, sessions.path(), sessions.path(), &session).unwrap();
     let reply = lines(&path).into_iter().find(|l| l["id"] == "a1").unwrap();
     assert_eq!(reply["message"]["provider"].as_str(), want);
 }
@@ -486,7 +495,7 @@ fn an_omp_session_starts_with_its_title_slot(
     let session = session("s-slot", sessions.path(), vec![message("u1", None, Role::User, vec![
         Content::Text("hi".to_owned()),
     ])]);
-    let path = rehydrate_into(flavour, sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(flavour, None, sessions.path(), sessions.path(), &session).unwrap();
     let body = std::fs::read_to_string(&path).unwrap();
     let first = body.split_inclusive('\n').next().unwrap();
     let first_type = serde_json::from_str::<serde_json::Value>(first).unwrap()["type"].clone();
@@ -495,6 +504,44 @@ fn an_omp_session_starts_with_its_title_slot(
         Flavour::Omp => {
             assert_eq!((first_type.as_str(), first.len()), (Some("title"), 256));
             assert_eq!(locate(sessions.path(), "s-slot"), Some(path));
+        }
+    }
+}
+
+/// A session whose replies name no model (a continuation) ends on a `model_change` to the model
+/// given, hung from the entry before it so it is on the path omp reads; one whose replies name
+/// their model keeps them.
+#[rstest]
+fn a_session_with_no_model_starts_on_the_one_given(
+    sessions: TempDir,
+    #[values(None, Some("gpt-5.6-luna"))] reply_model: Option<&str>,
+) {
+    let mut reply =
+        message("a1", Some("u1"), Role::Assistant, vec![Content::Text("hi".to_owned())]);
+    reply.model = reply_model.map(str::to_owned);
+    let session = session("s-model", sessions.path(), vec![
+        message("u1", None, Role::User, vec![Content::Text("hello".to_owned())]),
+        reply,
+    ]);
+    let path = rehydrate_into(
+        Flavour::Omp,
+        Some("openai-codex/gpt-5.6-luna"),
+        sessions.path(),
+        sessions.path(),
+        &session,
+    )
+    .unwrap();
+    let lines = lines(&path);
+    let changes: Vec<_> = lines.iter().filter(|l| l["type"] == "model_change").collect();
+    match reply_model {
+        Some(_) => assert!(changes.is_empty(), "{changes:?}"),
+        None => {
+            assert_eq!(changes.len(), 1);
+            let change = changes[0];
+            assert_eq!(change["model"], "openai-codex/gpt-5.6-luna");
+            let last = &lines[lines.len() - 1];
+            assert_eq!(last["type"], "model_change");
+            assert_eq!(last["parentId"], lines[lines.len() - 2]["id"]);
         }
     }
 }
