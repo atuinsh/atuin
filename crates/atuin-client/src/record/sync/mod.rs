@@ -613,8 +613,7 @@ impl Keyed<'_> {
                     manifest_id = %page[i].id,
                     host = %page[i].host.id,
                     idx = page[i].idx,
-                    "skipping a packfile manifest that can't be expanded, so its records are \
-                     lost: {e}"
+                    "skipping unexpandable packfile manifest: {e}. you have lost data."
                 ),
                 Err(e) => {
                     error!("failed to download packfile: {e:?}");
