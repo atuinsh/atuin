@@ -5,6 +5,7 @@ use std::time::Duration;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::{DbLocation, Settings};
 use atuin_common::env;
+use atuin_common::logs::USER;
 use atuin_common::path::{AbsPathBuf, PathExt};
 use atuin_common::shell::{Shell, shell_name};
 use atuin_common::string::NonEmptyOrExt as _;
@@ -319,8 +320,9 @@ impl SettingPaths {
                 continue;
             };
             if path.as_path().is_dangling_symlink() {
-                eprintln!(
-                    "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin.",
+                tracing::warn!(
+                    target: USER,
+                    "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin",
                     path.display()
                 );
             }
@@ -390,6 +392,7 @@ impl DoctorDump {
     }
 }
 
+#[expect(clippy::disallowed_macros, reason = "prints the doctor's report")]
 fn checks(info: &DoctorDump, settings: &Settings) {
     println!(); // spacing
     //
@@ -423,11 +426,11 @@ fn checks(info: &DoctorDump, settings: &Settings) {
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
         let active = atuin_common::dirs::config_path("config.toml");
         let warning = super::info::shadowed_config_warning(&legacy, &active);
-        println!("{}", format!("[Config] {warning}").bold().red());
+        println!("{}", format!("[Config] Warning: {warning}.").bold().red());
     }
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_data_dir(&settings.data_dir) {
         let warning = super::info::shadowed_data_dir_warning(&legacy, &settings.data_dir);
-        println!("{}", format!("[Data] {warning}").bold().red());
+        println!("{}", format!("[Data] Warning: {warning}.").bold().red());
     }
 
     // Shell
@@ -446,6 +449,7 @@ fn checks(info: &DoctorDump, settings: &Settings) {
 }
 
 #[instrument(level = "trace", skip_all, err)]
+#[expect(clippy::disallowed_macros, reason = "prints the doctor's report")]
 pub async fn run(settings: &Settings) -> Result<()> {
     println!("{}", "Atuin Doctor".bold());
     println!("Checking for diagnostics");

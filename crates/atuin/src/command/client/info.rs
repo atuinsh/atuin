@@ -1,7 +1,9 @@
 use atuin_client::settings::Settings;
+use atuin_common::logs::USER;
 
 use crate::{SHA, VERSION};
 
+#[expect(clippy::disallowed_macros, reason = "prints the info report")]
 pub fn run(settings: &Settings) {
     let config_file = atuin_common::dirs::config_path("config.toml");
     let sever_config = atuin_common::dirs::config_path("server.toml");
@@ -31,18 +33,18 @@ pub fn run(settings: &Settings) {
     println!("{print_out}");
 
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
-        println!("\n{}", shadowed_config_warning(&legacy, &config_file));
+        tracing::warn!(target: USER, "{}", shadowed_config_warning(&legacy, &config_file));
     }
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_data_dir(&settings.data_dir) {
-        println!("\n{}", shadowed_data_dir_warning(&legacy, &settings.data_dir));
+        tracing::warn!(target: USER, "{}", shadowed_data_dir_warning(&legacy, &settings.data_dir));
     }
 }
 
 /// Atuin reads `active`, so the settings in `legacy` do nothing.
 pub fn shadowed_config_warning(legacy: &std::path::Path, active: &std::path::Path) -> String {
     format!(
-        "Warning: {} is ignored, because {} exists and Atuin reads that instead. Move your \
-         settings into it, or delete it to go back to the old one.",
+        "{} is ignored, because {} exists and Atuin reads that instead. Move your settings into \
+         it, or delete it to go back to the old one",
         legacy.display(),
         active.display()
     )
@@ -51,8 +53,8 @@ pub fn shadowed_config_warning(legacy: &std::path::Path, active: &std::path::Pat
 /// Atuin uses `active`, so the history and keys in `legacy` go unused.
 pub fn shadowed_data_dir_warning(legacy: &std::path::Path, active: &std::path::Path) -> String {
     format!(
-        "Warning: {} is ignored, because {} exists and Atuin uses that instead. If your history \
-         is in the old one, move the new one somewhere else to go back to it.",
+        "{} is ignored, because {} exists and Atuin uses that instead. If your history is in the \
+         old one, move the new one somewhere else to go back to it",
         legacy.display(),
         active.display()
     )

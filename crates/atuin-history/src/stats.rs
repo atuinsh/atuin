@@ -176,6 +176,7 @@ fn strip_leading_env_vars(command: &str) -> &str {
     command[token_start_pos..].trim()
 }
 
+#[expect(clippy::disallowed_macros, reason = "prints the `atuin stats` report")]
 pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
     let max = stats.top.iter().map(|x| x.1).max().unwrap();
     let num_pad = usize::conv(max.ilog10()) + 1;

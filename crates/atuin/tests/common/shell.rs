@@ -129,6 +129,7 @@ impl Setup {
     }
 }
 
+#[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why one is skipped")]
 fn missing(config: &Path, dependency: &str) {
     assert!(
         atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(),

@@ -4,6 +4,7 @@ use std::{env, fs};
 
 use protox::prost::Message;
 
+#[expect(clippy::disallowed_macros, reason = "cargo reads build script directives from stdout")]
 fn main() -> std::io::Result<()> {
     let git = |args: &[&str]| {
         let output = Command::new("git").args(args).output().ok()?;

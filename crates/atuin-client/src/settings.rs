@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use atuin_common::logs::LogLevel;
+use atuin_common::logs::{LogLevel, USER};
 use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeTo, ShellExpanded};
 // `AsDuration`/`AsDisableableDuration` are deprecated.
 #[allow(deprecated)]
@@ -1555,10 +1555,11 @@ impl Settings {
             match ShellExpanded::expand(&raw) {
                 Ok(_) => {}
                 Err(ExpandError::Empty) => {
-                    tracing::warn!("{key} is empty, so Atuin uses its default");
+                    tracing::warn!(target: USER, "{key} is empty, so Atuin uses its default");
                     emptied.push((key, default));
                 }
                 Err(err @ ExpandError::Variable { .. }) => tracing::warn!(
+                    target: USER,
                     "{key}: failed to expand {raw:?} ({err}), so Atuin uses it as written; write \
                      $$ for a literal $"
                 ),

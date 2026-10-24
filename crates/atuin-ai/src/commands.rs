@@ -98,6 +98,7 @@ pub async fn run(command: Command, settings: Settings) -> eyre::Result<()> {
             let settings = Arc::new(settings);
             inline::run(command, args.api_endpoint, args.api_token, &settings, hook).await
         }
+        #[expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
         Command::Init { .. } => {
             // This is valid comment syntax in all the shells we support and thus a no-op: bash,
             // zsh, fish, nushell, xonsh, and powershell.

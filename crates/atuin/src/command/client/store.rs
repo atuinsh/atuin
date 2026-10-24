@@ -3,13 +3,14 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
+use atuin_common::logs::USER;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
 use atuin_domain::record::RecordSeriesKey;
 use clap::Subcommand;
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
 use time::OffsetDateTime;
-use tracing::instrument;
+use tracing::{info, instrument, warn};
 
 #[cfg(feature = "daemon")]
 use crate::command::client::daemon;
@@ -62,7 +63,7 @@ pub enum Cmd {
 /// has already happened.
 pub async fn invalidate_ai_sessions(settings: &Settings) {
     if let Err(err) = atuin_client::ai_session::invalidate_sidecar(settings).await {
-        eprintln!("Failed to schedule a rebuild of the threads index: {err}");
+        warn!(target: USER, "failed to schedule a rebuild of the threads index: {err}");
     }
 }
 
@@ -136,7 +137,7 @@ impl Cmd {
                 #[cfg(not(feature = "daemon"))]
                 let rewritten = store.compact().await?;
 
-                println!("Rewrote {rewritten} records");
+                info!(target: USER, "Rewrote {rewritten} records");
                 Ok(())
             }
             Self::Verify(verify) => verify.run(settings, store).await,
@@ -150,6 +151,7 @@ impl Cmd {
         }
     }
 
+    #[expect(clippy::disallowed_macros, reason = "prints the store status")]
     pub async fn status(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         let host_id = settings.host_id().await?;
         let offset = time::UtcOffset::local_or_utc();

@@ -1,4 +1,5 @@
 use atuin_client::settings::Settings;
+use atuin_common::logs::USER;
 use eyre::{Result, bail};
 
 use crate::i18n::fl;
@@ -16,18 +17,21 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let hub_address = settings.hub_endpoint();
 
     if hub_token.is_some() {
-        println!("{}", fl!("link-both-sessions"));
+        tracing::info!(target: USER, "{}", fl!("link-both-sessions"));
     } else {
-        println!("{}", fl!("link-hub-login-first"));
+        tracing::info!(target: USER, "{}", fl!("link-hub-login-first"));
 
         let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
 
-        if session.open_in_browser() {
-            println!("{}", fl!("account-hub-browser-opened"));
-        } else {
-            println!("{}", fl!("account-hub-open-url"));
+        #[expect(clippy::disallowed_macros, reason = "the user opens the URL to log in")]
+        {
+            if session.open_in_browser() {
+                println!("{}", fl!("account-hub-browser-opened"));
+            } else {
+                println!("{}", fl!("account-hub-open-url"));
+            }
+            println!("{}", session.auth_url);
         }
-        println!("{}", session.auth_url);
 
         let token = session
             .wait_for_completion(
@@ -38,11 +42,11 @@ pub async fn run(settings: &Settings) -> Result<()> {
             .await?;
 
         atuin_client::hub::save_session(&token, settings).await?;
-        println!("{}", fl!("link-hub-complete"));
+        tracing::info!(target: USER, "{}", fl!("link-hub-complete"));
     }
 
     atuin_client::hub::link_account(&hub_address, &cli_token, settings).await?;
-    println!("{}", fl!("link-success"));
+    tracing::info!(target: USER, "{}", fl!("link-success"));
 
     Ok(())
 }

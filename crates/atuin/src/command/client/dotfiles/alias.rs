@@ -41,6 +41,7 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    #[expect(clippy::disallowed_macros, reason = "prints the aliases")]
     async fn list(
         &self,
         store: &AliasStore,

@@ -342,6 +342,7 @@ async fn disjoint_concurrent_deletes_leave_the_index_empty() {
 /// latency stays within a small multiple of an uncontended finish.
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[expect(clippy::disallowed_macros, reason = "prints the timings to diagnose a failure")]
 async fn end_history_is_not_starved_by_an_index_reload() {
     let env = seeded_env().await;
     // Calibrate: how long does one reload take here? Only used as the sleep yardstick and the

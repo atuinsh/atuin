@@ -129,7 +129,7 @@ impl Importer for XonshSqlite {
             count += 1;
         }
 
-        println!("Loaded: {count}");
+        debug!("Loaded: {count}");
         Ok(())
     }
 }
@@ -165,6 +165,7 @@ mod tests {
         assert_eq!(hist.command, "echo hello");
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_import() {
         let connection_str = "tests/data/xonsh-history.sqlite";

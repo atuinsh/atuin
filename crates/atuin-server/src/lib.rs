@@ -36,13 +36,13 @@ async fn shutdown_signal() {
         _ = term.recv() => {},
         _ = interrupt.recv() => {},
     };
-    eprintln!("Shutting down gracefully...");
+    tracing::info!("Shutting down gracefully...");
 }
 
 #[cfg(target_family = "windows")]
 async fn shutdown_signal() {
     signal::windows::ctrl_c().expect("failed to register signal handler").recv().await;
-    eprintln!("Shutting down gracefully...");
+    tracing::info!("Shutting down gracefully...");
 }
 
 pub async fn launch(settings: Settings, addr: SocketAddr) -> Result<()> {

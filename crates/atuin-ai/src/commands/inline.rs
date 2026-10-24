@@ -102,6 +102,10 @@ pub async fn run(
     Ok(())
 }
 
+#[expect(
+    clippy::disallowed_macros,
+    reason = "ai inline owns the terminal and logs only to its file"
+)]
 async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
     if let Some(token) = atuin_client::hub::get_session_token(settings).await? {
         debug!("Found Hub session, using existing token");
@@ -192,6 +196,7 @@ fn snapshots_dir(settings: &Settings) -> PathBuf {
     path
 }
 
+#[expect(clippy::disallowed_macros, reason = "the inline TUI starts on a fresh line")]
 async fn run_inline_tui(
     ctx: AppContext,
     initial_prompt: Option<String>,
@@ -387,6 +392,7 @@ enum SetupChoice {
     Cancel,
 }
 
+#[expect(clippy::disallowed_macros, reason = "the user picks an option below this header")]
 fn prompt_ai_setup() -> Result<SetupChoice> {
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use crossterm::{cursor, terminal};
@@ -473,6 +479,10 @@ fn render_setup_options(
     Ok(())
 }
 
+#[expect(
+    clippy::disallowed_macros,
+    reason = "ai inline owns the terminal and logs only to its file"
+)]
 async fn set_ai_enabled(enabled: bool) -> Result<()> {
     let config_file = Settings::get_config_path()?;
     let config_str = tokio::fs::read_to_string(&config_file).await?;
@@ -523,6 +533,7 @@ fn wait_for_login_confirmation() -> Result<bool> {
     }
 }
 
+#[expect(clippy::disallowed_macros, reason = "the shell widget reads the outcome from this output")]
 fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) {
     if output_for_hook {
         match outcome {

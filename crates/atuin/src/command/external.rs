@@ -43,6 +43,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 process::exit(status.code().unwrap_or(1));
             }
         }
+        #[expect(clippy::disallowed_macros, reason = "prints clap's styled error")]
         Err(e) => {
             eprintln!("{}", e.ansi());
 

@@ -1,3 +1,5 @@
+#![expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
+
 use super::StaticInitOptions;
 
 fn ps_bool(value: bool) -> &'static str {

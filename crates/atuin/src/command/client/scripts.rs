@@ -6,6 +6,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::logs::USER;
 use atuin_scripts::execution::{
     build_executable_script, execute_script_interactive, template_script, template_variables,
 };
@@ -14,7 +15,7 @@ use atuin_scripts::store::script::Script;
 use clap::{Parser, Subcommand};
 use eyre::{Context as _, OptionExt, Result, bail};
 use tempfile::NamedTempFile;
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::i18n::fl;
 
@@ -183,12 +184,12 @@ impl Cmd {
                                 // Convert the bytes to a string and forward to script
                                 let input = String::from_utf8_lossy(&buffer[0..n]).to_string();
                                 if let Err(e) = sender.send(input).await {
-                                    eprintln!("Error sending input to script: {e}");
+                                    warn!(target: USER, "failed to send input to script: {e}");
                                     break;
                                 }
                             },
                             Err(e) => {
-                                eprintln!("Error reading from stdin: {e}");
+                                warn!(target: USER, "failed to read from stdin: {e}");
                                 break;
                             }
                         }
@@ -206,7 +207,7 @@ impl Cmd {
 
         let code = exit_code.unwrap_or(-1);
         if code != 0 {
-            eprintln!("Script exited with code {code}");
+            warn!(target: USER, "script exited with code {code}");
         }
 
         Ok(code)
@@ -282,6 +283,10 @@ impl Cmd {
         Ok(())
     }
 
+    #[expect(
+        clippy::disallowed_macros,
+        reason = "prompts the user for the script's template variables"
+    )]
     async fn handle_run(
         _settings: &Settings,
         run: Run,
@@ -304,8 +309,8 @@ impl Cmd {
                         .insert(key.to_string(), serde_json::Value::String(value.to_string()));
                     debug!("Using CLI variable: {}={}", key, value);
                 } else {
-                    eprintln!("Warning: Ignoring malformed variable specification: {var_str}");
-                    eprintln!("Variables should be specified as KEY=VALUE");
+                    warn!(target: USER, "ignoring malformed variable specification: {var_str}");
+                    info!(target: USER, "Variables should be specified as KEY=VALUE");
                 }
             }
 
@@ -326,7 +331,7 @@ impl Cmd {
                     println!("Enter value for '{var}': ");
 
                     if stdin.read_line(&mut input).is_err() {
-                        eprintln!("Failed to read input for variable '{var}'");
+                        warn!(target: USER, "failed to read input for variable '{var}'");
                         // Provide an empty string as fallback
                         variable_values.insert(var, serde_json::Value::String(String::new()));
                         continue;
@@ -354,6 +359,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[expect(clippy::disallowed_macros, reason = "prints the script listing")]
     async fn handle_list(
         _settings: &Settings,
         _list: List,
@@ -362,7 +368,7 @@ impl Cmd {
         let scripts = script_db.list().await?;
 
         if scripts.is_empty() {
-            println!("No scripts found");
+            info!(target: USER, "No scripts found");
         } else {
             println!("Available scripts:");
             for script in scripts {
@@ -382,6 +388,7 @@ impl Cmd {
         Ok(())
     }
 
+    #[expect(clippy::disallowed_macros, reason = "prints the script")]
     async fn handle_get(
         _settings: &Settings,
         get: Get,
@@ -501,7 +508,7 @@ impl Cmd {
             // Rebuild the database to apply changes
             script_store.build(script_db).await?;
 
-            println!("Script '{}' updated successfully!", edit.name);
+            info!(target: USER, "Script '{}' updated successfully!", edit.name);
 
             Ok(())
         } else {
@@ -509,6 +516,7 @@ impl Cmd {
         }
     }
 
+    #[expect(clippy::disallowed_macros, reason = "the user confirms the deletion on stdin")]
     async fn handle_delete(
         _settings: &Settings,
         delete: Delete,
@@ -527,7 +535,7 @@ impl Cmd {
 
                 let input = input.trim().to_lowercase();
                 if input != "y" && input != "yes" {
-                    println!("Deletion cancelled");
+                    info!(target: USER, "Deletion cancelled");
                     return Ok(());
                 }
             }
@@ -538,7 +546,7 @@ impl Cmd {
             // Rebuild the database to apply changes
             script_store.build(script_db).await?;
 
-            println!("Script '{}' deleted successfully", delete.name);
+            info!(target: USER, "Script '{}' deleted successfully", delete.name);
             Ok(())
         } else {
             bail!("script '{}' not found", delete.name);

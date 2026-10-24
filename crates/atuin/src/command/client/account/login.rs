@@ -7,6 +7,7 @@ use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
+use atuin_common::logs::USER;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
@@ -51,17 +52,17 @@ impl Cmd {
     pub async fn run(&self, settings: &Arc<Settings>, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
-                println!("{}", fl!("account-hub-authenticated"));
-                println!("{}", fl!("account-run-logout"));
+                tracing::info!(target: USER, "{}", fl!("account-hub-authenticated"));
+                tracing::info!(target: USER, "{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::Legacy { .. } => {
-                println!("{}", fl!("login-legacy-logged-in"));
-                println!("{}", fl!("account-run-logout"));
+                tracing::info!(target: USER, "{}", fl!("login-legacy-logged-in"));
+                tracing::info!(target: USER, "{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::HubViaCli { .. } => {
-                println!("{}", fl!("login-upgrading-legacy"));
+                tracing::info!(target: USER, "{}", fl!("login-upgrading-legacy"));
             }
             SyncAuth::NotLoggedIn { .. } => {}
         }
@@ -123,8 +124,8 @@ impl Cmd {
                 meta.save_hub_session(&session).await?;
             } else {
                 meta.save_session(&session).await?;
-                println!("\n{}", fl!("account-not-migrated-note"));
-                println!("{}", fl!("account-not-migrated-hint"));
+                tracing::info!(target: USER, "{}", fl!("account-not-migrated-note"));
+                tracing::info!(target: USER, "{}", fl!("account-not-migrated-hint"));
             }
         } else {
             // Interactive login via browser OAuth flow.
@@ -145,7 +146,7 @@ impl Cmd {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
 
-        println!("{}", fl!("login-success"));
+        tracing::info!(target: USER, "{}", fl!("login-success"));
         Ok(())
     }
 
@@ -171,12 +172,12 @@ impl Cmd {
             }
         }
 
-        println!("{}", fl!("login-legacy-success"));
+        tracing::info!(target: USER, "{}", fl!("login-legacy-success"));
         Ok(())
     }
 
     async fn ensure_hub_session(&self, settings: &Settings, hub_address: &url::Url) -> Result<()> {
-        tracing::info!("Authenticating with Atuin Hub...");
+        tracing::info!(target: USER, "Authenticating with Atuin Hub...");
 
         let mut session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
 
@@ -185,12 +186,15 @@ impl Cmd {
             session.auth_url.query_pairs_mut().append_pair("signup", "1");
         }
 
-        if session.open_in_browser() {
-            println!("{}", fl!("account-hub-browser-opened"));
-        } else {
-            println!("{}", fl!("account-hub-open-url"));
+        #[expect(clippy::disallowed_macros, reason = "the user opens the URL to log in")]
+        {
+            if session.open_in_browser() {
+                println!("{}", fl!("account-hub-browser-opened"));
+            } else {
+                println!("{}", fl!("account-hub-open-url"));
+            }
+            println!("{}", session.auth_url);
         }
-        println!("{}", session.auth_url);
 
         let token = session
             .wait_for_completion(
@@ -200,7 +204,7 @@ impl Cmd {
             )
             .await?;
 
-        tracing::info!("Authentication complete, saving session token");
+        tracing::info!(target: USER, "Authentication complete, saving session token");
 
         atuin_client::hub::save_session(&token, settings).await?;
 
@@ -210,12 +214,13 @@ impl Cmd {
     async fn prompt_and_store_key(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let key_path = &settings.key_path;
 
-        println!("{}", fl!("login-key-important"));
-        println!("{}", fl!("login-key-same-everywhere"));
-        println!("{}", fl!("login-key-find"));
-        println!("{}", fl!("login-key-secret"));
-        println!(
-            "\n{} \n",
+        tracing::info!(target: USER, "{}", fl!("login-key-important"));
+        tracing::info!(target: USER, "{}", fl!("login-key-same-everywhere"));
+        tracing::info!(target: USER, "{}", fl!("login-key-find"));
+        tracing::info!(target: USER, "{}", fl!("login-key-secret"));
+        tracing::info!(
+            target: USER,
+            "{}",
             fl!("login-key-read-more", url = atuin_common::docs::url("guide/sync/#login"))
         );
 
@@ -238,7 +243,7 @@ impl Cmd {
                     if !interactive {
                         bail!(msg);
                     }
-                    println!("\n{msg}\n");
+                    tracing::warn!(target: USER, "{msg}");
                     continue;
                 }
 
@@ -254,7 +259,11 @@ impl Cmd {
             match paseto_v4::Key::try_from_mnemonic(key.expose_secret()) {
                 Ok(key) => return store_key(settings, store, &key).await,
                 Err(err) if interactive => {
-                    println!("\n{}\n", fl!("login-key-try-again", error = err.to_string()));
+                    tracing::warn!(
+                        target: USER,
+                        "{}",
+                        fl!("login-key-try-again", error = err.to_string())
+                    );
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -277,11 +286,11 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
         return Ok(());
     }
 
-    println!("\n{}", fl!("login-reencrypting"));
+    tracing::info!(target: USER, "{}", fl!("login-reencrypting"));
     store.re_encrypt(&current_key, key).await?;
     crate::command::client::store::invalidate_ai_sessions(settings).await;
 
-    println!("{}", fl!("login-writing-key"));
+    tracing::info!(target: USER, "{}", fl!("login-writing-key"));
     key.overwrite_path(key_path)?;
 
     Ok(())
@@ -317,8 +326,8 @@ async fn verify_key_against_remote(
                     logout_wrong_key(settings).await;
                 }
 
-                println!("\n{}", fl!("login-key-mismatch"));
-                println!("{}", fl!("login-key-find-correct"));
+                tracing::warn!(target: USER, "{}", fl!("login-key-mismatch"));
+                tracing::info!(target: USER, "{}", fl!("login-key-find-correct"));
 
                 let input = read_user_input::<SecretString>(&fl!("prompt-key-or-logout"));
                 match input {
@@ -326,8 +335,9 @@ async fn verify_key_against_remote(
                         match paseto_v4::Key::try_from_mnemonic(input.expose_secret()) {
                             Ok(candidate) => key = candidate,
                             Err(err) => {
-                                println!(
-                                    "\n{}",
+                                tracing::warn!(
+                                    target: USER,
+                                    "{}",
                                     fl!("login-key-try-again", error = err.to_string())
                                 );
                             }
@@ -341,7 +351,7 @@ async fn verify_key_against_remote(
                 // Non-key error (e.g. transient network issue). Don't fail the
                 // login — the user is authenticated and can sync later when the
                 // network recovers.
-                tracing::warn!("could not verify encryption key against remote: {e}");
+                tracing::warn!(target: USER, "could not verify encryption key against remote: {e}");
                 return Ok(());
             }
         }
@@ -379,6 +389,7 @@ pub(super) fn read_secret(prompt: &str) -> SecretString {
 }
 
 /// Returns `None` if stdin reached end of input before a line was read.
+#[expect(clippy::disallowed_macros, reason = "the user answers on the same line")]
 pub(super) fn read_user_input<T: for<'a> From<&'a str>>(prompt: &str) -> Option<T> {
     eprint!("{prompt}: ");
     get_input().expect("Failed to read from input")

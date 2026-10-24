@@ -9,6 +9,7 @@ use eyre::{Result, bail};
 use crate::i18n::fl;
 use crate::{SHA, VERSION};
 
+#[expect(clippy::disallowed_macros, reason = "prints the sync status report")]
 pub async fn run(settings: &Arc<Settings>) -> Result<()> {
     if !settings.logged_in().await? {
         bail!(fl!("sync-status-not-logged-in"));
