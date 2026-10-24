@@ -15,16 +15,17 @@ mod common;
 #[allow(dead_code, reason = "the pty harness is shared with the other e2e test binaries")]
 #[path = "common/pty.rs"]
 mod pty;
-#[allow(dead_code, reason = "only `PROMPT` is needed here; `pty` reaches for it by path")]
+#[allow(
+    dead_code,
+    reason = "only `executable` and `PROMPT`, which `pty` reaches by path, are used"
+)]
 #[path = "common/shell.rs"]
 mod shell;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use atuin_client::history::HistoryId;
-use atuin_common::path::PathBufExt as _;
 use atuin_common::range::PyStyleIdxRange;
 use atuin_daemon::client::HistoryClient;
 use common::{FreshEnv, Process, SESSION, TIMEOUT, marker, output};
@@ -57,22 +58,6 @@ async fn captured(env: &FreshEnv, client: &mut HistoryClient) -> Vec<(String, St
     captured
 }
 
-/// `bash`, honouring the same override and skip rules as the other shell tests.
-#[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why one is skipped")]
-fn bash() -> Option<PathBuf> {
-    let found = match atuin_common::env::var_os("ATUIN_E2E_BASH") {
-        Some(path) => Some(PathBuf::from(path)),
-        None => std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
-            .map(|dir| dir.joined("bash"))
-            .find(|path| path.is_file()),
-    };
-    if found.is_none() {
-        assert!(atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(), "missing bash");
-        eprintln!("skipping: missing bash");
-    }
-    found
-}
-
 /// `config` excludes commands starting `echo filtered-`; `in_history` is whether it leaves them in
 /// history all the same.
 #[rstest]
@@ -83,7 +68,7 @@ async fn filtered_commands_leave_no_captured_output(
     #[case] config: &str,
     #[case] in_history: bool,
 ) {
-    let Some(bash) = bash() else {
+    let Some(bash) = shell::executable("e2e_capture", "bash") else {
         return;
     };
 

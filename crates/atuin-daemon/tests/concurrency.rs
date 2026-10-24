@@ -342,7 +342,6 @@ async fn disjoint_concurrent_deletes_leave_the_index_empty() {
 /// latency stays within a small multiple of an uncontended finish.
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[expect(clippy::disallowed_macros, reason = "prints the timings to diagnose a failure")]
 async fn end_history_is_not_starved_by_an_index_reload() {
     let env = seeded_env().await;
     // Calibrate: how long does one reload take here? Only used as the sleep yardstick and the
@@ -395,11 +394,6 @@ async fn end_history_is_not_starved_by_an_index_reload() {
     let racing_reload_time = reload.await.unwrap();
     writer.await.unwrap();
     let ratio = hook_latency.as_secs_f64() / racing_reload_time.as_secs_f64();
-    eprintln!(
-        "calibration_time={calibration_time:?} racing_reload_time={racing_reload_time:?} \
-         hook_latency={hook_latency:?} uncontended={uncontended:?} ratio={ratio:.3} \
-         writer_queued={writer_queued}"
-    );
     // An uncontended `finish` is the honest yardstick: "racing_reload_time / 2" carried only a
     // ~20% margin over the observed 0.60-0.63x ratio and flaked. A generous floor (50ms, or 20x
     // the uncontended cost) fails on a guard-holding daemon, where a starved hook takes hundreds
@@ -408,8 +402,8 @@ async fn end_history_is_not_starved_by_an_index_reload() {
     assert!(
         hook_latency < budget,
         "EndHistory took {hook_latency:?} (budget {budget:?}, uncontended {uncontended:?}) while \
-         a reload of {racing_reload_time:?} ran (ratio {ratio:.3}, writer queued: \
-         {writer_queued}): shell hook starved"
+         a reload of {racing_reload_time:?} ran (ratio {ratio:.3}, calibration \
+         {calibration_time:?}, writer queued: {writer_queued}): shell hook starved"
     );
 }
 

@@ -25,17 +25,19 @@ mod common;
 #[allow(dead_code, reason = "the pty harness is shared with the other e2e test binaries")]
 #[path = "common/pty.rs"]
 mod pty;
-#[allow(dead_code, reason = "only `PROMPT` is needed here; `pty` reaches for it by path")]
+#[allow(
+    dead_code,
+    reason = "only `executable` and `PROMPT`, which `pty` reaches by path, are used"
+)]
 #[path = "common/shell.rs"]
 mod shell;
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::os::unix::process::CommandExt as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-use atuin_common::path::PathBufExt as _;
 use common::FreshEnv;
 use pty::PtyShell;
 use rstest::rstest;
@@ -58,40 +60,11 @@ function fish_mode_prompt
 end
 "#;
 
-/// The `name` binary to test against, or [`None`] when it is not installed.
-///
-/// Mirrors the lookup in [`shell::Shell::start`]: `ATUIN_E2E_<NAME>` overrides the binary, and a
-/// missing shell is a hard error only when `ATUIN_E2E_REQUIRE_SHELLS` is set.
-#[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why one is skipped")]
-fn find_shell(name: &str) -> Option<PathBuf> {
-    if let Some(path) = atuin_common::env::var_os(format!("ATUIN_E2E_{}", name.to_uppercase())) {
-        let path = PathBuf::from(path);
-        assert!(
-            path.is_file(),
-            "ATUIN_E2E_{} is not a file: {}",
-            name.to_uppercase(),
-            path.display()
-        );
-        return Some(path);
-    }
-    let found = std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
-        .map(|dir| dir.joined(name))
-        .find(|path| path.is_file());
-    if found.is_none() {
-        assert!(
-            atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(),
-            "missing {name} for e2e_pty_proxy_init"
-        );
-        eprintln!("skipping e2e_pty_proxy_init: missing {name}");
-    }
-    found
-}
-
 #[rstest]
 fn fish_keeps_its_keyboard_however_the_preamble_is_sourced(
     #[values(Sourced::FromPipe, Sourced::FromFile)] sourced: Sourced,
 ) {
-    let Some(fish) = find_shell("fish") else {
+    let Some(fish) = shell::executable("e2e_pty_proxy_init", "fish") else {
         return;
     };
 
@@ -193,25 +166,26 @@ fn posix_shells_run_their_command_or_file_instead_of_a_proxy(
     )]
     invocation: Invocation,
 ) {
-    let Some(shell) = find_shell(name) else {
+    let Some(shell) = shell::executable("e2e_pty_proxy_init", name) else {
         return;
     };
 
     let env = FreshEnv::new();
-    #[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why it is skipped")]
     if let Invocation::Login | Invocation::LoginPath = invocation
         && name == "bash"
         && !login_bash_is(&shell)
     {
-        eprintln!("skipping: a login bash's $BASH is the passwd shell, not {}", shell.display());
+        common::skip(format_args!(
+            "a login bash's $BASH is the passwd shell, not {}",
+            shell.display()
+        ));
         return;
     }
-    #[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why it is skipped")]
     if let Invocation::File = invocation
         && name == "bash"
         && !bash_names_script_in_rc(&shell)
     {
-        eprintln!("skipping: {} only sets $0 to the script after its rc", shell.display());
+        common::skip(format_args!("{} only sets $0 to the script after its rc", shell.display()));
         return;
     }
     let shadow = match invocation {
@@ -301,7 +275,7 @@ fn proxy_starts_only_when_atuin_runs_by_name(
 ) {
     const SYSTEM_PATH: &str = "/usr/bin:/bin";
 
-    let Some(shell) = find_shell(name) else {
+    let Some(shell) = shell::executable("e2e_pty_proxy_init", name) else {
         return;
     };
 
