@@ -9,6 +9,7 @@ use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
 use atuin_common::logs::USER;
 use atuin_common::out::outln;
+use atuin_common::prompt::Prompt;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
@@ -36,17 +37,6 @@ pub struct Cmd {
 
     #[clap(long, hide = true)]
     pub from_registration: bool,
-}
-
-/// Read a line from stdin, returning `None` at end of input. The distinction
-/// matters for the key prompts, which re-prompt on a blank line but must not
-/// spin forever once stdin is exhausted.
-fn get_input<T: for<'a> From<&'a str>>() -> Result<Option<T>> {
-    let mut input = Zeroizing::new(String::new());
-    if io::stdin().read_line(&mut input)? == 0 {
-        return Ok(None);
-    }
-    Ok(Some(input.trim_end_matches(&['\r', '\n'][..]).into()))
 }
 
 impl Cmd {
@@ -386,11 +376,11 @@ pub(super) fn read_secret(prompt: &str) -> SecretString {
     SecretString::from(secret.as_str())
 }
 
-/// Returns `None` if stdin reached end of input before a line was read.
-#[expect(clippy::disallowed_macros, reason = "the user answers on the same line")]
+/// Returns `None` if stdin reached end of input before a line was read. The distinction matters
+/// for the key prompts, which re-prompt on a blank line but must not spin forever once stdin is
+/// exhausted.
 pub(super) fn read_user_input<T: for<'a> From<&'a str>>(prompt: &str) -> Option<T> {
-    eprint!("{prompt}: ");
-    get_input().expect("Failed to read from input")
+    Prompt::new(&format!("{prompt}: ")).ask().expect("Failed to read from input")
 }
 
 #[cfg(test)]

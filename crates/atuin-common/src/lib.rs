@@ -22,6 +22,7 @@ pub mod logs;
 pub mod os;
 pub mod out;
 pub mod path;
+pub mod prompt;
 pub mod range;
 pub mod rmp;
 pub mod secrets;
