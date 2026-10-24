@@ -1,4 +1,5 @@
 #![warn(clippy::pedantic, clippy::nursery)]
+#![cfg_attr(test, allow(clippy::disallowed_macros, reason = "tests may print"))]
 #![allow(clippy::use_self, clippy::missing_const_for_fn)] // not 100% reliable
 
 use clap::Parser;

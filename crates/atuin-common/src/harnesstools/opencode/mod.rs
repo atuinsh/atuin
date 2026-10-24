@@ -150,7 +150,6 @@ await fire("tool.execute.after", { tool: "read", id: "c6", status: "completed", 
     /// timeout's 124); not one left running in the background, nor one that was denied.
     #[cfg(unix)]
     #[rstest]
-    #[expect(clippy::disallowed_macros, reason = "says why the test is skipped")]
     fn the_opencode_2_plugin_records_commands_that_ended() {
         use std::os::unix::fs::PermissionsExt;
         if !node_runs_typescript() {

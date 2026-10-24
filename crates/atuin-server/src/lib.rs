@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::disallowed_macros, reason = "tests may print"))]
 
 use std::future::Future;
 use std::net::SocketAddr;
