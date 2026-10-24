@@ -1,4 +1,4 @@
-#![expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
+use atuin_common::out::outln;
 
 use super::StaticInitOptions;
 
@@ -18,8 +18,8 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
     };
 
     // TODO: tmux popup for Powershell
-    println!("{}", crate::shell::POWERSHELL);
-    println!(
+    outln!("{}", crate::shell::POWERSHELL);
+    outln!(
         "Enable-AtuinSearchKeys -CtrlR {} -UpArrow {}",
         ps_bool(bind_ctrl_r),
         ps_bool(bind_up_arrow)

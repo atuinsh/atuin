@@ -1,6 +1,7 @@
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::out::outln;
 use atuin_dotfiles::store::var::VarStore;
 use clap::{Subcommand, ValueEnum};
 use eyre::{Context, Result};
@@ -56,7 +57,6 @@ pub enum Cmd {
 
 impl Cmd {
     #[allow(clippy::too_many_arguments)]
-    #[expect(clippy::disallowed_macros, reason = "prints the vars")]
     async fn list(
         &self,
         store: VarStore,
@@ -104,9 +104,9 @@ impl Cmd {
 
         for i in vars {
             if i.export {
-                println!("export {}={}", i.name, i.value);
+                outln!("export {}={}", i.name, i.value);
             } else {
-                println!("{}={}", i.name, i.value);
+                outln!("{}={}", i.name, i.value);
             }
         }
 

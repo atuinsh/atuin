@@ -1,5 +1,3 @@
-#![expect(clippy::disallowed_macros, reason = "prints the wrapped report")]
-
 use std::collections::{HashMap, HashSet};
 
 use atuin_client::database::Sqlite;
@@ -7,6 +5,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use atuin_history::stats::{Stats, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
@@ -187,11 +186,11 @@ pub fn print_wrapped_header(year: i32) {
     let reset = ResetColor;
     let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
-    println!("{bold}╭────────────────────────────────────╮{reset}");
-    println!("{bold}│        ATUIN WRAPPED {year}          │{reset}");
-    println!("{bold}│    Your Year in Shell History      │{reset}");
-    println!("{bold}╰────────────────────────────────────╯{reset}");
-    println!();
+    outln!("{bold}╭────────────────────────────────────╮{reset}");
+    outln!("{bold}│        ATUIN WRAPPED {year}          │{reset}");
+    outln!("{bold}│    Your Year in Shell History      │{reset}");
+    outln!("{bold}╰────────────────────────────────────╯{reset}");
+    outln!();
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -200,7 +199,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     let bold = SetAttribute(crossterm::style::Attribute::Bold);
 
     if wrapped_stats.git_percentage > 0.05 {
-        println!(
+        outln!(
             "{bold}🌟 You're a Git Power User!{reset} {bold}{:.1}%{reset} of your commands were \
              Git operations\n",
             wrapped_stats.git_percentage * 100.0
@@ -209,43 +208,43 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     // Navigation patterns
     let nav_percentage = wrapped_stats.nav_commands as f64 / stats.total_commands as f64 * 100.0;
     if nav_percentage > 0.05 {
-        println!(
+        outln!(
             "{bold}🚀 You're a Navigator!{reset} {bold}{nav_percentage:.1}%{reset} of your time \
              was spent navigating directories\n",
         );
     }
 
     // Command vocabulary
-    println!(
+    outln!(
         "{bold}📚 Command Vocabulary{reset}: You know {bold}{}{reset} unique commands\n",
         stats.unique_commands
     );
 
     // Package management
-    println!(
+    outln!(
         "{bold}📦 Package Management{reset}: You ran {bold}{}{reset} package-related commands\n",
         wrapped_stats.pkg_commands
     );
 
     // Error patterns
     let error_percentage = wrapped_stats.error_rate * 100.0;
-    println!(
+    outln!(
         "{bold}🚨 Error Analysis{reset}: Your commands failed {bold}{error_percentage:.1}%{reset} \
          of the time\n",
     );
 
     // Command evolution
-    println!("🔍 Command Evolution:");
+    outln!("🔍 Command Evolution:");
 
     // print stats for each half and compare
-    println!("  {bold}Top Commands{reset} in the first half of {year}:");
+    outln!("  {bold}Top Commands{reset} in the first half of {year}:");
     for (cmd, count) in wrapped_stats.first_half_commands.iter().take(3) {
-        println!("    {bold}{cmd}{reset} ({count} times)");
+        outln!("    {bold}{cmd}{reset} ({count} times)");
     }
 
-    println!("  {bold}Top Commands{reset} in the second half of {year}:");
+    outln!("  {bold}Top Commands{reset} in the second half of {year}:");
     for (cmd, count) in wrapped_stats.second_half_commands.iter().take(3) {
-        println!("    {bold}{cmd}{reset} ({count} times)");
+        outln!("    {bold}{cmd}{reset} ({count} times)");
     }
 
     // Find new favorite commands (in top 5 of second half but not in first half)
@@ -259,26 +258,26 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
         .collect();
 
     if !new_favorites.is_empty() {
-        println!("  {bold}New favorites{reset} in the second half:");
+        outln!("  {bold}New favorites{reset} in the second half:");
         for (cmd, count) in new_favorites {
-            println!("    {bold}{cmd}{reset} ({count} times)");
+            outln!("    {bold}{cmd}{reset} ({count} times)");
         }
     }
 
     // Time patterns
     if let Some((hour, count)) = &wrapped_stats.busiest_hour {
-        println!("\n🕘 Most Productive Hour: {bold}{hour}{reset} ({count} commands)");
+        outln!("\n🕘 Most Productive Hour: {bold}{hour}{reset} ({count} commands)");
 
         // Night owl or early bird
         let hour_num = hour.split(':').next().unwrap_or("0").parse::<u32>().unwrap_or(0);
         if hour_num >= 22 || hour_num <= 4 {
-            println!("  You're quite the night owl! 🦉");
+            outln!("  You're quite the night owl! 🦉");
         } else if (5..=7).contains(&hour_num) {
-            println!("  Early bird gets the worm! 🐦");
+            outln!("  Early bird gets the worm! 🐦");
         }
     }
 
-    println!();
+    outln!();
 }
 
 #[instrument(level = "trace", skip_all, err)]
@@ -336,12 +335,12 @@ pub async fn run(
     // Print wrapped format
     print_wrapped_header(year);
 
-    println!("🎉 In {year}, you typed {} commands!", stats.total_commands);
-    println!("   That's ~{} commands every day\n", stats.total_commands / 365);
+    outln!("🎉 In {year}, you typed {} commands!", stats.total_commands);
+    outln!("   That's ~{} commands every day\n", stats.total_commands / 365);
 
-    println!("Your Top Commands:");
+    outln!("Your Top Commands:");
     atuin_history::stats::pretty_print(stats.clone(), 1, theme);
-    println!();
+    outln!();
 
     print_fun_facts(&wrapped_stats, &stats, year);
 

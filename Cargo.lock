@@ -662,6 +662,7 @@ name = "atuin-history"
 version = "18.24.2"
 dependencies = [
  "atuin-client",
+ "atuin-common",
  "crossterm",
  "easy-cast",
  "rstest",

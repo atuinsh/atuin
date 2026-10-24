@@ -6,6 +6,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::settings::{DbLocation, Settings};
 use atuin_common::env;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use atuin_common::path::{AbsPathBuf, PathExt};
 use atuin_common::shell::{Shell, shell_name};
 use atuin_common::string::NonEmptyOrExt as _;
@@ -392,9 +393,8 @@ impl DoctorDump {
     }
 }
 
-#[expect(clippy::disallowed_macros, reason = "prints the doctor's report")]
 fn checks(info: &DoctorDump, settings: &Settings) {
-    println!(); // spacing
+    outln!(); // spacing
     //
     let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
     let bash_plugin_error = format!(
@@ -413,12 +413,12 @@ fn checks(info: &DoctorDump, settings: &Settings) {
     let openbsd_warning = "[System] OpenBSD is not officially supported.".bold().red();
 
     if cfg!(target_os = "openbsd") {
-        println!("{openbsd_warning}");
+        outln!("{openbsd_warning}");
     }
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
-        println!("{zfs_error}");
+        outln!("{zfs_error}");
     }
 
     info.atuin.setting_paths.verify();
@@ -426,41 +426,40 @@ fn checks(info: &DoctorDump, settings: &Settings) {
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
         let active = atuin_common::dirs::config_path("config.toml");
         let warning = super::info::shadowed_config_warning(&legacy, &active);
-        println!("{}", format!("[Config] Warning: {warning}.").bold().red());
+        outln!("{}", format!("[Config] Warning: {warning}.").bold().red());
     }
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_data_dir(&settings.data_dir) {
         let warning = super::info::shadowed_data_dir_warning(&legacy, &settings.data_dir);
-        println!("{}", format!("[Data] Warning: {warning}.").bold().red());
+        outln!("{}", format!("[Data] Warning: {warning}.").bold().red());
     }
 
     // Shell
     if info.shell.name == "bash" {
         if !info.shell.plugins.iter().any(|p| p == "blesh" || p == "bash-preexec") {
-            println!("{bash_plugin_error}");
+            outln!("{bash_plugin_error}");
         }
 
         if info.shell.plugins.iter().any(|plugin| plugin == "atuin")
             && info.shell.plugins.iter().any(|plugin| plugin == "blesh")
             && info.shell.preexec.as_ref().is_some_and(|val| val == "none")
         {
-            println!("{blesh_integration_error}");
+            outln!("{blesh_integration_error}");
         }
     }
 }
 
 #[instrument(level = "trace", skip_all, err)]
-#[expect(clippy::disallowed_macros, reason = "prints the doctor's report")]
 pub async fn run(settings: &Settings) -> Result<()> {
-    println!("{}", "Atuin Doctor".bold());
-    println!("Checking for diagnostics");
+    outln!("{}", "Atuin Doctor".bold());
+    outln!("Checking for diagnostics");
     let dump = DoctorDump::new(settings).await;
 
     checks(&dump, settings);
 
     let dump = serde_json::to_string_pretty(&dump)?;
 
-    println!("\nPlease include the output below with any bug reports or issues\n");
-    println!("{dump}");
+    outln!("\nPlease include the output below with any bug reports or issues\n");
+    outln!("{dump}");
 
     Ok(())
 }

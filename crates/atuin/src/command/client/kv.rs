@@ -3,6 +3,7 @@ use std::io::{self, IsTerminal, Read};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::out::outln;
 use atuin_kv::store::KvStore;
 use clap::Subcommand;
 use eyre::{Context, Result, eyre};
@@ -98,18 +99,16 @@ impl Cmd {
 
             Self::Delete { keys, namespace } => kv_store.delete(namespace, keys).await,
 
-            #[expect(clippy::disallowed_macros, reason = "prints the value")]
             Self::Get { key, namespace } => {
                 let kv = kv_store.get(namespace, key).await?;
 
                 if let Some(val) = kv {
-                    println!("{val}");
+                    outln!("{val}");
                 }
 
                 Ok(())
             }
 
-            #[expect(clippy::disallowed_macros, reason = "prints the keys")]
             Self::List {
                 namespace,
                 all_namespaces,
@@ -122,9 +121,9 @@ impl Cmd {
 
                 for entry in entries {
                     if *all_namespaces {
-                        println!("{}.{}", entry.namespace, entry.key);
+                        outln!("{}.{}", entry.namespace, entry.key);
                     } else {
-                        println!("{}", entry.key);
+                        outln!("{}", entry.key);
                     }
                 }
 

@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 
+use atuin_common::out::out;
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::{CaptureConfig, runtime};
@@ -110,11 +111,10 @@ impl PtyProxy {
 }
 
 impl Init {
-    #[expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
     fn run(self) -> Result<(), String> {
         let shell = detect_shell(self.shell)?;
         let script = init_script(shell);
-        print!("{script}");
+        out!("{script}");
         Ok(())
     }
 }

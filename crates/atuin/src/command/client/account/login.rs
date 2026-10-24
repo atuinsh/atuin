@@ -8,6 +8,7 @@ use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
@@ -186,15 +187,12 @@ impl Cmd {
             session.auth_url.query_pairs_mut().append_pair("signup", "1");
         }
 
-        #[expect(clippy::disallowed_macros, reason = "the user opens the URL to log in")]
-        {
-            if session.open_in_browser() {
-                println!("{}", fl!("account-hub-browser-opened"));
-            } else {
-                println!("{}", fl!("account-hub-open-url"));
-            }
-            println!("{}", session.auth_url);
+        if session.open_in_browser() {
+            outln!("{}", fl!("account-hub-browser-opened"));
+        } else {
+            outln!("{}", fl!("account-hub-open-url"));
         }
+        outln!("{}", session.auth_url);
 
         let token = session
             .wait_for_completion(

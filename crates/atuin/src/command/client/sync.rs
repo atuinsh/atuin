@@ -7,6 +7,7 @@ use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use atuin_domain::record::{RecordId, RecordTag};
 use clap::Subcommand;
 use clap_couture::Couture;
@@ -70,15 +71,14 @@ impl Cmd {
             Self::Logout => account::logout::run(settings).await,
             Self::Register(r) => r.run(settings, &store).await,
             Self::Status => status::run(settings).await,
-            #[expect(clippy::disallowed_macros, reason = "prints the key")]
             Self::Key { base64 } => {
                 let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
                     .wrap_err(fl!("sync-key-load-failed"))?;
 
                 if base64 {
-                    println!("{}", key.encode().dangerously_leak_secret());
+                    outln!("{}", key.encode().dangerously_leak_secret());
                 } else {
-                    println!("{}", key.try_mnemonic().context(fl!("sync-key-invalid"))?);
+                    outln!("{}", key.try_mnemonic().context(fl!("sync-key-invalid"))?);
                 }
                 Ok(())
             }

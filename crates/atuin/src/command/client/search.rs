@@ -12,6 +12,7 @@ use atuin_client::tui::cursor;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::filter::OrFilter;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use atuin_common::utils;
 use clap::Parser;
@@ -218,7 +219,7 @@ impl Cmd {
 
         #[expect(
             clippy::disallowed_macros,
-            reason = "the shell reads the picked command from stdout or stderr"
+            reason = "the shell reads the picked command from stderr"
         )]
         if self.interactive {
             let item = interactive::history(&query, &settings, db, &history_store, theme).await?;
@@ -230,7 +231,7 @@ impl Cmd {
                 // stdout is not a terminal - likely command substitution like VAR=$(atuin search -i)
                 // Write to stdout so it gets captured. This requires some care on Windows, as the current
                 // console code page or `[Console]::OutputEncoding` on PowerShell may be different from UTF-8.
-                println!("{item}");
+                outln!("{item}");
             } else if stderr().is_terminal() {
                 eprintln!("{}", item.escape_non_printable());
             } else {

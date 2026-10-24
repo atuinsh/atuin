@@ -3,6 +3,7 @@ use std::sync::Arc;
 use atuin_client::logs::FromSettings;
 use atuin_client::settings::Settings;
 use atuin_common::logs::{FileConfig, LogConfig, StderrConfig};
+use atuin_common::out::outln;
 use atuin_common::shell::Shell;
 use clap::{Args, Subcommand};
 use secrecy::SecretString;
@@ -98,11 +99,10 @@ pub async fn run(command: Command, settings: Settings) -> eyre::Result<()> {
             let settings = Arc::new(settings);
             inline::run(command, args.api_endpoint, args.api_token, &settings, hook).await
         }
-        #[expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
         Command::Init { .. } => {
             // This is valid comment syntax in all the shells we support and thus a no-op: bash,
             // zsh, fish, nushell, xonsh, and powershell.
-            println!(
+            outln!(
                 "# This command is no longer necessary. If you have it in your shell init file, \
                  feel free to remove it."
             );

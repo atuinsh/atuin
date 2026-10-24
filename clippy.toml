@@ -98,8 +98,8 @@ reason = "use atuin_common::path::AbsPathBuf::canonicalize_async, whose type say
 [[disallowed-macros]]
 path = "std::println"
 reason = """log with `tracing`, and send a message the user should read to \
-    `target: atuin_common::logs::USER`; only a command's own output belongs on stdout, under an \
-    `#[expect]` that says what it is"""
+    `target: atuin_common::logs::USER`; write a command's own output with \
+    atuin_common::out::{out!, outln!}, which don't panic once the reader has gone"""
 
 [[disallowed-macros]]
 path = "std::print"

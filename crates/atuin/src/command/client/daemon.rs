@@ -6,6 +6,7 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::grpc::versioning::BUILD_STR;
 use atuin_daemon::service::{
@@ -231,10 +232,9 @@ pub async fn compact_store(settings: &Settings) -> Result<u64> {
     Ok(reply.rewritten)
 }
 
-#[expect(clippy::disallowed_macros, reason = "prints the daemon's status")]
 async fn status_cmd(settings: &Settings) -> Result<()> {
     let Some(service) = ActiveService::find(settings).await? else {
-        println!("Daemon is not running");
+        outln!("Daemon is not running");
         return Ok(());
     };
 
@@ -242,20 +242,20 @@ async fn status_cmd(settings: &Settings) -> Result<()> {
         Ok(()) => {
             let address = service.address().clone();
             let status = service.into_client().status().await?;
-            println!("Daemon running");
-            println!("  PID:      {}", status.pid);
-            println!("  Version:  {}", status.version);
-            println!("  Build:    {BUILD_STR}");
-            println!("  Healthy:  {}", status.healthy);
-            println!("  Address:  {address}");
+            outln!("Daemon running");
+            outln!("  PID:      {}", status.pid);
+            outln!("  Version:  {}", status.version);
+            outln!("  Build:    {BUILD_STR}");
+            outln!("  Healthy:  {}", status.healthy);
+            outln!("  Address:  {address}");
         }
         Err(reason) if reason.peer_is_newer() => {
-            println!("Daemon running (newer than this client)");
-            println!("  Reason: {reason}");
+            outln!("Daemon running (newer than this client)");
+            outln!("  Reason: {reason}");
         }
         Err(reason) => {
-            println!("Daemon running (needs restart)");
-            println!("  Reason: {reason}");
+            outln!("Daemon running (needs restart)");
+            outln!("  Reason: {reason}");
         }
     }
 

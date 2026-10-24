@@ -1,4 +1,4 @@
-#![expect(clippy::disallowed_macros, reason = "prints the shell's init script")]
+use atuin_common::out::outln;
 
 use super::StaticInitOptions;
 
@@ -35,14 +35,14 @@ const BIND_UP_ARROW: &str = r"$env.config = (
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
     // TODO: tmux popup for Nu
-    println!("{}", crate::shell::NU);
+    outln!("{}", crate::shell::NU);
 
     if atuin_common::env::var("ATUIN_NOBIND").is_err() {
         if options.enable_ctrl_r {
-            println!("{BIND_CTRL_R}");
+            outln!("{BIND_CTRL_R}");
         }
         if options.enable_up_arrow {
-            println!("{BIND_UP_ARROW}");
+            outln!("{BIND_UP_ARROW}");
         }
     }
 }

@@ -1,5 +1,6 @@
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
+use atuin_common::out::outln;
 use eyre::{Result, bail};
 
 use crate::i18n::fl;
@@ -23,15 +24,12 @@ pub async fn run(settings: &Settings) -> Result<()> {
 
         let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
 
-        #[expect(clippy::disallowed_macros, reason = "the user opens the URL to log in")]
-        {
-            if session.open_in_browser() {
-                println!("{}", fl!("account-hub-browser-opened"));
-            } else {
-                println!("{}", fl!("account-hub-open-url"));
-            }
-            println!("{}", session.auth_url);
+        if session.open_in_browser() {
+            outln!("{}", fl!("account-hub-browser-opened"));
+        } else {
+            outln!("{}", fl!("account-hub-open-url"));
         }
+        outln!("{}", session.auth_url);
 
         let token = session
             .wait_for_completion(
