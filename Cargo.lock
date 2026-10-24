@@ -283,6 +283,7 @@ dependencies = [
  "atuin-server",
  "atuin-vt100",
  "axoupdater",
+ "build-rs",
  "clap",
  "clap-couture",
  "clap_complete",
@@ -356,6 +357,7 @@ dependencies = [
  "atuin-domain",
  "atuin-vt100",
  "base64 0.22.1",
+ "build-rs",
  "chrono",
  "chrono-humanize",
  "clap",
@@ -419,6 +421,7 @@ dependencies = [
  "atuin-domain",
  "atuin-vt100",
  "base64 0.22.1",
+ "build-rs",
  "clap",
  "config",
  "crossterm",
@@ -560,6 +563,7 @@ dependencies = [
  "atuin-octavo",
  "atuin-scripts",
  "atuin-service-manager",
+ "build-rs",
  "daemonix",
  "dashmap",
  "derive_more",
@@ -699,6 +703,7 @@ dependencies = [
  "atuin-client",
  "atuin-common",
  "atuin-domain",
+ "build-rs",
  "eyre",
  "futures",
  "hyper-tls",
@@ -780,6 +785,7 @@ dependencies = [
  "atuin-common",
  "atuin-domain",
  "axum",
+ "build-rs",
  "clap",
  "config",
  "derive_more",
@@ -1076,6 +1082,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
 dependencies = [
  "tinyvec",
+]
+
+[[package]]
+name = "build-rs"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87a490fb7ec2896b97a4c721c03a2b2dc5c2b9b75b2a57ca396db4470dea0381"
+dependencies = [
+ "unicode-ident",
 ]
 
 [[package]]
