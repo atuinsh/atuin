@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::future::Future;
 use std::time::SystemTime;
 
@@ -68,24 +69,29 @@ impl AnyListener {
     pub fn events<F>(
         self,
         since: SystemTime,
-        checkpoint: impl Fn(&SessionId) -> F + Clone + Send + 'static,
+        checkpointed: HashSet<SessionId>,
+        checkpoint: impl Fn(&SessionId) -> F + Send + 'static,
     ) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>>
     where
         F: Future<Output = Option<Checkpoint>> + Send + 'static,
     {
         match self {
-            Self::Ccode(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
-            Self::Codex(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
-            Self::Opencode(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
-            Self::Pi(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
+            Self::Ccode(l) => l
+                .events(since, checkpointed, checkpoint)
+                .map_ok(|ev| ev.map_message(AnyMessage::from))
+                .boxed(),
+            Self::Codex(l) => l
+                .events(since, checkpointed, checkpoint)
+                .map_ok(|ev| ev.map_message(AnyMessage::from))
+                .boxed(),
+            Self::Opencode(l) => l
+                .events(since, checkpointed, checkpoint)
+                .map_ok(|ev| ev.map_message(AnyMessage::from))
+                .boxed(),
+            Self::Pi(l) => l
+                .events(since, checkpointed, checkpoint)
+                .map_ok(|ev| ev.map_message(AnyMessage::from))
+                .boxed(),
         }
     }
 }

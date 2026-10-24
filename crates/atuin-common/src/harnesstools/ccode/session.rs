@@ -1174,6 +1174,7 @@ impl Message for CcodeMessage {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::PathBuf;
 
     use futures::{StreamExt, TryStreamExt};
@@ -1520,7 +1521,9 @@ mod tests {
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             listener
-                .events(std::time::SystemTime::UNIX_EPOCH, |_| std::future::ready(None))
+                .events(std::time::SystemTime::UNIX_EPOCH, HashSet::new(), |_| {
+                    std::future::ready(None)
+                })
                 .take(2)
                 .try_collect(),
         )
@@ -1556,10 +1559,14 @@ mod tests {
             .unwrap();
         let from =
             Checkpoint::new(u64::try_from(first.len()).unwrap(), first.trim_end().as_bytes());
+        let checkpointed =
+            HashSet::from([SessionId::from("66666666-6666-6666-6666-666666666666".to_owned())]);
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             listener
-                .events(std::time::SystemTime::UNIX_EPOCH, move |_| std::future::ready(Some(from)))
+                .events(std::time::SystemTime::UNIX_EPOCH, checkpointed, move |_| {
+                    std::future::ready(Some(from))
+                })
                 .take(1)
                 .try_collect(),
         )
@@ -1604,7 +1611,7 @@ mod tests {
             let stored = std::sync::Arc::clone(&stored);
             move |_: &SessionId| std::future::ready(*stored.lock())
         };
-        let mut events = Box::pin(listener.events(since, checkpoint));
+        let mut events = Box::pin(listener.events(since, HashSet::new(), checkpoint));
         let early = tokio::time::timeout(std::time::Duration::from_secs(1), events.next()).await;
         assert!(early.is_err(), "read before it changed");
 
@@ -1643,7 +1650,10 @@ mod tests {
             .unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events(since, |_| std::future::ready(None)).take(1).try_collect(),
+            listener
+                .events(since, HashSet::new(), |_| std::future::ready(None))
+                .take(1)
+                .try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
