@@ -183,6 +183,12 @@ pub fn output(command: Command) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// Says why a test returns early: it passes all the same, with no other trace of being skipped.
+#[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why one is skipped")]
+pub fn skip(why: impl std::fmt::Display) {
+    eprintln!("skipping: {why}");
+}
+
 pub fn wait_until(what: &str, mut pred: impl FnMut() -> bool) {
     let deadline = Instant::now() + TIMEOUT;
     while !pred() {

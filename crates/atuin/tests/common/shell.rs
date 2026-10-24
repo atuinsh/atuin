@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -65,27 +66,14 @@ impl Setup {
     pub fn find(path: &Path) -> Option<Self> {
         let config: ShellConfig = toml_edit::de::from_str(&fs::read_to_string(path).unwrap())
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let override_var = format!("ATUIN_E2E_{}", config.shell.to_uppercase());
-        let executable = if let Some(path) = atuin_common::env::var_os(&override_var) {
-            let path = PathBuf::from(path);
-            assert!(path.is_file(), "{override_var} is not a file: {}", path.display());
-            Some(path)
-        } else {
-            std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
-                .map(|dir| dir.joined(&config.shell))
-                .find(|path| path.is_file())
-        };
-        let Some(executable) = executable else {
-            missing(path, &config.shell);
-            return None;
-        };
+        let executable = executable(path.display(), &config.shell)?;
         let mut files = BTreeMap::new();
         for (name, default) in &config.required_files {
             let value = atuin_common::env::var(name).unwrap_or_else(|_| {
                 default.replace("$HOME", &atuin_common::env::var("HOME").unwrap_or_default())
             });
             if !Path::new(&value).is_file() {
-                missing(path, &format!("{name}={value}"));
+                missing(path.display(), &format!("{name}={value}"));
                 return None;
             }
             files.insert(name.clone(), value);
@@ -129,12 +117,28 @@ impl Setup {
     }
 }
 
-#[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why one is skipped")]
-fn missing(config: &Path, dependency: &str) {
+/// The `shell` binary `test` runs: `ATUIN_E2E_<SHELL>` if set, else the first on `PATH`. `None`
+/// when it isn't installed, and `test` is skipped, or fails where `ATUIN_E2E_REQUIRE_SHELLS` is set.
+pub fn executable(test: impl Display, shell: &str) -> Option<PathBuf> {
+    let override_var = format!("ATUIN_E2E_{}", shell.to_uppercase());
+    if let Some(path) = atuin_common::env::var_os(&override_var) {
+        let path = PathBuf::from(path);
+        assert!(path.is_file(), "{override_var} is not a file: {}", path.display());
+        return Some(path);
+    }
+    let found = std::env::split_paths(&atuin_common::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.joined(shell))
+        .find(|path| path.is_file());
+    if found.is_none() {
+        missing(test, shell);
+    }
+    found
+}
+
+fn missing(test: impl Display, dependency: &str) {
     assert!(
         atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_none(),
-        "{}: missing {dependency}",
-        config.display()
+        "{test}: missing {dependency}"
     );
-    eprintln!("skipping {}: missing {dependency}", config.display());
+    crate::common::skip(format_args!("{test}: missing {dependency}"));
 }
