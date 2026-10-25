@@ -110,8 +110,9 @@ pub struct CommandData {
     most_recent_id: HistoryId,
     /// Timestamp of the most recent invocation.
     most_recent_timestamp: i64,
-    /// Timestamp of the oldest invocation.
-    oldest_timestamp: i64,
+    /// Timestamp of the oldest invocation, in unix nanoseconds (the precision stored in the
+    /// database, so session-preload filtering matches the database search).
+    oldest_timestamp_nanos: i64,
     /// Pre-computed global frecency.
     pub global_frecency: FrecencyData,
 
@@ -154,7 +155,7 @@ impl CommandData {
         Some(Self {
             most_recent_id: history.id,
             most_recent_timestamp: timestamp,
-            oldest_timestamp: timestamp,
+            oldest_timestamp_nanos: unix_timestamp_nanos(history),
             global_frecency,
             directories: HashSet::from([dir_key]),
             hosts: HashSet::from([host_key]),
@@ -187,7 +188,8 @@ impl CommandData {
             self.most_recent_id = history.id;
             self.most_recent_timestamp = timestamp;
         }
-        self.oldest_timestamp = self.oldest_timestamp.min(timestamp);
+        self.oldest_timestamp_nanos =
+            self.oldest_timestamp_nanos.min(unix_timestamp_nanos(history));
 
         true
     }
@@ -223,10 +225,20 @@ impl CommandData {
         self.sessions.contains(session)
     }
 
-    /// Check if any invocation happened before a unix timestamp (in seconds).
-    pub fn has_invocation_before(&self, timestamp: i64) -> bool {
-        self.oldest_timestamp < timestamp
+    /// Check if any invocation happened before a unix timestamp (in nanoseconds).
+    pub fn has_invocation_before(&self, timestamp_nanos: i64) -> bool {
+        self.oldest_timestamp_nanos < timestamp_nanos
     }
+}
+
+/// Unix timestamp of a history entry in nanoseconds, saturating at the `i64` range.
+fn unix_timestamp_nanos(history: &History) -> i64 {
+    let nanos = history.timestamp.unix_timestamp_nanos();
+    i64::try_from(nanos).unwrap_or(if nanos < 0 {
+        i64::MIN
+    } else {
+        i64::MAX
+    })
 }
 
 /// Filter mode for search queries.
@@ -253,7 +265,7 @@ enum CompiledFilter<'a> {
     Workspace(&'a str),
     Host(Spur),
     Session(Uuid),
-    /// Commands run in a session, or before the given unix timestamp (in seconds).
+    /// Commands run in a session, or before the given unix timestamp (in nanoseconds).
     SessionPreload(Uuid, Option<i64>),
     /// Used when a target (host/dir/session) has never been seen by the index -- nothing can match.
     Nothing,
@@ -276,8 +288,15 @@ impl IndexFilterMode {
             }
             Self::SessionPreload(session) => {
                 Uuid::parse_str(session).map_or(CompiledFilter::Nothing, |session| {
-                    let start =
-                        session.get_timestamp().and_then(|ts| i64::try_from(ts.to_unix().0).ok());
+                    // Same cutoff as the database search: the session's UUIDv7 timestamp, in
+                    // unix nanoseconds.
+                    let start = session.get_timestamp().and_then(|ts| {
+                        let (seconds, nanos) = ts.to_unix();
+                        i64::try_from(seconds)
+                            .ok()?
+                            .checked_mul(1_000_000_000)?
+                            .checked_add(i64::from(nanos))
+                    });
                     CompiledFilter::SessionPreload(session, start)
                 })
             }
@@ -891,6 +910,35 @@ mod tests {
         let preload: HashSet<_> =
             search(&IndexFilterMode::SessionPreload(session)).into_iter().collect();
         assert_eq!(preload, HashSet::from([before.id, in_session.id]));
+    }
+
+    #[rstest]
+    fn search_session_preload_keeps_sub_second_precision() {
+        let index = SearchIndex::default();
+
+        // The session starts half a second into 12:00:00; a command from another session
+        // at 12:00:00.100 happened before it, one at 12:00:00.900 did not.
+        let session = Uuid::new_v7(uuid::Timestamp::from_unix(
+            uuid::NoContext,
+            u64::try_from(datetime!(2024-01-01 12:00 UTC).unix_timestamp()).unwrap(),
+            500_000_000,
+        ));
+        let other_session = Uuid::now_v7().simple().to_string();
+
+        let mut before =
+            make_history("git status", "/home/user", datetime!(2024-01-01 12:00:00.1 UTC));
+        before.session.clone_from(&other_session);
+        let mut after =
+            make_history("git push", "/home/user", datetime!(2024-01-01 12:00:00.9 UTC));
+        after.session = other_session;
+
+        index.add_history(&before);
+        index.add_history(&after);
+
+        let preload: Vec<_> = index
+            .search("git", &IndexFilterMode::SessionPreload(session.simple().to_string()), 10)
+            .collect();
+        assert_eq!(preload, vec![before.id]);
     }
 
     /// Regression test for #3702: a frequently-run command whose match is
