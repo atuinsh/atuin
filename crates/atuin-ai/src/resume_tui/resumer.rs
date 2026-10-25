@@ -16,6 +16,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, Head, SourceId};
@@ -374,6 +375,18 @@ fn restored(restore: &Restore) -> String {
     }
 }
 
+/// How long [`ThisMachine`] spent writing session files, if it wrote any.
+static WRITING: parking_lot::Mutex<Option<Duration>> = parking_lot::const_mutex(None);
+
+/// How long this process spent writing session files out for the harness, if it wrote any.
+pub fn time_writing() -> Option<Duration> {
+    *WRITING.lock()
+}
+
+fn wrote(started: Instant) {
+    *WRITING.lock().get_or_insert_default() += started.elapsed();
+}
+
 /// This machine, as the harnesses themselves see it.
 pub struct ThisMachine;
 
@@ -388,7 +401,12 @@ impl Machine for ThisMachine {
         harness: AnyHarness,
         session: &RehydrateSession,
     ) -> Result<PathBuf, RehydrateError> {
-        harness.rehydrate(session).await
+        let started = Instant::now();
+        let written = harness.rehydrate(session).await;
+        if written.is_ok() {
+            wrote(started);
+        }
+        written
     }
 
     fn installed(&self, program: &str) -> bool {
@@ -415,7 +433,12 @@ impl Machine for ThisMachine {
         lines: &[RehydrateMessage],
         options: &AppendOptions<'_>,
     ) -> Result<AppendOutcome, SyncError> {
-        harness.append(id, base, lines, options).await
+        let started = Instant::now();
+        let appended = harness.append(id, base, lines, options).await;
+        if appended.as_ref().is_ok_and(|outcome| !outcome.appended.is_empty()) {
+            wrote(started);
+        }
+        appended
     }
 
     async fn replace(
@@ -427,7 +450,12 @@ impl Machine for ThisMachine {
         options: &AppendOptions<'_>,
         backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError> {
-        harness.replace(id, base, branch, options, backups).await
+        let started = Instant::now();
+        let replaced = harness.replace(id, base, branch, options, backups).await;
+        if replaced.is_ok() {
+            wrote(started);
+        }
+        replaced
     }
 }
 

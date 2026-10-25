@@ -817,6 +817,11 @@ fn exec(plan: &ResumePlan) -> Result<()> {
         // Keep $PWD in step, so harnesses that read it see the session's directory.
         command.env("PWD", cwd);
     }
+    // The harness can take a while to start: say where the time goes, so it isn't put down to atuin.
+    if let Some(took) = crate::resume_tui::resumer::time_writing() {
+        eprintln!("atuin: wrote the session file in {}ms", took.as_millis());
+    }
+    eprintln!("atuin: starting {}…", plan.program.escape_non_printable());
 
     #[cfg(unix)]
     {
