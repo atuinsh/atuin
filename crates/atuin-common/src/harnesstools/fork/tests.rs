@@ -72,6 +72,7 @@ async fn written(
         AnyHarness::Pi(_) => {
             let path = pi::rehydrate::rehydrate_into(
                 pi::Flavour::Pi,
+                None,
                 root,
                 &root.join("sessions"),
                 session,

@@ -36,6 +36,27 @@ impl Flavour {
             |dir| expand_tilde(&dir),
         )
     }
+
+    /// The model a session starts on, as `provider/id`, when one is configured and this flavour
+    /// needs telling: omp's `modelRoles.default` (its `config.yml`). pi falls back to its own
+    /// default by itself.
+    fn default_model(self) -> Option<String> {
+        if self == Self::Omp {
+            omp_default_model(&self.agent_dir())
+        } else {
+            None
+        }
+    }
+}
+
+/// omp's `modelRoles.default` from `config.yml` (or `config.yaml`) in `agent_dir`.
+fn omp_default_model(agent_dir: &Path) -> Option<String> {
+    let config = ["config.yml", "config.yaml"]
+        .iter()
+        .find_map(|name| std::fs::read_to_string(agent_dir.join(name)).ok())?;
+    let docs = yaml_rust2::YamlLoader::load_from_str(&config).ok()?;
+    let model = docs.first()?["modelRoles"]["default"].as_str()?.trim();
+    model.contains('/').then(|| model.to_owned())
 }
 
 /// Expand a leading `~` the way pi does for its path settings and variables (pi-mono
@@ -127,5 +148,37 @@ impl Harness for Pi {
 
     async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
         rehydrate::rehydrate(self.flavour, session).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// omp's default model, from `modelRoles.default` in its `config.yml` or `config.yaml`.
+    #[rstest]
+    #[case::configured(
+        "config.yml",
+        "modelRoles:\n  default: openai-codex/gpt-5.6-luna\n",
+        Some("openai-codex/gpt-5.6-luna")
+    )]
+    #[case::yaml_extension(
+        "config.yaml",
+        "modelRoles:\n  default: anthropic/claude-sonnet-5\n",
+        Some("anthropic/claude-sonnet-5")
+    )]
+    #[case::no_default("config.yml", "setupVersion: 2\n", None)]
+    #[case::no_provider("config.yml", "modelRoles:\n  default: gpt-5\n", None)]
+    #[case::not_yaml("config.yml", "modelRoles: [\n", None)]
+    fn omp_default_model_is_read_from_its_config(
+        #[case] name: &str,
+        #[case] config: &str,
+        #[case] want: Option<&str>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(name), config).unwrap();
+        assert_eq!(omp_default_model(dir.path()).as_deref(), want);
     }
 }
