@@ -110,6 +110,8 @@ pub struct CommandData {
     most_recent_id: HistoryId,
     /// Timestamp of the most recent invocation.
     most_recent_timestamp: i64,
+    /// Timestamp of the oldest invocation.
+    oldest_timestamp: i64,
     /// Pre-computed global frecency.
     pub global_frecency: FrecencyData,
 
@@ -152,6 +154,7 @@ impl CommandData {
         Some(Self {
             most_recent_id: history.id,
             most_recent_timestamp: timestamp,
+            oldest_timestamp: timestamp,
             global_frecency,
             directories: HashSet::from([dir_key]),
             hosts: HashSet::from([host_key]),
@@ -184,6 +187,7 @@ impl CommandData {
             self.most_recent_id = history.id;
             self.most_recent_timestamp = timestamp;
         }
+        self.oldest_timestamp = self.oldest_timestamp.min(timestamp);
 
         true
     }
@@ -218,6 +222,11 @@ impl CommandData {
     pub fn has_invocation_in_session(&self, session: &Uuid) -> bool {
         self.sessions.contains(session)
     }
+
+    /// Check if any invocation happened before a unix timestamp (in seconds).
+    pub fn has_invocation_before(&self, timestamp: i64) -> bool {
+        self.oldest_timestamp < timestamp
+    }
 }
 
 /// Filter mode for search queries.
@@ -233,6 +242,8 @@ pub enum IndexFilterMode {
     Host(String),
     /// Filter to commands run in a specific session.
     Session(String),
+    /// Filter to commands run in a specific session, or anywhere before that session started.
+    SessionPreload(String),
 }
 
 /// A "compiled" form of [`IndexFilterMode`], with most of the strings interned and parsed.
@@ -242,6 +253,8 @@ enum CompiledFilter<'a> {
     Workspace(&'a str),
     Host(Spur),
     Session(Uuid),
+    /// Commands run in a session, or before the given unix timestamp (in seconds).
+    SessionPreload(Uuid, Option<i64>),
     /// Used when a target (host/dir/session) has never been seen by the index -- nothing can match.
     Nothing,
 }
@@ -260,6 +273,13 @@ impl IndexFilterMode {
             }
             Self::Session(session) => {
                 Uuid::parse_str(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
+            }
+            Self::SessionPreload(session) => {
+                Uuid::parse_str(session).map_or(CompiledFilter::Nothing, |session| {
+                    let start =
+                        session.get_timestamp().and_then(|ts| i64::try_from(ts.to_unix().0).ok());
+                    CompiledFilter::SessionPreload(session, start)
+                })
             }
         }
     }
@@ -506,6 +526,10 @@ impl SearchIndex {
                         CompiledFilter::Host(hostname) => entry.has_invocation_on_host(*hostname),
                         CompiledFilter::Session(session) => {
                             entry.has_invocation_in_session(session)
+                        }
+                        CompiledFilter::SessionPreload(session, start) => {
+                            entry.has_invocation_in_session(session)
+                                || start.is_some_and(|start| entry.has_invocation_before(start))
                         }
                     })
                     .map(|entry| entry.haystack_index)
@@ -832,6 +856,41 @@ mod tests {
             )
             .count();
         assert_eq!(count, 2);
+    }
+
+    #[rstest]
+    fn search_session_preload_includes_history_from_before_the_session() {
+        let index = SearchIndex::default();
+
+        let session_start = datetime!(2024-01-01 12:00 UTC);
+        let session = Uuid::new_v7(uuid::Timestamp::from_unix(
+            uuid::NoContext,
+            u64::try_from(session_start.unix_timestamp()).unwrap(),
+            0,
+        ));
+        let other_session = Uuid::now_v7();
+
+        let mut before = make_history("git status", "/home/user", datetime!(2024-01-01 10:00 UTC));
+        before.session = other_session.simple().to_string();
+        let mut in_session =
+            make_history("git commit", "/home/user", datetime!(2024-01-01 12:05 UTC));
+        in_session.session = session.simple().to_string();
+        let mut elsewhere = make_history("git push", "/home/user", datetime!(2024-01-01 12:10 UTC));
+        elsewhere.session = other_session.simple().to_string();
+
+        index.add_history(&before);
+        index.add_history(&in_session);
+        index.add_history(&elsewhere);
+
+        let session = session.simple().to_string();
+        let search = |mode: &IndexFilterMode| index.search("git", mode, 10).collect::<Vec<_>>();
+
+        let session_only = search(&IndexFilterMode::Session(session.clone()));
+        assert_eq!(session_only, vec![in_session.id]);
+
+        let preload: HashSet<_> =
+            search(&IndexFilterMode::SessionPreload(session)).into_iter().collect();
+        assert_eq!(preload, HashSet::from([before.id, in_session.id]));
     }
 
     /// Regression test for #3702: a frequently-run command whose match is

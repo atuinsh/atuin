@@ -400,8 +400,7 @@ fn convert_filter_mode(
         (FilterMode::Host, Some(ctx)) => IndexFilterMode::Host(ctx.hostname.clone()),
         (FilterMode::Session, Some(ctx)) => IndexFilterMode::Session(ctx.session_id.clone()),
         (FilterMode::SessionPreload, Some(ctx)) => {
-            // SessionPreload is similar to Session - filter by session
-            IndexFilterMode::Session(ctx.session_id.clone())
+            IndexFilterMode::SessionPreload(ctx.session_id.clone())
         }
         // If no context provided, fall back to global
         _ => IndexFilterMode::Global,
