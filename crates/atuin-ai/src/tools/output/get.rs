@@ -6,6 +6,7 @@ use std::str::FromStr;
 use atuin_client::history::HistoryId;
 use atuin_common::range::PyStyleIdxRange;
 use eyre::Result;
+use serde::Deserialize;
 
 use super::{NO_OUTPUT_ADVICE, format_chunked_output_line_views_for_llm};
 use crate::permissions::rule::Rule;
@@ -24,40 +25,31 @@ pub struct AtuinOutputToolCall {
     pub command: Option<String>,
 }
 
+/// `atuin_output`'s arguments as sent. An argument the schema doesn't list is an error rather
+/// than ignored.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputArgs {
+    history_id: String,
+    ranges: Option<Vec<[i64; 2]>>,
+}
+
 impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let history_id: HistoryId = value
-            .get("history_id")
-            .and_then(|v| v.as_str())
-            .and_then(|s| HistoryId::from_str(s).ok())
-            .ok_or_else(|| eyre::eyre!("Missing or invalid history ID"))?;
+        let args = OutputArgs::deserialize(value)?;
 
-        let ranges =
-            value.get("ranges").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or(&[]);
-
-        let ranges = ranges
-            .iter()
-            .map(|r| {
-                let range = r
-                    .as_array()
-                    .filter(|a| a.len() == 2)
-                    .ok_or_else(|| eyre::eyre!("Each range must be a [start, end] array"))?;
-
-                let start = range[0]
-                    .as_i64()
-                    .ok_or_else(|| eyre::eyre!("Range start must be an integer"))?;
-                let end =
-                    range[1].as_i64().ok_or_else(|| eyre::eyre!("Range end must be an integer"))?;
-
-                Ok(PyStyleIdxRange::new(start, end))
-            })
-            .collect::<Result<Vec<PyStyleIdxRange>, eyre::Error>>()?;
+        let history_id = HistoryId::from_str(&args.history_id)
+            .map_err(|_| eyre::eyre!("Invalid history ID: {}", args.history_id))?;
+        let ranges = args.ranges.unwrap_or_default();
 
         Ok(Self {
             history_id,
-            ranges,
+            ranges: ranges
+                .into_iter()
+                .map(|[start, end]| PyStyleIdxRange::new(start, end))
+                .collect(),
             command: None,
         })
     }
@@ -170,6 +162,16 @@ mod tests {
 
         assert_eq!(call.ranges, vec![PyStyleIdxRange::new(0, 30), PyStyleIdxRange::new(-100, -1),]);
         Ok(())
+    }
+
+    #[rstest]
+    fn atuin_output_rejects_unknown_arguments() {
+        let input = serde_json::json!({
+            "history_id": "018f0000000070008000000000000000",
+            "full": true
+        });
+        let err = AtuinOutputToolCall::try_from(&input).unwrap_err().to_string();
+        assert!(err.contains("`full`") && err.contains("`ranges`"), "{err}");
     }
 
     #[rstest]
