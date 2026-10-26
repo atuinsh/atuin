@@ -194,8 +194,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 # held at 0.11: 0.12 pulls hashlink 0.12 (a 2nd copy vs sqlx's 0.11) + an encoding_rs/multiversion subtree
 yaml-rust2 = "0.11"
 zeroize = "1"
-# held at 0.13: compression-codecs (via reqwest) pins zstd 0.13; bumping would add a 2nd copy
-zstd = "0.13"
+zstd = "0.14"
 
 # Dependencies that are pure hot loops (the bundled SQLite and the record-store
 # crypto) run 10x+ slower unoptimized, which makes every test that touches a
