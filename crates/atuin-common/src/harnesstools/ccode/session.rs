@@ -855,12 +855,19 @@ impl CcodeMessage {
         }
     }
 
+    /// The line's `message`, on a user or assistant line. Other lines that carry one are
+    /// bookkeeping: an `api-request-blob` (2.1.300+) logs a message of an API request, which
+    /// repeats the conversation and the context Claude Code sent with it.
+    fn message(&self) -> Option<&serde_json::Value> {
+        self.message.as_deref().filter(|_| matches!(self.kind.as_str(), "user" | "assistant"))
+    }
+
     /// The line's raw content: `message.content`, or a system line's top-level `content`.
     /// Other lines' top-level `content` is bookkeeping: a `queue-operation` copies the prompt it
     /// queued, which reaches the transcript again as the user line or `queued_command` it
     /// becomes.
     fn raw_content(&self) -> Option<&serde_json::Value> {
-        match &self.message {
+        match self.message() {
             Some(message) => Some(&message["content"]),
             None => self.content.as_deref().filter(|_| self.kind == "system"),
         }
@@ -868,7 +875,7 @@ impl CcodeMessage {
 
     /// The line's role as written: `message.role`, else its `type`.
     fn raw_role(&self) -> &str {
-        self.message.as_deref().and_then(|m| m["role"].as_str()).unwrap_or(self.kind.as_str())
+        self.message().and_then(|m| m["role"].as_str()).unwrap_or(self.kind.as_str())
     }
 
     /// The text a line opens with, peeked without cloning its blocks.
@@ -888,7 +895,7 @@ impl CcodeMessage {
     /// Claude Code wrote this assistant line itself (an API error, a canned reply).
     fn is_synthetic(&self) -> bool {
         self.is_api_error()
-            || self.message.as_deref().is_some_and(|m| m["model"].as_str() == Some(SYNTHETIC_MODEL))
+            || self.message().is_some_and(|m| m["model"].as_str() == Some(SYNTHETIC_MODEL))
     }
 
     /// A `queued_command` attachment: a prompt delivered while the agent was busy (the user's,
@@ -942,7 +949,7 @@ impl CcodeMessage {
 
     /// Thinking tokens the call reported (`usage.output_tokens_details.thinking_tokens`).
     fn thinking_tokens(&self) -> Option<u64> {
-        self.message.as_deref()?["usage"]["output_tokens_details"]["thinking_tokens"].as_u64()
+        self.message()?["usage"]["output_tokens_details"]["thinking_tokens"].as_u64()
     }
 }
 
@@ -1058,7 +1065,7 @@ impl Message for CcodeMessage {
         if self.is_synthetic() {
             return None;
         }
-        self.message.as_deref()?.get("model")?.as_str().map(str::to_owned)
+        self.message()?.get("model")?.as_str().map(str::to_owned)
     }
 
     fn usage(&self) -> Option<Usage> {
@@ -1066,7 +1073,7 @@ impl Message for CcodeMessage {
         if self.is_synthetic() {
             return None;
         }
-        let usage = self.message.as_deref()?.get("usage")?;
+        let usage = self.message()?.get("usage")?;
         if usage.is_null() {
             return None;
         }
@@ -1097,7 +1104,7 @@ impl Message for CcodeMessage {
         {
             return Some(StopReason::Aborted);
         }
-        Some(ccode_stop_reason(self.message.as_deref()?.get("stop_reason")?.as_str()?))
+        Some(ccode_stop_reason(self.message()?.get("stop_reason")?.as_str()?))
     }
 
     fn cwd(&self) -> Option<PathBuf> {
@@ -1137,7 +1144,7 @@ impl Message for CcodeMessage {
         if self.is_synthetic() {
             return None;
         }
-        self.message.as_deref()?.get("id")?.as_str().map(str::to_owned)
+        self.message()?.get("id")?.as_str().map(str::to_owned)
     }
 
     /// The title a metadata line sets: `custom-title` (`/rename`), `agent-name` (the name
@@ -1802,6 +1809,21 @@ mod tests {
         }));
         assert_eq!(m.title().and_then(|t| t.text).as_deref(), Some("Fix the flaky sync test"));
         assert!(m.content().is_empty());
+    }
+
+    /// An `api-request-blob` (2.1.300+) logs one message of an API request: it repeats the
+    /// conversation, so it is no row of its own.
+    #[rstest]
+    #[case::user("user")]
+    #[case::assistant("assistant")]
+    #[case::system("system")]
+    fn api_request_blob_is_no_message(#[case] role: &str) {
+        let m = parse(&serde_json::json!({
+            "type": "api-request-blob", "hash": "5e19c0ffee",
+            "message": {"role": role, "content": [{"type": "text", "text": "Tool loaded."}]},
+        }));
+        assert!(m.content().is_empty());
+        assert!(m.id().is_none() && m.usage().is_none() && m.model().is_none());
     }
 
     /// A prompt the user types while the agent is busy is written only as a `queued_command`

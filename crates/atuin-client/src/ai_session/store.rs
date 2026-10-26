@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use atuin_common::encryption::paseto_v4::{EncryptedData, Key};
+use atuin_common::harnesstools::session::Role;
+use atuin_common::harnesstools::session::synthetic::SYNTHETIC;
 use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
@@ -344,6 +346,11 @@ impl AiSessionStore {
                 return Ok(Projected::Skipped);
             }
         };
+
+        if is_api_request_blob(&msg) {
+            debug!(id = %id.0, "skipping a claude code api-request-blob row");
+            return Ok(Projected::Skipped);
+        }
 
         // The record body never carries the host: its envelope does.
         let msg = PreparedMessage::new(Message {
@@ -741,6 +748,17 @@ impl ReprojectProgress {
     }
 }
 
+/// A row capture made, before it knew better, of a Claude Code `api-request-blob` (2.1.300+): a
+/// message of an API request as sent, repeating the conversation. Such a line has no uuid, so its
+/// row has a synthetic id and no parent, which no conversation row of Claude Code's has; title
+/// rows, the other id-less lines, have a role of their own.
+fn is_api_request_blob(msg: &Message) -> bool {
+    msg.session.harness == HarnessKind::ClaudeCode
+        && msg.source_id.as_ref().starts_with(SYNTHETIC)
+        && msg.parent_source_id.is_none()
+        && matches!(msg.role, Role::User | Role::Assistant | Role::System | Role::Tool)
+}
+
 /// What replaying one record does to the sidecar.
 #[derive(Debug)]
 enum Projected {
@@ -943,6 +961,43 @@ mod tests {
 
         let sess = db.get_session(&sample_handle()).await.unwrap().unwrap();
         assert_eq!(usize::try_from(sess.message_count).unwrap(), messages.len());
+    }
+
+    /// A row capture made of a Claude Code `api-request-blob` is not projected; a title row,
+    /// also id-less, still is.
+    #[rstest]
+    #[tokio::test]
+    async fn build_skips_api_request_blob_rows() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let s = AiSessionStore::builder().store(store).host_id(hid()).key(key()).build();
+
+        let handle = sample_handle();
+        let row = |source_id: &str, parent: Option<&str>, role: Role| {
+            let mut m = message_in(&handle, 0, "Tool loaded.");
+            m.source_id = SourceId::from(source_id.to_owned());
+            m.parent_source_id = parent.map(|p| SourceId::from(p.to_owned()));
+            m.role = role;
+            m
+        };
+        for m in [
+            row("u1", None, Role::User),
+            row("u2", Some("u1"), Role::Assistant),
+            row("syn-00000000000000a1", None, Role::Other("ai-title".to_owned())),
+            row("syn-00000000000000b1", None, Role::User),
+            row("syn-00000000000000b2", None, Role::Assistant),
+            row("syn-00000000000000b3", None, Role::System),
+            row("syn-00000000000000b4", None, Role::Tool),
+        ] {
+            s.push(&m).await.unwrap();
+        }
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        s.build(&db).await.unwrap();
+
+        let rows: Vec<_> = db.messages(&handle).try_collect().await.unwrap();
+        let mut ids: Vec<_> = rows.iter().map(|m| m.source_id.as_ref().to_owned()).collect();
+        ids.sort();
+        assert_eq!(ids, ["syn-00000000000000a1", "u1", "u2"]);
     }
 
     #[rstest]
