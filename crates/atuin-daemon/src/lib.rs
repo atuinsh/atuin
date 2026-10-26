@@ -8,7 +8,9 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
 use atuin_common::sync::BlockingPool;
-use eyre::Result;
+use atuin_kv::database::Database as KvDatabase;
+use atuin_scripts::database::Database as ScriptsDatabase;
+use eyre::{Context, Result};
 
 use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
@@ -78,10 +80,19 @@ pub async fn boot(
     let search_service = search_component.grpc_service(output_capture.store());
     let search_index = search_component.index();
 
+    let kv_db = KvDatabase::new(&settings.kv.db_path, settings.local_timeout)
+        .await
+        .context("failed to open the kv database")?;
+    let scripts_db = ScriptsDatabase::new(&settings.scripts.db_path, settings.local_timeout)
+        .await
+        .context("failed to open the scripts database")?;
+
     // Build the daemon
     let mut daemon = Daemon::builder(settings.clone())
         .store(store)
         .history_db(history_db)
+        .kv_db(kv_db)
+        .scripts_db(scripts_db)
         .component(search_component)
         .build()?;
 

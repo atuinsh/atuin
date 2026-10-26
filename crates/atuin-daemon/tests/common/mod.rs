@@ -36,6 +36,8 @@ use atuin_daemon::{
     Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCaptureEngine, SearchComponent,
 };
 use atuin_domain::record::{CmdOrigin, HostId, RecordTag};
+use atuin_kv::database::Database as KvDatabase;
+use atuin_scripts::database::Database as ScriptsDatabase;
 use corpus::{HistoryGen, Seeded};
 use easy_cast::Conv;
 use hyper_util::rt::TokioIo;
@@ -130,6 +132,9 @@ impl TestEnvBuilder {
 
         let history_db = Sqlite::new(&settings.db_path, self.db_timeout).await.unwrap();
         let store = SqliteStore::new(&settings.record_store_path, self.db_timeout).await.unwrap();
+        let kv_db = KvDatabase::new(&settings.kv.db_path, self.db_timeout).await.unwrap();
+        let scripts_db =
+            ScriptsDatabase::new(&settings.scripts.db_path, self.db_timeout).await.unwrap();
 
         let output_capture =
             OutputCaptureEngine::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited).await;
@@ -154,8 +159,11 @@ impl TestEnvBuilder {
             (Seeded::default(), 0)
         };
 
-        let mut builder =
-            Daemon::builder(settings.clone()).store(store.clone()).history_db(history_db.clone());
+        let mut builder = Daemon::builder(settings.clone())
+            .store(store.clone())
+            .history_db(history_db.clone())
+            .kv_db(kv_db)
+            .scripts_db(scripts_db);
         if self.with_search_component {
             builder = builder.component(search_component);
         }
@@ -266,6 +274,10 @@ impl TestEnv {
             .set_override("daemon.socket_path", dir.join("test.sock").to_str().unwrap())
             .unwrap()
             .set_override("meta.db_path", dir.join("meta.db").to_str().unwrap())
+            .unwrap()
+            .set_override("kv.db_path", dir.join("kv.db").to_str().unwrap())
+            .unwrap()
+            .set_override("scripts.db_path", dir.join("scripts.db").to_str().unwrap())
             .unwrap()
             // Prevent meta store from migrating files from the real data dir.
             .set_override("data_dir", dir.to_str().unwrap())

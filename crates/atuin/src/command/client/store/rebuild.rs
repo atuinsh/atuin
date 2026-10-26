@@ -84,7 +84,7 @@ impl Rebuild {
         )
         .await?;
 
-        script_store.build(database).await?;
+        script_store.build(&database).await?;
 
         Ok(())
     }

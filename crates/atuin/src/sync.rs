@@ -53,7 +53,7 @@ pub async fn build(
     )
     .await?;
 
-    if let Err(e) = script_store.build(script_db).await {
+    if let Err(e) = script_store.build(&script_db).await {
         eprintln!("Warning: failed to build scripts: {e}");
     }
 

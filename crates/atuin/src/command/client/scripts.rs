@@ -281,7 +281,7 @@ impl Cmd {
 
         script_store.create(script).await?;
 
-        script_store.build(script_db).await?;
+        script_store.build(&script_db).await?;
 
         Ok(())
     }
@@ -503,7 +503,7 @@ impl Cmd {
             script_store.update(script).await?;
 
             // Rebuild the database to apply changes
-            script_store.build(script_db).await?;
+            script_store.build(&script_db).await?;
 
             println!("Script '{}' updated successfully!", edit.name);
 
@@ -540,7 +540,7 @@ impl Cmd {
             script_store.delete(script.id).await?;
 
             // Rebuild the database to apply changes
-            script_store.build(script_db).await?;
+            script_store.build(&script_db).await?;
 
             println!("Script '{}' deleted successfully", delete.name);
             Ok(())

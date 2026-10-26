@@ -17,6 +17,8 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_domain::caps::CapClient;
+use atuin_kv::database::Database as KvDatabase;
+use atuin_scripts::database::Database as ScriptsDatabase;
 use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
@@ -44,6 +46,8 @@ pub struct DaemonState {
 
     // Database handles
     history_db: HistoryDatabase,
+    kv_db: KvDatabase,
+    scripts_db: ScriptsDatabase,
     store: SqliteStore,
 
     // Reads the server's advertised capabilities (e.g. the packfile record count).
@@ -144,6 +148,18 @@ impl DaemonHandle {
     #[must_use]
     pub fn history_db(&self) -> &HistoryDatabase {
         &self.state.history_db
+    }
+
+    /// Get a reference to the kv database.
+    #[must_use]
+    pub fn kv_db(&self) -> &KvDatabase {
+        &self.state.kv_db
+    }
+
+    /// Get a reference to the scripts database.
+    #[must_use]
+    pub fn scripts_db(&self) -> &ScriptsDatabase {
+        &self.state.scripts_db
     }
 
     /// Get a reference to the record store.
@@ -390,6 +406,8 @@ impl Daemon {
 /// let daemon = Daemon::builder(settings)
 ///     .store(store)
 ///     .history_db(history_db)
+///     .kv_db(kv_db)
+///     .scripts_db(scripts_db)
 ///     .component(SearchComponent::new())
 ///     .build()
 ///     .await?;
@@ -400,6 +418,8 @@ pub struct DaemonBuilder {
     settings: Arc<Settings>,
     store: Option<SqliteStore>,
     history_db: Option<HistoryDatabase>,
+    kv_db: Option<KvDatabase>,
+    scripts_db: Option<ScriptsDatabase>,
     components: Vec<AnyComponent>,
 }
 
@@ -411,6 +431,8 @@ impl DaemonBuilder {
             settings,
             store: None,
             history_db: None,
+            kv_db: None,
+            scripts_db: None,
             components: Vec::new(),
         }
     }
@@ -429,6 +451,20 @@ impl DaemonBuilder {
         self
     }
 
+    /// Set the kv database.
+    #[must_use]
+    pub fn kv_db(mut self, db: KvDatabase) -> Self {
+        self.kv_db = Some(db);
+        self
+    }
+
+    /// Set the scripts database.
+    #[must_use]
+    pub fn scripts_db(mut self, db: ScriptsDatabase) -> Self {
+        self.scripts_db = Some(db);
+        self
+    }
+
     /// Register a component.
     ///
     /// Components are started in registration order and stopped in reverse order.
@@ -444,6 +480,8 @@ impl DaemonBuilder {
     pub fn build(self) -> Result<Daemon> {
         let store = self.store.ok_or_else(|| eyre::eyre!("store is required"))?;
         let history_db = self.history_db.ok_or_else(|| eyre::eyre!("history_db is required"))?;
+        let kv_db = self.kv_db.ok_or_else(|| eyre::eyre!("kv_db is required"))?;
+        let scripts_db = self.scripts_db.ok_or_else(|| eyre::eyre!("scripts_db is required"))?;
 
         // Load encryption key
         let encryption_key = paseto_v4::Key::try_load_or_generate(&self.settings.key_path)
@@ -463,6 +501,8 @@ impl DaemonBuilder {
             settings: RwLock::new(self.settings),
             encryption_key,
             history_db,
+            kv_db,
+            scripts_db,
             store,
             caps,
         });

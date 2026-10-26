@@ -85,6 +85,9 @@ mod unix {
             history_db.save(history).await.unwrap();
         }
         let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
+        let kv_db = atuin_kv::database::Database::in_memory(Duration::from_secs(5)).await.unwrap();
+        let scripts_db =
+            atuin_scripts::database::Database::in_memory(Duration::from_secs(5)).await.unwrap();
 
         let search_component = SearchComponent::new();
         // This test exercises command search only; there is no output store, so the searcher is a
@@ -94,6 +97,8 @@ mod unix {
         let mut daemon = Daemon::builder(Arc::new(settings))
             .store(store)
             .history_db(history_db)
+            .kv_db(kv_db)
+            .scripts_db(scripts_db)
             .component(search_component)
             .build()
             .unwrap();

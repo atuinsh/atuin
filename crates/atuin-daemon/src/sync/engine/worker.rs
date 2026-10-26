@@ -15,6 +15,7 @@ use futures::StreamExt;
 use tokio::sync::{RwLock, mpsc};
 use tokio::time;
 
+use super::rebuild::ReplayedStores;
 use crate::daemon::DaemonHandle;
 use crate::search::SearchIndex;
 use crate::session_capture::Recovery;
@@ -35,6 +36,8 @@ pub struct Worker {
     handle: DaemonHandle,
     index: Arc<RwLock<SearchIndex>>,
     history_store: HistoryStore,
+    /// The kv and scripts dbs, rebuilt after a sync that brought records of theirs.
+    replayed: ReplayedStores,
     /// Tells [`spawn_ai_session_projector`] records were downloaded; `None` without a sidecar.
     ai_session_projector: Option<mpsc::UnboundedSender<()>>,
 }
@@ -125,6 +128,13 @@ impl Worker {
         //                      us having the concept of a "store bundle".
         let history_store =
             HistoryStore::new(handle.store().clone(), host_id, encryption_key.clone());
+        let replayed = ReplayedStores::new(
+            handle.store().clone(),
+            handle.kv_db().clone(),
+            handle.scripts_db().clone(),
+            host_id,
+            encryption_key.clone(),
+        );
         let ai_session_store = AiSessionStore::builder()
             .store(handle.store().clone())
             .host_id(host_id)
@@ -138,6 +148,7 @@ impl Worker {
             handle,
             index,
             history_store,
+            replayed,
             ai_session_projector,
         })
     }
@@ -235,6 +246,7 @@ impl Worker {
         }
 
         self.index_downloaded_records(&downloaded_records).await;
+        self.replayed.rebuild_changed().await;
 
         // Store sync time
         if let Err(e) = settings.save_sync_time().await {
