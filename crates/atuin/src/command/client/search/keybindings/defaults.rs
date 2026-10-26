@@ -529,6 +529,7 @@ mod tests {
             results_len: len,
             original_input_empty: false,
             has_context: false,
+            shell_up_key_binding: false,
         }
     }
 
@@ -595,6 +596,35 @@ mod tests {
         let ctx = make_ctx(0, 0, 0, 10);
         assert_eq!(km.resolve(&key("enter"), &ctx), Some(Action::Accept));
         assert_eq!(km.resolve(&key("tab"), &ctx), Some(Action::ReturnSelection));
+    }
+
+    #[rstest]
+    fn shell_up_key_binding_condition_in_config() {
+        use std::collections::HashMap;
+
+        use atuin_client::settings::{KeyBindingConfig, KeyRuleConfig};
+
+        let mut settings = default_settings();
+        settings.keymap.emacs = HashMap::from([(
+            "enter".to_string(),
+            KeyBindingConfig::Rules(vec![
+                KeyRuleConfig {
+                    when: Some("shell-up-key-binding".to_string()),
+                    action: "accept".to_string(),
+                },
+                KeyRuleConfig {
+                    when: None,
+                    action: "return-selection".to_string(),
+                },
+            ]),
+        )]);
+
+        let set = KeymapSet::from_settings(&settings);
+
+        let mut ctx = make_ctx(0, 0, 0, 10);
+        assert_eq!(set.emacs.resolve(&key("enter"), &ctx), Some(Action::ReturnSelection));
+        ctx.shell_up_key_binding = true;
+        assert_eq!(set.emacs.resolve(&key("enter"), &ctx), Some(Action::Accept));
     }
 
     // -- Vim Normal keymap tests --
@@ -1055,6 +1085,7 @@ mod tests {
             results_len: 10,
             original_input_empty: true,
             has_context: false,
+            shell_up_key_binding: false,
         };
         assert_eq!(
             set.emacs.resolve(&key("esc"), &ctx_original_empty),
@@ -1071,6 +1102,7 @@ mod tests {
             results_len: 10,
             original_input_empty: false,
             has_context: false,
+            shell_up_key_binding: false,
         };
         assert_eq!(
             set.emacs.resolve(&key("esc"), &ctx_original_not_empty),

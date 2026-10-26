@@ -173,6 +173,7 @@ pub struct State {
     tab_index: usize,
     pending_vim_key: Option<char>,
     original_input_empty: bool,
+    shell_up_key_binding: bool,
 
     pub inspecting_state: InspectingState,
 
@@ -364,6 +365,7 @@ impl State {
             results_len,
             original_input_empty: self.original_input_empty,
             has_context: self.search.custom_context.is_some(),
+            shell_up_key_binding: self.shell_up_key_binding,
         }
     }
 
@@ -1986,6 +1988,7 @@ pub async fn history(
         prefix: false,
         pending_vim_key: None,
         original_input_empty: original_query.is_empty(),
+        shell_up_key_binding: settings.shell_up_key_binding,
     };
 
     app.initialize_keymap_cursor(settings);
@@ -2435,6 +2438,7 @@ mod tests {
             tab_index: 0,
             pending_vim_key: None,
             original_input_empty: false,
+            shell_up_key_binding: false,
             inspecting_state: InspectingState::default(),
             keymaps: KeymapSet::defaults(&Settings::utc()),
             search: SearchState {
