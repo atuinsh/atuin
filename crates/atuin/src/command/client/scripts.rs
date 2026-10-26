@@ -137,9 +137,13 @@ impl Cmd {
         let parts = shlex::split(&editor_str).ok_or_eyre("Failed to parse editor command")?;
         let (command, args) = parts.split_first().ok_or_eyre("No editor command found")?;
 
-        let status = std::process::Command::new(command).args(args).arg(&path).status()?;
+        let status = std::process::Command::new(command)
+            .args(args)
+            .arg(&path)
+            .status()
+            .wrap_err_with(|| format!("failed to open editor `{command}`"))?;
         if !status.success() {
-            bail!("failed to open editor");
+            bail!("editor `{command}` failed ({status})");
         }
 
         // Read back the edited content
@@ -576,5 +580,30 @@ impl Cmd {
                 Self::handle_delete(settings, delete, script_store, script_db).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::ErrorKind;
+
+    use atuin_common::env::MockEnv;
+    use rstest::rstest;
+
+    use super::Cmd;
+
+    #[rstest]
+    #[case("missing-editor")]
+    #[case("missing editor")]
+    fn missing_editor_reports_the_command_and_preserves_the_io_error(#[case] name: &str) {
+        let env = MockEnv::install();
+        let dir = tempfile::tempdir().unwrap();
+        let editor = dir.path().join(name);
+        env.set("EDITOR", format!("'{}' --wait", editor.display()));
+
+        let error = Cmd::open_editor(Some("echo hello")).unwrap_err();
+
+        assert_eq!(error.to_string(), format!("failed to open editor `{}`", editor.display()));
+        assert_eq!(error.downcast_ref::<std::io::Error>().unwrap().kind(), ErrorKind::NotFound);
     }
 }
