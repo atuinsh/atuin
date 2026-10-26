@@ -193,6 +193,14 @@ const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]];
     fi
   fi
 
+  # Ghostty's temporary ZDOTDIR is gone after re-exec. Restore its integration in the inner
+  # shell; Ghostty's shell-local state guard makes repeated sourcing safe.
+  if [[ -n ${ZSH_VERSION-} ]] && [[ $__atuin_pty_proxy_owns_tty = 1 ]] &&
+     [[ -n ${GHOSTTY_RESOURCES_DIR-} ]] &&
+     [[ -r "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration" ]]; then
+    builtin source "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
+  fi
+
   # Check if we're allowed to spawn a PTY proxy in this shell. If false, this is most commonly
   # because the shell was started with `-ic <command>` or `-i <file>`, and spawning a proxy would
   # fail to forward those arguments.
