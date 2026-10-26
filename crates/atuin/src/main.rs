@@ -8,16 +8,16 @@ use clap_couture::{Couture, CoutureParser};
 use command::AtuinCmd;
 use eyre::Result;
 
+use crate::error::CliError;
 use crate::i18n::fl;
 
 mod command;
+mod error;
 mod i18n;
 pub(crate) mod logs;
 #[cfg(feature = "client")]
 pub(crate) mod shell;
 
-#[cfg(feature = "sync")]
-mod print_error;
 #[cfg(feature = "sync")]
 mod sync;
 
@@ -51,6 +51,6 @@ impl Atuin {
     }
 }
 
-fn main() -> Result<()> {
-    Atuin::couture_parse().run()
+fn main() -> Result<(), CliError> {
+    Ok(Atuin::couture_parse().run()?)
 }

@@ -88,7 +88,7 @@ impl Pull {
         if !self.force
             && let Some(err) = keyed.key_valid_against(&remote_index).await
         {
-            return Err(crate::print_error::format_sync_error(err));
+            return Err(err.into());
         }
 
         let operations = SyncSession::operations(diff)?;
