@@ -29,7 +29,8 @@
 # YAML anchors for what the steps below repeat; Buildkite ignores this key.
 common:
   - &main-only build.branch == pipeline.default_branch
-  - &non-pr build.pull_request.id == null
+  # Not PRs, nor mono's land/* builds of a /merge: main runs these right after.
+  - &non-pr build.pull_request.id == null && build.branch !~ /^land\//
   - &infra-retry
     automatic:
       - exit_status: -1
@@ -343,7 +344,7 @@ steps:
 
   - label: ":nix: Nix build"
     key: nix-build-no-push
-    if: build.pull_request.id == null && build.branch != pipeline.default_branch
+    if: build.pull_request.id == null && build.branch != pipeline.default_branch && build.branch !~ /^land\//
     agents: *linux-large
     timeout_in_minutes: 45
     command:
