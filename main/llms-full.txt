@@ -3373,6 +3373,7 @@ Conditions let a single key do different things depending on the current state. 
 | `no-results`           | The search returned zero results                                        |
 | `has-results`          | The search returned at least one result                                 |
 | `has-context`          | The context comes from a previously selected command (`switch-context`) |
+| `shell-up-key-binding` | Atuin was invoked from the shell's up-key binding rather than ctrl-r    |
 
 ### Boolean expressions
 
@@ -3447,6 +3448,20 @@ The default keymaps already encode the standard `[keys]` behaviors. Here is what
   { action = "delete-char-before" },
 ]
 ```
+
+### Different enter behavior for up and ctrl-r
+
+The `shell-up-key-binding` condition is true when the shell invoked Atuin from its up-key binding. This makes enter run the command when pressing up, but return it to the prompt for editing when pressing ctrl-r:
+
+```
+[keymap.emacs]
+"enter" = [
+  { when = "shell-up-key-binding", action = "accept" },
+  { action = "return-selection" },
+]
+```
+
+Overriding `enter` replaces the default binding for that key only, so add the same rules for `ctrl-m` and for `enter` under `[keymap.vim-normal]` and `[keymap.vim-insert]` if you use them.
 
 ### Disabling scroll-exit
 
