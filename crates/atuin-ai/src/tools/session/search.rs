@@ -27,6 +27,7 @@ const NOTE_SCAN: u32 = 100;
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AtuinThreadsSearchToolCall {
     /// What to look for across captured AI-agent session transcripts (what the user and agent
     /// wrote, the names of tools used, and session titles), case-insensitive. Sessions with a

@@ -395,6 +395,27 @@ mod tests {
         assert_eq!(required, &json!(["query"]));
     }
 
+    /// A misremembered option (`from_end`, say) is an error naming the real ones, not silently
+    /// dropped so the call runs on defaults; the schema says so too.
+    #[rstest]
+    fn unknown_arguments_are_rejected() {
+        let args = |v: Value| v.as_object().unwrap().clone();
+        let Err(ToolOutcome::Error(err)) = parse::<AtuinThreadsReadToolCall>(args(json!({
+            "session_id": "latest",
+            "from_end": true,
+        }))) else {
+            panic!("from_end was accepted");
+        };
+        assert!(err.contains("`from_end`") && err.contains("`start`"), "{err}");
+        assert!(
+            parse::<AtuinThreadsReadToolCall>(args(json!({"session_id": "x", "start": -10})))
+                .is_ok()
+        );
+        for tool in &tool_definitions()[2..] {
+            assert_eq!(tool.input_schema["additionalProperties"], false, "{}", tool.name);
+        }
+    }
+
     /// The output-search schema is derived from the call struct, so this pins what the model
     /// sees rather than how the struct is annotated.
     #[rstest]

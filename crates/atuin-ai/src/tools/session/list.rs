@@ -15,6 +15,7 @@ use crate::tools::ToolOutcome;
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AtuinThreadsListToolCall {
     /// Only sessions whose working directory is this path or inside it. Relative paths,
     /// including '.', resolve against the current project directory, so '.' lists the sessions

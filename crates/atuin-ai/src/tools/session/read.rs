@@ -48,6 +48,7 @@ const LABELS: [&str; 3] = [SUMMARY_LABEL, MODEL_ERROR_LABEL, TOOL_ERROR_MARK];
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AtuinThreadsReadToolCall {
     /// The session to read: a full session id or atuin id, or a unique prefix of one, as returned by
     /// atuin_threads_list or atuin_threads_search. 'latest' reads the most recent session
