@@ -182,12 +182,16 @@ pub enum Cmd {
     )]
     Internal(internal::Cmd),
 
+    /// We want to exclude the `__internal` subcommand from Clap's `infer_subcommands`; otherwise,
+    /// a user could access it simply by typing `atuin _`. However, Clap has no way to disable
+    /// `infer_subcommands` for a single command. As a workaround, we define a dummy command with
+    /// the same name but with an extra understore, which forces `__internal` to be typed out in
+    /// entirety, since any prefix of the name would be ambiguous.
     #[command(
         hide = true,
         name = "__internal_",
         disable_help_flag = true,
-        disable_help_subcommand = true,
-        about = fl!("cmd-__internal_")
+        disable_help_subcommand = true
     )]
     InternalDecoy,
 }

@@ -5,15 +5,13 @@ use std::sync::Arc;
 use atuin_client::settings::Settings;
 use atuin_common::logs::LogConfig;
 
-use crate::i18n::fl;
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Cmd {
     PrepareSearchIndex,
-    #[command(
-        about = fl!("cmd-__internal-pty-proxy-active"),
-        long_about = fl!("cmd-__internal-pty-proxy-active", "long")
-    )]
+    /// Check whether the current terminal belongs to a live PTY proxy.
+    ///
+    /// Prints `0` or `1` to stdout. This command is used by shell hooks to determine whether the
+    /// PTY proxy is in use.
     PtyProxyActive,
 }
 
