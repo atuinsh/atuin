@@ -1,6 +1,6 @@
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
-use atuin_common::prompt::{DefaultAnswer, Prompt};
+use atuin_common::userio::{Confirm, DefaultAnswer};
 use colored::Colorize;
 use eyre::Result;
 use toml_edit::{DocumentMut, value};
@@ -68,5 +68,5 @@ pub fn prompt(
     let feature = feature.bold().bright_blue();
     let note = note.map(|note| format!("\n  {note}")).unwrap_or_default();
     let question = format!("> Enable {feature}?\n  {description}{note}");
-    Ok(Prompt::new(&question).confirm(default)?)
+    Ok(Confirm::new(&question, default).ask()?)
 }

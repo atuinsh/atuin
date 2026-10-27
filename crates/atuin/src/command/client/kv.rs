@@ -1,9 +1,8 @@
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, IsTerminal, Read, Write as _};
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
-use atuin_common::out::outln;
 use atuin_kv::store::KvStore;
 use clap::Subcommand;
 use eyre::{Context, Result, eyre};
@@ -103,7 +102,7 @@ impl Cmd {
                 let kv = kv_store.get(namespace, key).await?;
 
                 if let Some(val) = kv {
-                    outln!("{val}");
+                    writeln!(io::stdout(), "{val}")?;
                 }
 
                 Ok(())
@@ -119,11 +118,12 @@ impl Cmd {
                     kv_store.list(Some(namespace)).await?
                 };
 
+                let mut stdout = io::stdout().lock();
                 for entry in entries {
                     if *all_namespaces {
-                        outln!("{}.{}", entry.namespace, entry.key);
+                        writeln!(stdout, "{}.{}", entry.namespace, entry.key)?;
                     } else {
-                        outln!("{}", entry.key);
+                        writeln!(stdout, "{}", entry.key)?;
                     }
                 }
 

@@ -1,13 +1,13 @@
+use std::io::{self, Write as _};
 use std::sync::Arc;
 
 #[cfg(feature = "octavo")]
 use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
-use atuin_common::out::outln;
-#[cfg(feature = "octavo")]
-use atuin_common::prompt::DefaultAnswer;
 use atuin_common::string::StrExt;
+#[cfg(feature = "octavo")]
+use atuin_common::userio::DefaultAnswer;
 #[cfg(feature = "octavo")]
 use atuin_domain::caps::OctavoCap;
 #[cfg(feature = "octavo")]
@@ -89,15 +89,15 @@ impl GetCmd {
         }
 
         if self.verbose {
-            outln!("Config file:");
+            writeln!(io::stdout(), "Config file:")?;
             self.print_current_value(key, "  ").await?;
-            outln!("\nResolved:");
-            Self::print_effective_value(settings, key, "  ");
+            writeln!(io::stdout(), "\nResolved:")?;
+            Self::print_effective_value(settings, key, "  ")?;
             return Ok(());
         }
 
         if self.resolved {
-            Self::print_effective_value(settings, key, "");
+            Self::print_effective_value(settings, key, "")?;
         } else {
             self.print_current_value(key, "").await?;
         }
@@ -116,32 +116,31 @@ impl GetCmd {
             Some(item) if item.is_table() || item.is_inline_table() => {
                 let table =
                     item.as_table_like().expect("is_table()/is_inline_table() but no table");
-                outln!("{prefix}[{key}]");
+                writeln!(io::stdout(), "{prefix}[{key}]")?;
                 dump_table(table, prefix, &mut vec![key.to_string()])?;
             }
             Some(item) => {
                 let val = item.to_string();
                 let val = val.trim().trim_matches('"');
-                outln!("{prefix}{val}");
+                writeln!(io::stdout(), "{prefix}{val}")?;
             }
             None => {
-                outln!("{prefix}(not set in config file)");
+                writeln!(io::stdout(), "{prefix}(not set in config file)")?;
             }
         }
 
         Ok(())
     }
 
-    fn print_effective_value(settings: &Settings, key: &str, prefix: &str) {
+    fn print_effective_value(settings: &Settings, key: &str, prefix: &str) -> io::Result<()> {
         match settings.get_config_value(key) {
             Ok(value) => {
                 for line in value.lines() {
-                    outln!("{prefix}{line}");
+                    writeln!(io::stdout(), "{prefix}{line}")?;
                 }
+                Ok(())
             }
-            Err(_) => {
-                outln!("{prefix}(unknown key)");
-            }
+            Err(_) => writeln!(io::stdout(), "{prefix}(unknown key)"),
         }
     }
 }
@@ -586,17 +585,17 @@ impl PrintCmd {
 
             if let Some(current) = current {
                 if current.is_table() || current.is_inline_table() {
-                    outln!("[{key}]");
+                    writeln!(io::stdout(), "[{key}]")?;
                     dump_table(
                         current.as_table_like().expect("is_table()/is_inline_table() but no table"),
                         "",
                         &mut vec![key.clone()],
                     )?;
                 } else {
-                    outln!("{}", current.to_string().trim().trim_matches('"'));
+                    writeln!(io::stdout(), "{}", current.to_string().trim().trim_matches('"'))?;
                 }
             } else {
-                outln!("key not found");
+                writeln!(io::stdout(), "key not found")?;
             }
         } else {
             dump_table(doc.as_table(), "", &mut Vec::new())?;
@@ -613,13 +612,13 @@ fn dump_table(table: &dyn TableLike, prefix: &str, stack: &mut Vec<String>) -> R
 
             let table = value.as_table_like().expect("is_table()/is_inline_table() but no table");
 
-            outln!("\n{}[{}]", prefix, stack.join("."));
+            writeln!(io::stdout(), "\n{}[{}]", prefix, stack.join("."))?;
 
             dump_table(table, prefix, stack)?;
 
             stack.pop();
         } else {
-            outln!("{prefix}{key} = {value}");
+            writeln!(io::stdout(), "{prefix}{key} = {value}")?;
         }
     }
 

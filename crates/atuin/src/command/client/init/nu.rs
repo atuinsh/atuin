@@ -1,4 +1,4 @@
-use atuin_common::out::outln;
+use std::io::{self, Write as _};
 
 use super::StaticInitOptions;
 
@@ -33,18 +33,21 @@ const BIND_UP_ARROW: &str = r"$env.config = (
     )
 )";
 
-pub fn init_static(options: &StaticInitOptions<'_>) {
+pub fn init_static(options: &StaticInitOptions<'_>) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
     // TODO: tmux popup for Nu
-    outln!("{}", crate::shell::NU);
+    writeln!(stdout, "{}", crate::shell::NU)?;
 
     if atuin_common::env::var("ATUIN_NOBIND").is_err() {
         if options.enable_ctrl_r {
-            outln!("{BIND_CTRL_R}");
+            writeln!(stdout, "{BIND_CTRL_R}")?;
         }
         if options.enable_up_arrow {
-            outln!("{BIND_UP_ARROW}");
+            writeln!(stdout, "{BIND_UP_ARROW}")?;
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,5 +1,4 @@
-//! A command's result: on stdout for the user or a program to read, or on stderr for the shell
-//! widget.
+//! A report on stdout for the user to read, or the line on stderr for the shell widget.
 //!
 //! [`out!`] and [`outln!`] take the place of `print!` and `println!`, which panic once the reader
 //! has gone (`atuin stats | head`). [`widgetln!`] writes the line the shell widget reads: it runs
@@ -44,21 +43,21 @@ impl<W: Write> Output<W> {
 #[macro_export]
 macro_rules! __atuin_out {
     ($($arg:tt)*) => {
-        ::std::write!($crate::out::Output::stdout(), $($arg)*)
+        ::std::write!($crate::userio::Output::stdout(), $($arg)*)
     };
 }
 
 #[macro_export]
 macro_rules! __atuin_outln {
     ($($arg:tt)*) => {
-        ::std::writeln!($crate::out::Output::stdout(), $($arg)*)
+        ::std::writeln!($crate::userio::Output::stdout(), $($arg)*)
     };
 }
 
 #[macro_export]
 macro_rules! __atuin_widgetln {
     ($($arg:tt)*) => {
-        ::std::writeln!($crate::out::Output::stderr(), $($arg)*)
+        ::std::writeln!($crate::userio::Output::stderr(), $($arg)*)
     };
 }
 

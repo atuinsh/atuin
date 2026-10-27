@@ -53,8 +53,8 @@ use std::sync::Arc;
 use atuin_client::ai_session::{Analysis, AtuinSessionId, HarnessKind, HarnessSession, SourceId};
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
-use atuin_common::out::widgetln;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use atuin_common::userio::widgetln;
 use clap::Args;
 use eyre::{Result, bail};
 

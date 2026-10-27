@@ -1,20 +1,22 @@
+use std::io::{self, Write};
+
 use atuin_client::settings::Tmux;
-use atuin_common::out::outln;
 
 use super::StaticInitOptions;
 
-fn print_tmux_config(tmux: &Tmux) {
+fn print_tmux_config(writer: &mut impl Write, tmux: &Tmux) -> io::Result<()> {
     if tmux.enabled {
-        outln!("export ATUIN_TMUX_POPUP_WIDTH='{}'", tmux.width);
-        outln!("export ATUIN_TMUX_POPUP_HEIGHT='{}'", tmux.height);
+        writeln!(writer, "export ATUIN_TMUX_POPUP_WIDTH='{}'", tmux.width)?;
+        writeln!(writer, "export ATUIN_TMUX_POPUP_HEIGHT='{}'", tmux.height)
     } else {
-        outln!("export ATUIN_TMUX_POPUP=false");
+        writeln!(writer, "export ATUIN_TMUX_POPUP=false")
     }
 }
 
-pub fn init_static(options: &StaticInitOptions<'_>) {
-    print_tmux_config(options.tmux);
-    outln!("{}", crate::shell::ZSH);
+pub fn init_static(options: &StaticInitOptions<'_>) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    print_tmux_config(&mut stdout, options.tmux)?;
+    writeln!(stdout, "{}", crate::shell::ZSH)?;
 
     if atuin_common::env::var("ATUIN_NOBIND").is_err() {
         const BIND_CTRL_R: &str = r"bindkey -M emacs '^r' atuin-search
@@ -30,24 +32,27 @@ bindkey -M viins '^[OA' atuin-up-search-viins
 bindkey -M vicmd 'k' atuin-up-search-vicmd";
 
         if options.enable_ctrl_r {
-            outln!("{BIND_CTRL_R}");
+            writeln!(stdout, "{BIND_CTRL_R}")?;
         }
         if options.enable_up_arrow {
-            outln!("{BIND_UP_ARROW}");
+            writeln!(stdout, "{BIND_UP_ARROW}")?;
         }
 
         #[cfg(feature = "ai")]
         if options.enable_ai {
-            outln!("{}", atuin_ai::shell::ZSH_INIT);
+            writeln!(stdout, "{}", atuin_ai::shell::ZSH_INIT)?;
         }
 
         #[cfg(feature = "ai")]
         if options.enable_ai_resume {
-            outln!(
+            writeln!(
+                stdout,
                 r"bindkey -M emacs '^]' atuin-ai-resume
 bindkey -M viins '^]' atuin-ai-resume-viins
 bindkey -M vicmd '^]' atuin-ai-resume-vicmd"
-            );
+            )?;
         }
     }
+
+    Ok(())
 }

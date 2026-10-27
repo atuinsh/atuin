@@ -1,4 +1,4 @@
-use atuin_common::out::outln;
+use atuin_common::userio::outln;
 
 static CONTRIBUTORS: &str = include_str!("CONTRIBUTORS");
 

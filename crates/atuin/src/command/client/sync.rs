@@ -1,3 +1,4 @@
+use std::io::{self, Write as _};
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
@@ -7,7 +8,6 @@ use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::USER;
-use atuin_common::out::outln;
 use atuin_domain::record::{RecordId, RecordTag};
 use clap::Subcommand;
 use clap_couture::Couture;
@@ -76,9 +76,13 @@ impl Cmd {
                     .wrap_err(fl!("sync-key-load-failed"))?;
 
                 if base64 {
-                    outln!("{}", key.encode().dangerously_leak_secret());
+                    writeln!(io::stdout(), "{}", key.encode().dangerously_leak_secret())?;
                 } else {
-                    outln!("{}", key.try_mnemonic().context(fl!("sync-key-invalid"))?);
+                    writeln!(
+                        io::stdout(),
+                        "{}",
+                        key.try_mnemonic().context(fl!("sync-key-invalid"))?
+                    )?;
                 }
                 Ok(())
             }

@@ -1,6 +1,7 @@
+use std::io;
+
 use atuin_client::settings::{Settings, Tmux};
 use atuin_common::logs::USER;
-use atuin_common::out::out;
 use clap::{Parser, ValueEnum};
 use eyre::Result;
 use tracing::{instrument, warn};
@@ -64,28 +65,16 @@ struct StaticInitOptions<'a> {
 }
 
 impl Cmd {
-    fn static_init(&self, settings: &Settings) {
+    fn static_init(&self, settings: &Settings) -> io::Result<()> {
         let options = self.to_options(settings);
 
         match self.shell {
-            Shell::Zsh => {
-                zsh::init_static(&options);
-            }
-            Shell::Bash => {
-                bash::init_static(&options);
-            }
-            Shell::Fish => {
-                fish::init_static(&options);
-            }
-            Shell::Nu => {
-                nu::init_static(&options);
-            }
-            Shell::Xonsh => {
-                xonsh::init_static(&options);
-            }
-            Shell::PowerShell => {
-                powershell::init_static(&options);
-            }
+            Shell::Zsh => zsh::init_static(&options),
+            Shell::Bash => bash::init_static(&options),
+            Shell::Fish => fish::init_static(&options),
+            Shell::Nu => nu::init_static(&options),
+            Shell::Xonsh => xonsh::init_static(&options),
+            Shell::PowerShell => powershell::init_static(&options),
         }
     }
 
@@ -105,9 +94,11 @@ impl Cmd {
     /// won't spawn another, so users who still have the standalone line keep working: whichever
     /// copy runs first wins and the other no-ops.
     #[cfg(all(feature = "pty-proxy", unix))]
-    fn pty_proxy_init(&self, settings: &Settings) {
+    fn pty_proxy_init(&self, settings: &Settings) -> io::Result<()> {
+        use std::io::Write as _;
+
         if !settings.pty_proxy.enabled {
-            return;
+            return Ok(());
         }
 
         let shell = match self.shell {
@@ -120,15 +111,15 @@ impl Cmd {
                     target: USER,
                     "pty_proxy.enabled is set, but atuin pty-proxy does not support this shell"
                 );
-                return;
+                return Ok(());
             }
         };
 
-        out!("{}", atuin_pty_proxy::init_script(shell));
+        write!(io::stdout(), "{}", atuin_pty_proxy::init_script(shell))
     }
 
     #[cfg(not(all(feature = "pty-proxy", unix)))]
-    fn pty_proxy_init(&self, settings: &Settings) {
+    fn pty_proxy_init(&self, settings: &Settings) -> io::Result<()> {
         if settings.pty_proxy.enabled {
             warn!(
                 target: USER,
@@ -136,6 +127,7 @@ impl Cmd {
                  support"
             );
         }
+        Ok(())
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -149,9 +141,9 @@ impl Cmd {
             return Ok(());
         }
 
-        self.pty_proxy_init(settings);
+        self.pty_proxy_init(settings)?;
 
-        self.static_init(settings);
+        self.static_init(settings)?;
 
         Ok(())
     }

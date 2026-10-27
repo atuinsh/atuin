@@ -1,7 +1,8 @@
+use std::io::{self, Write as _};
+
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
-use atuin_common::out::outln;
 use atuin_dotfiles::store::AliasStore;
 use clap::{Subcommand, ValueEnum};
 use eyre::{Context, Result};
@@ -77,8 +78,9 @@ impl Cmd {
             aliases.reverse();
         }
 
+        let mut stdout = io::stdout().lock();
         for i in aliases {
-            outln!("{}={}", i.name, i.value);
+            writeln!(stdout, "{}={}", i.name, i.value)?;
         }
 
         Ok(())

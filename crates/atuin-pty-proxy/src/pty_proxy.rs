@@ -1,6 +1,6 @@
 use std::ffi::OsString;
+use std::io::{self, Write as _};
 
-use atuin_common::out::out;
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::{CaptureConfig, runtime};
@@ -116,8 +116,8 @@ impl Init {
     fn run(self) -> Result<(), String> {
         let shell = detect_shell(self.shell)?;
         let script = init_script(shell);
-        out!("{script}");
-        Ok(())
+        write!(io::stdout(), "{script}")
+            .map_err(|e| format!("failed to write the init script: {e}"))
     }
 }
 

@@ -250,7 +250,7 @@ impl Cmd {
     /// `Ok(Some(future))` where `future` will run the command when awaited. Returns `Err` on error.
     fn run_inner(self) -> Result<Option<impl Future<Output = Result<()>>>> {
         let run_internal = if let Self::Internal(cmd) = &self {
-            match cmd.run() {
+            match cmd.run()? {
                 Some(func) => Some(func),
                 None => return Ok(None),
             }
@@ -355,7 +355,7 @@ impl Cmd {
             }
 
             Self::DefaultConfig => {
-                default_config::run();
+                default_config::run()?;
                 Ok(())
             }
 

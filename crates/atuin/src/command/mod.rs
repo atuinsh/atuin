@@ -1,5 +1,6 @@
+use std::io::{self, Write as _};
+
 use atuin_common::logs::LogConfig;
-use atuin_common::out::outln;
 use clap::Subcommand;
 use clap_couture::Couture;
 use eyre::Result;
@@ -94,7 +95,7 @@ impl AtuinCmd {
                 Ok(())
             }
             Self::Uuid => {
-                outln!("{}", atuin_common::utils::uuid_v7().as_simple());
+                writeln!(io::stdout(), "{}", atuin_common::utils::uuid_v7().as_simple())?;
                 Ok(())
             }
             Self::GenCompletions(gen_completions) => gen_completions.run(),

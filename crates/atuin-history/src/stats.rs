@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use atuin_client::history::History;
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
-use atuin_common::out::{out, outln};
+use atuin_common::userio::{out, outln};
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
 use easy_cast::Conv;
 use serde::{Deserialize, Serialize};

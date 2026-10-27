@@ -6,7 +6,7 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
-use atuin_common::out::outln;
+use atuin_common::userio::outln;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::grpc::versioning::BUILD_STR;
 use atuin_daemon::service::{

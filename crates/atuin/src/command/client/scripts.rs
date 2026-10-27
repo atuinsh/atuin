@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{IsTerminal, Read};
+use std::io::{self, IsTerminal, Read, Write as _};
 use std::path::PathBuf;
 
 use atuin_client::database::Sqlite;
@@ -7,8 +7,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::USER;
-use atuin_common::out::{out, outln};
-use atuin_common::prompt::{DefaultAnswer, Prompt};
+use atuin_common::userio::{Confirm, DefaultAnswer, Prompt, outln};
 use atuin_scripts::execution::{
     build_executable_script, execute_script_interactive, template_script, template_variables,
 };
@@ -393,7 +392,11 @@ impl Cmd {
         if let Some(script) = script {
             if get.script {
                 // Just print the executable script with shebang
-                out!("{}", build_executable_script(&script.script, &script.shebang));
+                write!(
+                    io::stdout(),
+                    "{}",
+                    build_executable_script(&script.script, &script.shebang)
+                )?;
                 return Ok(());
             }
 
@@ -523,7 +526,7 @@ impl Cmd {
             // If not force, confirm deletion
             if !delete.force {
                 let question = format!("Are you sure you want to delete script '{}'?", delete.name);
-                if !Prompt::new(&question).confirm(DefaultAnswer::No)? {
+                if !Confirm::new(&question, DefaultAnswer::No).ask()? {
                     info!(target: USER, "Deletion cancelled");
                     return Ok(());
                 }

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
-use atuin_common::out::{outln, widgetln};
 use atuin_common::path::PathBufExt as _;
+use atuin_common::userio::widgetln;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -36,11 +36,11 @@ pub async fn run(
             }
             SetupChoice::DisableKeybind => {
                 set_ai_enabled(false).await?;
-                emit_shell_result(ExitOutcome::Cancel, output_for_hook);
+                emit_shell_result(ExitOutcome::Cancel, output_for_hook)?;
                 return Ok(());
             }
             SetupChoice::Cancel => {
-                emit_shell_result(ExitOutcome::Cancel, output_for_hook);
+                emit_shell_result(ExitOutcome::Cancel, output_for_hook)?;
                 return Ok(());
             }
         }
@@ -99,7 +99,7 @@ pub async fn run(
     };
 
     let action = run_inline_tui(ctx, initial_command, settings).await?;
-    emit_shell_result(action, output_for_hook);
+    emit_shell_result(action, output_for_hook)?;
 
     Ok(())
 }
@@ -525,19 +525,20 @@ fn wait_for_login_confirmation() -> Result<bool> {
     }
 }
 
-fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) {
+fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) -> io::Result<()> {
     if output_for_hook {
         match outcome {
             ExitOutcome::Execute(output) => widgetln!("__atuin_ai_execute__:{output}"),
             ExitOutcome::Insert(output) => widgetln!("__atuin_ai_insert__:{output}"),
             ExitOutcome::Cancel => widgetln!("__atuin_ai_cancel__"),
         }
-    } else {
-        match outcome {
-            ExitOutcome::Execute(output) | ExitOutcome::Insert(output) => {
-                outln!("{output}");
-            }
-            ExitOutcome::Cancel => {}
+        return Ok(());
+    }
+
+    match outcome {
+        ExitOutcome::Execute(output) | ExitOutcome::Insert(output) => {
+            writeln!(io::stdout(), "{output}")
         }
+        ExitOutcome::Cancel => Ok(()),
     }
 }

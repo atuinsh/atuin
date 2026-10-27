@@ -2,12 +2,13 @@
 
 use std::io::{self, IsTerminal as _};
 
-use atuin_common::out::outln;
-use atuin_common::prompt::{DefaultAnswer, Prompt};
+use atuin_common::logs::USER;
+use atuin_common::userio::{Confirm, DefaultAnswer};
 use atuin_common::utils::crypto_random_string;
 use clap::Subcommand;
 use eyre::{Context as _, Result, bail};
 use secrecy::{ExposeSecret as _, SecretString};
+use tracing::info;
 
 use crate::db::models::{HashedPassword, NewUser, NewUsername, User};
 use crate::db::{DbError, DynDatabase};
@@ -67,7 +68,7 @@ async fn create(db: &dyn DynDatabase, username: NewUsername, email: String) -> R
         .await
         .wrap_err_with(|| format!("failed to create {}", user.username))?;
 
-    outln!("created {}", user.username);
+    info!(target: USER, "created {}", user.username);
     Ok(())
 }
 
@@ -76,7 +77,7 @@ async fn set_password(db: &dyn DynDatabase, username: &str) -> Result<()> {
     user.password = HashedPassword::new(read_password()?).await;
     db.update_user_password(&user).await.wrap_err("failed to update the password")?;
 
-    outln!("changed the password of {username}");
+    info!(target: USER, "changed the password of {username}");
     Ok(())
 }
 
@@ -87,7 +88,7 @@ async fn delete(db: &dyn DynDatabase, username: &str, yes: bool) -> Result<()> {
     }
     db.delete_user(&user).await.wrap_err("failed to delete the user")?;
 
-    outln!("deleted {username}");
+    info!(target: USER, "deleted {username}");
     Ok(())
 }
 
@@ -137,8 +138,8 @@ fn confirm_delete(username: &str) -> Result<()> {
     let question = format!(
         "Delete {username} with all their history and synced records? This cannot be undone."
     );
-    if !Prompt::new(&question)
-        .confirm(DefaultAnswer::No)
+    if !Confirm::new(&question, DefaultAnswer::No)
+        .ask()
         .wrap_err("failed to read the confirmation")?
     {
         bail!("not deleting {username}");

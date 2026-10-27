@@ -19,9 +19,7 @@ pub mod json;
 pub mod logs;
 #[cfg(feature = "os")]
 pub mod os;
-pub mod out;
 pub mod path;
-pub mod prompt;
 pub mod range;
 pub mod rmp;
 pub mod secrets;
@@ -34,4 +32,5 @@ pub mod test_utils;
 pub mod time;
 pub mod units;
 pub mod url;
+pub mod userio;
 pub mod utils;

@@ -1,6 +1,6 @@
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
-use atuin_common::out::outln;
+use atuin_common::userio::outln;
 use eyre::{Result, bail};
 
 use crate::i18n::fl;

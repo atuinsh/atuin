@@ -1,10 +1,10 @@
 //! Internal subcommands, not for direct use by users.
 
+use std::io::{self, Write as _};
 use std::sync::Arc;
 
 use atuin_client::settings::Settings;
 use atuin_common::logs::LogConfig;
-use atuin_common::out::outln;
 
 use crate::i18n::fl;
 
@@ -23,10 +23,12 @@ impl Cmd {
     ///
     /// If the command was able to be handled synchronously, this method returns [`None`].
     /// Otherwise, it returns an async function that, when called, will run the command.
-    pub fn run(&self) -> Option<impl AsyncFnOnce(Settings) -> eyre::Result<()> + use<>> {
+    pub fn run(
+        &self,
+    ) -> io::Result<Option<impl AsyncFnOnce(Settings) -> eyre::Result<()> + use<>>> {
         match self {
             Self::PrepareSearchIndex => {
-                Some(async |settings| super::search::prepare_index(&Arc::new(settings)).await)
+                Ok(Some(async |settings| super::search::prepare_index(&Arc::new(settings)).await))
             }
             Self::PtyProxyActive => {
                 #[cfg(all(unix, feature = "pty-proxy"))]
@@ -34,8 +36,8 @@ impl Cmd {
                 #[cfg(not(all(unix, feature = "pty-proxy")))]
                 let is_proxy_child = false;
 
-                outln!("{}", u8::from(is_proxy_child));
-                None
+                writeln!(io::stdout(), "{}", u8::from(is_proxy_child))?;
+                Ok(None)
             }
         }
     }

@@ -51,11 +51,6 @@ fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) 
     writeln!(writer, "}}") // end include guard
 }
 
-pub fn init_static(options: &StaticInitOptions<'_>) {
-    if let Err(e) = write_static_init(&mut io::stdout().lock(), options) {
-        // This function used to use `println!`, which panics on write failure with this same
-        // message. Using a locked `Stdout` object is faster, but `write!` returns an error rather
-        // than panicking, so we manually panic here to keep the same behavior.
-        panic!("failed printing to stdout: {e}");
-    }
+pub fn init_static(options: &StaticInitOptions<'_>) -> io::Result<()> {
+    write_static_init(&mut io::stdout().lock(), options)
 }

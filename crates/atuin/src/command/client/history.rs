@@ -13,7 +13,6 @@ use atuin_client::settings::FilterMode::{Directory, Global, Session};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::{LogConfig, USER};
-use atuin_common::out::outln;
 use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::utils;
@@ -1163,7 +1162,7 @@ impl Cmd {
                 )
                 .await?
                 {
-                    outln!("{id}");
+                    writeln!(io::stdout(), "{id}")?;
                 }
 
                 Ok(())

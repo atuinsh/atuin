@@ -12,8 +12,8 @@ use atuin_client::tui::cursor;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::filter::OrFilter;
 use atuin_common::logs::USER;
-use atuin_common::out::{outln, widgetln};
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use atuin_common::userio::widgetln;
 use atuin_common::utils;
 use clap::Parser;
 use eyre::{Context as _, Result, bail};
@@ -227,7 +227,7 @@ impl Cmd {
                 // stdout is not a terminal - likely command substitution like VAR=$(atuin search -i)
                 // Write to stdout so it gets captured. This requires some care on Windows, as the current
                 // console code page or `[Console]::OutputEncoding` on PowerShell may be different from UTF-8.
-                outln!("{item}");
+                writeln!(stdout(), "{item}")?;
             } else if stderr().is_terminal() {
                 widgetln!("{}", item.escape_non_printable());
             } else {

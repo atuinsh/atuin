@@ -1,6 +1,7 @@
-use atuin_client::settings::Settings;
-use atuin_common::out::outln;
+use std::io::{self, Write as _};
 
-pub fn run() {
-    outln!("{}", Settings::example_config());
+use atuin_client::settings::Settings;
+
+pub fn run() -> io::Result<()> {
+    writeln!(io::stdout(), "{}", Settings::example_config())
 }

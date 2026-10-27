@@ -1,6 +1,6 @@
 use atuin_client::settings::{Settings, UpdateChannel};
 use atuin_common::logs::USER;
-use atuin_common::out::outln;
+use atuin_common::userio::outln;
 use axoupdater::{AxoUpdater, UpdateRequest};
 use clap::Parser;
 use eyre::{Result, bail, eyre};

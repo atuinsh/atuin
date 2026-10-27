@@ -1,13 +1,15 @@
 #![forbid(unsafe_code)]
 
+use std::io::{self, Write as _};
 use std::net::SocketAddr;
 
-use atuin_common::out::outln;
+use atuin_common::logs::USER;
 use atuin_server::admin::AdminCmd;
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 use clap::Parser;
 use eyre::{Context, Result};
-use tracing_subscriber::filter::LevelFilter;
+use tracing::Level;
+use tracing_subscriber::filter::{LevelFilter, filter_fn};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -38,10 +40,19 @@ async fn main() -> Result<()> {
     let cmd = Cmd::parse();
 
     // Warnings show without RUST_LOG, since that is how loading the settings reports what it
-    // ignored.
-    let filter =
-        EnvFilter::builder().with_default_directive(LevelFilter::WARN.into()).from_env_lossy();
-    tracing_subscriber::registry().with(fmt::layer()).with(filter).init();
+    // ignored. A message for the operator, such as an admin command saying what it did, is a
+    // plain line on stderr instead.
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::WARN.into())
+        .from_env_lossy()
+        .add_directive(format!("{USER}=warn").parse()?);
+    let user = fmt::layer()
+        .with_writer(std::io::stderr)
+        .without_time()
+        .with_level(false)
+        .with_target(false)
+        .with_filter(filter_fn(|meta| meta.target() == USER && *meta.level() == Level::INFO));
+    tracing_subscriber::registry().with(fmt::layer().with_filter(filter)).with(user).init();
 
     tracing::trace!(command = ?cmd, "server command");
 
@@ -62,7 +73,7 @@ async fn main() -> Result<()> {
             launch(settings, addr).await
         }
         Cmd::DefaultConfig => {
-            outln!("{}", example_config());
+            writeln!(io::stdout(), "{}", example_config())?;
             Ok(())
         }
         Cmd::Admin(cmd) => {

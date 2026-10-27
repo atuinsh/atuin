@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use atuin_client::api_client;
 use atuin_client::settings::Settings;
-use atuin_common::out::outln;
 use atuin_common::time::DurationExt;
+use atuin_common::userio::outln;
 use colored::Colorize;
 use eyre::{Result, bail};
 

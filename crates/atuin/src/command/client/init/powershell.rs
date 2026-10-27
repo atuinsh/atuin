@@ -1,4 +1,4 @@
-use atuin_common::out::outln;
+use std::io::{self, Write as _};
 
 use super::StaticInitOptions;
 
@@ -10,18 +10,20 @@ fn ps_bool(value: bool) -> &'static str {
     }
 }
 
-pub fn init_static(options: &StaticInitOptions<'_>) {
+pub fn init_static(options: &StaticInitOptions<'_>) -> io::Result<()> {
     let (bind_ctrl_r, bind_up_arrow) = if atuin_common::env::var("ATUIN_NOBIND").is_ok() {
         (false, false)
     } else {
         (options.enable_ctrl_r, options.enable_up_arrow)
     };
 
+    let mut stdout = io::stdout().lock();
     // TODO: tmux popup for Powershell
-    outln!("{}", crate::shell::POWERSHELL);
-    outln!(
+    writeln!(stdout, "{}", crate::shell::POWERSHELL)?;
+    writeln!(
+        stdout,
         "Enable-AtuinSearchKeys -CtrlR {} -UpArrow {}",
         ps_bool(bind_ctrl_r),
         ps_bool(bind_up_arrow)
-    );
+    )
 }
