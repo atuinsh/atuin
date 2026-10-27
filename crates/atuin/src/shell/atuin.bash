@@ -8,18 +8,17 @@ fi
 ATUIN_STTY=$(stty -g)
 ATUIN_HISTORY_ID=""
 
-if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
+if [[ -z ${__atuin_pty_proxy_owns_tty-} ]] && [[ -n ${ATUIN_PTY_PROXY_ACTIVE-} ]]; then
     # The pty-proxy preamble also sets this variable, but make sure it's set here,
     # so a manually started proxy still functions when `pty_proxy.enabled` is false.
-    __atuin_pty_proxy_owns_tty=0
-    if [[ -n ${ATUIN_PTY_PROXY_ACTIVE-} ]]; then
-        if __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null) &&
-            [[ $__atuin_pty_proxy_answer = 1 ]]
-        then
-            __atuin_pty_proxy_owns_tty=1
-        fi
-        unset __atuin_pty_proxy_answer
+    if __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null) &&
+      [[ $__atuin_pty_proxy_answer = [01] ]]
+    then
+      __atuin_pty_proxy_owns_tty=$__atuin_pty_proxy_answer
+    else
+      __atuin_pty_proxy_owns_tty=-1
     fi
+    unset -v __atuin_pty_proxy_answer
 fi
 
 __atuin_mark_output_start() {

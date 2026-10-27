@@ -14,21 +14,31 @@ if 'ATUIN_SESSION' not-in $env or ('ATUIN_SHLVL' not-in $env) or ($env.ATUIN_SHL
 }
 hide-env -i ATUIN_HISTORY_ID
 
-if '__atuin_pty_proxy' not-in $env {
+if '__atuin_pty_proxy' not-in $env and 'ATUIN_PTY_PROXY_ACTIVE' in $env {
     # The pty-proxy preamble also sets this variable, but make sure it's set here,
     # so a manually started proxy still functions when `pty_proxy.enabled` is false.
-    # We are using a record rather than a plain string so it doesn't get exported
+    let status = (do -i { atuin __internal pty-proxy-active } | complete)
+    let answer = if $status.exit_code == 0 {
+        $status.stdout | str trim
+    } else {
+        ""
+    }
+
+    # Use a record rather than a plain string so the variable doesn't get exported
     # to child processes -- we want each child shell to perform its own detection.
-    $env.__atuin_pty_proxy = { owns_tty: (if 'ATUIN_PTY_PROXY_ACTIVE' in $env {
-        do {
-            let atuin_pty_proxy_check = (do -i { atuin __internal pty-proxy-active } | complete)
-            $atuin_pty_proxy_check.exit_code == 0 and ($atuin_pty_proxy_check.stdout | str trim) == "1"
+    $env.__atuin_pty_proxy = { owns_tty: (
+        if $answer == "1" {
+            true
+        } else if $answer == "0" {
+            false
+        } else {
+            null
         }
-    } else { false }) }
+    ) }
 }
 
 def _atuin_mark_output_start [] {
-    if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
+    if $env.__atuin_pty_proxy?.owns_tty? != true {
         return
     }
 
@@ -54,7 +64,7 @@ def _atuin_mark_output_start [] {
 }
 
 def _atuin_mark_output_end [exit_code: int] {
-    if not ($env.__atuin_pty_proxy?.owns_tty? | default false) {
+    if $env.__atuin_pty_proxy?.owns_tty? != true {
         return
     }
     if 'ATUIN_HISTORY_ID' not-in $env or ($env.ATUIN_HISTORY_ID | is-empty) {
