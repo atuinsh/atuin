@@ -42,6 +42,10 @@ Startup performance
 
 When enabled this way, the proxy starts wherever your `atuin init` line sits, and everything sourced *before* that line runs a second time inside the proxy. This is harmless, but for the fastest startup keep your `atuin init` line as high in your shell config as possible.
 
+Linux virtual consoles
+
+A PTY proxy will not be automatically spawned directly inside a Linux virtual console (`/dev/tty1`, `/dev/tty2`, etc.) because this would interfere with programs that need direct console access, like `chvt`, `setfont`, and `startx`. However, you can still run `atuin pty-proxy` to start a proxy manually.
+
 Alternatively, you can initialize pty-proxy explicitly in your shell config. Place the init line shown below as high in the document as possible, *before* your normal `atuin init` call. Both methods can coexist safely — the proxy only starts once.
 
 ```
