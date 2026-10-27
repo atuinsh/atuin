@@ -1,15 +1,15 @@
-//! Logging for every atuin process: one logfmt file, and warnings on stderr.
+//! Logging for every atuin process: one logfmt file, and user messages on stderr.
 //!
-//! Each command picks a [`LogMode`]. Events go to `~/.atuin/logs/atuin.<date>.log`, one line per
-//! event starting with `process=daemon|cli pid=<n>`, filtered by `ATUIN_LOG` (`EnvFilter`
-//! directives, `warn,atuin=info` when unset). Warnings and errors also print on stderr, unless the
-//! process owns the terminal.
+//! Each command picks a [`LogMode`]. Diagnostics go to `~/.atuin/logs/atuin.<date>.log`, one line
+//! per event starting with `process=daemon|cli pid=<n>`, filtered by `ATUIN_LOG` (`EnvFilter`
+//! directives, `warn,atuin=info` when unset). Events on the [`USER`] target also print on stderr
+//! as `warning: …`/`error: …`, unless the process owns the terminal.
 
 use std::io::IsTerminal;
 use std::time::SystemTime;
 
 use atuin_common::logs::{LogMode, USER};
-use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::filter::{FilterExt, LevelFilter, Targets, filter_fn};
 use tracing_subscriber::fmt::{self, MakeWriter};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::TryInitError;
@@ -22,7 +22,7 @@ mod otel;
 
 use file::LogFile;
 use filter::FileFilter;
-use format::ProcessTagged;
+use format::{ProcessTagged, UserFormat};
 use otel::OtelCtx;
 pub use otel::OtelCtxEnableError;
 
@@ -133,8 +133,8 @@ impl LogCtx {
         Ok(Self { _otel: otel })
     }
 
-    /// The layers `mode` asks for, each with its own filter: the log file, warnings on `stderr`,
-    /// and the daemon's `--show-logs` copy of every event.
+    /// The layers `mode` asks for, each with its own filter: the log file, user messages on
+    /// `stderr`, and the daemon's `--show-logs` copy of every event.
     fn layers<F, E>(
         mode: LogMode,
         filter: &EnvFilter,
@@ -163,14 +163,13 @@ impl LogCtx {
             );
         }
 
-        if mode.has_stderr() {
+        if mode.has_user_stderr() {
             layers.push(
                 fmt::layer()
-                    .without_time()
-                    .with_target(false)
+                    .event_format(UserFormat)
                     .with_writer(stderr.clone())
                     .with_ansi(ansi)
-                    .with_filter(LevelFilter::WARN)
+                    .with_filter(Targets::new().with_target(USER, LevelFilter::INFO))
                     .boxed(),
             );
         }
@@ -180,7 +179,7 @@ impl LogCtx {
                 fmt::layer()
                     .with_writer(stderr)
                     .with_ansi(ansi)
-                    .with_filter(filter.clone())
+                    .with_filter(filter.clone().and(filter_fn(|meta| meta.target() != USER)))
                     .boxed(),
             );
         }
@@ -194,7 +193,7 @@ mod tests {
     use std::io;
     use std::sync::Arc;
 
-    use atuin_common::logs::LogMode;
+    use atuin_common::logs::{LogMode, USER};
     use parking_lot::Mutex;
     use rstest::rstest;
     use tracing::dispatcher::{self, Dispatch};
@@ -261,33 +260,31 @@ mod tests {
     }
 
     #[rstest]
-    #[case::file_and_stderr(LogMode::FileAndStderr, true, true, false)]
-    #[case::file(LogMode::File, true, false, false)]
-    #[case::stderr(LogMode::Stderr, false, true, false)]
-    #[case::daemon(LogMode::Daemon { show_logs: false }, true, false, false)]
-    #[case::daemon_show_logs(LogMode::Daemon { show_logs: true }, true, true, true)]
+    #[case::file_and_stderr(LogMode::FileAndStderr, true, 1, true, false)]
+    #[case::file(LogMode::File, true, 0, true, false)]
+    #[case::stderr(LogMode::Stderr, false, 1, false, false)]
+    #[case::daemon(LogMode::Daemon { show_logs: false }, true, 1, true, false)]
+    #[case::daemon_show_logs(LogMode::Daemon { show_logs: true }, true, 1, true, true)]
     fn routes_by_mode(
         #[case] mode: LogMode,
-        #[case] in_file: bool,
-        #[case] warning_on_stderr: bool,
-        #[case] info_on_stderr: bool,
+        #[case] user_in_file: bool,
+        #[case] user_on_stderr: usize,
+        #[case] diagnostic_in_file: bool,
+        #[case] diagnostic_on_stderr: bool,
     ) {
         let logged = Logged::new(mode);
 
         logged.emit(|| {
-            tracing::warn!(target: "atuin_client::sync", "worrying");
-            tracing::info!(target: "atuin_client::sync", "chatter");
+            tracing::info!(target: USER, "to-user");
+            tracing::info!(target: "atuin_client::sync", "diagnostic");
         });
 
         let file = logged.file.text();
         let stderr = logged.stderr.text();
-        assert_eq!(file.contains("worrying") && file.contains("chatter"), in_file, "file: {file}");
-        assert_eq!(
-            stderr.matches("worrying").count(),
-            usize::from(warning_on_stderr),
-            "stderr: {stderr}"
-        );
-        assert_eq!(stderr.contains("chatter"), info_on_stderr, "stderr: {stderr}");
+        assert_eq!(file.contains("to-user"), user_in_file, "file: {file}");
+        assert_eq!(stderr.matches("to-user").count(), user_on_stderr, "stderr: {stderr}");
+        assert_eq!(file.contains("diagnostic"), diagnostic_in_file, "file: {file}");
+        assert_eq!(stderr.contains("diagnostic"), diagnostic_on_stderr, "stderr: {stderr}");
     }
 
     #[rstest]

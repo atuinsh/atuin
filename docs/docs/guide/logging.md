@@ -54,8 +54,9 @@ and says so. Release builds don't include `trace`.
 
 ## What appears in the terminal
 
-Warnings and errors also print in the terminal, but never on top of the search
-UI.
+Atuin prints only the messages meant for you, as `warning: ...` or
+`error: ...`, and never on top of the search UI. Everything else goes to the
+file.
 
 To watch every event the daemon logs as it happens, run it in the foreground:
 
