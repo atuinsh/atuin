@@ -1801,6 +1801,13 @@ impl Settings {
     /// as `threads.capture`, `threads.capture_tools` and `threads.*`, for any key `[threads]`
     /// doesn't set itself. The defaults are set here, under them, so they never hide a legacy
     /// value.
+    /// `(legacy key, current key)` pairs that [`Self::with_legacy_threads`] migrates.
+    const LEGACY_THREADS: [(&str, &str); 3] = [
+        ("ai.capture_sessions", "threads.capture"),
+        ("ai.capture_tools", "threads.capture_tools"),
+        ("ai.sessions", "threads"),
+    ];
+
     fn with_legacy_threads(config: Config) -> Result<Config, config::ConfigError> {
         fn leaves(prefix: String, value: config::Value, out: &mut Vec<(String, config::Value)>) {
             match value.kind {
@@ -1814,11 +1821,7 @@ impl Settings {
         }
 
         let mut legacy = Vec::new();
-        for (old, new) in [
-            ("ai.capture_sessions", "threads.capture"),
-            ("ai.capture_tools", "threads.capture_tools"),
-            ("ai.sessions", "threads"),
-        ] {
+        for (old, new) in Self::LEGACY_THREADS {
             if let Ok(value) = config.get::<config::Value>(old) {
                 leaves(new.to_string(), value, &mut legacy);
             }
@@ -1980,8 +1983,18 @@ impl Settings {
             let Some(file) = file else {
                 return;
             };
+            let key = path.to_string();
+            // Legacy keys still apply through `with_legacy_threads`, which leaves them in place.
+            if Self::legacy_threads_key(&key) {
+                return;
+            }
             if Self::file_contains_path(file, &path) {
-                unknown.insert(path.to_string());
+                unknown.insert(key);
+            } else if let Some(legacy) = Self::legacy_name(&key)
+                && Self::file_contains_dotted(file, &legacy)
+            {
+                // An unknown key migrated from `[ai.sessions]` is reported where the user wrote it.
+                unknown.insert(legacy);
             }
         })
         .map_err(|e| eyre!("failed to deserialize: {}", e))?;
@@ -1997,6 +2010,37 @@ impl Settings {
             .add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
             .build()?;
         Ok(config.cache)
+    }
+
+    /// Whether `key` is, or is inside, a legacy key that [`Self::with_legacy_threads`] migrates.
+    fn legacy_threads_key(key: &str) -> bool {
+        Self::LEGACY_THREADS.iter().any(|(old, _)| {
+            key.strip_prefix(old).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+        })
+    }
+
+    /// The legacy spelling of a migrated `threads` key, e.g. `ai.sessions.mouse` for
+    /// `threads.mouse`.
+    fn legacy_name(key: &str) -> Option<String> {
+        Self::LEGACY_THREADS.iter().find_map(|(old, new)| {
+            let rest = key.strip_prefix(new)?;
+            (rest.is_empty() || rest.starts_with('.')).then(|| format!("{old}{rest}"))
+        })
+    }
+
+    /// Whether the dotted `key` exists in the file. Legacy keys have no quoted segments.
+    fn file_contains_dotted(file: &config::Value, key: &str) -> bool {
+        let mut current = file;
+        for segment in key.split('.') {
+            let config::ValueKind::Table(table) = &current.kind else {
+                return false;
+            };
+            let Some(next) = table.get(segment) else {
+                return false;
+            };
+            current = next;
+        }
+        true
     }
 
     /// Whether the original serde path exists in the file, preserving quoted dotted keys.
@@ -3041,6 +3085,35 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
         assert!(!settings.keys.scroll_exits);
         assert_eq!(settings.filter_mode, Some(FilterMode::Directory));
         assert_eq!(settings.theme.debug, Some(true));
+    }
+
+    #[rstest]
+    #[case::legacy_keys_apply_quietly(
+        "[ai]\ncapture_sessions = true\ncapture_tools = false\n\n[ai.sessions]\nmouse = false\n",
+        &[][..]
+    )]
+    #[case::typo_under_legacy_sessions("[ai.sessions]\nmouse_typo = false\n", &["ai.sessions.mouse_typo"][..])]
+    fn legacy_threads_keys_are_not_unknown(#[case] toml: &str, #[case] paths: &[&str]) {
+        use std::path::Path;
+
+        let config = Settings::with_legacy_threads(
+            Settings::add_config_file(
+                Settings::defaults_builder(Path::new("/tmp/atuin-unknown-config")).unwrap(),
+                ConfigFile::from_str(toml, FileFormat::Toml),
+                config::Environment::with_prefix("atuin")
+                    .source(Some(std::collections::HashMap::new())),
+            )
+            .build()
+            .unwrap(),
+        )
+        .unwrap();
+        let file = Config::builder()
+            .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+            .build()
+            .unwrap();
+
+        let (_, unknown) = Settings::deserialize_config(config, Some(&file.cache)).unwrap();
+        assert_eq!(unknown, paths);
     }
 
     #[rstest]
