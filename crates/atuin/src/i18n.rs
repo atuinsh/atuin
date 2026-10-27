@@ -83,12 +83,4 @@ macro_rules! fl {
     };
 }
 
-/// [`write!`](std::write) a message looked up with [`fl!`].
-macro_rules! writet {
-    ($dst:expr, $($args:tt)+) => {
-        ::std::write!($dst, "{}", $crate::i18n::fl!($($args)+))
-    };
-}
-
 pub(crate) use fl;
-pub(crate) use writet;
