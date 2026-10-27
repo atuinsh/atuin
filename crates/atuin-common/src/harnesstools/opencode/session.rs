@@ -811,6 +811,16 @@ impl Reader {
             "session.next.synthetic.1" | "session.next.context.updated.1" => text("messageID")
                 .zip(data["text"].as_str())
                 .map(|(id, said)| Next::said(Role::System, id, Content::Text(said.to_owned()))),
+            // a command the user ran with `!`, as the 2.0 reader has it
+            "session.next.shell.started.1" => {
+                text("messageID").zip(data["command"].as_str()).map(|(id, command)| {
+                    Next::said(Role::User, id, Content::Text(format!("! {command}")))
+                })
+            }
+            // an API error the call is retried after, as a 1.x `retry` part is
+            "session.next.retried.1" => data["error"]["message"].as_str().map(|message| {
+                Next::said(Role::System, event.to_owned(), Content::Error(message.to_owned()))
+            }),
             "session.next.compaction.ended.1" => {
                 text("messageID").zip(data["text"].as_str()).map(|(id, said)| {
                     Next::said(Role::Assistant, id, Content::Summary(said.to_owned()))
@@ -2403,14 +2413,26 @@ impl OpencodeMessage {
                         }));
                         content.extend(patch.map(Content::Patch));
                     }
+                    // an aborted call keeps what it had output, which opencode replays in place
+                    // of the error (`processor.ts`, `message-v2.ts`)
                     Some("error") => content.push(Content::ToolResult(ToolResult {
                         call,
-                        output: state["error"].clone(),
+                        output: match &state["metadata"] {
+                            meta if meta["interrupted"] == true && meta["output"].is_string() => {
+                                meta["output"].clone()
+                            }
+                            _ => state["error"].clone(),
+                        },
                         error: true,
                     })),
                     _ => {}
                 }
                 content
+            }
+            // a command run as a subagent (`prompt.ts`, `command`): the whole of the user's
+            // message, its task the prompt the command expanded to
+            Some("subtask") => {
+                vec![Content::Text(part["prompt"].as_str().unwrap_or_default().to_owned())]
             }
             _ => vec![Content::Other(part.clone())],
         }
@@ -5091,5 +5113,68 @@ mod tests {
         }));
         assert_eq!(retry.content(), vec![Content::Error("overloaded".into())]);
         assert_eq!(retry.stop_reason(), None);
+    }
+
+    /// As `processor.ts` settles a call still running when the step is aborted.
+    #[rstest]
+    fn an_aborted_call_keeps_what_it_had_output() {
+        let call = part_message(serde_json::json!({
+            "id": "prt_1", "type": "tool", "callID": "call_1", "tool": "bash",
+            "state": {
+                "status": "error", "input": {"command": "cargo build"},
+                "error": "Tool execution aborted",
+                "metadata": {"output": "Compiling atuin", "description": "build", "interrupted": true},
+                "time": {"start": 1, "end": 2},
+            },
+        }));
+        assert!(matches!(
+            call.content().as_slice(),
+            [Content::ToolUse(_), Content::ToolResult(r)] if r.output == "Compiling atuin" && r.error
+        ));
+    }
+
+    /// As `prompt.ts` writes a command that runs as a subagent: the whole of the user's message.
+    #[rstest]
+    fn a_subtask_says_its_prompt() {
+        let info = MessageInfo {
+            role: Role::User,
+            ..MessageInfo::unknown()
+        };
+        let subtask = OpencodeMessage::part(
+            info,
+            serde_json::json!({
+                "id": "prt_1", "type": "subtask", "agent": "general", "description": "review",
+                "command": "review", "model": {"providerID": "anthropic", "modelID": "m"},
+                "prompt": "Review the diff on this branch",
+            }),
+            Some(1),
+        );
+        assert_eq!(subtask.role(), Role::User);
+        assert_eq!(subtask.content(), vec![Content::Text("Review the diff on this branch".into())]);
+    }
+
+    /// A command run with `!` and a retried API error, as `packages/schema/src/session-event.ts`
+    /// has them.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_shell_command_and_a_retry_of_the_experimental_event_system_are_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let db = event_db(&path).await;
+        load_fixture(
+            &db,
+            r#"{"id": "evt_1", "aggregate_id": "ses_N", "seq": 0, "type": "session.next.shell.started.1", "data": {"timestamp": 1000, "sessionID": "ses_N", "messageID": "msg_sh", "callID": "c", "command": "ls -la"}}
+{"id": "evt_2", "aggregate_id": "ses_N", "seq": 1, "type": "session.next.retried.1", "data": {"timestamp": 1001, "sessionID": "ses_N", "attempt": 1, "error": {"message": "overloaded", "isRetryable": true}}}"#,
+        )
+        .await;
+        let messages: Vec<(Option<String>, Role, Vec<Content>)> = read_all(&path)
+            .await
+            .into_iter()
+            .map(|(_, m)| (m.id().map(String::from), m.role(), m.content()))
+            .collect();
+        assert_eq!(messages, [
+            (Some("msg_sh".into()), Role::User, vec![Content::Text("! ls -la".into())]),
+            (Some("evt_2".into()), Role::System, vec![Content::Error("overloaded".into())]),
+        ]);
     }
 }
