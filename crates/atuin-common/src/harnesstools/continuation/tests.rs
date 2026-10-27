@@ -532,6 +532,24 @@ fn text(t: &str) -> Content {
 
 /// Tool rows go, calls become notes of their input and never their output, reasoning goes, and
 /// what is left of one role in a row is one turn.
+/// Claude Code's away recap is for the user coming back: no turn of the conversation.
+#[rstest]
+fn an_away_recap_is_not_carried_over() {
+    let recap = Role::Other("away_summary".into());
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text("fix the flaky test")], 1),
+        msg(Role::Assistant, vec![text("Fixed.")], 2),
+        msg(recap, vec![Content::Summary("You fixed the flaky test.".into())], 3),
+    ]);
+    let c = continue_at(CLAUDE, &original, None, CODEX, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let said: Vec<(Role, Vec<Content>)> =
+        c.session.messages[1..].iter().map(|m| (m.role.clone(), m.content.clone())).collect();
+    assert_eq!(said, vec![
+        (Role::User, vec![text("fix the flaky test")]),
+        (Role::Assistant, vec![text("Fixed.")]),
+    ]);
+}
+
 #[rstest]
 fn calls_become_notes_and_turns_merge() {
     let original = session_of("orig", vec![

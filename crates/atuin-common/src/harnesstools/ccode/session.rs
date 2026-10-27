@@ -458,10 +458,15 @@ pub struct CcodeMessage {
     /// Who submitted a user line: absent or `{"kind": "human"}` for the user.
     origin: Option<Box<serde_json::Value>>,
     is_meta: Option<bool>,
+    /// Set on every line of a subagent's transcript.
+    is_sidechain: Option<bool>,
     is_compact_summary: Option<bool>,
     is_api_error_message: Option<bool>,
-    /// The error class of an API error line (`rate_limit`, `unknown`, ...).
+    /// The error class of an API error line (`rate_limit`, `unknown`, ...), or what went wrong
+    /// on an `api_error` system line (`{message, formatted, ...}`).
     error: Option<Box<serde_json::Value>>,
+    /// On an assistant line whose response stream was cut off.
+    is_aborted_mid_stream: Option<bool>,
     /// Present on the user lines that carry a tool's result (the tool's own record of it).
     tool_use_result: Option<ToolUseResult>,
     /// What the user typed when rejecting a tool call, on the line with its `tool_result`.
@@ -913,9 +918,18 @@ impl CcodeMessage {
             && human_origin(queued.get("origin"))
     }
 
-    /// A user-role line Claude Code wrote itself rather than the user typing it.
+    /// Whether a queued command is a message from another agent: the one that spawned this one
+    /// (`coordinator`) or a `peer`, through `SendMessage`. It prompts this agent, as a subagent's
+    /// task does.
+    fn queued_by_agent(queued: &serde_json::Value) -> bool {
+        matches!(queued["origin"]["kind"].as_str(), Some("coordinator" | "peer"))
+    }
+
+    /// A user-role line Claude Code wrote itself rather than the user typing it. A subagent's
+    /// first line is its task, even when it is `isMeta` (a forked skill's prompt).
     fn injected_user_line(&self) -> bool {
-        self.is_meta == Some(true)
+        let task = self.is_sidechain == Some(true) && self.parent_uuid.is_none();
+        (self.is_meta == Some(true) && !task)
             || !human_origin(self.origin.as_deref())
             || self.first_text().is_some_and(|text| {
                 let text = text.trim_start();
@@ -947,6 +961,11 @@ impl CcodeMessage {
             && self.first_text().is_some_and(|text| text.trim_start().starts_with("<command-"))
     }
 
+    /// The subtype of a system line.
+    fn system_subtype(&self) -> Option<&str> {
+        self.subtype.as_deref().filter(|_| self.kind == "system")
+    }
+
     /// Thinking tokens the call reported (`usage.output_tokens_details.thinking_tokens`).
     fn thinking_tokens(&self) -> Option<u64> {
         self.message()?["usage"]["output_tokens_details"]["thinking_tokens"].as_u64()
@@ -961,13 +980,20 @@ impl Message for CcodeMessage {
     fn role(&self) -> Role {
         if self.kind == "attachment" {
             return match self.queued_command() {
-                Some(queued) if Self::queued_by_user(queued) => Role::User,
+                Some(queued) if Self::queued_by_user(queued) || Self::queued_by_agent(queued) => {
+                    Role::User
+                }
                 Some(_) => Role::System,
                 None => Role::Other(self.kind.clone()),
             };
         }
         if self.is_compact_summary == Some(true) {
             return Role::System;
+        }
+        // A recap of the session Claude Code shows the user on their return: not context the
+        // model is given, nor a compaction summary, as a system row with a summary is taken for.
+        if self.system_subtype() == Some("away_summary") {
+            return Role::Other("away_summary".to_owned());
         }
         if self.typed_local_command() {
             return Role::User;
@@ -1005,9 +1031,26 @@ impl Message for CcodeMessage {
                 _ => Vec::new(),
             };
         }
+        // A failed request Claude Code is retrying: no content, only what went wrong.
+        if self.system_subtype() == Some("api_error") {
+            let error = self.error.as_deref();
+            let text = error.and_then(|e| e["formatted"].as_str().or(e["message"].as_str()));
+            return text.map(|text| Content::Error(text.to_owned())).into_iter().collect();
+        }
         let Some(raw) = self.raw_content() else {
             return Vec::new();
         };
+        let wrapped =
+            |wrap: fn(String) -> Content| joined_text(raw).map(wrap).into_iter().collect();
+        match self.system_subtype() {
+            Some("away_summary") => return wrapped(Content::Summary),
+            // The notice that the model's safeguards stopped a response. Other notices (an idle
+            // compaction, auto mode) are not part of the conversation.
+            Some("informational") if joined_text(raw).is_some_and(|t| t.contains("safeguards")) => {
+                return wrapped(Content::Error);
+            }
+            _ => {}
+        }
         if self.is_compact_summary == Some(true) {
             return joined_text(raw)
                 .map(|text| Content::Summary(compact_summary(&text).to_owned()))
@@ -1095,6 +1138,9 @@ impl Message for CcodeMessage {
     fn stop_reason(&self) -> Option<StopReason> {
         if self.is_api_error() {
             return Some(StopReason::Error);
+        }
+        if self.is_aborted_mid_stream == Some(true) {
+            return Some(StopReason::Aborted);
         }
         // An interrupt is recorded as a user line; it is the turn that it ends.
         if self.raw_role() == "user"
@@ -1831,6 +1877,10 @@ mod tests {
     #[rstest]
     #[case::origin_human(serde_json::json!({"origin": {"kind": "human"}}))]
     #[case::prompt_mode(serde_json::json!({"commandMode": "prompt"}))]
+    // From another agent through `SendMessage` (CC 2.1.310): it prompts this one.
+    #[case::coordinator(serde_json::json!({"isMeta": true, "origin": {"kind": "coordinator"}}))]
+    #[case::peer(serde_json::json!({"commandMode": "prompt", "isMeta": true,
+        "origin": {"kind": "peer", "from": "a1", "senderTaskId": "a1"}}))]
     fn queued_prompt_is_user_text(#[case] extra: serde_json::Value) {
         let mut attachment =
             serde_json::json!({"type": "queued_command", "prompt": "also check forks please"});
@@ -1846,7 +1896,6 @@ mod tests {
     /// Background task results are delivered through the same queue; they are not the user's.
     #[rstest]
     #[case::task_notification(serde_json::json!({"commandMode": "task-notification"}))]
-    #[case::peer(serde_json::json!({"origin": {"kind": "peer", "from": "a1"}}))]
     #[case::meta(serde_json::json!({"isMeta": true}))]
     fn queued_harness_message_is_system(#[case] extra: serde_json::Value) {
         let mut attachment = serde_json::json!({"type": "queued_command",
@@ -2010,6 +2059,72 @@ mod tests {
         assert_eq!(m.content(), vec![Content::Error("API Error: 529 Overloaded".into())]);
     }
 
+    /// A request Claude Code retries is recorded as an `api_error` system line with no content
+    /// (real line, CC 2.1.291).
+    #[rstest]
+    fn retried_api_error_keeps_what_went_wrong() {
+        let m = parse(&serde_json::json!({
+            "type": "system", "subtype": "api_error", "level": "error", "uuid": "b078",
+            "parentUuid": "1688", "error": {"message": "Connection error.",
+                "formatted": "Connection dropped (ECONNRESET)",
+                "connection": {"code": "ECONNRESET"}, "isNetworkDown": false},
+            "retryInMs": 606, "retryAttempt": 1, "maxRetries": 10, "source": "connection_retry",
+        }));
+        assert_eq!(m.role(), Role::System);
+        assert_eq!(m.content(), vec![Content::Error("Connection dropped (ECONNRESET)".into())]);
+    }
+
+    /// The notice that the safeguards stopped a response is kept (real line, CC 2.1.296).
+    #[rstest]
+    #[case::refusal(
+        "Opus 5.5's safeguards stopped the response above · continuing once with that noted"
+    )]
+    fn safeguard_notice_is_kept(#[case] text: &str) {
+        let m = parse(&serde_json::json!({
+            "type": "system", "subtype": "informational", "content": text, "isMeta": false,
+            "level": "notice", "uuid": "0f06", "parentUuid": "f6f9",
+        }));
+        assert_eq!(m.content(), vec![Content::Error(text.into())]);
+    }
+
+    /// The recap Claude Code writes when the user comes back (CC 2.1.296 to 2.1.310) is a summary,
+    /// but no system row: those with a summary are compaction summaries, which resume writes back.
+    #[rstest]
+    fn away_recap_is_a_summary_of_its_own_role() {
+        let text = "You asked whether deleting a Hub account leaves the linked CLI account \
+                    behind. Next, run the two lookup queries. (disable recaps in /config)";
+        let m = parse(&serde_json::json!({
+            "parentUuid": "2eaa", "isSidechain": false, "type": "system",
+            "subtype": "away_summary", "content": text, "uuid": "f065", "isMeta": false,
+        }));
+        assert_eq!(m.role(), Role::Other("away_summary".into()));
+        assert_eq!(m.content(), vec![Content::Summary(text.into())]);
+    }
+
+    /// A forked skill's subagent starts on the skill's prompt, written `isMeta` like the skill
+    /// text Claude Code injects into the main thread (real shape, CC 2.1.300): it is the task.
+    #[rstest]
+    fn subagent_task_prompt_is_user_text() {
+        let prompt = "`high effort → 8 inline angles`\n\nYou are reviewing for **recall**.";
+        let m = parse(&serde_json::json!({
+            "parentUuid": null, "isSidechain": true, "agentId": "a12b", "type": "user",
+            "message": {"role": "user", "content": prompt}, "isMeta": true, "uuid": "d477",
+        }));
+        assert_eq!(m.role(), Role::User);
+        assert_eq!(m.content(), vec![Content::Text(prompt.into())]);
+    }
+
+    /// A response whose stream was cut off was aborted (real line, CC 2.1.296).
+    #[rstest]
+    fn response_aborted_mid_stream_is_aborted() {
+        let m = parse(&serde_json::json!({
+            "type": "assistant", "uuid": "9009", "isAbortedMidStream": true,
+            "message": {"id": "msg_1", "role": "assistant", "stop_reason": null,
+                "content": [{"type": "text", "text": "## Layer 3"}]},
+        }));
+        assert_eq!(m.stop_reason(), Some(StopReason::Aborted));
+    }
+
     /// Lines Claude Code writes into the user's side of the conversation are not user text.
     #[rstest]
     #[case::meta(serde_json::json!({"isMeta": true,
@@ -2024,6 +2139,8 @@ mod tests {
         "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}))]
     #[case::fork_directive(serde_json::json!({
         "message": {"role": "user", "content": "<fork-boilerplate>\nYou are a worker fork."}}))]
+    #[case::subagent_meta(serde_json::json!({"isMeta": true, "isSidechain": true,
+        "parentUuid": "d477", "message": {"role": "user", "content": "Base directory for this skill"}}))]
     fn injected_user_line_is_system(#[case] extra: serde_json::Value) {
         let mut raw = serde_json::json!({"type": "user", "uuid": "m1"});
         raw.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());

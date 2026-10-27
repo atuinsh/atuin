@@ -683,9 +683,15 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
             match content {
                 // Said by the note the continuation opens with.
                 Content::Summary(summary) if summary == UNREADABLE_SUMMARY => {}
-                Content::Summary(summary) if !summary.trim().is_empty() => user.push(Part::Text(
-                    format!("[Summary of the earlier conversation]\n{}", summary.trim()),
-                )),
+                // A summary of the harness's own (Claude Code's away recap) is only for show.
+                Content::Summary(summary)
+                    if !summary.trim().is_empty() && !matches!(m.role, Role::Other(_)) =>
+                {
+                    user.push(Part::Text(format!(
+                        "[Summary of the earlier conversation]\n{}",
+                        summary.trim()
+                    )));
+                }
                 Content::Text(text) if !text.trim().is_empty() => match m.role {
                     Role::User => user.push(Part::Text(text.clone())),
                     Role::Assistant => assistant.push(Item::Part(Part::Text(text.clone()))),

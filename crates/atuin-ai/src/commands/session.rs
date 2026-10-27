@@ -729,7 +729,7 @@ fn write_message_text(out: &mut dyn Write, m: &Message) -> io::Result<()> {
     if message_summary(m).is_none() {
         return Ok(());
     }
-    writeln!(out, "── {} · {} ──", role_name(&m.role), age(m.timestamp))?;
+    writeln!(out, "── {} · {} ──", message_role(m), age(m.timestamp))?;
     for block in &m.content {
         match block {
             Content::Text(t) => writeln!(out, "{}", sanitize(t))?,
@@ -1717,6 +1717,15 @@ mod tests {
         let mut out = Vec::new();
         write_message_text(&mut out, &msg(Role::Other(String::new()), content)).unwrap();
         assert_eq!(!out.is_empty(), printed, "{}", String::from_utf8_lossy(&out));
+    }
+
+    /// A row of a role the enum does not name is headed with the harness's own (an away recap).
+    #[rstest]
+    fn show_heads_a_row_with_its_own_role() {
+        let recap = msg(Role::Other("away_summary".to_owned()), vec![Content::Summary("s".into())]);
+        let mut out = Vec::new();
+        write_message_text(&mut out, &recap).unwrap();
+        assert!(String::from_utf8(out).unwrap().starts_with("── away_summary · "));
     }
 
     /// A call's text input and a result's text blocks read as text, not as escaped JSON.
