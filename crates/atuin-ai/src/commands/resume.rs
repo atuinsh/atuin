@@ -53,6 +53,7 @@ use std::sync::Arc;
 use atuin_client::ai_session::{Analysis, AtuinSessionId, HarnessKind, HarnessSession, SourceId};
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
+use atuin_common::out::widgetln;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use clap::Args;
 use eyre::{Result, bail};
@@ -749,7 +750,6 @@ fn direct_outcome(plan: ResumePlan, output: Output, enter_accept: bool) -> Outco
     }
 }
 
-#[expect(clippy::disallowed_macros, reason = "the shell widget reads the command from stderr")]
 fn finish(outcome: Outcome, output: Output) -> Result<()> {
     let (plan, run) = match outcome {
         Outcome::Cancelled => return Ok(()),
@@ -760,9 +760,9 @@ fn finish(outcome: Outcome, output: Output) -> Result<()> {
         Output::Widget => {
             let line = printable_line(&plan)?;
             if run {
-                eprintln!("{ACCEPT_PREFIX}{line}");
+                widgetln!("{ACCEPT_PREFIX}{line}");
             } else {
-                eprintln!("{line}");
+                widgetln!("{line}");
             }
             Ok(())
         }

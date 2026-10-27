@@ -5,7 +5,7 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
-use atuin_common::out::outln;
+use atuin_common::out::{outln, widgetln};
 use atuin_common::path::PathBufExt as _;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
@@ -531,13 +531,12 @@ fn wait_for_login_confirmation() -> Result<bool> {
     }
 }
 
-#[expect(clippy::disallowed_macros, reason = "the shell widget reads the outcome from stderr")]
 fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) {
     if output_for_hook {
         match outcome {
-            ExitOutcome::Execute(output) => eprintln!("__atuin_ai_execute__:{output}"),
-            ExitOutcome::Insert(output) => eprintln!("__atuin_ai_insert__:{output}"),
-            ExitOutcome::Cancel => eprintln!("__atuin_ai_cancel__"),
+            ExitOutcome::Execute(output) => widgetln!("__atuin_ai_execute__:{output}"),
+            ExitOutcome::Insert(output) => widgetln!("__atuin_ai_insert__:{output}"),
+            ExitOutcome::Cancel => widgetln!("__atuin_ai_cancel__"),
         }
     } else {
         match outcome {
