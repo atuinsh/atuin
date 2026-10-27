@@ -32,4 +32,5 @@ pub mod test_utils;
 pub mod time;
 pub mod units;
 pub mod url;
+pub mod userio;
 pub mod utils;

@@ -484,6 +484,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "bytesize",
+ "colored",
  "crypto_secretbox",
  "derive_more",
  "dirs 6.0.0",
