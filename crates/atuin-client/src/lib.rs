@@ -16,7 +16,6 @@ pub mod distro;
 pub mod history;
 pub mod import;
 pub mod logout;
-pub mod logs;
 pub mod meta;
 pub mod ordering;
 pub mod packfile;

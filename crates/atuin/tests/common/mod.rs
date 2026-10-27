@@ -108,6 +108,20 @@ impl FreshEnv {
         fs::create_dir_all(self.atuin_home()).unwrap();
         fs::write(self.config_file(), contents).unwrap();
     }
+
+    pub fn logs_dir(&self) -> PathBuf {
+        self.atuin_home().joined("logs")
+    }
+
+    /// The files in the log directory, sorted; empty when it doesn't exist.
+    pub fn log_files(&self) -> Vec<PathBuf> {
+        let Ok(entries) = fs::read_dir(self.logs_dir()) else {
+            return Vec::new();
+        };
+        let mut files: Vec<PathBuf> = entries.map(|entry| entry.unwrap().path()).collect();
+        files.sort();
+        files
+    }
 }
 
 /// File-backed output avoids pipe deadlocks. Drop kills and reaps the child.
