@@ -1,0 +1,10 @@
+{"id":"5973b6c0-94b8-487b-a530-2aeb6098ae0e","timestamp":"2025-07-24T10:00:00.123Z","instructions":null,"git":{"commit_hash":"abc123","branch":"main","repository_url":"https://example.invalid/repo.git"}}
+{"record_type":"state"}
+{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/work</cwd>\n</environment_context>"}]}
+{"type":"message","role":"user","content":[{"type":"input_text","text":"list the files"}]}
+{"record_type":"state"}
+{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"**Listing** files"}],"encrypted_content":null}
+{"type":"function_call","name":"shell","arguments":"{\"command\":[\"ls\"]}","call_id":"call_1"}
+{"type":"function_call_output","call_id":"call_1","output":"{\"output\":\"a.txt\\n\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":0.1}}"}
+{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"There is one file: a.txt"}]}
+{"record_type":"state"}

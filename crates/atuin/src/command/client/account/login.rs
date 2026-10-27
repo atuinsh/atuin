@@ -1,62 +1,70 @@
-use std::io;
+use std::io::{self, IsTerminal};
+use std::sync::Arc;
 
+use atuin_client::auth::{self, AuthClient, AuthResponse};
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
+use atuin_client::settings::{Settings, SyncAuth};
+use atuin_common::encryption::paseto_v4;
+use atuin_common::env::var_nonempty;
+#[cfg(feature = "daemon")]
+use atuin_daemon::service::ActiveService;
 use clap::Parser;
 use eyre::{Context, Result, bail};
-use tokio::{fs::File, io::AsyncWriteExt};
-
-use atuin_client::{
-    auth::{self, AuthClient, AuthResponse},
-    encryption::{Key, decode_key, encode_key, load_key},
-    record::sqlite_store::SqliteStore,
-    record::sync::{self, SyncError},
-    settings::{Settings, SyncAuth},
-};
 use rpassword::prompt_password;
+use secrecy::zeroize::Zeroizing;
+use secrecy::{ExposeSecret, SecretString};
+
+use super::PasswordArg;
+use crate::error::CliError;
+use crate::i18n::fl;
+
+const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
 
 #[derive(Parser, Debug)]
 pub struct Cmd {
     #[clap(long, short)]
     pub username: Option<String>,
 
-    #[clap(long, short)]
-    pub password: Option<String>,
+    #[clap(long, short, help = fl!("arg-password"))]
+    pub password: Option<PasswordArg>,
 
-    /// The encryption key for your account
-    #[clap(long, short)]
-    pub key: Option<String>,
+    #[clap(long, short, help = fl!("arg-account-login-key"))]
+    pub key: Option<SecretString>,
 
-    /// The two-factor authentication code for your account, if any
-    #[clap(long, short)]
-    pub totp_code: Option<String>,
+    #[clap(long, short, help = fl!("arg-totp-code"))]
+    pub totp_code: Option<SecretString>,
 
     #[clap(long, hide = true)]
     pub from_registration: bool,
 }
 
-fn get_input() -> Result<String> {
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(input.trim_end_matches(&['\r', '\n'][..]).to_string())
+/// Read a line from stdin, returning `None` at end of input. The distinction
+/// matters for the key prompts, which re-prompt on a blank line but must not
+/// spin forever once stdin is exhausted.
+fn get_input<T: for<'a> From<&'a str>>() -> Result<Option<T>> {
+    let mut input = Zeroizing::new(String::new());
+    if io::stdin().read_line(&mut input)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(input.trim_end_matches(&['\r', '\n'][..]).into()))
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Arc<Settings>, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
-                println!("You are authenticated with Atuin Hub.");
-                println!("Run 'atuin logout' to log out.");
+                println!("{}", fl!("account-hub-authenticated"));
+                println!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::Legacy { .. } => {
-                println!("You are logged in to your sync server.");
-                println!("Run 'atuin logout' to log out.");
+                println!("{}", fl!("login-legacy-logged-in"));
+                println!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::HubViaCli { .. } => {
-                println!(
-                    "You have a legacy sync session. \
-                     Continuing login to upgrade to full Hub authentication."
-                );
+                println!("{}", fl!("login-upgrading-legacy"));
             }
             SyncAuth::NotLoggedIn { .. } => {}
         }
@@ -67,7 +75,18 @@ impl Cmd {
             self.run_legacy_login(settings, store).await?;
         }
 
-        verify_key_against_remote(settings).await
+        verify_key_against_remote(settings, store, self.interactive()).await
+    }
+
+    /// Whether a rejected key can be corrected by asking for another one.
+    fn interactive(&self) -> bool {
+        self.scripted_key().is_none() && io::stdin().is_terminal()
+    }
+
+    fn scripted_key(&self) -> Option<SecretString> {
+        self.key
+            .clone()
+            .or_else(|| var_nonempty(KEY_ENV)?.into_string().ok().map(SecretString::from))
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -78,41 +97,43 @@ impl Cmd {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
+            let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
+                .unwrap_or_else(read_user_password);
+
             self.prompt_and_store_key(settings, store).await?;
 
-            let password = self.password.clone().unwrap_or_else(read_user_password);
             let mut totp_code = self.totp_code.clone();
 
             let (session, auth_type) = loop {
-                let response = client
-                    .login(username, &password, totp_code.as_deref())
-                    .await?;
+                let response = client.login(username, &password, totp_code.as_ref()).await?;
 
                 match response {
                     AuthResponse::Success { session, auth_type } => break (session, auth_type),
                     AuthResponse::TwoFactorRequired => {
-                        totp_code = Some(or_user_input(None, "two-factor code"));
+                        let Some(code) = read_user_input(&fl!("prompt-two-factor-code")) else {
+                            bail!(fl!("login-totp-required"));
+                        };
+                        totp_code = Some(code);
                     }
                 }
             };
 
-            let meta = Settings::meta_store().await?;
-            let is_hub_token = auth_type.as_deref() == Some("hub") || session.starts_with("atapi_");
+            let meta = settings.meta_store().await?;
+            let is_hub_token =
+                auth_type.as_deref() == Some("hub") || atuin_client::meta::is_hub_token(&session);
 
             if is_hub_token {
                 meta.save_hub_session(&session).await?;
             } else {
                 meta.save_session(&session).await?;
-                println!("\nNote: Your account has not been fully migrated to Atuin Hub.");
-                println!(
-                    "Sync will continue to work, but you can visit hub.atuin.sh \
-                     to create an account and link it to your existing CLI account."
-                );
+                println!("\n{}", fl!("account-not-migrated-note"));
+                println!("{}", fl!("account-not-migrated-hint"));
             }
         } else {
             // Interactive login via browser OAuth flow.
             if self.from_registration {
-                load_key(settings)?;
+                paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                    .context(fl!("login-key-generate-failed"))?;
             } else {
                 self.prompt_and_store_key(settings, store).await?;
             }
@@ -122,20 +143,21 @@ impl Cmd {
 
         // Silently attempt to link CLI account to Hub if one exists
         if let Ok(cli_token) = settings.session_token().await
-            && let Err(e) = atuin_client::hub::link_account(&endpoint, &cli_token).await
+            && let Err(e) = atuin_client::hub::link_account(&endpoint, &cli_token, settings).await
         {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
 
-        println!("Successfully authenticated.");
+        println!("{}", fl!("login-success"));
         Ok(())
     }
 
     /// Legacy login: always prompt for username/password interactively
     /// (or accept them via flags).
     async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let username = or_user_input(self.username.clone(), "username");
-        let password = self.password.clone().unwrap_or_else(read_user_password);
+        let username = or_user_input(self.username.clone(), &fl!("prompt-username"));
+        let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
+            .unwrap_or_else(read_user_password);
 
         self.prompt_and_store_key(settings, store).await?;
 
@@ -144,35 +166,46 @@ impl Cmd {
 
         match response {
             AuthResponse::Success { session, .. } => {
-                Settings::meta_store().await?.save_session(&session).await?;
+                settings.meta_store().await?.save_session(&session).await?;
             }
             AuthResponse::TwoFactorRequired => {
                 // Legacy server doesn't support 2FA, so this shouldn't happen.
-                bail!("unexpected two-factor requirement from legacy server");
+                bail!(fl!("login-legacy-unexpected-2fa"));
             }
         }
 
-        println!("Logged in!");
+        println!("{}", fl!("login-legacy-success"));
         Ok(())
     }
 
-    async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &url::Url) -> Result<()> {
+    async fn ensure_hub_session(&self, settings: &Settings, hub_address: &url::Url) -> Result<()> {
         tracing::info!("Authenticating with Atuin Hub...");
 
-        let session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
-        println!("Open this URL to continue authenticating with Atuin Hub:");
+        let mut session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
+
+        // Asks the Hub to show signed-out users its signup page rather than its login page.
+        if self.from_registration {
+            session.auth_url.query_pairs_mut().append_pair("signup", "1");
+        }
+
+        if session.open_in_browser() {
+            println!("{}", fl!("account-hub-browser-opened"));
+        } else {
+            println!("{}", fl!("account-hub-open-url"));
+        }
         println!("{}", session.auth_url);
 
         let token = session
             .wait_for_completion(
                 atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
                 atuin_client::hub::DEFAULT_POLL_INTERVAL,
+                &fl!("account-hub-waiting"),
             )
             .await?;
 
         tracing::info!("Authentication complete, saving session token");
 
-        atuin_client::hub::save_session(&token).await?;
+        atuin_client::hub::save_session(&token, settings).await?;
 
         Ok(())
     }
@@ -180,173 +213,232 @@ impl Cmd {
     async fn prompt_and_store_key(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let key_path = &settings.key_path;
 
-        println!("IMPORTANT");
+        println!("{}", fl!("login-key-important"));
+        println!("{}", fl!("login-key-same-everywhere"));
+        println!("{}", fl!("login-key-find"));
+        println!("{}", fl!("login-key-secret"));
         println!(
-            "If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there."
-        );
-        println!("You can find your key by running 'atuin key' on the other machine.");
-        println!("Do not share this key with anyone.");
-        println!(
-            "\nRead more here: {} \n",
-            atuin_common::docs::url("guide/sync/#login")
+            "\n{} \n",
+            fl!("login-key-read-more", url = atuin_common::docs::url("guide/sync/#login"))
         );
 
-        let key = or_user_input(
-            self.key.clone(),
-            "encryption key [blank to use existing key file]",
-        );
+        let interactive = self.interactive();
+        let mut flag_key = self.scripted_key();
 
-        // if provided, the key may be EITHER base64, or a bip mnemonic
-        // try to normalize on base64
-        let key = if key.is_empty() {
-            key
-        } else {
-            // try parse the key as a mnemonic...
-            match bip39::Mnemonic::from_phrase(&key, bip39::Language::English) {
-                Ok(mnemonic) => encode_key(Key::from_slice(mnemonic.entropy()))?,
-                Err(err) => {
-                    match err {
-                        // assume they copied in the base64 key
-                        bip39::ErrorKind::InvalidWord(_) => key,
-                        bip39::ErrorKind::InvalidChecksum => {
-                            bail!("Key mnemonic is not valid")
-                        }
-                        bip39::ErrorKind::InvalidKeysize(_)
-                        | bip39::ErrorKind::InvalidWordLength(_)
-                        | bip39::ErrorKind::InvalidEntropyLength(_, _) => {
-                            bail!("Key is not the correct length")
-                        }
+        loop {
+            let key = match flag_key.take() {
+                Some(key) => key,
+                None => match read_user_input::<SecretString>(&fl!("prompt-key-or-existing")) {
+                    Some(key) => key,
+                    // Stdin is exhausted, so re-prompting would spin forever.
+                    None => bail!(fl!("login-no-key-provided")),
+                },
+            };
+
+            if key.expose_secret().is_empty() {
+                if !key_path.exists() {
+                    let msg = fl!("login-no-key-found");
+                    if !interactive {
+                        bail!(msg);
                     }
+                    println!("\n{msg}\n");
+                    continue;
                 }
-            }
-        };
 
-        if key.is_empty() {
-            if key_path.exists() {
-                let bytes = fs_err::read_to_string(key_path).context(format!(
-                    "Existing key file at '{}' could not be read",
-                    key_path.to_string_lossy()
+                paseto_v4::Key::try_load_from_path(key_path).context(fl!(
+                    "login-key-file-invalid",
+                    path = key_path.to_string_lossy().into_owned()
                 ))?;
-                if decode_key(bytes).is_err() {
-                    bail!(format!(
-                        "The key in existing key file at '{}' is invalid",
-                        key_path.to_string_lossy()
-                    ));
+
+                return Ok(());
+            }
+
+            // The key may be EITHER base64 or a bip39 mnemonic.
+            match paseto_v4::Key::try_from_mnemonic(key.expose_secret()) {
+                Ok(key) => return store_key(settings, store, &key).await,
+                Err(err) if interactive => {
+                    println!("\n{}\n", fl!("login-key-try-again", error = err.to_string()));
                 }
-            } else {
-                panic!(
-                    "No key provided and no existing key file found. Please use 'atuin key' on your other machine, or recover your key from a backup"
-                )
-            }
-        } else if !key_path.exists() {
-            if decode_key(key.clone()).is_err() {
-                bail!("The specified key is invalid");
-            }
-
-            let mut file = File::create(key_path).await?;
-            file.write_all(key.as_bytes()).await?;
-        } else {
-            // we now know that the user has logged in specifying a key, AND that the key path
-            // exists
-
-            // 1. check if the saved key and the provided key match. if so, nothing to do.
-            // 2. if not, re-encrypt the local history and overwrite the key
-            let current_key: [u8; 32] = load_key(settings)?.into();
-
-            let encoded = key.clone(); // gonna want to save it in a bit
-            let new_key: [u8; 32] = decode_key(key)
-                .context("Could not decode provided key; is not valid base64-encoded key")?
-                .into();
-
-            if new_key != current_key {
-                println!("\nRe-encrypting local store with new key");
-
-                store.re_encrypt(&current_key, &new_key).await?;
-
-                println!("Writing new key");
-                let mut file = File::create(key_path).await?;
-                file.write_all(encoded.as_bytes()).await?;
+                Err(err) => return Err(err.into()),
             }
         }
-
-        Ok(())
     }
 }
 
-async fn verify_key_against_remote(settings: &Settings) -> Result<()> {
-    let key: [u8; 32] = load_key(settings)
-        .context("could not load encryption key for verification")?
-        .into();
+/// Write the key to the key file, re-encrypting the local store first if it was
+/// previously encrypted with a different key.
+async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Key) -> Result<()> {
+    let key_path = &settings.key_path;
 
-    let client = sync::build_client(settings).await?;
-    let remote_index = match client.record_status().await {
-        Ok(idx) => idx,
-        Err(e) => {
-            tracing::warn!("could not fetch remote status to verify key: {e}");
-            return Ok(());
-        }
+    if !key_path.exists() {
+        key.try_write_path(key_path)?;
+        return Ok(());
+    }
+
+    let current_key = paseto_v4::Key::try_load_from_path(key_path)?;
+    if *key == current_key {
+        return Ok(());
+    }
+
+    // The daemon holds the key in memory, so stop it before it writes records under the old one
+    // while the store is rewritten, and start it again once the new key is written. A daemon systemd
+    // or launchd runs can't be stopped from here, only restarted after. One can be running without
+    // `daemon.enabled`, started by `atuin threads`.
+    #[cfg(feature = "daemon")]
+    let stopped = match ActiveService::find(settings).await {
+        Ok(Some(daemon)) => daemon.stop().await.is_ok(),
+        _ => false,
     };
 
-    match sync::check_encryption_key(&client, &remote_index, &key).await {
-        Ok(()) => Ok(()),
-        Err(SyncError::WrongKey) => {
-            // Roll back the saved session so the user is not left in a
-            // half-authenticated state with a key that can't read the data.
-            if let Ok(meta) = Settings::meta_store().await {
-                let _ = meta.delete_session().await;
-                let _ = meta.delete_hub_session().await;
+    println!("\n{}", fl!("login-reencrypting"));
+    store.re_encrypt(&current_key, key).await?;
+    crate::command::client::store::invalidate_ai_sessions(settings).await;
+
+    println!("{}", fl!("login-writing-key"));
+    key.overwrite_path(key_path)?;
+
+    #[cfg(feature = "daemon")]
+    if let Err(e) = start_daemon(settings, stopped).await {
+        eprintln!("{}", fl!("login-daemon-start-failed", error = format!("{e:#}")));
+    }
+
+    Ok(())
+}
+
+/// Start the daemon on the new key if it was stopped, and restart one running on the old key, such
+/// as one a shell hook started while it was stopped.
+#[cfg(feature = "daemon")]
+async fn start_daemon(settings: &Settings, stopped: bool) -> Result<()> {
+    let running = ActiveService::find(settings).await?;
+    if running.is_none() && !stopped {
+        return Ok(());
+    }
+
+    println!("{}", fl!("login-starting-daemon"));
+    if let Some(daemon) = running {
+        daemon.restart().await?;
+    } else {
+        ActiveService::find_or_spawn(settings).await?;
+    }
+    Ok(())
+}
+
+async fn verify_key_against_remote(
+    settings: &Arc<Settings>,
+    store: &SqliteStore,
+    interactive: bool,
+) -> Result<()> {
+    let mut key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context(fl!("login-key-load-failed"))?;
+
+    // Build the session once (this hits the network). The key can change between retries below, so
+    // each iteration re-keys the shared session rather than reconnecting.
+    let session = SyncSession::builder()
+        .store(store.clone())
+        .client_source(ClientSource::FromSettings {
+            settings,
+            caps: None,
+        })
+        .build()
+        .connect()
+        .await?;
+    loop {
+        let check = session.keyed(&key).key_valid().await;
+        match check {
+            // Only persist a key the server has confirmed can read the data, so
+            // that cancelling out of a retry leaves the local store as it was.
+            None => return store_key(settings, store, &key).await,
+            Some(SyncError::WrongKey) => {
+                if !interactive {
+                    return Err(logout_wrong_key(settings).await.into());
+                }
+
+                println!("\n{}", fl!("login-key-mismatch"));
+                println!("{}", fl!("login-key-find-correct"));
+
+                let input = read_user_input::<SecretString>(&fl!("prompt-key-or-logout"));
+                match input {
+                    Some(input) if !input.expose_secret().is_empty() => {
+                        match paseto_v4::Key::try_from_mnemonic(input.expose_secret()) {
+                            Ok(candidate) => key = candidate,
+                            Err(err) => {
+                                println!(
+                                    "\n{}",
+                                    fl!("login-key-try-again", error = err.to_string())
+                                );
+                            }
+                        }
+                    }
+                    // A blank line or exhausted stdin both mean "give up".
+                    _ => return Err(logout_wrong_key(settings).await.into()),
+                }
             }
-            crate::print_error::print_error(
-                "Wrong encryption key",
-                "The encryption key on this machine does not match the data on the server. \
-                 You have been logged out.\n\n\
-                 To fix this, find your existing key by running `atuin key` on a machine that \
-                 already syncs successfully, then run `atuin login` again here with that key.",
-            );
-            std::process::exit(1);
-        }
-        Err(e) => {
-            // Non-key error (e.g. transient network issue). Don't fail the
-            // login — the user is authenticated and can sync later when the
-            // network recovers.
-            tracing::warn!("could not verify encryption key against remote: {e}");
-            Ok(())
+            Some(e) => {
+                // Non-key error (e.g. transient network issue). Don't fail the
+                // login — the user is authenticated and can sync later when the
+                // network recovers.
+                tracing::warn!("could not verify encryption key against remote: {e}");
+                return Ok(());
+            }
         }
     }
 }
 
-pub(super) fn or_user_input(value: Option<String>, name: &'static str) -> String {
-    value.unwrap_or_else(|| read_user_input(name))
+/// Roll back the saved session so the user is not left in a half-authenticated
+/// state with a key that can't read the data, and get the error that says so.
+async fn logout_wrong_key(settings: &Settings) -> CliError {
+    if let Ok(meta) = settings.meta_store().await {
+        let _ = meta.delete_session().await;
+        let _ = meta.delete_hub_session().await;
+    }
+    CliError::LoginWrongKey
 }
 
-pub(super) fn read_user_password() -> String {
-    let password = prompt_password("Please enter password: ");
-    password.expect("Failed to read from input")
+#[must_use]
+pub(super) fn or_user_input(value: Option<String>, prompt: &str) -> String {
+    value.unwrap_or_else(|| read_user_input(prompt).unwrap_or_default())
 }
 
-fn read_user_input(name: &'static str) -> String {
-    eprint!("Please enter {name}: ");
+#[must_use]
+pub(super) fn read_user_password() -> SecretString {
+    read_secret(&fl!("prompt-password"))
+}
+
+/// Prompt on the tty without echo.
+#[must_use]
+pub(super) fn read_secret(prompt: &str) -> SecretString {
+    let secret =
+        Zeroizing::new(prompt_password(format!("{prompt}: ")).expect("Failed to read from input"));
+    // `From<&str>` copies; `From<String>` would shrink the buffer and free the old one unwiped.
+    SecretString::from(secret.as_str())
+}
+
+/// Returns `None` if stdin reached end of input before a line was read.
+pub(super) fn read_user_input<T: for<'a> From<&'a str>>(prompt: &str) -> Option<T> {
+    eprint!("{prompt}: ");
     get_input().expect("Failed to read from input")
 }
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::encryption::Key;
+    use atuin_common::encryption::paseto_v4;
+    use rstest::rstest;
 
-    #[test]
+    #[rstest]
     fn mnemonic_round_trip() {
-        let key = Key::from([
+        let key = paseto_v4::Key::from([
             3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3, 2,
             7, 9, 5,
         ]);
-        let phrase = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
+        let phrase = bip39::Mnemonic::from_entropy(key.as_bytes(), bip39::Language::English)
             .unwrap()
             .into_phrase();
         let mnemonic = bip39::Mnemonic::from_phrase(&phrase, bip39::Language::English).unwrap();
-        assert_eq!(mnemonic.entropy(), key.as_slice());
+        assert_eq!(mnemonic.entropy(), key.as_bytes().as_slice());
         assert_eq!(
             phrase,
-            "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage lottery avoid scare alcohol cactus school avoid coral adjust catch pink"
+            "adapt amused able anxiety mother adapt beef gaze amount else seat alcohol cage \
+             lottery avoid scare alcohol cactus school avoid coral adjust catch pink"
         );
     }
 }

@@ -8,7 +8,7 @@ use yaml_rust2::YamlLoader;
 
 /// Parsed frontmatter fields from a `SKILL.md` file.
 #[derive(Debug, Default)]
-pub(crate) struct Frontmatter {
+pub struct Frontmatter {
     pub name: Option<String>,
     pub description: Option<String>,
     pub disable_model_invocation: bool,
@@ -16,7 +16,7 @@ pub(crate) struct Frontmatter {
 
 /// Result of splitting a skill file into frontmatter + body.
 #[derive(Debug)]
-pub(crate) struct ParsedSkillFile {
+pub struct ParsedSkillFile {
     pub frontmatter: Frontmatter,
     /// Everything after the closing `---` delimiter.
     pub body: String,
@@ -26,7 +26,7 @@ pub(crate) struct ParsedSkillFile {
 ///
 /// If no frontmatter delimiters are found, all content is treated as body
 /// with default frontmatter.
-pub(crate) fn parse(content: &str) -> ParsedSkillFile {
+pub fn parse(content: &str) -> ParsedSkillFile {
     let Some((yaml_str, body)) = split_frontmatter(content) else {
         return ParsedSkillFile {
             frontmatter: Frontmatter::default(),
@@ -61,11 +61,8 @@ fn split_frontmatter(content: &str) -> Option<(&str, String)> {
     let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
 
     // Find the closing `---`
-    let close_pos = after_open
-        .lines()
-        .enumerate()
-        .find(|(_, line)| line.trim() == "---")
-        .map(|(i, _)| {
+    let close_pos =
+        after_open.lines().enumerate().find(|(_, line)| line.trim() == "---").map(|(i, _)| {
             after_open
                 .lines()
                 .take(i)
@@ -76,10 +73,7 @@ fn split_frontmatter(content: &str) -> Option<(&str, String)> {
     let yaml_str = &after_open[..close_pos];
     let rest = &after_open[close_pos..];
     // Skip the closing `---` line
-    let body = rest
-        .strip_prefix("---")
-        .unwrap_or(rest)
-        .trim_start_matches(|c: char| c != '\n');
+    let body = rest.strip_prefix("---").unwrap_or(rest).trim_start_matches(|c: char| c != '\n');
     let body = body.strip_prefix('\n').unwrap_or(body);
 
     Some((yaml_str, body.to_string()))
@@ -113,8 +107,9 @@ fn extract_fields(doc: &yaml_rust2::Yaml) -> Frontmatter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::basic(
@@ -189,10 +184,7 @@ Body.
         let parsed = parse(content);
         assert_eq!(parsed.frontmatter.name.as_deref(), expected_name);
         assert_eq!(parsed.frontmatter.description.as_deref(), expected_desc);
-        assert_eq!(
-            parsed.frontmatter.disable_model_invocation,
-            expected_disable
-        );
+        assert_eq!(parsed.frontmatter.disable_model_invocation, expected_disable);
         if let Some(b) = expected_body_trimmed {
             assert_eq!(parsed.body.trim(), b);
         }

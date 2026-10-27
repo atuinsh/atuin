@@ -1,15 +1,14 @@
+use std::collections::{HashMap, HashSet};
+
+use atuin_client::database::Sqlite;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_client::theme::Theme;
+use atuin_history::stats::{Stats, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
-use std::collections::{HashMap, HashSet};
 use time::{Date, Duration, Month, OffsetDateTime, Time};
-
-use atuin_client::{
-    database::Database, encryption, record::sqlite_store::SqliteStore, settings::Settings,
-    theme::Theme,
-};
-use atuin_dotfiles::store::AliasStore;
-
-use atuin_history::stats::{Stats, compute};
+use tracing::instrument;
 
 #[derive(Debug)]
 struct WrappedStats {
@@ -34,13 +33,7 @@ impl WrappedStats {
         let expand_alias = |cmd: &str| -> String {
             alias_map.get(cmd).map_or_else(
                 || cmd.to_string(),
-                |expanded| {
-                    expanded
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or(cmd)
-                        .to_string()
-                },
+                |expanded| expanded.split_whitespace().next().unwrap_or(cmd).to_string(),
             )
         };
 
@@ -119,13 +112,17 @@ impl WrappedStats {
         let mut hours: HashMap<String, usize> = HashMap::new();
 
         for entry in history {
-            let raw_cmd = entry
-                .command
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_string();
-            let cmd = expand_alias(&raw_cmd);
+            let command = entry.command.trim_start();
+            let command =
+                split_common_prefix(settings, command).map_or(command, |(prefix, rest)| {
+                    if rest.is_empty() {
+                        prefix
+                    } else {
+                        rest
+                    }
+                });
+            let raw_cmd = command.split_whitespace().next().unwrap_or("");
+            let cmd = expand_alias(raw_cmd);
             let (total, errors) = command_errors.entry(cmd.clone()).or_insert((0, 0));
             *total += 1;
             if entry.exit != 0 {
@@ -201,7 +198,8 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
 
     if wrapped_stats.git_percentage > 0.05 {
         println!(
-            "{bold}🌟 You're a Git Power User!{reset} {bold}{:.1}%{reset} of your commands were Git operations\n",
+            "{bold}🌟 You're a Git Power User!{reset} {bold}{:.1}%{reset} of your commands were \
+             Git operations\n",
             wrapped_stats.git_percentage * 100.0
         );
     }
@@ -209,7 +207,8 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     let nav_percentage = wrapped_stats.nav_commands as f64 / stats.total_commands as f64 * 100.0;
     if nav_percentage > 0.05 {
         println!(
-            "{bold}🚀 You're a Navigator!{reset} {bold}{nav_percentage:.1}%{reset} of your time was spent navigating directories\n",
+            "{bold}🚀 You're a Navigator!{reset} {bold}{nav_percentage:.1}%{reset} of your time \
+             was spent navigating directories\n",
         );
     }
 
@@ -228,7 +227,8 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     // Error patterns
     let error_percentage = wrapped_stats.error_rate * 100.0;
     println!(
-        "{bold}🚨 Error Analysis{reset}: Your commands failed {bold}{error_percentage:.1}%{reset} of the time\n",
+        "{bold}🚨 Error Analysis{reset}: Your commands failed {bold}{error_percentage:.1}%{reset} \
+         of the time\n",
     );
 
     // Command evolution
@@ -246,11 +246,8 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     }
 
     // Find new favorite commands (in top 5 of second half but not in first half)
-    let first_half_set: HashSet<_> = wrapped_stats
-        .first_half_commands
-        .iter()
-        .map(|(cmd, _)| cmd)
-        .collect();
+    let first_half_set: HashSet<_> =
+        wrapped_stats.first_half_commands.iter().map(|(cmd, _)| cmd).collect();
     let new_favorites: Vec<_> = wrapped_stats
         .second_half_commands
         .iter()
@@ -270,12 +267,7 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
         println!("\n🕘 Most Productive Hour: {bold}{hour}{reset} ({count} commands)");
 
         // Night owl or early bird
-        let hour_num = hour
-            .split(':')
-            .next()
-            .unwrap_or("0")
-            .parse::<u32>()
-            .unwrap_or(0);
+        let hour_num = hour.split(':').next().unwrap_or("0").parse::<u32>().unwrap_or(0);
         if hour_num >= 22 || hour_num <= 4 {
             println!("  You're quite the night owl! 🦉");
         } else if (5..=7).contains(&hour_num) {
@@ -286,11 +278,12 @@ fn print_fun_facts(wrapped_stats: &WrappedStats, stats: &Stats, year: i32) {
     println!();
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn run(
     year: Option<i32>,
-    db: &impl Database,
+    db: &Sqlite,
     settings: &Settings,
-    store: SqliteStore,
+    _store: SqliteStore,
     theme: &Theme,
 ) -> Result<()> {
     let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
@@ -319,44 +312,27 @@ pub async fn run(
     let history = db.range(start, end).await?;
     if history.is_empty() {
         println!(
-            "Your history for {year} is empty!\nMaybe 'atuin import' could help you import your previous history 🪄"
+            "Your history for {year} is empty!\nMaybe 'atuin import' could help you import your \
+             previous history 🪄"
         );
         return Ok(());
     }
 
-    // Load aliases for expansion
-    let alias_map: HashMap<String, String> = if settings.dotfiles.enabled {
-        if let Ok(encryption_key) = encryption::load_key(settings) {
-            let encryption_key: [u8; 32] = encryption_key.into();
-            let host_id = Settings::host_id().await?;
-            let alias_store = AliasStore::new(store, host_id, encryption_key);
-
-            alias_store
-                .aliases()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|a| (a.name, a.value))
-                .collect()
-        } else {
-            HashMap::new()
-        }
-    } else {
-        HashMap::new()
+    let Some(stats) = compute(settings, &history, 10, 1) else {
+        println!(
+            "No commands found in your {year} history. Run a command or check your config for \
+             commands ignored by stats.ignored_commands."
+        );
+        return Ok(());
     };
-
-    // Compute overall stats using existing functionality
-    let stats = compute(settings, &history, 10, 1).expect("Failed to compute stats");
+    let alias_map = HashMap::new();
     let wrapped_stats = WrappedStats::new(settings, &stats, &history, &alias_map);
 
     // Print wrapped format
     print_wrapped_header(year);
 
     println!("🎉 In {year}, you typed {} commands!", stats.total_commands);
-    println!(
-        "   That's ~{} commands every day\n",
-        stats.total_commands / 365
-    );
+    println!("   That's ~{} commands every day\n", stats.total_commands / 365);
 
     println!("Your Top Commands:");
     atuin_history::stats::pretty_print(stats.clone(), 1, theme);
@@ -365,4 +341,66 @@ pub async fn run(
     print_fun_facts(&wrapped_stats, &stats, year);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::history::History;
+    use rstest::rstest;
+    use time::macros::datetime;
+
+    use super::*;
+
+    #[rstest]
+    #[case::default_prefix(None, "sudo echo hello", "echo")]
+    #[case::default_doas(None, "doas echo hello", "echo")]
+    #[case::custom_prefix(Some(vec!["please"]), "please echo hello", "echo")]
+    #[case::longest_prefix(Some(vec!["sudo", "sudo -u root"]), "sudo -u root echo hello", "echo")]
+    #[case::empty_prefixes(Some(vec![]), "sudo echo hello", "sudo")]
+    #[case::unconfigured_prefix(Some(vec!["please"]), "sudo echo hello", "sudo")]
+    #[case::prefix_only(None, "sudo", "sudo")]
+    #[case::whitespace(None, " \t sudo \t echo hello", "echo")]
+    #[case::empty(None, " \t ", "")]
+    #[case::subcommand(None, "sudo git status", "git")]
+    #[case::alias(None, "ll /tmp", "ls")]
+    #[case::prefixed_alias(None, "sudo ll /tmp", "ls")]
+    #[case::multiword_prefix_only(Some(vec!["sudo -u root"]), "sudo -u root  ", "sudo")]
+    #[case::one_removal(None, "sudo doas echo hello", "doas")]
+    #[case::partial_word(None, "sudoedit file", "edit")]
+    fn evolution_respects_common_prefix(
+        #[case] prefixes: Option<Vec<&str>>,
+        #[case] command: &str,
+        #[case] expected: &str,
+    ) {
+        let mut settings = Settings::utc();
+        if let Some(prefixes) = prefixes {
+            settings.stats.common_prefix = prefixes.into_iter().map(str::to_owned).collect();
+        }
+        let history: Vec<History> =
+            [datetime!(2024-01-01 0:00 UTC), datetime!(2024-10-01 0:00 UTC)]
+                .into_iter()
+                .flat_map(|timestamp| {
+                    [(command, 0), (expected, 1)].map(|(command, exit)| {
+                        History::import()
+                            .timestamp(timestamp)
+                            .command(command)
+                            .exit(exit)
+                            .build()
+                            .into()
+                    })
+                })
+                .collect();
+        let stats = Stats {
+            total_commands: 4,
+            unique_commands: 2,
+            top: vec![],
+        };
+        let aliases = HashMap::from([("ll".to_string(), "ls -l".to_string())]);
+
+        let wrapped = WrappedStats::new(&settings, &stats, &history, &aliases);
+
+        assert_eq!(wrapped.first_half_commands, vec![(expected.to_string(), 2)]);
+        assert_eq!(wrapped.second_half_commands, vec![(expected.to_string(), 2)]);
+        assert!((wrapped.error_rate - 0.5).abs() < f64::EPSILON);
+    }
 }

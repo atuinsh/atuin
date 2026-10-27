@@ -1,15 +1,14 @@
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
+use atuin_client::database::Sqlite;
+use atuin_client::history::store::HistoryStore;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
 use atuin_scripts::store::ScriptStore;
 use clap::Args;
-use eyre::{Result, bail};
+use eyre::{Context as _, Result, bail};
 
 #[cfg(feature = "daemon")]
-use crate::command::client::daemon as daemon_cmd;
-
-use atuin_client::{
-    database::Database, encryption, history::store::HistoryStore,
-    record::sqlite_store::SqliteStore, settings::Settings,
-};
+use crate::command::client::daemon;
 
 #[derive(Args, Debug)]
 pub struct Rebuild {
@@ -21,7 +20,7 @@ impl Rebuild {
         &self,
         settings: &Settings,
         store: SqliteStore,
-        database: &dyn Database,
+        database: &Sqlite,
     ) -> Result<()> {
         // keep it as a string and not an enum atm
         // would be super cool to build this dynamically in the future
@@ -29,16 +28,17 @@ impl Rebuild {
         // binary big
         match self.tag.as_str() {
             "history" => {
-                self.rebuild_history(settings, store.clone(), database)
-                    .await?;
-            }
-
-            "dotfiles" => {
-                self.rebuild_dotfiles(settings, store.clone()).await?;
+                self.rebuild_history(settings, store.clone(), database).await?;
             }
 
             "scripts" => {
                 self.rebuild_scripts(settings, store.clone()).await?;
+            }
+
+            // The daemon owns the sidecar, and rebuilds it. `ai-session` is the threads' record tag.
+            "threads" | "ai-session" => {
+                super::reset_ai_sessions(settings).await?;
+                println!("The daemon is rebuilding the threads index");
             }
 
             tag => {
@@ -49,47 +49,42 @@ impl Rebuild {
         Ok(())
     }
 
+    /// The daemon owns the rebuild when enabled; otherwise we rebuild locally.
     async fn rebuild_history(
         &self,
         settings: &Settings,
         store: SqliteStore,
-        database: &dyn Database,
+        database: &Sqlite,
     ) -> Result<()> {
-        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
+        #[cfg(feature = "daemon")]
+        if settings.daemon.enabled {
+            daemon::rebuild_history(settings).await?;
+            return Ok(());
+        }
 
-        let host_id = Settings::host_id().await?;
+        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
+
+        let host_id = settings.host_id().await?;
         let history_store = HistoryStore::new(store, host_id, encryption_key);
 
         history_store.build(database).await?;
-
-        #[cfg(feature = "daemon")]
-        daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryRebuilt).await;
-
-        Ok(())
-    }
-
-    async fn rebuild_dotfiles(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
-
-        let host_id = Settings::host_id().await?;
-
-        let alias_store = AliasStore::new(store.clone(), host_id, encryption_key);
-        let var_store = VarStore::new(store.clone(), host_id, encryption_key);
-
-        alias_store.build().await?;
-        var_store.build().await?;
 
         Ok(())
     }
 
     async fn rebuild_scripts(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let encryption_key: [u8; 32] = encryption::load_key(settings)?.into();
-        let host_id = Settings::host_id().await?;
+        let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
+        let host_id = settings.host_id().await?;
         let script_store = ScriptStore::new(store, host_id, encryption_key);
-        let database =
-            atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
+        let database = atuin_scripts::database::Database::new(
+            settings.scripts.db_path.clone(),
+            std::time::Duration::from_secs(1),
+        )
+        .await?;
 
-        script_store.build(database).await?;
+        script_store.build(&database).await?;
 
         Ok(())
     }

@@ -74,12 +74,9 @@ impl<'a> RichDisplay<'a> {
     /// Abbreviate the path relative to the current user's home directory.
     #[must_use]
     pub fn tilde_me(self) -> Self {
-        // TODO(markovejnovic): Do not call BaseDirs here. It does a lot of work. This is a massive
-        //                      amount of work. We should lazily initialize, but this pattern is
-        //                      spread throughout the code everywhere.
-        match directories::BaseDirs::new() {
-            Some(dirs) => Self {
-                tilde: Some(Cow::Owned(dirs.home_dir().to_owned())),
+        match dirs::home_dir() {
+            Some(home) => Self {
+                tilde: Some(Cow::Owned(home)),
                 ..self
             },
             None => self,
@@ -89,11 +86,11 @@ impl<'a> RichDisplay<'a> {
 
 impl fmt::Display for RichDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let maybe_write_terminal_slash = |f: &mut fmt::Formatter<'_>, p: &Path| {
+        let maybe_write_terminal_slash = |f: &mut fmt::Formatter<'_>, p: &Path| -> fmt::Result {
             if self.trailing_slash
                 && p.as_os_str().as_encoded_bytes().last() != Some(&(MAIN_SEPARATOR as u8))
             {
-                write!(f, "{}", MAIN_SEPARATOR_STR)?;
+                write!(f, "{MAIN_SEPARATOR_STR}")?;
             }
 
             Ok(())
@@ -135,13 +132,16 @@ impl<T: AsRef<Path> + ?Sized> DisplayRichExt for T {
 
 #[cfg(test)]
 mod tests {
-    use super::DisplayRichExt;
-    use rstest::rstest;
     use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf};
+
+    use rstest::rstest;
+
+    use super::DisplayRichExt;
+    use crate::path::PathBufExt as _;
 
     /// With no options, output is byte-identical to `Path::display()`.
     #[rstest]
-    #[case(Path::new("relative").join("some").join("dir"))]
+    #[case(Path::new("relative").join("some").joined("dir"))]
     #[case(Path::new("etc").join("hosts"))]
     fn base_output_matches_path_display(#[case] path: PathBuf) {
         assert_eq!(path.display_rich().to_string(), path.display().to_string());
@@ -163,48 +163,24 @@ mod tests {
         #[case] enabled: bool,
         #[case] expected: String,
     ) {
-        assert_eq!(
-            input.display_rich().trailing_slash(enabled).to_string(),
-            expected
-        );
+        assert_eq!(input.display_rich().trailing_slash(enabled).to_string(), expected);
     }
 
     /// `display_rich()` is available on every `AsRef<Path>` input type.
     #[rstest]
     fn works_for_all_asref_path_types() {
         let expected = format!("bar{MAIN_SEPARATOR_STR}");
-        assert_eq!(
-            "bar".display_rich().trailing_slash(true).to_string(),
-            expected
-        );
-        assert_eq!(
-            String::from("bar")
-                .display_rich()
-                .trailing_slash(true)
-                .to_string(),
-            expected
-        );
-        assert_eq!(
-            Path::new("bar")
-                .display_rich()
-                .trailing_slash(true)
-                .to_string(),
-            expected
-        );
-        assert_eq!(
-            PathBuf::from("bar")
-                .display_rich()
-                .trailing_slash(true)
-                .to_string(),
-            expected
-        );
+        assert_eq!("bar".display_rich().trailing_slash(true).to_string(), expected);
+        assert_eq!(String::from("bar").display_rich().trailing_slash(true).to_string(), expected);
+        assert_eq!(Path::new("bar").display_rich().trailing_slash(true).to_string(), expected);
+        assert_eq!(PathBuf::from("bar").display_rich().trailing_slash(true).to_string(), expected);
     }
 
     /// `relative_to(base)` strips `base` when the path is under it (empty when
     /// equal), and passes the path through otherwise.
     #[rstest]
     #[case::strips_prefix(
-        Path::new("home").join("user").join("project").join("src"),
+        Path::new("home").join("user").joined("project").joined("src"),
         Path::new("home").join("user"),
         Path::new("project").join("src").display().to_string()
     )]
@@ -230,7 +206,7 @@ mod tests {
     /// (`~` + separator for `home` itself), and passes through otherwise.
     #[rstest]
     #[case::abbreviates_home(
-        Path::new("home").join("user").join("project"),
+        Path::new("home").join("user").joined("project"),
         Path::new("home").join("user"),
         format!("~{MAIN_SEPARATOR_STR}project")
     )]
@@ -253,10 +229,7 @@ mod tests {
     fn relative_to_takes_priority_over_tilde() {
         let dir = Path::new("home").join("user");
         let p = dir.join("proj");
-        assert_eq!(
-            p.display_rich().relative_to(&dir).tilde(&dir).to_string(),
-            "proj"
-        );
+        assert_eq!(p.display_rich().relative_to(&dir).tilde(&dir).to_string(), "proj");
     }
 
     /// Enrichments compose with `trailing_slash`. The `relative_to`-to-base
@@ -264,7 +237,7 @@ mod tests {
     /// — pinning that edge, which no current caller reaches.
     #[rstest]
     #[case::tilde(
-        Path::new("home").join("user").join("proj"),
+        Path::new("home").join("user").joined("proj"),
         None,
         Some(Path::new("home").join("user")),
         format!("~{MAIN_SEPARATOR_STR}proj{MAIN_SEPARATOR_STR}")

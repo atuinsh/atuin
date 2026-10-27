@@ -33,38 +33,50 @@ if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
 fi
 ATUIN_HISTORY_ID=""
 
-__atuin_osc133_command_executed() {
-    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
-    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
+if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
+    # The pty-proxy preamble also sets this variable, but make sure it's set here,
+    # so a manually started proxy still functions when `pty_proxy.enabled` is false.
+    __atuin_pty_proxy_owns_tty=0
+    if [[ -n ${ATUIN_PTY_PROXY_ACTIVE-} ]]; then
+        if __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null) &&
+            [[ $__atuin_pty_proxy_answer = 1 ]]
+        then
+            __atuin_pty_proxy_owns_tty=1
+        fi
+        unset __atuin_pty_proxy_answer
+    fi
+fi
 
-    printf '\033]133;C\a'
-}
+__atuin_mark_output_start() {
+    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
 
-__atuin_osc133_command_finished() {
-    [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]] || return
-    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return
+    if [[ -n ${__atuin_needs_osc133_reset-} ]]; then
+        unset -v __atuin_needs_osc133_reset
+        # Old pty-proxy will reset an in-progress capture on a `B` marker.
+        # Always reset, even if there's no history ID, to avoid capturing a
+        # filtered command.
+        printf '\033]133;B\a'
+    fi
 
-    printf '\033]133;D;%s;history_id=%s;session_id=%s\a' "$1" "$ATUIN_HISTORY_ID" "${ATUIN_SESSION:-}"
-}
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
 
-__atuin_osc133_prompt_start=$'%{\033]133;A;cl=line\a%}'
-__atuin_osc133_prompt_end=$'%{\033]133;B\a%}'
-
-__atuin_osc133_wrap_prompt() {
-    local __atuin_prompt="${PROMPT-}"
-    local __atuin_rprompt="${RPROMPT-}"
-
-    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_start/}"
-    __atuin_prompt="${__atuin_prompt//$__atuin_osc133_prompt_end/}"
-    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_start/}"
-    __atuin_rprompt="${__atuin_rprompt//$__atuin_osc133_prompt_end/}"
-
-    if [[ -n "${ATUIN_PTY_PROXY_ACTIVE:-}" ]]; then
-        PROMPT="${__atuin_osc133_prompt_start}${__atuin_prompt}"
-        RPROMPT="${__atuin_rprompt}${__atuin_osc133_prompt_end}"
+    if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
+        # Current pty-proxy is an older version that expects OSC 133; new
+        # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
+        printf '\033]133;C\a'
     else
-        PROMPT="$__atuin_prompt"
-        RPROMPT="$__atuin_rprompt"
+        printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"
+    fi
+}
+
+__atuin_mark_output_end() {
+    [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
+    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
+
+    if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
+        printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
+    else
+        printf '\033]18188735;D;%s\a' "$ATUIN_HISTORY_ID"
     fi
 }
 
@@ -72,23 +84,22 @@ _atuin_preexec() {
     local id
     id=$(ATUIN_SHELL=zsh atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
-    __atuin_osc133_command_executed
+    __atuin_mark_output_start
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
 
 _atuin_precmd() {
     local EXIT="$?" __atuin_precmd_time=${EPOCHREALTIME-}
 
-    __atuin_osc133_wrap_prompt
-
-    [[ -z "${ATUIN_HISTORY_ID:-}" ]] && return
+    [[ -z "${ATUIN_HISTORY_ID:-}" ]] && return 0
 
     local duration=""
     if [[ -n $__atuin_preexec_time && -n $__atuin_precmd_time ]]; then
         printf -v duration %.0f $(((__atuin_precmd_time - __atuin_preexec_time) * 1000000000))
+        ((duration < 0)) && duration=0
     fi
 
-    __atuin_osc133_command_finished "$EXIT"
+    __atuin_mark_output_end "$EXIT"
     (atuin history end --hook --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID >/dev/null 2>&1 &)
     export ATUIN_HISTORY_ID=""
 }
@@ -229,6 +240,44 @@ _atuin_up_search_viins() {
     _atuin_up_search --keymap-mode=vim-insert
 }
 
+# `atuin threads resume`: pick a captured AI coding-agent session. The result uses
+# the same protocol as the history search: `__atuin_accept__:` runs it.
+_atuin_ai_resume() {
+    emulate -L zsh
+    zle -I
+
+    local output __atuin_status
+    output=$(ATUIN_SHELL=zsh ATUIN_QUERY=$BUFFER atuin threads resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-)
+    __atuin_status=$?
+
+    zle reset-prompt
+    # re-enable bracketed paste
+    # shellcheck disable=SC2154
+    echo -n ${zle_bracketed_paste[1]} >/dev/tty
+
+    if (( __atuin_status != 0 )); then
+        [[ -n $output ]] && print -r -- "$output" >/dev/tty
+        return $__atuin_status
+    fi
+
+    if [[ -n $output ]]; then
+        RBUFFER=""
+        LBUFFER=$output
+
+        if [[ $LBUFFER == __atuin_accept__:* ]]
+        then
+            LBUFFER=${LBUFFER#__atuin_accept__:}
+            zle accept-line
+        fi
+    fi
+}
+_atuin_ai_resume_vicmd() {
+    _atuin_ai_resume --keymap-mode=vim-normal
+}
+_atuin_ai_resume_viins() {
+    _atuin_ai_resume --keymap-mode=vim-insert
+}
+
 add-zsh-hook preexec _atuin_preexec
 add-zsh-hook precmd _atuin_precmd
 add-zsh-hook zshaddhistory _atuin_zshaddhistory
@@ -239,7 +288,21 @@ zle -N atuin-search-viins _atuin_search_viins
 zle -N atuin-up-search _atuin_up_search
 zle -N atuin-up-search-vicmd _atuin_up_search_vicmd
 zle -N atuin-up-search-viins _atuin_up_search_viins
+zle -N atuin-ai-resume _atuin_ai_resume
+zle -N atuin-ai-resume-vicmd _atuin_ai_resume_vicmd
+zle -N atuin-ai-resume-viins _atuin_ai_resume_viins
 
 # These are compatibility widget names for "atuin <= 17.2.1" users.
 zle -N _atuin_search_widget _atuin_search
 zle -N _atuin_up_search_widget _atuin_up_search
+
+(ATUIN_SHELL=zsh atuin __internal prepare-search-index >/dev/null 2>&1 &)
+
+if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] && [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
+    # We're running in an old pty-proxy that expects OSC 133 markers. The outer
+    # shell may have already sent a `C` marker, causing the proxy to start
+    # capturing output. We need to clear this state before the first command's
+    # output starts, or else the prompt and command itself will be erroneously
+    # included in the output.
+    __atuin_needs_osc133_reset=1
+fi

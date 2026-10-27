@@ -6,7 +6,7 @@ Atuin ships with only a couple of built-in alternative themes, but more can be a
 
 ## Required config
 
-The following is required in your config file (`~/.config/atuin/config.toml`)
+The following is required in your config file (`~/.atuin/config.toml`)
 
 ```toml
 [theme]
@@ -18,6 +18,7 @@ Where `THEMENAME` is a known theme. The following themes are available out-of-th
 * `default` theme
 * `autumn` theme
 * `marine` theme
+* `default-powershell` theme (same as `default`, but with PowerShell default syntax colors)
 * `(none)` theme (removes all styling)
 
 These are present to make sure users and developers can try out theming, but in general, you
@@ -77,9 +78,8 @@ PRs, extend the Meanings enum if needed (along with a fallback Meaning!).
 ### Theme creation
 
 When a theme name is read but not yet loaded, Atuin will look for it in the folder
-`~/.config/atuin/themes/` unless overridden by the `ATUIN_THEME_DIR` environment
-variable. It will attempt to open a file of name `THEMENAME.toml` and read it as a
-map from *Meanings* to foreground colors.
+`~/.atuin/themes/`. It will attempt to open a file of name `THEMENAME.toml` and
+read it as a map from *Meanings* to foreground colors.
 
 Note that, at present, it's not possible to specify the default terminal color explicitly
 in a theme file. However, the default theme Base color will always be unset and therefore
@@ -132,8 +132,8 @@ If the named theme is missing entirely, that's an error. The theme then drops
 to `(none)` and leaves Atuin unstyled, rather than falling back to the default
 or any other theme.
 
-This theme file should be moved to `~/.config/atuin/themes/my-theme.toml` and the
-following added to `~/.config/atuin/config.toml`:
+This theme file should be moved to `~/.atuin/themes/my-theme.toml` and the
+following added to `~/.atuin/config.toml`:
 
 ```toml
 [theme]

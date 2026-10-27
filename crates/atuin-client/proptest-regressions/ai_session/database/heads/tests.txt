@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 53270785ca0a6e976cfe4052e3a5c8e06e729e84b259195b87bb105b2160d494 # shrinks to rows = [("n00", None, 1, 0, Prompt), ("n01", None, 1, 4, Prompt), ("n02", Some("n00"), 1, 8, Prompt), ("n03", None, 1, 12, Prompt), ("n04", None, 1, 16, Prompt), ("n05", None, 1, 20, Prompt), ("n06", Some("n00"), 1, 24, Tool), ("n07", None, 1, 28, Tool), ("n08", None, 1, 32, Prompt), ("n09", None, 1, 36, Prompt)], harness = ClaudeCode, seed = 0

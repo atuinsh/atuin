@@ -2,11 +2,17 @@
 
 mod duration;
 mod offset_date_time;
+mod system_time;
 mod utc_offset;
 
-pub use duration::{DurationDisplay, DurationExt, DurationOverflow, DurationStyle};
-pub use offset_date_time::{
-    OffsetDateTimeDisplay, OffsetDateTimeExt, OffsetDateTimeStyle, TimespecOutOfRange,
-    TimestampOutOfRange, YMD_HM, YMD_HMS,
+#[allow(deprecated)]
+pub use duration::{
+    AsDisableableDuration, AsDuration, Days, DurationDisplay, DurationExt, DurationOverflow,
+    DurationStyle, DurationUnit, Minutes, NonZeroDuration, Seconds,
 };
+pub use offset_date_time::{
+    OffsetDateTimeDisplay, OffsetDateTimeExt, OffsetDateTimeStyle, TimespecOutOfRange, YMD_HM,
+    YMD_HMS,
+};
+pub use system_time::SystemTimeExt;
 pub use utc_offset::{TimezoneDecodingError, UtcOffsetExt, UtcOffsetSpec};

@@ -9,6 +9,7 @@ use clap::builder::{StyledStr, Styles};
 use eyre::Result;
 
 use crate::Atuin;
+use crate::i18n::writet;
 
 pub fn run(args: &[String]) -> Result<()> {
     let subcommand = &args[0];
@@ -70,7 +71,8 @@ fn render_not_found(subcommand: &str, bin: &str) -> StyledStr {
             let _ = write!(output, "{error}error:{error:#} ");
             let _ = write!(
                 output,
-                "'{invalid}{subcommand}{invalid:#}' is an official atuin plugin, but it's not installed"
+                "'{invalid}{subcommand}{invalid:#}' is an official atuin plugin, but it's not \
+                 installed"
             );
             let _ = write!(output, "\n\n");
             let _ = write!(output, "{install_message}");
@@ -82,21 +84,35 @@ fn render_not_found(subcommand: &str, bin: &str) -> StyledStr {
     let usage = atuin_cmd.render_usage();
 
     let _ = write!(output, "{error}error:{error:#} ");
-    let _ = write!(
+    let _ = writet!(
         output,
-        "unrecognized subcommand '{invalid}{subcommand}{invalid:#}' "
-    );
-    let _ = write!(
-        output,
-        "and no executable named '{invalid}{bin}{invalid:#}' found in your PATH"
+        "unrecognized-subcommand",
+        subcommand = format!("{invalid}{subcommand}{invalid:#}"),
+        bin = format!("{invalid}{bin}{invalid:#}"),
     );
     let _ = write!(output, "\n\n");
     let _ = write!(output, "{usage}");
     let _ = write!(output, "\n\n");
-    let _ = write!(
-        output,
-        "For more information, try '{literal}--help{literal:#}'."
-    );
+    let _ = write!(output, "For more information, try '{literal}--help{literal:#}'.");
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::render_not_found;
+
+    #[rstest]
+    fn not_found_names_the_subcommand_and_its_binary() {
+        let rendered = render_not_found("frobnicate", "atuin-frobnicate").to_string();
+        assert!(
+            rendered.starts_with(
+                "error: unrecognized subcommand 'frobnicate' and no executable named \
+                 'atuin-frobnicate' found in your PATH\n\n"
+            ),
+            "{rendered:?}"
+        );
+    }
 }

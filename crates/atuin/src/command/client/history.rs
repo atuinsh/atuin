@@ -1,95 +1,91 @@
-use std::{
-    fmt::{self, Display},
-    io::{self, IsTerminal, Write},
-    time::Duration,
-};
+use std::fmt::{self, Display};
+use std::io::{self, IsTerminal, Write};
+use std::sync::Arc;
+use std::time::Duration;
 
-use atuin_common::logs::LogConfig;
-use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
-use atuin_common::{
-    string::{EscapeNonPrintablePosixExt as _, NonNulStr},
-    utils,
-};
-use clap::Subcommand;
-use eyre::{Context, Result, bail};
-use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
-
-#[cfg(feature = "daemon")]
-use super::daemon as daemon_cmd;
-#[cfg(feature = "daemon")]
-use colored::Colorize;
-#[cfg(feature = "daemon")]
-use serde::Serialize;
-
-#[cfg(feature = "daemon")]
-use atuin_common::utils::normalize_optional_string;
-#[cfg(feature = "daemon")]
-use atuin_daemon::history::{HistoryEventKind, TailHistoryReply};
-
-use atuin_client::{
-    database::{Database, Sqlite, current_context},
-    encryption,
-    history::{History, store::HistoryStore},
-    record::sqlite_store::SqliteStore,
-    settings::{
-        FilterMode::{Directory, Global, Session},
-        Settings,
-    },
-};
-
+use atuin_client::database::{Sqlite, current_context};
+use atuin_client::history::store::HistoryStore;
+use atuin_client::history::{AuthorKind, History, HistoryId, probe_author};
 #[cfg(feature = "sync")]
 use atuin_client::record;
-
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::FilterMode::{Directory, Global, Session};
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
+use atuin_common::logs::LogConfig;
+use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
+use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
+use atuin_common::utils;
+use atuin_common::utils::normalize_optional_string;
+#[cfg(feature = "daemon")]
+use atuin_daemon::grpc::history::pb::{
+    TailHistoryReply, tail_history_reply::Event as TailEventProto,
+};
+use atuin_domain::record::CmdOrigin;
+#[cfg(feature = "octavo")]
+use atuin_octavo::hub::{HubCallError, HubClient};
+#[cfg(feature = "octavo")]
+use atuin_octavo::pb;
+#[cfg(feature = "octavo")]
+use atuin_octavo::queue::UploadQueue;
+use clap::Subcommand;
+#[cfg(feature = "daemon")]
+use colored::Colorize;
+use eyre::{Context, Result, bail};
+use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
+#[cfg(feature = "daemon")]
+use serde::Serialize;
 use time::OffsetDateTime;
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
 
 #[cfg(feature = "daemon")]
 use super::daemon;
+use crate::i18n::fl;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
 pub enum Cmd {
-    /// Begins a new command in the history
+    #[command(about = fl!("cmd-history-start"))]
     Start {
-        /// Collects the command from the `ATUIN_COMMAND_LINE` environment variable,
-        /// which does not need escaping and is more compatible between OS and shells
-        #[arg(long = "command-from-env", hide = true)]
+        #[arg(long = "command-from-env", hide = true, help = fl!("arg-history-start-cmd-env"))]
         cmd_env: bool,
 
-        /// Author of this command, eg `ellie`, `claude`, or `copilot`
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-history-start-author"))]
         author: Option<String>,
 
-        /// Optional intent/rationale for running this command
-        #[arg(long)]
+        #[arg(
+            long,
+            value_enum,
+            help = fl!("arg-history-start-author-kind"),
+            long_help = fl!("arg-history-start-author-kind", "long")
+        )]
+        author_kind: Option<AuthorKind>,
+
+        #[arg(long, help = fl!("arg-history-start-intent"))]
         intent: Option<String>,
 
         command: Vec<String>,
 
-        /// Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and
-        /// to minimize the amount of time the command takes to run.
-        #[arg(long, hide = true)]
+        #[arg(long, hide = true, help = fl!("arg-history-hook"))]
         hook: bool,
     },
 
-    /// Finishes a new command in the history (adds time, exit code)
+    #[command(about = fl!("cmd-history-end"))]
     End {
-        id: String,
+        id: HistoryId,
         #[arg(long, short)]
         exit: i64,
         #[arg(long, short)]
         duration: Option<u64>,
 
-        /// Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and
-        /// to minimize the amount of time the command takes to run.
-        #[arg(long, hide = true)]
+        #[arg(long, hide = true, help = fl!("arg-history-hook"))]
         hook: bool,
     },
 
-    /// Stream history events from the daemon as they are received
+    #[command(about = fl!("cmd-history-tail"))]
     Tail,
 
-    /// List all items in history
+    #[command(about = fl!("cmd-history-list"))]
     List {
         #[arg(long, short)]
         cwd: bool,
@@ -100,12 +96,10 @@ pub enum Cmd {
         #[arg(long)]
         human: bool,
 
-        /// Show only the text of the command
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-cmd-only"))]
         cmd_only: bool,
 
-        /// Terminate the output with a null, for better multiline support
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-print0"))]
         print0: bool,
 
         #[arg(long, short, default_value = "true")]
@@ -115,68 +109,65 @@ pub enum Cmd {
         #[arg(action = clap::ArgAction::Set)]
         reverse: bool,
 
-        /// Display the command time in another timezone other than the configured default.
-        ///
-        /// This option takes one of the following kinds of values:
-        ///
-        /// - the special value "local" (or "l") which refers to the system time zone
-        /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
+        #[arg(
+            long,
+            visible_alias = "tz",
+            help = fl!("arg-history-timezone"),
+            long_help = fl!("arg-history-timezone", "long")
+        )]
         timezone: Option<UtcOffsetSpec>,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {exit}, {time}, {session}, and {uuid}
-        ///
-        /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
-        #[arg(long, short)]
+        #[arg(
+            long,
+            short,
+            help = fl!("arg-history-list-format"),
+            long_help = fl!("arg-history-list-format", "long")
+        )]
         format: Option<String>,
     },
 
-    /// Get the last command that was run
+    #[command(about = fl!("cmd-history-last"))]
     Last {
         #[arg(long)]
         human: bool,
 
-        /// Show only the text of the command
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-cmd-only"))]
         cmd_only: bool,
 
-        /// Display the command time in another timezone other than the configured default.
-        ///
-        /// This option takes one of the following kinds of values:
-        ///
-        /// - the special value "local" (or "l") which refers to the system time zone
-        /// - an offset from UTC (e.g. "+9", "-2:30")
-        #[arg(long, visible_alias = "tz", verbatim_doc_comment)]
+        #[arg(
+            long,
+            visible_alias = "tz",
+            help = fl!("arg-history-timezone"),
+            long_help = fl!("arg-history-timezone", "long")
+        )]
         timezone: Option<UtcOffsetSpec>,
 
-        /// Available variables: {command}, {directory}, {duration}, {user}, {host}, {author}, {intent}, {time}, {session}, {uuid} and {relativetime}.
-        ///
-        /// Example: --format "{time} - [{duration}] - {directory}$\t{command}"
-        #[arg(long, short)]
+        #[arg(
+            long,
+            short,
+            help = fl!("arg-history-last-format"),
+            long_help = fl!("arg-history-last-format", "long")
+        )]
         format: Option<String>,
     },
 
     InitStore,
 
-    /// Delete history entries matching the configured exclusion filters
+    #[command(about = fl!("cmd-history-prune"))]
     Prune {
-        /// List matching history lines without performing the actual deletion.
-        #[arg(short = 'n', long)]
+        #[arg(short = 'n', long, help = fl!("arg-history-dry-run"))]
         dry_run: bool,
     },
 
-    /// Delete duplicate history entries (that have the same command, cwd and hostname)
+    #[command(about = fl!("cmd-history-dedup"))]
     Dedup {
-        /// List matching history lines without performing the actual deletion.
-        #[arg(short = 'n', long)]
+        #[arg(short = 'n', long, help = fl!("arg-history-dry-run"))]
         dry_run: bool,
 
-        /// Only delete results added before this date
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-history-dedup-before"))]
         before: String,
 
-        /// How many recent duplicates to keep
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-history-dedup-dupkeep"))]
         dupkeep: u32,
     },
 }
@@ -200,7 +191,7 @@ impl ListMode {
     }
 }
 
-#[allow(clippy::cast_sign_loss)]
+#[instrument(level = "trace", skip_all, fields(count = h.len()))]
 pub fn print_list(
     h: &[History],
     list_mode: ListMode,
@@ -213,12 +204,8 @@ pub fn print_list(
     let mut w = w.lock();
 
     let fmt_str = match list_mode {
-        ListMode::Human => format
-            .unwrap_or("{time} · {duration}\t{command}")
-            .replace("\\t", "\t"),
-        ListMode::Regular => format
-            .unwrap_or("{time}\t{command}\t{duration}")
-            .replace("\\t", "\t"),
+        ListMode::Human => format.unwrap_or("{time} · {duration}\t{command}").replace("\\t", "\t"),
+        ListMode::Regular => format.unwrap_or("{time}\t{command}\t{duration}").replace("\\t", "\t"),
         // not used
         ListMode::CmdOnly => String::new(),
     };
@@ -234,7 +221,11 @@ pub fn print_list(
         Box::new(h.iter()) as Box<dyn Iterator<Item = &History>>
     };
 
-    let entry_terminator = if print0 { "\0" } else { "\n" };
+    let entry_terminator = if print0 {
+        "\0"
+    } else {
+        "\n"
+    };
     let flush_each_line = print0;
 
     for history in iterator {
@@ -268,10 +259,12 @@ pub fn print_list(
             Err(_) => {
                 eprintln!("ERROR: Format string caused a formatting error.");
                 eprintln!(
-                    "This may be due to an unsupported format string containing special characters."
+                    "This may be due to an unsupported format string containing special \
+                     characters."
                 );
                 eprintln!(
-                    "Please check your format string syntax and ensure literal braces are properly escaped."
+                    "Please check your format string syntax and ensure literal braces are \
+                     properly escaped."
                 );
                 std::process::exit(1);
             }
@@ -321,7 +314,6 @@ impl CmdFormat {
 
 /// defines how to format the history
 impl FormatKey for FmtHistory<'_> {
-    #[allow(clippy::cast_sign_loss)]
     fn fmt(&self, key: &str, f: &mut fmt::Formatter<'_>) -> Result<(), FormatKeyError> {
         match key {
             "command" => match self.cmd_format {
@@ -337,33 +329,18 @@ impl FormatKey for FmtHistory<'_> {
                 write!(f, "{}", dur.display().largest_unit())?;
             }
             "time" => {
-                self.history
-                    .timestamp
-                    .to_offset(self.tz.0)
-                    .display()
-                    .ymd_hms()
-                    .fmt(f)?;
+                self.history.timestamp.to_offset(self.tz.0).display().ymd_hms().fmt(f)?;
             }
             "relativetime" => {
                 let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
                 write!(f, "{}", d.display().largest_unit())?;
             }
-            "host" => f.write_str(
-                self.history
-                    .hostname
-                    .split_once(':')
-                    .map_or(&self.history.hostname, |(host, _)| host),
-            )?,
+            "host" => f.write_str(self.history.cmd_origin.host().into_inner())?,
             "author" => f.write_str(&self.history.author)?,
             "intent" => f.write_str(self.history.intent.as_deref().unwrap_or_default())?,
-            "user" => f.write_str(
-                self.history
-                    .hostname
-                    .split_once(':')
-                    .map_or("", |(_, user)| user),
-            )?,
+            "user" => f.write_str(self.history.cmd_origin.user().into_inner())?,
             "session" => f.write_str(&self.history.session)?,
-            "uuid" => f.write_str(&self.history.id.0)?,
+            "uuid" => write!(f, "{}", self.history.id)?,
             _ => return Err(FormatKeyError::UnknownKey),
         }
         Ok(())
@@ -382,7 +359,8 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
                 eprintln!("Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'");
             } else {
                 eprintln!(
-                    "If your formatting string contains literal curly braces, you need to escape them by doubling:"
+                    "If your formatting string contains literal curly braces, you need to escape \
+                     them by doubling:"
                 );
                 eprintln!("Use {{{{ for literal {{ and }}}} for literal }}");
             }
@@ -401,12 +379,8 @@ fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &
         return command;
     }
 
-    let trailing_backslashes = trimmed
-        .as_bytes()
-        .iter()
-        .rev()
-        .take_while(|&&byte| byte == b'\\')
-        .count();
+    let trailing_backslashes =
+        trimmed.as_bytes().iter().rev().take_while(|&&byte| byte == b'\\').count();
 
     if trailing_backslashes % 2 == 1 {
         command
@@ -419,6 +393,7 @@ fn make_starting_history(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
 ) -> Option<History> {
     // It's better for atuin to silently fail here and attempt to
@@ -430,86 +405,58 @@ fn make_starting_history(
     // (argv entries are C strings), so it can only come from a broken caller such
     // as an agent hook. Drop it rather than committing garbage to history.
     if let Err(err) = NonNulStr::new(command) {
-        debug!(
-            "dropping command containing a NUL byte at index {}",
-            err.index
-        );
+        debug!("dropping command containing a NUL byte at index {}", err.index);
         return None;
     }
+
+    // When the flags didn't state an identity, fall back to the one the invoking integration
+    // exported to the environment. The env kind only qualifies a stated author: a stray
+    // ATUIN_HISTORY_AUTHOR_KIND inherited by a nested interactive shell must not stamp the
+    // human's own commands.
+    let author = normalize_optional_string(author.map(String::from)).or_else(probe_author);
+    let author_kind =
+        author_kind.or_else(|| author.is_some().then(AuthorKind::probe_current).flatten());
 
     let h: History = History::capture()
         .timestamp(OffsetDateTime::now_utc())
         .command(command)
-        .cwd(cwd)
-        .author_opt(author.map(String::from))
+        .cwd(cwd.to_string_lossy().into_owned())
+        .author_opt(author)
+        .author_kind_opt(author_kind)
         .intent_opt(intent.map(String::from))
-        .shell_opt(std::env::var("ATUIN_SHELL").ok())
+        .shell_opt(atuin_common::env::var("ATUIN_SHELL").ok())
         .build()
         .into();
 
     h.should_save(settings).then_some(h)
 }
 
-async fn handle_start(
-    db: &impl Database,
-    settings: &Settings,
-    command: &str,
-    author: Option<&str>,
-    intent: Option<&str>,
-) -> Result<Option<String>> {
-    let Some(h) = make_starting_history(settings, command, author, intent) else {
-        return Ok(None);
-    };
-
+#[instrument(level = "trace", skip_all)]
+async fn handle_start(db: &Sqlite, h: &History) {
     // Silently ignore database errors to avoid breaking the shell
     // This is important when disk is full or database is locked
-    if let Err(e) = db.save(&h).await {
+    if let Err(e) = db.save(h).await {
         debug!("failed to save history: {e}");
     }
-
-    Ok(Some(h.id.0.clone()))
 }
 
 #[cfg(feature = "daemon")]
-async fn handle_daemon_start(
-    settings: &Settings,
-    command: &str,
-    author: Option<&str>,
-    intent: Option<&str>,
-) -> Result<Option<String>> {
-    let Some(h) = make_starting_history(settings, command, author, intent) else {
-        return Ok(None);
-    };
-
-    let local_id = h.id.0.clone();
-
-    // Attempt to start history via daemon, but silently ignore errors
-    // to avoid breaking the shell when the daemon is unavailable or disk is full
-    let resp = match daemon::start_history(settings, h).await {
-        Ok(id) => id,
-        Err(e) => {
-            debug!("failed to start history via daemon: {e}");
-            local_id
-        }
-    };
-
-    Ok(Some(resp))
+#[instrument(level = "trace", skip_all, err)]
+async fn handle_daemon_start(settings: &Settings, h: History) -> Result<HistoryId> {
+    daemon::start_history(settings, h).await
 }
 
 #[allow(unused_variables)]
+#[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 async fn handle_end(
-    db: &impl Database,
+    db: &Sqlite,
     store: SqliteStore,
     history_store: HistoryStore,
-    settings: &Settings,
-    id: &str,
+    settings: &Arc<Settings>,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
-    if id.trim() == "" {
-        return Ok(());
-    }
-
     let Some(mut h) = db.load(id).await? else {
         warn!("history entry is missing");
         return Ok(());
@@ -544,9 +491,17 @@ async fn handle_end(
     if settings.should_sync().await? {
         #[cfg(feature = "sync")]
         {
-            let (_, downloaded) =
-                record::sync::sync(settings, &store, &history_store.encryption_key).await?;
-            Settings::save_sync_time().await?;
+            let session = record::sync::SyncSession::builder()
+                .store(store.clone())
+                .client_source(record::sync::ClientSource::FromSettings {
+                    settings,
+                    caps: None,
+                })
+                .build()
+                .connect()
+                .await?;
+            let (_, downloaded) = session.keyed(&history_store.encryption_key).sync().await?;
+            settings.save_sync_time().await?;
 
             crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
         }
@@ -560,47 +515,72 @@ async fn handle_end(
 }
 
 #[cfg(feature = "daemon")]
+#[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 async fn handle_daemon_end(
     settings: &Settings,
-    id: &str,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
     if !settings.store_failed && exit > 0 {
         debug!("history has non-zero exit code, and store_failed is false");
-        daemon::cancel_history(settings, id.to_string()).await?;
+        daemon::cancel_history(settings, id).await?;
     } else {
-        daemon::end_history(settings, id.to_string(), duration.unwrap_or(0), exit).await?;
+        let duration = duration.map(Duration::from_nanos);
+        daemon::end_history(settings, id, duration, exit).await?;
     }
 
     Ok(())
 }
 
+#[instrument(level = "trace", skip_all, err)]
 pub(super) async fn start_history_entry(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
+    author_kind: Option<AuthorKind>,
     intent: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Option<HistoryId>> {
+    let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
+        return Ok(None);
+    };
+
+    // If the daemon can't take the command (e.g. it isn't running and couldn't be started), save it
+    // locally rather than dropping it; `history end` falls back to the local database to match.
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
-        return handle_daemon_start(settings, command, author, intent).await;
+        match handle_daemon_start(settings, h.clone()).await {
+            Ok(id) => return Ok(Some(id)),
+            Err(e) => {
+                warn!("failed to start history via the daemon; saving it locally instead: {e:#}");
+            }
+        }
     }
 
     let db_path = &settings.db_path;
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
-    handle_start(&db, settings, command, author, intent).await
+    handle_start(&db, &h).await;
+
+    Ok(Some(h.id))
 }
 
+#[instrument(level = "trace", skip_all, fields(id = %id, exit, duration = ?duration), err)]
 pub(super) async fn end_history_entry(
-    settings: &Settings,
-    id: &str,
+    settings: &Arc<Settings>,
+    id: HistoryId,
     exit: i64,
     duration: Option<u64>,
 ) -> Result<()> {
+    // If the daemon can't end the command, it may have been saved locally by `history start` falling
+    // back when the daemon wasn't running, so finish it locally too.
     #[cfg(feature = "daemon")]
     if settings.daemon.enabled {
-        return handle_daemon_end(settings, id, exit, duration).await;
+        match handle_daemon_end(settings, id, exit, duration).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                warn!("failed to end history via the daemon; ending it locally instead: {e:#}");
+            }
+        }
     }
 
     let db_path = &settings.db_path;
@@ -609,13 +589,75 @@ pub(super) async fn end_history_entry(
     let db = Sqlite::new(db_path, settings.local_timeout).await?;
     let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-    let encryption_key: [u8; 32] = encryption::load_key(settings)
-        .context("could not load encryption key")?
-        .into();
-    let host_id = Settings::host_id().await?;
+    let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+        .context("could not load or generate encryption key")?;
+    let host_id = settings.host_id().await?;
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
     handle_end(&db, store, history_store, settings, id, exit, duration).await
+}
+
+/// Delete history entries, routing through the daemon when it owns the store.
+///
+/// When `daemon.enabled`, the daemon performs the deletion and updates its in-memory search index,
+/// and its errors propagate: we deliberately do not delete locally instead, since that would leave a
+/// running daemon serving a stale index. Otherwise we delete directly via the record store and
+/// rebuild the affected rows locally.
+#[cfg_attr(not(feature = "daemon"), allow(unused_variables))]
+pub(super) async fn delete_history_entries(
+    settings: &Settings,
+    history_store: &HistoryStore,
+    db: &Sqlite,
+    entries: impl IntoIterator<Item = History>,
+) -> Result<()> {
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled {
+        let ids: Vec<HistoryId> = entries.into_iter().map(|h| h.id).collect();
+        daemon::delete_history(settings, ids).await?;
+        return Ok(());
+    }
+
+    let entries: Vec<History> = entries.into_iter().collect();
+    #[cfg(feature = "octavo")]
+    let history_ids: Vec<HistoryId> = entries.iter().map(|h| h.id).collect();
+
+    let ids = history_store.delete_entries(entries).await?;
+    history_store.build_all(db, &ids).await?;
+
+    #[cfg(feature = "octavo")]
+    queue_octavo_deletions(settings, history_ids).await;
+    Ok(())
+}
+
+/// Queues the deletion of `ids` from Octavo, for the daemon to send once it runs, if Octavo was
+/// ever on here.
+#[cfg(feature = "octavo")]
+async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
+    let path = settings.octavo_queue_path();
+    if !path.exists() {
+        return;
+    }
+
+    let login = async { HubClient::new(settings)?.login(settings).await };
+    let login = match login.await {
+        Ok(login) => login,
+        Err(HubCallError::NotLoggedIn) => return,
+        Err(err) => {
+            warn!(
+                ?err,
+                "failed to learn which hub user is logged in; deletions won't reach octavo"
+            );
+            return;
+        }
+    };
+
+    // Octavo never stored an entry whose id isn't a UUIDv7.
+    let stored = ids.into_iter().filter(|&id| pb::UuidV7::try_from(id).is_ok());
+    let queued =
+        async { UploadQueue::open(path).await?.push_deletions(login.user_id(), stored).await };
+    if let Err(err) = queued.await {
+        warn!(?err, "failed to queue history deletions for octavo; they will not reach it");
+    }
 }
 
 #[cfg(feature = "daemon")]
@@ -623,6 +665,7 @@ pub(super) async fn end_history_entry(
 enum TailKind {
     Started,
     Ended,
+    Cancelled,
 }
 
 #[cfg(feature = "daemon")]
@@ -642,7 +685,7 @@ struct TailJsonEvent<'a> {
 #[cfg(feature = "daemon")]
 #[derive(Serialize)]
 struct TailJsonHistory<'a> {
-    id: &'a str,
+    id: HistoryId,
     timestamp: String,
     timestamp_unix_ns: u64,
     command: &'a str,
@@ -669,33 +712,38 @@ struct TailJsonHistory<'a> {
 #[cfg(feature = "daemon")]
 impl TailEvent {
     fn from_proto(reply: TailHistoryReply) -> Result<Self> {
-        let history = reply
-            .history
-            .ok_or_else(|| eyre::eyre!("daemon sent a history tail event without history"))?;
-        let timestamp = OffsetDateTime::from_unix_nanos_u64(history.timestamp);
-        let kind = match HistoryEventKind::try_from(reply.kind)
-            .unwrap_or(HistoryEventKind::Unspecified)
-        {
-            HistoryEventKind::Started => TailKind::Started,
-            HistoryEventKind::Ended => TailKind::Ended,
-            HistoryEventKind::Unspecified => bail!("daemon sent an unspecified history tail event"),
+        let (kind, history) = match reply.event {
+            Some(TailEventProto::Started(history)) => (TailKind::Started, history),
+            Some(TailEventProto::Ended(history)) => (TailKind::Ended, history),
+            Some(TailEventProto::Cancelled(history)) => (TailKind::Cancelled, history),
+            Some(TailEventProto::Lagged(_)) => {
+                bail!("daemon sent a lag notice as a history event")
+            }
+            None => bail!("daemon sent an unspecified history tail event"),
         };
+        let timestamp = OffsetDateTime::from_unix_nanos_i64(history.timestamp);
+        let author_kind = history.author_kind();
 
         Ok(Self {
             kind,
             history: History {
-                id: history.id.into(),
+                id: history
+                    .id
+                    .ok_or_else(|| eyre::eyre!("daemon tail event is missing the history id"))?
+                    .try_into()?,
                 timestamp,
                 duration: history.duration,
                 exit: history.exit,
                 command: history.command,
                 cwd: history.cwd,
                 session: history.session,
-                hostname: history.hostname,
+                #[allow(deprecated)]
+                cmd_origin: CmdOrigin::parse_lenient(history.hostname),
                 author: history.author,
                 intent: normalize_optional_string(history.intent),
                 shell: normalize_optional_string(history.shell),
                 deleted_at: None,
+                author_kind: author_kind.into(),
             },
         })
     }
@@ -714,20 +762,14 @@ impl TailEvent {
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
-                id: &self.history.id.0,
-                timestamp: self
-                    .history
-                    .timestamp
-                    .to_offset(tz.0)
-                    .display()
-                    .ymd_hms()
-                    .to_string(),
+                id: self.history.id,
+                timestamp: self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
                 timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
                     .context("history timestamp predates unix epoch")?,
                 command: &self.history.command,
                 cwd: &self.history.cwd,
                 session: &self.history.session,
-                hostname: &self.history.hostname,
+                hostname: self.history.cmd_origin.as_str(),
                 host: self.host(),
                 user: self.user(),
                 author: &self.history.author,
@@ -735,10 +777,7 @@ impl TailEvent {
                 exit: self.exit_value(),
                 duration_ns: self.duration_value(),
                 duration: self.duration_value().map(|d| {
-                    Duration::saturating_from_nanos_i64(d)
-                        .display()
-                        .largest_unit()
-                        .to_string()
+                    Duration::saturating_from_nanos_i64(d).display().largest_unit().to_string()
                 }),
                 success: self.success_value(),
                 finished_at: self
@@ -756,6 +795,7 @@ impl TailEvent {
             TailKind::Started => "-".repeat(72).bright_blue().to_string(),
             TailKind::Ended if self.history.exit == 0 => "-".repeat(72).bright_green().to_string(),
             TailKind::Ended => "-".repeat(72).bright_red().to_string(),
+            TailKind::Cancelled => "-".repeat(72).bright_yellow().to_string(),
         };
 
         out.push_str(&border);
@@ -781,15 +821,9 @@ impl TailEvent {
         push_pretty_field(
             &mut out,
             "start",
-            &self
-                .history
-                .timestamp
-                .to_offset(tz.0)
-                .display()
-                .ymd_hms()
-                .to_string(),
+            &self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
         );
-        push_pretty_field(&mut out, "history", &self.history.id.0);
+        push_pretty_field(&mut out, "history", &self.history.id.to_string());
         push_pretty_field(&mut out, "session", &self.history.session);
         push_pretty_field(&mut out, "exit", &self.exit_display());
         push_pretty_field(&mut out, "duration", &self.duration_display());
@@ -797,7 +831,7 @@ impl TailEvent {
         out.push('\n');
 
         push_pretty_field(&mut out, "cwd", &self.history.cwd);
-        push_pretty_field(&mut out, "hostname", &self.history.hostname);
+        push_pretty_field(&mut out, "hostname", self.history.cmd_origin.as_str());
         push_pretty_field(&mut out, "host", self.host());
         push_pretty_field(&mut out, "user", self.user());
         push_pretty_field(&mut out, "author", &self.history.author);
@@ -817,17 +851,11 @@ impl TailEvent {
     }
 
     fn host(&self) -> &str {
-        self.history
-            .hostname
-            .split_once(':')
-            .map_or(self.history.hostname.as_str(), |(host, _)| host)
+        self.history.cmd_origin.host().into_inner()
     }
 
     fn user(&self) -> &str {
-        self.history
-            .hostname
-            .split_once(':')
-            .map_or("", |(_, user)| user)
+        self.history.cmd_origin.user().into_inner()
     }
 
     fn exit_value(&self) -> Option<i64> {
@@ -859,10 +887,9 @@ impl TailEvent {
 
     fn duration_display(&self) -> String {
         match self.duration_value() {
-            Some(duration) if duration >= 0 => Duration::saturating_from_nanos_i64(duration)
-                .display()
-                .largest_unit()
-                .to_string(),
+            Some(duration) if duration >= 0 => {
+                Duration::saturating_from_nanos_i64(duration).display().largest_unit().to_string()
+            }
             Some(_) => "unknown".bright_yellow().to_string(),
             None => "running".bright_yellow().to_string(),
         }
@@ -875,6 +902,7 @@ impl TailKind {
         match self {
             Self::Started => "started",
             Self::Ended => "ended",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -883,6 +911,7 @@ impl TailKind {
             Self::Started => "STARTED".bold().bright_blue(),
             Self::Ended if exit == 0 => "ENDED".bold().bright_green(),
             Self::Ended => "ENDED".bold().bright_red(),
+            Self::Cancelled => "CANCELLED".bold().bright_yellow(),
         }
     }
 }
@@ -911,13 +940,22 @@ fn push_pretty_field(out: &mut String, label: &str, value: &str) {
 
 impl Cmd {
     #[cfg(feature = "daemon")]
+    #[instrument(level = "trace", skip_all, err)]
     async fn handle_tail(settings: &Settings) -> Result<()> {
         let tty = std::io::stdout().is_terminal();
-        let mut client = daemon::tail_client(settings).await?;
+        let mut client = daemon::ready_client(settings).await?;
         let mut stream = client.tail_history().await?;
         let stdout = std::io::stdout();
 
         while let Some(reply) = stream.message().await? {
+            if let Some(TailEventProto::Lagged(lagged)) = &reply.event {
+                eprintln!(
+                    "WARNING: atuin daemon dropped {} history events; tail fell behind",
+                    lagged.dropped
+                );
+                continue;
+            }
+
             let event = TailEvent::from_proto(reply)?;
             let rendered = event.render(tty, settings.timezone)?;
             let mut out = stdout.lock();
@@ -932,11 +970,12 @@ impl Cmd {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
+    #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
+    #[instrument(level = "trace", skip_all, err)]
     async fn handle_list(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         context: atuin_client::database::Context,
         session: bool,
@@ -952,15 +991,10 @@ impl Cmd {
             (true, true) => [Session, Directory],
             (true, false) => [Session, Global],
             (false, true) => [Global, Directory],
-            (false, false) => [
-                settings.default_filter_mode(context.git_root.is_some()),
-                Global,
-            ],
+            (false, false) => [settings.default_filter_mode(context.git_root.is_some()), Global],
         };
 
-        let history = db
-            .list(&filters, &context, None, false, include_deleted, None)
-            .await?;
+        let history = db.list(filters, &context, None, false, include_deleted, None).await?;
 
         print_list(
             &history,
@@ -977,8 +1011,9 @@ impl Cmd {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(dry_run), err)]
     async fn handle_prune(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         store: SqliteStore,
         context: atuin_client::database::Context,
@@ -987,7 +1022,7 @@ impl Cmd {
         // Grab all executed commands and filter them using History::should_save.
         // We could iterate or paginate here if memory usage becomes an issue.
         let matches: Vec<History> = db
-            .list(&[Global], &context, None, false, false, None)
+            .list([Global], &context, None, false, false, None)
             .await?
             .into_iter()
             .filter(|h| !h.should_save(settings))
@@ -1012,26 +1047,23 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key: [u8; 32] = encryption::load_key(settings)
-                .context("could not load encryption key")?
-                .into();
-            let host_id = Settings::host_id().await?;
+            let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .context("could not load or generate encryption key")?;
+            let host_id = settings.host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-            for entry in matches {
+            for entry in &matches {
                 eprintln!("deleting {}", entry.id);
-                let (id, _) = history_store.delete(entry.id.clone()).await?;
-                history_store.build_all(db, &[id]).await?;
             }
 
-            #[cfg(feature = "daemon")]
-            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryPruned).await;
+            delete_history_entries(settings, &history_store, db, matches).await?;
         }
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(dry_run, dupkeep), err)]
     async fn handle_dedup(
-        db: &impl Database,
+        db: &Sqlite,
         settings: &Settings,
         store: SqliteStore,
         before: i64,
@@ -1040,7 +1072,8 @@ impl Cmd {
     ) -> Result<()> {
         if dupkeep == 0 {
             eprintln!(
-                "\"--dupkeep 0\" would keep 0 copies of duplicate commands and thus delete all of them! Use \"atuin search --delete ...\" if you really want that."
+                "\"--dupkeep 0\" would keep 0 copies of duplicate commands and thus delete all of \
+                 them! Use \"atuin search --delete ...\" if you really want that."
             );
             std::process::exit(1);
         }
@@ -1066,47 +1099,46 @@ impl Cmd {
                 settings.timezone,
             );
         } else {
-            let encryption_key: [u8; 32] = encryption::load_key(settings)
-                .context("could not load encryption key")?
-                .into();
-            let host_id = Settings::host_id().await?;
+            let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                .context("could not load or generate encryption key")?;
+            let host_id = settings.host_id().await?;
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
-            #[cfg(feature = "daemon")]
-            let ids = matches.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
-
-            for entry in matches {
+            for entry in &matches {
                 eprintln!("deleting {}", entry.id);
-                let (id, _) = history_store.delete(entry.id).await?;
-                history_store.build_all(db, &[id]).await?;
             }
 
-            #[cfg(feature = "daemon")]
-            daemon_cmd::emit_event(settings, atuin_daemon::DaemonEvent::HistoryDeleted { ids })
-                .await;
+            delete_history_entries(settings, &history_store, db, matches).await?;
         }
         Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match self {
             Self::Start {
                 cmd_env,
                 author,
+                author_kind,
                 intent,
                 command,
                 ..
             } => {
                 let command = if cmd_env {
-                    std::env::var("ATUIN_COMMAND_LINE").unwrap_or_default()
+                    atuin_common::env::var("ATUIN_COMMAND_LINE").unwrap_or_default()
                 } else {
                     command.join(" ")
                 };
 
-                if let Some(id) =
-                    start_history_entry(settings, &command, author.as_deref(), intent.as_deref())
-                        .await?
+                if let Some(id) = start_history_entry(
+                    settings,
+                    &command,
+                    author.as_deref(),
+                    author_kind,
+                    intent.as_deref(),
+                )
+                .await?
                 {
                     println!("{id}");
                 }
@@ -1115,7 +1147,7 @@ impl Cmd {
             }
             Self::End {
                 id, exit, duration, ..
-            } => end_history_entry(settings, &id, exit, duration).await,
+            } => end_history_entry(settings, id, exit, duration).await,
             Self::Tail => {
                 #[cfg(feature = "daemon")]
                 {
@@ -1126,7 +1158,7 @@ impl Cmd {
                 bail!("`atuin history tail` requires Atuin to be built with the `daemon` feature");
             }
             cmd => {
-                let context = current_context().await?;
+                let context = current_context(settings).await?;
 
                 let db_path = &settings.db_path;
                 let record_store_path = &settings.record_store_path;
@@ -1134,11 +1166,10 @@ impl Cmd {
                 let db = Sqlite::new(db_path, settings.local_timeout).await?;
                 let store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
-                let encryption_key: [u8; 32] = encryption::load_key(settings)
-                    .context("could not load encryption key")?
-                    .into();
+                let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+                    .context("could not load or generate encryption key")?;
 
-                let host_id = Settings::host_id().await?;
+                let host_id = settings.host_id().await?;
                 let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
                 match cmd {
@@ -1185,7 +1216,7 @@ impl Cmd {
                         Ok(())
                     }
 
-                    Self::InitStore => history_store.init_store(&db).await,
+                    Self::InitStore => history_store.init_store(&db, settings).await,
 
                     Self::Prune { dry_run } => {
                         Self::handle_prune(&db, settings, store, context, dry_run).await
@@ -1199,8 +1230,8 @@ impl Cmd {
                         let before = i64::try_from(
                             interim::parse_date_string(
                                 before.as_str(),
-                                OffsetDateTime::now_utc(),
-                                interim::Dialect::Uk,
+                                OffsetDateTime::now_utc().to_offset(settings.timezone.0),
+                                settings.dialect.into(),
                             )?
                             .unix_timestamp_nanos(),
                         )?;
@@ -1215,7 +1246,8 @@ impl Cmd {
 
     fn logs_enabled(&self) -> bool {
         match self {
-            // Enable logs if not invoked from a shell hook.
+            // Enable logs if not invoked from a shell hook. History commands invoked from shell
+            // hooks are performance-sensitive, so we want to skip any unnecessary initialization.
             Self::Start { hook, .. } | Self::End { hook, .. } => !*hook,
             _ => true,
         }
@@ -1228,15 +1260,15 @@ impl Cmd {
 
 #[cfg(test)]
 mod tests {
+    use rstest::{fixture, rstest};
     #[cfg(feature = "daemon")]
     use time::macros::datetime;
 
     use super::*;
-    use rstest::{fixture, rstest};
 
     #[fixture]
     async fn db() -> Sqlite {
-        Sqlite::new("sqlite::memory:", 2.0).await.unwrap()
+        Sqlite::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
     #[fixture]
@@ -1272,9 +1304,8 @@ mod tests {
             ..Settings::utc()
         };
 
-        handle_start(&db, &settings, "ls   \t", None, None)
-            .await
-            .unwrap();
+        let h = make_starting_history(&settings, "ls   \t", None, None, None).unwrap();
+        handle_start(&db, &h).await;
 
         let history = db
             .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
@@ -1286,22 +1317,10 @@ mod tests {
     }
 
     #[rstest]
-    #[tokio::test]
-    async fn handle_start_drops_command_with_nul_byte(#[future] db: Sqlite, settings: Settings) {
-        let db = db.await;
-
+    fn make_starting_history_drops_command_with_nul_byte(settings: Settings) {
         // A command containing a NUL byte can never have been executed by a shell;
         // it should be dropped rather than committed to history.
-        let id = handle_start(&db, &settings, "hello\0world", None, None)
-            .await
-            .unwrap();
-        assert!(id.is_none());
-
-        let stored = db
-            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
-            .await
-            .unwrap();
-        assert!(stored.is_empty());
+        assert!(make_starting_history(&settings, "hello\0world", None, None, None).is_none());
     }
 
     #[rstest]
@@ -1319,18 +1338,19 @@ mod tests {
         TailEvent {
             kind,
             history: History {
-                id: "history-id".to_owned().into(),
+                id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
                 timestamp: datetime!(2026-04-09 17:18:19 UTC),
                 duration: 12_345_678,
                 exit: 0,
                 command: "git status".to_owned(),
                 cwd: "/tmp/repo".to_owned(),
                 session: "session-id".to_owned(),
-                hostname: "host:ellie".to_owned(),
+                cmd_origin: CmdOrigin::try_from("host:ellie").unwrap(),
                 author: "claude".to_owned(),
                 intent: Some("inspect repository state".to_owned()),
                 deleted_at: None,
                 shell: Some("zsh".into()),
+                author_kind: Some(AuthorKind::Agent),
             },
         }
     }
@@ -1338,13 +1358,11 @@ mod tests {
     #[cfg(feature = "daemon")]
     #[rstest]
     fn test_tail_json_output_contains_history_fields(tail_event: TailEvent) {
-        let json = tail_event
-            .render(false, UtcOffsetSpec(time::UtcOffset::UTC))
-            .unwrap();
+        let json = tail_event.render(false, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["event"], "ended");
-        assert_eq!(value["history"]["id"], "history-id");
+        assert_eq!(value["history"]["id"], "018f011c9a0a70008000000000000001");
         assert_eq!(value["history"]["duration_ns"], 12_345_678);
         assert_eq!(value["history"]["success"], true);
         assert!(value.get("record").is_none());
@@ -1355,17 +1373,61 @@ mod tests {
     fn test_tail_pretty_output_shows_pending_fields_for_started_events(
         #[with(TailKind::Started)] tail_event: TailEvent,
     ) {
-        let rendered = tail_event
-            .render(true, UtcOffsetSpec(time::UtcOffset::UTC))
-            .unwrap();
-        let plain = regex::Regex::new(r"\x1b\[[0-9;]*m")
-            .unwrap()
-            .replace_all(&rendered, "");
+        let rendered = tail_event.render(true, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
+        let plain = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap().replace_all(&rendered, "");
 
         assert!(plain.contains("STARTED git status"));
         assert!(plain.contains("exit:"));
         assert!(plain.contains("pending"));
         assert!(plain.contains("duration:"));
         assert!(plain.contains("running"));
+    }
+
+    /// With the daemon enabled, a delete is the daemon's job: if it cannot be reached the command
+    /// fails loudly and nothing is deleted behind its back (a running daemon would otherwise serve
+    /// a stale index). With the daemon disabled, the CLI deletes locally.
+    #[cfg(feature = "daemon")]
+    #[rstest]
+    #[case::daemon_enabled_but_unreachable(true, true, 2)]
+    #[case::daemon_disabled(false, false, 0)]
+    #[tokio::test]
+    async fn delete_routes_through_the_daemon_only_when_enabled(
+        #[future] db: Sqlite,
+        #[case] daemon_enabled: bool,
+        #[case] expect_error: bool,
+        #[case] rows_left: i64,
+    ) {
+        use atuin_client::record::sqlite_store::SqliteStore;
+        use atuin_common::path::AbsPathBuf;
+        use atuin_common::utils::uuid_v7;
+        use atuin_domain::record::HostId;
+
+        let db = db.await;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SqliteStore::in_memory(Duration::from_secs(2)).await.unwrap();
+        let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
+        let mut settings = Settings::utc();
+        settings.daemon.enabled = daemon_enabled;
+        settings.daemon.autostart = false;
+        settings.daemon.socket_path = AbsPathBuf::new(tmp.path().join("no-daemon-here.sock")).ok();
+        let entries: Vec<History> = ["echo one", "echo two"]
+            .into_iter()
+            .map(|cmd| {
+                History::capture()
+                    .timestamp(time::OffsetDateTime::now_utc())
+                    .command(cmd)
+                    .cwd("/")
+                    .build()
+                    .into()
+            })
+            .collect();
+        for entry in &entries {
+            db.save(entry).await.unwrap();
+        }
+
+        let result = delete_history_entries(&settings, &history_store, &db, entries).await;
+
+        assert_eq!(result.is_err(), expect_error, "{result:?}");
+        assert_eq!(db.history_count(false).await.unwrap(), rows_left);
     }
 }

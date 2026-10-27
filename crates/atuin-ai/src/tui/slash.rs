@@ -1,5 +1,5 @@
 #[derive(Debug, Clone)]
-pub(crate) struct SlashCommand {
+pub struct SlashCommand {
     pub name: String,
     pub description: String,
     /// Built-in commands take dispatch precedence over skills with the same
@@ -25,12 +25,12 @@ impl SlashCommand {
 }
 
 #[derive(Debug)]
-pub(crate) struct SlashCommandRegistry {
+pub struct SlashCommandRegistry {
     commands: Vec<SlashCommand>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SlashCommandSearchResult {
+pub struct SlashCommandSearchResult {
     pub command: SlashCommand,
     pub relevance: f32,
     pub span: (usize, usize),

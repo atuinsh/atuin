@@ -1,11 +1,15 @@
 use std::io::Read;
 use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
 
+use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
-use atuin_common::utils::home_dir;
+use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError, codex};
+use atuin_common::path::PathBufExt as _;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
-use serde_json::Value;
+use tracing::instrument;
 
 use super::history;
 
@@ -14,90 +18,13 @@ mod wire;
 
 use event::HookEvent;
 
-const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
-const PI_EXTENSION_SOURCE: &str = include_str!("../../../contrib/pi/atuin.ts");
-
-enum InstallKind {
-    JsonHooks {
-        config_path: &'static [&'static str],
-        hook_command: &'static str,
-        matcher: &'static str,
-    },
-    PiExtension {
-        extension_path: &'static [&'static str],
-    },
-}
-
-struct AgentSpec {
-    aliases: &'static [&'static str],
-    actor_name: &'static str,
-    install_kind: InstallKind,
-}
-
-const CLAUDE_CODE: AgentSpec = AgentSpec {
-    aliases: &["claude-code", "claude"],
-    actor_name: "claude-code",
-    install_kind: InstallKind::JsonHooks {
-        config_path: &[".claude", "settings.json"],
-        hook_command: "atuin hook claude-code",
-        matcher: "Bash",
-    },
-};
-
-const CODEX: AgentSpec = AgentSpec {
-    aliases: &["codex"],
-    actor_name: "codex",
-    install_kind: InstallKind::JsonHooks {
-        config_path: &[".codex", "hooks.json"],
-        hook_command: "atuin hook codex",
-        matcher: "^Bash$",
-    },
-};
-
-const PI: AgentSpec = AgentSpec {
-    aliases: &["pi"],
-    actor_name: "pi",
-    install_kind: InstallKind::PiExtension {
-        extension_path: &[".pi", "agent", "extensions", "atuin.ts"],
-    },
-};
-
-const AGENTS: &[&AgentSpec] = &[&CLAUDE_CODE, &CODEX, &PI];
-
-struct Agent(&'static AgentSpec);
-
-impl Agent {
-    fn from_name(name: &str) -> Result<Self> {
-        AGENTS
-            .iter()
-            .copied()
-            .find(|spec| spec.aliases.contains(&name))
-            .map(Self)
-            .ok_or_else(|| {
-                eyre::eyre!("unknown agent: {name}. Supported agents: claude-code, codex, pi")
-            })
-    }
-
-    fn actor_name(&self) -> &'static str {
-        self.0.actor_name
-    }
-
-    fn path(path: &'static [&'static str]) -> PathBuf {
-        path.iter()
-            .fold(home_dir(), |path, segment| path.join(segment))
-    }
-
-    fn install_kind(&self) -> &InstallKind {
-        &self.0.install_kind
-    }
-}
+use crate::i18n::fl;
 
 #[derive(Subcommand, Debug)]
 enum Action {
-    /// Install hooks for an AI agent to capture commands in atuin history
+    #[command(about = fl!("cmd-hook-install"))]
     Install {
-        /// Agent to install hooks for (e.g., "claude-code")
-        #[arg(value_name = "AGENT")]
+        #[arg(value_name = "AGENT", help = fl!("arg-hook-install-agent"))]
         agent: String,
     },
 }
@@ -108,15 +35,15 @@ pub struct Cmd {
     #[command(subcommand)]
     action: Option<Action>,
 
-    /// Which agent's hook format to parse (e.g., "claude-code")
-    #[arg(value_name = "AGENT", hide = true)]
+    #[arg(value_name = "AGENT", hide = true, help = fl!("arg-hook-agent"))]
     agent: Option<String>,
 }
 
 impl Cmd {
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match (self.action, self.agent) {
-            (Some(Action::Install { agent }), None) => install(&agent),
+            (Some(Action::Install { agent }), None) => install(&agent).await,
             (None, Some(agent)) => handle(&agent, settings).await,
             (None, None) => {
                 bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`");
@@ -129,15 +56,51 @@ impl Cmd {
 }
 
 fn id_file_path(tool_use_id: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("atuin-hook-{tool_use_id}"))
+    std::env::temp_dir().joined(format!("atuin-hook-{tool_use_id}"))
 }
 
-async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
-    let agent = Agent::from_name(agent_name)?;
-
-    if matches!(agent.install_kind(), InstallKind::PiExtension { .. }) {
-        bail!("`atuin hook pi` is not supported. Use `atuin hook install pi` and reload pi.");
+/// How the user makes an agent pick up a freshly installed extension. Only the
+/// extension-based agents need a nudge; command-hook agents load on next run.
+fn reload_hint(harness_name: &str) -> Option<&'static str> {
+    match harness_name {
+        "pi" => Some("Reload pi with `/reload` or restart pi."),
+        "omp" => Some("Reload omp with `/reload` or restart omp."),
+        "opencode" => Some("Restart opencode to load the plugin."),
+        _ => None,
     }
+}
+
+async fn install(agent_name: &str) -> Result<()> {
+    let harness = AnyHarness::from_name(agent_name)?;
+
+    match harness.install_hooks().await {
+        Ok(path) => {
+            eprintln!("Atuin hooks installed for {}. Path: {}", harness.name(), path.display());
+            if harness.name() == "codex" {
+                // Codex runs only the hooks the user trusted (see `codex::hook_trust`).
+                let config = path.with_file_name("config.toml");
+                eprintln!("Trusted them in Codex's config: {}", config.display());
+            }
+            if let Some(hint) = reload_hint(harness.name()) {
+                eprintln!("{hint}");
+            }
+        }
+        Err(InstallHookError::AlreadyInstalled) => {
+            eprintln!("{}: hooks already installed, skipping", harness.name());
+        }
+        Err(err) => return Err(err.into()),
+    }
+
+    if cfg!(feature = "ai") {
+        let name = harness.name();
+        eprintln!("To let {name} search your history too, run `atuin mcp install {name}`.");
+    }
+
+    Ok(())
+}
+
+async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
+    let harness = AnyHarness::from_name(agent_name)?;
 
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
@@ -155,20 +118,30 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
             if let Some(history_id) = history::start_history_entry(
                 settings,
                 &command,
-                Some(agent.actor_name()),
+                Some(harness.name()),
+                Some(AuthorKind::Agent),
                 intent.as_deref(),
             )
             .await?
             {
-                std::fs::write(id_file_path(&tool_use_id), &history_id)?;
+                std::fs::write(id_file_path(&tool_use_id), history_id.to_string())?;
             }
         }
-        Some(HookEvent::End { tool_use_id, exit }) => {
+        Some(HookEvent::End {
+            tool_use_id,
+            exit,
+            transcript,
+        }) => {
+            let exit = exit
+                .or_else(|| {
+                    let transcript = transcript.filter(|_| harness.name() == "codex")?;
+                    codex::session::command_exit_code(&transcript, &tool_use_id)
+                })
+                .unwrap_or(0);
             let id_path = id_file_path(&tool_use_id);
 
             if let Ok(history_id) = std::fs::read_to_string(&id_path) {
-                let history_id = history_id.trim();
-                if !history_id.is_empty() {
+                if let Ok(history_id) = HistoryId::from_str(history_id.trim()) {
                     let _ = history::end_history_entry(settings, history_id, exit, None).await;
                 }
                 let _ = std::fs::remove_file(&id_path);
@@ -180,142 +153,26 @@ async fn handle(agent_name: &str, settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-fn install(agent_name: &str) -> Result<()> {
-    let agent = Agent::from_name(agent_name)?;
-
-    match agent.install_kind() {
-        InstallKind::JsonHooks {
-            config_path,
-            hook_command: _,
-            matcher: _,
-        } => {
-            let config_path = Agent::path(config_path);
-
-            if let Some(parent) = config_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            let mut root: Value = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                serde_json::from_str(&content)?
-            } else {
-                Value::Object(serde_json::Map::new())
-            };
-
-            let hooks = root
-                .as_object_mut()
-                .ok_or_else(|| eyre::eyre!("config is not a JSON object"))?
-                .entry("hooks")
-                .or_insert_with(|| Value::Object(serde_json::Map::new()));
-
-            add_hook_entries(hooks, &agent)?;
-
-            let content = serde_json::to_string_pretty(&root)?;
-            std::fs::write(&config_path, content)?;
-
-            eprintln!(
-                "\nAtuin hooks installed for {}. Config: {}",
-                agent.actor_name(),
-                config_path.display()
-            );
-        }
-        InstallKind::PiExtension { extension_path } => {
-            let extension_path = Agent::path(extension_path);
-
-            if let Some(parent) = extension_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            let already_installed = std::fs::read_to_string(&extension_path)
-                .is_ok_and(|existing| existing == PI_EXTENSION_SOURCE);
-
-            if already_installed {
-                eprintln!("pi extension: already installed, skipping");
-            } else {
-                std::fs::write(&extension_path, PI_EXTENSION_SOURCE)?;
-                eprintln!("pi extension: installed atuin extension");
-            }
-
-            eprintln!(
-                "\nAtuin extension installed for {}. Extension: {}\nReload pi with `/reload` or restart pi.",
-                agent.actor_name(),
-                extension_path.display()
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn add_hook_entries(hooks: &mut Value, agent: &Agent) -> Result<()> {
-    let InstallKind::JsonHooks {
-        config_path: _,
-        hook_command,
-        matcher,
-    } = agent.install_kind()
-    else {
-        bail!("agent does not use JSON hooks");
-    };
-
-    for event_type in HOOK_EVENT_TYPES {
-        let event_hooks = hooks
-            .as_object_mut()
-            .ok_or_else(|| eyre::eyre!("hooks is not a JSON object"))?
-            .entry(*event_type)
-            .or_insert_with(|| Value::Array(Vec::new()));
-
-        let arr = event_hooks
-            .as_array_mut()
-            .ok_or_else(|| eyre::eyre!("hooks.{event_type} is not an array"))?;
-
-        let already_installed = arr.iter().any(|entry| {
-            entry
-                .get("hooks")
-                .and_then(Value::as_array)
-                .is_some_and(|hooks| {
-                    hooks.iter().any(|hook| {
-                        hook.get("command").and_then(Value::as_str) == Some(hook_command)
-                    })
-                })
-        });
-
-        if already_installed {
-            eprintln!("hooks.{event_type}: already installed, skipping");
-            continue;
-        }
-
-        arr.push(serde_json::json!({
-            "matcher": matcher,
-            "hooks": [{"type": "command", "command": hook_command}],
-        }));
-        eprintln!("hooks.{event_type}: installed atuin hook");
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        Atuin,
-        command::{AtuinCmd, client},
-    };
+    use atuin_client::history::is_known_agent;
     use clap::Parser;
     use rstest::rstest;
 
-    #[test]
+    use super::*;
+    use crate::Atuin;
+    use crate::command::{AtuinCmd, client};
+
+    #[rstest]
     fn parse_hook_agent_command() {
         let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
 
-        assert!(matches!(
-            (cmd.action, cmd.agent.as_deref()),
-            (None, Some("codex"))
-        ));
+        assert!(matches!((cmd.action, cmd.agent.as_deref()), (None, Some("codex"))));
     }
 
     #[rstest]
     #[case::codex("codex")]
+    #[case::opencode("opencode")]
     #[case::pi("pi")]
     fn parse_hook_install_command(#[case] agent_name: &str) {
         let cmd = Cmd::try_parse_from(["hook", "install", agent_name]).unwrap();
@@ -326,17 +183,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn agent_from_name_supports_pi() {
-        let agent = Agent::from_name("pi").unwrap();
-        assert_eq!(agent.actor_name(), "pi");
-        assert!(matches!(
-            agent.install_kind(),
-            InstallKind::PiExtension { .. }
-        ));
+    /// A harness whose author is missing from `KNOWN_AGENTS` would be installable
+    /// but invisible to `$all-agent`, and would pollute `$all-user` with its commands.
+    #[rstest]
+    fn every_harness_author_is_a_known_agent() {
+        for harness in AnyHarness::all() {
+            assert!(
+                is_known_agent(harness.name()),
+                "{} is missing from KNOWN_AGENTS",
+                harness.name()
+            );
+        }
     }
 
-    #[test]
+    #[rstest]
     fn parse_top_level_hook_command() {
         let cmd = Atuin::try_parse_from(["atuin", "hook", "codex"]).unwrap();
 

@@ -1,0 +1,661 @@
+//! Durable storage for captured command output.
+//!
+//! Output is keyed by `history_id` (16 UUID bytes) in a fjall keyspace; the
+//! value is the encoded `history::CommandCapture`. Each write runs in an
+//! optimistic transaction so the check-then-insert is atomic against concurrent
+//! writers, and all blocking fjall I/O runs on tokio's blocking pool via
+//! `spawn_blocking`.
+mod schema;
+
+use std::num::NonZeroUsize;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
+
+use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::futures::stream::ChunkedStream;
+use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
+use schema::{Schema as _, SchemaV2};
+use tokio::task::JoinHandle;
+use tokio_stream::wrappers::ReceiverStream;
+use tracing::error;
+
+use super::{BlobStore, CaptureError, DeleteOutputError, GetOutputError};
+
+/// The schema currently in use for stored output.
+type ActiveSchema = SchemaV2;
+
+/// The store and every operation on it.
+///
+/// This structure is shared between the [`FjallBlobStore`] and the task in [`Flusher`].
+struct FjallStorageInner {
+    db: OptimisticTxDatabase,
+    keyspace: OptimisticTxKeyspace,
+    /// Set on every mutation; the flusher clears it and persists. See `Flusher` for the
+    /// memory-ordering rationale.
+    dirty: Arc<AtomicBool>,
+    /// Running estimate of stored bytes for the disk budget.
+    estimated_usage: AtomicU64,
+}
+
+impl FjallStorageInner {
+    fn estimated_disk_space(&self) -> u64 {
+        self.estimated_usage.load(Ordering::Relaxed)
+    }
+
+    fn add_estimated(&self, bytes: u64) {
+        self.estimated_usage.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn sub_estimated(&self, bytes: u64) {
+        let _ = self.estimated_usage.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+            Some(cur.saturating_sub(bytes))
+        });
+    }
+
+    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
+        let db = self.db.clone();
+        let keyspace = self.keyspace.clone();
+        let dirty = self.dirty.clone();
+        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
+        let value = ActiveSchema::serialize_value(capture)
+            .map_err(|err| CaptureError::Serialize(Box::new(err)))?;
+        let value_len = u64::try_from(value.len()).unwrap_or(u64::MAX);
+
+        let result = tokio::task::spawn_blocking(move || {
+            let mut tx = db.write_tx().map_err(|err| CaptureError::Storage(Box::new(err)))?;
+            if tx
+                .contains_key(&keyspace, key)
+                .map_err(|err| CaptureError::Storage(Box::new(err)))?
+            {
+                return Err(CaptureError::AlreadyExists);
+            }
+
+            tx.insert(&keyspace, key, value);
+            match tx.commit().map_err(|err| CaptureError::Storage(Box::new(err)))? {
+                Ok(()) => {
+                    dirty.store(true, Ordering::Release);
+                    Ok(())
+                }
+                // Another writer committed this key first, so it's already captured.
+                Err(fjall::Conflict) => Err(CaptureError::AlreadyExists),
+            }
+        })
+        .await
+        .expect("output-capture write task panicked");
+
+        if result.is_ok() {
+            self.add_estimated(value_len);
+        }
+
+        result
+    }
+
+    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
+        let keyspace = self.keyspace.clone();
+        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
+
+        tokio::task::spawn_blocking(move || {
+            match keyspace.get(key).map_err(|err| GetOutputError::Storage(Box::new(err)))? {
+                Some(slice) => {
+                    let capture = ActiveSchema::deserialize_value(slice.to_vec())
+                        .map_err(|err| GetOutputError::Storage(Box::new(err)))?;
+                    Ok(Some(capture))
+                }
+                None => Ok(None),
+            }
+        })
+        .await
+        .expect("output-capture read task panicked")
+    }
+
+    async fn contains(&self, id: HistoryId) -> Result<bool, GetOutputError> {
+        let keyspace = self.keyspace.clone();
+        let key = ActiveSchema::serialize_key(id).expect("history id serialization is infallible");
+
+        tokio::task::spawn_blocking(move || {
+            keyspace.contains_key(key).map_err(|err| GetOutputError::Storage(Box::new(err)))
+        })
+        .await
+        .expect("output-capture contains task panicked")
+    }
+
+    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
+        let keys: Vec<_> = ids
+            .map(|id| {
+                ActiveSchema::serialize_key(id).expect("history id serialization is infallible")
+            })
+            .collect();
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let db = self.db.clone();
+        let keyspace = self.keyspace.clone();
+        let dirty = self.dirty.clone();
+        let freed = tokio::task::spawn_blocking(move || {
+            let freed = keys.iter().try_fold(0u64, |acc, key| {
+                keyspace
+                    .size_of(key)
+                    .map(|size| acc.saturating_add(u64::from(size.unwrap_or(0))))
+                    .map_err(|err| DeleteOutputError::Storage(Box::new(err)))
+            })?;
+
+            let mut tx = db.write_tx().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+            for key in keys {
+                tx.remove(&keyspace, key);
+            }
+            match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
+                Ok(()) => {
+                    dirty.store(true, Ordering::Release);
+                    Ok(freed)
+                }
+                // fjall only reports conflicts for transactions that read; this one never does.
+                Err(fjall::Conflict) => {
+                    unreachable!("a blind remove performs no reads, so it can never conflict")
+                }
+            }
+        })
+        .await
+        .expect("output-capture delete task panicked")?;
+
+        self.sub_estimated(freed);
+        Ok(())
+    }
+
+    /// Every stored id, oldest first (fjall key order), streamed in chunks.
+    fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
+        const SCAN_CHUNKS_IN_FLIGHT: usize = 4;
+        const CHUNK: NonZeroUsize = NonZeroUsize::new(512).unwrap();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(SCAN_CHUNKS_IN_FLIGHT);
+
+        let keyspace = self.keyspace.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut ids = keyspace.inner().iter().map(|guard| {
+                // Read the key only; the value (a KV-separated blob) stays on disk.
+                guard.key().map_err(|err| GetOutputError::Storage(Box::new(err))).and_then(|key| {
+                    ActiveSchema::deserialize_key(key.as_ref())
+                        .map_err(|err| GetOutputError::Storage(Box::new(err)))
+                })
+            });
+
+            loop {
+                let batch: Vec<_> = ids
+                    .by_ref()
+                    .filter(|item| {
+                        if let Err(err) = item {
+                            error!(
+                                ?err,
+                                "skipping an unreadable key during the output-capture id scan"
+                            );
+                        }
+                        item.is_ok()
+                    })
+                    .take(CHUNK.get())
+                    .collect();
+
+                if batch.is_empty() {
+                    return; // the walk is done
+                }
+
+                if tx.blocking_send(batch).is_err() {
+                    return;
+                }
+            }
+        });
+
+        ChunkedStream::new(ReceiverStream::new(rx))
+    }
+
+    /// The oldest ids whose values total at least `reclaim_bytes`.
+    ///
+    /// TODO(markovejnovic): Consider making this return a ChunkedStream. It's probably fine as-is,
+    ///                      since the working set should be small.
+    async fn eviction_candidates(
+        &self,
+        reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
+        if reclaim_bytes == 0 {
+            return Ok(Vec::new());
+        }
+
+        let keyspace = self.keyspace.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut ids = Vec::new();
+            let mut freed: u64 = 0;
+            for guard in keyspace.inner().iter() {
+                let (key, value) =
+                    guard.into_inner().map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+                let id = ActiveSchema::deserialize_key(key.as_ref())
+                    .map_err(|err| DeleteOutputError::Storage(Box::new(err)))?;
+                ids.push(id);
+                freed = freed.saturating_add(u64::try_from(value.len()).unwrap_or(u64::MAX));
+                if freed >= reclaim_bytes {
+                    break;
+                }
+            }
+            Ok(ids)
+        })
+        .await
+        .expect("output-capture eviction-candidates task panicked")
+    }
+}
+
+/// Task responsible for flushing fjall data buffered in memory onto the disk.
+#[derive(Debug)]
+struct Flusher {
+    /// Handle to the background task.
+    task: JoinHandle<()>,
+}
+
+impl Flusher {
+    /// How often to try to flush.
+    ///
+    /// We'd expect flush itself to take anywhere between 1-10ms, so this is plenty of overhead.
+    const SYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+    pub fn spawn(inner: Arc<FjallStorageInner>) -> Self {
+        let task = tokio::task::spawn(async move {
+            let mut interval = tokio::time::interval(Self::SYNC_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+
+                // TODO(markovejnovic): @taylordotfish and I were wondering whether it is possible
+                // to use relaxed here. @taylordotfish claims that's not possible and I am more and
+                // more convinced by her argument.
+                //
+                // The concern is that one thread may perform some writes
+                //
+                // db-write
+                // db-write
+                // dirty-set
+                //
+                // while another thread does
+                //
+                // dirty-load
+                // persist
+                //
+                // In the pathological case, the db writes can be re-ordered after the dirty-set
+                // (under relaxed semantics):
+                //
+                // dirty-set
+                // db-write
+                // db-write
+                //
+                // while the other thread does
+                //
+                // dirty-load
+                // persist
+                //
+                // Well the persist won't observe those db-writes.
+                //
+                // The counter-argument is that both db-write and persist acquire the same mutex,
+                // so must be seq-cst-ordered?
+                //
+                // Unsure but would be curious to learn more.
+                //
+                // @taylordotfish mentioned we shouldn't rely on the internal implementation
+                // details.
+                if !inner.dirty.swap(false, Ordering::Acquire) {
+                    continue;
+                }
+
+                let db = inner.db.clone();
+                if let Err(err) =
+                    tokio::task::spawn_blocking(move || db.persist(PersistMode::SyncAll))
+                        .await
+                        .expect("persistence task shouldn't panic")
+                {
+                    error!(?err, "failed to persist data on disk. will try again...");
+                    inner.dirty.store(true, Ordering::Relaxed);
+                }
+            }
+        });
+
+        Self { task }
+    }
+}
+
+impl Drop for Flusher {
+    fn drop(&mut self) {
+        // Stop the background loop once nothing is holding the flusher any more.
+        self.task.abort();
+    }
+}
+
+#[derive(Clone, derive_more::Debug)]
+pub struct FjallBlobStore {
+    #[debug(skip)]
+    inner: Arc<FjallStorageInner>,
+    #[debug(skip)]
+    _flusher: Arc<Flusher>,
+}
+
+impl FjallBlobStore {
+    /// Open the store at `path`.
+    pub fn open(path: impl AsRef<Path>) -> fjall::Result<Self> {
+        let db = OptimisticTxDatabase::builder(path.as_ref()).open()?;
+        Self::new(db)
+    }
+
+    pub fn new(db: OptimisticTxDatabase) -> fjall::Result<Self> {
+        let keyspace = db.keyspace(ActiveSchema::NAME, ActiveSchema::create_options)?;
+        let seed = keyspace.inner().disk_space();
+
+        let inner = Arc::new(FjallStorageInner {
+            db,
+            keyspace,
+            dirty: Arc::new(AtomicBool::new(false)),
+            estimated_usage: AtomicU64::new(seed),
+        });
+
+        let flusher = Arc::new(Flusher::spawn(inner.clone()));
+
+        Ok(Self {
+            inner,
+            _flusher: flusher,
+        })
+    }
+
+    /// Store bytes under `id` that `get` cannot decode, standing in for disk corruption.
+    #[cfg(test)]
+    pub(in crate::output_capture::persistence) fn corrupt(&self, id: HistoryId) {
+        let mut tx = self.inner.db.write_tx().expect("write tx");
+        tx.insert(&self.inner.keyspace, id.into_bytes().as_slice(), b"not messagepack".as_slice());
+        tx.commit().expect("commit").expect("no conflict");
+    }
+}
+
+impl BlobStore for FjallBlobStore {
+    async fn capture(&self, id: HistoryId, capture: CommandCapture) -> Result<(), CaptureError> {
+        self.inner.capture(id, capture).await
+    }
+
+    async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
+        self.inner.get(id).await
+    }
+
+    async fn contains(&self, id: HistoryId) -> Result<bool, GetOutputError> {
+        self.inner.contains(id).await
+    }
+
+    async fn remove(&self, ids: impl Iterator<Item = HistoryId>) -> Result<(), DeleteOutputError> {
+        self.inner.remove(ids).await
+    }
+
+    fn estimated_disk_space(&self) -> u64 {
+        self.inner.estimated_disk_space()
+    }
+
+    async fn all_ids(&self) -> ChunkedStream<Result<HistoryId, GetOutputError>> {
+        self.inner.all_ids()
+    }
+
+    async fn eviction_candidates(
+        &self,
+        reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
+        self.inner.eviction_candidates(reclaim_bytes).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use easy_cast::Conv;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn temp_storage() -> (FjallBlobStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = FjallBlobStore::open(dir.path()).expect("open");
+        (backend, dir)
+    }
+
+    fn hid(n: u128) -> HistoryId {
+        HistoryId::from_bytes(*Uuid::from_u128(n).as_bytes())
+    }
+
+    fn cap(output: &str) -> CommandCapture {
+        CommandCapture {
+            output_start: output.to_string(),
+            output_end: None,
+            output_observed_bytes: u64::conv(output.len()),
+            terminal_width: 80,
+            terminal_height: 24,
+        }
+    }
+
+    #[tokio::test]
+    async fn round_trips_output_by_history_id() {
+        let (store, _dir) = temp_storage();
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        let got = store.get(hid(1)).await.expect("get").expect("present");
+        assert_eq!(got.output_start, "hello");
+        assert_eq!(got.output_observed_bytes, 5);
+    }
+
+    /// A capture whose middle was discarded: the v2 schema stores the two halves separately, so
+    /// the optional tail has to survive a round trip as its own field.
+    fn split_cap(start: &str, end: &str, observed: u64) -> CommandCapture {
+        CommandCapture {
+            output_start: start.to_string(),
+            output_end: Some(end.to_string()),
+            output_observed_bytes: observed,
+            terminal_width: 80,
+            terminal_height: 24,
+        }
+    }
+
+    #[tokio::test]
+    async fn round_trips_a_capture_that_lost_its_middle() {
+        let (store, _dir) = temp_storage();
+        let capture = split_cap("first lines", "last lines", 10_000);
+        store.capture(hid(1), capture.clone()).await.expect("capture");
+
+        let got = store.get(hid(1)).await.expect("get").expect("present");
+        assert_eq!(got, capture);
+        // The tail is what distinguishes a split capture from a whole one, so it must come back
+        // as `Some` and not be folded into the start.
+        assert_eq!(got.output_end.as_deref(), Some("last lines"));
+        assert_eq!(got.output_observed_bytes, 10_000, "the observed count is not the kept count");
+    }
+
+    #[tokio::test]
+    async fn an_empty_tail_is_not_the_same_as_no_tail() {
+        // `Some("")` means "everything after the start was discarded"; `None` means "nothing was".
+        // Collapsing the two would lose the only signal that a capture is incomplete.
+        let (store, _dir) = temp_storage();
+        store.capture(hid(1), split_cap("kept", "", 500)).await.expect("capture");
+        store.capture(hid(2), cap("kept")).await.expect("capture");
+
+        let split = store.get(hid(1)).await.expect("get").expect("present");
+        let whole = store.get(hid(2)).await.expect("get").expect("present");
+        assert_eq!(split.output_end.as_deref(), Some(""));
+        assert_eq!(whole.output_end, None);
+    }
+
+    #[tokio::test]
+    async fn missing_id_returns_none() {
+        let (store, _dir) = temp_storage();
+        assert!(store.get(hid(9)).await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn second_capture_for_same_id_is_rejected() {
+        let (store, _dir) = temp_storage();
+        store.capture(hid(1), cap("first")).await.expect("first");
+        let err = store.capture(hid(1), cap("second")).await.unwrap_err();
+        assert!(matches!(err, CaptureError::AlreadyExists));
+        // The first write survives.
+        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "first");
+    }
+
+    #[tokio::test]
+    async fn concurrent_writers_store_exactly_one() {
+        let (store, _dir) = temp_storage();
+        let store = std::sync::Arc::new(store);
+        let mut handles = Vec::new();
+        for n in 0..16u8 {
+            let store = store.clone();
+            handles.push(tokio::spawn(async move {
+                store.capture(hid(1), cap(&format!("w{n}"))).await
+            }));
+        }
+        let mut ok = 0;
+        for h in handles {
+            if h.await.expect("join").is_ok() {
+                ok += 1;
+            }
+        }
+        assert_eq!(ok, 1, "exactly one writer wins, no TOCTOU double-store");
+    }
+
+    #[tokio::test]
+    async fn remove_removes_stored_output() {
+        let (store, _dir) = temp_storage();
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        store.remove(std::iter::once(hid(1))).await.expect("remove");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_of_absent_ids_is_ok() {
+        let (store, _dir) = temp_storage();
+        store.remove(std::iter::empty()).await.expect("remove of nothing is idempotent");
+        store.remove(std::iter::once(hid(9))).await.expect("remove of an absent id is idempotent");
+    }
+
+    #[tokio::test]
+    async fn remove_only_removes_requested_ids() {
+        let (store, _dir) = temp_storage();
+        for n in 1..=3u128 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+        store.remove([hid(1), hid(3), hid(9)].into_iter()).await.expect("remove");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+        assert_eq!(store.get(hid(2)).await.expect("get").expect("kept").output_start, "out2");
+        assert!(store.get(hid(3)).await.expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn removed_id_can_be_captured_again() {
+        let (store, _dir) = temp_storage();
+        store.capture(hid(1), cap("first")).await.expect("first");
+        store.remove(std::iter::once(hid(1))).await.expect("remove");
+        // The tombstone must free the id for the capture-once check, not merely hide the value.
+        store.capture(hid(1), cap("second")).await.expect("recapture after remove");
+        assert_eq!(store.get(hid(1)).await.expect("get").expect("present").output_start, "second");
+    }
+
+    #[tokio::test]
+    async fn remove_after_removal_is_idempotent() {
+        let (store, _dir) = temp_storage();
+        store.capture(hid(1), cap("hello")).await.expect("capture");
+        store.remove(std::iter::once(hid(1))).await.expect("remove");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+        // Re-removing an already-removed id alongside an absent one is still Ok.
+        store.remove([hid(1), hid(9)].into_iter()).await.expect("remove again");
+    }
+
+    #[tokio::test]
+    async fn eviction_candidates_names_oldest_until_budget_met() {
+        let (store, _dir) = temp_storage();
+        for n in 1..=3u128 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+
+        // One byte of budget names exactly the oldest entry (keys sort by id), and selecting a
+        // victim must not delete it -- the backend's `remove` does that, so both stores stay in sync.
+        let victims = store.eviction_candidates(1).await.expect("candidates");
+        assert_eq!(victims, vec![hid(1)]);
+        assert!(store.get(hid(1)).await.expect("get").is_some(), "selection does not delete");
+
+        // A budget past everything names all entries, oldest first.
+        let all = store.eviction_candidates(u64::MAX).await.expect("candidates");
+        assert_eq!(all, vec![hid(1), hid(2), hid(3)]);
+    }
+
+    #[tokio::test]
+    async fn eviction_candidates_for_zero_bytes_is_empty() {
+        let (store, _dir) = temp_storage();
+        store.capture(hid(1), cap("keep")).await.expect("capture");
+        assert!(store.eviction_candidates(0).await.expect("candidates").is_empty());
+    }
+
+    #[tokio::test]
+    async fn all_ids_lists_every_stored_id_oldest_first() {
+        let (store, _dir) = temp_storage();
+        for n in 1..=3u128 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+        let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
+        assert_eq!(ids, vec![hid(1), hid(2), hid(3)]);
+    }
+
+    #[tokio::test]
+    async fn all_ids_streams_every_id_across_chunk_boundaries() {
+        let (store, _dir) = temp_storage();
+        // More ids than one internal scan chunk (512), so the walker must send a full chunk and
+        // keep walking -- the flush-and-continue path a single-chunk store never reaches.
+        let count = 600u128;
+        for n in 1..=count {
+            store.capture(hid(n), cap("x")).await.expect("capture");
+        }
+
+        let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
+        let expected: Vec<HistoryId> = (1..=count).map(hid).collect();
+        assert_eq!(ids, expected);
+    }
+
+    #[tokio::test]
+    async fn all_ids_skips_unreadable_keys_and_keeps_walking() {
+        let (store, _dir) = temp_storage();
+        for n in 1..=3u128 {
+            store.capture(hid(n), cap(&format!("out{n}"))).await.expect("capture");
+        }
+
+        // Write a key that isn't 16 bytes straight into the keyspace, so `deserialize_key` rejects
+        // it. It sorts ahead of the real ids, so a scan that aborted on it would drop every id.
+        {
+            let mut tx = store.inner.db.write_tx().expect("write tx");
+            tx.insert(&store.inner.keyspace, [0u8; 4].as_slice(), b"".as_slice());
+            tx.commit().expect("commit").expect("no conflict");
+        }
+
+        let ids: Vec<HistoryId> = store.all_ids().await.try_collect().await.expect("all_ids");
+        assert_eq!(ids, vec![hid(1), hid(2), hid(3)], "the bad key is skipped, the rest survive");
+    }
+
+    #[tokio::test]
+    async fn get_surfaces_an_error_for_an_undecodable_value() {
+        let (store, _dir) = temp_storage();
+
+        // A stored value that isn't valid MessagePack -- disk corruption or a torn write. `get`
+        // must surface a recoverable error, not panic (search/reconcile/the RPC all call it).
+        store.corrupt(hid(1));
+
+        let err = store.get(hid(1)).await.unwrap_err();
+        assert!(matches!(err, GetOutputError::Storage(_)));
+    }
+
+    #[tokio::test]
+    async fn estimated_disk_space_shrinks_when_entries_are_removed() {
+        let (store, _dir) = temp_storage();
+        let base = store.estimated_disk_space();
+
+        store.capture(hid(1), cap(&"x".repeat(50_000))).await.expect("capture");
+        let after_capture = store.estimated_disk_space();
+        assert!(after_capture > base, "the estimate grows with a capture");
+
+        store.remove(std::iter::once(hid(1))).await.expect("remove");
+        let after_remove = store.estimated_disk_space();
+        // The point of the estimate: a removal shrinks it at once, unlike physical disk_space()
+        // (whose value-log reclamation lags), so GC won't re-evict the same freed space.
+        assert!(after_remove < after_capture, "the estimate shrinks on removal");
+        assert_eq!(after_remove, base, "removing what we added returns the estimate to baseline");
+    }
+}

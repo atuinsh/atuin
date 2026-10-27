@@ -10,12 +10,12 @@ use eye_declare::{AnyElement, ElementExt, Keymap, col, key, keymap, text};
 use ratatui_core::style::Style;
 
 #[derive(Debug, Default)]
-pub(crate) struct SelectState {
+pub struct SelectState {
     pub cursor: usize,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) enum SelectMsg {
+#[derive(Debug, Clone, Copy)]
+pub enum SelectMsg {
     Up,
     Down,
 }
@@ -32,14 +32,12 @@ impl SelectState {
     }
 
     pub fn keymap() -> Keymap<SelectMsg> {
-        keymap()
-            .on(key(KeyCode::Up), SelectMsg::Up)
-            .on(key(KeyCode::Down), SelectMsg::Down)
+        keymap().on(key(KeyCode::Up), SelectMsg::Up).on(key(KeyCode::Down), SelectMsg::Down)
     }
 }
 
 /// One row per label, the cursor row reversed.
-pub(crate) fn select_view<'a>(
+pub fn select_view<'a>(
     labels: impl IntoIterator<Item = &'a str>,
     cursor: usize,
 ) -> AnyElement<'static> {

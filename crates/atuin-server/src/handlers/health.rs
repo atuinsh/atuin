@@ -1,5 +1,5 @@
-use axum::{Json, http, response::IntoResponse};
-
+use axum::response::IntoResponse;
+use axum::{Json, http};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -8,8 +8,5 @@ pub struct HealthResponse {
 }
 
 pub async fn health_check() -> impl IntoResponse {
-    (
-        http::StatusCode::OK,
-        Json(HealthResponse { status: "healthy" }),
-    )
+    (http::StatusCode::OK, Json(HealthResponse { status: "healthy" }))
 }

@@ -1,21 +1,22 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::io::IsTerminal;
-use std::io::Read;
+use std::collections::{HashMap, HashSet};
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
-use atuin_scripts::execution::template_script;
-use atuin_scripts::{
-    execution::{build_executable_script, execute_script_interactive, template_variables},
-    store::{ScriptStore, script::Script},
+use atuin_client::database::Sqlite;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
+use atuin_scripts::execution::{
+    build_executable_script, execute_script_interactive, template_script, template_variables,
 };
+use atuin_scripts::store::ScriptStore;
+use atuin_scripts::store::script::Script;
 use clap::{Parser, Subcommand};
-use eyre::OptionExt;
-use eyre::{Result, bail};
+use eyre::{Context as _, OptionExt, Result, bail};
 use tempfile::NamedTempFile;
+use tracing::{debug, instrument};
 
-use atuin_client::{database::Database, record::sqlite_store::SqliteStore, settings::Settings};
-use tracing::debug;
+use crate::i18n::fl;
 
 #[derive(Parser, Debug)]
 pub struct NewScript {
@@ -35,13 +36,11 @@ pub struct NewScript {
 
     #[allow(clippy::option_option)]
     #[arg(long)]
-    /// Use the last command as the script content
-    ///
-    /// Optionally specify a number to use the last N commands
+    #[arg(help = fl!("arg-scripts-new-last"), long_help = fl!("arg-scripts-new-last", "long"))]
     pub last: Option<Option<usize>>,
 
     #[arg(long)]
-    /// Skip opening editor when using --last
+    #[arg(help = fl!("arg-scripts-new-no-edit"))]
     pub no_edit: bool,
 }
 
@@ -49,10 +48,12 @@ pub struct NewScript {
 pub struct Run {
     pub name: String,
 
-    /// Specify template variables in the format KEY=VALUE
-    ///
-    /// Example: -v name=John -v greeting="Hello there"
-    #[arg(short, long = "var")]
+    #[arg(
+        short,
+        long = "var",
+        help = fl!("arg-scripts-run-var"),
+        long_help = fl!("arg-scripts-run-var", "long")
+    )]
     pub var: Vec<String>,
 }
 
@@ -64,7 +65,7 @@ pub struct Get {
     pub name: String,
 
     #[arg(short, long)]
-    /// Display only the executable script with shebang
+    #[arg(help = fl!("arg-scripts-get-script"))]
     pub script: bool,
 }
 
@@ -75,16 +76,13 @@ pub struct Edit {
     #[arg(short, long)]
     pub description: Option<String>,
 
-    /// Replace all existing tags with these new tags
-    #[arg(short, long)]
+    #[arg(short, long, help = fl!("arg-scripts-edit-tags"))]
     pub tags: Vec<String>,
 
-    /// Remove all tags from the script
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-scripts-edit-no-tags"))]
     pub no_tags: bool,
 
-    /// Rename the script
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-scripts-edit-rename"))]
     pub rename: Option<String>,
 
     #[arg(short, long)]
@@ -94,8 +92,7 @@ pub struct Edit {
     pub script: Option<PathBuf>,
 
     #[allow(clippy::struct_field_names)]
-    /// Skip opening editor
-    #[arg(long)]
+    #[arg(long, help = fl!("arg-scripts-edit-no-edit"))]
     pub no_edit: bool,
 }
 
@@ -134,7 +131,7 @@ impl Cmd {
         }
 
         // Open the file in the user's preferred editor
-        let editor_str = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+        let editor_str = atuin_common::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
 
         // Use shlex to safely split the string into shell-like parts.
         let parts = shlex::split(&editor_str).ok_or_eyre("Failed to parse editor command")?;
@@ -143,9 +140,10 @@ impl Cmd {
         let status = std::process::Command::new(command)
             .args(args)
             .arg(&path)
-            .status()?;
+            .status()
+            .wrap_err_with(|| format!("failed to open editor `{command}`"))?;
         if !status.success() {
-            bail!("failed to open editor");
+            bail!("editor `{command}` failed ({status})");
         }
 
         // Read back the edited content
@@ -223,20 +221,19 @@ impl Cmd {
         new_script: NewScript,
         script_store: ScriptStore,
         script_db: atuin_scripts::database::Database,
-        history_db: &impl Database,
+        history_db: &Sqlite,
     ) -> Result<()> {
         let mut stdin = std::io::stdin();
         let script_content = if let Some(count_opt) = new_script.last {
             // Get the last N commands from history, plus 1 to exclude the command that runs this script
             let count = count_opt.unwrap_or(1) + 1; // Add 1 to the count to exclude the current command
-            let context = atuin_client::database::current_context().await?;
+            let context = atuin_client::database::current_context(settings).await?;
 
             // Get the last N+1 commands, filtering by the default mode
             let filters = [settings.default_filter_mode(context.git_root.is_some())];
 
-            let mut history = history_db
-                .list(&filters, &context, Some(count), false, false, None)
-                .await?;
+            let mut history =
+                history_db.list(filters, &context, Some(count), false, false, None).await?;
 
             // Reverse to get chronological order
             history.reverse();
@@ -284,7 +281,7 @@ impl Cmd {
 
         script_store.create(script).await?;
 
-        script_store.build(script_db).await?;
+        script_store.build(&script_db).await?;
 
         Ok(())
     }
@@ -307,10 +304,8 @@ impl Cmd {
             for var_str in &run.var {
                 if let Some((key, value)) = var_str.split_once('=') {
                     // Add to variable values
-                    variable_values.insert(
-                        key.to_string(),
-                        serde_json::Value::String(value.to_string()),
-                    );
+                    variable_values
+                        .insert(key.to_string(), serde_json::Value::String(value.to_string()));
                     debug!("Using CLI variable: {}={}", key, value);
                 } else {
                     eprintln!("Warning: Ignoring malformed variable specification: {var_str}");
@@ -319,10 +314,8 @@ impl Cmd {
             }
 
             // Collect variables that are still needed (not specified via CLI)
-            let remaining_vars: HashSet<String> = variables
-                .into_iter()
-                .filter(|var| !variable_values.contains_key(var))
-                .collect();
+            let remaining_vars: HashSet<String> =
+                variables.into_iter().filter(|var| !variable_values.contains_key(var)).collect();
 
             // If there are variables in the template that weren't specified on the command line, prompt for them
             if !remaining_vars.is_empty() {
@@ -403,10 +396,7 @@ impl Cmd {
         if let Some(script) = script {
             if get.script {
                 // Just print the executable script with shebang
-                print!(
-                    "{}",
-                    build_executable_script(script.script.clone(), script.shebang)
-                );
+                print!("{}", build_executable_script(&script.script, &script.shebang));
                 return Ok(());
             }
 
@@ -513,7 +503,7 @@ impl Cmd {
             script_store.update(script).await?;
 
             // Rebuild the database to apply changes
-            script_store.build(script_db).await?;
+            script_store.build(&script_db).await?;
 
             println!("Script '{}' updated successfully!", edit.name);
 
@@ -535,10 +525,7 @@ impl Cmd {
         if let Some(script) = script {
             // If not force, confirm deletion
             if !delete.force {
-                println!(
-                    "Are you sure you want to delete script '{}'? [y/N]",
-                    delete.name
-                );
+                println!("Are you sure you want to delete script '{}'? [y/N]", delete.name);
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input)?;
 
@@ -553,7 +540,7 @@ impl Cmd {
             script_store.delete(script.id).await?;
 
             // Rebuild the database to apply changes
-            script_store.build(script_db).await?;
+            script_store.build(&script_db).await?;
 
             println!("Script '{}' deleted successfully", delete.name);
             Ok(())
@@ -562,18 +549,23 @@ impl Cmd {
         }
     }
 
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(
         self,
         settings: &Settings,
         store: SqliteStore,
-        history_db: &impl Database,
+        history_db: &Sqlite,
     ) -> Result<()> {
-        let host_id = Settings::host_id().await?;
-        let encryption_key: [u8; 32] = atuin_client::encryption::load_key(settings)?.into();
+        let host_id = settings.host_id().await?;
+        let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
+            .context("could not load or generate encryption key")?;
 
         let script_store = ScriptStore::new(store, host_id, encryption_key);
-        let script_db =
-            atuin_scripts::database::Database::new(settings.scripts.db_path.clone(), 1.0).await?;
+        let script_db = atuin_scripts::database::Database::new(
+            settings.scripts.db_path.clone(),
+            std::time::Duration::from_secs(1),
+        )
+        .await?;
 
         match self {
             Self::New(new_script) => {
@@ -588,5 +580,30 @@ impl Cmd {
                 Self::handle_delete(settings, delete, script_store, script_db).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::ErrorKind;
+
+    use atuin_common::env::MockEnv;
+    use rstest::rstest;
+
+    use super::Cmd;
+
+    #[rstest]
+    #[case("missing-editor")]
+    #[case("missing editor")]
+    fn missing_editor_reports_the_command_and_preserves_the_io_error(#[case] name: &str) {
+        let env = MockEnv::install();
+        let dir = tempfile::tempdir().unwrap();
+        let editor = dir.path().join(name);
+        env.set("EDITOR", format!("'{}' --wait", editor.display()));
+
+        let error = Cmd::open_editor(Some("echo hello")).unwrap_err();
+
+        assert_eq!(error.to_string(), format!("failed to open editor `{}`", editor.display()));
+        assert_eq!(error.downcast_ref::<std::io::Error>().unwrap().kind(), ErrorKind::NotFound);
     }
 }

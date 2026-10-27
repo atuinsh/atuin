@@ -1,51 +1,56 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use eyre::{Result, eyre};
-
 use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
 use getrandom::fill;
+use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox, SecretString};
 use uuid::Uuid;
 
+use crate::path::AbsPathBuf;
+
 /// Generate N random bytes, using a cryptographically secure source
-pub fn crypto_random_bytes<const N: usize>() -> [u8; N] {
+#[must_use]
+pub fn crypto_random_bytes<const N: usize>() -> SecretBox<[u8; N]> {
     // rand say they are in principle safe for crypto purposes, but that it is perhaps a better
     // idea to use getrandom for things such as passwords.
-    let mut ret = [0u8; N];
+    let mut ret = SecretBox::new(Box::new([0u8; N]));
 
-    fill(&mut ret).expect("Failed to generate random bytes!");
+    fill(ret.expose_secret_mut()).expect("Failed to generate random bytes!");
 
     ret
 }
 
 /// Generate N random bytes using a cryptographically secure source, return encoded as a string
-pub fn crypto_random_string<const N: usize>() -> String {
+#[must_use]
+pub fn crypto_random_string<const N: usize>() -> SecretString {
     let bytes = crypto_random_bytes::<N>();
 
     // We only use this to create a random string, and won't be reversing it to find the original
     // data - no padding is OK there. It may be in URLs.
-    BASE64_URL_SAFE_NO_PAD.encode(bytes)
+    BASE64_URL_SAFE_NO_PAD.encode(bytes.expose_secret()).into()
 }
 
+#[must_use]
 pub fn uuid_v7() -> Uuid {
     Uuid::now_v7()
 }
 
-pub fn uuid_v4() -> String {
-    Uuid::new_v4().as_simple().to_string()
+#[must_use]
+pub fn has_git_dir(path: &Path) -> bool {
+    path.join(".git").exists()
 }
 
-pub fn has_git_dir(path: &str) -> bool {
-    let mut gitdir = PathBuf::from(path);
-    gitdir.push(".git");
-
-    gitdir.exists()
-}
-
-// in a git worktree, .git is a file containing "gitdir: <path>" pointing
-// to the main repo's .git/worktrees/<name> directory. follow the pointer
-// back to the main repo root so all worktrees share a workspace.
-fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
+/// in a linked worktree, .git is a file containing `gitdir: <path>` pointing to the main repo's
+/// `.git/worktrees/<name>` directory, whose `commondir` file points on to the main repo's .git.
+/// follow both back to the main repo root so all worktrees share a workspace. like git, resolve a
+/// relative pointer from the real location of its file: the `..` applies after symlinks.
+///
+/// TODO(markovejnovic): This is slop that should really not live here. It would be much better if
+/// we used some correct git library.
+///
+/// There are also bugs with this implementation---without shelling out to git, there's no correct
+/// way to actually resolve the git worktree. PR #3850 was supposed to fix this, but never landed.
+fn resolve_git_worktree(path: &Path) -> Option<AbsPathBuf> {
     let git_path = path.join(".git");
 
     if !git_path.is_file() {
@@ -53,107 +58,67 @@ fn resolve_git_worktree(path: &Path) -> Option<PathBuf> {
     }
 
     let contents = std::fs::read_to_string(&git_path).ok()?;
-    let gitdir_str = contents.strip_prefix("gitdir: ")?.trim();
+    let gitdir = contents.strip_prefix("gitdir: ")?.trim();
+    let gitdir = AbsPathBuf::canonicalize(path.join(gitdir)).ok()?;
 
-    let gitdir = PathBuf::from(gitdir_str);
-    let gitdir = if gitdir.is_absolute() {
-        gitdir
-    } else {
-        path.join(gitdir_str)
-    };
+    // a submodule's gitdir is a repository of its own, with no `commondir`
+    let commondir = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let commondir = AbsPathBuf::canonicalize(gitdir.join(commondir.trim())).ok()?;
 
-    // walk up from e.g. /repo/.git/worktrees/feature to find /repo
-    let mut candidate = gitdir.as_path();
-    while let Some(parent) = candidate.parent() {
-        if parent.join(".git").is_dir() {
-            return Some(parent.to_path_buf());
-        }
-        candidate = parent;
+    // a bare repository has no main worktree to share
+    if commondir.file_name()? != ".git" {
+        return None;
     }
-
-    None
+    commondir.parent().map(ToOwned::to_owned)
 }
 
 // detect if any parent dir has a git repo in it
 // I really don't want to bring in libgit for something simple like this
 // If we start to do anything more advanced, then perhaps
-pub fn in_git_repo(path: &str) -> Option<PathBuf> {
+//
+// A linked worktree resolves to its main repository, so that all of a repository's worktrees
+// share a workspace. [`git_checkout_root`] stops at the worktree instead.
+#[must_use]
+pub fn in_git_repo(path: &Path) -> Option<PathBuf> {
+    let root = git_checkout_root(path)?;
+    Some(resolve_git_worktree(&root).map_or(root, AbsPathBuf::into_path_buf))
+}
+
+/// The root of the checkout `path` is in: the nearest directory, `path` or above, with a `.git`
+/// entry. Unlike [`in_git_repo`], a linked worktree's root is the worktree's own, not its main
+/// repository's: the directory its files are checked out in, and whose `HEAD` is its branch.
+#[must_use]
+pub fn git_checkout_root(path: &Path) -> Option<PathBuf> {
     let mut gitdir = PathBuf::from(path);
 
-    while gitdir.parent().is_some() && !has_git_dir(gitdir.to_str().unwrap()) {
+    while gitdir.parent().is_some() && !has_git_dir(&gitdir) {
         gitdir.pop();
     }
 
     // No parent? then we hit root, finding no git
-    if gitdir.parent().is_some() {
-        // if .git is a file (worktree), resolve to the main repo root
-        if let Some(main_repo) = resolve_git_worktree(&gitdir) {
-            return Some(main_repo);
-        }
-        return Some(gitdir);
-    }
-
-    None
+    gitdir.parent().is_some().then_some(gitdir)
 }
 
-// TODO: more reliable, more tested
-// I don't want to use ProjectDirs, it puts config in awkward places on
-// mac. Data too. Seems to be more intended for GUI apps.
-
-pub fn home_dir() -> PathBuf {
-    directories::BaseDirs::new()
-        .map(|d| d.home_dir().to_path_buf())
-        .expect("could not determine home directory")
-}
-
-pub fn config_dir() -> PathBuf {
-    let config_dir =
-        std::env::var("XDG_CONFIG_HOME").map_or_else(|_| home_dir().join(".config"), PathBuf::from);
-    config_dir.join("atuin")
-}
-
-pub fn data_dir() -> PathBuf {
-    let data_dir = std::env::var("XDG_DATA_HOME")
-        .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
-
-    data_dir.join("atuin")
-}
-
-pub fn runtime_dir() -> PathBuf {
-    std::env::var("XDG_RUNTIME_DIR").map_or_else(|_| data_dir(), PathBuf::from)
-}
-
-pub fn logs_dir() -> PathBuf {
-    home_dir().join(".atuin").join("logs")
-}
-
-pub fn dotfiles_cache_dir() -> PathBuf {
-    // In most cases, this will be  ~/.local/share/atuin/dotfiles/cache
-    let data_dir = std::env::var("XDG_DATA_HOME")
-        .map_or_else(|_| home_dir().join(".local").join("share"), PathBuf::from);
-
-    data_dir.join("atuin").join("dotfiles").join("cache")
-}
-
-pub fn get_current_dir() -> String {
+#[must_use]
+pub fn get_current_dir() -> PathBuf {
     // Prefer PWD environment variable over cwd if available to better support symbolic links
-    match env::var("PWD") {
-        Ok(v) => v,
-        Err(_) => match env::current_dir() {
-            Ok(dir) => dir.display().to_string(),
-            Err(_) => String::from(""),
-        },
+    match crate::env::var("PWD") {
+        Ok(v) => v.into(),
+        Err(_) => env::current_dir().unwrap_or_default(),
     }
 }
 
-pub fn broken_symlink<P: Into<PathBuf>>(path: P) -> bool {
-    let path = path.into();
-    path.is_symlink() && !path.exists()
+#[derive(Debug, thiserror::Error)]
+pub enum UnquoteError {
+    #[error("not enough chars")]
+    NotEnoughChars,
+    #[error("unexpected eof, quotes do not match")]
+    MismatchedQuotes,
 }
 
-pub fn unquote(s: &str) -> Result<String> {
+pub fn unquote(s: &str) -> Result<String, UnquoteError> {
     if s.chars().count() < 2 {
-        return Err(eyre!("not enough chars"));
+        return Err(UnquoteError::NotEnoughChars);
     }
 
     let quote = s.chars().next().unwrap();
@@ -164,7 +129,7 @@ pub fn unquote(s: &str) -> Result<String> {
     }
 
     if s.chars().last().unwrap() != quote {
-        return Err(eyre!("unexpected eof, quotes do not match"));
+        return Err(UnquoteError::MismatchedQuotes);
     }
 
     // removes quote characters
@@ -198,120 +163,140 @@ where
 #[allow(unsafe_code)]
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pretty_assertions::assert_ne;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
-    #[cfg(not(windows))]
-    #[test]
-    fn test_dirs() {
-        // these tests need to be run sequentially to prevent race condition
-        test_config_dir_xdg();
-        test_config_dir();
-        test_data_dir_xdg();
-        test_data_dir();
+    use super::*;
+    use crate::path::PathBufExt as _;
+
+    #[cfg(unix)]
+    #[fixture]
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
-    #[cfg(not(windows))]
-    fn test_config_dir_xdg() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::remove_var("HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::set_var("XDG_CONFIG_HOME", "/home/user/custom_config") };
-        assert_eq!(
-            config_dir(),
-            PathBuf::from("/home/user/custom_config/atuin")
-        );
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::remove_var("XDG_CONFIG_HOME") };
+    /// The layouts are the ones git 2.56 writes. A `.git` at the top stands for an unrelated
+    /// repository above the checkouts, like dotfiles in `$HOME`, which a pointer resolved the wrong
+    /// way lands in.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::repository(&[("repo/.git/HEAD", "")], &[], "repo/src", "repo")]
+    #[case::worktree_with_a_relative_gitdir(
+        &[
+            ("main/.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../main/.git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        "main",
+    )]
+    // Git applies the `..` after following the symlink, so it leads out of `data/`, not `home/`.
+    #[case::worktree_with_a_relative_gitdir_through_a_symlink(
+        &[
+            (".git/HEAD", ""),
+            ("data/main/.git/worktrees/wt/commondir", "../..\n"),
+            ("data/wt/.git", "gitdir: ../main/.git/worktrees/wt\n"),
+        ],
+        &[("home/wt", "../data/wt")],
+        "home/wt/src",
+        "data/main",
+    )]
+    #[case::worktree_of_a_bare_repository(
+        &[
+            (".git/HEAD", ""),
+            ("repo.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../repo.git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        "wt",
+    )]
+    #[case::submodule(
+        &[
+            ("super/.git/modules/sub/HEAD", ""),
+            ("super/sub/.git", "gitdir: ../.git/modules/sub\n"),
+        ],
+        &[],
+        "super/sub/src",
+        "super/sub",
+    )]
+    #[case::dangling_gitdir(
+        &[(".git/HEAD", ""), ("wt/.git", "gitdir: ../gone/.git/worktrees/wt\n")],
+        &[],
+        "wt/src",
+        "wt",
+    )]
+    fn only_a_linked_worktree_resolves_to_its_main_repository(
+        tmp: tempfile::TempDir,
+        #[case] files: &[(&str, &str)],
+        #[case] symlinks: &[(&str, &str)],
+        #[case] cwd: &str,
+        #[case] workspace: &str,
+    ) {
+        // Resolved like the pointers are (on macOS, /var is /private/var).
+        let root = AbsPathBuf::canonicalize(tmp.path()).unwrap();
+        for (path, contents) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        for (link, target) in symlinks {
+            let link = root.join(link);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(target, link).unwrap();
+        }
+        let cwd = root.join(cwd);
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        assert_eq!(in_git_repo(&cwd), Some(root.join(workspace)));
     }
 
-    #[cfg(not(windows))]
-    fn test_config_dir() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::set_var("HOME", "/home/user") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::remove_var("XDG_CONFIG_HOME") };
-
-        assert_eq!(config_dir(), PathBuf::from("/home/user/.config/atuin"));
-
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::remove_var("HOME") };
+    /// Runs `git` in `dir`, failing the test if it fails.
+    #[cfg(unix)]
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=atuin", "-c", "user.email=atuin@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
     }
 
-    #[cfg(not(windows))]
-    fn test_data_dir_xdg() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::remove_var("HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::set_var("XDG_DATA_HOME", "/home/user/custom_data") };
-        assert_eq!(data_dir(), PathBuf::from("/home/user/custom_data/atuin"));
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::remove_var("XDG_DATA_HOME") };
-    }
+    #[cfg(unix)]
+    #[rstest]
+    fn a_real_worktree_is_its_own_checkout_in_the_main_repository(tmp: tempfile::TempDir) {
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "-q", "-b", "trunk"]);
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let worktree = tmp.path().join("feature-wt");
+        git(&main, &["worktree", "add", "-q", "-b", "feature", worktree.to_str().unwrap()]);
+        let deep = worktree.join("src").joined("deep");
+        std::fs::create_dir_all(&deep).unwrap();
 
-    #[cfg(not(windows))]
-    fn test_data_dir() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::set_var("HOME", "/home/user") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::remove_var("XDG_DATA_HOME") };
-        assert_eq!(data_dir(), PathBuf::from("/home/user/.local/share/atuin"));
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::remove_var("HOME") };
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn in_git_repo_regular() {
-        // regular git repo should resolve to the directory containing .git
-        let tmp = std::env::temp_dir().join("atuin-test-regular-git");
-        let _ = std::fs::remove_dir_all(&tmp);
-        let subdir = tmp.join("src").join("deep");
-        std::fs::create_dir_all(&subdir).unwrap();
-        std::fs::create_dir_all(tmp.join(".git")).unwrap();
-
-        let result = in_git_repo(subdir.to_str().unwrap());
-        assert_eq!(result, Some(tmp.clone()));
-
-        std::fs::remove_dir_all(&tmp).unwrap();
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn in_git_repo_worktree_resolves_to_main_repo() {
-        // worktree .git is a file pointing back to the main repo —
-        // in_git_repo should follow it so all worktrees share a workspace
-        let tmp = std::env::temp_dir().join("atuin-test-worktree-git");
-        let _ = std::fs::remove_dir_all(&tmp);
-
-        // main repo at tmp/main with a real .git directory
-        let main_repo = tmp.join("main");
-        let worktree_git_dir = main_repo.join(".git").join("worktrees").join("feature");
-        std::fs::create_dir_all(&worktree_git_dir).unwrap();
-
-        // worktree at tmp/worktree with a .git file
-        let worktree = tmp.join("worktree");
-        let worktree_subdir = worktree.join("src");
-        std::fs::create_dir_all(&worktree_subdir).unwrap();
-        std::fs::write(
-            worktree.join(".git"),
-            format!("gitdir: {}", worktree_git_dir.to_str().unwrap()),
-        )
-        .unwrap();
-
-        // should resolve to the main repo root, not the worktree root
-        let result = in_git_repo(worktree_subdir.to_str().unwrap());
-        assert_eq!(result, Some(main_repo));
-
-        std::fs::remove_dir_all(&tmp).unwrap();
+        assert_eq!(git_checkout_root(&deep), Some(worktree));
+        assert_eq!(git_checkout_root(&main), Some(main.clone()));
+        // Through the `.git` file, whose path may be resolved (on macOS, /var is /private/var).
+        let repo = |path: &Path| in_git_repo(path).map(|p| AbsPathBuf::canonicalize(p).unwrap());
+        assert_eq!(repo(&deep), Some(AbsPathBuf::canonicalize(&main).unwrap()));
+        assert_eq!(repo(&main), Some(AbsPathBuf::canonicalize(&main).unwrap()));
     }
 
     #[rstest]
+    #[allow(
+        clippy::used_underscore_binding,
+        reason = "unused _n is used to drive generic N within rstest"
+    )]
     fn dumb_random_test<const N: usize>(#[values([(); 8], [(); 16], [(); 32])] _n: [(); N]) {
         // Obviously not a test of randomness, but make sure we haven't made some
         // catastrophic error
 
-        assert_ne!(crypto_random_string::<N>(), crypto_random_string::<N>());
+        assert_ne!(
+            crypto_random_string::<N>().expose_secret(),
+            crypto_random_string::<N>().expose_secret()
+        );
     }
 }

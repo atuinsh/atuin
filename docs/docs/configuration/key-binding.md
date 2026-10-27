@@ -1,5 +1,14 @@
 # Key Binding
 
+!!! note
+
+    The snippets on this page must go in your shell's startup file (`~/.bashrc`,
+    `~/.zshrc`, `~/.config/fish/config.fish`, etc.) — the same file where you run
+    `atuin init`. Custom bindings that set `ATUIN_NOBIND` and bind keys afterwards
+    only take effect if they run at shell startup. Running them once in an
+    interactive session, or placing them in a file your shell does not source, has
+    no lasting effect.
+
 ## Custom up arrow filter mode
 
 It can be useful to use a different filter or search mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
@@ -124,6 +133,7 @@ commands and any arbitrary shell command:
 | `atuin-up-search-emacs` | Search command for <kbd>up</kbd> or similar keys, with the `emacs` keymap mode      |
 | `atuin-up-search-viins` | Search command for <kbd>up</kbd> or similar keys, with the `vim-insert` keymap mode |
 | `atuin-up-search-vicmd` | Search command for <kbd>up</kbd> or similar keys, with the `vim-normal` keymap mode |
+| (other strings)         | The strings are executed as shell commands                                          |
 
 The keymap mode controls the initial keymap in the Atuin search and is
 determined in combination with the config
@@ -153,6 +163,11 @@ the `vi` editing mode, the options `--keymap-mode=vim-insert` and the keymap
 mode `--keymap-mode=vim-normal` (`atuin >= 18.0`) can be additionally specified
 to the shell function `__atuin_history`.
 
+Inside `COMMAND`, `__atuin_accept_line "string"` can be used to execute the
+string as a command. Similarly, `__atuin_insert_line "string"` can be used to
+insert the string into the buffer of the line editor. They're designed to
+work also in Bash 3.2, where `READLINE_LINE` isn't supported.
+
 ## fish
 Edit key bindings in FISH shell by adding the following to ~/.config/fish/config.fish
 
@@ -180,8 +195,8 @@ Adding this to the above sample, `bind \e\[1\;5A _atuin_search` will provide the
 
 ```
 $env.ATUIN_NOBIND = true
-atuin init nu | save -f ~/.local/share/atuin/init.nu #make sure you created the directory beforehand with `mkdir ~/.local/share/atuin`
-source ~/.local/share/atuin/init.nu
+atuin init nu | save -f ~/.atuin/init.nu  # make sure you created the directory beforehand with `mkdir ~/.atuin`
+source ~/.atuin/init.nu
 
 #bind to ctrl-r in emacs, vi_normal and vi_insert modes, add any other bindings you want here too
 $env.config = (
@@ -230,6 +245,8 @@ $env.config = (
 | Ctrl + a, D                               | Delete **all** history entries matching the selected command                  |
 | Ctrl + a, a                               | Move cursor to the start of the line                                         |
 | Ctrl + a, c                               | Switch to the context of the currently selected command / return to default   |
+| Ctrl + a, g                               | Change to the directory the selected command ran in                           |
+| Ctrl + a, G                               | Put a `cd` to the selected command's directory on the command line            |
 
 ### Prefix mode
 
@@ -275,17 +292,25 @@ If vim is enabled in the config (see [`keymap_mode`](config.md#keymap_mode)), th
 
 
 ### Inspector
-Open the inspector with Ctrl + o
 
-| Shortcut  | Action                                        |
-| --------- | --------------------------------------------- |
-| Esc       | Close the inspector, returning to the shell   |
-| Ctrl + o  | Close the inspector, returning to search view |
-| Ctrl + d  | Delete the inspected item from the history    |
-| ↑         | Inspect the previous item in the history      |
-| ↓         | Inspect the next item in the history          |
-| Page Up   | Inspect the previous item in the history      |
-| Page Down | Inspect the next item in the history          |
-| j / k     | Navigate items (when vim mode is enabled)     |
-| Enter     | Execute selected item (respects `enter_accept`) |
-| Tab       | Select current item and edit                  |
+Open with **Ctrl + o**. **Runs** lists executions of the selected command;
+**Session** lists commands in that run's session. Both are newest first.
+**Stats** shows aggregate statistics.
+
+Captured output requires the local daemon and preserves colours and formatting.
+By default, **Enter** opens output instead of executing the command, regardless of
+`enter_accept`. **Esc** returns to the same selection.
+
+| Default shortcut | Action |
+| ---------------- | ------ |
+| r / s / t | Switch to Runs / Session / Stats |
+| Enter / o | Open captured output |
+| ↑ / ↓ or mouse wheel | Select a row or scroll output |
+| j / k | Navigate in vim mode |
+| Page Up / Page Down | Scroll output a page (one row in lists) |
+| Home / End | Jump to the start / end of output |
+| Esc | Back to the inspector or search |
+| Ctrl + o | Back to search |
+| Ctrl + d | Delete the selected run |
+| Tab | Edit the selected command in the shell, without executing it |
+| Ctrl + c | Close Atuin |

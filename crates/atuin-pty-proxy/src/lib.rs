@@ -3,18 +3,24 @@ mod capture;
 #[cfg(unix)]
 mod debug;
 #[cfg(unix)]
-mod osc133;
+mod foreground;
+#[cfg(unix)]
+mod parser;
 #[cfg(unix)]
 mod pty_proxy;
 #[cfg(unix)]
 mod runtime;
 #[cfg(unix)]
 mod screen;
+#[cfg(unix)]
+mod title;
 
 #[cfg(unix)]
-pub use capture::{CommandCapture, CommandCaptureSink};
+pub use capture::{CaptureConfig, CommandCapture, CommandCaptureSink};
 #[cfg(unix)]
 pub use pty_proxy::{PtyProxy, Shell, init_script};
+#[cfg(unix)]
+pub use screen::{is_pty_proxy_child, parent_socket_path};
 
 #[cfg(not(unix))]
 #[allow(dead_code)]
@@ -23,9 +29,10 @@ mod unsupported {
 
     #[derive(Args, Debug)]
     pub struct PtyProxy {
-        /// Highlight OSC 133 prompt, input, output, and exit-code regions
+        /// Highlight `OSC 18188735` escape sequences used to mark the start and end of command
+        /// output.
         #[arg(long)]
-        debug_osc133: bool,
+        debug_markers: bool,
 
         /// Path to the shell binary that atuin pty-proxy should spawn.
         /// Defaults to the system login shell. Only valid when no subcommand is given.

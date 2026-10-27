@@ -189,9 +189,9 @@ Actions are specified as kebab-case strings.
 | `scroll-page-down` | Scroll a full page down |
 | `scroll-to-top` | Jump to the top of the list |
 | `scroll-to-bottom` | Jump to the bottom of the list |
-| `scroll-to-screen-top` | Jump to the top of the visible screen |
-| `scroll-to-screen-middle` | Jump to the middle of the visible screen |
-| `scroll-to-screen-bottom` | Jump to the bottom of the visible screen |
+| `scroll-to-screen-top` | Jump to the top of the visible search results |
+| `scroll-to-screen-middle` | Jump to the middle of the visible search results |
+| `scroll-to-screen-bottom` | Jump to the bottom of the visible search results |
 
 Note: `select-next` and `select-previous` respect the `invert` setting. When `invert` is true, the visual direction is flipped.
 
@@ -203,6 +203,8 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `accept-N` | Accept the Nth entry below the selection and execute it (for example, `accept-1` through `accept-9`) |
 | `return-selection` | Return the selected entry to the command line **without executing** |
 | `return-selection-N` | Return the Nth entry below the selection without executing (for example, `return-selection-1` through `return-selection-9`) |
+| `accept-cd` | Change to the directory the selected entry ran in, **immediately** |
+| `return-cd` | Put a command changing to the directory the selected entry ran in on the command line **without executing** |
 | `return-original` | Close the TUI and return the original command line text |
 | `return-query` | Close the TUI and return the current search query |
 | `copy` | Copy the selected entry to the clipboard |
@@ -217,6 +219,14 @@ Note: `select-next` and `select-previous` respect the `invert` setting. When `in
 | `clear-context` | Return to the initial [context](../guide/advanced-usage.md#context-switch) |
 
 The difference between `accept` and `return-selection`: `accept` runs the command immediately when the TUI closes, while `return-selection` places it on your command line for further editing before you press enter. The `enter_accept` setting controls which of these the default `enter` key uses.
+
+`accept-cd` and `return-cd` are bound to `g` and `G` in prefix mode (`ctrl-a g`, `ctrl-a G`); see [Jumping to a command's directory](#jumping-to-a-commands-directory). They act like `accept` and `return-selection`, but return a command changing to the entry's directory:
+
+- The path is quoted for the current shell: `cd -- '<path>'` in bash, zsh and fish, `cd r#'<path>'#` in nushell (with more `#` when the path contains `'#`), `cd @('<path>')` in xonsh, and `Set-Location -LiteralPath '<path>'` in PowerShell.
+- In the inspector tab, they use the inspected entry.
+- With [`command_chaining`](config.md#command_chaining), in the search tab, the command is appended to the chain and not executed, as with `accept`.
+- Atuin doesn't check that the directory still exists. If it's gone, for example because it came from another synced host, the shell reports the error.
+- They close the TUI like `return-original` when there is no safe command: the entry has no absolute directory (imported history records `unknown`), the path contains control or line-separator characters, the path contains `\` in PowerShell outside Windows, or the shell is unknown (`ATUIN_SHELL` unset: `atuin search -i` outside the shell integration, or nushell older than 0.106).
 
 ### Mode changes
 
@@ -235,8 +245,15 @@ The difference between `accept` and `return-selection`: `accept` runs the comman
 
 | Action | Description |
 |--------|-------------|
-| `inspect-previous` | Inspect the previous entry (in the inspector tab) |
-| `inspect-next` | Inspect the next entry (in the inspector tab) |
+| `inspect-previous` | Select the row above, or scroll output up |
+| `inspect-next` | Select the row below, or scroll output down |
+| `inspect-runs` | Open Runs |
+| `inspect-session` | Open Session |
+| `inspect-stats` | Open Stats |
+| `inspect-output` | Open captured output |
+
+List conditions apply to the current inspector view, not the search results.
+In Output, start/end conditions describe scroll boundaries.
 
 ### Special
 
@@ -261,6 +278,7 @@ Conditions let a single key do different things depending on the current state. 
 | `no-results` | The search returned zero results |
 | `has-results` | The search returned at least one result |
 | `has-context` | The context comes from a previously selected command (`switch-context`) |
+| `shell-up-key-binding` | Atuin was invoked from the shell's up-key binding rather than ctrl-r |
 
 ### Boolean expressions
 
@@ -336,6 +354,20 @@ The default keymaps already encode the standard `[keys]` behaviors. Here is what
 ]
 ```
 
+### Different enter behavior for up and ctrl-r
+
+The `shell-up-key-binding` condition is true when the shell invoked Atuin from its up-key binding. This makes enter run the command when pressing up, but return it to the prompt for editing when pressing ctrl-r:
+
+```toml
+[keymap.emacs]
+"enter" = [
+  { when = "shell-up-key-binding", action = "accept" },
+  { action = "return-selection" },
+]
+```
+
+Overriding `enter` replaces the default binding for that key only, so add the same rules for `ctrl-m` and for `enter` under `[keymap.vim-normal]` and `[keymap.vim-insert]` if you use them.
+
 ### Disabling scroll-exit
 
 To make `down` always scroll without ever exiting:
@@ -373,6 +405,19 @@ Use `noop` to make a key do nothing:
 
 This is equivalent to setting `enter_accept = false`, but expressed directly as a keybinding.
 
+### Jumping to a command's directory
+
+By default, press `ctrl-a g` to change to the selected entry's directory, or `ctrl-a G` to put the `cd` on the command line to edit first. Prefix bindings work in every mode.
+
+To use a single key instead:
+
+```toml
+[keymap.emacs]
+"alt-c" = "accept-cd"
+```
+
+A binding under `[keymap.emacs]` doesn't apply in vim mode: add the same key to `[keymap.vim-insert]` and `[keymap.vim-normal]` too.
+
 ### Custom vim-normal bindings
 
 ```toml
@@ -405,6 +450,8 @@ Prefix mode is a two-step shortcut: press the prefix key (++ctrl+a++ by default)
 | `D` | Delete all entries matching the selected command |
 | `a` | Move cursor to start of line |
 | `c` | Clear context (if in a switched context), otherwise switch context |
+| `g` | Change to the selected entry's directory (`accept-cd`) |
+| `G` | Put a `cd` to the selected entry's directory on the command line (`return-cd`) |
 
 You can customize these with `[keymap.prefix]`:
 

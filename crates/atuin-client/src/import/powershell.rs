@@ -1,7 +1,9 @@
-use async_trait::async_trait;
-use directories::BaseDirs;
-use eyre::{Result, eyre};
 use std::path::PathBuf;
+
+use async_trait::async_trait;
+use atuin_common::path::PathBufExt as _;
+use easy_cast::Conv;
+use eyre::{Result, eyre};
 use time::{Duration, OffsetDateTime};
 
 use super::{Importer, Loader, count_lines, unix_byte_lines};
@@ -15,8 +17,6 @@ pub struct PowerShell {
 }
 
 fn get_history_path() -> Result<PathBuf> {
-    let base = BaseDirs::new().ok_or_else(|| eyre!("could not determine data directory"))?;
-
     // The command line history in PowerShell is maintained by the PSReadLine module:
     // https://learn.microsoft.com/en-us/powershell/module/psreadline/about/about_psreadline#command-history
     //
@@ -27,26 +27,31 @@ fn get_history_path() -> Result<PathBuf> {
     // > or `$Env:HOME/.local/share/powershell/PSReadLine`.
 
     let dir = if cfg!(windows) {
-        base.data_dir()
-            .join("Microsoft")
-            .join("Windows")
-            .join("PowerShell")
-            .join("PSReadLine")
+        dirs::data_dir()
+            .ok_or_else(|| eyre!("could not determine data directory"))?
+            .joined("Microsoft")
+            .joined("Windows")
+            .joined("PowerShell")
+            .joined("PSReadLine")
     } else {
-        std::env::var("XDG_DATA_HOME")
-            .map_or_else(
-                |_| base.home_dir().join(".local").join("share"),
-                PathBuf::from,
-            )
-            .join("powershell")
-            .join("PSReadLine")
+        atuin_common::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .ok_or(())
+            .or_else(|_| {
+                let Some(home) = dirs::home_dir() else {
+                    eyre::bail!("could not determine home directory");
+                };
+                Ok(home.joined(".local").joined("share"))
+            })?
+            .joined("powershell")
+            .joined("PSReadLine")
     };
 
     // The history is stored in a file named `$($Host.Name)_history.txt`.
     // For the default console host shipped by Microsoft,`$Host.Name` is `ConsoleHost`:
     // https://learn.microsoft.com/en-us/dotnet/api/system.management.automation.host.pshost.name#remarks
 
-    let file = dir.join("ConsoleHost_history.txt");
+    let file = dir.joined("ConsoleHost_history.txt");
 
     if file.is_file() {
         Ok(file)
@@ -79,7 +84,7 @@ impl Importer for PowerShell {
 
     async fn load(mut self, h: &mut impl Loader) -> Result<()> {
         let line_count = self.entries().await?;
-        let start = OffsetDateTime::now_utc() - Duration::milliseconds(line_count as i64);
+        let start = OffsetDateTime::now_utc() - Duration::milliseconds(i64::conv(line_count));
 
         let mut counter = 0;
         let mut iter = unix_byte_lines(&self.bytes);
@@ -113,10 +118,8 @@ impl Importer for PowerShell {
             let offset = Duration::milliseconds(counter);
             counter += 1;
 
-            let entry = History::import()
-                .shell("powershell")
-                .timestamp(start + offset)
-                .command(cmd);
+            let entry =
+                History::import().shell("powershell").timestamp(start + offset).command(cmd);
             h.push(entry.build().into()).await?;
         }
 
@@ -135,10 +138,11 @@ fn read_line(s: &[u8]) -> Result<&str> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::import::tests::TestLoader;
     use itertools::assert_equal;
     use rstest::rstest;
+
+    use super::*;
+    use crate::import::tests::TestLoader;
 
     const INPUT: &str = r#"cargo install atuin
 cargo update
@@ -163,7 +167,7 @@ echo baz
 
     #[rstest]
     #[case::lf(INPUT.to_string())]
-    #[case::crlf(INPUT.replace("\n", "\r\n"))]
+    #[case::crlf(INPUT.replace('\n', "\r\n"))]
     #[tokio::test]
     async fn imports_commands(#[case] input: String) {
         let loader = import(input.as_str()).await;

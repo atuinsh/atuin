@@ -1,8 +1,9 @@
-use atuin_client::history::{History, is_known_agent};
+use atuin_client::history::History;
+use atuin_common::string::StrExt as _;
 use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use time::UtcOffset;
 
-pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
+pub fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
     format!(
         "History ID: {} - `{}`\n{}",
         history.id,
@@ -11,7 +12,12 @@ pub(crate) fn format_last_command(history: &History, local_offset: UtcOffset) ->
     )
 }
 
-pub(crate) fn format_history_search_result(
+/// How much of a command a search result shows. Agent-run commands are often multi-kilobyte
+/// heredocs or scripts; shown whole, a page of 30 results can run past 100k characters, which
+/// floods a model's context for what is a lookup. The opening shows what the command was.
+const SEARCH_RESULT_COMMAND_CHARS: usize = 600;
+
+pub fn format_history_search_result(
     ordinal: usize,
     history: &History,
     local_offset: UtcOffset,
@@ -20,9 +26,17 @@ pub(crate) fn format_history_search_result(
         "## #{}. (History ID: {}):\n`{}`\n{}\n",
         ordinal,
         history.id,
-        history.command,
+        clip_command(&history.command),
         format_history_metadata(history, local_offset)
     )
+}
+
+fn clip_command(command: &str) -> std::borrow::Cow<'_, str> {
+    let head = command.truncate_chars(SEARCH_RESULT_COMMAND_CHARS);
+    if head.len() == command.len() {
+        return command.into();
+    }
+    format!("{head}… [+{} chars]", command[head.len()..].chars().count()).into()
 }
 
 fn format_history_metadata(history: &History, local_offset: UtcOffset) -> String {
@@ -37,11 +51,11 @@ fn format_history_metadata(history: &History, local_offset: UtcOffset) -> String
 }
 
 /// Attribution for agent-run commands: which agent, and its stated intent.
-/// A stated intent marks a command as agent-run even when the agent is not in
-/// KNOWN_AGENTS, so its author is still named. User-run commands (no intent,
-/// author not a known agent) get nothing.
+/// A stated intent marks a command as agent-run even when the entry is not
+/// recognised as one, so its author is still named. User-run commands (no
+/// intent, not an agent) get nothing.
 fn format_attribution(history: &History) -> String {
-    match (is_known_agent(&history.author), &history.intent) {
+    match (history.is_agent(), &history.intent) {
         (true, Some(intent)) => format!(" — {}: {intent}", history.author),
         (true, None) => format!(" — {}", history.author),
         (false, Some(intent)) if !history.author.is_empty() => {
@@ -53,12 +67,7 @@ fn format_attribution(history: &History) -> String {
 }
 
 fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
-    history
-        .timestamp
-        .to_offset(local_offset)
-        .display()
-        .ymd_hms()
-        .to_string()
+    history.timestamp.to_offset(local_offset).display().ymd_hms().to_string()
 }
 
 fn format_duration(nanos: i64) -> String {
@@ -66,17 +75,13 @@ fn format_duration(nanos: i64) -> String {
         return String::new();
     }
 
-    format!(
-        ", {}",
-        std::time::Duration::saturating_from_nanos_i64(nanos)
-            .display()
-            .stopwatch()
-    )
+    format!(", {}", std::time::Duration::saturating_from_nanos_i64(nanos).display().stopwatch())
 }
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::history::{History, HistoryId};
+    use atuin_client::history::History;
+    use atuin_domain::record::CmdOrigin;
     use rstest::rstest;
     use time::{OffsetDateTime, UtcOffset};
 
@@ -84,34 +89,49 @@ mod tests {
 
     fn history(duration: i64) -> History {
         History {
-            id: HistoryId("018f011c-9a0a-7000-8000-000000000001".to_string()),
+            id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
             timestamp: OffsetDateTime::UNIX_EPOCH,
             duration,
             exit: 2,
             command: "cargo test".to_string(),
             cwd: "/repo".to_string(),
             session: String::new(),
-            hostname: String::new(),
+            cmd_origin: CmdOrigin::default(),
             author: String::new(),
             intent: None,
             deleted_at: None,
             shell: Some("zsh".into()),
+            author_kind: None,
         }
     }
 
-    #[test]
-    fn formats_last_command() {
-        assert_eq!(
-            format_last_command(&history(1_234_000_000), UtcOffset::UTC),
-            "History ID: 018f011c-9a0a-7000-8000-000000000001 - `cargo test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2), 1.234s"
+    #[rstest]
+    fn search_results_clip_long_commands() {
+        let mut long = history(0);
+        long.command = format!("cat <<'EOF'\n{}\nEOF", "x".repeat(5_000));
+        let out = format_history_search_result(1, &long, UtcOffset::UTC);
+        assert!(out.len() < 1_000, "{}", out.len());
+        assert!(out.contains("… [+4"), "{out}");
+        assert!(
+            format_history_search_result(1, &history(0), UtcOffset::UTC).contains("`cargo test`")
         );
     }
 
-    #[test]
+    #[rstest]
+    fn formats_last_command() {
+        assert_eq!(
+            format_last_command(&history(1_234_000_000), UtcOffset::UTC),
+            "History ID: 018f011c9a0a70008000000000000001 - `cargo test`\n[1970-01-01 00:00:00] \
+             (in `/repo`, exit 2), 1.234s"
+        );
+    }
+
+    #[rstest]
     fn formats_history_search_result() {
         assert_eq!(
             format_history_search_result(3, &history(0), UtcOffset::UTC),
-            "## #3. (History ID: 018f011c-9a0a-7000-8000-000000000001):\n`cargo test`\n[1970-01-01 00:00:00] (in `/repo`, exit 2)\n"
+            "## #3. (History ID: 018f011c9a0a70008000000000000001):\n`cargo test`\n[1970-01-01 \
+             00:00:00] (in `/repo`, exit 2)\n"
         );
     }
 

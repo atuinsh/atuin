@@ -1,0 +1,499 @@
+mod blob;
+mod index;
+
+use std::borrow::Cow;
+use std::sync::Arc;
+
+use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_common::db::sqlite::fts::TextHighlighter;
+use atuin_common::futures::stream::{ChunkedStream, EitherOrBoth, try_merge_join};
+use atuin_common::range::KeptEnds;
+use atuin_common::slice::excerpt;
+use atuin_common::string::highlighted::{HighlightedString, HighlightedText};
+#[cfg(test)]
+pub use blob::FailingBlobStore;
+pub use blob::{
+    AnyBlobStore, BlobStore, CaptureError, DeleteOutputError, FjallBlobStore, GetOutputError,
+    NopBlobStore,
+};
+use futures::{StreamExt, TryStreamExt, future, stream};
+#[cfg(test)]
+pub use index::FailingIndex;
+pub use index::{
+    AnyIndex, HighlightedCapture, Index, IndexError, NopIndex, RankedMatch, SqliteIndex,
+};
+use tracing::warn;
+
+use super::{OutputLine, OutputMatch};
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReconcileError {
+    #[error(transparent)]
+    BlobStore(#[from] GetOutputError),
+    #[error(transparent)]
+    Index(#[from] IndexError),
+}
+
+/// Hits fetched and highlighted ahead of the consumer, in order.
+const SEARCH_CONCURRENCY: usize = 4;
+/// Hits per chunk of the search stream.
+const SEARCH_CHUNK: usize = 16;
+
+#[derive(Debug)]
+pub struct OutputStore {
+    blob: AnyBlobStore,
+    index: AnyIndex,
+}
+
+impl OutputStore {
+    pub fn new(blob: AnyBlobStore, index: AnyIndex) -> Self {
+        Self { blob, index }
+    }
+
+    pub async fn capture(
+        &self,
+        id: HistoryId,
+        capture: CommandCapture,
+    ) -> Result<(), CaptureError> {
+        let head = capture.plaintext_start();
+        let tail = capture.plaintext_end();
+        self.blob.capture(id, capture).await?;
+
+        if let Err(err) = self.index.insert(id, &head, tail.as_deref()).await {
+            warn!(?err, %id, "failed to index captured output; search may miss it until reconcile");
+        }
+        Ok(())
+    }
+
+    pub async fn get(&self, id: HistoryId) -> Result<Option<CommandCapture>, GetOutputError> {
+        self.blob.get(id).await
+    }
+
+    pub async fn remove(&self, ids: &[HistoryId]) -> Result<(), DeleteOutputError> {
+        let result = self.blob.remove(ids.iter().copied()).await;
+
+        if let Err(err) = self.index.remove(ids.iter().copied()).await {
+            warn!(?err, "failed to drop ids from the output search index");
+        }
+
+        result
+    }
+
+    /// Relevance-ranked hits for output holding every one of `terms` (a term of several words as
+    /// a phrase), each reduced to the lines within `context` of a match, or whole when `context`
+    /// is `None`.
+    pub async fn search(
+        &self,
+        terms: impl IntoIterator<Item = &str>,
+        limit: usize,
+        context: Option<usize>,
+    ) -> ChunkedStream<Result<OutputMatch, IndexError>> {
+        let terms: Arc<[String]> = terms.into_iter().map(str::to_owned).collect();
+        // Only the ranking (history_id + score) comes from the contentless index; it is small, so
+        // collecting it keeps error handling simple. The bodies -- each up to `max_output_size` --
+        // are the memory risk, so they are hydrated from the blob only as the caller pulls, and
+        // dropping the stream stops that work early.
+        let ranked: Vec<RankedMatch> = match self
+            .index
+            .search(terms.iter().map(String::as_str), limit)
+            .await
+            .try_collect()
+            .await
+        {
+            Ok(ranked) => ranked,
+            Err(err) => return ChunkedStream::from_error(err),
+        };
+
+        let blob = self.blob.clone();
+        let index = self.index.clone();
+        let hits = stream::iter(ranked)
+            .map(move |hit| {
+                let blob = blob.clone();
+                let index = index.clone();
+                let terms = terms.clone();
+
+                async move {
+                    let capture = match blob.get(hit.history_id).await {
+                        Ok(Some(capture)) => capture,
+                        Ok(None) => return None,
+                        // A transient read failure hides only this hit, not the whole search.
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                id = %hit.history_id,
+                                "failed to read a search hit's capture; dropping it",
+                            );
+                            return None;
+                        }
+                    };
+                    let head = capture.plaintext_start();
+                    let tail = capture.plaintext_end();
+                    let body = match index
+                        .highlight(terms.iter().map(String::as_str), &head, tail.as_deref())
+                        .await
+                    {
+                        Ok(body) => body,
+                        // Still a hit, just unhighlighted: highlighting is cosmetic and must not
+                        // fail the search.
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                id = %hit.history_id,
+                                "failed to highlight a search hit; showing it unmarked",
+                            );
+                            HighlightedCapture::unmarked(
+                                TextHighlighter::default(),
+                                &head,
+                                tail.as_deref(),
+                            )
+                        }
+                    };
+
+                    let mut body_lines: Vec<HighlightedText<Cow<'_, str>>> =
+                        body.head.lines().collect();
+                    let head = body_lines.len();
+                    body_lines.extend(body.tail.iter().flat_map(HighlightedString::lines));
+                    let ends = KeptEnds {
+                        head,
+                        tail: body_lines.len() - head,
+                    };
+                    let lines = excerpt(&body_lines, |line| line.has_match(), context)
+                        .map(|(idx, line)| OutputLine {
+                            line: ends.number(idx),
+                            content: line.clone().map(Cow::into_owned),
+                        })
+                        .collect();
+                    Some(Ok(OutputMatch {
+                        history_id: hit.history_id,
+                        lines,
+                        score: hit.score,
+                    }))
+                }
+            })
+            .buffered(SEARCH_CONCURRENCY)
+            .filter_map(future::ready);
+
+        ChunkedStream::new(hits.chunks(SEARCH_CHUNK))
+    }
+
+    pub fn estimated_disk_space(&self) -> u64 {
+        self.blob.estimated_disk_space()
+    }
+
+    pub async fn eviction_candidates(
+        &self,
+        reclaim_bytes: u64,
+    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
+        self.blob.eviction_candidates(reclaim_bytes).await
+    }
+
+    pub async fn reconcile(&self) -> Result<(), ReconcileError> {
+        let blob = self.blob.all_ids().await.items().filter_map(|res| async move {
+            match res {
+                Ok(id) => Some(Ok::<HistoryId, ReconcileError>(id)),
+                Err(err) => {
+                    warn!(?err, "skipping an unreadable id from the output store during reconcile");
+                    None
+                }
+            }
+        });
+
+        let index = self.index.indexed_ids().await.items().filter_map(|res| async move {
+            match res {
+                Ok(id) => Some(Ok::<HistoryId, ReconcileError>(id)),
+                Err(err) => {
+                    warn!(?err, "skipping an unreadable id from the search index during reconcile");
+                    None
+                }
+            }
+        });
+
+        try_merge_join(blob, index)
+            .try_for_each(|side| async move {
+                match side {
+                    EitherOrBoth::Left(id) => match self.blob.get(id).await {
+                        Ok(Some(capture)) => {
+                            let tail = capture.plaintext_end();
+                            self.index
+                                .insert(id, &capture.plaintext_start(), tail.as_deref())
+                                .await?;
+                        }
+                        Ok(None) => {}
+                        // One unreadable capture must not stall reconciliation of everything
+                        // sorted after it; index failures still abort, since those are systemic.
+                        Err(err) => {
+                            warn!(?err, %id, "skipping an unreadable capture during reconcile");
+                        }
+                    },
+                    EitherOrBoth::Right(id) => {
+                        if !self.blob.contains(id).await? {
+                            self.index.remove(std::iter::once(id)).await?;
+                        }
+                    }
+                    EitherOrBoth::Both(..) => {}
+                }
+                Ok(())
+            })
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use easy_cast::Conv;
+    use rstest::rstest;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn hid(n: u128) -> HistoryId {
+        HistoryId::from_bytes(*Uuid::from_u128(n).as_bytes())
+    }
+
+    fn cap(output: &str) -> CommandCapture {
+        CommandCapture {
+            output_start: output.to_string(),
+            output_end: None,
+            output_observed_bytes: u64::conv(output.len()),
+            terminal_width: 80,
+            terminal_height: 24,
+        }
+    }
+
+    async fn temp_backend(dir: &Path) -> OutputStore {
+        let blob = FjallBlobStore::open(dir.join("store")).expect("open blob");
+        let index = SqliteIndex::open(&dir.join("index.sqlite")).await.expect("open index");
+        OutputStore::new(AnyBlobStore::Fjall(blob), AnyIndex::Sqlite(index))
+    }
+
+    async fn search_hits(
+        store: &OutputStore,
+        terms: impl IntoIterator<Item = &str>,
+        limit: usize,
+    ) -> Vec<OutputMatch> {
+        store.search(terms, limit, Some(0)).await.try_collect().await.expect("search")
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn capture_then_search_finds_the_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+        backend
+            .capture(hid(1), cap("compilation error: missing semicolon"))
+            .await
+            .expect("capture");
+
+        let hits = search_hits(&backend, ["semicolon"], 10).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].history_id, hid(1));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_matches_the_visible_text_of_colorized_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+        backend.capture(hid(1), cap("\x1b[31mfatal\x1b[0m: disk full")).await.expect("capture");
+
+        let hits = search_hits(&backend, ["fatal"], 10).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].lines.len(), 1);
+        let plain = hits[0].lines[0].content.to_plain();
+        assert_eq!(plain.text, "fatal: disk full");
+        assert_eq!(plain.ranges, vec![0..5]);
+    }
+
+    /// The words of one term match only together and in order, and the hit shows every line the
+    /// phrase is on: FTS5 marks a phrase that wraps onto the next line as one span across the
+    /// newline.
+    #[rstest]
+    #[case::words_anywhere(&["foo", "bar"], &[
+        (1, &["«foo» then", "later «bar»"][..]),
+        (2, &["a «foo» «bar» b"]),
+        (3, &["x «foo»", "«bar» y"]),
+    ])]
+    #[case::phrase_only_where_the_words_meet(&["foo bar"], &[
+        (2, &["a «foo bar» b"][..]),
+        (3, &["x «foo»", "«bar» y"]),
+    ])]
+    #[tokio::test]
+    async fn search_matches_the_words_of_a_term_as_a_phrase(
+        #[case] terms: &[&str],
+        #[case] expected: &[(u128, &[&str])],
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+        for (n, output) in [(1, "foo then\nlater bar"), (2, "a foo bar b"), (3, "x foo\nbar y")] {
+            backend.capture(hid(n), cap(output)).await.expect("capture");
+        }
+
+        let mut hits: Vec<(HistoryId, Vec<String>)> =
+            search_hits(&backend, terms.iter().copied(), 10)
+                .await
+                .into_iter()
+                .map(|hit| {
+                    let lines = hit
+                        .lines
+                        .iter()
+                        .map(|line| line.content.display_subs(['«', '»']).to_string())
+                        .collect();
+                    (hit.history_id, lines)
+                })
+                .collect();
+        hits.sort_by_key(|(id, _)| *id);
+        let expected: Vec<(HistoryId, Vec<String>)> = expected
+            .iter()
+            .map(|(n, lines)| (hid(*n), lines.iter().map(|l| (*l).to_owned()).collect()))
+            .collect();
+        assert_eq!(hits, expected);
+    }
+
+    /// The words either side of a truncated capture's discarded middle were never next to each
+    /// other, so a phrase must not match across the cut; separate terms still match either side.
+    #[rstest]
+    #[case::phrase_across_the_cut(&["connection refused"], &[])]
+    #[case::terms_either_side(
+        &["connection", "refused"],
+        &["0: failed with «connection»", "-1: «refused» by the server"],
+    )]
+    #[case::phrase_in_the_tail(&["refused by"], &["-1: «refused by» the server"])]
+    #[tokio::test]
+    async fn a_phrase_does_not_match_across_discarded_output(
+        #[case] terms: &[&str],
+        #[case] expected: &[&str],
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+        let capture = CommandCapture {
+            output_end: Some("refused by the server".to_owned()),
+            ..cap("failed with connection")
+        };
+        backend.capture(hid(1), capture).await.expect("capture");
+
+        let lines: Vec<String> = search_hits(&backend, terms.iter().copied(), 10)
+            .await
+            .iter()
+            .flat_map(|hit| &hit.lines)
+            .map(|line| format!("{}: {}", line.line, line.content.display_subs(['«', '»'])))
+            .collect();
+        assert_eq!(lines, expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn remove_drops_the_output_from_search() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+        backend.capture(hid(1), cap("searchable content")).await.expect("capture");
+        backend.remove(&[hid(1)]).await.expect("remove");
+        assert!(search_hits(&backend, ["searchable"], 10).await.is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn search_hides_index_entries_whose_capture_is_gone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+
+        // An index entry with no backing capture -- the drift a capture/remove race or a swallowed
+        // index write can leave behind. The blob is authoritative, so search must not surface it.
+        backend.index.insert(hid(9), "ghost output text", None).await.expect("insert");
+        assert!(search_hits(&backend, ["ghost"], 10).await.is_empty());
+
+        // A normally-captured entry is still found, so the guard only hides the orphan.
+        backend.capture(hid(1), cap("real ghost output")).await.expect("capture");
+        let hits = search_hits(&backend, ["ghost"], 10).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].history_id, hid(1));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn capture_and_remove_survive_an_erroring_index() {
+        // The index is derived, so a live index failure must not fail the capture or the removal;
+        // the blob store stays authoritative and reconcile heals the index later.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blob = FjallBlobStore::open(dir.path().join("store")).expect("open blob");
+        let store = OutputStore::new(AnyBlobStore::Fjall(blob), AnyIndex::Failing(FailingIndex));
+
+        store.capture(hid(1), cap("still stored")).await.expect("capture survives index failure");
+        assert_eq!(
+            store.get(hid(1)).await.expect("get").expect("present").output_start,
+            "still stored"
+        );
+
+        store.remove(&[hid(1)]).await.expect("remove survives index failure");
+        assert!(store.get(hid(1)).await.expect("get").is_none());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reconcile_indexes_captures_missing_from_the_index() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+        backend.blob.capture(hid(1), cap("orphaned output text")).await.expect("capture");
+
+        assert!(search_hits(&backend, ["orphaned"], 10).await.is_empty(), "not yet indexed");
+        backend.reconcile().await.expect("reconcile");
+
+        let hits = search_hits(&backend, ["orphaned"], 10).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].history_id, hid(1));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reconcile_skips_an_unreadable_capture_and_indexes_the_rest() {
+        use std::collections::HashSet;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+        let AnyBlobStore::Fjall(blob) = &backend.blob else {
+            unreachable!()
+        };
+        blob.capture(hid(1), cap("stored 1")).await.expect("capture");
+        blob.corrupt(hid(2));
+        blob.capture(hid(3), cap("stored 3")).await.expect("capture");
+
+        backend.reconcile().await.expect("reconcile");
+
+        let indexed: HashSet<HistoryId> =
+            backend.index.indexed_ids().await.try_collect().await.expect("indexed_ids");
+        assert_eq!(indexed, [hid(1), hid(3)].into_iter().collect());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reconcile_drops_index_entries_without_a_capture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+        backend.index.insert(hid(9), "ghost entry", None).await.expect("insert");
+
+        backend.reconcile().await.expect("reconcile");
+        assert!(search_hits(&backend, ["ghost"], 10).await.is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reconcile_syncs_a_mixed_index_in_one_pass() {
+        use std::collections::HashSet;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = temp_backend(dir.path()).await;
+
+        for n in [1u128, 2, 4] {
+            backend.blob.capture(hid(n), cap(&format!("stored {n}"))).await.expect("capture");
+        }
+        backend.index.insert(hid(2), "stored 2", None).await.expect("insert");
+        backend.index.insert(hid(3), "ghost 3", None).await.expect("insert");
+
+        backend.reconcile().await.expect("reconcile");
+
+        let indexed: HashSet<HistoryId> =
+            backend.index.indexed_ids().await.try_collect().await.expect("indexed_ids");
+        assert_eq!(indexed, [hid(1), hid(2), hid(4)].into_iter().collect());
+    }
+}

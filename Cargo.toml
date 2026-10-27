@@ -1,101 +1,212 @@
 [workspace]
-members = [
-  "crates/*",
-  "crates/atuin-nucleo/matcher",
-]
-
 resolver = "2"
-exclude = ["ui/backend", "crates/atuin-nucleo/matcher/fuzz"]
+members = ["crates/*"]
+exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.19.0-beta.3"
+version = "18.24.2"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
-rust-version = "1.97.0"
+rust-version = "1.95.0"
 license = "MIT"
 homepage = "https://atuin.sh"
 repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
-async-trait = "0.1.58"
-enum_dispatch = "0.3"
-atuin-client = { path = "crates/atuin-client", version = "18.19.0-beta.3" }
-atuin-common = { path = "crates/atuin-common", version = "18.19.0-beta.3" }
-atuin-daemon = { path = "crates/atuin-daemon", version = "18.19.0-beta.3" }
-atuin-domain = { path = "crates/atuin-domain", version = "18.19.0-beta.3" }
-atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.19.0-beta.3" }
-atuin-history = { path = "crates/atuin-history", version = "18.19.0-beta.3" }
-atuin-kv = { path = "crates/atuin-kv", version = "18.19.0-beta.3" }
-atuin-scripts = { path = "crates/atuin-scripts", version = "18.19.0-beta.3" }
-atuin-server = { path = "crates/atuin-server", version = "18.19.0-beta.3" }
-atuin-server-database = { path = "crates/atuin-server-database", version = "18.19.0-beta.3" }
-atuin-server-postgres = { path = "crates/atuin-server-postgres", version = "18.19.0-beta.3" }
-atuin-server-sqlite = { path = "crates/atuin-server-sqlite", version = "18.19.0-beta.3" }
-atuin-nucleo = { path = "crates/atuin-nucleo", version = "0.6.0" }
-atuin-nucleo-matcher = { path = "crates/atuin-nucleo/matcher", version = "0.3.1" }
-frizbee = "0.12.0"
+atuin-ai = { path = "crates/atuin-ai", version = "18.24.2", default-features = false }
+atuin-client = { path = "crates/atuin-client", version = "18.24.2" }
+atuin-common = { path = "crates/atuin-common", version = "18.24.2" }
+atuin-daemon = { path = "crates/atuin-daemon", version = "18.24.2", default-features = false }
+atuin-domain = { path = "crates/atuin-domain", version = "18.24.2" }
+atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.24.2" }
+atuin-history = { path = "crates/atuin-history", version = "18.24.2" }
+atuin-kv = { path = "crates/atuin-kv", version = "18.24.2" }
+atuin-octavo = { path = "crates/atuin-octavo", version = "18.24.2" }
+atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.24.2", default-features = false }
+atuin-scripts = { path = "crates/atuin-scripts", version = "18.24.2" }
+atuin-server = { path = "crates/atuin-server", version = "18.24.2" }
+atuin-vt100 = "0.19"
+atuin-vte = "0.15"
+
+ansi-to-tui = { version = "8", default-features = false }
+arboard = { version = "3", default-features = false }
+# held at 0.5: rusty_paserk 0.5.0 pins argon2 0.5; bumping would add a 2nd copy
+argon2 = "0.5"
+async-stream = "0.3"
+async-trait = "0.1"
+axoupdater = "0.10"
+axum = "0.8"
+# held at 0.22: sqlx-postgres 0.9 pins base64 0.22; bumping would add a 2nd copy
 base64 = "0.22"
-crossterm = "0.29.0"
-time = { version = "0.3.47", features = [
-  "serde-human-readable",
-  "macros",
-  "local-offset",
-] }
-clap = { version = "4.5.7", features = ["derive"] }
-config = { version = "0.15.8", default-features = false, features = ["toml"] }
-derive_more = { version = "2", features = ["as_ref", "deref", "display", "error", "from", "into"] }
-directories = "6.0.0"
+bytes = "1"
+bytesize = { version = "2", features = ["serde"] }
+chrono = "0.4"
+chrono-humanize = "0.2"
+clap = { version = "4", features = ["derive"] }
+clap-couture = { version = "0.1", default-features = false, features = ["derive", "markdown"] }
+clap_complete = "4"
+clap_complete_nushell = "4"
+colored = "3"
+config = { version = "0.15", default-features = false, features = ["toml"] }
+crossterm = "0.29"
+crypto_secretbox = "0.1"
+daemonix = "0.1"
+dashmap = "6"
+derive_more = { version = "2", features = ["add", "add_assign", "as_ref", "deref", "display", "error", "from", "into", "debug"] }
+dirs = "6"
+# easy-cast 0.5.5+ raises its MSRV to 1.96.
+#
+# The assert_nonzero feature patches a bug fixed in:
+# https://github.com/kas-gui/easy-cast/pull/52
+# which was released in 0.6.0
+easy-cast = { version = "0.5", features = ["assert_nonzero"] }
+enum_dispatch = "0.3"
+eventsource-stream = "0.2"
+eye_declare = "0.7"
+eye_declare_engine = { version = "0.7", features = ["test-util"] }
 eyre = "0.6"
-fs-err = "3.1"
-http = "1.5"
-reqwest-middleware = "0.5"
-wiremock = "0.6"
-interim = { version = "0.2.0", features = ["time_0_3"] }
-itertools = "0.14.0"
-rand = { version = "0.8.5", features = ["std"] }
-semver = "1.0.20"
-serde = { version = "1.0.202", features = ["derive"] }
-serde_json = "1.0.119"
-shellexpand = "3"
-tokio = { version = "1", features = ["full"] }
-uuid = { version = "1.9", features = ["v4", "v7", "serde"] }
-whoami = "2.1.0"
-typed-builder = "0.23.2"
-pretty_assertions = "1.3.0"
-proptest = "1.11.0"
-parking_lot = "0.12.5"
-rstest = "0.26.1"
-thiserror = "2"
-rustix = { version = "1.1.4", features = ["process", "fs"] }
-tower = "0.5"
-tracing = "0.1"
-tree-sitter = "0.26.8"
-tree-sitter-bash = "0.25.1"
-tree-sitter-fish = "3.6.0"
-ratatui = "0.30.0"
-sql-builder = "3"
-tempfile = { version = "3.19" }
-minijinja = "2.9.0"
-glob-match = "0.2.1"
+fjall = { version = "3" }
+flume = { version = "0.12", default-features = false, features = ["async"] }
+frizbee = "0.13"
+fs-err = "3"
+futures = "0.3"
+futures-util = "0.3"
+getrandom = "0.4"
+glob-match = "0.2"
+http = "1"
+humantime = "2"
+hyper-tls = "0.6"
+hyper-util = "0.1"
+i18n-embed = { version = "0.16", features = ["fluent-system"] }
+i18n-embed-fl = "0.10"
 imara-diff = "0.2"
+indicatif = "0.18"
+interim = { version = "0.2", features = ["time_0_3"] }
+itertools = "0.15"
+lasso = { version = "0.7", features = ["multi-threaded"] }
+libc = "0.2"
+# Version range mirrors sqlx-sqlite's so cargo unifies both to a single
+# `links = "sqlite3"` package (one bundled SQLite).
+libsqlite3-sys = ">=0.30.1, <0.38.0"
+listenfd = "1"
+locked-tripwire = "0.1"
+memchr = "2"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+minijinja = "2"
+minspan = "0.1"
+native-tls = "0.2"
+norm = { version = "0.1", features = ["fzf-v2"] }
+notify = "8"
+notify-debouncer-full = "0.7"
+num-traits = "0.2"
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSURL"] }
+objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+opentelemetry = "0.32"
+opentelemetry-otlp = "0.32"
+opentelemetry_sdk = "0.32"
+palette = { version = "0.7", features = ["serializing"] }
+parking_lot = "0.12"
+percent-encoding = "2"
+portable-pty = "0.9"
+plist = { version = "1", default-features = false }
+pretty_assertions = "1"
+proptest = "1"
+prost = "0.14"
+prost-types = "0.14"
+protox = "0.9"
+pulldown-cmark = "0.13"
+rand = { version = "0.8", features = ["std"] }
+ratatui = "0.30"
+ratatui-core = "0.1"
+ref-cast = "1"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "stream", "gzip", "zstd"] }
+reqwest-middleware = "0.5"
+rmcp = { version = "3", default-features = false, features = ["server", "transport-io", "schemars"] }
+rmp = "0.8"
+rmp-serde = "1"
+rpassword = "7"
+rstest = "0.27"
+runtime-format = "0.1"
+# The AI session sidecar's synchronous writer. Kept on the libsqlite3-sys that sqlx uses (one
+# bundled SQLite), with unlock_notify as sqlx has it, for shared-cache in-memory databases.
+rusqlite = { version = "0.32", features = ["unlock_notify"] }
+rust-embed = "8"
+rustix = { version = "1", features = ["event", "fs", "net", "param", "process", "pty", "stdio", "termios"] }
+schemars = "1"
+secrecy = { version = "0.10", features = ["serde"] }
+rusty_paserk = { version = "0.5", default-features = false, features = ["v4", "serde"] }
+# rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
+rusty_paseto = { version = "0.8", default-features = false }
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_regex = "1"
+serde_with = "3"
+service-manager = { package = "atuin-service-manager", version = "0.12", default-features = false }
+sha2 = "0.10"
+shellexpand = "3"
+shlex = "2"
+sql-builder = "3"
+sqlx = { version = "0.9", features = ["runtime-tokio", "time", "uuid"] }
+strum = { version = "0.27", features = ["strum_macros"] }
+strum_macros = "0.28"
+sysinfo = "0.39"
+tempfile = { version = "3" }
+thiserror = "2"
+time = { version = "0.3", features = ["serde-human-readable", "macros", "local-offset"] }
+tiny-bip39 = "2"
+tracing = { version = "0.1", features = ["release_max_level_debug"] }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+toml = "1"
+toml_edit = "0.25"
+tonic = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+tower = "0.5"
+# held at 0.6: reqwest 0.13 pins tower-http 0.6; bumping would add a 2nd copy
+tower-http = { version = "0.6", features = ["trace"] }
+tracing-appender = "0.2"
+tracing-futures = { version = "0.2", features = ["futures-03"] }
+tracing-opentelemetry = "0.33"
+tracing-subscriber = { version = "0.3", features = ["ansi", "fmt", "registry", "env-filter", "json"] }
+tracing-tree = "0.4"
+tree-sitter = "0.27"
+tree-sitter-bash = "0.25"
+tree-sitter-fish = "3"
+tree-sitter-powershell = "0.26"
+tui-textarea-2 = "0.13"
+typed-builder = "0.23"
+unicode-normalization = "0.1"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+url = { version = "2", features = ["serde"] }
+# Explicitly 1.6 is necessary because the v7 UUID was only added then.
+uuid = { version = "1.6", features = ["v4", "v7", "serde"] }
+whoami = "2"
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Foundation", "Win32_Storage_FileSystem"] }
+wiremock = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-vt100 = "0.16"
-regex = "1.10.5"
-toml_edit = "0.25.4"
-url = { version = "2.5", features = ["serde"] }
+# held at 0.11: 0.12 pulls hashlink 0.12 (a 2nd copy vs sqlx's 0.11) + an encoding_rs/multiversion subtree
+yaml-rust2 = "0.11"
+zeroize = "1"
+zstd = "0.14"
 
-[workspace.dependencies.tracing-subscriber]
-version = "0.3"
-features = ["ansi", "fmt", "registry", "env-filter", "json"]
-
-[workspace.dependencies.reqwest]
-version = "0.13"
-features = ["json", "native-tls", "stream"]
-default-features = false
-
-[workspace.dependencies.sqlx]
-version = "0.9"
-features = ["runtime-tokio", "time", "uuid"]
+# Dependencies that are pure hot loops (the bundled SQLite and the record-store
+# crypto) run 10x+ slower unoptimized, which makes every test that touches a
+# database or the record store crawl. Optimize just those in dev/test builds; the
+# workspace crates themselves stay fast to compile and easy to debug.
+[profile.dev.package]
+libsqlite3-sys.opt-level = 3
+chacha20.opt-level = 3
+blake2.opt-level = 3
+rusty_paseto.opt-level = 3
+rusty_paserk.opt-level = 3
+base64.opt-level = 3
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
@@ -104,9 +215,21 @@ lto = "fat"
 strip = "symbols"
 codegen-units = 1
 
-# For local development against a local eye-declare, uncomment below
-#eye_declare = { path = "../eye_declare/crates/eye_declare" }
-#eye_declare_engine = { path = "../eye_declare/crates/eye_declare_engine" }
+[profile.profiling]
+inherits = "dist"
+debug = true
+strip = "none"
+split-debuginfo = "packed"
+# dist inherits fat LTO + codegen-units = 1, which inline aggressively across
+# crates and collapse the call tree in a profiler. Override both to keep frames
+# distinct. For a finer knob, lower LLVM's inline threshold at build time with
+# RUSTFLAGS="-C llvm-args=--inline-threshold=25" (0 = flattest).
+lto = false
+codegen-units = 256
+
+[profile.profiling-traced]
+inherits = "dist"
+debug-assertions = true
 
 [patch.crates-io]
 # axoasset (axoupdater's HTTP layer) hardcodes reqwest's "default-tls" feature,
@@ -118,3 +241,121 @@ codegen-units = 1
 # git URL because git-sourced patches break crates.io publishing. Drop this
 # once the change is upstreamed and released.
 axoasset = { path = "vendor/axoasset" }
+
+[workspace.lints.clippy]
+as_ptr_cast_mut = "warn"
+assigning_clones = "warn"
+borrow_as_ptr = "warn"
+branches_sharing_code = "warn"
+case_sensitive_file_extension_comparisons = "warn"
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+# TODO(markovejnovic): This could be enabled in a separate PR.
+#cast_precision_loss = "warn"
+clear_with_drain = "warn"
+cloned_instead_of_copied = "warn"
+collapsible_else_if = "warn"
+collection_is_never_read = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+derive_partial_eq_without_eq = "warn"
+elidable_lifetime_names = "warn"
+empty_line_after_outer_attr = "warn"
+explicit_deref_methods = "warn"
+explicit_into_iter_loop = "warn"
+explicit_iter_loop = "warn"
+fallible_impl_from = "warn"
+filter_map_next = "warn"
+flat_map_option = "warn"
+float_cmp = "warn"
+float_cmp_const = "warn"
+fn_params_excessive_bools = "warn"
+fn_to_numeric_cast_any = "warn"
+if_not_else = "warn"
+implicit_clone = "warn"
+# Going through `Display` is slower than shadowing `to_string`, as it avoids
+# dynamic dispatch.
+inherent_to_string_shadow_display = "allow"
+index_refutable_slice = "warn"
+iter_not_returning_iterator = "warn"
+iter_on_single_items = "warn"
+iter_with_drain = "warn"
+large_stack_arrays = "warn"
+large_types_passed_by_value = "warn"
+lossy_float_literal = "warn"
+manual_assert = "warn"
+manual_ilog2 = "warn"
+manual_instant_elapsed = "warn"
+manual_is_power_of_two = "warn"
+manual_is_variant_and = "warn"
+manual_let_else = "warn"
+match_wildcard_for_single_variants = "warn"
+maybe_infinite_iter = "warn"
+mem_forget = "warn"
+mismatching_type_param_order = "warn"
+multiple_unsafe_ops_per_block = "warn"
+must_use_candidate = "warn"
+mut_mut = "warn"
+needless_collect = "warn"
+needless_continue = "warn"
+needless_pass_by_ref_mut = "warn"
+needless_pass_by_value = "warn"
+needless_raw_string_hashes = "warn"
+no_effect_underscore_binding = "warn"
+non_std_lazy_statics = "warn"
+nonminimal_bool = "warn"
+option_as_ref_cloned = "warn"
+path_buf_push_overwrite = "warn"
+ptr_as_ptr = "warn"
+range_minus_one = "warn"
+range_plus_one = "warn"
+rc_mutex = "warn"
+read_zero_byte_vec = "warn"
+redundant_clone = "warn"
+redundant_pub_crate = "warn"
+ref_option = "warn"
+ref_option_ref = "warn"
+return_self_not_must_use = "warn"
+same_functions_in_if_condition = "warn"
+same_name_method = "warn"
+search_is_some = "warn"
+semicolon_if_nothing_returned = "warn"
+set_contains_or_insert = "warn"
+significant_drop_in_scrutinee = "warn"
+significant_drop_tightening = "warn"
+single_char_pattern = "warn"
+single_option_map = "warn"
+stable_sort_primitive = "warn"
+str_split_at_newline = "warn"
+string_lit_as_bytes = "warn"
+suspicious_operation_groupings = "warn"
+trailing_empty_array = "warn"
+trait_duplication_in_bounds = "warn"
+trivial_regex = "warn"
+trivially_copy_pass_by_ref = "warn"
+tuple_array_conversions = "warn"
+type_repetition_in_bounds = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+uninlined_format_args = "warn"
+unnecessary_box_returns = "warn"
+unnecessary_join = "warn"
+unnecessary_literal_bound = "warn"
+unnecessary_struct_initialization = "warn"
+unnecessary_trailing_comma = "warn"
+unnecessary_wraps = "warn"
+unnested_or_patterns = "warn"
+unreadable_literal = "warn"
+unused_async = "warn"
+unused_peekable = "warn"
+unused_rounding = "warn"
+unused_self = "warn"
+use_self = "warn"
+used_underscore_binding = "warn"
+used_underscore_items = "warn"
+useless_let_if_seq = "warn"
+verbose_bit_mask = "warn"
+while_float = "warn"
+wildcard_imports = "warn"

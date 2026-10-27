@@ -1,72 +1,82 @@
-use clap::Subcommand;
-use eyre::{Result, WrapErr};
+use std::sync::Arc;
 
-use atuin_client::{
-    database::Database,
-    encryption,
-    history::store::HistoryStore,
-    record::{sqlite_store::SqliteStore, sync},
-    settings::Settings,
-};
+use atuin_client::database::Sqlite;
+use atuin_client::history::store::HistoryStore;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync::{ClientSource, SyncSession};
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
+use atuin_domain::record::{RecordId, RecordTag};
+use clap::Subcommand;
+use clap_couture::Couture;
+use easy_cast::Conv;
+use eyre::{Result, WrapErr};
+use tracing::instrument;
 
 mod status;
 
 use crate::command::client::account;
+#[cfg(feature = "daemon")]
+use crate::command::client::daemon;
+use crate::i18n::fl;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Couture)]
 #[command(infer_subcommands = true)]
+#[couture(inherit = ["sync", "advanced"])]
 pub enum Cmd {
-    /// Sync with the configured server
+    #[command(about = fl!("cmd-sync"))]
+    #[couture(category = "sync")]
     Sync {
-        /// Force re-download everything
-        #[arg(long, short)]
+        #[arg(long, short, help = fl!("arg-sync-force"))]
         force: bool,
     },
 
-    /// Login to the configured server
+    #[command(about = fl!("cmd-login"))]
+    #[couture(category = "sync")]
     Login(account::login::Cmd),
 
-    /// Log out
+    #[command(about = fl!("cmd-logout"))]
+    #[couture(category = "sync")]
     Logout,
 
-    /// Register with the configured server
+    #[command(about = fl!("cmd-register"))]
+    #[couture(category = "sync")]
     Register(account::register::Cmd),
 
-    /// Print the encryption key for transfer to another machine
+    #[command(about = fl!("cmd-key"))]
+    #[couture(category = "advanced")]
     Key {
-        /// Switch to base64 output of the key
-        #[arg(long)]
+        #[arg(long, help = fl!("arg-key-base64"))]
         base64: bool,
     },
 
-    /// Display the sync status
+    #[command(about = fl!("cmd-status"))]
+    #[couture(category = "sync")]
     Status,
 }
 
 impl Cmd {
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(
         self,
-        settings: Settings,
-        db: &impl Database,
+        settings: &Arc<Settings>,
+        db: &Sqlite,
         store: SqliteStore,
     ) -> Result<()> {
         match self {
-            Self::Sync { force } => run(&settings, force, db, store).await,
-            Self::Login(l) => l.run(&settings, &store).await,
-            Self::Logout => account::logout::run().await,
-            Self::Register(r) => r.run(&settings, &store).await,
-            Self::Status => status::run(&settings).await,
+            Self::Sync { force } => run(settings, force, db, store).await,
+            Self::Login(l) => l.run(settings, &store).await,
+            Self::Logout => account::logout::run(settings).await,
+            Self::Register(r) => r.run(settings, &store).await,
+            Self::Status => status::run(settings).await,
             Self::Key { base64 } => {
-                use atuin_client::encryption::{encode_key, load_key};
-                let key = load_key(&settings).wrap_err("could not load encryption key")?;
+                let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+                    .wrap_err(fl!("sync-key-load-failed"))?;
 
                 if base64 {
-                    let encode = encode_key(&key).wrap_err("could not encode encryption key")?;
-                    println!("{encode}");
+                    println!("{}", key.encode().dangerously_leak_secret());
                 } else {
-                    let mnemonic = bip39::Mnemonic::from_entropy(&key, bip39::Language::English)
-                        .map_err(|_| eyre::eyre!("invalid key"))?;
-                    println!("{mnemonic}");
+                    println!("{}", key.try_mnemonic().context(fl!("sync-key-invalid"))?);
                 }
                 Ok(())
             }
@@ -74,56 +84,83 @@ impl Cmd {
     }
 }
 
-async fn run(
-    settings: &Settings,
-    force: bool,
-    db: &impl Database,
-    store: SqliteStore,
-) -> Result<()> {
-    let encryption_key: [u8; 32] = encryption::load_key(settings)
-        .context("could not load encryption key")?
-        .into();
+#[instrument(level = "trace", skip_all, fields(force), err)]
+async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteStore) -> Result<()> {
+    let encryption_key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+        .context("could not load encryption key")?;
 
-    let host_id = Settings::host_id().await?;
-    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
+    let host_id = settings.host_id().await?;
+    let history_store = HistoryStore::new(store.clone(), host_id, encryption_key.clone());
 
-    let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
-        .await
-        .map_err(crate::print_error::format_sync_error)?;
+    // Build the session once and reuse it for both sync passes below. It owns a clone of the store
+    // (a shared pool), so the second pass sees whatever the store-init writes locally.
+    let session = SyncSession::builder()
+        .store(store.clone())
+        .client_source(ClientSource::FromSettings {
+            settings,
+            caps: None,
+        })
+        .build()
+        .connect()
+        .await?;
 
-    crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+    let (uploaded, downloaded) = session.keyed(&encryption_key).sync().await?;
 
-    println!("{uploaded}/{} up/down to record store", downloaded.len());
+    build(settings, &store, db, &downloaded).await?;
+
+    println!("{}", fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len()));
 
     let history_length = db.history_count(true).await?;
-    let store_history_length = store.len_tag("history").await?;
+    let store_history_length = store.len_tag(&RecordTag::History).await?;
 
-    #[allow(clippy::cast_sign_loss)]
-    if history_length as u64 > store_history_length {
-        println!("{history_length} in history index, but {store_history_length} in history store");
-        println!("Running automatic history store init...");
+    if u64::conv(history_length) > store_history_length {
+        println!(
+            "{}",
+            fl!("sync-history-mismatch", index = history_length, store = store_history_length)
+        );
+        println!("{}", fl!("sync-store-init"));
 
         // Internally we use the global filter mode, so this context is ignored.
         // don't recurse or loop here.
-        history_store.init_store(db).await?;
+        history_store.init_store(db, settings).await?;
 
-        println!("Re-running sync due to new records locally");
+        println!("{}", fl!("sync-rerun"));
 
-        // we'll want to run sync once more, as there will now be stuff to upload
-        let (uploaded, downloaded) = sync::sync(settings, &store, &encryption_key)
-            .await
-            .map_err(crate::print_error::format_sync_error)?;
+        // we'll want to run sync once more, as there will now be stuff to upload -- re-key the same
+        // session rather than reconnecting.
+        let (uploaded, downloaded) = session.keyed(&encryption_key).sync().await?;
 
-        crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+        build(settings, &store, db, &downloaded).await?;
 
-        println!("{uploaded}/{} up/down to record store", downloaded.len());
+        println!("{}", fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len()));
     }
 
     println!(
-        "Sync complete! {} items in history database, force: {}",
-        db.history_count(true).await?,
-        force
+        "{}",
+        fl!("sync-complete", count = db.history_count(true).await?, force = force.to_string())
     );
 
     Ok(())
+}
+
+/// [`crate::sync::build`], then have a running daemon project the AI sessions `downloaded` brought,
+/// even if building the other stores failed: it owns their index, and otherwise projects only what
+/// it syncs itself, or finds as it starts.
+pub(super) async fn build(
+    settings: &Settings,
+    store: &SqliteStore,
+    db: &Sqlite,
+    downloaded: &[RecordId],
+) -> Result<()> {
+    let built = crate::sync::build(settings, store, db, Some(downloaded)).await;
+
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled
+        && !downloaded.is_empty()
+        && let Err(e) = daemon::project_synced_ai_sessions(settings).await
+    {
+        eprintln!("Warning: failed to build threads: {e}");
+    }
+
+    built
 }

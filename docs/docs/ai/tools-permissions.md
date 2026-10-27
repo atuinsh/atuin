@@ -8,7 +8,9 @@ By default, Atuin AI asks your permission before using any client-side tool. You
 
 ### Permission Files
 
-Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in the Atuin config directory (`~/.config/atuin/permissions.ai.toml` by default).
+Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in your Atuin home directory (`~/.atuin/permissions.ai.toml`[^1] by default).
+
+[^1]: Because `~/.atuin/permissions.ai.toml` is the global permissions file, "Always allow in this directory" is unavailable when your current directory is `$HOME`. (Similarly, if your `$HOME` is a Git repository, "Always allow in this workspace" is unavailable when your workspace is that repository.) If a global rule is acceptable, select "Always allow" instead.
 
 A permission file is a TOML file with the following format:
 
@@ -76,7 +78,7 @@ allow = ["AtuinHistory"]
 
 ### Atuin Output
 
-The `AtuinOutput` tool allows Atuin AI to read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI might ask to use this tool when you ask about the result of a command you ran, or for help with a failing command. Output capture requires the daemon and pty-proxy to be set up — see [Reading Command Output](./command-output.md).
+The `AtuinOutput` tool allows Atuin AI to read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI might ask to use this tool when you ask about the result of a command you ran, or for help with a failing command. Output capture has to be set up first — see [Capturing Command Output](../guide/output-capture.md).
 
 **Permission rule and scope:** `AtuinOutput`
 

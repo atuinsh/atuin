@@ -1,26 +1,36 @@
-use std::{collections::HashSet, fmt::Write, time::Duration};
+use std::collections::HashSet;
+use std::fmt::Write;
+use std::num::NonZeroUsize;
+use std::time::Duration;
 
+use atuin_common::encryption::paseto_v4;
+use atuin_common::futures::stream::chunk_by_bounded;
+use atuin_common::rmp::decode::Bytes;
+use atuin_domain::record::{
+    DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
+    RecordVersion,
+};
+use easy_cast::Conv;
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use rmp::decode::Bytes;
+use tracing::instrument;
+use tracing_futures::Instrument;
 
-use crate::{
-    database::{Database, current_context},
-    record::{encryption::PASETO_V4, sqlite_store::SqliteStore},
-};
-use atuin_domain::record::{DecryptedData, Host, HostId, Record, RecordId, RecordIdx};
-
-use super::{HISTORY_TAG, History, HistoryId, Version};
+use super::{History, HistoryId, Version};
+use crate::database::{Sqlite, current_context};
+use crate::record::sqlite_store::SqliteStore;
+use crate::settings::Settings;
 
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
     pub store: SqliteStore,
     pub host_id: HostId,
-    pub encryption_key: [u8; 32],
+    pub encryption_key: paseto_v4::Key,
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, strum_macros::EnumDiscriminants)]
+#[strum_discriminants(name(HistoryRecordKind))]
 #[allow(
     clippy::large_enum_variant,
     reason = "`Create` records are much more common than `Delete` records; wrapping in a `Box`
@@ -47,12 +57,12 @@ impl HistoryRecord {
     pub fn serialize(&self) -> Result<DecryptedData> {
         // probably don't actually need to use rmp here, but if we ever need to extend it, it's a
         // nice wrapper around raw byte stuff
-        use rmp::encode;
+        use atuin_common::rmp::encode;
 
         let mut output = vec![];
 
         match self {
-            HistoryRecord::Create(history) => {
+            Self::Create(history) => {
                 // 0 -> a history create
                 encode::write_u8(&mut output, 0)?;
 
@@ -60,10 +70,10 @@ impl HistoryRecord {
 
                 encode::write_bin(&mut output, &bytes.0)?;
             }
-            HistoryRecord::Delete(id) => {
+            Self::Delete(id) => {
                 // 1 -> a history delete
                 encode::write_u8(&mut output, 1)?;
-                encode::write_str(&mut output, id.0.as_str())?;
+                encode::write_str(&mut output, &id.0.as_simple().to_string())?;
             }
         };
 
@@ -71,7 +81,7 @@ impl HistoryRecord {
     }
 
     pub fn deserialize(bytes: &DecryptedData, version: &str) -> Result<Self> {
-        use rmp::decode;
+        use atuin_common::rmp::decode;
 
         fn error_report<E: std::fmt::Debug>(err: E) -> eyre::Report {
             eyre!("{err:?}")
@@ -88,9 +98,10 @@ impl HistoryRecord {
                 // written by write_bin above
                 let _ = decode::read_bin_len(&mut bytes).map_err(error_report)?;
 
-                let record = History::deserialize(bytes.remaining_slice(), version)?;
+                let record =
+                    History::deserialize(bytes.remaining_slice(), version).map_err(error_report)?;
 
-                Ok(HistoryRecord::Create(record))
+                Ok(Self::Create(record))
             }
 
             // 1 -> HistoryRecord::Delete
@@ -104,7 +115,7 @@ impl HistoryRecord {
                     );
                 }
 
-                Ok(HistoryRecord::Delete(id.to_string().into()))
+                Ok(Self::Delete(id.parse()?))
             }
 
             n => {
@@ -114,92 +125,174 @@ impl HistoryRecord {
     }
 }
 
+/// How many entries `incremental_build` holds in memory, and the most it puts into a single
+/// `save_bulk`/`delete_rows` transaction.
+const BUILD_BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(5000).unwrap();
+
+/// Records appended to the store per transaction by [`HistoryStore::push_records`]. Each chunk is
+/// encrypted before its write lock is taken, so this bounds both how long a concurrent writer can
+/// wait on the lock and how much work a lost race throws away.
+const APPEND_BATCH_SIZE: usize = 1000;
+
+/// Below this many records, [`encrypt_records`] encrypts inline rather than fanning out.
+const PARALLEL_ENCRYPT_MIN: usize = 64;
+
+/// Encrypt `records`, in order, spread across the blocking pool. Every record gets its own content
+/// key and key wrap, so encrypting a large batch one record at a time is CPU-bound on a single
+/// core: it was most of the time a 200k-entry delete spent writing tombstones.
+async fn encrypt_records(
+    records: Vec<Record<DecryptedData>>,
+    key: &paseto_v4::Key,
+) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+    if records.len() < PARALLEL_ENCRYPT_MIN {
+        return Ok(records.iter().map(|record| record.encrypt(key)).collect());
+    }
+
+    let tasks = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    let per_task = records.len().div_ceil(tasks);
+    let mut records = records.into_iter();
+    let mut handles = Vec::with_capacity(tasks);
+    loop {
+        let part: Vec<_> = records.by_ref().take(per_task).collect();
+        if part.is_empty() {
+            break;
+        }
+        let key = key.clone();
+        handles.push(tokio::task::spawn_blocking(move || {
+            part.iter().map(|record| record.encrypt(&key)).collect::<Vec<_>>()
+        }));
+    }
+
+    let mut encrypted = Vec::with_capacity(per_task * handles.len());
+    for handle in handles {
+        encrypted.extend(handle.await?);
+    }
+    Ok(encrypted)
+}
+
+/// How many records `incremental_build` decodes concurrently. Decoding is read-then-decrypt per
+/// record; overlapping the reads keeps the record store's pool busy without unbounded fan-out.
+/// Kept under the store's connection pool size so decodes don't starve other readers.
+const DECODE_CONCURRENCY: usize = 4;
+
 impl HistoryStore {
-    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: [u8; 32]) -> Self {
-        HistoryStore {
+    #[must_use]
+    pub fn new(store: SqliteStore, host_id: HostId, encryption_key: paseto_v4::Key) -> Self {
+        Self {
             store,
             host_id,
             encryption_key,
         }
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     async fn push_record(&self, record: HistoryRecord) -> Result<(RecordId, RecordIdx)> {
         let bytes = record.serialize()?;
-        let idx = self
-            .store
-            .last(self.host_id, HISTORY_TAG)
-            .await?
-            .map_or(0, |p| p.idx + 1);
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::History);
 
-        let record = Record::builder()
-            .host(Host::new(self.host_id))
-            .version(Version::LATEST.name().to_owned())
-            .tag(HISTORY_TAG.to_owned())
-            .idx(idx)
-            .data(bytes)
-            .build();
-
-        let id = record.id;
-
-        self.store
-            .push(&record.encrypt::<PASETO_V4>(&self.encryption_key))
-            .await?;
-
-        Ok((id, idx))
-    }
-
-    async fn push_batch(&self, records: impl Iterator<Item = HistoryRecord>) -> Result<()> {
-        let mut ret = Vec::new();
-
-        let idx = self
-            .store
-            .last(self.host_id, HISTORY_TAG)
-            .await?
-            .map_or(0, |p| p.idx + 1);
-
-        // Could probably _also_ do this as an iterator, but let's see how this is for now.
-        // optimizing for minimal sqlite transactions, this code can be optimised later
-        for (n, record) in records.enumerate() {
-            let bytes = record.serialize()?;
+        // Allocate the append index optimistically: read `last().idx + 1`, then try to claim it.
+        // Concurrent writers may read the same tail and compute the same idx. `push_unique` reports
+        // `false` when a racer already took the slot, and we recompute and retry.
+        loop {
+            let idx = self.store.last(&series).await?.map_or(0, |p| p.idx + 1);
 
             let record = Record::builder()
                 .host(Host::new(self.host_id))
-                .version(Version::LATEST.name().to_owned())
-                .tag(HISTORY_TAG.to_owned())
-                .idx(idx + n as u64)
-                .data(bytes)
+                .version(RecordVersion::from(Version::LATEST.name()))
+                .tag(RecordTag::History)
+                .idx(idx)
+                .data(bytes.clone())
                 .build();
 
-            let record = record.encrypt::<PASETO_V4>(&self.encryption_key);
+            let id = record.id;
 
-            ret.push(record);
+            if self.store.push_unique(&record.encrypt(&self.encryption_key)).await? {
+                return Ok((id, idx));
+            }
+        }
+    }
+
+    /// Append `records` to this host's history series and return their record ids, in order.
+    ///
+    /// Records go in as chunks of [`APPEND_BATCH_SIZE`], each atomic. Indices are claimed
+    /// optimistically like [`Self::push_record`]: a chunk is stamped from the current tail, and if
+    /// another writer took a slot in the meantime only that chunk is re-stamped from the new tail
+    /// and retried. Fresh record ids are built on every attempt, which
+    /// [`SqliteStore::push_batch_unique`] relies on.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, count = records.len()), err)]
+    async fn push_records(&self, records: &[HistoryRecord]) -> Result<Vec<RecordId>> {
+        let series = RecordSeriesKey::new(self.host_id, RecordTag::History);
+        let payloads = records.iter().map(HistoryRecord::serialize).collect::<Result<Vec<_>>>()?;
+        let mut ids = Vec::with_capacity(payloads.len());
+
+        for chunk in payloads.chunks(APPEND_BATCH_SIZE) {
+            loop {
+                let idx = self.store.last(&series).await?.map_or(0, |p| p.idx + 1);
+
+                let unencrypted: Vec<_> = chunk
+                    .iter()
+                    .enumerate()
+                    .map(|(n, bytes)| {
+                        Record::builder()
+                            .host(Host::new(self.host_id))
+                            .version(RecordVersion::from(Version::LATEST.name()))
+                            .tag(RecordTag::History)
+                            .idx(idx + u64::conv(n))
+                            .data(bytes.clone())
+                            .build()
+                    })
+                    .collect();
+                let encrypted = encrypt_records(unencrypted, &self.encryption_key).await?;
+
+                if self.store.push_batch_unique(encrypted.iter()).await? {
+                    ids.extend(encrypted.into_iter().map(|r| r.id));
+                    break;
+                }
+            }
         }
 
-        self.store.push_batch(ret.iter()).await?;
+        Ok(ids)
+    }
+
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
+    async fn push_batch(&self, records: impl Iterator<Item = HistoryRecord>) -> Result<()> {
+        self.push_records(&records.collect::<Vec<_>>()).await?;
 
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, id = ?id), err)]
     pub async fn delete(&self, id: HistoryId) -> Result<(RecordId, RecordIdx)> {
         let record = HistoryRecord::Delete(id);
 
         self.push_record(record).await
     }
 
-    /// Delete a batch of history entries via the record store.
-    /// Returns the record IDs so the caller can run incremental_build when ready.
+    /// Delete a batch of history entries via the record store. Returns the record IDs so the
+    /// caller can run incremental_build when ready.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
+    pub async fn delete_batch(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<Vec<RecordId>> {
+        let records: Vec<_> = ids.into_iter().map(HistoryRecord::Delete).collect();
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.push_records(&records).await
+    }
+
+    /// [`Self::delete_batch`] for whole entries.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn delete_entries(
         &self,
         entries: impl IntoIterator<Item = History>,
     ) -> Result<Vec<RecordId>> {
-        let mut record_ids = Vec::new();
-        for entry in entries {
-            let (id, _) = self.delete(entry.id).await?;
-            record_ids.push(id);
-        }
-        Ok(record_ids)
+        self.delete_batch(entries.into_iter().map(|entry| entry.id)).await
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn push(&self, history: History) -> Result<(RecordId, RecordIdx)> {
         // TODO(ellie): move the history store to its own file
         // it's tiny rn so fine as is
@@ -208,29 +301,27 @@ impl HistoryStore {
         self.push_record(record).await
     }
 
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn history(&self) -> Result<Vec<HistoryRecord>> {
         // Atm this loads all history into memory
         // Not ideal as that is potentially quite a lot, although history will be small.
-        let records = self.store.all_tagged(HISTORY_TAG).await?;
+        let records = self.store.all_tagged(&RecordTag::History).await?;
         let mut ret = Vec::with_capacity(records.len());
         let mut skipped = 0;
 
-        for record in records.into_iter() {
+        for record in records {
             let id = record.id;
             let version = record.version.clone();
 
             // A record we can't decrypt or decode must not block the rest of the store -
             // skip it, and load everything else.
-            let hist = match Version::from_name(version.as_str()) {
-                Some(_) => {
-                    record
-                        .decrypt::<PASETO_V4>(&self.encryption_key)
-                        .and_then(|decrypted| {
-                            HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                        })
-                }
-                None => Err(eyre!("unknown history version {version:?}")),
-            };
+            let hist =
+                match Version::from_name(version.as_str()) {
+                    Some(_) => record.decrypt(&self.encryption_key).map_err(Into::into).and_then(
+                        |decrypted| HistoryRecord::deserialize(&decrypted.data, version.as_str()),
+                    ),
+                    None => Err(eyre!("unknown history version {version:?}")),
+                };
 
             match hist {
                 Ok(hist) => ret.push(hist),
@@ -244,14 +335,23 @@ impl HistoryStore {
         if skipped > 0 {
             // library code that may run under the TUI or shell hooks, so no stderr here
             warn!(
-                "skipped {skipped} history records that could not be decrypted or decoded. Run `atuin store verify` to check your store, and `atuin store purge` to remove broken records locally."
+                "skipped {skipped} history records that could not be decrypted or decoded. Run \
+                 `atuin store verify` to check your store, and `atuin store purge` to remove \
+                 broken records locally."
             );
         }
 
         Ok(ret)
     }
 
-    pub async fn build(&self, database: &dyn Database) -> Result<()> {
+    /// This function builds the history database from the current history record state.
+    ///
+    /// Invariants:
+    ///   - I1: Records which have been created and then subsequently deleted via a delete record
+    ///         will *not* be committed to the history store, at any point during the operation of
+    ///         this function.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
+    pub async fn build(&self, database: &Sqlite) -> Result<()> {
         // I'd like to change how we rebuild and not couple this with the database, but need to
         // consider the structure more deeply. This will be easy to change.
 
@@ -277,95 +377,130 @@ impl HistoryStore {
             }
         }
 
+        // Upholds I1.
+        //
+        // TODO(markovejnovic): Make this an iterator. The extra allocation is not useful.
+        let deleted: HashSet<HistoryId> = deletes.iter().copied().collect();
+        creates.retain(|h| !deleted.contains(&h.id));
+
         database.save_bulk(&creates).await?;
-        database.delete_rows(&deletes).await?;
+        database.delete_rows(deletes).await?;
 
         Ok(())
     }
 
-    /// Apply records to the history database, yielding each `History` that was created.
+    /// Apply records to the history database, yielding each batch of created `History`.
     pub fn incremental_build<'a>(
         &'a self,
-        database: &'a dyn Database,
+        database: &'a Sqlite,
         ids: &'a [RecordId],
-    ) -> impl Stream<Item = Result<History>> + 'a {
-        stream::iter(ids)
-            .then(move |id| async move {
-                let Ok(record) = self.store.get(*id).await else {
-                    return Ok(None);
-                };
+    ) -> impl Stream<Item = Result<Vec<History>>> + 'a {
+        // Group the concurrent per-record decodes under one span so the whole
+        // decode fan-out shows as a single unit (each `decode` nests under it).
+        let records = stream::iter(ids)
+            .map(move |id| async move { self.decode(*id).await })
+            .buffered(DECODE_CONCURRENCY)
+            .filter_map(future::ready)
+            .boxed()
+            .instrument(tracing::trace_span!("decode_records", count = ids.len()));
 
-                if record.tag != HISTORY_TAG {
-                    return Ok(None);
-                }
+        // Group adjacent records of the same kind so each kind lands in its own bulk transaction,
+        // while the database still sees them in record order.
+        chunk_by_bounded(records, BUILD_BATCH_SIZE, |record| HistoryRecordKind::from(record)).then(
+            move |(kind, chunk)| async move {
+                // TODO(ATU-594): unwrapping the chunk into a typed `Vec` reallocates what
+                // `chunk_by_bounded` already collected.
+                match kind {
+                    HistoryRecordKind::Create => {
+                        let creates: Vec<_> = chunk
+                            .into_iter()
+                            .map(|record| match record {
+                                HistoryRecord::Create(h) => h,
+                                HistoryRecord::Delete(_) => unreachable!(),
+                            })
+                            .collect();
 
-                let version = record.version.clone();
+                        database.save_bulk(&creates).await?;
 
-                // Skip records we can't decrypt or decode, rather than failing the entire build.
-                let record =
-                    match Version::from_name(version.as_str()) {
-                        Some(_) => record.decrypt::<PASETO_V4>(&self.encryption_key).and_then(
-                            |decrypted| {
-                                HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                            },
-                        ),
-                        None => Err(eyre!("unknown history version {version:?}")),
-                    };
-
-                let record = match record {
-                    Ok(record) => record,
-                    Err(e) => {
-                        warn!("failed to decode history record {}, skipping: {e}", id.0);
-                        return Ok(None);
+                        Ok(creates)
                     }
-                };
+                    HistoryRecordKind::Delete => {
+                        let deletes = chunk.into_iter().map(|record| match record {
+                            HistoryRecord::Delete(id) => id,
+                            HistoryRecord::Create(_) => unreachable!(),
+                        });
 
-                match record {
-                    HistoryRecord::Create(h) => {
-                        // TODO: benchmark CPU time/memory tradeoff of batch commit vs one at a time
-                        database.save(&h).await?;
-                        Ok(Some(h))
-                    }
-                    HistoryRecord::Delete(id) => {
-                        database.delete_rows(&[id]).await?;
-                        Ok(None)
+                        database.delete_rows(deletes).await?;
+
+                        Ok(Vec::new())
                     }
                 }
-            })
-            .filter_map(|res| async move { res.transpose() })
+            },
+        )
+    }
+
+    /// Read a record and decode it, or `None` if it is missing, not history, or undecodable.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, id = ?id))]
+    async fn decode(&self, id: RecordId) -> Option<HistoryRecord> {
+        let record = self.store.get(id).await.ok()?;
+
+        if record.tag != RecordTag::History {
+            return None;
+        }
+
+        let version = record.version.clone();
+
+        // Skip records we can't decrypt or decode, rather than failing the entire build.
+        let record = match Version::from_name(version.as_str()) {
+            Some(_) => {
+                record.decrypt(&self.encryption_key).map_err(Into::into).and_then(|decrypted| {
+                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
+                })
+            }
+            None => Err(eyre!("unknown history version {version:?}")),
+        };
+
+        match record {
+            Ok(record) => Some(record),
+            Err(e) => {
+                warn!("failed to decode history record {}, skipping: {e}", id.0);
+                None
+            }
+        }
     }
 
     /// Apply records to the history database, discarding the created `History` entries.
     ///
     /// Use this when you want the database writes but not the values. Callers that need
     /// the created entries should use [`HistoryStore::incremental_build`] directly.
-    pub async fn build_all(&self, database: &dyn Database, ids: &[RecordId]) -> Result<()> {
-        self.incremental_build(database, ids)
-            .try_for_each(|_| future::ready(Ok(())))
-            .await
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, n_ids = ids.len()), err)]
+    pub async fn build_all(&self, database: &Sqlite, ids: &[RecordId]) -> Result<()> {
+        self.incremental_build(database, ids).try_for_each(|_| future::ready(Ok(()))).await
     }
 
     /// Get a list of history IDs that exist in the store
     /// Note: This currently involves loading all history into memory. This is not going to be a
     /// large amount in absolute terms, but do not all it in a hot loop.
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
     pub async fn history_ids(&self) -> Result<HashSet<HistoryId>> {
         let history = self.history().await?;
 
         let ret = HashSet::from_iter(history.iter().map(|h| match h {
-            HistoryRecord::Create(h) => h.id.clone(),
-            HistoryRecord::Delete(id) => id.clone(),
+            HistoryRecord::Create(h) => h.id,
+            HistoryRecord::Delete(id) => *id,
         }));
 
         Ok(ret)
     }
 
-    pub async fn init_store(&self, db: &impl Database) -> Result<()> {
+    #[instrument(level = "trace", skip_all, fields(host = ?self.host_id), err)]
+    pub async fn init_store(&self, db: &Sqlite, settings: &Settings) -> Result<()> {
         let pb = ProgressBar::new_spinner();
         pb.set_style(
             ProgressStyle::with_template("{spinner:.blue} {msg}")
                 .unwrap()
                 .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-                    write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                    write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap();
                 })
                 .progress_chars("#>-"),
         );
@@ -373,8 +508,8 @@ impl HistoryStore {
 
         pb.set_message("Fetching history from old database");
 
-        let context = current_context().await?;
-        let history = db.list(&[], &context, None, false, true, None).await?;
+        let context = current_context(settings).await?;
+        let history = db.list([], &context, None, false, true, None).await?;
 
         pb.set_message("Fetching history already in store");
         let store_ids = self.history_ids().await?;
@@ -411,36 +546,39 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use atuin_domain::record::{DecryptedData, Host, HostId, Record};
+    use atuin_domain::record::{
+        CmdOrigin, DecryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag, RecordVersion,
+    };
+    use easy_cast::Conv;
     use futures::TryStreamExt;
     use rstest::*;
+    use time::Duration;
     use time::macros::datetime;
 
-    use crate::{
-        database::Sqlite,
-        history::{HISTORY_TAG, Version, store::HistoryRecord, store::HistoryStore},
-        record::{encryption::PASETO_V4, sqlite_store::SqliteStore},
-        settings::test_local_timeout,
-    };
-
-    use super::History;
+    use super::{BUILD_BATCH_SIZE, History};
+    use crate::database::{Context, Sqlite};
+    use crate::history::Version;
+    use crate::history::store::{HistoryRecord, HistoryStore};
+    use crate::record::sqlite_store::SqliteStore;
+    use crate::settings::test_local_timeout;
 
     /// The identical `History` literal used by both async tests.
     #[fixture]
     fn sample_history() -> History {
         History {
-            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
+            id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
             duration: 100,
             exit: 0,
             command: "ls".to_owned(),
             cwd: "/".to_owned(),
             session: "018cd4fead897597852527a31c998059".to_owned(),
-            hostname: "test:test".to_owned(),
+            cmd_origin: CmdOrigin::try_from("test:test").unwrap(),
             author: "test".to_owned(),
             intent: None,
             deleted_at: None,
             shell: None,
+            author_kind: None,
         }
     }
 
@@ -450,21 +588,19 @@ mod tests {
     /// and the `HistoryStore` layered on it must originate from a single fixture.
     #[fixture]
     async fn stores() -> (SqliteStore, HostId, HistoryStore) {
-        let store = SqliteStore::new(":memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
         let host_id = HostId(atuin_common::utils::uuid_v7());
-        let history_store = HistoryStore::new(store.clone(), host_id, [0u8; 32]);
+        let history_store = HistoryStore::new(store.clone(), host_id, [0u8; 32].into());
         (store, host_id, history_store)
     }
 
-    fn assert_record_roundtrip(record: HistoryRecord, expected_bytes: &[u8]) {
+    fn assert_record_roundtrip(record: &HistoryRecord, expected_bytes: &[u8]) {
         let serialized = record.serialize().expect("failed to serialize history");
         assert_eq!(serialized.0, expected_bytes);
 
         let deserialized = HistoryRecord::deserialize(&serialized, Version::LATEST.name())
             .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
+        assert_eq!(&deserialized, record);
 
         // check the snapshot too
         let deserialized = HistoryRecord::deserialize(
@@ -472,27 +608,28 @@ mod tests {
             Version::LATEST.name(),
         )
         .expect("failed to deserialize HistoryRecord");
-        assert_eq!(deserialized, record);
+        assert_eq!(&deserialized, record);
     }
 
     #[rstest]
     #[case::create(
         HistoryRecord::Create(History {
-            id: "018cd4fe81757cd2aee65cd7861f9c81".to_owned().into(),
+            id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
             timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
             duration: 100,
             exit: 0,
             command: "ls".to_owned(),
             cwd: "/Users/ellie/src/github.com/atuinsh/atuin".to_owned(),
             session: "018cd4fead897597852527a31c998059".to_owned(),
-            hostname: "boop:ellie".to_owned(),
+            cmd_origin: CmdOrigin::try_from("boop:ellie").unwrap(),
             author: "ellie".to_owned(),
             intent: None,
             deleted_at: None,
             shell: Some("bash".to_owned()),
+            author_kind: None,
         }),
         vec![
-            204, 0, 196, 153, 205, 0, 2, 156, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
+            204, 0, 196, 154, 205, 0, 2, 157, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
             55, 53, 55, 99, 100, 50, 97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99,
             56, 49, 207, 23, 166, 251, 212, 181, 82, 0, 0, 100, 0, 162, 108, 115, 217, 41, 47, 85,
             115, 101, 114, 115, 47, 101, 108, 108, 105, 101, 47, 115, 114, 99, 47, 103, 105, 116,
@@ -500,18 +637,18 @@ mod tests {
             105, 110, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 97, 100, 56, 57, 55, 53, 57, 55,
             56, 53, 50, 53, 50, 55, 97, 51, 49, 99, 57, 57, 56, 48, 53, 57, 170, 98, 111, 111, 112,
             58, 101, 108, 108, 105, 101, 192, 165, 101, 108, 108, 105, 101, 192, 164, 98, 97, 115,
-            104,
+            104, 192,
         ]
     )]
     #[case::delete(
-        HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".to_string().into()),
+        HistoryRecord::Delete("018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap()),
         vec![
             204, 1, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49, 55, 53, 55, 99, 100, 50,
             97, 101, 101, 54, 53, 99, 100, 55, 56, 54, 49, 102, 57, 99, 56, 49,
         ]
     )]
     fn test_serialize_deserialize(#[case] record: HistoryRecord, #[case] expected_bytes: Vec<u8>) {
-        assert_record_roundtrip(record, &expected_bytes);
+        assert_record_roundtrip(&record, &expected_bytes);
     }
 
     #[rstest]
@@ -529,16 +666,13 @@ mod tests {
         // or "mixed". it should be skipped, rather than breaking loading entirely.
         let corrupt = Record::builder()
             .host(Host::new(host_id))
-            .version(Version::LATEST.name().to_owned())
-            .tag(HISTORY_TAG.to_owned())
+            .version(RecordVersion::from(Version::LATEST.name()))
+            .tag(RecordTag::History)
             .idx(1)
             .data(DecryptedData(vec![1, 2, 3]))
             .build();
 
-        store
-            .push(&corrupt.encrypt::<PASETO_V4>(&[1u8; 32]))
-            .await
-            .unwrap();
+        store.push(&corrupt.encrypt(&[1u8; 32].into())).await.unwrap();
 
         let records = history_store.history().await.unwrap();
 
@@ -559,17 +693,243 @@ mod tests {
         // `history.id` (the HistoryId). This distinction is the whole bug.
         let (record_id, _) = history_store.push(history.clone()).await.unwrap();
 
-        let db = Sqlite::new("sqlite::memory:", test_local_timeout())
-            .await
-            .unwrap();
+        let db = memory_db().await;
 
-        let created: Vec<History> = history_store
-            .incremental_build(&db, &[record_id])
-            .try_collect()
-            .await
-            .unwrap();
+        let created: Vec<History> =
+            history_store.incremental_build(&db, &[record_id]).try_concat().await.unwrap();
 
         assert_eq!(created.len(), 1);
         assert_eq!(created[0], history);
+    }
+
+    async fn memory_db() -> Sqlite {
+        Sqlite::in_memory(test_local_timeout()).await.unwrap()
+    }
+
+    fn history_n(n: usize) -> History {
+        History {
+            id: format!("{n:032x}").parse().unwrap(),
+            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00)
+                + Duration::seconds(i64::conv(n)),
+            command: format!("command {n}"),
+            ..sample_history()
+        }
+    }
+
+    /// Filtering is `Global` in these tests, so `list` only needs a plausible context.
+    fn context() -> Context {
+        Context {
+            session: "018cd4fead897597852527a31c998059".to_owned(),
+            cwd: "/".to_owned(),
+            cmd_origin: CmdOrigin::try_from("test:test").unwrap(),
+            host_id: "test".to_owned(),
+            git_root: None,
+        }
+    }
+
+    /// Each yielded batch is one `save_bulk`, so batch sizes are the transaction shape.
+    async fn batch_sizes(
+        history_store: &HistoryStore,
+        db: &Sqlite,
+        ids: &[atuin_domain::record::RecordId],
+    ) -> Vec<usize> {
+        history_store
+            .incremental_build(db, ids)
+            .try_collect::<Vec<Vec<History>>>()
+            .await
+            .unwrap()
+            .iter()
+            .map(Vec::len)
+            .collect()
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_run_of_creates_is_one_bulk_write(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (_store, _host_id, history_store) = parts;
+        let db = memory_db().await;
+
+        let mut ids = Vec::new();
+        for n in 0..25 {
+            let (id, _) = history_store.push(history_n(n)).await.unwrap();
+            ids.push(id);
+        }
+
+        assert_eq!(batch_sizes(&history_store, &db, &ids).await, vec![25]);
+        assert_eq!(db.list([], &context(), None, false, true, None).await.unwrap().len(), 25);
+    }
+
+    /// The create before a delete is flushed on its own rather than grouped with the create
+    /// after it - which is what keeps the order intact.
+    #[rstest]
+    #[tokio::test]
+    async fn interleaved_creates_and_deletes_keep_their_order(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (_store, _host_id, history_store) = parts;
+        let db = memory_db().await;
+
+        let first = history_n(1);
+        let (create_first, _) = history_store.push(first.clone()).await.unwrap();
+        let (delete_first, _) = history_store.delete(first.id).await.unwrap();
+        let (create_second, _) = history_store.push(history_n(2)).await.unwrap();
+
+        // Three flushes: the create, the delete (which creates nothing), then the create.
+        let ids = [create_first, delete_first, create_second];
+        assert_eq!(batch_sizes(&history_store, &db, &ids).await, vec![1, 0, 1]);
+
+        // Had the delete been applied before the create, `first` would still be present.
+        let stored = db.list([], &context(), None, false, true, None).await.unwrap();
+        assert_eq!(stored.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(), vec![
+            "command 2"
+        ]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn creates_are_split_into_bounded_batches(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (store, _host_id, history_store) = parts;
+        let db = memory_db().await;
+
+        let total = BUILD_BATCH_SIZE.get() + 3;
+        history_store
+            .push_batch((0..total).map(|n| HistoryRecord::Create(history_n(n))))
+            .await
+            .unwrap();
+        let ids: Vec<_> =
+            store.all_tagged(&RecordTag::History).await.unwrap().iter().map(|r| r.id).collect();
+
+        assert_eq!(batch_sizes(&history_store, &db, &ids).await, vec![BUILD_BATCH_SIZE.get(), 3]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn missing_and_undecodable_ids_are_skipped(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+        #[from(sample_history)] history: History,
+    ) {
+        let (store, host_id, history_store) = parts;
+        let db = memory_db().await;
+
+        let (good, _) = history_store.push(history.clone()).await.unwrap();
+
+        // Encrypted with a different key: present, but undecodable.
+        let corrupt = Record::builder()
+            .host(Host::new(host_id))
+            .version(RecordVersion::from(Version::LATEST.name()))
+            .tag(RecordTag::History)
+            .idx(1)
+            .data(DecryptedData(vec![1, 2, 3]))
+            .build();
+        let corrupt_id = corrupt.id;
+        store.push(&corrupt.encrypt(&[1u8; 32].into())).await.unwrap();
+
+        let missing = atuin_domain::record::RecordId(atuin_common::utils::uuid_v7());
+
+        let created: Vec<History> = history_store
+            .incremental_build(&db, &[missing, good, corrupt_id])
+            .try_concat()
+            .await
+            .unwrap();
+
+        assert_eq!(created, vec![history]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_database_error_aborts_the_build(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+        #[from(sample_history)] history: History,
+    ) {
+        let (_store, _host_id, history_store) = parts;
+        let (record_id, _) = history_store.push(history).await.unwrap();
+
+        let db = memory_db().await;
+        db.close().await;
+
+        assert!(history_store.build_all(&db, &[record_id]).await.is_err());
+    }
+
+    /// A full rebuild never writes a row for an id the store also deletes. The end state (deleted
+    /// absent, kept present) is what this pins; that no row is written even transiently is by
+    /// construction of `build`, which filters the creates before touching the database.
+    #[rstest]
+    #[tokio::test]
+    async fn build_skips_rows_the_store_deletes(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+        #[from(sample_history)] history: History,
+    ) {
+        let (_store, _host_id, history_store) = parts;
+        let deleted_id = history.id;
+        let mut kept = history.clone();
+        kept.id = "018cd4fe81757cd2aee65cd7861f9c82".parse().unwrap();
+        history_store.push(history).await.unwrap();
+        history_store.delete(deleted_id).await.unwrap();
+        history_store.push(kept.clone()).await.unwrap();
+
+        let db = memory_db().await;
+        history_store.build(&db).await.unwrap();
+
+        assert!(db.load(deleted_id).await.unwrap().is_none());
+        assert!(db.load(kept.id).await.unwrap().is_some());
+    }
+
+    /// A batch delete appends one tombstone per id, in order, on consecutive indices, and
+    /// applying them empties the db of exactly those rows.
+    #[rstest]
+    #[tokio::test]
+    async fn delete_batch_appends_ordered_tombstones(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (store, host_id, history_store) = parts;
+        let db = memory_db().await;
+
+        let histories: Vec<_> = (0..3).map(history_n).collect();
+        let mut created = Vec::new();
+        for h in &histories {
+            created.push(history_store.push(h.clone()).await.unwrap().0);
+        }
+        history_store.build_all(&db, &created).await.unwrap();
+
+        let doomed = [histories[0].id, histories[2].id];
+        let tombstones = history_store.delete_batch(doomed).await.unwrap();
+        assert_eq!(tombstones.len(), 2);
+
+        let series = RecordSeriesKey::new(host_id, RecordTag::History);
+        assert_eq!(store.last(&series).await.unwrap().unwrap().idx, 4);
+        for (n, (record_id, id)) in tombstones.iter().zip(doomed).enumerate() {
+            let record = store.get(*record_id).await.unwrap();
+            assert_eq!(record.idx, 3 + u64::conv(n));
+            let decoded = HistoryRecord::deserialize(
+                &record.decrypt(&[0u8; 32].into()).unwrap().data,
+                record.version.as_str(),
+            )
+            .unwrap();
+            assert_eq!(decoded, HistoryRecord::Delete(id));
+        }
+
+        history_store.build_all(&db, &tombstones).await.unwrap();
+        assert!(db.load(histories[0].id).await.unwrap().is_none());
+        assert!(db.load(histories[1].id).await.unwrap().is_some());
+        assert!(db.load(histories[2].id).await.unwrap().is_none());
+        assert!(history_store.delete_batch([]).await.unwrap().is_empty());
     }
 }

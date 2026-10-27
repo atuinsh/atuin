@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use crate::store::{AliasStore, var::VarStore};
+use atuin_common::path::PathBufExt as _;
+
+use crate::store::AliasStore;
+use crate::store::var::VarStore;
 
 async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
     match tokio::fs::read_to_string(path).await {
@@ -10,7 +13,7 @@ async fn cached_aliases(path: PathBuf, store: &AliasStore) -> String {
             // fallback to generating new aliases on the fly
 
             store.posix().await.unwrap_or_else(|e| {
-                format!("echo 'Atuin: failed to read and generate aliases: \n{r}\n{e}'",)
+                format!("echo 'Atuin: failed to read and generate aliases: \n{r}\n{e}'")
             })
         }
     }
@@ -24,7 +27,7 @@ async fn cached_vars(path: PathBuf, store: &VarStore) -> String {
             // fallback to generating new vars on the fly
 
             store.posix().await.unwrap_or_else(|e| {
-                format!("echo 'Atuin: failed to read and generate vars: \n{r}\n{e}'",)
+                format!("echo 'Atuin: failed to read and generate vars: \n{r}\n{e}'")
             })
         }
     }
@@ -37,9 +40,10 @@ async fn cached_vars(path: PathBuf, store: &VarStore) -> String {
 /// In the worst case, Atuin should not function but the shell should start correctly.
 ///
 /// While currently this only returns aliases, it will be extended to also return other synced dotfiles
+#[must_use]
 pub async fn alias_config(store: &AliasStore) -> String {
     // First try to read the cached config
-    let aliases = atuin_common::utils::dotfiles_cache_dir().join("aliases.bash");
+    let aliases = atuin_common::dirs::dotfiles_cache_dir().joined("aliases.bash");
 
     if aliases.exists() {
         return cached_aliases(aliases, store).await;
@@ -52,9 +56,10 @@ pub async fn alias_config(store: &AliasStore) -> String {
     cached_aliases(aliases, store).await
 }
 
+#[must_use]
 pub async fn var_config(store: &VarStore) -> String {
     // First try to read the cached config
-    let vars = atuin_common::utils::dotfiles_cache_dir().join("vars.bash");
+    let vars = atuin_common::dirs::dotfiles_cache_dir().joined("vars.bash");
 
     if vars.exists() {
         return cached_vars(vars, store).await;

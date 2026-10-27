@@ -176,6 +176,21 @@ Then update `CHANGELOG.md`:
 
 ---
 
+## Step 5.5 — Update Contributors
+
+Regenerate `CONTRIBUTORS`, which `atuin contributors` prints:
+
+```bash
+git log --format='%aN <%aE>' \
+    | grep -vE '\[bot\]|^atuin-bot ' \
+    | LC_ALL=C sort -uf > CONTRIBUTORS
+```
+
+`LC_ALL=C` keeps the order the same on macOS and Linux. Tell the user how
+many names were added (`git diff --numstat -- CONTRIBUTORS`).
+
+---
+
 ## Step 6 — Commit & Push
 
 Stage all changes and commit:
@@ -207,9 +222,10 @@ gh pr create \
     --draft
 ```
 
-Show the PR URL to the user. Tell the user to go review and merge the PR.
+Show the PR URL to the user. Tell the user to go review the PR, mark it ready,
+and comment `/merge` on it.
 
-When the user reports the PR is merged, proceed to the next step.
+When the PR shows as merged, proceed to the next step.
 
 ---
 
@@ -233,9 +249,10 @@ For each approved PR:
 2. **Checkpoint:** Show the PR number and title and ask the user to confirm this
    specific merge. Step 2.5 approved the *timing*; this confirms merging *now*.
 
-3. Merge:
+3. Merge, then wait until the PR shows as merged:
    ```bash
-   gh pr merge <N> --repo atuinsh/atuin --squash
+   gh pr comment <N> --repo atuinsh/atuin --body /merge
+   gh pr view <N> --repo atuinsh/atuin --json state --jq .state  # until MERGED
    ```
 
 These commits land in the tag but are absent from the changelog generated in
@@ -308,7 +325,7 @@ live while the release it points at is still building.
 
 5. Merge each PR the user confirms:
    ```bash
-   gh pr merge <N> --repo atuinsh/atuin --squash
+   gh pr comment <N> --repo atuinsh/atuin --body /merge
    ```
 
 Merging a `docs/` change here fires `trigger-docs-deploy.yml` and the docs go
@@ -322,25 +339,29 @@ out immediately. That is the whole point of the label.
 
 **If this is a stable release**, ask the user whether to publish.
 
-If yes, publish each crate **in dependency order** using `--no-verify`
+If yes, publish **every** crate in the workspace using `--no-verify`
 (the code already passed CI, and verification fails when crates.io
-hasn't indexed a freshly-published dependency yet):
+hasn't indexed a freshly-published dependency yet).
 
-```
-atuin-common, atuin-client, atuin-ai, atuin-dotfiles, atuin-history,
-atuin-nucleo/matcher, atuin-nucleo, atuin-daemon, atuin-kv,
-atuin-scripts, atuin-server-database, atuin-server-postgres,
-atuin-server-sqlite, atuin-server, atuin-pty-proxy, atuin
+Do not keep a hardcoded list of crates — discover them dynamically so new
+crates are never missed:
+
+```bash
+ls crates/
 ```
 
-For each crate, run from `crates/<name>`:
+Publish each one from `crates/<name>`:
 ```bash
 cargo publish --no-verify 2>&1
 ```
 
+Publish in dependency order: if a publish fails because a dependency isn't
+on crates.io yet (e.g. "failed to select a version for the requirement"),
+publish that dependency first, then retry the failed crate.
+
 If it fails with "already uploaded", report it as a skip (not an error) —
-some crates like `atuin-nucleo` are versioned independently and may
-already be published at their current version.
+some crates are versioned independently and may already be published at
+their current version.
 
 If it fails for any other reason, stop and report the error.
 

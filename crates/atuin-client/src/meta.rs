@@ -1,11 +1,15 @@
+use std::ffi::OsStr;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
+use atuin_common::db;
+use atuin_common::db::sqlite::{Journaling, Sqlite, SqliteBuilder};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use secrecy::{ExposeSecret, SecretString};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
@@ -22,95 +26,104 @@ const KEY_LAST_VERSION_CHECK: &str = "last_version_check_time";
 const KEY_LATEST_VERSION: &str = "latest_version";
 const KEY_SESSION: &str = "session";
 const KEY_HUB_SESSION: &str = "hub_session";
+const KEY_HUB_USER_ID: &str = "hub_user_id";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
 
+const HUB_TOKEN_PREFIX: &str = "atapi_";
+
+/// The longest to wait for another process's commit to the store before failing.
+const LOCK_WAIT: Duration = Duration::from_mins(1);
+
+/// Whether `token` is a Hub API token rather than a legacy CLI session token.
+#[must_use]
+pub fn is_hub_token(token: &SecretString) -> bool {
+    token.expose_secret().starts_with(HUB_TOKEN_PREFIX)
+}
+
 pub struct MetaStore {
-    pool: SqlitePool,
+    sqlite: Sqlite,
     cached_host_id: OnceCell<HostId>,
 }
 
 impl MetaStore {
-    pub async fn new(path: impl AsRef<Path>, timeout: f64) -> Result<Self> {
+    /// Load the meta store at `path`.
+    ///
+    /// Legacy plain-text files in `data_dir` will be migrated to the meta store when the meta
+    /// store is first created.
+    pub async fn new(
+        path: impl AsRef<OsStr>,
+        data_dir: impl AsRef<Path>,
+        timeout: Duration,
+    ) -> Result<Self> {
         let path = path.as_ref();
-        let path_str = path
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| eyre!("meta database path is not valid UTF-8: {path:?}"))?;
         debug!("opening meta sqlite database at {path:?}");
 
-        let is_memory = path_str.contains(":memory:");
+        let builder = Sqlite::builder(path);
+        let ephemeral = builder.is_memory();
 
-        if !is_memory
-            && !path.exists()
-            && let Some(dir) = path.parent()
-        {
-            fs_err::create_dir_all(dir)?;
-        }
+        let store = Self::from_builder(builder, timeout).await?;
 
-        // Use DELETE journal mode instead of WAL. This is a small, infrequently-
-        // written KV store — WAL's concurrency benefits aren't needed, and DELETE
-        // mode avoids creating auxiliary -wal/-shm files that complicate
-        // permission handling.
-        let opts = SqliteConnectOptions::from_str(path_str)?
-            .journal_mode(SqliteJournalMode::Delete)
-            .optimize_on_close(true, None)
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(Duration::try_from_secs_f64(timeout)?)
-            .connect_with(opts)
-            .await?;
-
-        sqlx::migrate!("./meta-migrations").run(&pool).await?;
-
-        // Session tokens are stored in this database, so restrict permissions.
-        #[cfg(unix)]
-        if !is_memory {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
-
-        let store = Self {
-            pool,
-            cached_host_id: OnceCell::const_new(),
-        };
-
-        if !is_memory {
-            store.migrate_files().await?;
+        if !ephemeral {
+            store.migrate_files(data_dir.as_ref()).await?;
         }
 
         Ok(store)
     }
 
+    pub async fn in_memory(timeout: Duration) -> Result<Self> {
+        Self::from_builder(Sqlite::builder_in_memory(), timeout).await
+    }
+
+    async fn from_builder(builder: SqliteBuilder<'_>, timeout: Duration) -> Result<Self> {
+        // A rollback journal, as every atuin before has forced it: one that opened it in WAL mode
+        // would lock an older one out for as long as it ran. So a commit holds out readers
+        // while it syncs, which on a busy disk can take many seconds (the daemon commits on every
+        // sync): wait that out rather than fail. The wait outlasts the user's `local_timeout`, and
+        // holds up interactive paths too (Ctrl-R's host id, nushell's `history end` without the
+        // daemon): a hang on a stalled disk, rather than an error.
+        let sqlite = builder
+            .timeout(timeout.max(LOCK_WAIT))
+            .busy_timeout(LOCK_WAIT)
+            .journal(Some(Journaling::Delete))
+            .foreign_keys(false)
+            .restrict_permissions()
+            .open()
+            .await?;
+
+        db::migrate!(sqlite.pool(), "./meta-migrations").await?;
+
+        Ok(Self {
+            sqlite,
+            cached_host_id: OnceCell::const_new(),
+        })
+    }
+
     // Generic key-value operations
 
     pub async fn get(&self, key: &str) -> Result<Option<String>> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM meta WHERE key = ?1")
+        let row: Option<(String,)> = db::query_as("SELECT value FROM meta WHERE key = ?1")
             .bind(key)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.sqlite.pool())
             .await?;
 
         Ok(row.map(|r| r.0))
     }
 
     pub async fn set(&self, key: &str, value: &str) -> Result<()> {
-        sqlx::query(
+        db::query(
             "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, strftime('%s', 'now'))
              ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
         )
         .bind(key)
         .bind(value)
-        .execute(&self.pool)
+        .execute(self.sqlite.pool())
         .await?;
 
         Ok(())
     }
 
     pub async fn delete(&self, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM meta WHERE key = ?1")
-            .bind(key)
-            .execute(&self.pool)
-            .await?;
+        db::query("DELETE FROM meta WHERE key = ?1").bind(key).execute(self.sqlite.pool()).await?;
 
         Ok(())
     }
@@ -127,8 +140,7 @@ impl MetaStore {
                 }
 
                 let uuid = atuin_common::utils::uuid_v7();
-                self.set(KEY_HOST_ID, uuid.as_simple().to_string().as_ref())
-                    .await?;
+                self.set(KEY_HOST_ID, uuid.as_simple().to_string().as_ref()).await?;
 
                 Ok(HostId(uuid))
             })
@@ -144,11 +156,7 @@ impl MetaStore {
     }
 
     pub async fn save_sync_time(&self) -> Result<()> {
-        self.set(
-            KEY_LAST_SYNC,
-            OffsetDateTime::now_utc().format(&Rfc3339)?.as_str(),
-        )
-        .await
+        self.set(KEY_LAST_SYNC, OffsetDateTime::now_utc().format(&Rfc3339)?.as_str()).await
     }
 
     pub async fn last_version_check(&self) -> Result<OffsetDateTime> {
@@ -159,11 +167,7 @@ impl MetaStore {
     }
 
     pub async fn save_version_check_time(&self) -> Result<()> {
-        self.set(
-            KEY_LAST_VERSION_CHECK,
-            OffsetDateTime::now_utc().format(&Rfc3339)?.as_str(),
-        )
-        .await
+        self.set(KEY_LAST_VERSION_CHECK, OffsetDateTime::now_utc().format(&Rfc3339)?.as_str()).await
     }
 
     pub async fn latest_version(&self) -> Result<Option<String>> {
@@ -174,12 +178,12 @@ impl MetaStore {
         self.set(KEY_LATEST_VERSION, version).await
     }
 
-    pub async fn session_token(&self) -> Result<Option<String>> {
-        self.get(KEY_SESSION).await
+    pub async fn session_token(&self) -> Result<Option<SecretString>> {
+        Ok(self.get(KEY_SESSION).await?.map(SecretString::from))
     }
 
-    pub async fn save_session(&self, token: &str) -> Result<()> {
-        self.set(KEY_SESSION, token).await
+    pub async fn save_session(&self, token: &SecretString) -> Result<()> {
+        self.set(KEY_SESSION, token.expose_secret()).await
     }
 
     pub async fn delete_session(&self) -> Result<()> {
@@ -187,36 +191,98 @@ impl MetaStore {
     }
 
     pub async fn logged_in(&self) -> Result<bool> {
-        Ok(self.session_token().await?.is_some() || self.hub_session_token().await?.is_some())
+        let (logged_in,): (bool,) =
+            db::query_as("SELECT EXISTS (SELECT 1 FROM meta WHERE key IN (?1, ?2))")
+                .bind(KEY_SESSION)
+                .bind(KEY_HUB_SESSION)
+                .fetch_one(self.sqlite.pool())
+                .await?;
+
+        Ok(logged_in)
     }
 
     // Hub session methods (separate from sync session, used for Hub-specific features like AI)
 
-    pub async fn hub_session_token(&self) -> Result<Option<String>> {
-        self.get(KEY_HUB_SESSION).await
+    pub async fn hub_session_token(&self) -> Result<Option<SecretString>> {
+        Ok(self.get(KEY_HUB_SESSION).await?.map(SecretString::from))
     }
 
-    pub async fn save_hub_session(&self, token: &str) -> Result<()> {
-        self.set(KEY_HUB_SESSION, token).await
+    pub async fn save_hub_session(&self, token: &SecretString) -> Result<()> {
+        let mut tx = self.sqlite.pool().begin().await?;
+        db::query(
+            "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, strftime('%s', 'now'))
+             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
+        )
+        .bind(KEY_HUB_SESSION)
+        .bind(token.expose_secret())
+        .execute(&mut *tx)
+        .await?;
+        db::query("DELETE FROM meta WHERE key = ?1")
+            .bind(KEY_HUB_USER_ID)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     pub async fn delete_hub_session(&self) -> Result<()> {
-        self.delete(KEY_HUB_SESSION).await
+        db::query("DELETE FROM meta WHERE key IN (?1, ?2)")
+            .bind(KEY_HUB_SESSION)
+            .bind(KEY_HUB_USER_ID)
+            .execute(self.sqlite.pool())
+            .await?;
+
+        Ok(())
+    }
+
+    /// The id of the hub user `token` logs in, if `token` is still the hub session and
+    /// [`Self::save_hub_user_id`] recorded it.
+    pub async fn hub_user_id(&self, token: &SecretString) -> Result<Option<String>> {
+        let row: Option<(String,)> = db::query_as(
+            "SELECT user_id.value FROM meta AS user_id
+             JOIN meta AS session ON session.key = ?2 AND session.value = ?3
+             WHERE user_id.key = ?1",
+        )
+        .bind(KEY_HUB_USER_ID)
+        .bind(KEY_HUB_SESSION)
+        .bind(token.expose_secret())
+        .fetch_optional(self.sqlite.pool())
+        .await?;
+
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Records that `token` logs in the hub user `user_id`, unless a login or logout replaced
+    /// `token` as the hub session since it was read.
+    pub async fn save_hub_user_id(&self, token: &SecretString, user_id: &str) -> Result<()> {
+        db::query(
+            "INSERT INTO meta (key, value, updated_at)
+             SELECT ?1, ?2, strftime('%s', 'now') WHERE EXISTS
+               (SELECT 1 FROM meta WHERE key = ?3 AND value = ?4)
+             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
+        )
+        .bind(KEY_HUB_USER_ID)
+        .bind(user_id)
+        .bind(KEY_HUB_SESSION)
+        .bind(token.expose_secret())
+        .execute(self.sqlite.pool())
+        .await?;
+
+        Ok(())
     }
 
     pub async fn hub_logged_in(&self) -> Result<bool> {
-        Ok(self.hub_session_token().await?.is_some())
+        Ok(self.get(KEY_HUB_SESSION).await?.is_some())
     }
 
     // File migration: on first open, migrate old plain-text files into the database.
     // Old files are left in place for safe downgrades.
 
-    async fn migrate_files(&self) -> Result<()> {
+    async fn migrate_files(&self, data_dir: &Path) -> Result<()> {
         if self.get(KEY_FILES_MIGRATED).await?.is_some() {
             return Ok(());
         }
-
-        let data_dir = crate::settings::Settings::effective_data_dir();
 
         // host_id — validate as UUID
         let host_id_path = data_dir.join(LEGACY_HOST_ID_FILENAME);
@@ -281,9 +347,10 @@ impl MetaStore {
         if session_path.exists()
             && let Ok(value) = fs_err::read_to_string(&session_path)
         {
-            let value = value.trim();
-            if !value.is_empty() {
-                self.set(KEY_SESSION, value).await?;
+            let value = SecretString::from(value);
+            let token = value.expose_secret().trim();
+            if !token.is_empty() {
+                self.set(KEY_SESSION, token).await?;
             }
         }
 
@@ -295,12 +362,13 @@ impl MetaStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::*;
+
+    use super::*;
 
     #[fixture]
     async fn store() -> MetaStore {
-        MetaStore::new("sqlite::memory:", 2.0).await.unwrap()
+        MetaStore::in_memory(Duration::from_secs(2)).await.unwrap()
     }
 
     #[rstest]
@@ -353,17 +421,26 @@ mod tests {
     #[tokio::test]
     async fn test_session_crud(#[future(awt)] store: MetaStore) {
         assert!(!store.logged_in().await.unwrap());
-        assert_eq!(store.session_token().await.unwrap(), None);
+        assert!(store.session_token().await.unwrap().is_none());
 
-        store.save_session("tok123").await.unwrap();
+        store.save_session(&"tok123".into()).await.unwrap();
         assert!(store.logged_in().await.unwrap());
         assert_eq!(
-            store.session_token().await.unwrap(),
-            Some("tok123".to_string())
+            store.session_token().await.unwrap().as_ref().map(ExposeSecret::expose_secret),
+            Some("tok123")
         );
 
         store.delete_session().await.unwrap();
         assert!(!store.logged_in().await.unwrap());
+    }
+
+    #[rstest]
+    #[case::sync(KEY_SESSION)]
+    #[case::hub(KEY_HUB_SESSION)]
+    #[tokio::test]
+    async fn logged_in_with_either_session(#[future(awt)] store: MetaStore, #[case] key: &str) {
+        store.set(key, "tok123").await.unwrap();
+        assert!(store.logged_in().await.unwrap());
     }
 
     #[rstest]
@@ -372,9 +449,67 @@ mod tests {
         assert_eq!(store.latest_version().await.unwrap(), None);
 
         store.save_latest_version("1.2.3").await.unwrap();
-        assert_eq!(
-            store.latest_version().await.unwrap(),
-            Some("1.2.3".to_string())
-        );
+        assert_eq!(store.latest_version().await.unwrap(), Some("1.2.3".to_string()));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn legacy_files_are_migrated_from_the_given_data_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let host_id = Uuid::now_v7().as_simple().to_string();
+        std::fs::write(data_dir.join(LEGACY_HOST_ID_FILENAME), &host_id).unwrap();
+
+        let store = MetaStore::new(tmp.path().join("meta.db"), &data_dir, Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        assert_eq!(store.get(KEY_HOST_ID).await.unwrap(), Some(host_id));
+        assert!(store.get(KEY_FILES_MIGRATED).await.unwrap().is_some());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn memory_store_skips_file_migration() {
+        let store =
+            MetaStore::new(":memory:", "/nonexistent", Duration::from_secs(2)).await.unwrap();
+
+        assert_eq!(store.get(KEY_FILES_MIGRATED).await.unwrap(), None);
+    }
+
+    /// A commit by another process held up past sqlite's usual 5s wait (the daemon saving its
+    /// last sync on a busy disk) is waited out: a command opening and reading the store meanwhile
+    /// gets there, and sees the store as committed.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn waits_out_another_process_committing_slowly() {
+        use sqlx::{ConnectOptions as _, Connection as _};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meta.db");
+        MetaStore::new(&path, dir.path(), Duration::from_secs(2))
+            .await
+            .unwrap()
+            .set("k", "v")
+            .await
+            .unwrap();
+
+        let mut writer =
+            sqlx::sqlite::SqliteConnectOptions::new().filename(&path).connect().await.unwrap();
+        db::query("BEGIN EXCLUSIVE").execute(&mut writer).await.unwrap();
+        db::query("UPDATE meta SET value = 'w' WHERE key = 'k'")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+        let commit = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(6)).await;
+            db::query("COMMIT").execute(&mut writer).await.unwrap();
+            writer.close().await.unwrap();
+        });
+
+        let store = MetaStore::new(&path, dir.path(), Duration::from_secs(2)).await.unwrap();
+        assert_eq!(store.get("k").await.unwrap().as_deref(), Some("w"));
+        commit.await.unwrap();
     }
 }

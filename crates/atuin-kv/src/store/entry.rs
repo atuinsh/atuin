@@ -1,6 +1,4 @@
-use typed_builder::TypedBuilder;
-
-#[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct KvEntry {
     pub namespace: String,
     pub key: String,

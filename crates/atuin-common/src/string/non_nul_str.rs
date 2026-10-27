@@ -1,5 +1,6 @@
 //! A string proven to contain no NUL bytes.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::ops::Deref;
 
@@ -29,6 +30,21 @@ impl<T: AsRef<str>> NonNulStr<T> {
     /// The wrapped string as a slice.
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<'a> NonNulStr<Cow<'a, str>> {
+    /// Wrap `inner` with its NUL bytes removed, still borrowing it if it has none.
+    pub fn stripping(inner: impl Into<Cow<'a, str>>) -> Self {
+        let mut inner = inner.into();
+        if inner.contains('\0') {
+            inner.to_mut().retain(|c| c != '\0');
+        }
+        Self(inner)
     }
 }
 
@@ -70,9 +86,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainsNul, NonNulStr};
     use proptest::prelude::*;
     use rstest::rstest;
+
+    use super::{ContainsNul, NonNulStr};
 
     #[rstest]
     #[case("echo hello")]
@@ -92,13 +109,13 @@ mod tests {
         assert_eq!(NonNulStr::new(input), Err(ContainsNul { index }));
     }
 
-    #[test]
+    #[rstest]
     fn serializes_as_plain_string() {
         let json = serde_json::to_string(&NonNulStr::new("echo hi").unwrap()).unwrap();
         assert_eq!(json, r#""echo hi""#);
     }
 
-    #[test]
+    #[rstest]
     fn deserializes_nul_free_string() {
         let c: NonNulStr<String> = serde_json::from_str(r#""echo hi""#).unwrap();
         assert_eq!(c.as_str(), "echo hi");
@@ -116,7 +133,7 @@ mod tests {
 
     proptest! {
         /// Wrapping succeeds iff there is no NUL, and reports the first NUL's index.
-        #[test]
+        #[rstest]
         fn validates_against_nul(s in r"(?s).*") {
             let result = NonNulStr::new(s.as_str());
             match s.find('\0') {
@@ -129,7 +146,7 @@ mod tests {
         }
 
         /// A NUL-free command serialize → deserialize round-trips unchanged.
-        #[test]
+        #[rstest]
         fn serde_round_trip(s in r"[^\x00]*") {
             let original = NonNulStr::new(s).unwrap();
             let json = serde_json::to_string(&original).unwrap();

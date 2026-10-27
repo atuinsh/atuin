@@ -13,15 +13,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use atuin_common::time::SystemTimeExt;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 
 /// Metadata key used for session_metadata persistence.
-pub(crate) const METADATA_KEY: &str = "file_read_tracker";
+pub const METADATA_KEY: &str = "file_read_tracker";
 
 /// State recorded for a single file read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct FileReadState {
+pub struct FileReadState {
     /// Hash of the file contents at the time of the last read.
     pub content_hash: u64,
     /// File mtime (as milliseconds since epoch) at the time of the last read.
@@ -31,12 +32,12 @@ pub(crate) struct FileReadState {
 
 /// Tracks file read state for freshness checking.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub(crate) struct FileReadTracker {
+pub struct FileReadTracker {
     reads: HashMap<PathBuf, FileReadState>,
 }
 
 /// Result of a freshness check.
-pub(crate) enum FreshnessCheck {
+pub enum FreshnessCheck {
     /// File is fresh — the content hasn't changed since the last read.
     Fresh,
     /// File has never been read in this session.
@@ -49,35 +50,31 @@ impl FileReadTracker {
     /// Record that a file was read. Call this after a successful `read_file`
     /// execution. The `path` should be canonical (absolute, tilde-expanded).
     pub fn record_read(&mut self, path: PathBuf, content: &[u8], mtime: SystemTime) {
-        let content_hash = hash_content(content);
-        let mtime_ms = system_time_to_ms(mtime);
+        let content_hash = Self::hash_content(content);
+        let mtime_ms = mtime.saturating_unix_millis();
 
-        self.reads.insert(
-            path,
-            FileReadState {
-                content_hash,
-                mtime_ms,
-            },
-        );
+        self.reads.insert(path, FileReadState {
+            content_hash,
+            mtime_ms,
+        });
     }
 
     /// Check whether a file is fresh (unchanged since last read).
     ///
     /// Uses mtime as a fast path — only re-hashes if mtime differs.
     pub fn check_freshness(&self, path: &Path) -> Result<FreshnessCheck> {
-        let state = match self.reads.get(path) {
-            Some(s) => s,
-            None => return Ok(FreshnessCheck::NotRead),
+        let Some(state) = self.reads.get(path) else {
+            return Ok(FreshnessCheck::NotRead);
         };
 
         // Stat the file
-        let metadata = match std::fs::metadata(path) {
-            Ok(m) => m,
-            Err(_) => return Ok(FreshnessCheck::Stale), // file deleted or inaccessible
+        // file deleted or inaccessible
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return Ok(FreshnessCheck::Stale);
         };
 
         let current_mtime_ms =
-            system_time_to_ms(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
+            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH).saturating_unix_millis();
 
         // Fast path: mtime unchanged → fresh
         if current_mtime_ms == state.mtime_ms {
@@ -86,7 +83,7 @@ impl FileReadTracker {
 
         // Mtime changed — re-hash to confirm
         let content = std::fs::read(path)?;
-        let current_hash = hash_content(&content);
+        let current_hash = Self::hash_content(&content);
 
         if current_hash == state.content_hash {
             Ok(FreshnessCheck::Fresh)
@@ -97,16 +94,13 @@ impl FileReadTracker {
 
     /// Update the tracker entry after a successful edit (new content written).
     pub fn update_after_edit(&mut self, path: &Path, new_content: &[u8], new_mtime: SystemTime) {
-        let content_hash = hash_content(new_content);
-        let mtime_ms = system_time_to_ms(new_mtime);
+        let content_hash = Self::hash_content(new_content);
+        let mtime_ms = new_mtime.saturating_unix_millis();
 
-        self.reads.insert(
-            path.to_path_buf(),
-            FileReadState {
-                content_hash,
-                mtime_ms,
-            },
-        );
+        self.reads.insert(path.to_path_buf(), FileReadState {
+            content_hash,
+            mtime_ms,
+        });
     }
 
     /// Serialize to JSON for session metadata persistence.
@@ -118,24 +112,20 @@ impl FileReadTracker {
     pub fn from_json(json: &str) -> Result<Self> {
         Ok(serde_json::from_str(json)?)
     }
-}
 
-fn system_time_to_ms(t: SystemTime) -> i64 {
-    t.duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-fn hash_content(content: &[u8]) -> u64 {
-    xxhash_rust::xxh3::xxh3_64(content)
+    fn hash_content(content: &[u8]) -> u64 {
+        xxhash_rust::xxh3::xxh3_64(content)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rstest::*;
     use std::io::Write;
+
+    use rstest::*;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[fixture]
     fn recorded() -> (FileReadTracker, NamedTempFile) {
@@ -154,20 +144,14 @@ mod tests {
 
     #[rstest]
     fn record_and_check_fresh(#[from(recorded)] (tracker, tmp): (FileReadTracker, NamedTempFile)) {
-        assert!(matches!(
-            tracker.check_freshness(tmp.path()).unwrap(),
-            FreshnessCheck::Fresh
-        ));
+        assert!(matches!(tracker.check_freshness(tmp.path()).unwrap(), FreshnessCheck::Fresh));
     }
 
     #[test]
     fn check_not_read() {
         let tracker = FileReadTracker::default();
         let path = PathBuf::from("/nonexistent/file.txt");
-        assert!(matches!(
-            tracker.check_freshness(&path).unwrap(),
-            FreshnessCheck::NotRead
-        ));
+        assert!(matches!(tracker.check_freshness(&path).unwrap(), FreshnessCheck::NotRead));
     }
 
     #[rstest]
@@ -180,10 +164,7 @@ mod tests {
         // Modify the file
         std::fs::write(tmp.path(), "modified").unwrap();
 
-        assert!(matches!(
-            tracker.check_freshness(tmp.path()).unwrap(),
-            FreshnessCheck::Stale
-        ));
+        assert!(matches!(tracker.check_freshness(tmp.path()).unwrap(), FreshnessCheck::Stale));
     }
 
     #[rstest]
@@ -196,29 +177,20 @@ mod tests {
         let new_mtime = std::fs::metadata(tmp.path()).unwrap().modified().unwrap();
         tracker.update_after_edit(tmp.path(), new_content, new_mtime);
 
-        assert!(matches!(
-            tracker.check_freshness(tmp.path()).unwrap(),
-            FreshnessCheck::Fresh
-        ));
+        assert!(matches!(tracker.check_freshness(tmp.path()).unwrap(), FreshnessCheck::Fresh));
     }
 
     #[test]
     fn roundtrip_json() {
         let mut tracker = FileReadTracker::default();
-        tracker.reads.insert(
-            PathBuf::from("/some/file.toml"),
-            FileReadState {
-                content_hash: 12345,
-                mtime_ms: 1700000000000,
-            },
-        );
+        tracker.reads.insert(PathBuf::from("/some/file.toml"), FileReadState {
+            content_hash: 12345,
+            mtime_ms: 1_700_000_000_000,
+        });
 
         let json = tracker.to_json().unwrap();
         let restored = FileReadTracker::from_json(&json).unwrap();
         assert_eq!(restored.reads.len(), 1);
-        assert_eq!(
-            restored.reads[&PathBuf::from("/some/file.toml")].content_hash,
-            12345
-        );
+        assert_eq!(restored.reads[&PathBuf::from("/some/file.toml")].content_hash, 12345);
     }
 }

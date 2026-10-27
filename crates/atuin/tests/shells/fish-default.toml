@@ -1,0 +1,10 @@
+shell = "fish"
+rc = ".config/fish/config.fish"
+script = '''
+atuin init fish | source
+function fish_prompt
+    echo -n "E2E_PROMPT> "
+end
+function fish_mode_prompt
+end
+'''

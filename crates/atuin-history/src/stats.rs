@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
+use atuin_client::history::History;
+use atuin_client::settings::Settings;
+use atuin_client::theme::{Meaning, Theme};
 use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
+use easy_cast::Conv;
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
-
-use atuin_client::{history::History, settings::Settings, theme::Meaning, theme::Theme};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stats {
@@ -29,7 +31,14 @@ fn first_whitespace(s: &str) -> usize {
         .map_or(s.len(), |(i, _)| i)
 }
 
-fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
+/// Split off the longest configured common prefix, returning the matched prefix
+/// and the remainder with leading whitespace removed. Both slices borrow from
+/// `command`; an empty remainder means the command consists only of the prefix.
+#[must_use]
+pub fn split_common_prefix<'a>(
+    settings: &Settings,
+    command: &'a str,
+) -> Option<(&'a str, &'a str)> {
     // Sort by length so that we match the longest prefix first
     let mut common_prefix = settings.stats.common_prefix.clone();
     common_prefix.sort_by_key(|b| std::cmp::Reverse(b.len()));
@@ -38,14 +47,19 @@ fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str
     for p in &common_prefix {
         if command.starts_with(p) {
             let i = p.len();
-            let prefix = &command[..i];
-            command = command[i..].trim_start();
-            if command.is_empty() {
-                // no commands following, just use the prefix
-                return prefix;
-            }
-            break;
+            return Some((&command[..i], command[i..].trim_start()));
         }
+    }
+    None
+}
+
+fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
+    if let Some((prefix, remainder)) = split_common_prefix(settings, command) {
+        if remainder.is_empty() {
+            // no commands following, just use the prefix
+            return prefix;
+        }
+        command = remainder;
     }
 
     // Sort the common_subcommands by length so that we match the longest subcommand first
@@ -164,7 +178,7 @@ fn strip_leading_env_vars(command: &str) -> &str {
 
 pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
     let max = stats.top.iter().map(|x| x.1).max().unwrap();
-    let num_pad = max.ilog10() as usize + 1;
+    let num_pad = usize::conv(max.ilog10()) + 1;
 
     // Find the length of the longest command name for each column
     let column_widths = stats
@@ -172,10 +186,7 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
         .iter()
         .map(|(commands, _)| commands.iter().map(|c| c.len()).collect::<Vec<usize>>())
         .fold(vec![0; ngram_size], |acc, item| {
-            acc.iter()
-                .zip(item.iter())
-                .map(|(a, i)| *std::cmp::max(a, i))
-                .collect()
+            acc.iter().zip(item.iter()).map(|(a, i)| *std::cmp::max(a, i)).collect()
         });
 
     for (command, count) in stats.top {
@@ -232,13 +243,15 @@ pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
             .join(" | ");
 
         println!(
-            "{ResetColor}] {gray}{count:num_pad$}{ResetColor} {bold}{formatted_command}{ResetColor}"
+            "{ResetColor}] {gray}{count:num_pad$}{ResetColor} \
+             {bold}{formatted_command}{ResetColor}"
         );
     }
     println!("Total commands:   {}", stats.total_commands);
     println!("Unique commands:  {}", stats.unique_commands);
 }
 
+#[must_use]
 pub fn compute(
     settings: &Settings,
     history: &[History],
@@ -304,10 +317,11 @@ mod tests {
     use rstest::*;
     use time::OffsetDateTime;
 
-    use super::compute;
-    use super::{interesting_command, split_at_pipe, strip_leading_env_vars};
+    use super::{
+        compute, interesting_command, split_at_pipe, split_common_prefix, strip_leading_env_vars,
+    };
 
-    #[test]
+    #[rstest]
     fn ignored_env_vars() {
         let settings = Settings::utc();
 
@@ -322,17 +336,13 @@ mod tests {
         assert_eq!(stats.top.first().unwrap().0, vec!["echo"]);
     }
 
-    #[test]
+    #[rstest]
     fn ignored_commands() {
         let mut settings = Settings::utc();
         settings.stats.ignored_commands.push("cd".to_string());
 
         let history = [
-            History::import()
-                .timestamp(OffsetDateTime::now_utc())
-                .command("cd foo")
-                .build()
-                .into(),
+            History::import().timestamp(OffsetDateTime::now_utc()).command("cd foo").build().into(),
             History::import()
                 .timestamp(OffsetDateTime::now_utc())
                 .command("cargo build stuff")
@@ -345,18 +355,30 @@ mod tests {
         assert_eq!(stats.unique_commands, 1);
     }
 
+    #[rstest]
+    fn all_commands_ignored() {
+        let mut settings = Settings::utc();
+        settings.stats.ignored_commands.push("cd".to_string());
+
+        let history = [History::import()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("cd foo")
+            .build()
+            .into()];
+
+        // non-empty history can still leave nothing to report, so callers have
+        // to handle None rather than assuming history.is_empty() covers it
+        assert!(compute(&settings, &history, 10, 1).is_none());
+    }
+
     #[fixture]
     fn settings(
         #[default(&[][..])] prefix: &[&str],
         #[default(&[][..])] subcommand: &[&str],
     ) -> Settings {
         let mut s = Settings::utc();
-        s.stats
-            .common_prefix
-            .extend(prefix.iter().map(|p| p.to_string()));
-        s.stats
-            .common_subcommands
-            .extend(subcommand.iter().map(|p| p.to_string()));
+        s.stats.common_prefix.extend(prefix.iter().map(|p| p.to_string()));
+        s.stats.common_subcommands.extend(subcommand.iter().map(|p| p.to_string()));
         s
     }
 
@@ -368,6 +390,22 @@ mod tests {
     fn interesting_commands(#[case] input: &str, #[case] expected: &str) {
         let settings = Settings::utc();
         assert_eq!(interesting_command(&settings, input), expected);
+    }
+
+    #[rstest]
+    #[case::no_match("echo hello", None)]
+    #[case::prefix("sudo echo hello", Some(("sudo", "echo hello")))]
+    #[case::longest("sudo test echo hello", Some(("sudo test", "echo hello")))]
+    #[case::prefix_only("sudo test", Some(("sudo test", "")))]
+    #[case::trailing_whitespace("sudo test \t ", Some(("sudo test", "")))]
+    #[case::one_removal("sudo doas echo", Some(("sudo", "doas echo")))]
+    #[case::partial_word("sudoedit file", Some(("sudo", "edit file")))]
+    fn splits_common_prefix(
+        #[with(&["sudo test"][..])] settings: Settings,
+        #[case] command: &str,
+        #[case] expected: Option<(&str, &str)>,
+    ) {
+        assert_eq!(split_common_prefix(&settings, command), expected);
     }
 
     // Test with spaces in the common_prefix

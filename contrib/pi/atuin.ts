@@ -1,1 +1,0 @@
-../../crates/atuin/contrib/pi/atuin.ts

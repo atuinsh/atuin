@@ -5,7 +5,6 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use directories::UserDirs;
 use eyre::{Result, eyre};
 use time::{Duration, OffsetDateTime};
 
@@ -30,8 +29,7 @@ fn default_histpath() -> Result<PathBuf> {
     // zsh has no default value for this var, but uses ~/.zhistory.
     // zsh-newuser-install propose as default .histfile https://github.com/zsh-users/zsh/blob/master/Functions/Newuser/zsh-newuser-install#L794
     // we could maybe be smarter about this in the future :)
-    let user_dirs = UserDirs::new().ok_or_else(|| eyre!("could not find user directories"))?;
-    let home_dir = user_dirs.home_dir();
+    let home_dir = dirs::home_dir().ok_or_else(|| eyre!("could not find home directory"))?;
 
     let mut candidates = [".zhistory", ".zsh_history", ".histfile"].iter();
     loop {
@@ -76,16 +74,12 @@ impl Entry {
             };
         };
 
-        let time = time
-            .parse::<i64>()
-            .ok()
-            .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
+        let time =
+            time.parse::<i64>().ok().and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
 
         // use nanos, because why the hell not? we won't display them.
         // saturate rather than overflow on an implausible duration
-        let duration = duration
-            .parse::<i64>()
-            .map_or(-1, |t| t.saturating_mul(1_000_000_000));
+        let duration = duration.parse::<i64>().map_or(-1, |t| t.saturating_mul(1_000_000_000));
 
         Self {
             command: command.trim_end().to_owned(),
@@ -113,9 +107,9 @@ impl Importer for Zsh {
         let mut entries = Vec::with_capacity(self.num_entries());
 
         for b in unix_byte_lines(&self.bytes) {
-            let s = match unmetafy(b) {
-                Some(s) => s,
-                _ => continue, // we can skip past things like invalid utf8
+            // we can skip past things like invalid utf8
+            let Some(s) = unmetafy(b) else {
+                continue;
             };
 
             if let Some(s) = s.strip_suffix('\\') {
@@ -139,18 +133,14 @@ impl Importer for Zsh {
         let backfill =
             u32::try_from(commands_until_timestamp).unwrap_or(u32::MAX) * timestamp_increment;
         // a timestamp near the start of the representable range would underflow
-        let mut timestamp = first_timestamp
-            .checked_sub(backfill)
-            .unwrap_or(first_timestamp);
+        let mut timestamp = first_timestamp.checked_sub(backfill).unwrap_or(first_timestamp);
 
         for entry in entries {
             if let Some(time) = entry.timestamp {
                 timestamp = time;
             } else {
                 // a timestamp near the end of the representable range would overflow
-                timestamp = timestamp
-                    .checked_add(timestamp_increment)
-                    .unwrap_or(timestamp);
+                timestamp = timestamp.checked_add(timestamp_increment).unwrap_or(timestamp);
             }
 
             let imported = History::import()
@@ -176,7 +166,7 @@ fn unmetafy(line: &[u8]) -> Option<Cow<'_, str>> {
                 is_meta = false;
                 s.push(*ch ^ 32);
             } else {
-                s.push(*ch)
+                s.push(*ch);
             }
         }
         String::from_utf8(s).ok().map(Cow::Owned)
@@ -190,9 +180,8 @@ mod test {
     use itertools::assert_equal;
     use rstest::rstest;
 
-    use crate::import::tests::TestLoader;
-
     use super::*;
+    use crate::import::tests::TestLoader;
 
     #[rstest]
     #[case::zero_duration(
@@ -254,10 +243,7 @@ mod test {
         let parsed = Entry::parse(line);
 
         assert_eq!(parsed.command, command);
-        assert_eq!(
-            parsed.timestamp.map(OffsetDateTime::unix_timestamp),
-            timestamp
-        );
+        assert_eq!(parsed.timestamp.map(OffsetDateTime::unix_timestamp), timestamp);
         assert_eq!(parsed.duration, duration);
     }
 
@@ -277,14 +263,11 @@ cargo update
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            [
-                "cargo install atuin",
-                "cargo install atuin; \\\ncargo update",
-                "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
-            ],
-        );
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "cargo install atuin",
+            "cargo install atuin; \\\ncargo update",
+            "cargo :b̷i̶t̴r̵o̴t̴ ̵i̷s̴ ̷r̶e̵a̸l̷",
+        ]);
     }
 
     #[tokio::test]
@@ -299,10 +282,10 @@ cargo update
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["cargo install atuin", "cargo update"],
-        );
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), [
+            "cargo install atuin",
+            "cargo update",
+        ]);
     }
 
     #[tokio::test]
@@ -333,10 +316,7 @@ cargo update
         assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 253_402_300_799);
         // the increment saturates at the maximum representable instant rather than
         // wrapping or resetting to the epoch
-        assert_eq!(
-            loader.buf.last().unwrap().timestamp.unix_timestamp(),
-            253_402_300_799
-        );
+        assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
     }
 
     #[tokio::test]
@@ -350,9 +330,6 @@ cargo update
         let mut loader = TestLoader::default();
         zsh.load(&mut loader).await.unwrap();
 
-        assert_equal(
-            loader.buf.iter().map(|h| h.command.as_str()),
-            ["echo 你好", "ls ~/音乐"],
-        );
+        assert_equal(loader.buf.iter().map(|h| h.command.as_str()), ["echo 你好", "ls ~/音乐"]);
     }
 }

@@ -1,65 +1,97 @@
-use clap::Args;
-use eyre::Result;
+use std::num::NonZeroU64;
+use std::sync::Arc;
 
-use atuin_client::{
-    database::Database,
-    encryption::load_key,
-    record::sync::Operation,
-    record::{sqlite_store::SqliteStore, sync},
-    settings::Settings,
-};
+use atuin_client::database::Sqlite;
+use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::record::sync::{ClientSource, Operation, SyncSession};
+use atuin_client::settings::Settings;
+use atuin_common::encryption::paseto_v4;
+use atuin_domain::record::RecordTag;
+use clap::Args;
+use eyre::{Context as _, Result};
+
+use crate::i18n::fl;
 
 #[derive(Args, Debug)]
 pub struct Pull {
-    /// The tag to push (eg, 'history'). Defaults to all tags
-    #[arg(long, short)]
-    pub tag: Option<String>,
+    #[arg(long, short, help = fl!("arg-store-tag"))]
+    pub tag: Option<RecordTag>,
 
-    /// Force push records
-    ///
-    /// This will first wipe the local store, and then download all records from the remote
-    #[arg(long, default_value = "false")]
+    #[arg(
+        long,
+        default_value = "false",
+        help = fl!("arg-store-pull-force"),
+        long_help = fl!("arg-store-pull-force", "long")
+    )]
     pub force: bool,
 
-    /// Page Size
-    ///
-    /// How many records to download at once. Defaults to 100
-    #[arg(long, default_value = "100")]
-    pub page: u64,
+    #[arg(
+        long,
+        default_value = "100",
+        help = fl!("arg-store-pull-page"),
+        long_help = fl!("arg-store-pull-page", "long")
+    )]
+    pub page: NonZeroU64,
 }
 
 impl Pull {
     pub async fn run(
         &self,
-        settings: &Settings,
+        settings: &Arc<Settings>,
         store: SqliteStore,
-        db: &dyn Database,
+        db: &Sqlite,
     ) -> Result<()> {
-        if self.force {
-            println!("Forcing local overwrite!");
-            println!("Clearing local store");
-
-            store.delete_all().await?;
+        if !self.force {
+            return self.pull(settings, store, db).await;
         }
 
+        println!("Forcing local overwrite!");
+        println!("Clearing local store");
+        store.delete_all().await?;
+        let pulled = self.pull(settings, store, db).await;
+        // Records only this machine had are gone, and the threads index must forget what
+        // they projected: rebuilt from what the store holds now, however far the pull got.
+        let reset = super::reset_ai_sessions_after(settings).await;
+        match (pulled, reset) {
+            (Err(pull), Err(reset)) => {
+                eprintln!("{reset:?}");
+                Err(pull)
+            }
+            (pulled, reset) => pulled.and(reset),
+        }
+    }
+
+    async fn pull(&self, settings: &Arc<Settings>, store: SqliteStore, db: &Sqlite) -> Result<()> {
         // We can actually just use the existing diff/etc to push
         // 1. Diff
         // 2. Get operations
         // 3. Filter operations by
         //  a) are they a download op?
         //  b) are they for the host/tag we are pushing here?
-        let client = sync::build_client(settings).await?;
-        let (diff, remote_index) = sync::diff(&client, &store).await?;
+        let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
+            .context("could not load encryption key")?;
+        let session = SyncSession::builder()
+            .store(store.clone())
+            .client_source(ClientSource::FromSettings {
+                settings,
+                caps: None,
+            })
+            .build()
+            .connect()
+            .await?
+            .with_page_size(self.page);
+
+        let keyed = session.keyed(&key);
+        let (diff, remote_index) = session.diff().await?;
 
         // Skip on --force: local was already wiped above, mismatch is the user's call.
-        if !self.force {
-            let key: [u8; 32] = load_key(settings)?.into();
-            sync::check_encryption_key(&client, &remote_index, &key)
-                .await
-                .map_err(crate::print_error::format_sync_error)?;
+        if !self.force
+            && let Some(err) = keyed.key_valid_against(&remote_index).await
+        {
+            return Err(err.into());
         }
 
-        let operations = sync::operations(diff, &store).await?;
+        let operations = SyncSession::operations(diff)?;
 
         let operations = operations
             .into_iter()
@@ -68,13 +100,13 @@ impl Pull {
                 Operation::Noop { .. } | Operation::Upload { .. } => false,
 
                 // pull, so yes plz to downloads!
-                Operation::Download { tag, .. } => {
+                Operation::Download { series, .. } => {
                     if self.force {
                         return true;
                     }
 
                     if let Some(t) = self.tag.clone()
-                        && t != *tag
+                        && t != series.tag
                     {
                         return false;
                     }
@@ -84,11 +116,16 @@ impl Pull {
             })
             .collect();
 
-        let (_, downloaded) = sync::sync_remote(&client, operations, &store, self.page).await?;
+        let (_, downloaded) = keyed.sync_remote(operations).await?;
 
         println!("Downloaded {} records", downloaded.len());
 
-        crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+        // On --force the daemon rebuilds the AI sessions from scratch after this.
+        if self.force {
+            crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
+        } else {
+            crate::command::client::sync::build(settings, &store, db, &downloaded).await?;
+        }
 
         Ok(())
     }

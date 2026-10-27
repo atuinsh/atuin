@@ -3,9 +3,10 @@
 //! Claude Code and Codex invoke `atuin hook <agent>` for each tool use and
 //! pass the event as JSON on stdin.
 
-use serde::Deserialize;
+use std::path::PathBuf;
 
 use atuin_common::string::NonNulStr;
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub enum WireToolName {
@@ -32,6 +33,14 @@ pub struct WireHookEvent {
     /// How the command finished. Present on `PostToolUse`; absent elsewhere.
     #[serde(default)]
     pub tool_response: Option<WireToolResponse>,
+    /// Why the command failed, on Claude Code's `PostToolUseFailure`: for a shell command that
+    /// exited non-zero, `Exit code <n>` and then its output.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// The session's transcript, where Codex records a command's exit code (its
+    /// `tool_response` is only the output).
+    #[serde(default)]
+    pub transcript_path: Option<PathBuf>,
 }
 
 /// The lifecycle stage an event represents.
@@ -59,7 +68,24 @@ pub struct WireToolInput {
 
 /// See [`WireHookEvent::tool_response`].
 #[derive(Debug, Deserialize)]
-pub struct WireToolResponse {
-    #[serde(rename = "exitCode", default)]
-    pub exit_code: Option<i64>,
+#[serde(untagged)]
+pub enum WireToolResponse {
+    /// Some harnesses (ie. Codex) only return the tool output string.
+    Output(String),
+    /// Other harnesses return more details.
+    /// TODO(markovejnovic): Should we split the enum per-harness?
+    Object {
+        #[serde(rename = "exitCode", default)]
+        exit_code: Option<i64>,
+    },
+}
+
+impl WireToolResponse {
+    /// The exit code the agent reported, if any.
+    pub fn exit_code(&self) -> Option<i64> {
+        match self {
+            WireToolResponse::Output(_) => None,
+            WireToolResponse::Object { exit_code } => *exit_code,
+        }
+    }
 }

@@ -1,42 +1,112 @@
 # Config
 
-Atuin maintains two configuration files in `~/.config/atuin/`, and stores data
-in `~/.local/share/atuin` (unless overridden by XDG\_\*).
+Atuin's files are stored in `~/.atuin` by default. Atuin's main config file is
+`~/.atuin/config.toml`.
 
-The full path to the config file would be `~/.config/atuin/config.toml`
+You can configure Atuin to use a different directory by setting the
+`ATUIN_HOME` environment variable to that directory. The path must be absolute;
+otherwise it will be ignored. Note: if you're using `ATUIN_HOME` to switch
+between multiple profiles, make sure each one sets an explicit
+[`daemon.socket_path`](#socket_path), to avoid connecting to the wrong daemon.
 
-The config location can be overridden with ATUIN_CONFIG_DIR
+Additionally, if set, `ATUIN_CONFIG_DIR` will override the location of
+`config.toml` and [`server.toml`](../self-hosting/server-setup.md): Atuin will
+look for those files in `$ATUIN_CONFIG_DIR` rather than `~/.atuin`.
 
-### `db_path`
+Paths in the config may start with `~` and refer to environment variables, as
+in `$XDG_RUNTIME_DIR/atuin.sock`, or `${XDG_RUNTIME_DIR:-/tmp}/atuin.sock` to
+fall back to `/tmp` where the variable isn't set; write `$$` for a literal `$`.
+Atuin warns about a path that refers to a variable that isn't set, and uses it
+as written. An empty path is the setting's default. A relative path is relative
+to the directory holding `config.toml`, whatever directory Atuin runs in: with
+the default config, `socket_path = "atuin.sock"` is `~/.atuin/atuin.sock`. This
+holds for paths set through `ATUIN_*` environment variables too. A database
+path may also be SQLite's `:memory:`, or a `sqlite:` or `file:` URI, which
+SQLite opens as written.
 
-Default: `~/.local/share/atuin/history.db`
+??? note "Upgrading from older versions"
 
-The path to the Atuin SQLite database.
+    Older versions of Atuin stored data in `~/.config/atuin` (or
+    `$XDG_CONFIG_HOME/atuin`) and `~/.local/share/atuin` (or
+    `$XDG_DATA_HOME/atuin`). If `ATUIN_HOME` is unset (the default), Atuin will
+    continue to look for data in the old locations if it doesn't find it in
+    `~/.atuin`, so existing installations will keep working without any
+    modifications.
 
-```toml
-db_path = "~/.history.db"
-```
+    If you want to migrate to the new layout, run these commands in Bash, Zsh,
+    or fish (you'll have to adjust the paths if you have `XDG_CONFIG_HOME` or
+    `XDG_DATA_HOME` set).
 
-### `key_path`
+    Temporarily stop the daemon and disable autostart:
 
-Default: `~/.local/share/atuin/key`
+    ```sh
+    atuin config set daemon.autostart false
+    atuin daemon stop
+    ```
 
-The path to the Atuin encryption key.
+    Make sure `~/.atuin` exists:
 
-```toml
-key_path = "~/.atuin-key"
-```
+    ```sh
+    mkdir -p ~/.atuin
+    ```
 
-### `session_path`
+    Check whether you have any AI-related files in `~/.atuin`:
 
-Default: `~/.local/share/atuin/session`
+    ```sh
+    ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills -e TERMINAL.md
+    ```
 
-The path to the Atuin server session file.
-This is essentially just an API token
+    If you do, please expand and follow this section:
 
-```toml
-session_path = "~/.atuin-session"
-```
+    ??? note "Migrating home-scoped AI config"
+
+        In older installations, `permissions.ai.toml`, `skills`, or
+        `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas
+        in newer installations, they are applied *globally*. The existence of
+        `~/.atuin/config.toml` is what determines whether the new or old
+        behavior is used; if `~/.atuin/config.toml` exists, these items are
+        interpreted as global.
+
+        Before you move your `config.toml` to `~/.atuin`, review the existing
+        AI files in `~/.atuin`, especially `permissions.ai.toml`. Anything
+        you're ok with being made global can be left as-is (global is likely
+        not too different from applying to your entire home directory anyway);
+        anything else should be deleted or moved to subdirectories (meaning
+        moving it into `~/subdir/.atuin/` for each subdirectory).
+
+        After you've confirmed that the AI items in `~/.atuin` can be
+        interpreted as global, check whether any AI items appear in both
+        `~/.atuin` and `~/.config/atuin`:
+
+        ```sh
+        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills \
+            -e TERMINAL.md | sort | uniq -d
+        ```
+
+        If there are any such items, you must merge the items in
+        `~/.config/atuin` into the configuration at `~/.atuin` if you still
+        want them to take effect; otherwise, the items in `~/.config/atuin`
+        will be shadowed by those in `~/.atuin`.
+
+    Next, move your config items:
+
+    ```sh
+    cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
+        -e themes -e skills -e permissions.ai.toml -e TERMINAL.md) ~/.atuin/
+    ```
+
+    Then, move your data:
+
+    ```sh
+    [ -e ~/.atuin/data ] && echo 'error: destination exists' || \
+        mv -n ~/.local/share/atuin ~/.atuin/data
+    ```
+
+    Finally, re-enable daemon autostart, if you had it enabled before:
+
+    ```sh
+    atuin config set daemon.autostart true
+    ```
 
 ### `dialect`
 
@@ -73,7 +143,7 @@ Configures whether to automatically check for updates. When enabled, Atuin
 checks `https://api.atuin.sh` for the latest release at most once per hour,
 and prints a notice if you're out of date.
 
-Set to `false` to disable. With the update check disabled and sync not set
+Set to `false` to disable. With the update check turned off and sync not set
 up, Atuin makes no network requests of its own.
 
 ```toml
@@ -92,16 +162,17 @@ sync_address = "https://api.atuin.sh"
 
 ### `sync_frequency`
 
-Default: `1h`
+Default: `5m`
 
-How often to automatically sync with the server. This can be given in a
-"human-readable" format. For example, `10s`, `20m`, `1h`, etc.
+How often to automatically sync with the server, as a duration like `10s`,
+`20m`, `1h`, or `1d`.
 
-If set to `0`, Atuin will sync after every command. Some servers may rate limit
+A bare number is read as a count of seconds, for backwards compatibility. If set
+to `0`, Atuin will sync after every command — some servers may rate limit
 frequent syncs, but this won't cause any issues.
 
 ```toml
-sync_frequency = "1h"
+sync_frequency = "5m"
 ```
 
 ### `search_mode`
@@ -219,7 +290,7 @@ inline_height_shell_up_key_binding = 10
 
 ### `workspaces`
 
-Default: `false`
+Default: `true`
 
 This flag enables a pseudo filter-mode named "workspace": the filter is automatically
 activated when you're in a git repository.
@@ -373,6 +444,11 @@ history_filter = [
 ]
 ```
 
+A filtered command's output isn't captured either. To keep a command in history
+but not its output, use [`command_filter`](#command_filter) in `[output]`. The
+filter applies to the commands your AI agents run too: a matching call is
+[captured](../ai/threads.md#whats-captured) with its tool's name only.
+
 ### `cwd_filter`
 
 Use the `cwd` filter to exclude directories from history tracking.
@@ -388,6 +464,9 @@ This supports regular expressions, so you can hide pretty much whatever you want
 ```
 
 After updating that parameter, you can run [the prune command](../reference/prune.md) to remove old history entries that match the new filters.
+
+A [thread](../ai/threads.md#whats-captured) captured in a matching
+directory keeps only the names of the tools its agent called there.
 
 ### `store_failed`
 
@@ -412,31 +491,55 @@ to save it if any of them match. The patterns currently cover:
 
 | Service | Matches |
 |---------|---------|
-| AWS | Access key IDs, and commands setting `AWS_SECRET_ACCESS_KEY` or `AWS_SESSION_TOKEN` |
-| Azure | Commands setting `AZURE_*_KEY` |
-| Google Cloud | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY` |
+| AWS | Access key IDs, commands setting `AWS_SECRET_ACCESS_KEY` or `AWS_SESSION_TOKEN`, and Amazon Bedrock API keys |
+| Azure | Commands setting `AZURE_*_KEY`, and Entra ID client secrets |
+| Google Cloud | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY`, and API keys |
 | GitHub | Personal access tokens (old and new), OAuth access tokens (app and user), app installation tokens, and refresh tokens |
-| GitLab | Personal access tokens |
-| Slack | OAuth v2 bot and user tokens, and webhook URLs |
-| Stripe | Live and test keys |
-| Netlify | Authentication tokens |
-| npm | Tokens |
-| Pulumi | Personal access tokens |
+| GitLab | Personal, deploy, runner, CI/CD job, feed, SCIM, agent and OAuth tokens |
+| AI providers | Anthropic, OpenAI, OpenRouter, Groq, xAI, Perplexity, Pinecone, LangSmith and Hugging Face keys |
+| Slack | Bot, user, app and config tokens, and webhook URLs |
+| Stripe | Live, test and restricted keys |
+| Package registries | npm, PyPI, RubyGems, Clojars, Docker Hub and Artifactory tokens |
+| HashiCorp | Commands setting `NOMAD_TOKEN`, `CONSUL_HTTP_TOKEN` or `VAULT_TOKEN`, passing `-token` to `nomad` or `consul`, or sending an `X-Nomad-Token`, `X-Consul-Token` or `X-Vault-Token` header, each with the token itself rather than a reference like `$NOMAD_TOKEN` |
+| Infrastructure | DigitalOcean, Terraform Cloud, HashiCorp Vault, Fly.io, Heroku, Cloudflare origin CA, Databricks, PlanetScale, Supabase, Tailscale, Dynatrace, Grafana, Sentry, Doppler and OpenShift tokens |
+| Other services | Netlify, Pulumi, Atlassian, Linear, Notion, Postman, Shopify, SendGrid, Brevo, Square, EasyPost, Duffel, Frame.io, ReadMe, Prefect, Infracost and Telegram tokens, Discord and Microsoft Teams webhooks, 1Password service account tokens and age secret keys |
 | Atuin | `atuin login`, which takes your password and encryption key as arguments |
 
+Many of these come from the rules of [gitleaks](https://github.com/gitleaks/gitleaks).
 For the exact expressions, see
-[`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-client/src/secrets.rs).
+[`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-common/src/secrets.rs).
+
+The same patterns are applied to captured command output, and to
+[threads](../ai/threads.md#whats-captured). A command whose own text is
+clean can still print a credential, so recognised values in the captured
+output are replaced with `****` before storage. Only the value is replaced; the
+variable name or flag beside it stays. Output is also checked for credentials
+recognised by where they sit, which never keep a command out of history:
+
+- private keys (`-----BEGIN ... PRIVATE KEY-----`), JSON web tokens,
+  `Authorization` headers and bearer tokens, and `curl -u user:password`
+- the password in a web address or connection string (`postgres://app:pw@db`,
+  `password=...`)
+- a value assigned to a name that holds a credential, such as
+  `DB_PASSWORD=...`, `"client_secret": "..."` or `api_key: ...`. Placeholders
+  like `${TOKEN}`, `<password>` and `changeme` stay.
+
+A credential that color codes split apart in the output isn't recognised.
+Output that can't be redacted quickly (within a quarter of a second) isn't
+stored at all. Add patterns of your own with
+[`redact_patterns`](#redact_patterns).
 
 !!! note
 
     This is a safety net, not a guarantee. It only catches credentials in
     recognized formats — use [`history_filter`](#history_filter) for anything
-    else you need kept out, and see
-    [Excluding Commands from History](../guide/excluding-commands.md).
+    else you need kept out, or [`command_filter`](#command_filter) to keep a
+    command but not its output, and see
+    [Keeping Secrets Out of Atuin](../guide/excluding-commands.md).
 
 ### macOS Ctrl-n key shortcuts
 
-Default: `true`
+Default: `false`
 
 macOS doesn't have an ++alt++ key, although terminal emulators can often be configured to map the ++option++ key to be used as ++alt++. _However_, remapping ++option++ this way may prevent typing some characters, such as using ++option+3++ to type `#` on the British English layout. For such a scenario, set the `ctrl_n_shortcuts` option to `true` in your config file to replace ++alt+0++ to ++alt+9++ shortcuts with ++ctrl+0++ to ++ctrl+9++ instead:
 
@@ -457,25 +560,32 @@ show_numeric_shortcuts = true
 
 ### `network_timeout`
 
-Default: `30`
+Default: `30s`
 
-The max amount of time (in seconds) to wait for a network request. If any
-operations with a sync server take longer than this, the code will fail -
-rather than wait indefinitely.
+The maximum time to wait for a network request, as a duration like `500ms`,
+`30s`, or `5m`. If any operation with a sync server takes longer than this, it
+fails rather than waiting indefinitely.
+
+A bare number is read as a count of seconds (`network_timeout = 30`), for
+backwards compatibility.
 
 ```toml
-network_timeout = 30
+network_timeout = "30s"
 ```
 
 ### `network_connect_timeout`
 
-Default: `5`
+Default: `5s`
 
-The max time (in seconds) Atuin waits for a connection to become established with a
-remote sync server. Any longer than this and the request will fail.
+The maximum time Atuin waits for a connection to a remote sync server to be
+established, as a duration like `500ms`, `5s`, or `1m`. Any longer and the
+request fails.
+
+A bare number is read as a count of seconds (`network_connect_timeout = 5`), for
+backwards compatibility.
 
 ```toml
-network_connect_timeout = 5
+network_connect_timeout = "5s"
 ```
 
 ### `extra_headers`
@@ -499,12 +609,16 @@ extra_headers = { "CF-Access-Client-Id" = "...", "CF-Access-Client-Secret" = "..
 
 ### `local_timeout`
 
-Default: `5`
+Default: `2s`
 
-Timeout (in seconds) for acquiring a local database connection (SQLite).
+Timeout for acquiring a local database (SQLite) connection, as a duration like
+`500ms`, `2s`, or `1m`.
+
+A bare number is read as a count of seconds (`local_timeout = 2`), for backwards
+compatibility.
 
 ```toml
-local_timeout = 5
+local_timeout = "2s"
 ```
 
 ### `command_chaining`
@@ -773,34 +887,6 @@ common_prefix = [
 
 Configures commands that should be totally stripped from stats calculations. For example, 'sudo' should be ignored.
 
-## `dotfiles`
-
-Default: `false`
-
-To enable sync of shell aliases between hosts.
-
-Add the new section to the bottom of your config file, for every machine you use Atuin with
-
-```toml
-[dotfiles]
-enabled = true
-```
-
-Manage aliases using the command line options
-
-```shell
-# Alias 'k' to 'kubectl'
-atuin dotfiles alias set k kubectl
-
-# List all aliases
-atuin dotfiles alias list
-
-# Delete an alias
-atuin dotfiles alias delete k
-```
-
-After setting an alias, you will either need to restart your shell or source the init file for the change to take effect
-
 ## keys
 
 This section of the client config is specifically for configuring key-related settings.
@@ -992,7 +1078,24 @@ Default: `false`
 
 Automatically start and manage the daemon when needed.
 This isn't compatible with `systemd_socket = true`.
-If a legacy experimental daemon is already running, restart it manually once before using autostart.
+If a legacy experimental daemon is already running, restart it manually once
+before using autostart.
+On macOS, when you're logged in graphically, Atuin runs the daemon as a launchd
+agent at `~/Library/LaunchAgents/sh.atuin.daemon.plist`, and macOS tells you it
+added a background item the first time. With `ATUIN_HOME` or `ATUIN_CONFIG_DIR`
+set, Atuin starts the daemon itself instead.
+
+The agent is listed as `atuin` in System Settings, under General > Login Items.
+Switched off there, Atuin leaves it off and works without the daemon until you
+switch it back on. If the agent won't start, `daemon.stderr.log` in Atuin's
+logs directory says why. The agent gets the environment variables your
+config's paths use, such as `HISTDIR` for `db_path = "$HISTDIR/history.db"`,
+with the values they had when Atuin installed it. After you add one, run
+`atuin daemon restart`.
+
+`atuin daemon stop` stops the agent, but with `autostart` on, the next command
+that needs the daemon starts it again. `atuin config disable daemon` turns the
+daemon off and removes the agent.
 
 ```toml
 autostart = false
@@ -1000,32 +1103,47 @@ autostart = false
 
 ### `sync_frequency`
 
-Default: `300`
+Default: `5m`
 
-How often the daemon should sync, in seconds
+How often the daemon should sync, as a duration like `30s`, `5m`, or `1h`.
+
+A bare number is read as a count of seconds (`sync_frequency = 300`), for
+backwards compatibility.
 
 ```toml
-sync_frequency = 300
+sync_frequency = "5m"
 ```
 
 ### `socket_path`
 
-Default:
+Default if [`systemd_socket`] is false: `$TMPDIR/atuin-$UID/atuin.sock`, where
+`$UID` is your [user ID]. `$TMPDIR` defaults to `/tmp` if unset.
 
-```toml
-socket_path = "~/.local/share/atuin/atuin.sock"
-```
+Default if [`systemd_socket`] is true: `$XDG_RUNTIME_DIR/atuin.sock` if
+`$XDG_RUNTIME_DIR` is set, otherwise `$TMPDIR/atuin-$UID/atuin.sock`.
 
-Where to bind a Unix socket for client -> daemon communication
+[user ID]: https://en.wikipedia.org/wiki/User_identifier
+[`systemd_socket`](#systemd_socket)
 
-If XDG_RUNTIME_DIR is available, Atuin uses this directory instead.
+Where to bind a Unix socket for client -> daemon communication.
+
+The default doesn't depend on `ATUIN_HOME`. To run daemons for more than one
+`ATUIN_HOME` at the same time, set a different `socket_path` in each one's
+config.
+
+Older versions of Atuin used to listen on `$XDG_RUNTIME_DIR/atuin.sock` if
+`$XDG_RUNTIME_DIR` was set, otherwise `$XDG_DATA_HOME/atuin/atuin.sock` if
+`$XDG_DATA_HOME` was set, otherwise `~/.local/share/atuin/atuin.sock`. If you
+don't manually set `socket_path` in your config, Atuin will still look for an
+existing socket at the old path, as an older version of the daemon may be
+running there.
 
 ### `pidfile_path`
 
 Default:
 
 ```toml
-pidfile_path = "~/.local/share/atuin/atuin-daemon.pid"
+pidfile_path = "~/.atuin/data/atuin-daemon.pid"
 ```
 
 Path to the daemon `pidfile` used for process coordination.
@@ -1040,6 +1158,9 @@ Use a socket passed via systemd socket activation protocol instead of the path
 systemd_socket = false
 ```
 
+Note: setting this to true changes the default value of
+[`socket_path`](#socket_path).
+
 ### `tcp_port`
 
 Default: `8889`
@@ -1050,6 +1171,178 @@ The port to use for client -> daemon communication. Only used on non-Unix system
 tcp_port = 8889
 ```
 
+## Output capture
+
+Settings for [capturing command output](../guide/output-capture.md), which
+needs the [daemon](#daemon) and [pty-proxy](../reference/pty-proxy.md).
+
+```toml
+[output]
+enabled = true
+max_output_size = "1MB"
+max_disk_usage = "10%"
+command_filter = []
+```
+
+### `enabled`
+
+Default: `false`
+
+Capture and store the output of the commands you run. When `false`, nothing is
+captured and the other keys in this section are ignored. Turning it off stops
+the daemon storing output right away; turning it on takes a daemon restart and
+a new shell, or run `atuin config enable output-capture`, which also sets up
+the daemon and pty-proxy.
+
+```toml
+[output]
+enabled = true
+```
+
+### `max_output_size`
+
+Default: `"1MB"`
+
+The most output kept for a single command. When a command prints more, Atuin
+keeps the start and the end, half each, and drops the middle. Takes a size like
+`"512KB"` or `"2MB"`. pty-proxy reads it when your shell starts.
+
+```toml
+[output]
+max_output_size = "1MB"
+```
+
+### `max_disk_usage`
+
+Default: `"10%"`
+
+The most disk space captured output may use: a size (`"10GB"`), a share of
+the total size of the disk that holds Atuin's data directory (`"10%"`), or
+`"unlimited"`. Past the limit, the daemon deletes the oldest output first.
+Restart the daemon after changing it.
+
+```toml
+[output]
+max_disk_usage = "10%"
+```
+
+### `command_filter`
+
+Default: `[]`
+
+Commands whose output is never stored. Unlike
+[`history_filter`](#history_filter), a matching command is still recorded in
+your history -- only its output is dropped. Commands `history_filter` excludes
+never have their output stored either.
+
+```toml
+[output]
+## Note that these regular expressions are unanchored, i.e. if they don't start
+## with ^ or end with $, they'll match anywhere in the command.
+command_filter = [
+   "^cat ",
+   "^kubectl get secret",
+]
+```
+
+The filter applies to output captured after the daemon picks up the change; it
+doesn't remove output that's already stored.
+
+Some commands' output is never stored, whatever this filter says, because it
+can hold a credential: Atuin's own `atuin key`, `atuin login`, `atuin register`
+and `atuin account change-password`; commands that print a token or a password,
+such as `gh auth token`, `gcloud auth print-access-token`,
+`aws configure get`, `kubectl get secret`, `vault kv get`, `op read`,
+`pass show` and `security find-generic-password -w`; commands that print the
+environment (`printenv`, `env`); and commands that name a
+[sensitive file](#sensitive_files), such as `cat .env`.
+
+The filter also applies to the commands your AI agents run, whether or not
+output capture is enabled: a matching call is
+[captured](../ai/threads.md#whats-captured) without its output.
+
+### `sync`
+
+Default: `false`
+
+Reserved for syncing captured output between machines, which isn't
+implemented yet: captured output never leaves your machine, whatever this is
+set to.
+
+## Security
+
+Settings under `[security]` add to Atuin's built-in rules for keeping
+credentials out of what it stores: captured command output and
+[threads](../ai/threads.md#whats-captured). For which setting to reach for,
+see [Keeping Secrets Out of Atuin](../guide/excluding-commands.md).
+
+```toml
+[security]
+redact_patterns = []
+sensitive_files = []
+```
+
+### `redact_patterns`
+
+Default: `[]`
+
+Regular expressions for credentials of your own, redacted wherever Atuin
+redacts, alongside the [built-in patterns](#secrets_filter). Atuin replaces a
+pattern's `secret` group with `****` if it has one, otherwise everything the
+pattern matches.
+
+```toml
+[security]
+redact_patterns = [
+   "ACME-[0-9A-F]{32}",
+   "internal-api-key: (?<secret>\\S+)",
+]
+```
+
+These patterns don't keep a command out of history; use
+[`history_filter`](#history_filter) for that. When
+[`secrets_filter`](#secrets_filter) is off, captured command output is redacted
+with these patterns only.
+
+### `sensitive_files`
+
+Default: `[]`
+
+Files whose contents are credentials, on top of the built-in ones. The output
+of a command naming one isn't stored. An AI agent's reads of one aren't
+captured, and nor is what it writes to one.
+
+A glob without a `/` matches a file's name wherever it is. A glob with a `/`
+matches its path, from `~` or `/`, or anywhere below a directory for a relative
+one.
+
+```toml
+[security]
+sensitive_files = [
+   "*.secret",
+   "~/work/credentials/**",
+   "config/master.key",
+]
+```
+
+The built-in files are:
+
+- `.env` and `.env.*` (but not `.env.example`, `.env.sample`, `.env.template`
+  or `.env.dist`), `*.env` and `.envrc`
+- private keys: `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` (not their
+  `.pub` halves), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks` and `*.keystore`
+- Terraform state and variables: `*.tfstate`, `*.tfvars`
+- `.netrc`, `.pgpass`, `.git-credentials`, `.npmrc`, `.pypirc`, `.htpasswd`
+  and `.vault-token`
+- cloud and registry logins: `~/.aws/credentials` and its SSO cache, the
+  gcloud credential files, `~/.kube/config`, `~/.docker/config.json`, the
+  `gh` and `glab` logins, and Cargo, RubyGems and Terraform Cloud credentials
+- `~/.gnupg/private-keys-v1.d` and `~/.password-store`
+- the AI agents' own logins: `~/.claude/.credentials.json`,
+  `~/.codex/auth.json`, opencode's and Pi's `auth.json`
+- Atuin's encryption key (typically `~/.atuin/data/key`, or
+  `~/.local/share/atuin/key` in older installs)
+
 ## logs
 
 Behavior of log files.
@@ -1059,7 +1352,7 @@ Behavior of log files.
 enabled = true
 dir = "~/.atuin/logs"
 level = "info"
-retention = 4
+retention = "4d"
 ```
 
 ### enabled
@@ -1094,12 +1387,16 @@ level = "info"
 
 ### retention
 
-Default: `4`
+Default: `4d`
 
-How many days of log files to keep (per file type). Files older than this will be removed.
+How long to keep log files, per file type, as a duration like `12h` or `7d`.
+Files older than this are removed.
+
+A bare number is read as a count of days (`retention = 4`), for backwards
+compatibility.
 
 ```toml
-retention = 4
+retention = "4d"
 ```
 
 ### ai
@@ -1109,14 +1406,14 @@ A sub-object with specific options for AI logging:
 * `enabled` - whether to output AI logs; defaults to `logs.enabled`
 * `file` - the filename to use for the AI logs; defaults to `"ai.log"`. Always relative to `logs.dir`.
 * `level` - override the log level for the AI logs; defaults to `logs.level`
-* `retention` - how many days to store AI logs; defaults to `logs.retention`
+* `retention` - how long to keep AI logs; defaults to `logs.retention`
 
 ```toml
 [logs.ai]
 enabled = true
 file = "ai.log"
 level = "info"
-retention = 4
+retention = "4d"
 ```
 
 ### daemon
@@ -1126,14 +1423,14 @@ A sub-object with specific options for daemon logging:
 * `enabled` - whether to output daemon logs; defaults to `logs.enabled`
 * `file` - the filename to use for the daemon logs; defaults to `"daemon.log"`. Always relative to `logs.dir`.
 * `level` - override the log level for the daemon logs; defaults to `logs.level`
-* `retention` - how many days to store daemon logs; defaults to `logs.retention`
+* `retention` - how long to keep daemon logs; defaults to `logs.retention`
 
 ```toml
 [logs.daemon]
 enabled = true
 file = "daemon.log"
 level = "info"
-retention = 4
+retention = "4d"
 ```
 
 ### search
@@ -1143,14 +1440,14 @@ A sub-object with specific options for search logging:
 * `enabled` - whether to output search logs; defaults to `logs.enabled`
 * `file` - the filename to use for the search logs; defaults to `"search.log"`. Always relative to `logs.dir`.
 * `level` - override the log level for the search logs; defaults to `logs.level`
-* `retention` - how many days to store search logs; defaults to `logs.retention`
+* `retention` - how long to keep search logs; defaults to `logs.retention`
 
 ```toml
 [logs.search]
 enabled = true
 file = "search.log"
 level = "info"
-retention = 4
+retention = "4d"
 ```
 
 ## theme
@@ -1169,9 +1466,7 @@ max_depth = 10
 Default: `"default"`
 
 A theme name that must be present as a built-in (unset or `default` for the default,
-else `autumn` or `marine`), or found in the themes directory, with the suffix `.toml`.
-By default this is `~/.config/atuin/themes/` but can be overridden with the
-`ATUIN_THEME_DIR` environment variable.
+else `autumn` or `marine`), or found in `~/.atuin/themes/`, with the suffix `.toml`.
 
 ```toml
 name = "my-theme"
@@ -1271,7 +1566,7 @@ The default colors are ANSI palette colors, so they automatically match your
 terminal's color scheme. They can also be customized via the `Syntax*` keys in
 a [theme](../guide/theming.md).
 
-Not available on platforms where tree-sitter doesn't build (for example, Windows),
+Not available on platforms where tree-sitter doesn't build,
 so commands are shown unhighlighted there.
 
 ```toml

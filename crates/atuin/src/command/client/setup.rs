@@ -1,23 +1,28 @@
-use atuin_client::settings::Settings;
+use std::io::{self, Write};
 
+use atuin_client::settings::Settings;
 use colored::Colorize;
 use eyre::Result;
-use std::io::{self, Write};
 use toml_edit::{DocumentMut, value};
+use tracing::instrument;
 
+#[instrument(level = "trace", skip_all, err)]
 pub async fn run(_settings: &Settings) -> Result<()> {
     let enable_ai = prompt(
         "Atuin AI",
         "This will enable command generation and other AI features via the question mark key",
         Some(
-            "By default, Atuin AI only has access to the name and version of your operating system and shell - your shell history is not sent to the AI.",
+            "By default, Atuin AI only has access to the name and version of your operating \
+             system and shell - your shell history is not sent to the AI.",
         ),
+        DefaultAnswer::Yes,
     )?;
 
     let enable_daemon = prompt(
         "Atuin Daemon",
         "This will enable improved search and history sync using a persistent background process",
         None,
+        DefaultAnswer::Yes,
     )?;
 
     let config_file = Settings::get_config_path()?;
@@ -46,36 +51,47 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     if changed {
         tokio::fs::write(config_file, doc.to_string()).await?;
 
-        println!(
-            "{check} Settings updated successfully",
-            check = "✓".bold().bright_green()
-        );
+        println!("{check} Settings updated successfully", check = "✓".bold().bright_green());
     } else {
-        println!(
-            "{check} No settings changed",
-            check = "✓".bold().bright_green()
-        );
+        println!("{check} No settings changed", check = "✓".bold().bright_green());
     }
 
     Ok(())
 }
 
-pub fn prompt(feature: &str, description: &str, note: Option<&str>) -> Result<bool> {
-    println!(
-        "> Enable {feature}?",
-        feature = feature.bold().bright_blue()
-    );
+#[derive(Clone, Copy, Debug)]
+pub enum DefaultAnswer {
+    Yes,
+    #[cfg_attr(not(feature = "octavo"), expect(dead_code))]
+    No,
+}
+
+pub fn prompt(
+    feature: &str,
+    description: &str,
+    note: Option<&str>,
+    default: DefaultAnswer,
+) -> Result<bool> {
+    let q = match default {
+        DefaultAnswer::Yes => "[Y/n]",
+        DefaultAnswer::No => "[y/N]",
+    };
+
+    println!("> Enable {feature}?", feature = feature.bold().bright_blue());
     if let Some(note) = note {
         println!("  {description}");
-        print!("  {note} {q} ", q = "[Y/n]".bold());
+        print!("  {note} {q} ", q = q.bold());
     } else {
-        print!("  {description} {q} ", q = "[Y/n]".bold());
+        print!("  {description} {q} ", q = q.bold());
     }
 
     io::stdout().flush().ok();
 
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-    Ok(answer.is_empty() || answer == "y" || answer == "yes")
+    Ok(match input.trim().to_lowercase().as_str() {
+        "" => matches!(default, DefaultAnswer::Yes),
+        "y" | "yes" => true,
+        _ => false,
+    })
 }

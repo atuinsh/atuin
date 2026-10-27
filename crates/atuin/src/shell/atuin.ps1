@@ -241,4 +241,24 @@ New-Module -Name Atuin -ScriptBlock {
     }
 
     Export-ModuleMember -Function @("Enable-AtuinSearchKeys", "PSConsoleHostReadLine")
+
+    try {
+        # Fire and forget the `prepare-search-index` command to avoid blocking the shell.
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo.FileName = "atuin"
+        $process.StartInfo.Arguments = "__internal prepare-search-index"
+        $process.StartInfo.EnvironmentVariables["ATUIN_SHELL"] = "powershell"
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardInput = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        $process.Start() | Out-Null
+        $process.StandardInput.Close()
+        $process.BeginOutputReadLine()
+        $process.BeginErrorReadLine()
+    }
+    catch {
+        # Ignore errors from `prepare-search-index`; it's only an optimization.
+    }
 } | Import-Module -Global

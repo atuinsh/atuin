@@ -2,30 +2,646 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## 18.24.2
 
 ### Bug Fixes
 
-- Copy vendored axoasset into docker builder stage ([#3816](https://github.com/atuinsh/atuin/issues/3816))
+- *(ai)* Import IntoStaticStr from strum_macros, not strum ([#4480](https://github.com/atuinsh/atuin/issues/4480))
+- *(ai)* Improve detection of git repositories ([#4450](https://github.com/atuinsh/atuin/issues/4450))
+- *(client)* Resolve relative config paths beside config.toml, not the cwd ([#4479](https://github.com/atuinsh/atuin/issues/4479))
+- *(config)* Don't print errors twice ([#4501](https://github.com/atuinsh/atuin/issues/4501))
+- *(daemon)* Fetch the server's capabilities until a fetch succeeds
+- *(daemon)* Spare a stale pidfile's PID when evicting ([#4512](https://github.com/atuinsh/atuin/issues/4512))
+- *(daemon)* Handle daemons not spawned by atuin ([#4516](https://github.com/atuinsh/atuin/issues/4516))
+- *(output)* Keep quoted words together in output search ([#4502](https://github.com/atuinsh/atuin/issues/4502))
+- *(packfile)* Load only the records inside a manifest's range
+- *(pty-proxy)* Standalone init with `atuin pty-proxy init` ([#4449](https://github.com/atuinsh/atuin/issues/4449))
+- *(pty-proxy)* Wait for input on a non-blocking inherited stdin ([#4486](https://github.com/atuinsh/atuin/issues/4486))
+- *(pty-proxy)* Don't re-exec shells running commands from a string or file ([#4414](https://github.com/atuinsh/atuin/issues/4414))
+- *(search)* Don't panic when copying with no results ([#4426](https://github.com/atuinsh/atuin/issues/4426))
+- *(server)* Let `ATUIN_*` environment variables override server.toml ([#4456](https://github.com/atuinsh/atuin/issues/4456))
+- *(update)* Accept ATUIN_GITHUB_TOKEN ([#4262](https://github.com/atuinsh/atuin/issues/4262))
+- Remove duplicated word in the no-history stats message ([#4451](https://github.com/atuinsh/atuin/issues/4451))
+- Error printing in `?` handler ([#4448](https://github.com/atuinsh/atuin/issues/4448))
+- Normalize relative gitdir paths in worktree resolution ([#4506](https://github.com/atuinsh/atuin/issues/4506))
+- Upgrade regressions found in release QA ([#4519](https://github.com/atuinsh/atuin/issues/4519))
+
+
+### Documentation
+
+- Fix ctrl_n_shortcuts default value ([#4458](https://github.com/atuinsh/atuin/issues/4458))
+- List all history list --format variables ([#4460](https://github.com/atuinsh/atuin/issues/4460))
+- Fix the --reverse default for history list ([#4472](https://github.com/atuinsh/atuin/issues/4472))
+- Mention December default in wrapped --year help ([#4476](https://github.com/atuinsh/atuin/issues/4476))
 
 
 ### Features
 
-- Migrate TLS backend from rustls to native-tls ([#3807](https://github.com/atuinsh/atuin/issues/3807))
-- Make `update` a real subcommand ([#3813](https://github.com/atuinsh/atuin/issues/3813))
+- *(common)* AbsPath and AbsPathBuf, Path and PathBuf checked to be absolute ([#4481](https://github.com/atuinsh/atuin/issues/4481))
+- *(common)* Find a process's cgroup under cgroup v1 and v2 ([#4513](https://github.com/atuinsh/atuin/issues/4513))
+- *(daemon)* Run the daemon as a launchd agent on macOS ([#4517](https://github.com/atuinsh/atuin/issues/4517))
+- *(pty-proxy)* Window title follows child process ([#4447](https://github.com/atuinsh/atuin/issues/4447))
+- *(secrets)* Keep HashiCorp tokens out of history ([#4445](https://github.com/atuinsh/atuin/issues/4445))
 
 
 ### Miscellaneous Tasks
 
-- Fix deny.toml and get it to run in CI ([#3808](https://github.com/atuinsh/atuin/issues/3808))
-- Remove codspeed workflow ([#3812](https://github.com/atuinsh/atuin/issues/3812))
+- Give mono its own nixfmt step and scope atuin's to atuin/
+- Say a /merge's landed commit gets CI on main
+- Rebuild the apt .deb cache for Ubuntu 24.04 ([#4504](https://github.com/atuinsh/atuin/issues/4504))
+- Remove the benchmarks ([#4511](https://github.com/atuinsh/atuin/issues/4511))
+
+
+### Performance
+
+- *(common)* Compile the vendor regexes once ([#4485](https://github.com/atuinsh/atuin/issues/4485))
+- *(common)* Drop the tree watcher's file-id cache ([#4492](https://github.com/atuinsh/atuin/issues/4492))
+- *(common)* Release a line reader's buffer at the end of the file ([#4494](https://github.com/atuinsh/atuin/issues/4494))
+- *(common)* Keep no tree watcher entry for a rejected file ([#4493](https://github.com/atuinsh/atuin/issues/4493))
+- *(daemon)* Warm up only a resumed session's unanswered calls ([#4490](https://github.com/atuinsh/atuin/issues/4490))
+- *(packfile)* Compress packs in one shot ([#4484](https://github.com/atuinsh/atuin/issues/4484))
 
 
 ### Refactor
 
+- *(daemon)* Managed daemon service with multiple backends ([#4488](https://github.com/atuinsh/atuin/issues/4488))
+- *(daemon)* Move daemon startup into the service module ([#4503](https://github.com/atuinsh/atuin/issues/4503))
+- *(daemon)* Keep where the daemon listens behind service::address ([#4514](https://github.com/atuinsh/atuin/issues/4514))
+- *(daemon)* Take up the daemon's socket in SocketHolder, not Backend ([#4515](https://github.com/atuinsh/atuin/issues/4515))
+- *(deps)* Bump clap_complete_nushell from 4.6.0 to 4.6.2 ([#4473](https://github.com/atuinsh/atuin/issues/4473))
+- *(deps)* Bump clap_complete from 4.6.9 to 4.6.11 ([#4396](https://github.com/atuinsh/atuin/issues/4396))
+- *(deps)* Bump ratatui from 0.30.0 to 0.30.2 ([#4474](https://github.com/atuinsh/atuin/issues/4474))
+- *(deps)* Bump certifi from 2025.11.12 to 2026.10.19 in /docs in the uv group across 1 directory ([#4500](https://github.com/atuinsh/atuin/issues/4500))
+- *(pty-proxy)* Run on tokio with the parser on its own runtime ([#4482](https://github.com/atuinsh/atuin/issues/4482))
+- *(pty-proxy)* Forward captures to the daemon on the proxy's runtime ([#4487](https://github.com/atuinsh/atuin/issues/4487))
+- *(pty-proxy)* Rename the screen's parser to Emulator ([#4510](https://github.com/atuinsh/atuin/issues/4510))
+- *(pty-proxy)* Migrate output parsing to vte ([#4518](https://github.com/atuinsh/atuin/issues/4518))
+
+
+### Testing
+
+- *(daemon)* Run the output index tests under rstest ([#4496](https://github.com/atuinsh/atuin/issues/4496))
+
+
+## 18.24.1
+
+### Bug Fixes
+
+- *(daemon)* Verify daemon version in HTTP headers ([#4431](https://github.com/atuinsh/atuin/issues/4431))
+
+
+### Features
+
+- *(ai-session)* Support omp threads and keep reply providers for resume ([#4441](https://github.com/atuinsh/atuin/issues/4441))
+- *(config)* Insert new keys where they're documented ([#4432](https://github.com/atuinsh/atuin/issues/4432))
+
+
+## 18.24.0
+
+### Bug Fixes
+
+- *(ai)* Saturate file-tracker mtimes and rebuild on new migrations ([#4250](https://github.com/atuinsh/atuin/issues/4250))
+- *(ai)* Start the daemon before ai commands if autostart is enabled ([#4269](https://github.com/atuinsh/atuin/issues/4269))
+- *(ai)* Add MCP list cache fields and a since filter for session list ([#4294](https://github.com/atuinsh/atuin/issues/4294))
+- *(ai)* Only look up repos for this host's sessions in the resume picker ([#4400](https://github.com/atuinsh/atuin/issues/4400))
+- *(ai)* Fit the resume picker's title to the version so a prerelease isn't cut off ([#4406](https://github.com/atuinsh/atuin/issues/4406))
+- *(ai)* Correct large-file read guidance ([#4355](https://github.com/atuinsh/atuin/issues/4355))
+- *(ai-session)* Read an unknown parent kind as None ([#4301](https://github.com/atuinsh/atuin/issues/4301))
+- *(ai-session)* Count content-derived calls once per session lineage ([#4314](https://github.com/atuinsh/atuin/issues/4314))
+- *(ai-session)* Keep compacted Claude and Pi sessions whole when restored from sync ([#4357](https://github.com/atuinsh/atuin/issues/4357))
+- *(ai-session)* Link a Claude compaction that kept messages to the line before it ([#4370](https://github.com/atuinsh/atuin/issues/4370))
+- *(ai-session)* Harden capture, sync and resume across agents ([#4387](https://github.com/atuinsh/atuin/issues/4387))
+- *(ai-session)* Fix opencode 1.x resume capture, A→B→A catch-up, synced tail, and picker tty, keys and idle CPU ([#4398](https://github.com/atuinsh/atuin/issues/4398))
+- *(ai-session)* Switch inside a merged run past a failed call without losing the run's earlier text ([#4402](https://github.com/atuinsh/atuin/issues/4402))
+- *(build)* Drop atuin's implicit arboard feature so nix builds again ([#610](https://github.com/atuinsh/atuin/issues/610))
+- *(config)* Don't let a default ~/.atuin/config.toml hide the legacy config, and warn when one does ([#4420](https://github.com/atuinsh/atuin/issues/4420))
+- *(config)* Avoid shadowing data dir, fix gaps in avoidance logic ([#4421](https://github.com/atuinsh/atuin/issues/4421))
+- *(daemon)* Recover ai sessions in the background at boot ([#4293](https://github.com/atuinsh/atuin/issues/4293))
+- *(daemon)* Pick up ai.capture_sessions changes without a restart ([#4362](https://github.com/atuinsh/atuin/issues/4362))
+- *(daemon)* Run the daemonized daemon from / ([#4358](https://github.com/atuinsh/atuin/issues/4358))
+- *(daemon)* Write the record store before history.db when a command finishes ([#4361](https://github.com/atuinsh/atuin/issues/4361))
+- *(daemon)* Time out shell hook calls to an unresponsive daemon ([#4360](https://github.com/atuinsh/atuin/issues/4360))
+- *(daemon)* Only restart a daemon older than the client ([#4359](https://github.com/atuinsh/atuin/issues/4359))
+- *(doctor)* Fix sqlite error in `atuin doctor` ([#4354](https://github.com/atuinsh/atuin/issues/4354))
+- *(hook)* Write absolute executable path to agent configs ([#4044](https://github.com/atuinsh/atuin/issues/4044))
+- *(pty-proxy)* Fix forwarding of output to parent terminal under load ([#4217](https://github.com/atuinsh/atuin/issues/4217))
+- *(pty-proxy)* Fix PTY proxy initialization in fish ([#4224](https://github.com/atuinsh/atuin/issues/4224))
+- *(pty-proxy)* Preserve login shell status in init script ([#4271](https://github.com/atuinsh/atuin/issues/4271))
+- *(pty-proxy)* Periodically touch the socket to prevent automatic deletion ([#4366](https://github.com/atuinsh/atuin/issues/4366))
+- *(scripts)* Correct shebang prefix handling ([#4416](https://github.com/atuinsh/atuin/issues/4416))
+- *(sync)* Give sync errors their full cause and HTTP status, and flag a non-Atuin `sync_address` ([#4423](https://github.com/atuinsh/atuin/issues/4423))
+- *(systemd)* Stop pulling in systemd-networkd-wait-online ([#4415](https://github.com/atuinsh/atuin/issues/4415))
+- *(vendor)* Find the repository root from the script's location
+- Timezone awareness during atuin search ([#3762](https://github.com/atuinsh/atuin/issues/3762))
+- Handling of OSC 133 sequences in prompt ([#4221](https://github.com/atuinsh/atuin/issues/4221))
+- Don't (re)start daemon on history end ([#4229](https://github.com/atuinsh/atuin/issues/4229))
+- Fall back to saving history locally when the daemon can't be started ([#4234](https://github.com/atuinsh/atuin/issues/4234))
+- Use github release proxy ([#4297](https://github.com/atuinsh/atuin/issues/4297))
+- Improve "output capture disabled" message ([#4296](https://github.com/atuinsh/atuin/issues/4296))
+- Literal out of range for usize ([#4295](https://github.com/atuinsh/atuin/issues/4295))
+- Meaning of today in mcp since ([#4300](https://github.com/atuinsh/atuin/issues/4300))
+- Atuin update --prerelease ([#4429](https://github.com/atuinsh/atuin/issues/4429))
+
+
+### Documentation
+
+- *(ai)* Describe continuing in another agent as carrying tool calls over ([#4403](https://github.com/atuinsh/atuin/issues/4403))
+- *(zinit)* Fix bpick pattern, add wait/lucid ices ([#3492](https://github.com/atuinsh/atuin/issues/3492))
+- Limit installation methods to those that install the latest version ([#4219](https://github.com/atuinsh/atuin/issues/4219))
+- Remove information about dotfiles in support matrix ([#4298](https://github.com/atuinsh/atuin/issues/4298))
+
+
+### Features
+
+- *(ai)* List, read and richer search MCP tools for sessions ([#4280](https://github.com/atuinsh/atuin/issues/4280))
+- *(ai)* Add `atuin ai resume`, a picker over agent sessions ([#4311](https://github.com/atuinsh/atuin/issues/4311))
+- *(ai)* Resume sessions recorded on other machines ([#4315](https://github.com/atuinsh/atuin/issues/4315))
+- *(ai)* Give every AI session a fixed UUIDv7 atuin id ([#4326](https://github.com/atuinsh/atuin/issues/4326))
+- *(ai)* Show parent, root and children links as atuin ids ([#4337](https://github.com/atuinsh/atuin/issues/4337))
+- *(ai)* Continue a session in another agent from `atuin ai resume` ([#4325](https://github.com/atuinsh/atuin/issues/4325))
+- *(ai)* Fork a session from `atuin ai resume` ([#4340](https://github.com/atuinsh/atuin/issues/4340))
+- *(ai)* Work out a session's heads on demand, with Codex rows linked to the row before ([#4341](https://github.com/atuinsh/atuin/issues/4341))
+- *(ai)* Catch sessions up with sync on resume, and fork from another machine's branch ([#4345](https://github.com/atuinsh/atuin/issues/4345))
+- *(ai)* Switch a diverged session's copy to another machine's branch on resume ([#4350](https://github.com/atuinsh/atuin/issues/4350))
+- *(ai)* Capture tool calls as well as messages ([#4352](https://github.com/atuinsh/atuin/issues/4352))
+- *(ai)* Capture and restore the diffs of agents' edits ([#4369](https://github.com/atuinsh/atuin/issues/4369))
+- *(ai)* Filter session reads by query and role, rank substring history matches first ([#4367](https://github.com/atuinsh/atuin/issues/4367))
+- *(ai)* Add `atuin resume` as short for `atuin ai resume` ([#4382](https://github.com/atuinsh/atuin/issues/4382))
+- *(ai)* List forks as a tree under their root in the session picker, mark running forks, and name the provider in Codex rollouts ([#4399](https://github.com/atuinsh/atuin/issues/4399))
+- *(ai)* Show the atuin id as ID and the harness's own as Harness ID in the resume picker's Inspect tab ([#4401](https://github.com/atuinsh/atuin/issues/4401))
+- *(ai)* Session picker reader pane, two-line rows grouped by day, visible scopes, per-session actions and an in-list resume chooser ([#4383](https://github.com/atuinsh/atuin/issues/4383))
+- *(ai)* Show atuin's MCP tool calls as 🐢 atuin <tool> in the session reader ([#4411](https://github.com/atuinsh/atuin/issues/4411))
+- *(ai)* Rename AI sessions to threads: atuin threads, [threads] and threads.db ([#4418](https://github.com/atuinsh/atuin/issues/4418))
+- *(ai-session)* Faster sidecar rebuilds, session grouping, and one search API ([#4302](https://github.com/atuinsh/atuin/issues/4302))
+- *(ai-session)* Fast-forward a behind transcript to its synced head ([#4344](https://github.com/atuinsh/atuin/issues/4344))
+- *(ai-session)* Search by message role and without subagents, and know a stateless MCP caller's own session ([#4385](https://github.com/atuinsh/atuin/issues/4385))
+- *(ai-session)* Show short session ids, and select text with the mouse in the resume picker ([#4404](https://github.com/atuinsh/atuin/issues/4404))
+- *(ai-session)* Capture sessions from when it's turned on, and atuin config enable ai-sessions ([#4389](https://github.com/atuinsh/atuin/issues/4389))
+- *(api-client)* Add the atuin.api.v1 protos ([#4312](https://github.com/atuinsh/atuin/issues/4312))
+- *(common)* Add BlockingPool, a cap on concurrent blocking work ([#4242](https://github.com/atuinsh/atuin/issues/4242))
+- *(daemon)* Store daemon socket path in pidfile ([#4253](https://github.com/atuinsh/atuin/issues/4253))
+- *(i18n)* Localize user-facing text with Fluent ([#4233](https://github.com/atuinsh/atuin/issues/4233))
+- *(mcp)* Add `atuin mcp install <agent>` and per-agent setup docs ([#4417](https://github.com/atuinsh/atuin/issues/4417))
+- *(output)* Add command_filter to drop output but keep history ([#4268](https://github.com/atuinsh/atuin/issues/4268))
+- *(pty-proxy)* Switch from OSC 133 to Atuin-specific sequence ([#4291](https://github.com/atuinsh/atuin/issues/4291))
+- *(search)* Add accept-cd and return-cd keymap actions ([#4319](https://github.com/atuinsh/atuin/issues/4319))
+- *(secrets)* Add several new known secrets formats ([#4364](https://github.com/atuinsh/atuin/issues/4364))
+- *(server)* Read the database password from db_password_file ([#4425](https://github.com/atuinsh/atuin/issues/4425))
+- Read login password and key from env or stdin ([#3498](https://github.com/atuinsh/atuin/issues/3498))
+- Enable workspaces by default ([#1838](https://github.com/atuinsh/atuin/issues/1838))
+- Capture ai agent sessions into the store ([#4212](https://github.com/atuinsh/atuin/issues/4212))
+- Automatically open login link ([#4351](https://github.com/atuinsh/atuin/issues/4351))
+- Send atuin register's login link to the hub's signup page ([#4353](https://github.com/atuinsh/atuin/issues/4353))
+- Config disable ([#4349](https://github.com/atuinsh/atuin/issues/4349))
+- Unify all data in `~/.atuin` (customizable with `ATUIN_HOME`) ([#4380](https://github.com/atuinsh/atuin/issues/4380))
+
+
+### Miscellaneous Tasks
+
+- *(buildkite)* Fix the installer hang and address #4274 review ([#4275](https://github.com/atuinsh/atuin/issues/4275))
+- *(buildkite)* Build tests once, split test jobs by timing ([#4278](https://github.com/atuinsh/atuin/issues/4278))
+- *(nix)* Build with crane and cache to atuin.cachix.org ([#4348](https://github.com/atuinsh/atuin/issues/4348))
+- *(nix)* Set USER so cachix runs in the CI container
+- *(nix)* Use stdenv.hostPlatform.isDarwin in atuin.nix ([#4391](https://github.com/atuinsh/atuin/issues/4391))
+- Sccache for codegen jobs, rust-cache for the rest ([#4214](https://github.com/atuinsh/atuin/issues/4214))
+- Fix Clippy warning about `time::Duration` ([#4231](https://github.com/atuinsh/atuin/issues/4231))
+- Rename `Backoff::Linear` to `Backoff::Constant` ([#4238](https://github.com/atuinsh/atuin/issues/4238))
+- Reduce record store disk usage ([#4249](https://github.com/atuinsh/atuin/issues/4249))
+- Run CI on Buildkite ([#4274](https://github.com/atuinsh/atuin/issues/4274))
+- Remove the GitHub Actions workflows Buildkite replaced ([#4277](https://github.com/atuinsh/atuin/issues/4277))
+- Use internal session ids ([#4279](https://github.com/atuinsh/atuin/issues/4279))
+- Tell hub when main moves
+- Tiny bit of CONTRIBUTING.md formatting ([#4317](https://github.com/atuinsh/atuin/issues/4317))
+- Land pull requests with /merge
+- One check per pipeline, and a merge status for /merge
+- Skip CI on the update /merge makes, and keep other repos' links as text
+- Keep lockfiles, vendored code and fixtures out of rg results
+- Gate each deploy on its own checks and skip unchanged subtrees
+
+
+### Performance
+
+- *(ai)* Make AI session rebuilds fast ([#4343](https://github.com/atuinsh/atuin/issues/4343))
+- *(ai-session)* Import existing sessions in batches, off the daemon's runtime ([#4408](https://github.com/atuinsh/atuin/issues/4408))
+- *(daemon)* Load the search index with a linear history scan ([#4347](https://github.com/atuinsh/atuin/issues/4347))
+- *(dotfiles)* Remove defunct bind feature detection for fish ([#2532](https://github.com/atuinsh/atuin/issues/2532))
+- Build the bundled SQLite with SQLITE_DEFAULT_MEMSTATUS=0 ([#4342](https://github.com/atuinsh/atuin/issues/4342))
+- Share Settings through Arc instead of deep-cloning it ([#4410](https://github.com/atuinsh/atuin/issues/4410))
+
+
+### Refactor
+
+- *(ai-session)* Squash sidecar migrations, intern repeated message text, drop session transcript ([#4371](https://github.com/atuinsh/atuin/issues/4371))
+- *(ai-session)* Drop compatibility with records, checkpoints and daemons from earlier builds ([#4373](https://github.com/atuinsh/atuin/issues/4373))
+- *(deps)* Bump vmactions/omnios-vm from 1.3.4 to 1.3.6 ([#4029](https://github.com/atuinsh/atuin/issues/4029))
+- *(deps)* Bump debian from bookworm-20260713-slim to bookworm-20260918-slim ([#4025](https://github.com/atuinsh/atuin/issues/4025))
+- *(deps)* Bump lukemathwalker/cargo-chef from `e406ad0` to `9a2089c` ([#4026](https://github.com/atuinsh/atuin/issues/4026))
+- *(deps)* Bump urllib3 from 2.7.0 to 2.8.0 in /docs in the uv group across 1 directory ([#4313](https://github.com/atuinsh/atuin/issues/4313))
+- *(deps)* Bump xxhash-rust from 0.8.15 to 0.8.16 in the cargo group across 1 directory ([#4322](https://github.com/atuinsh/atuin/issues/4322))
+- *(deps)* Bump tokio-util from 0.7.18 to 0.7.19 ([#4289](https://github.com/atuinsh/atuin/issues/4289))
+- *(deps)* Bump rustix from 1.1.4 to 1.1.5 ([#4288](https://github.com/atuinsh/atuin/issues/4288))
+- *(deps)* Bump colored from 2.2.0 to 3.1.1 ([#4339](https://github.com/atuinsh/atuin/issues/4339))
+- *(deps)* Bump async-trait from 0.1.89 to 0.1.92 ([#4338](https://github.com/atuinsh/atuin/issues/4338))
+- *(deps)* Bump mozilla-actions/sccache-action from 0.0.9 to 0.0.11 ([#4287](https://github.com/atuinsh/atuin/issues/4287))
+- *(deps)* Bump thiserror from 2.0.19 to 2.0.21 ([#4284](https://github.com/atuinsh/atuin/issues/4284))
+- *(deps)* Bump libc from 0.2.186 to 0.2.190 ([#4397](https://github.com/atuinsh/atuin/issues/4397))
+- *(deps)* Bump lukemathwalker/cargo-chef from `9a2089c` to `b4b459d` ([#4394](https://github.com/atuinsh/atuin/issues/4394))
+- *(deps)* Bump debian from bookworm-20260918-slim to bookworm-20261005-slim ([#4393](https://github.com/atuinsh/atuin/issues/4393))
+- Hold secrets in secrecy types ([#4237](https://github.com/atuinsh/atuin/issues/4237))
+- Improve `Shell::default_shell`; fixes hanging test under Nextest ([#4267](https://github.com/atuinsh/atuin/issues/4267))
+- Switch from `directories` to `dirs` ([#4306](https://github.com/atuinsh/atuin/issues/4306))
+- Clean up atuin-common crate features ([#4323](https://github.com/atuinsh/atuin/issues/4323))
+- Add `PathBufExt::joined` to avoid unnecessary cloning of `PathBuf`s ([#4409](https://github.com/atuinsh/atuin/issues/4409))
+
+
+### Testing
+
+- *(ai-session)* E2e tests for capture, sync and resume; scan new dirs in the tree watcher ([#4368](https://github.com/atuinsh/atuin/issues/4368))
+- Deflake the e2e shell tests
+
+
+## 18.23.0
+
+### Bug Fixes
+
+- *(common)* Sleep before each backoff attempt ([#4129](https://github.com/atuinsh/atuin/issues/4129))
+- *(common)* Include the cause in the sqlite pool creation error ([#4185](https://github.com/atuinsh/atuin/issues/4185))
+- *(docs)* Resolve atuin.sh self-hosting link 404 + tidy 404 page ([#4194](https://github.com/atuinsh/atuin/issues/4194))
+- *(hook)* Accept a string tool_response from codex ([#4171](https://github.com/atuinsh/atuin/issues/4171))
+- *(pty-proxy)* Resolve zsh --shell to an absolute path with :c ([#4097](https://github.com/atuinsh/atuin/issues/4097))
+- *(wrapped)* Command Evolution ignoring common_prefix ([#4148](https://github.com/atuinsh/atuin/issues/4148))
+- Clarify migration errors caused by conflicting Atuin versions ([#4173](https://github.com/atuinsh/atuin/issues/4173))
+- Restart the daemon when enabling output capture ([#4215](https://github.com/atuinsh/atuin/issues/4215))
+
+
+### Documentation
+
+- Remove msrv chip ([#4112](https://github.com/atuinsh/atuin/issues/4112))
+- Slightly more pleasant help UX ([#4111](https://github.com/atuinsh/atuin/issues/4111))
+- Clarify atuin-client vs atuin-common crate placement ([#4192](https://github.com/atuinsh/atuin/issues/4192))
+
+
+### Features
+
+- *(atuin-common)* Cross-platform free-space probing for disk limits ([#4122](https://github.com/atuinsh/atuin/issues/4122))
+- *(atuin-common)* Add HighlightedText type with proto conversion ([#4123](https://github.com/atuinsh/atuin/issues/4123))
+- *(atuin-common)* Add generic SQLite FTS5 helper ([#4124](https://github.com/atuinsh/atuin/issues/4124))
+- *(atuin-daemon)* Full-text search index over captured output ([#4145](https://github.com/atuinsh/atuin/issues/4145))
+- *(common)* Add fs::tree_watcher directory watcher utility ([#4188](https://github.com/atuinsh/atuin/issues/4188))
+- *(common)* Generic file-tail and jsonl-tail utilities ([#4186](https://github.com/atuinsh/atuin/issues/4186))
+- *(common)* SqliteObserver for cross-process SQLite change observation ([#4195](https://github.com/atuinsh/atuin/issues/4195))
+- *(config)* Accept unit-aware durations in config ([#4128](https://github.com/atuinsh/atuin/issues/4128))
+- *(harnesstools)* Generic AI session-capture interface ([#4191](https://github.com/atuinsh/atuin/issues/4191))
+- *(mcp)* Add atuin_output_search tool ([#4157](https://github.com/atuinsh/atuin/issues/4157))
+- *(search)* Allow repeated exit-code filters ([#4132](https://github.com/atuinsh/atuin/issues/4132))
+- Improve `atuin_common::ansi::to_plain_text` ([#4101](https://github.com/atuinsh/atuin/issues/4101))
+- Full-text search over captured command output ([#4126](https://github.com/atuinsh/atuin/issues/4126))
+- Json and ndjson output styles for `output search` ([#4158](https://github.com/atuinsh/atuin/issues/4158))
+- AI Session Capture Daemon Interface ([#4184](https://github.com/atuinsh/atuin/issues/4184))
+- Add easy config shortcuts ([#4213](https://github.com/atuinsh/atuin/issues/4213))
+
+
+### Miscellaneous Tasks
+
+- *(atuin-common)* Remove eyre in favor of thiserror ([#4103](https://github.com/atuinsh/atuin/issues/4103))
+- *(output-capture)* Reconcile can no longer crash ([#4153](https://github.com/atuinsh/atuin/issues/4153))
+- Replace daemonize with daemonix ([#4099](https://github.com/atuinsh/atuin/issues/4099))
+- Bump sysinfo to 0.39.6 ([#4102](https://github.com/atuinsh/atuin/issues/4102))
+- Lower MSRV to 1.95 ([#4100](https://github.com/atuinsh/atuin/issues/4100))
+- Remove eyre from atuin-domain ([#4107](https://github.com/atuinsh/atuin/issues/4107))
+- Ban eyre from atuin-history ([#4108](https://github.com/atuinsh/atuin/issues/4108))
+- Remove eyre from atuin-pty-proxy ([#4110](https://github.com/atuinsh/atuin/issues/4110))
+- Less strict versions ([#4143](https://github.com/atuinsh/atuin/issues/4143))
+- Cut build-job time ([#4182](https://github.com/atuinsh/atuin/issues/4182))
+- Give integration-test root-disk headroom + disk telemetry ([#4208](https://github.com/atuinsh/atuin/issues/4208))
+- Sccache + Depot cache for integration-test ([#4211](https://github.com/atuinsh/atuin/issues/4211))
+
+
+### Performance
+
+- *(atuin)* Avoid clone on keystroke ([#4160](https://github.com/atuinsh/atuin/issues/4160))
+- *(atuin)* Avoid per-char String allocation when drawing command cells ([#4164](https://github.com/atuinsh/atuin/issues/4164))
+- *(atuin-daemon)* Key the output FTS index by rowid ([#4151](https://github.com/atuinsh/atuin/issues/4151))
+- *(atuin-daemon)* Make the output FTS index contentless ([#4154](https://github.com/atuinsh/atuin/issues/4154))
+- *(atuin-daemon)* Skip History clone in start_cmd when no tail subscriber ([#4165](https://github.com/atuinsh/atuin/issues/4165))
+- *(pty-proxy)* Forward stdout via raw fd write instead of buffered LineWriter ([#4159](https://github.com/atuinsh/atuin/issues/4159))
+- *(pty-proxy,common)* Use memchr for hot byte scans ([#4144](https://github.com/atuinsh/atuin/issues/4144))
+- Make the daemon's large deletes and CI's integration tests fast ([#4189](https://github.com/atuinsh/atuin/issues/4189))
+
+
+### Refactor
+
+- *(atuin-common)* Modularize futures::stream with chunked/merge combinators ([#4120](https://github.com/atuinsh/atuin/issues/4120))
+- *(atuin-daemon)* Move HistoryId proto message into common.proto ([#4121](https://github.com/atuinsh/atuin/issues/4121))
+- *(atuin-daemon)* Restructure output_capture into persistence + engine ([#4125](https://github.com/atuinsh/atuin/issues/4125))
+- *(client)* Rename SyncEngine to SyncSession ([#4130](https://github.com/atuinsh/atuin/issues/4130))
+- *(daemon)* Replace sync event-bus with a standalone engine ([#4131](https://github.com/atuinsh/atuin/issues/4131))
+- *(deps)* Bump DeterminateSystems/update-flake-lock from 28 to 29 ([#4138](https://github.com/atuinsh/atuin/issues/4138))
+- *(deps)* Bump DeterminateSystems/nix-installer-action from 22 to 23 ([#4137](https://github.com/atuinsh/atuin/issues/4137))
+- *(deps)* Bump eyre from 0.6.12 to 0.6.14 ([#4133](https://github.com/atuinsh/atuin/issues/4133))
+- *(deps)* Bump serde_regex from 1.1.0 to 1.2.0 ([#4134](https://github.com/atuinsh/atuin/issues/4134))
+- *(deps)* Bump uuid from 1.25.0 to 1.26.1 ([#4135](https://github.com/atuinsh/atuin/issues/4135))
+- *(deps)* Bump soupsieve from 2.8.4 to 2.9 in /docs in the uv group across 1 directory ([#4172](https://github.com/atuinsh/atuin/issues/4172))
+- *(deps)* Bump atuin-vt100 from 0.19.0 to 0.19.1 ([#4205](https://github.com/atuinsh/atuin/issues/4205))
+- *(hooks)* Move agent hook install into atuin-common harnesstools ([#4183](https://github.com/atuinsh/atuin/issues/4183))
+
+
+### Testing
+
+- *(atuin-common)* Use #[rstest] in place of #[test] ([#4146](https://github.com/atuinsh/atuin/issues/4146))
+- Fix flaky empty_history_search_can_be_cancelled e2e test ([#4197](https://github.com/atuinsh/atuin/issues/4197))
+
+
+### Bug
+
+- Fix transaction lock ([#4152](https://github.com/atuinsh/atuin/issues/4152))
+- Deletion state race ([#4180](https://github.com/atuinsh/atuin/issues/4180))
+
+## 18.22.0
+
+### Bug Fixes
+
+- *(daemon)* Periodically flush captured command output to disk ([#4070](https://github.com/atuinsh/atuin/issues/4070))
+- *(daemon)* Stream large DeleteHistory requests ([#4076](https://github.com/atuinsh/atuin/issues/4076))
+- *(daemon)* Delete captured output when history entries are deleted ([#4074](https://github.com/atuinsh/atuin/issues/4074))
+- *(nix)* Export OpenSSL lib for LD_LIBRARY_PATH in nix devshell ([#4018](https://github.com/atuinsh/atuin/issues/4018))
+- *(pty-proxy)* Make PTY proxy aware of other PTYs ([#4079](https://github.com/atuinsh/atuin/issues/4079))
+- *(server)* Wrap multi-write DB operations in transactions ([#4088](https://github.com/atuinsh/atuin/issues/4088))
+- *(server)* Emit HTTP access logs at INFO and compile in debug tracing ([#4087](https://github.com/atuinsh/atuin/issues/4087))
+- *(sync)* Expand a packfile whose range is a hole below the store head ([#4085](https://github.com/atuinsh/atuin/issues/4085))
+- Normalize output of `atuin --version` ([#4038](https://github.com/atuinsh/atuin/issues/4038))
+- Make `atuin ai init` a no-op instead of erroring ([#4040](https://github.com/atuinsh/atuin/issues/4040))
+- Do not try to decrypt plaintext records ([#4057](https://github.com/atuinsh/atuin/issues/4057))
+- Behavior of PTY proxy on terminal resizes ([#4061](https://github.com/atuinsh/atuin/issues/4061))
+- Build error ([#4094](https://github.com/atuinsh/atuin/issues/4094))
+
+### Features
+
+- *(daemon)* Daemon owns History Deletion ([#4045](https://github.com/atuinsh/atuin/issues/4045))
+- *(mcp)* Make agents actually use the atuin MCP server ([#4050](https://github.com/atuinsh/atuin/issues/4050))
+- *(pty-proxy)* Keep the start and end of command captures that exceed the max size ([#4092](https://github.com/atuinsh/atuin/issues/4092))
+- *(pty-proxy)* Mirror the CWD of the PTY proxy child ([#4091](https://github.com/atuinsh/atuin/issues/4091))
+- Implement command capture and remove semantic.rs ([#4048](https://github.com/atuinsh/atuin/issues/4048))
+- Simplify semantic captures ([#4065](https://github.com/atuinsh/atuin/issues/4065))
+- Store terminal size in command captures ([#4072](https://github.com/atuinsh/atuin/issues/4072))
+- Version Stored Output Capture and Avoid PB on disk ([#4068](https://github.com/atuinsh/atuin/issues/4068))
+- Redact secrets from captured command output ([#4071](https://github.com/atuinsh/atuin/issues/4071))
+- Rework inspector and add output view ([#4090](https://github.com/atuinsh/atuin/issues/4090))
+- Add [output_capture] settings ([#4069](https://github.com/atuinsh/atuin/issues/4069))
+
+### Miscellaneous Tasks
+
+- *(ci)* Limit concurrency of workflows on same branch ([#4073](https://github.com/atuinsh/atuin/issues/4073))
+- Lift dependencies into top-level Cargo.toml ([#4042](https://github.com/atuinsh/atuin/issues/4042))
+- Sort dependencies in `Cargo.toml`s ([#4046](https://github.com/atuinsh/atuin/issues/4046))
+- Enable Clippy cast warnings ([#4049](https://github.com/atuinsh/atuin/issues/4049))
+- Temporary workaround for flaky test ([#4083](https://github.com/atuinsh/atuin/issues/4083))
+- Emit proptest regression artifacts so CI failures are reproducible ([#4084](https://github.com/atuinsh/atuin/issues/4084))
+- Lockfile bumps ([#4089](https://github.com/atuinsh/atuin/issues/4089))
+- Don't fail if we can't capture output ([#4086](https://github.com/atuinsh/atuin/issues/4086))
+- Link to upstream rustix issue in atuin-pty-proxy ([#4093](https://github.com/atuinsh/atuin/issues/4093))
+
+### Refactor
+
+- *(daemon)* Manage sync inside of the daemon ([#4055](https://github.com/atuinsh/atuin/issues/4055))
+- *(daemon)* Split output capture into fjall and nop backends ([#4082](https://github.com/atuinsh/atuin/issues/4082))
+- *(deps)* Bump mkdocs-material from 9.7.0 to 9.7.7 in /docs in the uv group across 1 directory ([#4059](https://github.com/atuinsh/atuin/issues/4059))
+- *(deps)* Bump vale-cli/vale-action from 2.1.2 to 3.0.0 ([#3887](https://github.com/atuinsh/atuin/issues/3887))
+- *(deps)* Bump rpassword from 7.4.0 to 7.5.0 in the cargo group across 1 directory ([#3877](https://github.com/atuinsh/atuin/issues/3877))
+- *(history)* Make HistoryId a Copy Uuid ([#4013](https://github.com/atuinsh/atuin/issues/4013))
+- Clean up the history service and fix minor bugs
+
+### Testing
+
+- *(daemon)* Adversarial test suites with new daemon ([#4058](https://github.com/atuinsh/atuin/issues/4058))
+- E2e pty test harness ([#4075](https://github.com/atuinsh/atuin/issues/4075))
+- Filtered commands leave no captured output ([#4081](https://github.com/atuinsh/atuin/issues/4081))
+
+## 18.21.0
+
+### Bug Fixes
+
+- *(daemon)* Check for socket in `/tmp` even when `$TMPDIR` is set ([#4036](https://github.com/atuinsh/atuin/issues/4036))
+- *(daemon)* Reject invalid pidfile pids before signalling ([#4031](https://github.com/atuinsh/atuin/issues/4031))
+- *(deps)* Update unsound/yanked dependencies ([#4005](https://github.com/atuinsh/atuin/issues/4005))
+- *(docs)* Disambiguate sqlx intra-doc links to functions ([#4007](https://github.com/atuinsh/atuin/issues/4007))
+- *(server)* Connect eagerly to MySQL so a bad db_uri fails fast ([#4032](https://github.com/atuinsh/atuin/issues/4032))
+- *(sqlite)* Prevent stale prepared-statement panic across migrations ([#4006](https://github.com/atuinsh/atuin/issues/4006))
+
+### Features
+
+- MySQL for Atuin server ([#3541](https://github.com/atuinsh/atuin/pull/3541))
+- Refactor/improve output capturing mechanism ([#4017](https://github.com/atuinsh/atuin/issues/4017))
+
+### Miscellaneous Tasks
+
+- Enable more clippy checks ([#3997](https://github.com/atuinsh/atuin/issues/3997), [#4008](https://github.com/atuinsh/atuin/issues/4008), [#4011](https://github.com/atuinsh/atuin/issues/4011))
+
+### Refactor
+
+- *(deps)* Bump shlex from v1 to v2 ([#4024](https://github.com/atuinsh/atuin/issues/4024))
+- *(server)* Merge server database crates into atuin-server ([#4009](https://github.com/atuinsh/atuin/issues/4009))
+- *(server)* Polymorphic database ([#4014](https://github.com/atuinsh/atuin/issues/4014))
+- *(server)* Share SQLite + Postgres Database impls via a blanket impl ([#4015](https://github.com/atuinsh/atuin/issues/4015))
+
+## 18.20.1
+
+### Bug Fixes
+
+- *(client)* Bound WAL growth with journal_size_limit + a periodic compactor ([#3994](https://github.com/atuinsh/atuin/issues/3994))
+- *(docs)* Correct sync_frequency default ([#3984](https://github.com/atuinsh/atuin/issues/3984))
+- *(nu)* Use unique keybinding names ([#3975](https://github.com/atuinsh/atuin/issues/3975))
+- Correct documented local_timeout default ([#3983](https://github.com/atuinsh/atuin/issues/3983))
+- Drop nonexistent session_path and correct path defaults ([#3985](https://github.com/atuinsh/atuin/issues/3985))
+- Auto-generate encryption key if it doesn't exist ([#3998](https://github.com/atuinsh/atuin/issues/3998))
+
+
+### Features
+
+- Switch terminal emulation to `atuin-vt100` ([#3995](https://github.com/atuinsh/atuin/issues/3995))
+
+
+### Miscellaneous Tasks
+
+- *(release)* Include all crates in publish order
+
+
+### Refactor
+
+- *(deps)* Bump uuid from 1.23.2 to 1.25.0 ([#3886](https://github.com/atuinsh/atuin/issues/3886))
+- Remove atuin-lab-share crate ([#3993](https://github.com/atuinsh/atuin/issues/3993))
+
+## 18.20.0
+
+### Bug Fixes
+
+- *(ai)* Execute commands from enter in the bash integration ([#3892](https://github.com/atuinsh/atuin/issues/3892))
+- *(ai)* Answer unrecognized tool calls with an error result ([#3893](https://github.com/atuinsh/atuin/issues/3893))
+- *(bash)* Localize "READLINE_{LINE,POINT}" in Bash <= 3.2 ([#3926](https://github.com/atuinsh/atuin/issues/3926))
+- *(common)* Survive wide characters on a one-column screen ([#3876](https://github.com/atuinsh/atuin/issues/3876))
+- *(docs)* Don't say `enter_accept` defaults to true in example config.toml ([#3865](https://github.com/atuinsh/atuin/issues/3865))
+- *(history)* Don't misclassify users named after an agent as agents ([#3951](https://github.com/atuinsh/atuin/issues/3951))
+- *(install)* Atuin init for bash ([#3919](https://github.com/atuinsh/atuin/issues/3919))
+- *(nix)* Add an RPATH for OpenSSL so the built binary runs ([#3852](https://github.com/atuinsh/atuin/issues/3852))
+- *(search)* Prepare daemon search index in shell init scripts ([#3864](https://github.com/atuinsh/atuin/issues/3864))
+- *(search)* Fall back when daemon-fuzzy fails ([#3895](https://github.com/atuinsh/atuin/issues/3895))
+- *(search)* Don't overflow on a session id with an out-of-range uuid timestamp ([#3965](https://github.com/atuinsh/atuin/issues/3965))
+- *(sync)* Fix off-by-one bugs in sync ([#3913](https://github.com/atuinsh/atuin/issues/3913))
+- *(wrapped)* Panic when every command is in stats.ignored_commands ([#3925](https://github.com/atuinsh/atuin/issues/3925))
+- *(zsh)* Don't clobber RPS1 when wrapping the prompt for OSC 133 ([#3861](https://github.com/atuinsh/atuin/issues/3861))
+- 'atuin login' prints 401 failures until authorized ([#3916](https://github.com/atuinsh/atuin/issues/3916))
+- Silence hub 401 log spam during installer login ([#3918](https://github.com/atuinsh/atuin/issues/3918))
+- Fix panics from `vt100::Parser::new` ([#3933](https://github.com/atuinsh/atuin/issues/3933))
+- Make pty-proxy socket path shorter ([#3991](https://github.com/atuinsh/atuin/issues/3991))
+
+
+### Documentation
+
+- Document rstest/proptest testing conventions in AGENTS.md ([#3942](https://github.com/atuinsh/atuin/issues/3942))
+
+
+### Features
+
+- *(common)* Add rmp::serde iterator-to-MessagePack helper ([#3897](https://github.com/atuinsh/atuin/issues/3897))
+- *(daemon)* Change default daemon socket path ([#3910](https://github.com/atuinsh/atuin/issues/3910))
+- *(domain)* Add RecordTag string enum ([#3899](https://github.com/atuinsh/atuin/issues/3899))
+- *(sync)* Send the auth token on the capabilities fetch when logged in ([#3974](https://github.com/atuinsh/atuin/issues/3974))
+- Add agent hooks for opencode ([#3844](https://github.com/atuinsh/atuin/issues/3844))
+- Add devcontainers ([#3871](https://github.com/atuinsh/atuin/issues/3871))
+- Setup claude in devcontainers ([#3878](https://github.com/atuinsh/atuin/issues/3878))
+- Add windows/powershell highlighting ([#3883](https://github.com/atuinsh/atuin/issues/3883))
+- Add turn time and tips to Atuin AI ([#3870](https://github.com/atuinsh/atuin/issues/3870))
+- Enable syntax highlighting on illumos ([#3879](https://github.com/atuinsh/atuin/issues/3879))
+- Offer account login during install setup ([#3849](https://github.com/atuinsh/atuin/issues/3849))
+- Client-side history packfiles ([#3737](https://github.com/atuinsh/atuin/issues/3737))
+- Parallel packfile upload/download ([#3944](https://github.com/atuinsh/atuin/issues/3944))
+- Eager Key Query ([#3968](https://github.com/atuinsh/atuin/issues/3968))
+- Capabilities-driven sync page size ([#3979](https://github.com/atuinsh/atuin/issues/3979))
+- Improve powershell highlighting ([#3917](https://github.com/atuinsh/atuin/issues/3917))
+- Enable gzip and zstd for reqwest ([#3980](https://github.com/atuinsh/atuin/issues/3980))
+
+
+### Miscellaneous Tasks
+
+- *(ai)* Remove obsolete `atuin ai init` command ([#3936](https://github.com/atuinsh/atuin/issues/3936))
+- *(docker)* Install the toolchain pinned by rust-toolchain.toml ([#3963](https://github.com/atuinsh/atuin/issues/3963))
+- *(lints)* Use workspace lints instead of overriding lints in GHA workflow ([#3949](https://github.com/atuinsh/atuin/issues/3949))
+- *(rustfmt)* Update Rustfmt config ([#3945](https://github.com/atuinsh/atuin/issues/3945))
+- *(tests)* Fix flaky pty-proxy test ([#3874](https://github.com/atuinsh/atuin/issues/3874))
+- Add profiling to the app ([#3853](https://github.com/atuinsh/atuin/issues/3853))
+- Temporarily drop tailscale and atuin ([#3873](https://github.com/atuinsh/atuin/issues/3873))
+- Instruct agents to use `rstest` in AGENTS.md ([#3912](https://github.com/atuinsh/atuin/issues/3912))
+- More xdg compliance ([#3932](https://github.com/atuinsh/atuin/issues/3932))
+- Remove atuin-nucleo ([#3950](https://github.com/atuinsh/atuin/issues/3950))
+- Enable more Clippy lints ([#3953](https://github.com/atuinsh/atuin/issues/3953))
+- Update to rust 1.98 ([#3964](https://github.com/atuinsh/atuin/issues/3964))
+- Revert changes to `atuin-pty-proxy` from `lab share` PR / feat: store pty-proxy sockets in `/tmp/atuin-$UID` ([#3988](https://github.com/atuinsh/atuin/issues/3988))
+
+
+### Performance
+
+- *(sql)* Chunked bulk inserts + shared sqlite wrapper ([#3981](https://github.com/atuinsh/atuin/issues/3981))
+- *(sync)* Batch post-sync history indexing into bulk transactions ([#3947](https://github.com/atuinsh/atuin/issues/3947))
+- *(sync)* Parallel record downloads ([#3955](https://github.com/atuinsh/atuin/issues/3955))
+- *(tracing)* OTel export + instrumentation coverage ([#3952](https://github.com/atuinsh/atuin/issues/3952))
+
+
+### Refactor
+
+- *(ai/bash)* Use existing facility for accept-line ([#3928](https://github.com/atuinsh/atuin/issues/3928))
+- *(bash)* Remove redundant check of existing preexec-backend ([#3927](https://github.com/atuinsh/atuin/issues/3927))
+- *(caps)* CapClient owns its client and warms on construction ([#3898](https://github.com/atuinsh/atuin/issues/3898))
+- *(client)* Own sync_addr via Arc<Url>, drop Client lifetime ([#3896](https://github.com/atuinsh/atuin/issues/3896))
+- *(client)* Remove the Database trait in favor of Sqlite ([#3946](https://github.com/atuinsh/atuin/issues/3946))
+- *(deps)* Bump pymdown-extensions from 11.0 to 11.0.1 in /docs in the uv group across 1 directory ([#3875](https://github.com/atuinsh/atuin/issues/3875))
+- *(domain)* Make Record::with_data consume self, add with_data_clone ([#3900](https://github.com/atuinsh/atuin/issues/3900))
+- *(domain)* Make Record.version a RecordVersion enum ([#3903](https://github.com/atuinsh/atuin/issues/3903))
+- *(domain)* Drop the vestigial Host.name field ([#3941](https://github.com/atuinsh/atuin/issues/3941))
+- *(encryption)* Introduce PasetoV4Key newtype for the encryption key ([#3860](https://github.com/atuinsh/atuin/issues/3860))
+- *(encryption)* Move encryption into atuin-common. ([#3863](https://github.com/atuinsh/atuin/issues/3863))
+- *(record)* Name the (host, tag) pair as RecordSeriesKey ([#3961](https://github.com/atuinsh/atuin/issues/3961))
+- *(sqlx)* Use FromRow instead of manual row mapping ([#3958](https://github.com/atuinsh/atuin/issues/3958))
+- *(sync)* Introduce SyncEngine to hold shared sync state ([#3962](https://github.com/atuinsh/atuin/issues/3962))
+- Add a `CmdOrigin` Type ([#3943](https://github.com/atuinsh/atuin/issues/3943))
+
+
+### Bug
+
+- Avoid rare race condition in sync ([#3972](https://github.com/atuinsh/atuin/issues/3972))
+
+## 18.19.0
+
+### Bug Fixes
+
+- *(client)* Avoid panic decoding an empty encryption key ([#3803](https://github.com/atuinsh/atuin/issues/3803))
+- *(client)* Keep sqlx-postgres out of the client crate ([#2884](https://github.com/atuinsh/atuin/issues/2884)) ([#3823](https://github.com/atuinsh/atuin/issues/3823))
+- *(config)* Preserve comments in `atuin config set` ([#3766](https://github.com/atuinsh/atuin/issues/3766))
+- *(search)* Correct fuzzy result ranking ([#3603](https://github.com/atuinsh/atuin/issues/3603)) ([#3624](https://github.com/atuinsh/atuin/issues/3624))
+- Fix atuin-search-bench/benches/search.rs ([#3788](https://github.com/atuinsh/atuin/issues/3788))
+- Close OSC133 C when launching Atuin AI to prevent content erasure ([#3794](https://github.com/atuinsh/atuin/issues/3794))
+- Authenticate beta release push as atuin-bot ([#3809](https://github.com/atuinsh/atuin/issues/3809))
+- Copy vendored axoasset into docker builder stage ([#3816](https://github.com/atuinsh/atuin/issues/3816))
+
+
+### Documentation
+
+- Clarify update check network, provide build command ([#3767](https://github.com/atuinsh/atuin/issues/3767))
+- Remove old i18n docs ([#3787](https://github.com/atuinsh/atuin/issues/3787))
+- Use shell-agnostic install command in quickstart pages ([#3820](https://github.com/atuinsh/atuin/issues/3820))
+- Document named stats periods (today/week/month/year) ([#3821](https://github.com/atuinsh/atuin/issues/3821))
+- State minimum supported Rust version in install guide ([#3822](https://github.com/atuinsh/atuin/issues/3822))
+- Document iTerm2 tmux popup incompatibility ([#3826](https://github.com/atuinsh/atuin/issues/3826))
+- Clarify key binding snippets belong in shell startup file ([#3837](https://github.com/atuinsh/atuin/issues/3837))
+- Mention RustRover in IDE integration guidance ([#3834](https://github.com/atuinsh/atuin/issues/3834))
+
+
+### Features
+
+- *(client)* Show intent in inspector ([#3804](https://github.com/atuinsh/atuin/issues/3804))
+- *(client)* Enable pty-proxy via config ([#3828](https://github.com/atuinsh/atuin/issues/3828))
+- *(config)* Validate new settings in `atuin config set` before writing them to disk ([#3769](https://github.com/atuinsh/atuin/issues/3769))
+- *(lab)* Experimental `atuin lab share`
+- *(search)* Remove the "skim" engine ([#3825](https://github.com/atuinsh/atuin/issues/3825))
+- Remove word with ALT-Backspace ALT-D ([#2457](https://github.com/atuinsh/atuin/issues/2457))
+- Add scheduled beta release workflow ([#3805](https://github.com/atuinsh/atuin/issues/3805))
+- Migrate TLS backend from rustls to native-tls ([#3807](https://github.com/atuinsh/atuin/issues/3807))
+- Make `update` a real subcommand ([#3813](https://github.com/atuinsh/atuin/issues/3813))
+- Capability negotiation protocol (client + server) ([#3797](https://github.com/atuinsh/atuin/issues/3797))
+
+
+### Miscellaneous Tasks
+
+- *(ci)* Fix `package` step ([#3770](https://github.com/atuinsh/atuin/issues/3770))
+- Remove Store trait ([#3779](https://github.com/atuinsh/atuin/issues/3779))
+- Daemon search benchmark (divan + CodSpeed) ([#3763](https://github.com/atuinsh/atuin/issues/3763))
+- Run CodSpeed benchmarks on macro runners in walltime mode ([#3786](https://github.com/atuinsh/atuin/issues/3786))
+- Add `OrFilter` as a replacement for `Vec`s as filter lists ([#3768](https://github.com/atuinsh/atuin/issues/3768))
+- Add `atuin-domain` crate for shared domain types ([#3790](https://github.com/atuinsh/atuin/issues/3790))
+- Run CodSpeed walltime benchmarks on depot-macos-26 ([#3791](https://github.com/atuinsh/atuin/issues/3791))
+- Fix deny.toml and get it to run in CI ([#3808](https://github.com/atuinsh/atuin/issues/3808))
+- Remove codspeed workflow ([#3812](https://github.com/atuinsh/atuin/issues/3812))
+- Richer logging for atuin-server ([#2564](https://github.com/atuinsh/atuin/issues/2564))
+- Hide --active sharing ([#3846](https://github.com/atuinsh/atuin/issues/3846))
+
+
+### Refactor
+
+- *(deps)* Bump thiserror from 2.0.18 to 2.0.19 ([#3839](https://github.com/atuinsh/atuin/issues/3839))
+- *(deps)* Bump strum_macros from 0.27.2 to 0.28.0 ([#3841](https://github.com/atuinsh/atuin/issues/3841))
+- *(deps)* Bump tonic-types from 0.14.5 to 0.14.6 ([#3842](https://github.com/atuinsh/atuin/issues/3842))
+- *(deps)* Bump pulldown-cmark from 0.13.3 to 0.13.4 ([#3840](https://github.com/atuinsh/atuin/issues/3840))
+- *(deps)* Bump itertools from 0.14.0 to 0.15.0 ([#3838](https://github.com/atuinsh/atuin/issues/3838))
 - Adopt enum_dispatch for enum trait delegation ([#3806](https://github.com/atuinsh/atuin/issues/3806))
 
 
+### Testing
+
+- Adopt rstest across the workspace test suite ([#3785](https://github.com/atuinsh/atuin/issues/3785))
+
+
+### Daemon
+
+- Replace nucleo with frizbee, rank by match quality with frecency tiebreak ([#3782](https://github.com/atuinsh/atuin/issues/3782))
 
 ## 18.18.1
 

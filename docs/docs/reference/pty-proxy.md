@@ -22,11 +22,16 @@ With pty-proxy, the Atuin popup renders over the top of your previous output, bu
 ## Capturing command output
 
 Because pty-proxy sits between your terminal and your shell, it can also record
-what each command printed. It reads the [OSC 133](https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/prompts-data-model.md)
-prompt markers that your shell emits, using them to tell where one command's
-output ends and the next begins. It then hands each captured block to the
-[daemon](daemon.md), which holds it in memory, keyed by the command's Atuin
-history ID.
+what each command printed. It reads special escape sequences[^1] emitted by
+Atuin's shell integration to tell where one command's output ends and the next
+begins. It then hands each captured block to the [daemon](daemon.md), which
+holds it on disk, keyed by the command's Atuin history ID.
+
+[^1]: Atuin uses custom [OSC] escape sequences that begin with `OSC 18188735`.
+18188735 is `atuin` interpreted as a base-36 number; it was chosen to minimize
+conflicts with other programs and terminals.
+
+[OSC]: https://en.wikipedia.org/wiki/ANSI_escape_code#Operating_System_Command_sequences
 
 That capture is what lets AI tools see what actually happened, rather than
 guessing from the command alone:
@@ -37,12 +42,12 @@ guessing from the command alone:
   [MCP server](../ai/mcp.md)
 
 Output capture needs **both** pty-proxy and the daemon running. Nothing is
-captured by default. See [Reading Command Output](../ai/command-output.md) for
-setup, retention limits, and privacy.
+captured by default. See [Capturing Command Output](../guide/output-capture.md)
+for setup, retention limits, and privacy.
 
 ## Initialization
 
-The simplest way to enable pty-proxy is via your Atuin config (`~/.config/atuin/config.toml`) — no extra shell config needed:
+The simplest way to enable pty-proxy is via your Atuin config (`~/.atuin/config.toml`) — no extra shell config needed:
 
 ```toml
 [pty_proxy]
@@ -87,14 +92,14 @@ Alternatively, you can initialize pty-proxy explicitly in your shell config. Pla
     Run in *Nushell*:
 
     ```shell
-    mkdir ~/.local/share/atuin/
-    atuin pty-proxy init nu | save -f ~/.local/share/atuin/pty-proxy-init.nu
+    mkdir ~/.atuin/
+    atuin pty-proxy init nu | save -f ~/.atuin/pty-proxy-init.nu
     ```
 
     Add to `config.nu`, **before** the regular `atuin init`:
 
     ```shell
-    source ~/.local/share/atuin/pty-proxy-init.nu
+    source ~/.atuin/pty-proxy-init.nu
     ```
     Nushell's `source` command requires a static file path, so you must
     pre-generate the file.

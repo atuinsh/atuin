@@ -1,22 +1,31 @@
-use std::{
-    io::BufRead,
-    num::NonZeroU16,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::io::BufRead;
+use std::num::NonZeroU16;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use atuin_client::history::AuthorPattern;
+use atuin_client::history::{AuthorPattern, History};
+use atuin_client::settings::FilterMode;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::time::UtcOffsetExt;
+use easy_cast::Conv;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
-use uuid::Uuid;
+use serde::Deserialize;
+use strum_macros::{EnumIter, EnumString, IntoStaticStr};
 
 const DEFAULT_FILE_READ_LINES: u64 = 100;
 const MAX_FILE_READ_LINES: u64 = 1000;
+/// Page-size bounds for `atuin_history`; mirrored in the MCP schema.
+pub const DEFAULT_HISTORY_RESULTS: i64 = 10;
+pub const MAX_HISTORY_RESULTS: i64 = 50;
+pub mod descriptor;
+pub mod output;
+pub mod search_terms;
+pub mod session;
 
-pub(crate) mod descriptor;
+pub use output::get::AtuinOutputToolCall;
 
 use crate::permissions::rule::Rule;
 
@@ -27,9 +36,7 @@ use crate::permissions::rule::Rule;
 /// `?`, and `[...]` via `glob_match`.
 fn path_matches_scope(path: &Path, scope: &str) -> bool {
     let path = if path.is_relative() {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir().map(|cwd| cwd.joined(path)).unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
     };
@@ -66,7 +73,7 @@ fn path_matches_scope(path: &Path, scope: &str) -> bool {
 
 /// Result of executing a client-side tool.
 #[derive(Debug, Clone)]
-pub(crate) enum ToolOutcome {
+pub enum ToolOutcome {
     /// Simple success with a text result (used by Read, AtuinHistory).
     Success(String),
     /// Error with a message.
@@ -82,6 +89,21 @@ pub(crate) enum ToolOutcome {
 }
 
 impl ToolOutcome {
+    /// Maximum size of the `stdout` and `stderr` buffers (each) in [`Self::Structured`].
+    ///
+    /// [`ansi::to_plain_text`] used to be capped at 16384 rows to prevent OOM errors, which
+    /// provided an effective limit on the size of the stdout and stderr buffers we return. Now that
+    /// [`ansi::to_plain_text`] is more efficient, it imposes no limit of its own; to ensure we
+    /// don't return too much data, we apply the cap ourselves.
+    ///
+    /// 16384 times 120 (the width of the emulated terminal, from `PREVIEW_WIDTH`) is approximately
+    /// 2,000,000 (2MB), so we use that as our limit here.
+    ///
+    /// Note that we keep the *end* of output that exceeds the limit. This matches what
+    /// [`ansi::to_plain_text`] did previously -- it would process the full output but only keep the
+    /// last 16384 rendered lines.
+    const MAX_STRUCTURED_OUTPUT_SIZE: usize = 2_000_000;
+
     /// Format this outcome as a string for the tool result sent to the LLM.
     ///
     /// The optional `interrupt_reason` overrides the generic interrupted message
@@ -91,9 +113,9 @@ impl ToolOutcome {
         interrupt_reason: Option<&crate::fsm::tools::InterruptReason>,
     ) -> String {
         match self {
-            ToolOutcome::Success(s) => s.clone(),
-            ToolOutcome::Error(e) => e.clone(),
-            ToolOutcome::Structured {
+            Self::Success(s) => s.clone(),
+            Self::Error(e) => e.clone(),
+            Self::Structured {
                 stdout,
                 stderr,
                 exit_code,
@@ -108,16 +130,16 @@ impl ToolOutcome {
 
                 parts.push(format!("Duration: {duration_ms}ms"));
 
-                if !stdout.is_empty() {
-                    parts.push(format!("stdout:\n{stdout}"));
-                } else {
+                if stdout.is_empty() {
                     parts.push("stdout: (empty)".to_string());
+                } else {
+                    parts.push(format!("stdout:\n{stdout}"));
                 }
 
-                if !stderr.is_empty() {
-                    parts.push(format!("stderr:\n{stderr}"));
-                } else {
+                if stderr.is_empty() {
                     parts.push("stderr: (empty)".to_string());
+                } else {
+                    parts.push(format!("stderr:\n{stderr}"));
                 }
 
                 if *interrupted {
@@ -139,8 +161,8 @@ impl ToolOutcome {
     /// Whether this outcome represents an error.
     pub fn is_error(&self) -> bool {
         match self {
-            ToolOutcome::Error(_) => true,
-            ToolOutcome::Structured {
+            Self::Error(_) => true,
+            Self::Structured {
                 exit_code: Some(code),
                 ..
             } if *code != 0 => true,
@@ -151,7 +173,7 @@ impl ToolOutcome {
 
 /// Cached VT100 preview data for a shell tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolPreview {
+pub struct ToolPreview {
     pub lines: Vec<String>,
     pub exit_code: Option<i32>,
     pub interrupted: Option<crate::fsm::tools::InterruptReason>,
@@ -160,7 +182,7 @@ pub(crate) struct ToolPreview {
 /// A tool call from the server, with parsed input parameters.
 #[derive(Debug, Clone)]
 #[enum_dispatch(PermissibleToolCall)]
-pub(crate) enum ClientToolCall {
+pub enum ClientToolCall {
     Read(ReadToolCall),
     Edit(EditToolCall),
     Write(WriteToolCall),
@@ -175,19 +197,13 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
 
     fn try_from((name, input): (&str, &serde_json::Value)) -> Result<Self, Self::Error> {
         match name {
-            "read_file" => Ok(ClientToolCall::Read(ReadToolCall::try_from(input)?)),
-            "edit_file" => Ok(ClientToolCall::Edit(EditToolCall::try_from(input)?)),
-            "write_file" => Ok(ClientToolCall::Write(WriteToolCall::try_from(input)?)),
-            "execute_shell_command" => Ok(ClientToolCall::Shell(ShellToolCall::try_from(input)?)),
-            "atuin_history" => Ok(ClientToolCall::AtuinHistory(
-                AtuinHistoryToolCall::try_from(input)?,
-            )),
-            "atuin_output" => Ok(ClientToolCall::AtuinOutput(AtuinOutputToolCall::try_from(
-                input,
-            )?)),
-            "load_skill" => Ok(ClientToolCall::LoadSkill(LoadSkillToolCall::try_from(
-                input,
-            )?)),
+            "read_file" => Ok(Self::Read(ReadToolCall::try_from(input)?)),
+            "edit_file" => Ok(Self::Edit(EditToolCall::try_from(input)?)),
+            "write_file" => Ok(Self::Write(WriteToolCall::try_from(input)?)),
+            "execute_shell_command" => Ok(Self::Shell(ShellToolCall::try_from(input)?)),
+            "atuin_history" => Ok(Self::AtuinHistory(AtuinHistoryToolCall::try_from(input)?)),
+            "atuin_output" => Ok(Self::AtuinOutput(AtuinOutputToolCall::try_from(input)?)),
+            "load_skill" => Ok(Self::LoadSkill(LoadSkillToolCall::try_from(input)?)),
             _ => Err(eyre::eyre!("Unknown tool call: {name}")),
         }
     }
@@ -196,13 +212,13 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
 impl ClientToolCall {
     pub(crate) fn descriptor(&self) -> &'static descriptor::ToolDescriptor {
         match self {
-            ClientToolCall::Read(_) => descriptor::READ,
-            ClientToolCall::Edit(_) => descriptor::EDIT,
-            ClientToolCall::Write(_) => descriptor::WRITE,
-            ClientToolCall::Shell(_) => descriptor::SHELL,
-            ClientToolCall::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
-            ClientToolCall::AtuinOutput(_) => descriptor::ATUIN_OUTPUT,
-            ClientToolCall::LoadSkill(_) => descriptor::LOAD_SKILL,
+            Self::Read(_) => descriptor::READ,
+            Self::Edit(_) => descriptor::EDIT,
+            Self::Write(_) => descriptor::WRITE,
+            Self::Shell(_) => descriptor::SHELL,
+            Self::AtuinHistory(_) => descriptor::ATUIN_HISTORY,
+            Self::AtuinOutput(_) => descriptor::ATUIN_OUTPUT,
+            Self::LoadSkill(_) => descriptor::LOAD_SKILL,
         }
     }
 
@@ -213,13 +229,13 @@ impl ClientToolCall {
     /// implies Read (checked in `ReadToolCall::matches_rule`).
     pub(crate) fn rule_name(&self) -> &'static str {
         match self {
-            ClientToolCall::Read(_) => "Read",
-            ClientToolCall::Edit(_) => "Write",
-            ClientToolCall::Write(_) => "Write",
-            ClientToolCall::Shell(_) => "Shell",
-            ClientToolCall::AtuinHistory(_) => "AtuinHistory",
-            ClientToolCall::AtuinOutput(_) => "AtuinOutput",
-            ClientToolCall::LoadSkill(_) => "LoadSkill",
+            Self::Read(_) => "Read",
+            Self::Edit(_) => "Write",
+            Self::Write(_) => "Write",
+            Self::Shell(_) => "Shell",
+            Self::AtuinHistory(_) => "AtuinHistory",
+            Self::AtuinOutput(_) => "AtuinOutput",
+            Self::LoadSkill(_) => "LoadSkill",
         }
     }
 
@@ -227,20 +243,19 @@ impl ClientToolCall {
     /// Used to build scoped permission rules like `Write(/abs/path/to/file)`.
     pub(crate) fn resolved_file_path(&self) -> Option<PathBuf> {
         match self {
-            ClientToolCall::Read(tool) => Some(tool.resolved_path()),
-            ClientToolCall::Edit(tool) => Some(tool.resolved_path()),
-            ClientToolCall::Write(tool) => Some(tool.resolved_path()),
-            ClientToolCall::Shell(_)
-            | ClientToolCall::AtuinHistory(_)
-            | ClientToolCall::AtuinOutput(_)
-            | ClientToolCall::LoadSkill(_) => None,
+            Self::Read(tool) => Some(tool.resolved_path()),
+            Self::Edit(tool) => Some(tool.resolved_path()),
+            Self::Write(tool) => Some(tool.resolved_path()),
+            Self::Shell(_) | Self::AtuinHistory(_) | Self::AtuinOutput(_) | Self::LoadSkill(_) => {
+                None
+            }
         }
     }
 }
 
 /// A trait for tool calls that can be checked against permission rules.
 #[enum_dispatch]
-pub(crate) trait PermissibleToolCall {
+pub trait PermissibleToolCall {
     /// Checks if this tool call matches the given permission rule.
     fn matches_rule(&self, rule: &Rule) -> bool;
 
@@ -261,7 +276,7 @@ pub(crate) trait PermissibleToolCall {
 /// Returns true if this tool call should bypass the permission system entirely.
 impl ClientToolCall {
     pub(crate) fn is_auto_approved(&self) -> bool {
-        matches!(self, ClientToolCall::LoadSkill(_))
+        matches!(self, Self::LoadSkill(_))
     }
 }
 
@@ -269,12 +284,12 @@ impl ClientToolCall {
 ///
 /// Tool call paths arrive as raw strings from the API without shell
 /// expansion. Uses `shellexpand` (same as `atuin-client`).
-fn expand_path(path: &str) -> PathBuf {
+pub fn expand_path(path: &str) -> PathBuf {
     PathBuf::from(shellexpand::tilde(path).into_owned())
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ReadToolCall {
+pub struct ReadToolCall {
     pub path: PathBuf,
     pub offset: u64,
     pub limit: u64,
@@ -284,10 +299,8 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let path = value
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing path"))?;
+        let path =
+            value.get("file_path").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing path"))?;
 
         let offset = value.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
         let limit = value
@@ -296,7 +309,7 @@ impl TryFrom<&serde_json::Value> for ReadToolCall {
             .unwrap_or(DEFAULT_FILE_READ_LINES)
             .min(MAX_FILE_READ_LINES);
 
-        Ok(ReadToolCall {
+        Ok(Self {
             path: expand_path(path),
             offset,
             limit,
@@ -308,13 +321,14 @@ impl ReadToolCall {
     pub fn resolved_path(&self) -> PathBuf {
         if self.path.is_relative() {
             std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
+                .map(|cwd| cwd.joined(&self.path))
                 .unwrap_or_else(|_| self.path.clone())
         } else {
             self.path.clone()
         }
     }
 
+    #[must_use]
     pub fn execute(&self) -> ToolOutcome {
         let path = self.resolved_path();
 
@@ -347,15 +361,15 @@ impl ReadToolCall {
 
         let raw_lines = reader
             .lines()
-            .skip(self.offset as usize)
-            .take(self.limit as usize)
+            .skip(usize::conv(self.offset))
+            .take(usize::conv(self.limit))
             .collect::<Result<Vec<_>, _>>();
 
         match raw_lines {
             Ok(lines) => {
-                let first_line_no = self.offset as usize + 1;
+                let first_line_no = usize::conv(self.offset) + 1;
                 let last_line_no = first_line_no + lines.len().saturating_sub(1);
-                let width = last_line_no.max(1).ilog10() as usize + 1;
+                let width = usize::conv(last_line_no.max(1).ilog10()) + 1;
 
                 let numbered: String = lines
                     .iter()
@@ -366,7 +380,8 @@ impl ReadToolCall {
 
                 if numbered.len() > 100_000 {
                     ToolOutcome::Error(format!(
-                        "Error: file is too large to read ({} bytes in {} lines); use view_range to read a subset of the file",
+                        "Error: file is too large to read ({} bytes in {} lines); use read_file \
+                         with offset and a smaller limit to read a subset of the file",
                         numbered.len(),
                         lines.len()
                     ))
@@ -398,7 +413,7 @@ impl PermissibleToolCall for ReadToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct EditToolCall {
+pub struct EditToolCall {
     pub path: PathBuf,
     pub old_string: String,
     pub new_string: String,
@@ -424,12 +439,9 @@ impl TryFrom<&serde_json::Value> for EditToolCall {
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing new_string"))?;
 
-        let replace_all = value
-            .get("replace_all")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let replace_all = value.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        Ok(EditToolCall {
+        Ok(Self {
             path: expand_path(path),
             old_string: old_string.to_string(),
             new_string: new_string.to_string(),
@@ -443,7 +455,7 @@ impl EditToolCall {
     pub fn resolved_path(&self) -> PathBuf {
         if self.path.is_relative() {
             std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
+                .map(|cwd| cwd.joined(&self.path))
                 .unwrap_or_else(|_| self.path.clone())
         } else {
             self.path.clone()
@@ -458,6 +470,7 @@ impl EditToolCall {
     ///
     /// Callers should snapshot the file before calling this method and
     /// update the file tracker after a successful return.
+    #[must_use]
     pub fn execute(
         &self,
         resolved_path: &Path,
@@ -507,16 +520,15 @@ impl EditToolCall {
             Ok(FreshnessCheck::Stale) => {
                 return (
                     ToolOutcome::Error(
-                        "File has been modified since read, either by the user or by a linter. Read it again before attempting to edit it.".to_string(),
+                        "File has been modified since read, either by the user or by a linter. \
+                         Read it again before attempting to edit it."
+                            .to_string(),
                     ),
                     None,
                 );
             }
             Err(e) => {
-                return (
-                    ToolOutcome::Error(format!("Error checking file state: {e}")),
-                    None,
-                );
+                return (ToolOutcome::Error(format!("Error checking file state: {e}")), None);
             }
             Ok(FreshnessCheck::Fresh) => {}
         }
@@ -533,7 +545,8 @@ impl EditToolCall {
         if match_count == 0 {
             return (
                 ToolOutcome::Error(format!(
-                    "old_string not found in {}. Make sure it matches exactly, including whitespace and indentation.",
+                    "old_string not found in {}. Make sure it matches exactly, including \
+                     whitespace and indentation.",
                     resolved_path.display()
                 )),
                 None,
@@ -543,7 +556,9 @@ impl EditToolCall {
         if match_count > 1 && !self.replace_all {
             return (
                 ToolOutcome::Error(format!(
-                    "Found {match_count} matches of old_string in {}, but replace_all is false. Either provide more context to make the match unique, or set replace_all to true.",
+                    "Found {match_count} matches of old_string in {}, but replace_all is false. \
+                     Either provide more context to make the match unique, or set replace_all to \
+                     true.",
                     resolved_path.display()
                 )),
                 None,
@@ -597,7 +612,7 @@ impl PermissibleToolCall for EditToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct WriteToolCall {
+pub struct WriteToolCall {
     pub path: PathBuf,
     pub content: String,
     pub overwrite: bool,
@@ -612,17 +627,12 @@ impl TryFrom<&serde_json::Value> for WriteToolCall {
             .and_then(|v| v.as_str())
             .ok_or(eyre::eyre!("Missing file_path"))?;
 
-        let content = value
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing content"))?;
+        let content =
+            value.get("content").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing content"))?;
 
-        let overwrite = value
-            .get("overwrite")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let overwrite = value.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        Ok(WriteToolCall {
+        Ok(Self {
             path: expand_path(path),
             content: content.to_string(),
             overwrite,
@@ -635,7 +645,7 @@ impl WriteToolCall {
     pub fn resolved_path(&self) -> PathBuf {
         if self.path.is_relative() {
             std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
+                .map(|cwd| cwd.joined(&self.path))
                 .unwrap_or_else(|_| self.path.clone())
         } else {
             self.path.clone()
@@ -646,6 +656,7 @@ impl WriteToolCall {
     ///
     /// Creates a new file or overwrites an existing one (if `overwrite` is set).
     /// Returns the outcome and the written bytes (for tracker updates).
+    #[must_use]
     pub fn execute(&self, resolved_path: &Path) -> (ToolOutcome, Option<Vec<u8>>) {
         if resolved_path.is_dir() {
             return (
@@ -659,7 +670,8 @@ impl WriteToolCall {
         if resolved_path.exists() && !self.overwrite {
             return (
                 ToolOutcome::Error(format!(
-                    "File already exists: {}. Set overwrite to true to replace it, or use edit_file to make targeted changes.",
+                    "File already exists: {}. Set overwrite to true to replace it, or use \
+                     edit_file to make targeted changes.",
                     resolved_path.display()
                 )),
                 None,
@@ -676,7 +688,11 @@ impl WriteToolCall {
         }
 
         let line_count = self.content.lines().count();
-        let verb = if existed { "Overwrote" } else { "Created" };
+        let verb = if existed {
+            "Overwrote"
+        } else {
+            "Created"
+        };
         (
             ToolOutcome::Success(format!(
                 "{verb} {} ({line_count} lines).",
@@ -705,7 +721,7 @@ impl PermissibleToolCall for WriteToolCall {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ShellToolCall {
+pub struct ShellToolCall {
     pub dir: Option<PathBuf>,
     pub command: String,
     pub shell: String,
@@ -722,30 +738,17 @@ impl TryFrom<&serde_json::Value> for ShellToolCall {
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
         let dir = value.get("dir").and_then(|v| v.as_str());
 
-        let command = value
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing command"))?;
+        let command =
+            value.get("command").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing command"))?;
 
-        let shell = value
-            .get("shell")
-            .and_then(|v| v.as_str())
-            .unwrap_or("bash")
-            .to_string();
+        let shell = value.get("shell").and_then(|v| v.as_str()).unwrap_or("bash").to_string();
 
-        let timeout_secs = value
-            .get("timeout")
-            .and_then(|v| v.as_u64())
-            .filter(|&v| v > 0)
-            .unwrap_or(30)
-            .min(600);
+        let timeout_secs =
+            value.get("timeout").and_then(|v| v.as_u64()).filter(|&v| v > 0).unwrap_or(30).min(600);
 
-        let description = value
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let description = value.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-        Ok(ShellToolCall {
+        Ok(Self {
             dir: dir.map(expand_path),
             command: command.to_string(),
             shell,
@@ -808,10 +811,10 @@ impl PermissibleToolCall for ShellToolCall {
 }
 
 /// Preview viewport height for VT100 emulation.
-const PREVIEW_HEIGHT: u16 = 10;
+const PREVIEW_HEIGHT: NonZeroU16 = NonZeroU16::new(10).unwrap();
 
 /// Default terminal width for VT100 emulation.
-const PREVIEW_WIDTH: u16 = 120;
+const PREVIEW_WIDTH: NonZeroU16 = NonZeroU16::new(120).unwrap();
 
 /// Extract plain text lines from a VT100 screen buffer.
 ///
@@ -822,9 +825,12 @@ const PREVIEW_WIDTH: u16 = 120;
 /// instead of the real output.
 fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
     let (rows, cols) = screen.size();
-    let mut lines = Vec::with_capacity(rows as usize);
+    let rows = rows.get();
+    let cols = cols.get();
+
+    let mut lines = Vec::with_capacity(usize::conv(rows));
     for row in 0..rows {
-        let mut line = String::with_capacity(cols as usize);
+        let mut line = String::with_capacity(usize::conv(cols));
         for col in 0..cols {
             if let Some(cell) = screen.cell(row, col) {
                 line.push_str(cell.contents());
@@ -847,7 +853,7 @@ fn vt100_screen_lines(screen: &vt100::Screen) -> Vec<String> {
 ///
 /// Captures the FULL stdout and stderr separately for the tool result sent to the LLM.
 /// Returns a `ToolOutcome::Structured` with full output, exit code, and duration.
-pub(crate) async fn execute_shell_command_streaming(
+pub async fn execute_shell_command_streaming(
     shell_call: &ShellToolCall,
     output_tx: tokio::sync::mpsc::Sender<Vec<String>>,
     mut interrupt_rx: tokio::sync::oneshot::Receiver<()>,
@@ -913,8 +919,7 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(0) => stdout_done = true,
                     Ok(n) => {
                         full_stdout.extend_from_slice(&stdout_buf[..n]);
-                        let normalized = ansi::onlcr(&stdout_buf[..n]).collect::<Vec<u8>>();
-                        parser.process(&normalized);
+                        ansi::onlcr(&stdout_buf[..n]).for_each(|chunk| parser.process(chunk));
                     }
                     Err(_) => stdout_done = true,
                 }
@@ -927,8 +932,7 @@ pub(crate) async fn execute_shell_command_streaming(
                     Ok(n) => {
                         full_stderr.extend_from_slice(&stderr_buf[..n]);
                         // Feed stderr to the preview parser too, so it shows in the VT100 screen
-                        let normalized = ansi::onlcr(&stderr_buf[..n]).collect::<Vec<u8>>();
-                        parser.process(&normalized);
+                        ansi::onlcr(&stderr_buf[..n]).for_each(|chunk| parser.process(chunk));
                     }
                     Err(_) => stderr_done = true,
                 }
@@ -967,21 +971,28 @@ pub(crate) async fn execute_shell_command_streaming(
 
     // Strip ANSI escape sequences for clean LLM output by running
     // the raw bytes through a VT100 parser and extracting plain text.
-    let cols = NonZeroU16::new(PREVIEW_WIDTH).expect("PREVIEW_WIDTH is nonzero");
-    let stdout_text = ansi::to_plain_text(&full_stdout, cols);
-    let stderr_text = ansi::to_plain_text(&full_stderr, cols);
+    let rows = PREVIEW_HEIGHT;
+    let cols = PREVIEW_WIDTH;
+
+    let [stdout_text, stderr_text] = [full_stdout, full_stderr].map(|output| {
+        let mut text = ansi::to_plain_text(&output, rows, cols);
+        let start = text.len().saturating_sub(ToolOutcome::MAX_STRUCTURED_OUTPUT_SIZE);
+        let start = text.ceil_char_boundary(start);
+        text.drain(..start);
+        text
+    });
 
     ToolOutcome::Structured {
         stdout: stdout_text,
         stderr: stderr_text,
         exit_code,
-        duration_ms: duration.as_millis() as u64,
+        duration_ms: u64::conv(duration.as_millis()),
         interrupted,
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AtuinHistoryToolCall {
+pub struct AtuinHistoryToolCall {
     pub filter_modes: Vec<HistorySearchFilterMode>,
     pub query: String,
     pub limit: i64,
@@ -989,8 +1000,9 @@ pub(crate) struct AtuinHistoryToolCall {
     pub authors: OrFilter<Vec<AuthorPattern>>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) enum HistorySearchFilterMode {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "lowercase")]
+pub enum HistorySearchFilterMode {
     Global,
     Host,
     Session,
@@ -998,8 +1010,15 @@ pub(crate) enum HistorySearchFilterMode {
     Workspace,
 }
 
-impl From<&HistorySearchFilterMode> for atuin_client::settings::FilterMode {
-    fn from(mode: &HistorySearchFilterMode) -> Self {
+impl HistorySearchFilterMode {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+impl From<HistorySearchFilterMode> for FilterMode {
+    fn from(mode: HistorySearchFilterMode) -> Self {
         match mode {
             HistorySearchFilterMode::Global => Self::Global,
             HistorySearchFilterMode::Host => Self::Host,
@@ -1010,69 +1029,62 @@ impl From<&HistorySearchFilterMode> for atuin_client::settings::FilterMode {
     }
 }
 
+/// `atuin_history`'s arguments as sent. An argument the schema doesn't list is an error rather
+/// than ignored.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryArgs {
+    query: String,
+    filter_modes: Option<Vec<String>>,
+    limit: Option<i64>,
+    only_failed: Option<bool>,
+    authors: Option<Vec<String>>,
+}
+
 impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let filter_modes = value
-            .get("filter_modes")
-            .and_then(|v| v.as_array())
-            .ok_or(eyre::eyre!("Missing filter_modes"))?;
+        // Every field but `query` is optional, and JSON null counts as omitted because models
+        // often send null for optional params. A missing scope means a global search — evals
+        // showed that forcing the model to pick a scope on every call made it stop calling the
+        // tool at all.
+        let args = HistoryArgs::deserialize(value)?;
 
-        let filter_modes = filter_modes
+        let filter_modes = args
+            .filter_modes
+            .unwrap_or_default()
             .iter()
-            .map(|v| {
-                let mode = v.as_str().ok_or(eyre::eyre!("Invalid filter mode"))?;
-                match mode {
-                    "global" => Ok(HistorySearchFilterMode::Global),
-                    "host" => Ok(HistorySearchFilterMode::Host),
-                    "session" => Ok(HistorySearchFilterMode::Session),
-                    "directory" => Ok(HistorySearchFilterMode::Directory),
-                    "workspace" => Ok(HistorySearchFilterMode::Workspace),
-                    _ => Err(eyre::eyre!("Invalid filter mode: {mode}")),
-                }
+            .map(|mode| {
+                mode.parse::<HistorySearchFilterMode>()
+                    .map_err(|_| eyre::eyre!("Invalid filter mode: {mode}"))
             })
             .collect::<Result<Vec<HistorySearchFilterMode>>>()?;
 
-        let query = value
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing query"))?;
-
-        let limit = value
-            .get("limit")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(10)
-            .clamp(1, 50);
-
-        let only_failed = value
-            .get("only_failed")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let authors = match value.get("authors") {
-            Some(authors) => authors
-                .as_array()
-                .ok_or(eyre::eyre!("authors must be an array of strings"))?
-                .iter()
-                .map(|v| {
-                    v.as_str()
-                        .map(AuthorPattern::from)
-                        .ok_or(eyre::eyre!("authors entries must be strings"))
-                })
-                .collect::<Result<Vec<AuthorPattern>>>()?,
-            None => Vec::new(),
-        };
         // An omitted or empty `authors` array means no author filtering.
-        let authors = OrFilter::from_list(authors).unwrap_or_default();
+        let authors = args.authors.unwrap_or_default().into_iter().map(AuthorPattern::from);
+        let authors = OrFilter::from_list(authors.collect::<Vec<_>>()).unwrap_or_default();
 
-        Ok(AtuinHistoryToolCall {
+        Ok(Self {
             filter_modes,
-            query: query.to_string(),
-            limit,
-            only_failed,
+            query: args.query,
+            limit: args.limit.unwrap_or(DEFAULT_HISTORY_RESULTS).clamp(1, MAX_HISTORY_RESULTS),
+            only_failed: args.only_failed.unwrap_or(false),
             authors,
         })
+    }
+}
+
+/// Top `results` up to `size` with `loose` matches for commands not already
+/// in it, keeping their order.
+fn fill_with_loose(results: &mut Vec<History>, loose: Vec<History>, size: usize) {
+    for history in loose {
+        if results.len() >= size {
+            break;
+        }
+        if !results.iter().any(|r| r.command == history.command) {
+            results.push(history);
+        }
     }
 }
 
@@ -1087,224 +1099,148 @@ impl PermissibleToolCall for AtuinHistoryToolCall {
 }
 
 impl AtuinHistoryToolCall {
-    pub(crate) async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
-        use atuin_client::database::{self, Database as _, DbSearchMode, OptFilters};
+    pub(crate) async fn execute(
+        &self,
+        db: &atuin_client::database::Sqlite,
+        settings: &atuin_client::settings::Settings,
+    ) -> ToolOutcome {
+        use atuin_client::database::{self, DbSearchMode, OptFilters};
 
         // query_context rather than current_context: when running outside an
         // atuin-hooked shell (e.g. as an MCP server) there is no ATUIN_SESSION.
-        let context = match database::query_context().await {
+        let context = match database::query_context(settings).await {
             Ok(ctx) => ctx,
             Err(e) => return ToolOutcome::Error(format!("Failed to get history context: {e}")),
         };
 
-        let filter_mode = self
-            .filter_modes
-            .first()
-            .map(atuin_client::settings::FilterMode::from)
-            .unwrap_or(atuin_client::settings::FilterMode::Global);
+        let search_mode =
+            self.filter_modes.first().copied().unwrap_or(HistorySearchFilterMode::Global);
 
         // An empty session would silently match nothing; error instead so a
         // missing $ATUIN_SESSION (e.g. MCP server launched outside a hooked
         // shell) isn't mistaken for empty history.
-        if matches!(filter_mode, atuin_client::settings::FilterMode::Session)
-            && context.session.is_empty()
-        {
+        if matches!(search_mode, HistorySearchFilterMode::Session) && context.session.is_empty() {
             return ToolOutcome::Error(
-                "Session-scoped search is unavailable: $ATUIN_SESSION is not set, so there is \
-                 no shell session to scope to. Use another filter mode."
+                "Session-scoped search is unavailable: $ATUIN_SESSION is not set, so there is no \
+                 shell session to scope to. Use another filter mode."
                     .to_string(),
             );
         }
 
         let filter_options = OptFilters {
-            limit: Some(self.limit),
+            // Fetch one row beyond the requested limit so the truncation
+            // notice appended to the results below can say "more exist" as a
+            // fact rather than a guess.
+            limit: Some(self.limit + 1),
             only_failed: self.only_failed,
             authors: self.authors.as_slice_filter(),
             ..Default::default()
         };
 
-        let results = match db
-            .search(
+        // Each term as a substring first: fuzzy matching alone takes the most
+        // recent commands with the letters anywhere in order, so a short query
+        // like `pscale` is buried under long heredocs that happen to spell it
+        // out. Fuzzy matches only fill what is left of the page.
+        let search =
+            |mode| db.search(mode, search_mode.into(), &context, &self.query, filter_options);
+        // Full-text results come back newest first; rank them as fuzzy ones
+        // are, tightest match first.
+        let mut results = match search(DbSearchMode::FullText).await {
+            Ok(results) => atuin_client::ordering::reorder_fuzzy(
                 DbSearchMode::Fuzzy,
-                filter_mode,
-                &context,
-                &self.query,
-                filter_options,
-            )
-            .await
-        {
-            Ok(results) => results,
+                &database::ranking_query(&self.query),
+                results,
+            ),
             Err(e) => return ToolOutcome::Error(format!("History search failed: {e}")),
         };
+        // The clamp keeps this in 1..=MAX_HISTORY_RESULTS, so the conversion
+        // never fails; the fallback only exists to keep it infallible.
+        let page_size = usize::try_from(self.limit.clamp(1, MAX_HISTORY_RESULTS)).unwrap_or(1);
+        let exact = results.len();
+        // A page with room, or exactly full (to know whether more exist), is
+        // topped up; a query of operators alone (`^prefix`, `'exact`, regexes)
+        // matches the same either way.
+        if exact <= page_size && database::has_fuzzy_terms(&self.query) {
+            let loose = match search(DbSearchMode::Fuzzy).await {
+                Ok(loose) => loose,
+                Err(e) => return ToolOutcome::Error(format!("History search failed: {e}")),
+            };
+            fill_with_loose(&mut results, loose, page_size + 1);
+        }
+        let truncated = results.len() > page_size;
+        results.truncate(page_size);
 
         if results.is_empty() {
-            return ToolOutcome::Success("No matching history entries found.".to_string());
+            // An unadorned "no results" reads to the model as "this tool is
+            // useless". List which search parameters are worth loosening so
+            // its retry has somewhere to go.
+            let mut hints = Vec::new();
+            if !self.query.is_empty() {
+                hints.push("query terms are AND-ed, so try fewer or shorter terms");
+            }
+            if !matches!(search_mode, HistorySearchFilterMode::Global) {
+                hints.push("widen the scope to 'global'");
+            }
+            if self.only_failed {
+                hints.push("drop only_failed (the command may have succeeded)");
+            }
+            if !self.authors.is_all() {
+                hints.push("drop the authors filter");
+            }
+            let mut msg = format!(
+                "No history entries matched query {query:?} (scope: {scope}).",
+                query = self.query,
+                scope = search_mode.as_str(),
+            );
+            if !hints.is_empty() {
+                msg.push_str(&format!(" To find more: {}.", hints.join("; ")));
+            }
+            return ToolOutcome::Success(msg);
         }
 
         let local_offset = time::UtcOffset::local_or_utc();
 
-        let formatted: Vec<String> = results
+        let mut formatted: Vec<String> = results
             .iter()
             .enumerate()
             .map(|(i, history)| {
                 crate::history_format::format_history_search_result(i + 1, history, local_offset)
             })
             .collect();
+        if exact < results.len() {
+            let which = if exact == 0 {
+                "No command contains the query as written; these"
+            } else {
+                "The rest"
+            };
+            formatted.insert(
+                exact,
+                format!(
+                    "[{which} only match fuzzily: the query's letters appear in order, not \
+                     necessarily together.]"
+                ),
+            );
+        }
+
+        if truncated {
+            // The parser clamps `limit` to MAX_HISTORY_RESULTS, so a model
+            // that retries with a larger limit at the cap would just get the
+            // identical page back; only suggest raising it below the cap.
+            let advice = if self.limit < MAX_HISTORY_RESULTS {
+                "Refine the query or raise `limit` to see others."
+            } else {
+                "That is the maximum page size; refine the query to narrow them."
+            };
+            formatted
+                .push(format!("[Showing the first {page_size} matches; more exist. {advice}]"));
+        }
 
         ToolOutcome::Success(formatted.join("\n"))
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AtuinOutputToolCall {
-    pub history_id: Uuid,
-    pub ranges: Vec<(i64, i64)>,
-    /// The command the history entry ran, resolved from the local history
-    /// db after parsing (`Effect::ResolveOutputCommand`). Display-only:
-    /// `None` until the lookup lands, or when the id isn't known locally.
-    pub command: Option<String>,
-}
-
-impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
-    type Error = eyre::Error;
-
-    fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let history_id = value
-            .get("history_id")
-            .and_then(|v| v.as_str())
-            .and_then(|v| Uuid::parse_str(v).ok())
-            .ok_or(eyre::eyre!("Missing or invalid history ID"))?;
-
-        let ranges = value
-            .get("ranges")
-            .and_then(|v| v.as_array())
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-
-        let ranges = ranges
-            .iter()
-            .map(|r| {
-                let range = r
-                    .as_array()
-                    .filter(|a| a.len() == 2)
-                    .ok_or_else(|| eyre::eyre!("Each range must be a [start, end] array"))?;
-
-                let start = range[0]
-                    .as_i64()
-                    .ok_or_else(|| eyre::eyre!("Range start must be an integer"))?;
-                let end = range[1]
-                    .as_i64()
-                    .ok_or_else(|| eyre::eyre!("Range end must be an integer"))?;
-
-                Ok((start, end))
-            })
-            .collect::<Result<Vec<(i64, i64)>, eyre::Error>>()?;
-
-        Ok(Self {
-            history_id,
-            ranges,
-            command: None,
-        })
-    }
-}
-
-impl PermissibleToolCall for AtuinOutputToolCall {
-    fn target_dir(&self) -> Option<&Path> {
-        None
-    }
-
-    fn matches_rule(&self, rule: &Rule) -> bool {
-        rule.tool == "AtuinOutput"
-    }
-}
-
-fn format_output_lines_for_llm(lines: &[atuin_daemon::semantic::OutputLine]) -> String {
-    let width = lines
-        .iter()
-        .map(|line| line.line_number)
-        .max()
-        .unwrap_or(1)
-        .max(1)
-        .ilog10() as usize
-        + 1;
-    let mut formatted = Vec::with_capacity(lines.len());
-    let mut previous_line_number = None;
-
-    for line in lines {
-        if let Some(previous) = previous_line_number {
-            let skipped = line.line_number.saturating_sub(previous + 1);
-            if skipped > 0 {
-                formatted.push(format!("[...skipped {skipped} lines...]"));
-            }
-        }
-
-        formatted.push(format!("{:>width$}\t{}", line.line_number, line.content));
-        previous_line_number = Some(line.line_number);
-    }
-
-    formatted.join("\n")
-}
-
-impl AtuinOutputToolCall {
-    pub(crate) async fn execute(&self) -> ToolOutcome {
-        let settings = match atuin_client::settings::Settings::new() {
-            Ok(settings) => settings,
-            Err(e) => return ToolOutcome::Error(format!("Failed to load Atuin settings: {e}")),
-        };
-
-        let mut client = match atuin_daemon::SemanticClient::from_settings(&settings).await {
-            Ok(client) => client,
-            Err(e) => return ToolOutcome::Error(format!("Failed to connect to Atuin daemon: {e}")),
-        };
-
-        let history_id = self.history_id.as_simple().to_string();
-        let response = match client
-            .command_output(history_id.clone(), self.ranges.clone())
-            .await
-        {
-            Ok(response) => response,
-            Err(e) => return ToolOutcome::Error(format!("Failed to fetch command output: {e}")),
-        };
-
-        if !response.found {
-            return ToolOutcome::Success(format!(
-                "No captured output found for history ID {history_id}."
-            ));
-        }
-
-        if response.total_lines == 0 {
-            return ToolOutcome::Success(format!(
-                "Captured output for history ID {history_id} is empty."
-            ));
-        }
-
-        let output = format_output_lines_for_llm(&response.lines);
-        if output.is_empty() {
-            return ToolOutcome::Success(format!(
-                "No lines selected from captured output for history ID {history_id}."
-            ));
-        }
-
-        let total_output = if response.output_truncated {
-            format!(
-                "{} bytes captured, {} bytes observed before truncation, {} lines",
-                response.total_bytes, response.output_observed_bytes, response.total_lines
-            )
-        } else {
-            format!(
-                "{} bytes, {} lines",
-                response.total_bytes, response.total_lines
-            )
-        };
-
-        ToolOutcome::Success(format!(
-            "History ID: {history_id}\nTotal output: {total_output}\nSelected output:\n{output}"
-        ))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct LoadSkillToolCall {
+pub struct LoadSkillToolCall {
     pub name: String,
 }
 
@@ -1312,12 +1248,10 @@ impl TryFrom<&serde_json::Value> for LoadSkillToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        let name = value
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or(eyre::eyre!("Missing skill name"))?;
+        let name =
+            value.get("name").and_then(|v| v.as_str()).ok_or(eyre::eyre!("Missing skill name"))?;
 
-        Ok(LoadSkillToolCall {
+        Ok(Self {
             name: name.to_string(),
         })
     }
@@ -1335,15 +1269,56 @@ impl PermissibleToolCall for LoadSkillToolCall {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use atuin_common::filter;
     use rstest::*;
+
+    use super::*;
 
     fn read_rule(scope: Option<&str>) -> Rule {
         Rule {
             tool: "Read".to_string(),
             scope: scope.map(String::from),
         }
+    }
+
+    fn history(command: &str) -> History {
+        History::capture()
+            .timestamp(time::OffsetDateTime::UNIX_EPOCH)
+            .command(command)
+            .cwd("/")
+            .build()
+            .into()
+    }
+
+    fn commands(results: &[History]) -> Vec<&str> {
+        results.iter().map(|h| h.command.as_str()).collect()
+    }
+
+    /// Substring matches lead; fuzzy ones fill the rest of the page without
+    /// repeating a command.
+    #[rstest]
+    #[case::fills(3, vec!["pscale connect", "cat <<EOF p s c a l e", "pscale shell"])]
+    #[case::stops_at_size(2, vec!["pscale connect", "cat <<EOF p s c a l e"])]
+    #[case::exact_fills_the_page(1, vec!["pscale connect"])]
+    fn fuzzy_matches_fill_after_substring_ones(#[case] size: usize, #[case] want: Vec<&str>) {
+        let mut results = vec![history("pscale connect")];
+        let loose = ["pscale connect", "cat <<EOF p s c a l e", "pscale shell", "pip scale"];
+        fill_with_loose(&mut results, loose.into_iter().map(history).collect(), size);
+        assert_eq!(commands(&results), want);
+    }
+
+    /// Substring matches rank tightest first, as fuzzy ones did, not newest
+    /// first.
+    #[rstest]
+    fn substring_matches_rank_by_tightness() {
+        use atuin_client::database::{DbSearchMode, ranking_query};
+        let newest_first = ["ffmpeg -i in.mkv out.mkv # convert later to av1", "ffmpeg -c:v av1 x"];
+        let ranked = atuin_client::ordering::reorder_fuzzy(
+            DbSearchMode::Fuzzy,
+            &ranking_query("ffmpeg av1"),
+            newest_first.into_iter().map(history).collect(),
+        );
+        assert_eq!(commands(&ranked), ["ffmpeg -c:v av1 x", newest_first[0]]);
     }
 
     fn write_rule(scope: Option<&str>) -> Rule {
@@ -1371,12 +1346,38 @@ mod tests {
 
     // ── Cross-platform tests ──
 
-    #[test]
-    fn atuin_history_filters_are_optional() {
-        let input = serde_json::json!({
-            "query": "cargo",
-            "filter_modes": ["global"],
-        });
+    #[rstest]
+    #[case::omitted(serde_json::json!({ "query": "cargo" }))]
+    #[case::null(serde_json::json!({ "query": "cargo", "filter_modes": null }))]
+    fn atuin_history_filter_modes_are_optional(#[case] input: serde_json::Value) {
+        let call = AtuinHistoryToolCall::try_from(&input).unwrap();
+        assert!(call.filter_modes.is_empty());
+    }
+
+    #[rstest]
+    fn filter_mode_names_round_trip() {
+        use strum::IntoEnumIterator;
+        for mode in HistorySearchFilterMode::iter() {
+            assert_eq!(mode.as_str().parse::<HistorySearchFilterMode>(), Ok(mode));
+        }
+    }
+
+    #[rstest]
+    fn atuin_history_filter_modes_reject_non_arrays() {
+        let input = serde_json::json!({ "query": "cargo", "filter_modes": "global" });
+        assert!(AtuinHistoryToolCall::try_from(&input).is_err());
+    }
+
+    #[rstest]
+    fn atuin_history_rejects_unknown_arguments() {
+        let input = serde_json::json!({ "query": "cargo", "since": "2h" });
+        let err = AtuinHistoryToolCall::try_from(&input).unwrap_err().to_string();
+        assert!(err.contains("`since`") && err.contains("`only_failed`"), "{err}");
+    }
+
+    #[rstest]
+    fn atuin_history_author_and_failure_filters_parse() {
+        let input = serde_json::json!({ "query": "cargo" });
 
         let call = AtuinHistoryToolCall::try_from(&input).unwrap();
         assert!(!call.only_failed);
@@ -1384,65 +1385,13 @@ mod tests {
 
         let input = serde_json::json!({
             "query": "cargo",
-            "filter_modes": ["global"],
             "only_failed": true,
             "authors": ["$all-agent"],
         });
 
         let call = AtuinHistoryToolCall::try_from(&input).unwrap();
         assert!(call.only_failed);
-        assert_eq!(
-            call.authors.items(),
-            filter::Items::Some([AuthorPattern::AllAgent].as_slice())
-        );
-    }
-
-    #[rstest]
-    fn atuin_output_ranges_are_optional() -> eyre::Result<()> {
-        let input = serde_json::json!({
-            "history_id": "018f0000000070008000000000000000"
-        });
-
-        let call = AtuinOutputToolCall::try_from(&input)?;
-
-        assert_eq!(
-            call.history_id.as_simple().to_string(),
-            "018f0000000070008000000000000000"
-        );
-        assert!(call.ranges.is_empty());
-        Ok(())
-    }
-
-    #[rstest]
-    fn atuin_output_parses_line_ranges() -> eyre::Result<()> {
-        let input = serde_json::json!({
-            "history_id": "018f0000000070008000000000000000",
-            "ranges": [[0, 30], [-100, -1]]
-        });
-
-        let call = AtuinOutputToolCall::try_from(&input)?;
-
-        assert_eq!(call.ranges, vec![(0, 30), (-100, -1)]);
-        Ok(())
-    }
-
-    #[rstest]
-    fn atuin_output_formats_lines_like_read_file() {
-        let lines = vec![
-            atuin_daemon::semantic::OutputLine {
-                line_number: 98,
-                content: "near end".to_string(),
-            },
-            atuin_daemon::semantic::OutputLine {
-                line_number: 100,
-                content: "end".to_string(),
-            },
-        ];
-
-        assert_eq!(
-            format_output_lines_for_llm(&lines),
-            " 98\tnear end\n[...skipped 1 lines...]\n100\tend"
-        );
+        assert_eq!(call.authors.items(), filter::Items::Some([AuthorPattern::AllAgent].as_slice()));
     }
 
     #[rstest]
@@ -1537,10 +1486,7 @@ mod tests {
         )
     )]
     fn read_scope_glob(#[case] path: &str, #[case] scope: &str, #[case] expected: bool) {
-        assert_eq!(
-            read_tool(path).matches_rule(&read_rule(Some(scope))),
-            expected
-        );
+        assert_eq!(read_tool(path).matches_rule(&read_rule(Some(scope))), expected);
     }
 
     #[rstest]
@@ -1549,11 +1495,7 @@ mod tests {
     fn relative_multi_segment_glob(#[case] scope: &str, #[case] expected: bool) {
         // This matches against the path relative to cwd
         let cwd = std::env::current_dir().unwrap();
-        let abs = cwd
-            .join("crates")
-            .join("atuin-ai")
-            .join("src")
-            .join("lib.rs");
+        let abs = cwd.joined("crates").joined("atuin-ai").joined("src").joined("lib.rs");
         let tool = read_tool(abs.to_str().unwrap());
         assert_eq!(tool.matches_rule(&read_rule(Some(scope))), expected);
     }
@@ -1845,7 +1787,7 @@ mod tests {
             let file_path = dir.path().join("config.toml");
             std::fs::write(&file_path, "[db]\nhost = localhost\nport = 5432\n").unwrap();
 
-            let snapshot_dir = dir.path().join("snapshots").join("session-1");
+            let snapshot_dir = dir.path().join("snapshots").joined("session-1");
             let mut tracker = FileReadTracker::default();
             let mut store = SnapshotStore::open(snapshot_dir.clone()).unwrap();
 
@@ -1916,10 +1858,7 @@ mod tests {
             let (outcome, new_bytes) = call2.execute(&file_path, &tracker);
             assert!(matches!(outcome, ToolOutcome::Success(_)));
             assert!(new_bytes.is_some());
-            assert_eq!(
-                std::fs::read_to_string(&file_path).unwrap(),
-                "key1 = xxx\nkey2 = yyy\n"
-            );
+            assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "key1 = xxx\nkey2 = yyy\n");
         }
 
         #[rstest]
@@ -1961,10 +1900,7 @@ mod tests {
             }
 
             // File should be unchanged (the user's edit preserved)
-            assert_eq!(
-                std::fs::read_to_string(&file_path).unwrap(),
-                "value = user_changed\n"
-            );
+            assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "value = user_changed\n");
         }
 
         #[rstest]
@@ -1973,7 +1909,7 @@ mod tests {
             let file_path = dir.path().join("config.toml");
             std::fs::write(&file_path, "a = 1\nb = 2\n").unwrap();
 
-            let snapshot_dir = dir.path().join("snapshots").join("session-1");
+            let snapshot_dir = dir.path().join("snapshots").joined("session-1");
             let mut tracker = FileReadTracker::default();
             let mut store = SnapshotStore::open(snapshot_dir).unwrap();
 
@@ -1995,9 +1931,7 @@ mod tests {
 
             // Second edit — snapshot should NOT be recreated
             let content_before_second = std::fs::read(&file_path).unwrap();
-            let created = store
-                .ensure_snapshot(&file_path, &content_before_second)
-                .unwrap();
+            let created = store.ensure_snapshot(&file_path, &content_before_second).unwrap();
             assert!(!created); // idempotent — already snapshotted
         }
 
@@ -2087,7 +2021,7 @@ mod tests {
 
         #[rstest]
         fn creates_parent_directories(tempdir: tempfile::TempDir) {
-            let path = tempdir.path().join("sub").join("dir").join("file.txt");
+            let path = tempdir.path().join("sub").joined("dir").joined("file.txt");
 
             let call = WriteToolCall {
                 path: path.clone(),

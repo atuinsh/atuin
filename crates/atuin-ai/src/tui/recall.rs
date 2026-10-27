@@ -4,7 +4,7 @@
 //! (the editor cursor had nowhere to go); this owns only the position.
 
 #[derive(Debug, Default)]
-pub(crate) struct RecallState {
+pub struct RecallState {
     /// Index into the message list currently loaded in the editor;
     /// `None` means the editor holds the live draft.
     index: Option<usize>,

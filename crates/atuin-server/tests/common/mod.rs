@@ -1,14 +1,25 @@
-use std::{env, time::Duration};
+use std::process::Stdio;
+use std::time::Duration;
 
 use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
+use atuin_server::db::DbSettings;
 use atuin_server::{Settings as ServerSettings, launch_with_tcp_listener};
-use atuin_server_database::DbSettings;
-use atuin_server_postgres::Postgres;
 use futures_util::TryFutureExt;
-use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
+use tokio::io::AsyncWriteExt as _;
+use tokio::net::TcpListener;
+use tokio::process::Command;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tracing::{Dispatch, dispatcher};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+
+/// The database the tests run against: `ATUIN_DB_URI`, or a local Postgres.
+fn db_uri() -> String {
+    atuin_common::env::var("ATUIN_DB_URI")
+        .unwrap_or_else(|_| "postgres://atuin:pass@localhost:5432/atuin".to_owned())
+}
 
 pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHandle<()>) {
     let formatting_layer = tracing_tree::HierarchicalLayer::default()
@@ -23,20 +34,17 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
         .with(EnvFilter::new("atuin_server=debug,atuin_client=debug,info"))
         .into();
 
-    let db_uri = env::var("ATUIN_DB_URI")
-        .unwrap_or_else(|_| "postgres://atuin:pass@localhost:5432/atuin".to_owned());
-
     let server_settings = ServerSettings {
         host: "127.0.0.1".to_owned(),
         port: 0,
         path: path.to_owned(),
         open_registration: true,
-        max_record_size: 1024 * 1024 * 1024,
+        max_record_size: atuin_common::units::ByteSize::b(1024 * 1024 * 1024),
         register_webhook_url: None,
         register_webhook_username: String::new(),
         db_settings: DbSettings {
-            db_uri,
-            read_db_uri: None,
+            db_uri: db_uri().parse().expect("invalid ATUIN_DB_URI"),
+            db_password_file: None,
         },
         metrics: atuin_server::settings::Metrics::default(),
         fake_version: None,
@@ -48,12 +56,9 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
     let server = tokio::spawn(async move {
         let _tracing_guard = dispatcher::set_default(&dispatch);
 
-        if let Err(e) = launch_with_tcp_listener::<Postgres>(
-            server_settings,
-            listener,
-            shutdown_rx.unwrap_or_else(|_| ()),
-        )
-        .await
+        if let Err(e) =
+            launch_with_tcp_listener(server_settings, listener, shutdown_rx.unwrap_or_else(|_| ()))
+                .await
         {
             tracing::error!(error=?e, "server error");
             panic!("error running server: {e:?}");
@@ -69,57 +74,85 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
     (url, shutdown_tx, server)
 }
 
-pub async fn register_inner<'a>(
-    address: &'a url::Url,
+pub async fn register_inner(
+    address: &url::Url,
     username: &str,
     password: &str,
-) -> api_client::Client<'a> {
+) -> api_client::Client {
     let email = format!("{}@example.com", uuid_v7().as_simple());
 
     // registration works
     let registration_response =
-        api_client::register(address, username, &email, password, &Default::default())
+        api_client::register(address, username, &email, &password.into(), &Default::default())
             .await
             .unwrap();
 
+    let caps = api_client::caps_client_anonymous(address, &Default::default()).unwrap();
     api_client::Client::new(
-        address,
-        api_client::AuthToken::Token(registration_response.session),
-        5,
-        30,
+        address.clone(),
+        &api_client::AuthToken::Token(registration_response.session),
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
         &Default::default(),
+        caps,
     )
     .unwrap()
 }
 
 #[allow(dead_code)]
-pub async fn login(
-    address: &url::Url,
-    username: String,
-    password: String,
-) -> api_client::Client<'_> {
+pub async fn login(address: &url::Url, username: String, password: String) -> api_client::Client {
     // registration works
     let login_response = api_client::login(
         address,
-        atuin_domain::api::LoginRequest { username, password },
+        atuin_domain::api::LoginRequest {
+            username,
+            password: password.into(),
+            totp_code: None,
+        },
         &Default::default(),
     )
     .await
     .unwrap();
 
+    let caps = api_client::caps_client_anonymous(address, &Default::default()).unwrap();
     api_client::Client::new(
-        address,
-        api_client::AuthToken::Token(login_response.session),
-        5,
-        30,
+        address.clone(),
+        &api_client::AuthToken::Token(login_response.session),
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
         &Default::default(),
+        caps,
     )
     .unwrap()
 }
 
 #[allow(dead_code)]
-pub async fn register(address: &url::Url) -> api_client::Client<'_> {
+pub async fn register(address: &url::Url) -> api_client::Client {
     let username = uuid_v7().as_simple().to_string();
     let password = uuid_v7().as_simple().to_string();
     register_inner(address, &username, &password).await
+}
+
+/// Run the `atuin-server` binary with `args` against the test database, with `stdin` as its input.
+#[allow(dead_code)]
+pub async fn run_server_command(args: &[&str], stdin: &str) {
+    let config_dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_atuin-server"))
+        .args(args)
+        .env("ATUIN_CONFIG_DIR", config_dir.path())
+        .env("ATUIN_DB_URI", db_uri())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(stdin.as_bytes()).await.unwrap();
+    let output = child.wait_with_output().await.unwrap();
+
+    assert!(
+        output.status.success(),
+        "atuin-server {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

@@ -1,13 +1,11 @@
+use atuin_client::api_client;
 use atuin_common::utils::uuid_v7;
+use atuin_domain::api::LoginRequest;
 use rstest::{fixture, rstest};
 
 mod common;
 
-type TestServer = (
-    url::Url,
-    tokio::sync::oneshot::Sender<()>,
-    tokio::task::JoinHandle<()>,
-);
+type TestServer = (url::Url, tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<()>);
 
 #[fixture]
 async fn server() -> TestServer {
@@ -19,7 +17,6 @@ async fn server() -> TestServer {
 #[tokio::test]
 async fn registration(#[future] server: TestServer) {
     let (address, shutdown, server_task) = server.await;
-    dbg!(&address);
 
     // -- REGISTRATION --
 
@@ -62,9 +59,8 @@ async fn change_password(#[future] server: TestServer) {
 
     let current_password = password;
     let new_password = uuid_v7().as_simple().to_string();
-    let result = client
-        .change_password(current_password, new_password.clone())
-        .await;
+    let result =
+        client.change_password(&current_password.into(), &new_password.clone().into()).await;
 
     // the password change request succeeded
     assert!(result.is_ok());
@@ -81,11 +77,51 @@ async fn change_password(#[future] server: TestServer) {
     server_task.await.unwrap();
 }
 
+/// An operator can create a user who can then log in, reset their forgotten password without
+/// logging their machines out, and delete them so they can no longer log in.
+#[rstest]
+#[tokio::test]
+async fn operator_creates_resets_and_deletes_a_user(#[future] server: TestServer) {
+    let (address, shutdown, server_task) = server.await;
+
+    let username = uuid_v7().as_simple().to_string();
+    let email = format!("{username}@example.com");
+    let password = uuid_v7().as_simple().to_string();
+    common::run_server_command(
+        &["admin", "user", "create", "--email", &email, &username],
+        &format!("{password}\n"),
+    )
+    .await;
+    let logged_in = common::login(&address, username.clone(), password).await;
+
+    let new_password = uuid_v7().as_simple().to_string();
+    common::run_server_command(
+        &["admin", "user", "set-password", &username],
+        &format!("{new_password}\n"),
+    )
+    .await;
+
+    let client = common::login(&address, username.clone(), new_password.clone()).await;
+    assert_eq!(client.me().await.unwrap().username, username);
+    assert_eq!(logged_in.me().await.unwrap().username, username);
+
+    common::run_server_command(&["admin", "user", "delete", "--yes", &username], "").await;
+
+    let login = LoginRequest {
+        username,
+        password: new_password.into(),
+        totp_code: None,
+    };
+    assert!(api_client::login(&address, login, &Default::default()).await.is_err());
+
+    shutdown.send(()).unwrap();
+    server_task.await.unwrap();
+}
+
 #[rstest]
 #[tokio::test]
 async fn multi_user_test(#[future] server: TestServer) {
     let (address, shutdown, server_task) = server.await;
-    dbg!(&address);
 
     // -- REGISTRATION --
 
@@ -109,9 +145,8 @@ async fn multi_user_test(#[future] server: TestServer) {
 
     let current_password = password_one;
     let new_password = uuid_v7().as_simple().to_string();
-    let result = client_one
-        .change_password(current_password, new_password.clone())
-        .await;
+    let result =
+        client_one.change_password(&current_password.into(), &new_password.clone().into()).await;
 
     // the password change request succeeded
     assert!(result.is_ok());

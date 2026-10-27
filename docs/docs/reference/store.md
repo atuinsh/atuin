@@ -79,6 +79,17 @@ atuin store rebuild history
 
 Useful when the record store is intact but the local view of it isn't.
 
+`atuin store rebuild threads` rebuilds the daemon's index of captured
+[threads](../ai/threads.md) from the thread records alone: the daemon
+(started for it if `daemon.autostart` is on) deletes it and replays every
+record in the background (`atuin threads` waits for it meanwhile). `atuin
+store purge` and `atuin store pull --force` do the same after deleting records,
+so their threads leave the index. The index belongs to the daemon, so this
+needs it enabled and running: without it, the command fails and leaves the
+index as it was, and a purge or forced pull says the index still lists the
+deleted threads until `atuin store rebuild threads` runs with the daemon
+up.
+
 ### `atuin store push`
 
 Upload local records to the sync server, one way.

@@ -23,16 +23,13 @@ const MAX_INPUT_ROWS: u16 = 5;
 
 /// Build the editor with atuin-ai's configuration. Chrome (border/titles)
 /// comes from the surrounding `panel`, not a tui-textarea block.
-pub(crate) fn new_textarea() -> TextArea<'static> {
+pub fn new_textarea() -> TextArea<'static> {
     let mut textarea = TextArea::default();
     textarea.set_cursor_line_style(Style::default());
     textarea.set_wrap_mode(tui_textarea::WrapMode::Word);
     textarea.set_placeholder_text("Type a message...");
-    textarea.set_placeholder_style(
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::ITALIC),
-    );
+    textarea
+        .set_placeholder_style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC));
     textarea.set_max_rows(MAX_INPUT_ROWS);
     textarea
 }
@@ -64,7 +61,7 @@ impl Element for InputEditor<'_> {
 
 /// The full input area: bordered editor, contextual hint line, and slash
 /// suggestions.
-pub(crate) fn input_area<'a>(
+pub fn input_area<'a>(
     textarea: &'a RefCell<TextArea<'static>>,
     active: bool,
     footer: &str,
@@ -72,9 +69,7 @@ pub(crate) fn input_area<'a>(
     slash_results: &[SlashCommandSearchResult],
 ) -> AnyElement<'a> {
     let border_style = Style::default().fg(Color::DarkGray);
-    let title_style = Style::default()
-        .fg(Color::Gray)
-        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD);
 
     col()
         .child(
@@ -93,11 +88,7 @@ pub(crate) fn input_area<'a>(
             )
         })
         .children(
-            slash_results
-                .iter()
-                .take(4)
-                .enumerate()
-                .map(|(i, result)| slash_row(result, i == 0)),
+            slash_results.iter().take(4).enumerate().map(|(i, result)| slash_row(result, i == 0)),
         )
         .pad_top(1)
         .any()

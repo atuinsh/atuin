@@ -1,7 +1,6 @@
-use super::StaticInitOptions;
 use atuin_client::settings::Tmux;
-use atuin_dotfiles::store::{AliasStore, var::VarStore};
-use eyre::Result;
+
+use super::StaticInitOptions;
 
 fn print_tmux_config(tmux: &Tmux) {
     if tmux.enabled {
@@ -16,7 +15,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
     print_tmux_config(options.tmux);
     println!("{}", crate::shell::ZSH);
 
-    if std::env::var("ATUIN_NOBIND").is_err() {
+    if atuin_common::env::var("ATUIN_NOBIND").is_err() {
         const BIND_CTRL_R: &str = r"bindkey -M emacs '^r' atuin-search
 bindkey -M viins '^r' atuin-search-viins
 bindkey -M vicmd '/' atuin-search";
@@ -38,25 +37,16 @@ bindkey -M vicmd 'k' atuin-up-search-vicmd";
 
         #[cfg(feature = "ai")]
         if options.enable_ai {
-            let bind_ai = atuin_ai::commands::init::generate_zsh_integration();
+            println!("{}", atuin_ai::shell::ZSH_INIT);
+        }
 
-            println!("{bind_ai}");
+        #[cfg(feature = "ai")]
+        if options.enable_ai_resume {
+            println!(
+                r"bindkey -M emacs '^]' atuin-ai-resume
+bindkey -M viins '^]' atuin-ai-resume-viins
+bindkey -M vicmd '^]' atuin-ai-resume-vicmd"
+            );
         }
     }
-}
-
-pub async fn init(
-    aliases: AliasStore,
-    vars: VarStore,
-    options: &StaticInitOptions<'_>,
-) -> Result<()> {
-    init_static(options);
-
-    let aliases = atuin_dotfiles::shell::zsh::alias_config(&aliases).await;
-    let vars = atuin_dotfiles::shell::zsh::var_config(&vars).await;
-
-    println!("{aliases}");
-    println!("{vars}");
-
-    Ok(())
 }

@@ -5,13 +5,12 @@
 //! is sent to the server; full content is loaded on demand via `load_skill`.
 
 mod frontmatter;
-pub(crate) mod walker;
+pub mod walker;
 
 use std::path::Path;
 
-use atuin_common::string::EllipsizeExt as _;
-use atuin_common::string::Measure;
 use atuin_common::string::ellipsis::{Indicator, Pos};
+use atuin_common::string::{EllipsizeExt as _, Measure};
 use eyre::{Result, eyre};
 
 use crate::user_context::interpolate;
@@ -28,7 +27,7 @@ const PER_ENTRY_OVERHEAD: usize = 30;
 /// Metadata for a discovered skill. Produced at discovery time from
 /// frontmatter only — the body is not read until `load()`.
 #[derive(Debug, Clone)]
-pub(crate) struct SkillDescriptor {
+pub struct SkillDescriptor {
     pub name: String,
     pub description: String,
     pub source_path: std::path::PathBuf,
@@ -37,14 +36,14 @@ pub(crate) struct SkillDescriptor {
 
 /// A name + description pair ready to serialize into the request payload.
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct SkillSummary {
+pub struct SkillSummary {
     pub name: String,
     pub description: String,
 }
 
 /// Holds discovered skills and provides lookup, budget packing, and loading.
 #[derive(Debug, Clone)]
-pub(crate) struct SkillRegistry {
+pub struct SkillRegistry {
     skills: Vec<SkillDescriptor>,
 }
 
@@ -78,10 +77,8 @@ impl SkillRegistry {
                 continue;
             }
 
-            let description = fm
-                .description
-                .or_else(|| first_paragraph(&parsed.body))
-                .unwrap_or_default();
+            let description =
+                fm.description.or_else(|| first_paragraph(&parsed.body)).unwrap_or_default();
 
             skills.push(SkillDescriptor {
                 name,
@@ -124,11 +121,8 @@ impl SkillRegistry {
     }
 
     pub fn server_skills_with_budget(&self, budget: usize) -> (Vec<SkillSummary>, Option<String>) {
-        let eligible: Vec<&SkillDescriptor> = self
-            .skills
-            .iter()
-            .filter(|s| !s.disable_model_invocation)
-            .collect();
+        let eligible: Vec<&SkillDescriptor> =
+            self.skills.iter().filter(|s| !s.disable_model_invocation).collect();
 
         let mut summaries = Vec::new();
         let mut used = 0;
@@ -139,11 +133,7 @@ impl SkillRegistry {
             // packed into a byte-bounded LLM prompt budget.
             let truncated_desc = skill
                 .description
-                .ellipsize(
-                    Measure::Bytes(MAX_DESCRIPTION_LEN),
-                    Pos::End,
-                    Indicator::ASCII,
-                )
+                .ellipsize(Measure::Bytes(MAX_DESCRIPTION_LEN), Pos::End, Indicator::ASCII)
                 .to_string();
             let entry_size = skill.name.len() + truncated_desc.len() + PER_ENTRY_OVERHEAD;
 
@@ -179,9 +169,7 @@ impl SkillRegistry {
     /// shell interpolation runs. If `$ARGUMENTS` does not appear in the body
     /// and arguments were provided, they are appended as `ARGUMENTS: <value>`.
     pub async fn load(&self, name: &str, shell: &str, arguments: Option<&str>) -> Result<String> {
-        let skill = self
-            .get(name)
-            .ok_or_else(|| eyre!("Unknown skill: {name}"))?;
+        let skill = self.get(name).ok_or_else(|| eyre!("Unknown skill: {name}"))?;
 
         let content = tokio::fs::read_to_string(&skill.source_path).await?;
         let parsed = frontmatter::parse(&content);
@@ -237,20 +225,22 @@ fn first_paragraph(body: &str) -> Option<String> {
         return None;
     }
 
-    let para: String = trimmed
-        .lines()
-        .take_while(|line| !line.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let para: String =
+        trimmed.lines().take_while(|line| !line.trim().is_empty()).collect::<Vec<_>>().join(" ");
 
     let para = para.trim().to_string();
-    if para.is_empty() { None } else { Some(para) }
+    if para.is_empty() {
+        None
+    } else {
+        Some(para)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     /// Build a `SkillDescriptor` from its distinguishing fields, deriving the
     /// source path from the name.
@@ -272,10 +262,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(
-        "Hello world\nSecond line\n\nNew paragraph",
-        Some("Hello world Second line")
-    )]
+    #[case("Hello world\nSecond line\n\nNew paragraph", Some("Hello world Second line"))]
     #[case("", None)]
     #[case("\n\n", None)]
     #[case("Single line", Some("Single line"))]
@@ -397,7 +384,8 @@ mod tests {
         std::fs::create_dir_all(&skill_dir2).unwrap();
         std::fs::write(
             skill_dir2.join("SKILL.md"),
-            "---\nname: release\ndescription: >\n  Multi-line\n  description here.\n---\n\nRelease steps.\n",
+            "---\nname: release\ndescription: >\n  Multi-line\n  description \
+             here.\n---\n\nRelease steps.\n",
         )
         .unwrap();
 

@@ -4,7 +4,9 @@ use std::str::FromStr;
 
 use serde::Serialize;
 use serde_with::DeserializeFromStr;
-use time::{UtcOffset, format_description::FormatItem, macros::format_description};
+use time::UtcOffset;
+use time::format_description::FormatItem;
+use time::macros::format_description;
 use tracing::warn;
 
 /// Extensions to [`UtcOffset`].
@@ -24,9 +26,9 @@ pub trait UtcOffsetExt {
 
 impl UtcOffsetExt for UtcOffset {
     fn local_or_utc() -> UtcOffset {
-        UtcOffset::current_local_offset().unwrap_or_else(|e| {
+        Self::current_local_offset().unwrap_or_else(|e| {
             warn!("could not determine local UTC offset, falling back to UTC: {e}");
-            UtcOffset::UTC
+            Self::UTC
         })
     }
 
@@ -34,18 +36,18 @@ impl UtcOffsetExt for UtcOffset {
         let spec = spec.as_ref().to_lowercase();
 
         if matches!(spec.as_str(), "l" | "local") {
-            return Ok(UtcOffset::current_local_offset()?);
+            return Ok(Self::current_local_offset()?);
         }
 
         if matches!(spec.as_str(), "0" | "utc") {
-            return Ok(UtcOffset::UTC);
+            return Ok(Self::UTC);
         }
 
         // IDEA: Currently named timezones are not supported, because the well-known crate for this
         // is `chrono_tz`, which is not really interoperable with the datetime crate that we
         // currently use - `time`. If ever we migrate to using `chrono`, this would be a good
         // feature to add.
-        Ok(UtcOffset::parse(&spec, OFFSET_FMT)?)
+        Ok(Self::parse(&spec, OFFSET_FMT)?)
     }
 }
 
@@ -77,9 +79,16 @@ impl FromStr for UtcOffsetSpec {
     }
 }
 
+impl Default for UtcOffsetSpec {
+    fn default() -> Self {
+        Self(UtcOffset::UTC)
+    }
+}
+
 /// format: `<+|-><hour>[:<minute>[:<second>]]`
 static OFFSET_FMT: &[FormatItem<'_>] = format_description!(
-    "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional [:[offset_second padding:none]]]]]"
+    "[offset_hour sign:mandatory padding:none][optional [:[offset_minute padding:none][optional \
+     [:[offset_second padding:none]]]]]"
 );
 
 #[derive(Debug, Clone, Copy, thiserror::Error)]
@@ -92,8 +101,9 @@ pub enum TimezoneDecodingError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::no_sign("09:30")]
@@ -103,7 +113,7 @@ mod tests {
         assert!(UtcOffsetSpec::from_str(spec).is_err());
     }
 
-    #[test]
+    #[rstest]
     fn spec_wraps_the_resolved_offset() {
         let spec = UtcOffsetSpec::from_str("+09:30").unwrap();
         assert_eq!(spec.0.as_hms(), (9, 30, 0));
@@ -129,14 +139,14 @@ mod tests {
         assert_eq!(UtcOffset::resolve_spec(spec).unwrap().as_hms(), (h, m, s));
     }
 
-    #[test]
+    #[rstest]
     fn resolve_spec_accepts_anything_stringlike() {
         // the point of `impl AsRef<str>`: borrowed or owned, no dance at the call site
         assert!(UtcOffset::resolve_spec("utc").is_ok());
         assert!(UtcOffset::resolve_spec(String::from("utc")).is_ok());
     }
 
-    #[test]
+    #[rstest]
     fn resolve_spec_local_queries_the_system() {
         // cannot assert the value -- it depends on the machine -- but it must resolve
         assert!(UtcOffset::resolve_spec("local").is_ok());

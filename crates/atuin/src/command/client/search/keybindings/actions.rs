@@ -40,9 +40,11 @@ pub enum Action {
     // Commands — accept selection and execute immediately
     Accept,
     AcceptNth(u8),
+    AcceptCd,
     // Commands — return selection to command line without executing
     ReturnSelection,
     ReturnSelectionNth(u8),
+    ReturnCd,
     // Commands — other
     Copy,
     Delete,
@@ -70,6 +72,10 @@ pub enum Action {
     // Inspector
     InspectPrevious,
     InspectNext,
+    InspectRuns,
+    InspectSession,
+    InspectStats,
+    InspectOutput,
 
     // Special
     Noop,
@@ -123,7 +129,9 @@ impl Action {
             "scroll-to-screen-bottom" => Ok(Action::ScrollToScreenBottom),
 
             "accept" => Ok(Action::Accept),
+            "accept-cd" => Ok(Action::AcceptCd),
             "return-selection" => Ok(Action::ReturnSelection),
+            "return-cd" => Ok(Action::ReturnCd),
             "copy" => Ok(Action::Copy),
             "delete" => Ok(Action::Delete),
             "delete-all" => Ok(Action::DeleteAll),
@@ -148,6 +156,10 @@ impl Action {
 
             "inspect-previous" => Ok(Action::InspectPrevious),
             "inspect-next" => Ok(Action::InspectNext),
+            "inspect-runs" => Ok(Action::InspectRuns),
+            "inspect-session" => Ok(Action::InspectSession),
+            "inspect-stats" => Ok(Action::InspectStats),
+            "inspect-output" => Ok(Action::InspectOutput),
 
             "noop" => Ok(Action::Noop),
 
@@ -191,6 +203,8 @@ impl Action {
             Action::AcceptNth(n) => format!("accept-{n}"),
             Action::ReturnSelection => "return-selection".to_string(),
             Action::ReturnSelectionNth(n) => format!("return-selection-{n}"),
+            Action::AcceptCd => "accept-cd".to_string(),
+            Action::ReturnCd => "return-cd".to_string(),
             Action::Copy => "copy".to_string(),
             Action::Delete => "delete".to_string(),
             Action::DeleteAll => "delete-all".to_string(),
@@ -215,6 +229,10 @@ impl Action {
 
             Action::InspectPrevious => "inspect-previous".to_string(),
             Action::InspectNext => "inspect-next".to_string(),
+            Action::InspectRuns => "inspect-runs".to_string(),
+            Action::InspectSession => "inspect-session".to_string(),
+            Action::InspectStats => "inspect-stats".to_string(),
+            Action::InspectOutput => "inspect-output".to_string(),
 
             Action::Noop => "noop".to_string(),
         }
@@ -242,8 +260,9 @@ impl<'de> Deserialize<'de> for Action {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::cursor_left("cursor-left", Action::CursorLeft)]
@@ -256,6 +275,8 @@ mod tests {
     #[case::return_selection("return-selection", Action::ReturnSelection)]
     #[case::return_selection_1("return-selection-1", Action::ReturnSelectionNth(1))]
     #[case::return_selection_9("return-selection-9", Action::ReturnSelectionNth(9))]
+    #[case::accept_cd("accept-cd", Action::AcceptCd)]
+    #[case::return_cd("return-cd", Action::ReturnCd)]
     fn parse_action(#[case] input: &str, #[case] expected: Action) {
         assert_eq!(Action::from_str(input).unwrap(), expected);
     }
@@ -276,6 +297,8 @@ mod tests {
     #[case(Action::AcceptNth(5))]
     #[case(Action::ReturnSelection)]
     #[case(Action::ReturnSelectionNth(3))]
+    #[case(Action::AcceptCd)]
+    #[case(Action::ReturnCd)]
     #[case(Action::VimSearchInsert)]
     #[case(Action::ScrollToScreenMiddle)]
     fn round_trip(#[case] action: Action) {

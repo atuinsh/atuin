@@ -1,6 +1,6 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -13,11 +13,16 @@ atuin hook install claude-code
 # Codex
 atuin hook install codex
 
+# opencode
+atuin hook install opencode
+
 # pi
 atuin hook install pi
 ```
 
 That's it. Commands the agent runs will now appear in your Atuin history, tagged with the agent's name.
+
+To let the agent search your history too, connect it to Atuin's [MCP server](../ai/mcp.md) with `atuin mcp install <agent>`.
 
 ## How It Works
 
@@ -28,7 +33,8 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 | Agent | Config file / extension |
 |-------|-------------------------|
 | Claude Code | `~/.claude/settings.json` |
-| Codex | `~/.codex/hooks.json` |
+| Codex | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml` |
+| opencode | `~/.config/opencode/plugins/atuin.ts` |
 | pi | `~/.pi/agent/extensions/atuin.ts` |
 
 The hook lifecycle:
@@ -38,20 +44,22 @@ The hook lifecycle:
 
 Atuin only captures `Bash` tool invocations. It ignores other tool types (file writes, web fetches, etc.).
 
+Agents that load extensions rather than shelling out to a hook command -- opencode and pi -- call `atuin history start` and `atuin history end` directly instead, but record the same thing.
+
 ## Filtering by Author
 
 By default, Atuin's interactive search shows only your own commands. Agent-run commands are hidden so they don't clutter your history.
 
 Today this default is built into the search UI rather than configurable via `config.toml`. Interactive search uses the equivalent of:
 
-- `$all-user` — any author that's **not** a known AI agent
+- `$all-user` — any entry that's **not** agent-run
 
 For explicit author filtering, use the CLI `atuin search --author ...` flag. Special values:
 
 | Value | Meaning |
 |-------|---------|
-| `$all-user` | Any author that's **not** a known AI agent |
-| `$all-agent` | Any known AI agent author |
+| `$all-user` | Any entry that's **not** agent-run |
+| `$all-agent` | Any agent-run entry |
 
 You can also use literal author names:
 
@@ -82,7 +90,7 @@ For support tiers, see [Supported platforms](../support.md).
 atuin hook install claude-code
 ```
 
-This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each `Bash` tool use, passing the event as JSON on `stdin`.
+This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each Bash tool use matching `^Bash$`, passing the event as JSON on `stdin`.
 
 ### Codex
 
@@ -90,7 +98,26 @@ This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin ho
 atuin hook install codex
 ```
 
-This adds hook entries to `~/.codex/hooks.json`. Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
+This adds hook entries to `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`). Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
+
+Codex 0.160 and later only run hooks you have trusted, so the install also records Atuin's hooks as trusted in `$CODEX_HOME/config.toml` (`[hooks.state]` entries). It trusts only Atuin's own hooks, as installed, and leaves your other hooks and settings as they are. If you installed the hooks with an earlier version of Atuin, run the install again to trust them.
+
+### opencode
+
+```shell
+atuin hook install opencode
+```
+
+This writes Atuin's plugin to `~/.config/opencode/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/opencode/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`.
+
+Then restart opencode. The plugin records every shell tool command with author `opencode`, using the tool's description as the entry's intent when opencode supplies one.
+
+opencode 1.x and 2.x load plugins differently, so the install writes the plugin for the opencode it finds (`opencode --version`). After upgrading to opencode 2, run `atuin hook install opencode` again.
+
+A few details are worth knowing:
+
+- Commands you deny at the permission prompt aren't recorded. With opencode 2, a command is recorded once it has finished, so its time is when it ended, and its duration includes any wait at the permission prompt. A command that timed out is recorded with exit code 124, and one left running in the background isn't recorded.
+- Commands you run yourself in opencode -- with the `!command` prompt prefix or in a terminal pane -- aren't recorded either, since opencode didn't run them. Use Atuin's own shell integration for those.
 
 ### pi
 
@@ -123,6 +150,9 @@ cat ~/.claude/settings.json | grep atuin
 # Codex
 cat ~/.codex/hooks.json | grep atuin
 
+# opencode
+ls ~/.config/opencode/plugins/atuin.ts
+
 # pi
 ls ~/.pi/agent/extensions/atuin.ts
 ```
@@ -137,4 +167,4 @@ hooks.PostToolUse: already installed, skipping
 hooks.PostToolUseFailure: already installed, skipping
 ```
 
-For pi, reinstalling will also skip if the managed extension already matches the bundled version.
+For opencode and pi, reinstalling will also skip if the installed extension already matches the one for your agent's version.

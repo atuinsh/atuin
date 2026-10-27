@@ -1,7 +1,7 @@
 pub mod actions;
 pub mod conditions;
 pub mod defaults;
-pub mod key;
+pub use atuin_client::tui::key;
 pub mod keymap;
 
 pub use actions::Action;

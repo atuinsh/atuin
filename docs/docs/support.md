@@ -19,22 +19,22 @@ Feature coverage varies by shell:
   <thead>
     <tr>
       <th class="tier">Tier</th><th>Shell</th><th>History search</th><th>Inline popup</th>
-      <th>Dotfiles</th><th>Atuin AI</th><th>pty-proxy</th>
+      <th>Atuin AI</th><th>pty-proxy</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td rowspan="3" class="tier"><strong>1</strong></td>
-      <td>zsh</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td>
+      <td>zsh</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td>
     </tr>
-    <tr><td>bash</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
-    <tr><td>fish</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
+    <tr><td>bash</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
+    <tr><td>fish</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
     <tr>
       <td rowspan="3" class="tier"><strong>2</strong></td>
-      <td>nushell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-yes">✓</td>
+      <td>nushell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-yes">✓</td>
     </tr>
-    <tr><td>xonsh</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
-    <tr><td>PowerShell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
+    <tr><td>xonsh</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
+    <tr><td>PowerShell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
   </tbody>
 </table>
 </div>

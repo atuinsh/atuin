@@ -1,59 +1,52 @@
-use std::{
-    io::{IsTerminal, Write, stdout},
-    time::Duration,
-};
-
 #[cfg(unix)]
 use std::io::Read as _;
+use std::io::{IsTerminal, Write, stdout};
+use std::sync::Arc;
+use std::time::Duration;
 
-use atuin_common::{shell::Shell, string::EscapeNonPrintablePosixExt as _};
+use atuin_client::database::{Context, Sqlite, current_context};
+use atuin_client::history::store::HistoryStore;
+use atuin_client::history::{History, HistoryId};
+use atuin_client::settings::{
+    CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
+    SearchMode, Settings, UiColumn,
+};
+use atuin_common::shell::Shell;
+use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use easy_cast::Conv;
 use eyre::Result;
 use futures_util::FutureExt;
-use semver::Version;
-use time::{OffsetDateTime, UtcOffset};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-use super::{
-    cursor::Cursor,
-    engines::{AnySearchEngine, SearchEngine, SearchState},
-    history_list::{HistoryList, ListState},
-};
-use atuin_client::{
-    database::{Context, Database, current_context},
-    history::{History, HistoryId, HistoryStats, store::HistoryStore},
-    settings::{
-        CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
-        SearchMode, Settings, UiColumn,
-    },
-};
-
-use crate::command::client::search::history_list::HistoryHighlighter;
-use crate::command::client::search::keybindings::KeymapSet;
-use crate::command::client::theme::{Meaning, Theme};
-use crate::{VERSION, command::client::search::engines};
-
-use ratatui::{
-    Frame, Terminal, TerminalOptions, Viewport,
-    backend::{CrosstermBackend, FromCrossterm},
-    crossterm::{
-        cursor::SetCursorStyle,
-        event::{self, Event, KeyEvent, MouseEvent},
-        execute, queue, terminal,
-    },
-    layout::{Alignment, Constraint, Direction, Layout},
-    prelude::*,
-    style::{Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Tabs},
-};
-
+use ratatui::backend::{CrosstermBackend, FromCrossterm};
+use ratatui::crossterm::cursor::SetCursorStyle;
+use ratatui::crossterm::event::{self, Event, KeyEvent, MouseEvent};
 #[cfg(not(target_os = "windows"))]
 use ratatui::crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-
+use ratatui::crossterm::{execute, queue, terminal};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+use ratatui::prelude::*;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Tabs};
+use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
+use semver::Version;
+use time::{OffsetDateTime, UtcOffset};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[cfg(windows)]
 use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP};
+
+use super::cursor::Cursor;
+use super::engines::{AnySearchEngine, SearchEngine, SearchState};
+use super::history_list::{HistoryList, ListState};
+use super::inspector::Stats as InspectorStats;
+use super::inspector::bindings::Bindings;
+use super::inspector::browser::{Browser, View as InspectorView};
+use crate::VERSION;
+use crate::command::client::search::engines;
+use crate::command::client::search::history_list::HistoryHighlighter;
+use crate::command::client::search::keybindings::KeymapSet;
+use crate::command::client::theme::{Meaning, Theme};
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
 
@@ -90,11 +83,16 @@ impl KeyboardEnhancementState {
     }
 }
 
+/// Tells the shell integration to execute the returned line instead of inserting it.
+const ACCEPT_PREFIX: &str = "__atuin_accept__:";
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
     Copy(usize),
     Delete(usize),
+    DeleteInspecting,
     DeleteAllMatching(usize),
     ReturnOriginal,
     ReturnQuery,
@@ -103,30 +101,34 @@ pub enum InputAction {
     SwitchContext(Option<usize>),
 }
 
-#[derive(Clone)]
+#[derive(Default)]
 pub struct InspectingState {
     current: Option<HistoryId>,
     next: Option<HistoryId>,
     previous: Option<HistoryId>,
+    browser: Browser,
+    bindings: Bindings,
 }
 
 impl InspectingState {
     pub fn move_to_previous(&mut self) {
-        let previous = self.previous.clone();
-        self.reset();
-        self.current = previous;
+        if self.browser.view == InspectorView::Output {
+            self.browser.scroll_output(false, 1);
+        } else if let Some(previous) = self.previous {
+            self.current = Some(previous);
+        }
     }
 
     pub fn move_to_next(&mut self) {
-        let next = self.next.clone();
-        self.reset();
-        self.current = next;
+        if self.browser.view == InspectorView::Output {
+            self.browser.scroll_output(true, 1);
+        } else if let Some(next) = self.next {
+            self.current = Some(next);
+        }
     }
 
     pub fn reset(&mut self) {
-        self.current = None;
-        self.next = None;
-        self.previous = None;
+        *self = Self::default();
     }
 }
 
@@ -146,6 +148,45 @@ pub fn to_compactness(f: &Frame, settings: &Settings) -> Compactness {
     }
 }
 
+struct SearchModeState {
+    mode: SearchMode,
+    pub daemon_failed: bool,
+}
+
+impl SearchModeState {
+    pub fn new(settings: &Settings) -> Self {
+        Self {
+            mode: settings.active_search_mode(),
+            daemon_failed: !cfg!(feature = "daemon"),
+        }
+    }
+
+    /// Return the current search mode.
+    ///
+    /// If [`Self::daemon_failed`] is true and the requested mode is [`SearchMode::DaemonFuzzy`],
+    /// this method will return [`SearchMode::Fuzzy`] instead.
+    pub fn mode(&self) -> SearchMode {
+        if self.is_failed_daemon_fuzzy() {
+            SearchMode::Fuzzy
+        } else {
+            self.mode
+        }
+    }
+
+    /// Return the raw mode, without correcting for unavailable modes.
+    pub fn raw_mode(&self) -> SearchMode {
+        self.mode
+    }
+
+    pub fn advance_to_next_mode(&mut self, settings: &Settings) {
+        self.mode = self.mode.next(settings);
+    }
+
+    pub fn is_failed_daemon_fuzzy(&self) -> bool {
+        self.mode == SearchMode::DaemonFuzzy && self.daemon_failed
+    }
+}
+
 #[allow(clippy::struct_field_names)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct State {
@@ -154,15 +195,18 @@ pub struct State {
     update_needed: Option<Version>,
     results_state: ListState,
     switched_search_mode: bool,
-    search_mode: SearchMode,
+    search_mode_state: SearchModeState,
     results_len: usize,
     accept: bool,
+    /// Return a command changing to the selected entry's directory instead of its command.
+    cd: bool,
     keymap_mode: KeymapMode,
     prefix: bool,
     current_cursor: Option<CursorStyle>,
     tab_index: usize,
     pending_vim_key: Option<char>,
     original_input_empty: bool,
+    shell_up_key_binding: bool,
 
     pub inspecting_state: InspectingState,
 
@@ -187,56 +231,72 @@ struct StyleState {
 }
 
 impl State {
+    fn search_mode(&self) -> SearchMode {
+        self.search_mode_state.mode()
+    }
+
     async fn query_results(
         &mut self,
-        db: &mut dyn Database,
-        smart_sort: bool,
+        db: &mut Sqlite,
+        settings: &Arc<Settings>,
     ) -> Result<Vec<History>> {
-        let results = self.engine.query(&self.search, db).await?;
+        #[cfg(feature = "daemon")]
+        use atuin_daemon::client::{DaemonClientErrorKind, classify_error};
 
-        self.inspecting_state = InspectingState {
-            current: None,
-            next: None,
-            previous: None,
+        let results = match self.engine.query(&self.search, db).await {
+            Ok(results) => results,
+            #[cfg(feature = "daemon")]
+            Err(error)
+                if self.search_mode() == SearchMode::DaemonFuzzy
+                    && classify_error(&error) != DaemonClientErrorKind::NonGrpc =>
+            {
+                tracing::warn!("daemon-fuzzy search failed: {error:#}");
+                self.search_mode_state.daemon_failed = true;
+                self.engine = engines::engine(self.search_mode(), settings);
+                self.engine.query(&self.search, db).await?
+            }
+            Err(error) => return Err(error),
         };
+
+        // Search results are deduplicated; the inspected occurrence need not be among them.
+        // Context/filter changes while inspecting must not discard that independent selection.
+        if self.tab_index == 0 {
+            self.inspecting_state.reset();
+        }
         self.results_state.select(0);
         self.results_len = results.len();
 
-        if smart_sort {
-            Ok(atuin_history::sort::sort(
-                self.search.input.as_str(),
-                results,
-            ))
+        if settings.smart_sort {
+            Ok(atuin_history::sort::sort(self.search.input.as_str(), results))
         } else {
             Ok(results)
         }
     }
 
-    fn handle_input(&mut self, settings: &Settings, input: &Event) -> InputAction {
+    #[must_use]
+    fn handle_input(&mut self, settings: &Arc<Settings>, input: &Event) -> InputAction {
         match input {
             Event::Key(k) => self.handle_key_input(settings, k),
-            Event::Mouse(m) => self.handle_mouse_input(*m, settings.invert),
+            Event::Mouse(m) => self.handle_mouse_input(*m, settings),
             Event::Paste(d) => self.handle_paste_input(d),
             _ => InputAction::Continue,
         }
     }
 
-    fn handle_mouse_input(&mut self, input: MouseEvent, inverted: bool) -> InputAction {
-        match (input.kind, inverted) {
-            (event::MouseEventKind::ScrollDown, false)
-            | (event::MouseEventKind::ScrollUp, true) => {
-                self.scroll_down(1);
-            }
-            (event::MouseEventKind::ScrollDown, true)
-            | (event::MouseEventKind::ScrollUp, false) => {
-                self.scroll_up(1);
-            }
-            _ => {}
-        }
-        InputAction::Continue
+    fn handle_mouse_input(&mut self, input: MouseEvent, settings: &Arc<Settings>) -> InputAction {
+        use super::keybindings::Action;
+        let action = match input.kind {
+            event::MouseEventKind::ScrollDown => Action::SelectNext,
+            event::MouseEventKind::ScrollUp => Action::SelectPrevious,
+            _ => return InputAction::Continue,
+        };
+        self.execute_action(&action, settings)
     }
 
     fn handle_paste_input(&mut self, input: &str) -> InputAction {
+        if self.tab_index == 1 {
+            return InputAction::Continue;
+        }
         for i in input.chars() {
             self.search.input.insert(i);
         }
@@ -320,9 +380,31 @@ impl State {
             )
     }
 
-    fn handle_key_input(&mut self, settings: &Settings, input: &KeyEvent) -> InputAction {
+    fn eval_context(&self) -> super::keybindings::EvalContext {
+        let (selected_index, results_len) = if self.tab_index == 1 {
+            if self.inspecting_state.current.is_some() {
+                self.inspecting_state.browser.list_position()
+            } else {
+                (0, 0)
+            }
+        } else {
+            (self.results_state.selected(), self.results_len)
+        };
+        super::keybindings::EvalContext {
+            cursor_position: self.search.input.position(),
+            input_width: UnicodeWidthStr::width(self.search.input.as_str()),
+            input_byte_len: self.search.input.as_str().len(),
+            selected_index,
+            results_len,
+            original_input_empty: self.original_input_empty,
+            has_context: self.search.custom_context.is_some(),
+            shell_up_key_binding: self.shell_up_key_binding,
+        }
+    }
+
+    #[must_use]
+    fn handle_key_input(&mut self, settings: &Arc<Settings>, input: &KeyEvent) -> InputAction {
         use super::keybindings::Action;
-        use super::keybindings::EvalContext;
         use super::keybindings::key::{KeyCodeValue, KeyInput, SingleKey};
 
         // Skip release events
@@ -333,16 +415,7 @@ impl State {
         // Reset switched_search_mode at start of each key event
         self.switched_search_mode = false;
 
-        // Build evaluation context from current state
-        let ctx = EvalContext {
-            cursor_position: self.search.input.position(),
-            input_width: UnicodeWidthStr::width(self.search.input.as_str()),
-            input_byte_len: self.search.input.as_str().len(),
-            selected_index: self.results_state.selected(),
-            results_len: self.results_len,
-            original_input_empty: self.original_input_empty,
-            has_context: self.search.custom_context.is_some(),
-        };
+        let ctx = self.eval_context();
 
         // Convert KeyEvent to SingleKey
         let Some(single) = SingleKey::from_event(input) else {
@@ -395,10 +468,7 @@ impl State {
                 };
                 (Some(Action::Noop), Some(c))
             } else {
-                (
-                    keymap.resolve(&KeyInput::Single(single.clone()), &ctx),
-                    None,
-                )
+                (keymap.resolve(&KeyInput::Single(single.clone()), &ctx), None)
             }
         };
 
@@ -435,9 +505,17 @@ impl State {
 
     fn scroll_up(&mut self, scroll_len: usize) {
         let i = self.results_state.selected() + scroll_len;
-        self.results_state
-            .select(i.min(self.results_len.saturating_sub(1)));
+        self.results_state.select(i.min(self.results_len.saturating_sub(1)));
         self.inspecting_state.reset();
+    }
+
+    /// The inspected entry in the inspector tab, otherwise the selected one.
+    fn accept_selection(&self) -> InputAction {
+        if self.tab_index == 1 {
+            InputAction::AcceptInspecting
+        } else {
+            InputAction::Accept(self.results_state.selected())
+        }
     }
 
     /// Execute a resolved action, performing all side effects and returning the
@@ -450,12 +528,66 @@ impl State {
     /// for `settings.invert` so that keybindings are always in "visual" terms —
     /// users never need to think about invert in their keybinding config.
     #[allow(clippy::too_many_lines)]
+    #[must_use]
     pub(crate) fn execute_action(
         &mut self,
         action: &super::keybindings::Action,
-        settings: &Settings,
+        settings: &Arc<Settings>,
     ) -> InputAction {
         use crate::command::client::search::keybindings::Action;
+
+        if self.tab_index == 1 {
+            match action {
+                Action::Exit => {
+                    if self.inspecting_state.browser.view == InspectorView::Output {
+                        self.inspecting_state.browser.back_from_output();
+                    } else {
+                        self.tab_index = 0;
+                    }
+                    return InputAction::Redraw;
+                }
+                Action::SelectPrevious | Action::SelectNext => {
+                    if *action == Action::SelectNext {
+                        self.inspecting_state.move_to_next();
+                    } else {
+                        self.inspecting_state.move_to_previous();
+                    }
+                    return InputAction::Redraw;
+                }
+                Action::ScrollPageUp
+                | Action::ScrollPageDown
+                | Action::ScrollHalfPageUp
+                | Action::ScrollHalfPageDown => {
+                    let next =
+                        matches!(action, Action::ScrollPageDown | Action::ScrollHalfPageDown);
+                    let half =
+                        matches!(action, Action::ScrollHalfPageUp | Action::ScrollHalfPageDown);
+                    if self.inspecting_state.browser.view == InspectorView::Output {
+                        self.inspecting_state.browser.scroll_output_page(next, half);
+                    } else if next {
+                        self.inspecting_state.move_to_next();
+                    } else {
+                        self.inspecting_state.move_to_previous();
+                    }
+                    return InputAction::Redraw;
+                }
+                Action::ScrollToScreenTop
+                | Action::ScrollToScreenMiddle
+                | Action::ScrollToScreenBottom => {
+                    // Screen-position jumps are search-only; don't move the hidden search list.
+                    return InputAction::Continue;
+                }
+                Action::ScrollToTop | Action::ScrollToBottom => {
+                    if self.inspecting_state.browser.view == InspectorView::Output {
+                        self.inspecting_state
+                            .browser
+                            .scroll_output_edge(matches!(action, Action::ScrollToBottom));
+                    }
+                    return InputAction::Redraw;
+                }
+                _ => {}
+            }
+        }
 
         match action {
             // -- Cursor movement --
@@ -468,15 +600,11 @@ impl State {
                 InputAction::Continue
             }
             Action::CursorWordLeft => {
-                self.search
-                    .input
-                    .prev_word(&settings.word_chars, settings.word_jump_mode);
+                self.search.input.prev_word(&settings.word_chars, settings.word_jump_mode);
                 InputAction::Continue
             }
             Action::CursorWordRight => {
-                self.search
-                    .input
-                    .next_word(&settings.word_chars, settings.word_jump_mode);
+                self.search.input.next_word(&settings.word_chars, settings.word_jump_mode);
                 InputAction::Continue
             }
             Action::CursorWordEnd => {
@@ -502,15 +630,11 @@ impl State {
                 InputAction::Continue
             }
             Action::DeleteWordBefore => {
-                self.search
-                    .input
-                    .remove_prev_word(&settings.word_chars, settings.word_jump_mode);
+                self.search.input.remove_prev_word(&settings.word_chars, settings.word_jump_mode);
                 InputAction::Continue
             }
             Action::DeleteWordAfter => {
-                self.search
-                    .input
-                    .remove_next_word(&settings.word_chars, settings.word_jump_mode);
+                self.search.input.remove_next_word(&settings.word_chars, settings.word_jump_mode);
                 InputAction::Continue
             }
             Action::DeleteToWordBoundary => {
@@ -557,11 +681,9 @@ impl State {
             }
             // -- Page/half-page scroll (invert-aware) --
             Action::ScrollHalfPageUp => {
-                let scroll_len = self
-                    .results_state
-                    .max_entries()
-                    .saturating_sub(settings.scroll_context_lines)
-                    / 2;
+                let scroll_len =
+                    self.results_state.max_entries().saturating_sub(settings.scroll_context_lines)
+                        / 2;
                 if settings.invert {
                     self.scroll_down(scroll_len);
                 } else {
@@ -570,11 +692,9 @@ impl State {
                 InputAction::Continue
             }
             Action::ScrollHalfPageDown => {
-                let scroll_len = self
-                    .results_state
-                    .max_entries()
-                    .saturating_sub(settings.scroll_context_lines)
-                    / 2;
+                let scroll_len =
+                    self.results_state.max_entries().saturating_sub(settings.scroll_context_lines)
+                        / 2;
                 if settings.invert {
                     self.scroll_up(scroll_len);
                 } else {
@@ -583,10 +703,8 @@ impl State {
                 InputAction::Continue
             }
             Action::ScrollPageUp => {
-                let scroll_len = self
-                    .results_state
-                    .max_entries()
-                    .saturating_sub(settings.scroll_context_lines);
+                let scroll_len =
+                    self.results_state.max_entries().saturating_sub(settings.scroll_context_lines);
                 if settings.invert {
                     self.scroll_down(scroll_len);
                 } else {
@@ -595,10 +713,8 @@ impl State {
                 InputAction::Continue
             }
             Action::ScrollPageDown => {
-                let scroll_len = self
-                    .results_state
-                    .max_entries()
-                    .saturating_sub(settings.scroll_context_lines);
+                let scroll_len =
+                    self.results_state.max_entries().saturating_sub(settings.scroll_context_lines);
                 if settings.invert {
                     self.scroll_up(scroll_len);
                 } else {
@@ -635,8 +751,7 @@ impl State {
                 let top = self.results_state.offset();
                 let visible = self.results_state.max_entries().min(self.results_len);
                 let bottom = top + visible.saturating_sub(1);
-                self.results_state
-                    .select(bottom.min(self.results_len.saturating_sub(1)));
+                self.results_state.select(bottom.min(self.results_len.saturating_sub(1)));
                 self.inspecting_state.reset();
                 InputAction::Continue
             }
@@ -645,8 +760,7 @@ impl State {
                 let top = self.results_state.offset();
                 let visible = self.results_state.max_entries().min(self.results_len);
                 let middle = top + visible / 2;
-                self.results_state
-                    .select(middle.min(self.results_len.saturating_sub(1)));
+                self.results_state.select(middle.min(self.results_len.saturating_sub(1)));
                 self.inspecting_state.reset();
                 InputAction::Continue
             }
@@ -660,26 +774,24 @@ impl State {
 
             // -- Commands --
             Action::Accept => {
-                if self.tab_index == 1 {
-                    return InputAction::AcceptInspecting;
-                }
                 self.accept = true;
-                InputAction::Accept(self.results_state.selected())
+                self.accept_selection()
             }
             Action::AcceptNth(n) => {
                 self.accept = true;
-                InputAction::Accept(self.results_state.selected() + *n as usize)
+                InputAction::Accept(self.results_state.selected() + usize::conv(*n))
             }
-            Action::ReturnSelection => {
-                if self.tab_index == 1 {
-                    return InputAction::AcceptInspecting;
-                }
-                InputAction::Accept(self.results_state.selected())
-            }
+            Action::ReturnSelection => self.accept_selection(),
             Action::ReturnSelectionNth(n) => {
-                InputAction::Accept(self.results_state.selected() + *n as usize)
+                InputAction::Accept(self.results_state.selected() + usize::conv(*n))
+            }
+            Action::AcceptCd | Action::ReturnCd => {
+                self.cd = true;
+                self.accept = *action == Action::AcceptCd;
+                self.accept_selection()
             }
             Action::Copy => InputAction::Copy(self.results_state.selected()),
+            Action::Delete if self.tab_index == 1 => InputAction::DeleteInspecting,
             Action::Delete => InputAction::Delete(self.results_state.selected()),
             Action::DeleteAll => InputAction::DeleteAllMatching(self.results_state.selected()),
             Action::ReturnOriginal => InputAction::ReturnOriginal,
@@ -692,8 +804,8 @@ impl State {
             }
             Action::CycleSearchMode => {
                 self.switched_search_mode = true;
-                self.search_mode = self.search_mode.next(settings);
-                self.engine = engines::engine(self.search_mode, settings);
+                self.search_mode_state.advance_to_next_mode(settings);
+                self.engine = engines::engine(self.search_mode(), settings);
                 InputAction::Continue
             }
             Action::SwitchContext => {
@@ -702,7 +814,7 @@ impl State {
             Action::ClearContext => InputAction::SwitchContext(None),
             Action::ToggleTab => {
                 self.tab_index = (self.tab_index + 1) % TAB_TITLES.len();
-                InputAction::Continue
+                InputAction::Redraw
             }
 
             // -- Mode changes --
@@ -760,13 +872,25 @@ impl State {
                 self.inspecting_state.move_to_next();
                 InputAction::Redraw
             }
+            Action::InspectRuns
+            | Action::InspectSession
+            | Action::InspectStats
+            | Action::InspectOutput => {
+                let view = match action {
+                    Action::InspectSession => InspectorView::Session,
+                    Action::InspectStats => InspectorView::Stats,
+                    Action::InspectOutput => InspectorView::Output,
+                    _ => InspectorView::Runs,
+                };
+                self.inspecting_state.browser.select_view(view);
+                InputAction::Redraw
+            }
 
             // -- Special --
             Action::Noop => InputAction::Continue,
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::bool_to_int_with_if)]
     fn calc_preview_height(
         settings: &Settings,
@@ -782,13 +906,10 @@ impl State {
             && tab_index == 0
             && !results.is_empty()
         {
-            let length_current_cmd = results[selected].command.width() as u16;
+            let length_current_cmd = u16::conv(results[selected].command.width());
             // calculate the number of newlines in the command
-            let num_newlines = results[selected]
-                .command
-                .chars()
-                .filter(|&c| c == '\n')
-                .count() as u16;
+            let num_newlines =
+                u16::conv(results[selected].command.chars().filter(|&c| c == '\n').count());
             if num_newlines > 0 {
                 std::cmp::min(
                     settings.max_preview_height,
@@ -796,7 +917,7 @@ impl State {
                         .command
                         .split('\n')
                         .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
+                            (u16::conv(line.len()) + preview_width - 1 - border_size)
                                 / (preview_width - border_size)
                         })
                         .sum(),
@@ -816,16 +937,15 @@ impl State {
             && settings.preview.strategy == PreviewStrategy::Static
             && tab_index == 0
         {
-            let longest_command = results
-                .iter()
-                .max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
+            let longest_command =
+                results.iter().max_by(|h1, h2| h1.command.len().cmp(&h2.command.len()));
             longest_command.map_or(0, |v| {
                 std::cmp::min(
                     settings.max_preview_height,
                     v.command
                         .split('\n')
                         .map(|line| {
-                            (line.len() as u16 + preview_width - 1 - border_size)
+                            (u16::conv(line.len()) + preview_width - 1 - border_size)
                                 / (preview_width - border_size)
                         })
                         .sum(),
@@ -847,7 +967,7 @@ impl State {
         &mut self,
         f: &mut Frame,
         results: &[History],
-        stats: Option<HistoryStats>,
+        stats: Option<&InspectorStats>,
         inspecting: Option<&History>,
         settings: &Settings,
         theme: &Theme,
@@ -868,11 +988,20 @@ impl State {
         f: &mut Frame,
         area: Rect,
         results: &[History],
-        stats: Option<HistoryStats>,
+        stats: Option<&InspectorStats>,
         inspecting: Option<&History>,
         settings: &Settings,
         theme: &Theme,
     ) {
+        let bindings = &self.inspecting_state.bindings;
+        // Output is a focused reader, not another panel beneath the search chrome.
+        if self.tab_index == 1
+            && self.inspecting_state.browser.view == InspectorView::Output
+            && inspecting.or_else(|| results.get(self.results_state.selected())).is_some()
+        {
+            self.inspecting_state.browser.draw(f, area, theme, bindings);
+            return;
+        }
         let compactness = to_compactness(f, settings);
         let invert = settings.invert;
         let border_size = match compactness {
@@ -891,7 +1020,7 @@ impl State {
         );
 
         let show_help = settings.show_help && (compactness == Compactness::Full || area.height > 1);
-        let warnings = Self::build_warnings(settings, theme);
+        let warnings = self.build_warnings(settings, theme);
         let warning_height = u16::try_from(warnings.height()).unwrap_or(u16::MAX);
 
         // This is an OR, as it seems more likely for someone to wish to override
@@ -904,30 +1033,50 @@ impl State {
             .constraints::<&[Constraint]>(
                 if invert {
                     [
-                        Constraint::Length(1 + border_size),               // input
-                        Constraint::Min(1),                                // results list
-                        Constraint::Length(preview_height),                // preview
-                        Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
-                        Constraint::Length(if show_help { 1 } else { 0 }), // header (sic)
-                        Constraint::Length(warning_height),                // skim warning
+                        Constraint::Length(1 + border_size), // input
+                        Constraint::Min(1),                  // results list
+                        Constraint::Length(preview_height),  // preview
+                        Constraint::Length(if show_tabs {
+                            1
+                        } else {
+                            0
+                        }), // tabs
+                        Constraint::Length(if show_help {
+                            1
+                        } else {
+                            0
+                        }), // header (sic)
+                        Constraint::Length(warning_height),  // skim warning
                     ]
                 } else {
                     match compactness {
                         Compactness::Ultracompact => [
-                            Constraint::Length(if show_help { 1 } else { 0 }), // header
-                            Constraint::Length(0),                             // tabs
-                            Constraint::Min(1),                                // results list
-                            Constraint::Length(0),                             // no input
-                            Constraint::Length(0),                             // no preview
-                            Constraint::Length(warning_height),                // skim warning
+                            Constraint::Length(if show_help {
+                                1
+                            } else {
+                                0
+                            }), // header
+                            Constraint::Length(0),              // tabs
+                            Constraint::Min(1),                 // results list
+                            Constraint::Length(0),              // no input
+                            Constraint::Length(0),              // no preview
+                            Constraint::Length(warning_height), // skim warning
                         ],
                         _ => [
-                            Constraint::Length(if show_help { 1 } else { 0 }), // header
-                            Constraint::Length(if show_tabs { 1 } else { 0 }), // tabs
-                            Constraint::Min(1),                                // results list
-                            Constraint::Length(1 + border_size),               // input
-                            Constraint::Length(preview_height),                // preview
-                            Constraint::Length(warning_height),                // skim warning
+                            Constraint::Length(if show_help {
+                                1
+                            } else {
+                                0
+                            }), // header
+                            Constraint::Length(if show_tabs {
+                                1
+                            } else {
+                                0
+                            }), // tabs
+                            Constraint::Min(1),                  // results list
+                            Constraint::Length(1 + border_size), // input
+                            Constraint::Length(preview_height),  // preview
+                            Constraint::Length(warning_height),  // skim warning
                         ],
                     }
                 }
@@ -935,11 +1084,31 @@ impl State {
             )
             .split(area);
 
-        let input_chunk = if invert { chunks[0] } else { chunks[3] };
-        let results_list_chunk = if invert { chunks[1] } else { chunks[2] };
-        let preview_chunk = if invert { chunks[2] } else { chunks[4] };
-        let tabs_chunk = if invert { chunks[3] } else { chunks[1] };
-        let header_chunk = if invert { chunks[4] } else { chunks[0] };
+        let input_chunk = if invert {
+            chunks[0]
+        } else {
+            chunks[3]
+        };
+        let results_list_chunk = if invert {
+            chunks[1]
+        } else {
+            chunks[2]
+        };
+        let preview_chunk = if invert {
+            chunks[2]
+        } else {
+            chunks[4]
+        };
+        let tabs_chunk = if invert {
+            chunks[3]
+        } else {
+            chunks[1]
+        };
+        let header_chunk = if invert {
+            chunks[4]
+        } else {
+            chunks[0]
+        };
         // Always last, so it is the bottom row whichever way the layout is stacked.
         let warning_chunk = chunks[5];
 
@@ -967,12 +1136,8 @@ impl State {
         let header_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints::<&[Constraint]>(
-                [
-                    Constraint::Ratio(1, 5),
-                    Constraint::Ratio(3, 5),
-                    Constraint::Ratio(1, 5),
-                ]
-                .as_ref(),
+                [Constraint::Ratio(1, 5), Constraint::Ratio(3, 5), Constraint::Ratio(1, 5)]
+                    .as_ref(),
             )
             .split(header_chunk);
 
@@ -992,17 +1157,14 @@ impl State {
         let indicator: String = match compactness {
             Compactness::Ultracompact => {
                 if self.switched_search_mode {
-                    format!("S{}>", self.search_mode.as_str().chars().next().unwrap())
+                    format!(
+                        "S{}>",
+                        self.search_mode_state.raw_mode().as_str().chars().next().unwrap()
+                    )
                 } else if self.search.custom_context.is_some() {
-                    format!(
-                        "C{}>",
-                        self.search.filter_mode.as_str().chars().next().unwrap()
-                    )
+                    format!("C{}>", self.search.filter_mode.as_str().chars().next().unwrap())
                 } else {
-                    format!(
-                        "{}> ",
-                        self.search.filter_mode.as_str().chars().next().unwrap()
-                    )
+                    format!("{}> ", self.search.filter_mode.as_str().chars().next().unwrap())
                 }
             }
             _ => " > ".to_string(),
@@ -1031,7 +1193,7 @@ impl State {
             }
 
             1 => {
-                if results.is_empty() {
+                if results.is_empty() && inspecting.is_none() {
                     let message = Paragraph::new("Nothing to inspect")
                         .block(
                             Block::new()
@@ -1043,27 +1205,31 @@ impl State {
                         .alignment(Alignment::Center);
                     f.render_widget(message, results_list_chunk);
                 } else {
-                    let inspecting = match inspecting {
-                        Some(inspecting) => inspecting,
-                        None => &results[self.results_state.selected()],
-                    };
-                    super::inspector::draw(
+                    let browser = &mut self.inspecting_state.browser;
+                    let chunk = super::inspector::browser::draw_views(
                         f,
                         results_list_chunk,
-                        inspecting,
-                        &stats.expect("Drawing inspector, but no stats"),
-                        settings,
+                        browser.view,
                         theme,
-                        settings.timezone,
+                        bindings,
                     );
+                    let chunk = browser.draw_command(f, chunk, theme);
+                    if browser.view == InspectorView::Stats {
+                        if let Some(stats) = stats {
+                            super::inspector::draw(f, chunk, stats, theme);
+                        }
+                    } else {
+                        browser.draw(f, chunk, theme, bindings);
+                    }
                 }
 
-                // HACK: I'm following up with abstracting this into the UI container, with a
-                // sub-widget for search + for inspector
-                let feedback = Paragraph::new(
-                    "The inspector is new - please give feedback (good, or bad) at https://forum.atuin.sh",
+                let guide = super::inspector::browser::input_guide(
+                    self.inspecting_state.browser.view,
+                    input_chunk.width,
+                    theme,
+                    bindings,
                 );
-                f.render_widget(feedback, input_chunk);
+                f.render_widget(Paragraph::new(guide), input_chunk);
 
                 return;
             }
@@ -1085,7 +1251,6 @@ impl State {
                 preview_chunk.width.into(),
                 theme,
             );
-            #[allow(clippy::cast_possible_truncation)]
             let prefix_width = settings
                 .ui
                 .columns
@@ -1093,9 +1258,8 @@ impl State {
                 .take_while(|col| !col.expand)
                 .map(|col| col.width + 1)
                 .sum::<u16>()
-                + " > ".len() as u16;
-            #[allow(clippy::cast_possible_truncation)]
-            let min_prefix_width = "[ SRCH: FULLTXT ] ".len() as u16;
+                + u16::conv(" > ".len());
+            let min_prefix_width = u16::conv("[ SRCH: FULLTXT ] ".len());
             self.draw_preview(
                 f,
                 style,
@@ -1108,7 +1272,7 @@ impl State {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn draw_preview(
         &self,
         f: &mut Frame,
@@ -1132,7 +1296,7 @@ impl State {
         };
         f.set_cursor_position((
             // Put cursor past the end of the input text
-            input_chunk.x + extra_width as u16 + prefix_width + cursor_offset,
+            input_chunk.x + u16::conv(extra_width) + prefix_width + cursor_offset,
             input_chunk.y + cursor_offset,
         ));
     }
@@ -1176,16 +1340,8 @@ impl State {
                 Span::raw(": inspect"),
             ]))),
 
-            1 => Paragraph::new(Text::from(Line::from(vec![
-                Span::styled("<esc>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": exit"),
-                Span::raw(", "),
-                Span::styled("<ctrl-o>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": search"),
-                Span::raw(", "),
-                Span::styled("<ctrl-d>", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": delete"),
-            ]))),
+            // The inspector has its own contextual guide at the bottom.
+            1 => Paragraph::default(),
 
             _ => unreachable!("invalid tab index"),
         }
@@ -1193,22 +1349,31 @@ impl State {
         .alignment(Alignment::Center)
     }
 
-    fn build_warnings(settings: &Settings, theme: &Theme) -> Text<'static> {
+    fn build_warnings(&self, settings: &Settings, theme: &Theme) -> Text<'static> {
+        let get_style = || {
+            Style::from_crossterm(theme.as_style(Meaning::AlertWarn)).add_modifier(Modifier::BOLD)
+        };
+
+        if self.search_mode_state.is_failed_daemon_fuzzy() {
+            let msg = if cfg!(feature = "daemon") {
+                "Warning: daemon-fuzzy search failed; falling back to fuzzy"
+            } else {
+                "Warning: no daemon support; falling back to fuzzy search"
+            };
+            return Text::styled(msg, get_style());
+        }
+
         if settings.requested_search_mode != RequestedSearchMode::Skim {
             return Text::default();
         }
 
-        let style =
-            Style::from_crossterm(theme.as_style(Meaning::AlertWarn)).add_modifier(Modifier::BOLD);
+        let style = get_style();
         let code_style = Style::from_crossterm(theme.as_style(Meaning::SyntaxCommand))
             .add_modifier(Modifier::BOLD);
 
         Text::from(vec![
-            Span::styled(
-                "Warning: \"skim\" mode was removed; falling back to \"fuzzy\"",
-                style,
-            )
-            .into(),
+            Span::styled("Warning: \"skim\" mode was removed; falling back to \"fuzzy\"", style)
+                .into(),
             vec![
                 Span::styled("Set ", style),
                 Span::styled("search_mode = \"daemon-fuzzy\"", code_style),
@@ -1221,8 +1386,7 @@ impl State {
 
     fn build_stats(&self, theme: &Theme) -> Paragraph<'_> {
         Paragraph::new(Text::from(Span::raw(
-            self.history_count
-                .map_or_else(String::new, |count| format!("history count: {count}")),
+            self.history_count.map_or_else(String::new, |count| format!("history count: {count}")),
         )))
         .style(Style::from_crossterm(theme.as_style(Meaning::Annotation)))
         .alignment(Alignment::Right)
@@ -1281,7 +1445,7 @@ impl State {
         let (pref, mode) = if self.prefix {
             ("", "PREFIX")
         } else if self.switched_search_mode {
-            (" SRCH:", self.search_mode.as_str())
+            (" SRCH:", self.search_mode_state.raw_mode().as_str())
         } else if self.search.custom_context.is_some() {
             (" CTX:", self.search.filter_mode.as_str())
         } else {
@@ -1387,10 +1551,7 @@ impl TerminalWriter {
         #[cfg(unix)]
         {
             Ok(TerminalWriter::Tty(
-                std::fs::File::options()
-                    .read(true)
-                    .write(true)
-                    .open("/dev/tty")?,
+                std::fs::File::options().read(true).write(true).open("/dev/tty")?,
             ))
         }
 
@@ -1399,10 +1560,7 @@ impl TerminalWriter {
         // TUI to render properly. We'll set it back to its previous value upon exit.
         #[cfg(windows)]
         {
-            let file = std::fs::File::options()
-                .read(true)
-                .write(true)
-                .open("CONOUT$")?;
+            let file = std::fs::File::options().read(true).write(true).open("CONOUT$")?;
 
             let initial_console_output_cp = unsafe { GetConsoleOutputCP() };
             if initial_console_output_cp != Self::CP_UTF8 {
@@ -1411,10 +1569,7 @@ impl TerminalWriter {
                 }
             }
 
-            Ok(TerminalWriter::ConOut(
-                std::io::LineWriter::new(file),
-                initial_console_output_cp,
-            ))
+            Ok(TerminalWriter::ConOut(std::io::LineWriter::new(file), initial_console_output_cp))
         }
 
         #[cfg(not(any(unix, windows)))]
@@ -1473,9 +1628,10 @@ struct SavedScreen {
     rows_data: Vec<Vec<u8>>,
 }
 
-/// Connect to atuin pty-proxy's Unix socket and fetch the current screen state.
+/// Fetch the current screen state from the given PTY proxy socket.
 ///
 /// The wire format is:
+///
 /// ```text
 /// [rows: u16 BE][cols: u16 BE][cursor_row: u16 BE][cursor_col: u16 BE]
 /// [row_0_len: u32 BE][row_0_bytes...]
@@ -1483,10 +1639,14 @@ struct SavedScreen {
 /// ...
 /// ```
 #[cfg(unix)]
-fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
+fn fetch_screen_state(socket_path: &std::path::Path) -> Option<SavedScreen> {
     use std::os::unix::net::UnixStream;
 
     let mut stream = UnixStream::connect(socket_path).ok()?;
+    // We only read from this socket, but an older version of the PTY proxy might be waiting up to
+    // 100ms for us to send a magic byte we never do; shut down the write end of the socket
+    // immediately to cancel the timeout.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
 
     let mut data = Vec::new();
@@ -1502,15 +1662,15 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
     let cursor_col = u16::from_be_bytes([data[6], data[7]]);
 
     // Parse length-prefixed rows
-    let mut rows_data = Vec::with_capacity(rows as usize);
+    let mut rows_data = Vec::with_capacity(usize::conv(rows));
     let mut offset = 8;
     while offset + 4 <= data.len() {
-        let row_len = u32::from_be_bytes([
+        let row_len = usize::conv(u32::from_be_bytes([
             data[offset],
             data[offset + 1],
             data[offset + 2],
             data[offset + 3],
-        ]) as usize;
+        ]));
         offset += 4;
         if offset + row_len > data.len() {
             break;
@@ -1536,39 +1696,32 @@ fn fetch_screen_state(socket_path: &str) -> Option<SavedScreen> {
 #[cfg(unix)]
 fn restore_popup_area(saved: &SavedScreen, popup_rect: Rect, scroll_offset: u16) {
     use ratatui::crossterm::cursor::MoveTo;
+    use ratatui::crossterm::style::{Attribute, SetAttribute};
+    use ratatui::crossterm::terminal::{Clear, ClearType};
 
     let mut stdout = stdout();
 
     for dy in 0..popup_rect.height {
         let target_row = popup_rect.y + dy;
-        let source_row = (target_row + scroll_offset) as usize;
+        let source_row = usize::conv(target_row + scroll_offset);
 
-        // Clear only the popup region. The server-side rows_formatted() skips
-        // default cells (spaces with default attributes) using cursor jumps, so
-        // any popup content at those positions would remain if not cleared
-        // beforehand. We write `popup_rect.width` spaces instead of
-        // ClearType::CurrentLine so that only the popup area is cleared, not
-        // the entire terminal line.
+        // The snapshot from the server spans the full width of the terminal, not just the popup
+        // area, so move to the start of the line and clear the whole line before we write the row
+        // contents.
         let _ = execute!(
             stdout,
-            MoveTo(popup_rect.x, target_row),
-            ratatui::crossterm::style::SetAttribute(ratatui::crossterm::style::Attribute::Reset),
+            MoveTo(0, target_row),
+            SetAttribute(Attribute::Reset),
+            Clear(ClearType::CurrentLine),
         );
-        let _ = write!(stdout, "{:width$}", "", width = popup_rect.width as usize);
-        let _ = execute!(stdout, MoveTo(popup_rect.x, target_row));
 
         if let Some(row_bytes) = saved.rows_data.get(source_row) {
             let _ = stdout.write_all(row_bytes);
         }
     }
 
-    let _ = execute!(
-        stdout,
-        MoveTo(
-            saved.cursor_col,
-            saved.cursor_row.saturating_sub(scroll_offset)
-        )
-    );
+    let _ =
+        execute!(stdout, MoveTo(saved.cursor_col, saved.cursor_row.saturating_sub(scroll_offset)));
     let _ = stdout.flush();
 }
 
@@ -1702,22 +1855,16 @@ fn compute_popup_placement(
 
 // for now, it works. But it'd be great if it were more easily readable, and
 // modular. I'd like to add some more stats and stuff at some point
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::too_many_lines,
-    clippy::cognitive_complexity
-)]
+#[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
 pub async fn history(
     query: &[String],
-    settings: &Settings,
-    mut db: impl Database,
+    settings: &Arc<Settings>,
+    mut db: Sqlite,
     history_store: &HistoryStore,
     theme: &Theme,
 ) -> Result<String> {
     let inline_height = if settings.shell_up_key_binding {
-        settings
-            .inline_height_shell_up_key_binding
-            .unwrap_or(settings.inline_height)
+        settings.inline_height_shell_up_key_binding.unwrap_or(settings.inline_height)
     } else {
         settings.inline_height
     };
@@ -1742,9 +1889,11 @@ pub async fn history(
     // fetch the screen state and render as a centered overlay.
     #[cfg(unix)]
     let (saved_screen, popup_rect, popup_scroll_offset) = {
-        let socket_path = std::env::var("ATUIN_PTY_PROXY_SOCKET")
-            .or_else(|_| std::env::var("ATUIN_HEX_SOCKET"))
-            .ok();
+        #[cfg(feature = "pty-proxy")]
+        let socket_path = atuin_pty_proxy::parent_socket_path();
+        #[cfg(not(feature = "pty-proxy"))]
+        let socket_path = None::<std::path::PathBuf>;
+
         if let Some(ref path) = socket_path
             && inline_height > 0
         {
@@ -1802,29 +1951,21 @@ pub async fn history(
         );
         for row in popup_rect.y..popup_rect.y.saturating_add(popup_rect.height) {
             let _ = queue!(raw_stdout, MoveTo(popup_rect.x, row));
-            let _ = write!(
-                raw_stdout,
-                "{:width$}",
-                "",
-                width = popup_rect.width as usize
-            );
+            let _ = write!(raw_stdout, "{:width$}", "", width = usize::conv(popup_rect.width));
         }
         let _ = raw_stdout.flush();
     }
 
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: if popup_mode {
-                Viewport::Fixed(popup_rect)
-            } else if inline_height > 0 {
-                Viewport::Inline(inline_height)
-            } else {
-                Viewport::Fullscreen
-            },
+    let mut terminal = Terminal::with_options(backend, TerminalOptions {
+        viewport: if popup_mode {
+            Viewport::Fixed(popup_rect)
+        } else if inline_height > 0 {
+            Viewport::Inline(inline_height)
+        } else {
+            Viewport::Fullscreen
         },
-    )?;
+    })?;
 
     let original_query = query.join(" ");
 
@@ -1847,41 +1988,30 @@ pub async fn history(
     // Put the cursor at the end of the query by default
     input.end();
 
-    let settings2 = settings.clone();
+    let settings2 = Arc::clone(settings);
     let update_needed = tokio::spawn(async move { settings2.needs_update().await }).fuse();
     tokio::pin!(update_needed);
 
     // Counting history is a full table scan, which can take a while on a large,
     // cold database - don't hold up the first frame for it.
-    let count_db = db.clone_boxed();
+    let count_db = db.clone();
     let history_count = tokio::spawn(async move { count_db.history_count(false).await }).fuse();
     tokio::pin!(history_count);
 
-    let initial_context = current_context().await?;
-
-    let search_mode = if settings.shell_up_key_binding {
-        settings
-            .search_mode_shell_up_key_binding()
-            .unwrap_or_else(|| settings.search_mode())
-    } else {
-        settings.search_mode()
-    };
+    let initial_context = current_context(settings).await?;
+    let search_mode_state = SearchModeState::new(settings);
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding
         .filter(|_| settings.shell_up_key_binding)
         .unwrap_or_else(|| settings.default_filter_mode(initial_context.git_root.is_some()));
+
     let mut app = State {
         history_count: None,
         results_state: ListState::default(),
         update_needed: None,
         switched_search_mode: false,
-        search_mode,
         tab_index: 0,
-        inspecting_state: InspectingState {
-            current: None,
-            next: None,
-            previous: None,
-        },
+        inspecting_state: InspectingState::default(),
         keymaps: KeymapSet::from_settings(settings),
         search: SearchState {
             input,
@@ -1890,9 +2020,11 @@ pub async fn history(
             custom_context: None,
             shells: settings.search.shells.clone(),
         },
-        engine: engines::engine(search_mode, settings),
+        engine: engines::engine(search_mode_state.mode(), settings),
+        search_mode_state,
         results_len: 0,
         accept: false,
+        cd: false,
         keymap_mode: match settings.keymap_mode {
             KeymapMode::Auto => KeymapMode::Emacs,
             value => value,
@@ -1907,6 +2039,7 @@ pub async fn history(
         prefix: false,
         pending_vim_key: None,
         original_input_empty: original_query.is_empty(),
+        shell_up_key_binding: settings.shell_up_key_binding,
     };
 
     app.initialize_keymap_cursor(settings);
@@ -1922,31 +2055,32 @@ pub async fn history(
         app.draw(f, &[], None, None, settings, theme, popup_mode);
     })?;
 
-    let mut results = app.query_results(&mut db, settings.smart_sort).await?;
+    let mut results = app.query_results(&mut db, settings).await?;
 
-    let mut stats: Option<HistoryStats> = None;
-    // The id of the history entry `stats` was computed for, so the render loop
-    // only hits the database when the inspected entry actually changes.
-    let mut stats_for: Option<HistoryId> = None;
+    let mut stats: Option<InspectorStats> = None;
+    // Aggregates depend on the command, not the selected occurrence.
+    let mut stats_for: Option<String> = None;
     let mut inspecting: Option<History> = None;
     let accept;
     let result = 'render: loop {
+        if app.tab_index == 1 {
+            let context = app.eval_context();
+            app.inspecting_state.bindings.update(&app.keymaps.inspector, &context);
+            if let Some(selected) =
+                inspecting.as_ref().or_else(|| results.get(app.results_state.selected()))
+            {
+                app.inspecting_state.browser.prepare(selected, settings, theme);
+            }
+        }
+
         terminal.draw(|f| {
-            app.draw(
-                f,
-                &results,
-                stats.clone(),
-                inspecting.as_ref(),
-                settings,
-                theme,
-                popup_mode,
-            );
+            app.draw(f, &results, stats.as_ref(), inspecting.as_ref(), settings, theme, popup_mode);
         })?;
 
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
-        let initial_search_mode = app.search_mode;
-        let initial_custom_context = app.search.custom_context.clone();
+        let initial_search_mode = app.search_mode();
+        let initial_custom_context = app.search.custom_context;
 
         let event_ready = tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(250)));
 
@@ -1956,6 +2090,18 @@ pub async fn history(
                     loop {
                         match app.handle_input(settings, &event::read()?) {
                             InputAction::Continue => {},
+                            InputAction::DeleteInspecting => {
+                                if let Some(id) = app.inspecting_state.current {
+                                    if let Some(entry) = db.load(id).await? {
+                                        crate::command::client::history::delete_history_entries(
+                                            settings, history_store, &db, [entry],
+                                        ).await?;
+                                    }
+                                    app.tab_index = 0;
+                                    results = app.query_results(&mut db, settings).await?;
+                                    break;
+                                }
+                            },
                             InputAction::Delete(index) => {
                                 if results.is_empty() {
                                     break;
@@ -1969,8 +2115,13 @@ pub async fn history(
 
                                 let entry = results.remove(index);
 
-                                let ids = history_store.delete_entries([entry]).await?;
-                                history_store.build_all(&db, &ids).await?;
+                                crate::command::client::history::delete_history_entries(
+                                    settings,
+                                    history_store,
+                                    &db,
+                                    [entry],
+                                )
+                                .await?;
 
                                 app.tab_index  = 0;
                             },
@@ -1979,7 +2130,12 @@ pub async fn history(
                                     break;
                                 }
 
-                                let command = results[index].command.clone();
+                                let command = if app.tab_index == 1 {
+                                    let Some(entry) = inspecting.as_ref() else { break; };
+                                    entry.command.clone()
+                                } else {
+                                    results[index].command.clone()
+                                };
 
                                 // Remove matching entries from the visible results
                                 results.retain(|e| e.command != command);
@@ -1987,13 +2143,19 @@ pub async fn history(
                                 // Query the DB for ALL entries with this command and delete them
                                 let all_matching = db.query_history(
                                     &format!(
-                                        "select * from history where command = '{}' and deleted_at is null",
+                                        "select {} from history where command = '{}' and deleted_at is null",
+                                        atuin_client::database::HISTORY_COLUMNS,
                                         command.replace('\'', "''")
                                     )
                                 ).await?;
 
-                                let ids = history_store.delete_entries(all_matching).await?;
-                                history_store.build_all(&db, &ids).await?;
+                                crate::command::client::history::delete_history_entries(
+                                    settings,
+                                    history_store,
+                                    &db,
+                                    all_matching,
+                                )
+                                .await?;
 
                                 app.results_len = results.len();
                                 app.results_state = ListState::default();
@@ -2001,8 +2163,11 @@ pub async fn history(
                                 app.tab_index = 0;
                             },
                             InputAction::SwitchContext(index) => {
-                                if let Some(index) = index && let Some(entry) = results.get(index) {
-                                    app.search.custom_context = Some(entry.id.clone());
+                                let entry = index.and_then(|index| {
+                                    if app.tab_index == 1 { inspecting.as_ref() } else { results.get(index) }
+                                });
+                                if let Some(entry) = entry {
+                                    app.search.custom_context = Some(entry.id);
                                     app.search.context = Context::from_history(entry);
                                     app.search.filter_mode = FilterMode::Session;
                                     app.search.input = Cursor::from(String::new());
@@ -2012,14 +2177,16 @@ pub async fn history(
                                     app.search.context = initial_context.clone();
                                     app.search.filter_mode = default_filter_mode;
                                 }
+                                // Apply the context before consuming a queued accept/navigation key.
+                                break;
                             },
                             InputAction::Redraw => {
-                                if !popup_mode {
+                                // Inspector navigation uses ratatui's diff; clearing on every scroll flickers.
+                                if !popup_mode && app.tab_index != 1 {
                                     terminal.clear()?;
                                 }
-                                terminal.draw(|f| {
-                                    app.draw(f, &results, stats.clone(), inspecting.as_ref(), settings, theme, popup_mode);
-                                })?;
+                                // Refresh the selected occurrence before drawing or accepting another key.
+                                break;
                             },
                             r => {
                                 accept = app.accept;
@@ -2044,10 +2211,10 @@ pub async fn history(
 
         if initial_input != app.search.input.as_str()
             || initial_filter_mode != app.search.filter_mode
-            || initial_search_mode != app.search_mode
+            || initial_search_mode != app.search_mode()
             || initial_custom_context != app.search.custom_context
         {
-            results = app.query_results(&mut db, settings.smart_sort).await?;
+            results = app.query_results(&mut db, settings).await?;
         }
 
         // In custom context mode, when no filter is applied, highlight the entry which was used
@@ -2056,18 +2223,18 @@ pub async fn history(
             && app.search.input.as_str().is_empty()
             && (initial_custom_context != app.search.custom_context
                 || initial_filter_mode != app.search.filter_mode)
-            && let Some(history_id) = app.search.custom_context.clone()
+            && let Some(history_id) = app.search.custom_context
             && let Some(pos) = results.iter().position(|entry| entry.id == history_id)
         {
             app.results_state.select(pos);
         }
 
-        let inspecting_id = app.inspecting_state.clone().current;
+        let inspecting_id = app.inspecting_state.current;
         // If inspecting ID is not the current inspecting History, update it.
         match inspecting_id {
             Some(inspecting_id) => {
-                if inspecting.is_none() || inspecting_id != inspecting.clone().unwrap().id {
-                    inspecting = db.load(inspecting_id.0.as_str()).await?;
+                if inspecting.as_ref().is_none_or(|entry| inspecting_id != entry.id) {
+                    inspecting = db.load(inspecting_id).await?;
                 }
             }
             _ => {
@@ -2075,33 +2242,28 @@ pub async fn history(
             }
         }
 
+        if app.tab_index == 1 && inspecting.is_none() {
+            inspecting = results.get(app.results_state.selected()).cloned();
+        }
         stats = if app.tab_index == 0 {
             stats_for = None;
             None
-        } else if !results.is_empty() {
-            // If we have stats, then we can indicate next available IDs. This avoids passing
-            // around a database object, or a full stats object.
-            let selected = match inspecting.clone() {
-                Some(insp) => insp,
-                None => results[app.results_state.selected()].clone(),
-            };
-            if stats_for.as_ref() == Some(&selected.id) {
-                // Already computed for this entry - the render loop iterates on every
-                // input event and poll timeout, and stats() is several queries.
-                stats
+        } else if let Some(selected) = inspecting.as_ref() {
+            app.inspecting_state.current = Some(selected.id);
+            if app.inspecting_state.browser.view == InspectorView::Stats {
+                app.inspecting_state.previous = None;
+                app.inspecting_state.next = None;
+                if stats_for.as_deref() == Some(selected.command.as_str()) {
+                    stats
+                } else {
+                    stats_for = Some(selected.command.clone());
+                    Some(db.stats(selected).await?.into())
+                }
             } else {
-                let stats = db.stats(&selected).await?;
-                stats_for = Some(selected.id.clone());
-                app.inspecting_state.current = Some(selected.id);
-                app.inspecting_state.previous = match stats.previous.clone() {
-                    Some(p) => Some(p.id),
-                    _ => None,
-                };
-                app.inspecting_state.next = match stats.next.clone() {
-                    Some(p) => Some(p.id),
-                    _ => None,
-                };
-                Some(stats)
+                (app.inspecting_state.previous, app.inspecting_state.next) =
+                    app.inspecting_state.browser.refresh(&db, selected, settings).await?;
+                stats_for = None;
+                None
             }
         } else {
             stats_for = None;
@@ -2126,46 +2288,35 @@ pub async fn history(
         terminal.set_cursor_position(origin)?;
     }
 
+    let shell = Shell::from_env();
     let accept = accept
         && matches!(
-            Shell::from_env(),
+            shell,
             Shell::Zsh | Shell::Fish | Shell::Bash | Shell::Xonsh | Shell::Nu | Shell::Powershell
         );
 
-    let accept_prefix = "__atuin_accept__:";
+    let chain = is_command_chaining.then_some(original_query.as_str());
 
     match result {
-        InputAction::AcceptInspecting => {
-            match inspecting {
-                Some(result) => {
-                    let mut command = result.command;
-
-                    if accept {
-                        command = String::from(accept_prefix) + &command;
-                    }
-
-                    // index is in bounds so we return that entry
-                    Ok(command)
-                }
-                None => Ok(String::new()),
-            }
-        }
+        InputAction::AcceptInspecting => Ok(inspecting
+            .map(|entry| selection_output(entry, app.cd, accept, None, &shell))
+            .unwrap_or_default()),
         InputAction::Accept(index) if index < results.len() => {
-            let mut command = results.swap_remove(index).command;
-
-            if is_command_chaining {
-                command = format!("{} {}", original_query.trim_end(), command);
-            } else if accept {
-                command = String::from(accept_prefix) + &command;
-            }
-
-            // index is in bounds so we return that entry
-            Ok(command)
+            Ok(selection_output(results.swap_remove(index), app.cd, accept, chain, &shell))
         }
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
-            let cmd = results.swap_remove(index).command;
-            if let Err(e) = set_clipboard(cmd) {
+            let cmd = if app.tab_index == 1 {
+                inspecting.map(|entry| entry.command)
+            } else if index < results.len() {
+                Some(results.swap_remove(index).command)
+            } else {
+                // No results, e.g. the query matches nothing.
+                None
+            };
+            if let Some(cmd) = cmd
+                && let Err(e) = set_clipboard(cmd)
+            {
                 tracing::warn!(?e, "failed to copy to clipboard");
             }
             Ok(String::new())
@@ -2179,11 +2330,84 @@ pub async fn history(
         InputAction::Continue
         | InputAction::Redraw
         | InputAction::Delete(_)
+        | InputAction::DeleteInspecting
         | InputAction::DeleteAllMatching(_)
         | InputAction::SwitchContext(_) => {
             unreachable!("should have been handled!")
         }
     }
+}
+
+/// The line returned to the shell for the selected `entry`; empty returns the original command line.
+fn selection_output(
+    entry: History,
+    cd: bool,
+    accept: bool,
+    chain: Option<&str>,
+    shell: &Shell,
+) -> String {
+    let command = if cd {
+        match cd_command(&entry.cwd, shell) {
+            Some(command) => command,
+            None => return String::new(),
+        }
+    } else {
+        entry.command
+    };
+    match chain {
+        Some(query) => format!("{} {command}", query.trim_end()),
+        None if accept => format!("{ACCEPT_PREFIX}{command}"),
+        None => command,
+    }
+}
+
+/// Build a command that changes into `cwd` in `shell`, or `None` when no safe one exists: `cwd` is
+/// not absolute (imported entries store `unknown`), holds a control or line-separator character, or
+/// the shell is unknown so its quoting is too.
+fn cd_command(cwd: &str, shell: &Shell) -> Option<String> {
+    if !std::path::Path::new(cwd).is_absolute()
+        || cwd.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        return None;
+    }
+    Some(match shell {
+        // Single quotes only: double quotes still allow `!` history expansion in bash and zsh.
+        Shell::Sh | Shell::Bash | Shell::Zsh => format!("cd -- '{}'", cwd.replace('\'', r"'\''")),
+        Shell::Fish => format!("cd -- {}", backslash_quote(cwd)),
+        // Raw strings have no escapes; use one `#` more than any run following a `'`.
+        Shell::Nu => {
+            let longest = cwd
+                .split('\'')
+                .skip(1)
+                .map(|s| s.len() - s.trim_start_matches('#').len())
+                .max()
+                .unwrap_or(0);
+            let hashes = "#".repeat(longest + 1);
+            format!("cd r{hashes}'{cwd}'{hashes}")
+        }
+        // xonsh expands `$VAR` in quoted subprocess args; `@()` evaluates a plain Python string.
+        // Its `cd` also rejects `--`.
+        Shell::Xonsh => format!("cd @({})", backslash_quote(cwd)),
+        // Outside Windows, PowerShell treats `\` as a separator even in `-LiteralPath`.
+        Shell::Powershell if cfg!(not(windows)) && cwd.contains('\\') => return None,
+        Shell::Powershell => {
+            // PowerShell also treats curly single quotes as string delimiters.
+            let mut quoted = String::with_capacity(cwd.len() + 2);
+            for c in cwd.chars() {
+                if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
+                    quoted.push(c);
+                }
+                quoted.push(c);
+            }
+            format!("Set-Location -LiteralPath '{quoted}'")
+        }
+        Shell::Unknown => return None,
+    })
+}
+
+/// Single-quote `s` for fish and Python: doubling every `\` and escaping `'` is enough in both.
+fn backslash_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\\', r"\\").replace('\'', r"\'"))
 }
 
 // cli-clipboard only works on Windows, Mac, and Linux.
@@ -2210,20 +2434,27 @@ fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
 
 #[cfg(test)]
 mod tests {
-    use rstest::{fixture, rstest};
+    use std::sync::Arc;
 
     use atuin_client::database::Context;
     use atuin_client::history::History;
+    #[cfg(unix)]
+    use atuin_client::settings::RequestedSearchMode;
     use atuin_client::settings::{
-        FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
+        ExitMode, FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
     };
+    use atuin_common::path::AbsPathBuf;
+    use atuin_common::shell::Shell;
+    use rstest::{fixture, rstest};
     use time::OffsetDateTime;
 
+    use super::{
+        Compactness, InputAction, InspectingState, InspectorView, KeymapSet, SearchModeState,
+        State, cd_command, selection_output,
+    };
     use crate::command::client::search::engines::{self, SearchState};
     use crate::command::client::search::history_list::ListState;
     use crate::command::client::search::keybindings::Action;
-
-    use super::{Compactness, InputAction, InspectingState, KeymapSet, State};
 
     #[cfg(not(target_os = "windows"))]
     use super::KeyboardEnhancementState;
@@ -2255,8 +2486,8 @@ mod tests {
     }
 
     #[fixture]
-    fn settings() -> Settings {
-        Settings::utc()
+    fn settings() -> Arc<Settings> {
+        Arc::new(Settings::utc())
     }
 
     /// Build a full `State` for tests. Override the leading params via `#[with(..)]`
@@ -2274,20 +2505,21 @@ mod tests {
             update_needed: None,
             results_state: ListState::default(),
             switched_search_mode: false,
-            search_mode: SearchMode::Fuzzy,
+            search_mode_state: SearchModeState {
+                mode: SearchMode::DaemonFuzzy,
+                daemon_failed: false,
+            },
             results_len,
             accept: false,
+            cd: false,
             keymap_mode,
             prefix: false,
             current_cursor: None,
             tab_index: 0,
             pending_vim_key: None,
             original_input_empty: false,
-            inspecting_state: InspectingState {
-                current: None,
-                next: None,
-                previous: None,
-            },
+            shell_up_key_binding: false,
+            inspecting_state: InspectingState::default(),
             keymaps: KeymapSet::defaults(&Settings::utc()),
             search: SearchState {
                 input: input.to_string().into(),
@@ -2295,14 +2527,14 @@ mod tests {
                 context: Context {
                     session: String::new(),
                     cwd: String::new(),
-                    hostname: String::new(),
+                    cmd_origin: atuin_domain::record::CmdOrigin::default(),
                     host_id: String::new(),
                     git_root: None,
                 },
                 custom_context: None,
                 shells: Shells::all(),
             },
-            engine: engines::engine(SearchMode::Fuzzy, &Settings::utc()),
+            engine: engines::engine(SearchMode::Fuzzy, &Arc::new(Settings::utc())),
             now: Box::new(OffsetDateTime::now_utc),
         };
         state.results_state.select(selected);
@@ -2323,14 +2555,21 @@ mod tests {
 
         let cmd_124: History = History::capture()
             .timestamp(time::OffsetDateTime::now_utc())
-            .command("echo 'Aurea prima sata est aetas, quae vindice nullo, sponte sua, sine lege fidem rectumque colebat. Poena metusque aberant'")
+            .command(
+                "echo 'Aurea prima sata est aetas, quae vindice nullo, sponte sua, sine lege \
+                 fidem rectumque colebat. Poena metusque aberant'",
+            )
             .cwd("/")
             .build()
             .into();
 
         let cmd_200: History = History::capture()
             .timestamp(time::OffsetDateTime::now_utc())
-            .command("CREATE USER atuin WITH ENCRYPTED PASSWORD 'supersecretpassword'; CREATE DATABASE atuin WITH OWNER = atuin; \\c atuin; REVOKE ALL PRIVILEGES ON SCHEMA public FROM PUBLIC; echo 'All done. 200 characters'")
+            .command(
+                "CREATE USER atuin WITH ENCRYPTED PASSWORD 'supersecretpassword'; CREATE DATABASE \
+                 atuin WITH OWNER = atuin; \\c atuin; REVOKE ALL PRIVILEGES ON SCHEMA public FROM \
+                 PUBLIC; echo 'All done. 200 characters'",
+            )
             .cwd("/")
             .build()
             .into();
@@ -2394,12 +2633,13 @@ mod tests {
     #[rstest]
     fn test_accept_keybindings(
         #[with(KeymapMode::Emacs, 1)] mut state: State,
-        mut settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use atuin_client::settings::Keys;
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-        settings.keys = Keys {
+        let mut keymap_settings = Settings::utc();
+        keymap_settings.keys = Keys {
             scroll_exits: true,
             exit_past_line_start: false,
             accept_past_line_end: true,
@@ -2407,14 +2647,11 @@ mod tests {
             accept_with_backspace: false,
             prefix: "a".to_string(),
         };
-        state.keymaps = KeymapSet::defaults(&settings);
+        state.keymaps = KeymapSet::defaults(&keymap_settings);
 
         let tab_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &tab_event);
-        assert!(
-            matches!(result, super::InputAction::Accept(_)),
-            "Tab should always accept"
-        );
+        assert!(matches!(result, super::InputAction::Accept(_)), "Tab should always accept");
 
         // Test left arrow with accept_past_line_start disabled (should continue)
         let left_event = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
@@ -2425,15 +2662,15 @@ mod tests {
         );
 
         // Test left arrow with accept_past_line_start enabled (should accept at start of line)
-        settings.keys.accept_past_line_start = true;
-        state.keymaps = KeymapSet::defaults(&settings);
+        keymap_settings.keys.accept_past_line_start = true;
+        state.keymaps = KeymapSet::defaults(&keymap_settings);
         let result = state.handle_key_input(&settings, &left_event);
         assert!(
             matches!(result, super::InputAction::Accept(_)),
             "Left arrow should accept at start of line when enabled"
         );
-        settings.keys.accept_past_line_start = false;
-        state.keymaps = KeymapSet::defaults(&settings);
+        keymap_settings.keys.accept_past_line_start = false;
+        state.keymaps = KeymapSet::defaults(&keymap_settings);
 
         let backspace_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &backspace_event);
@@ -2442,8 +2679,8 @@ mod tests {
             "Backspace should continue when disabled"
         );
 
-        settings.keys.accept_with_backspace = true;
-        state.keymaps = KeymapSet::defaults(&settings);
+        keymap_settings.keys.accept_with_backspace = true;
+        state.keymaps = KeymapSet::defaults(&keymap_settings);
         let result = state.handle_key_input(&settings, &backspace_event);
         assert!(
             matches!(result, super::InputAction::Accept(_)),
@@ -2463,33 +2700,33 @@ mod tests {
             "Right arrow should accept at end of line when enabled"
         );
 
-        settings.keys.accept_past_line_start = true;
-        state.keymaps = KeymapSet::defaults(&settings);
+        keymap_settings.keys.accept_past_line_start = true;
+        state.keymaps = KeymapSet::defaults(&keymap_settings);
         let left_event = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &left_event);
         assert!(
             matches!(result, super::InputAction::Continue),
             "Left arrow should continue and end of line, even when enabled"
         );
-        settings.keys.accept_past_line_start = false;
-        state.keymaps = KeymapSet::defaults(&settings);
+        keymap_settings.keys.accept_past_line_start = false;
+        state.keymaps = KeymapSet::defaults(&keymap_settings);
 
-        settings.keys.accept_with_backspace = true;
-        state.keymaps = KeymapSet::defaults(&settings);
+        keymap_settings.keys.accept_with_backspace = true;
+        state.keymaps = KeymapSet::defaults(&keymap_settings);
         let backspace_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
         let result = state.handle_key_input(&settings, &backspace_event);
         assert!(
             matches!(result, super::InputAction::Continue),
             "Backspace should continue at end of line, even when enabled"
         );
-        settings.keys.accept_with_backspace = false;
-        state.keymaps = KeymapSet::defaults(&settings);
+        keymap_settings.keys.accept_with_backspace = false;
+        state.keymaps = KeymapSet::defaults(&keymap_settings);
     }
 
     #[rstest]
     fn test_vim_gg_multikey_sequence(
         #[with(KeymapMode::VimNormal)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2513,7 +2750,7 @@ mod tests {
     #[rstest]
     fn test_vim_g_key_clears_on_other_input(
         #[with(KeymapMode::VimNormal)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2521,19 +2758,19 @@ mod tests {
 
         // Press 'g' to set pending state
         let g_event = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
-        state.handle_key_input(&settings, &g_event);
+        let _ = state.handle_key_input(&settings, &g_event);
         assert_eq!(state.pending_vim_key, Some('g'));
 
         // Press 'j' - should clear pending state
         let j_event = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        state.handle_key_input(&settings, &j_event);
+        let _ = state.handle_key_input(&settings, &j_event);
         assert_eq!(state.pending_vim_key, None);
     }
 
     #[rstest]
     fn test_vim_big_g_jump_to_bottom(
         #[with(KeymapMode::VimNormal)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2551,17 +2788,15 @@ mod tests {
     #[rstest]
     fn test_vim_ctrl_scroll_clears_pending(
         #[with(KeymapMode::VimNormal)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
         #[values('d', 'u', 'f', 'b')] c: char,
     ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         state.results_state.select(50);
         state.pending_vim_key = Some('g');
-        let r = state.handle_key_input(
-            &settings,
-            &KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL),
-        );
+        let r = state
+            .handle_key_input(&settings, &KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
         assert!(matches!(r, InputAction::Continue));
         assert_eq!(state.pending_vim_key, None);
     }
@@ -2581,13 +2816,13 @@ mod tests {
     #[case::scroll_to_bottom_no_invert(false, Action::ScrollToBottom, 0)]
     fn execute_scroll_selection(
         #[with(KeymapMode::Emacs, 100, 50)] mut state: State,
-        mut settings: Settings,
         #[case] invert: bool,
         #[case] action: Action,
         #[case] expected_selected: usize,
     ) {
+        let mut settings = Settings::utc();
         settings.invert = invert;
-        let r = state.execute_action(&action, &settings);
+        let r = state.execute_action(&action, &Arc::new(settings));
         assert!(matches!(r, InputAction::Continue));
         assert_eq!(state.results_state.selected(), expected_selected);
     }
@@ -2599,7 +2834,7 @@ mod tests {
     #[case::enter_insert(KeymapMode::VimNormal, Action::VimEnterInsert, KeymapMode::VimInsert)]
     fn execute_vim_mode_change(
         mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
         #[case] start: KeymapMode,
         #[case] action: Action,
         #[case] expected: KeymapMode,
@@ -2611,22 +2846,21 @@ mod tests {
     }
 
     #[rstest]
-    fn execute_accept_sets_accept_flag(
-        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
-        mut settings: Settings,
-    ) {
+    fn execute_accept_sets_accept_flag(#[with(KeymapMode::Emacs, 100, 5)] mut state: State) {
         use crate::command::client::search::keybindings::Action;
 
+        let mut settings = Settings::utc();
         settings.enter_accept = true;
-        let result = state.execute_action(&Action::Accept, &settings);
+        let result = state.execute_action(&Action::Accept, &Arc::new(settings));
         assert!(matches!(result, super::InputAction::Accept(5)));
         assert!(state.accept);
+        assert!(!state.cd);
     }
 
     #[rstest]
     fn execute_return_selection_does_not_set_accept(
         #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use crate::command::client::search::keybindings::Action;
 
@@ -2636,7 +2870,219 @@ mod tests {
     }
 
     #[rstest]
-    fn execute_accept_nth(#[with(KeymapMode::Emacs, 100, 5)] mut state: State, settings: Settings) {
+    #[case::accept_cd(Action::AcceptCd, 0, InputAction::Accept(5), true)]
+    #[case::accept_cd_inspector(Action::AcceptCd, 1, InputAction::AcceptInspecting, true)]
+    #[case::return_cd(Action::ReturnCd, 0, InputAction::Accept(5), false)]
+    #[case::return_cd_inspector(Action::ReturnCd, 1, InputAction::AcceptInspecting, false)]
+    fn execute_cd_selects_entry(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        settings: Arc<Settings>,
+        #[case] action: Action,
+        #[case] tab_index: usize,
+        #[case] expected: InputAction,
+        #[case] accept: bool,
+    ) {
+        state.tab_index = tab_index;
+        assert_eq!(state.execute_action(&action, &settings), expected);
+        assert!(state.cd);
+        assert_eq!(state.accept, accept);
+    }
+
+    /// Makes a `/`-rooted test path absolute on the host: Windows needs a drive letter. Expected
+    /// outputs get the same prefix on their first `/`, which is always the path's.
+    fn on_host(path: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{path}")
+        } else {
+            path.to_owned()
+        }
+    }
+
+    #[rstest]
+    #[case::command(false, false, None, "/a b", "echo hi")]
+    #[case::command_accept(false, true, None, "/a b", "__atuin_accept__:echo hi")]
+    #[case::command_chained(false, true, Some("make && "), "/a b", "make && echo hi")]
+    #[case::cd(true, false, None, "/a b", "cd -- '/a b'")]
+    #[case::cd_accept(true, true, None, "/a b", "__atuin_accept__:cd -- '/a b'")]
+    #[case::cd_chained(true, true, Some("make && "), "/a b", "make && cd -- '/a b'")]
+    #[case::cd_chained_untrimmed(true, true, Some("make &&"), "/a b", "make && cd -- '/a b'")]
+    #[case::cd_without_directory(true, true, None, "unknown", "")]
+    #[case::cd_chained_without_directory(true, true, Some("make && "), "unknown", "")]
+    fn selection_output_maps_entry(
+        #[case] cd: bool,
+        #[case] accept: bool,
+        #[case] chain: Option<&str>,
+        #[case] cwd: &str,
+        #[case] expected: &str,
+    ) {
+        let entry: History = History::capture()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo hi")
+            .cwd(on_host(cwd))
+            .build()
+            .into();
+        assert_eq!(
+            selection_output(entry, cd, accept, chain, &Shell::Bash),
+            expected.replacen('/', &on_host("/"), 1)
+        );
+    }
+
+    #[rstest]
+    #[case::sh(Shell::Sh, r#"cd -- '/a b'\''c"d\e$HOME!'"#)]
+    #[case::bash(Shell::Bash, r#"cd -- '/a b'\''c"d\e$HOME!'"#)]
+    #[case::zsh(Shell::Zsh, r#"cd -- '/a b'\''c"d\e$HOME!'"#)]
+    #[case::fish(Shell::Fish, r#"cd -- '/a b\'c"d\\e$HOME!'"#)]
+    #[case::nu(Shell::Nu, r#"cd r#'/a b'c"d\e$HOME!'#"#)]
+    #[case::xonsh(Shell::Xonsh, r#"cd @('/a b\'c"d\\e$HOME!')"#)]
+    fn cd_command_quotes_per_shell(#[case] shell: Shell, #[case] expected: &str) {
+        let expected = expected.replacen('/', &on_host("/"), 1);
+        assert_eq!(cd_command(&on_host(r#"/a b'c"d\e$HOME!"#), &shell), Some(expected));
+    }
+
+    #[rstest]
+    #[case::nu_raw_terminator(Shell::Nu, "/x'#y'##z", "cd r###'/x'#y'##z'###")]
+    #[case::powershell_quotes(
+        Shell::Powershell,
+        "/a b'c\"d$HOME!\u{2018}\u{2019}\u{201a}\u{201b}",
+        "Set-Location -LiteralPath '/a \
+         b''c\"d$HOME!\u{2018}\u{2018}\u{2019}\u{2019}\u{201a}\u{201a}\u{201b}\u{201b}'"
+    )]
+    fn cd_command_escapes_shell_specific_delimiters(
+        #[case] shell: Shell,
+        #[case] cwd: &str,
+        #[case] expected: &str,
+    ) {
+        let expected = expected.replacen('/', &on_host("/"), 1);
+        assert_eq!(cd_command(&on_host(cwd), &shell), Some(expected));
+    }
+
+    #[rstest]
+    #[case::unknown("unknown")]
+    #[case::empty("")]
+    #[case::relative("some/dir")]
+    #[case::newline("/a\nb")]
+    #[case::carriage_return("/a\rb")]
+    #[case::escape("/a\x1b[2Jb")]
+    #[case::nul("/a\0b")]
+    #[case::next_line("/a\u{85}b")]
+    #[case::line_separator("/a\u{2028}b")]
+    #[case::paragraph_separator("/a\u{2029}b")]
+    fn cd_command_rejects_unusable_cwd(
+        #[case] cwd: &str,
+        #[values(
+            Shell::Sh,
+            Shell::Bash,
+            Shell::Zsh,
+            Shell::Fish,
+            Shell::Nu,
+            Shell::Xonsh,
+            Shell::Powershell
+        )]
+        shell: Shell,
+    ) {
+        assert_eq!(cd_command(&on_host(cwd), &shell), None);
+    }
+
+    #[rstest]
+    fn cd_command_rejects_unknown_shell() {
+        assert_eq!(cd_command(&on_host("/tmp"), &Shell::Unknown), None);
+    }
+
+    #[cfg(not(windows))]
+    #[rstest]
+    fn cd_command_rejects_backslash_in_powershell() {
+        assert_eq!(cd_command(r"/a\b", &Shell::Powershell), None);
+    }
+
+    proptest::proptest! {
+        #[rstest]
+        fn cd_command_posix_round_trips(path in "/[^\\p{Cc}\\x{2028}\\x{2029}]*") {
+            let path = on_host(&path);
+            let command = cd_command(&path, &Shell::Bash).unwrap();
+            proptest::prop_assert_eq!(shlex::split(&command), Some(vec!["cd".into(), "--".into(), path]));
+        }
+    }
+
+    /// Runs every generated `cd` in the real shell and checks where it lands. CI installs bash, zsh
+    /// and fish; the other shells are skipped when missing.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::sh(Shell::Sh, "sh", &["-c"], "pwd")]
+    #[case::bash(Shell::Bash, "bash", &["--norc", "-c"], "pwd")]
+    #[case::zsh(Shell::Zsh, "zsh", &["-f", "-c"], "pwd")]
+    #[case::fish(Shell::Fish, "fish", &["--no-config", "-c"], "pwd")]
+    #[case::nu(Shell::Nu, "nu", &["-n", "-c"], "print $env.PWD")]
+    #[case::xonsh(Shell::Xonsh, "xonsh", &["--no-rc", "-c"], "print($PWD)")]
+    #[case::powershell(Shell::Powershell, "pwsh", &["-NoProfile", "-Command"], "(Get-Location).ProviderPath")]
+    fn cd_command_lands_in_directory_in_real_shell(
+        #[case] shell: Shell,
+        #[case] program: &str,
+        #[case] args: &[&str],
+        #[case] print_cwd: &str,
+    ) {
+        use std::fmt::Write as _;
+
+        const NAMES: &[&str] = &[
+            r#"a b'c"d\e!$HOME"#,
+            "q'#x'##y",
+            "x'# y",
+            "ends'#",
+            "`x` $(y) @(z) {a,b} *? [1]",
+            "s \u{2018}x\u{2019} \u{201a}y\u{201b}",
+            "-lead",
+            "trail ",
+            "semi;amp&pipe|lt<gt>",
+            "~ tilde",
+            "back\\",
+            "\u{e9} \u{4e2d}",
+        ];
+        let required = atuin_common::env::var_os("ATUIN_E2E_REQUIRE_SHELLS").is_some()
+            && matches!(shell, Shell::Bash | Shell::Zsh | Shell::Fish);
+        let root = tempfile::tempdir().unwrap();
+        let mut script = String::new();
+        let mut expected = Vec::new();
+        for name in NAMES {
+            let dir = root.path().join(name);
+            std::fs::create_dir(&dir).unwrap();
+            let Some(cd) = cd_command(dir.to_str().unwrap(), &shell) else {
+                continue;
+            };
+            writeln!(script, "{cd}\n{print_cwd}").unwrap();
+            expected.push(AbsPathBuf::canonicalize(&dir).unwrap());
+        }
+        let skipped = NAMES.iter().filter(|n| shell == Shell::Powershell && n.contains('\\'));
+        assert_eq!(expected.len(), NAMES.len() - skipped.count(), "unexpected skips");
+        // Same override as the e2e shell setups, e.g. Homebrew bash on macOS.
+        let program = atuin_common::env::var(format!("ATUIN_E2E_{}", program.to_uppercase()))
+            .unwrap_or_else(|_| program.to_owned());
+        let output = match std::process::Command::new(&program)
+            .args(args)
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !required => {
+                eprintln!("skipping: {program} not installed");
+                return;
+            }
+            Err(e) => panic!("{program}: {e}"),
+        };
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            output.status.success(),
+            "{program} failed:\n{script}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let landed: Vec<_> = stdout.lines().map(|l| AbsPathBuf::canonicalize(l).unwrap()).collect();
+        assert_eq!(landed, expected, "{program} script:\n{script}");
+    }
+
+    #[rstest]
+    fn execute_accept_nth(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        settings: Arc<Settings>,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
         let result = state.execute_action(&Action::AcceptNth(3), &settings);
@@ -2644,32 +3090,35 @@ mod tests {
     }
 
     #[rstest]
-    fn execute_toggle_tab(#[with(KeymapMode::Emacs, 100, 0)] mut state: State, settings: Settings) {
+    fn execute_toggle_tab(
+        #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
+        settings: Arc<Settings>,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
         assert_eq!(state.tab_index, 0);
-        state.execute_action(&Action::ToggleTab, &settings);
+        let _ = state.execute_action(&Action::ToggleTab, &settings);
         assert_eq!(state.tab_index, 1);
-        state.execute_action(&Action::ToggleTab, &settings);
+        let _ = state.execute_action(&Action::ToggleTab, &settings);
         assert_eq!(state.tab_index, 0);
     }
 
     #[rstest]
     fn execute_enter_prefix_mode(
         #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use crate::command::client::search::keybindings::Action;
 
         assert!(!state.prefix);
-        state.execute_action(&Action::EnterPrefixMode, &settings);
+        let _ = state.execute_action(&Action::EnterPrefixMode, &settings);
         assert!(state.prefix);
     }
 
     #[rstest]
     fn prefix_chord_ctrl_a_c_switches_context(
         #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2690,14 +3139,14 @@ mod tests {
     #[rstest]
     fn inspector_prefix_chord_switches_context(
         #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         state.tab_index = 1;
 
         let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
-        state.handle_key_input(&settings, &ctrl_a);
+        let _ = state.handle_key_input(&settings, &ctrl_a);
         assert!(state.prefix, "ctrl-a should enter prefix mode in inspector");
 
         let c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
@@ -2711,7 +3160,7 @@ mod tests {
     #[rstest]
     fn inspector_unmatched_key_does_not_edit_search_input(
         #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2728,26 +3177,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::return_original(ExitMode::ReturnOriginal, InputAction::ReturnOriginal)]
+    #[case::return_query(ExitMode::ReturnQuery, InputAction::ReturnQuery)]
     fn execute_exit_returns_based_on_exit_mode(
         #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
-        mut settings: Settings,
+        #[case] exit_mode: ExitMode,
+        #[case] expected: InputAction,
     ) {
-        use crate::command::client::search::keybindings::Action;
-        use atuin_client::settings::ExitMode;
-
-        settings.exit_mode = ExitMode::ReturnOriginal;
-        let result = state.execute_action(&Action::Exit, &settings);
-        assert!(matches!(result, super::InputAction::ReturnOriginal));
-
-        settings.exit_mode = ExitMode::ReturnQuery;
-        let result = state.execute_action(&Action::Exit, &settings);
-        assert!(matches!(result, super::InputAction::ReturnQuery));
+        let mut settings = Settings::utc();
+        settings.exit_mode = exit_mode;
+        assert_eq!(state.execute_action(&Action::Exit, &Arc::new(settings)), expected);
     }
 
     #[rstest]
     fn execute_return_original(
         #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use crate::command::client::search::keybindings::Action;
 
@@ -2756,7 +3201,7 @@ mod tests {
     }
 
     #[rstest]
-    fn execute_copy(#[with(KeymapMode::Emacs, 100, 7)] mut state: State, settings: Settings) {
+    fn execute_copy(#[with(KeymapMode::Emacs, 100, 7)] mut state: State, settings: Arc<Settings>) {
         use crate::command::client::search::keybindings::Action;
 
         let result = state.execute_action(&Action::Copy, &settings);
@@ -2764,7 +3209,10 @@ mod tests {
     }
 
     #[rstest]
-    fn execute_delete(#[with(KeymapMode::Emacs, 100, 7)] mut state: State, settings: Settings) {
+    fn execute_delete(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Arc<Settings>,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
         let result = state.execute_action(&Action::Delete, &settings);
@@ -2774,7 +3222,7 @@ mod tests {
     #[rstest]
     fn execute_switch_context(
         #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use crate::command::client::search::keybindings::Action;
 
@@ -2785,7 +3233,7 @@ mod tests {
     #[rstest]
     fn execute_clear_context(
         #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use crate::command::client::search::keybindings::Action;
 
@@ -2794,7 +3242,7 @@ mod tests {
     }
 
     #[rstest]
-    fn execute_noop(#[with(KeymapMode::Emacs, 100, 50)] mut state: State, settings: Settings) {
+    fn execute_noop(#[with(KeymapMode::Emacs, 100, 50)] mut state: State, settings: Arc<Settings>) {
         use crate::command::client::search::keybindings::Action;
 
         let result = state.execute_action(&Action::Noop, &settings);
@@ -2805,33 +3253,302 @@ mod tests {
     #[rstest]
     fn execute_accept_in_inspector_tab(
         #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use crate::command::client::search::keybindings::Action;
 
         state.tab_index = 1;
         let result = state.execute_action(&Action::Accept, &settings);
         assert!(matches!(result, super::InputAction::AcceptInspecting));
+        assert!(state.accept);
+    }
+
+    #[rstest]
+    fn inspector_enter_opens_output_and_escape_goes_back(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+    ) {
+        use ratatui::crossterm::event;
+
+        use crate::command::client::search::keybindings::Action;
+        let mut settings = Settings::utc();
+        settings.enter_accept = true;
+        let settings = Arc::new(settings);
+        state.keymaps = KeymapSet::from_settings(&settings);
+        state.tab_index = 1;
+        state.inspecting_state.browser.select_view(super::InspectorView::Session);
+        let event = event::Event::Key(event::KeyEvent::new(
+            event::KeyCode::Enter,
+            event::KeyModifiers::NONE,
+        ));
+        assert!(matches!(state.handle_input(&settings, &event), InputAction::Redraw));
+        assert_eq!(state.inspecting_state.browser.view, super::InspectorView::Output);
+        assert!(!state.accept, "Enter in inspector must not execute the command");
+        let _ = state.execute_action(&Action::ScrollPageDown, &settings);
+        assert_eq!(state.results_state.selected(), 5);
+        let _ = state.execute_action(&Action::Exit, &settings);
+        assert_eq!(state.inspecting_state.browser.view, super::InspectorView::Session);
+        assert_eq!(state.tab_index, 1);
+        let _ = state.execute_action(&Action::Exit, &settings);
+        assert_eq!(state.tab_index, 0);
+    }
+
+    #[fixture]
+    async fn inspector_corpus(
+        #[default(3usize)] count: usize,
+        #[default(false)] tied: bool,
+    ) -> (atuin_client::database::Sqlite, Vec<History>) {
+        let db = atuin_client::database::Sqlite::in_memory(std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        let mut entries = Vec::new();
+        for i in 0..count {
+            let mut entry: History = History::capture()
+                .timestamp(
+                    OffsetDateTime::UNIX_EPOCH
+                        + time::Duration::seconds(if tied {
+                            0
+                        } else {
+                            i64::try_from(i).unwrap()
+                        }),
+                )
+                .command("echo FIRST")
+                .cwd("/tmp")
+                .build()
+                .into();
+            entry.session = "inspector-test".into();
+            entry.cwd = format!("/tmp/{i}");
+            db.save(&entry).await.unwrap();
+            entries.push(entry);
+        }
+        entries.sort_by_key(|entry| (entry.timestamp, entry.id.to_string()));
+        (db, entries)
+    }
+
+    async fn refresh_inspector(
+        state: &mut State,
+        db: &atuin_client::database::Sqlite,
+        settings: &Arc<Settings>,
+    ) {
+        if matches!(
+            state.inspecting_state.browser.view,
+            InspectorView::Output | InspectorView::Stats
+        ) {
+            state.inspecting_state.previous = None;
+            state.inspecting_state.next = None;
+            return;
+        }
+        let selected = db.load(state.inspecting_state.current.unwrap()).await.unwrap().unwrap();
+        (state.inspecting_state.previous, state.inspecting_state.next) =
+            state.inspecting_state.browser.refresh(db, &selected, settings).await.unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn context_refresh_preserves_an_occurrence_missing_from_search(
+        mut state: State,
+        settings: Arc<Settings>,
+        #[future] inspector_corpus: (atuin_client::database::Sqlite, Vec<History>),
+    ) {
+        let (mut db, entries) = inspector_corpus.await;
+        let mut third = entries[2].clone();
+        third.id = atuin_client::history::HistoryId::new(atuin_common::utils::uuid_v7());
+        third.command = "echo THIRD".into();
+        third.timestamp += time::Duration::seconds(1);
+        db.save(&third).await.unwrap();
+        state.tab_index = 1;
+        state.inspecting_state.current = Some(entries[0].id);
+        state.inspecting_state.browser.select_view(super::InspectorView::Session);
+        state.search.custom_context = Some(entries[0].id);
+        state.search.context = Context::from_history(&entries[0]);
+        state.search.filter_mode = FilterMode::Session;
+        let results = state.query_results(&mut db, &settings).await.unwrap();
+        assert!(
+            !results.iter().any(|entry| entry.id == entries[0].id),
+            "older occurrence should be deduplicated"
+        );
+        refresh_inspector(&mut state, &db, &settings).await;
+        assert_eq!(state.inspecting_state.current, Some(entries[0].id));
+        assert_eq!(state.inspecting_state.browser.view, super::InspectorView::Session);
+        assert!(matches!(
+            state.execute_action(&Action::ReturnSelection, &settings),
+            InputAction::AcceptInspecting
+        ));
+        // Even a filter with no search results must not replace the inspected occurrence.
+        state.search.input = "not in this history".to_owned().into();
+        assert!(state.query_results(&mut db, &settings).await.unwrap().is_empty());
+        assert_eq!(state.inspecting_state.current, Some(entries[0].id));
+        // Ordinary searches still reset the inspector.
+        state.tab_index = 0;
+        state.query_results(&mut db, &settings).await.unwrap();
+        assert!(state.inspecting_state.current.is_none());
+    }
+
+    #[rstest]
+    #[case(InspectorView::Runs)]
+    #[case(InspectorView::Session)]
+    #[tokio::test]
+    async fn conditional_navigation_crosses_windows_in_both_directions(
+        #[with(KeymapMode::Emacs, 1, 0)] mut state: State,
+        settings: Arc<Settings>,
+        #[case] view: super::InspectorView,
+        #[with(250, true)]
+        #[future]
+        inspector_corpus: (atuin_client::database::Sqlite, Vec<History>),
+    ) {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        use crate::command::client::search::keybindings::{ConditionExpr, KeyInput, KeyRule};
+        let (db, entries) = inspector_corpus.await;
+        state.tab_index = 1;
+        state.inspecting_state.browser.select_view(view);
+        state.inspecting_state.current = Some(entries.last().unwrap().id);
+        for (key, condition, action) in [
+            ("down", "has-results && !list-at-end", Action::SelectNext),
+            ("up", "!list-at-start", Action::SelectPrevious),
+        ] {
+            state.keymaps.inspector.bind_conditional(KeyInput::parse(key).unwrap(), vec![
+                KeyRule::when(ConditionExpr::parse(condition).unwrap(), action),
+            ]);
+        }
+        refresh_inspector(&mut state, &db, &settings).await;
+        for (key, indices) in [
+            (KeyCode::Down, (0..entries.len()).rev().collect::<Vec<_>>()),
+            (KeyCode::Up, (0..entries.len()).collect()),
+        ] {
+            for index in indices {
+                assert_eq!(state.inspecting_state.current, Some(entries[index].id));
+                let _ = state.handle_key_input(&settings, &KeyEvent::new(key, KeyModifiers::NONE));
+                refresh_inspector(&mut state, &db, &settings).await;
+            }
+        }
+        assert_eq!(state.inspecting_state.current, Some(entries.last().unwrap().id));
+        assert_eq!(state.results_state.selected(), 0);
+        assert_eq!(state.inspecting_state.browser.view, view);
+    }
+
+    #[rstest]
+    #[case(InspectorView::Runs)]
+    #[case(InspectorView::Session)]
+    #[case(InspectorView::Output)]
+    #[case(InspectorView::Stats)]
+    #[tokio::test]
+    async fn mouse_navigation_stays_in_the_inspector(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        #[case] view: super::InspectorView,
+        #[values(false, true)] invert: bool,
+        #[future] inspector_corpus: (atuin_client::database::Sqlite, Vec<History>),
+    ) {
+        use ratatui::crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        let (db, entries) = inspector_corpus.await;
+        let mut settings = Settings::utc();
+        settings.invert = invert;
+        let settings = Arc::new(settings);
+        state.tab_index = 1;
+        state.inspecting_state.current = Some(entries[1].id);
+        state.inspecting_state.browser.select_view(view);
+        refresh_inspector(&mut state, &db, &settings).await;
+        for (kind, expected) in
+            [(MouseEventKind::ScrollDown, entries[0].id), (MouseEventKind::ScrollUp, entries[1].id)]
+        {
+            let event = Event::Mouse(MouseEvent {
+                kind,
+                column: 5,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert!(matches!(state.handle_input(&settings, &event), InputAction::Redraw));
+            refresh_inspector(&mut state, &db, &settings).await;
+            let expected = if matches!(view, InspectorView::Output | InspectorView::Stats) {
+                entries[1].id
+            } else {
+                expected
+            };
+            assert_eq!(state.inspecting_state.current, Some(expected));
+            assert_eq!(state.results_state.selected(), 5);
+            assert_eq!(state.inspecting_state.browser.view, view);
+        }
+        let _ = state.execute_action(&Action::ScrollToScreenTop, &settings);
+        assert_eq!(state.inspecting_state.current, Some(entries[1].id));
+        assert_eq!(state.results_state.selected(), 5);
+        let input = state.search.input.as_str().to_owned();
+        let _ = state.handle_input(&settings, &Event::Paste("unwanted query".into()));
+        assert_eq!(state.search.input.as_str(), input);
+    }
+
+    #[rstest]
+    fn inspector_delete_targets_the_inspected_occurrence(
+        #[with(KeymapMode::Emacs, 100, 5)] mut state: State,
+        settings: Arc<Settings>,
+    ) {
+        use crate::command::client::search::keybindings::Action;
+        state.tab_index = 1;
+        assert!(matches!(
+            state.execute_action(&Action::Delete, &settings),
+            super::InputAction::DeleteInspecting
+        ));
     }
 
     #[rstest]
     fn execute_cycle_search_mode(
         #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use crate::command::client::search::keybindings::Action;
 
-        let original_mode = state.search_mode;
+        let original_mode = state.search_mode();
         let result = state.execute_action(&Action::CycleSearchMode, &settings);
         assert!(matches!(result, super::InputAction::Continue));
         assert!(state.switched_search_mode);
-        assert_ne!(state.search_mode, original_mode);
+        assert_ne!(state.search_mode(), original_mode);
+    }
+
+    #[cfg(all(feature = "daemon", unix))]
+    #[rstest]
+    #[tokio::test]
+    async fn unavailable_daemon_fuzzy_retries_with_local_fuzzy() {
+        use atuin_client::database::Sqlite;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut settings = Settings::utc();
+        settings.requested_search_mode = RequestedSearchMode::DaemonFuzzy;
+        settings.daemon.enabled = true;
+        settings.daemon.autostart = true;
+        settings.daemon.systemd_socket = true;
+        settings.daemon.socket_path = AbsPathBuf::new(temp.path().join("missing.sock")).ok();
+        let settings = Arc::new(settings);
+
+        let mut state = state(KeymapMode::Emacs, 0, 0, FilterMode::Global, "query");
+        state.search_mode_state = SearchModeState::new(&settings);
+        assert_eq!(state.search_mode(), SearchMode::DaemonFuzzy);
+        state.engine = engines::engine(SearchMode::DaemonFuzzy, &settings);
+        let mut db = Sqlite::in_memory(std::time::Duration::from_secs(2)).await.unwrap();
+        let history: History = History::capture()
+            .timestamp(OffsetDateTime::now_utc())
+            .command("echo query match")
+            .cwd("/tmp")
+            .build()
+            .into();
+        db.save(&history).await.unwrap();
+
+        let results = state.query_results(&mut db, &settings).await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].command, "echo query match");
+        assert_eq!(state.search_mode(), SearchMode::Fuzzy);
+        assert_eq!(state.search_mode_state.raw_mode(), SearchMode::DaemonFuzzy);
+        assert!(state.search_mode_state.daemon_failed);
+        assert!(state.search_mode_state.is_failed_daemon_fuzzy());
+
+        state.search_mode_state.mode = SearchMode::FullText;
+        let _ = state.execute_action(&Action::CycleSearchMode, &settings);
+        assert_eq!(state.search_mode_state.raw_mode(), SearchMode::DaemonFuzzy);
+        assert_eq!(state.search_mode(), SearchMode::Fuzzy);
     }
 
     #[rstest]
     fn execute_vim_search_insert(
         #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use crate::command::client::search::keybindings::Action;
 
@@ -2848,7 +3565,7 @@ mod tests {
     #[rstest]
     fn execute_cursor_movement(
         #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
-        settings: Settings,
+        settings: Arc<Settings>,
     ) {
         use crate::command::client::search::keybindings::Action;
 
@@ -2861,24 +3578,27 @@ mod tests {
         // cursor is at end (position 5)
 
         // CursorLeft
-        state.execute_action(&Action::CursorLeft, &settings);
+        let _ = state.execute_action(&Action::CursorLeft, &settings);
         assert_eq!(state.search.input.position(), 4);
 
         // CursorStart
-        state.execute_action(&Action::CursorStart, &settings);
+        let _ = state.execute_action(&Action::CursorStart, &settings);
         assert_eq!(state.search.input.position(), 0);
 
         // CursorEnd
-        state.execute_action(&Action::CursorEnd, &settings);
+        let _ = state.execute_action(&Action::CursorEnd, &settings);
         assert_eq!(state.search.input.position(), 5);
 
         // CursorRight at end does nothing
-        state.execute_action(&Action::CursorRight, &settings);
+        let _ = state.execute_action(&Action::CursorRight, &settings);
         assert_eq!(state.search.input.position(), 5);
     }
 
     #[rstest]
-    fn execute_editing(#[with(KeymapMode::Emacs, 100, 0)] mut state: State, settings: Settings) {
+    fn execute_editing(
+        #[with(KeymapMode::Emacs, 100, 0)] mut state: State,
+        settings: Arc<Settings>,
+    ) {
         use crate::command::client::search::keybindings::Action;
 
         // Insert "hello"
@@ -2889,28 +3609,30 @@ mod tests {
         state.search.input.insert('o');
 
         // DeleteCharBefore (backspace)
-        state.execute_action(&Action::DeleteCharBefore, &settings);
+        let _ = state.execute_action(&Action::DeleteCharBefore, &settings);
         assert_eq!(state.search.input.as_str(), "hell");
 
         // ClearLine
-        state.execute_action(&Action::ClearLine, &settings);
+        let _ = state.execute_action(&Action::ClearLine, &settings);
         assert_eq!(state.search.input.as_str(), "");
     }
 
     #[rstest]
     fn keymap_config_return_query(
         #[with(KeymapMode::Emacs, 100, 0, FilterMode::Global, "test query")] mut state: State,
-        mut settings: Settings,
     ) {
-        use atuin_client::settings::KeyBindingConfig;
-        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use std::collections::HashMap;
 
+        use atuin_client::settings::KeyBindingConfig;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
         // Configure tab to return-query
+        let mut settings = Settings::utc();
         settings.keymap.emacs = HashMap::from([(
             "tab".to_string(),
             KeyBindingConfig::Simple("return-query".to_string()),
         )]);
+        let settings = Arc::new(settings);
         state.keymaps = KeymapSet::from_settings(&settings);
 
         let tab_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);

@@ -1,0 +1,331 @@
+//! Sqlite utilities for full-text search.
+//!
+//! Please see <https://www.sqlite.org/fts5.html> for more details in the Sqlite implementation of
+//! FTS.
+//!
+//! The [`FtsQueryExt`] extension trait binds FTS5 values into a query: a [`TextHighlighter`]'s
+//! markers, text sanitized on the way into the index, and search terms escaped into a `MATCH`
+//! expression. The highlighter itself lives in [`crate::string::highlighted`].
+
+use sqlx::query::{Query, QueryScalar};
+use sqlx::{Database, Sqlite};
+
+pub use crate::string::highlighted::TextHighlighter;
+
+pub trait FtsQueryExt {
+    /// Bind the relevant highlight points into a `highlight(table, index, ?, ?)` sql query.
+    ///
+    /// See [`TextHighlighter`].
+    #[must_use]
+    fn bind_highlight(self, highlighter: TextHighlighter) -> Self;
+
+    /// Sanitize `highlightable` for `highlighter` and bind it. See [`TextHighlighter::sanitize`].
+    #[must_use]
+    fn bind_highlightable(self, highlighter: TextHighlighter, highlightable: &str) -> Self;
+
+    /// Escape `terms` into an FTS5 `MATCH` expression (see `match_expression`) and bind it.
+    /// Returns `None` when no term has anything to search, so the caller can skip the query
+    /// rather than run an empty `MATCH`, which FTS5 rejects as a syntax error.
+    #[must_use]
+    fn bind_match_query<I>(self, terms: I) -> Option<Self>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+        Self: Sized;
+}
+
+impl FtsQueryExt for Query<'_, Sqlite, <Sqlite as Database>::Arguments> {
+    fn bind_highlight(self, highlighter: TextHighlighter) -> Self {
+        // sqlite has no native `char` type; bind the markers as one-char strings.
+        let [open, close] = highlighter.markers();
+        self.bind(open.to_string()).bind(close.to_string())
+    }
+
+    fn bind_highlightable(self, highlighter: TextHighlighter, highlightable: &str) -> Self {
+        // `into_owned` so the bound value outlives this call rather than borrowing the local `Cow`.
+        self.bind(highlighter.sanitize(highlightable).into_owned())
+    }
+
+    fn bind_match_query<I>(self, terms: I) -> Option<Self>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
+        match_expression(terms).map(|expr| self.bind(expr))
+    }
+}
+
+impl<O> FtsQueryExt for QueryScalar<'_, Sqlite, O, <Sqlite as Database>::Arguments> {
+    fn bind_highlight(self, highlighter: TextHighlighter) -> Self {
+        let [open, close] = highlighter.markers();
+        self.bind(open.to_string()).bind(close.to_string())
+    }
+
+    fn bind_highlightable(self, highlighter: TextHighlighter, highlightable: &str) -> Self {
+        self.bind(highlighter.sanitize(highlightable).into_owned())
+    }
+
+    fn bind_match_query<I>(self, terms: I) -> Option<Self>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
+        match_expression(terms).map(|expr| self.bind(expr))
+    }
+}
+
+/// Escape `terms` into an FTS5 `MATCH` expression in which every term must match. A term of
+/// several words is a phrase, which matches only where they appear together and in that order:
+/// `["T", "K L"]` is translated to `"T" AND "K L"`, effectively.
+///
+/// Returns `None` when no term has anything to search.
+#[must_use]
+pub fn match_expression<I>(terms: I) -> Option<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    terms
+        .into_iter()
+        .filter_map(|term| {
+            let term = term.as_ref().trim();
+            (!term.is_empty()).then(|| format!("\"{}\"", term.replace('"', "\"\"")))
+        })
+        .reduce(|expr, term| format!("{expr} {term}"))
+}
+
+/// A looser [`match_expression`]: any term may match, and each as a prefix (`"deploy"*` also
+/// matches `deployment`; in a phrase, its last word is the prefix). For a fallback when no single
+/// row contains every term.
+#[must_use]
+pub fn match_any_expression<I>(terms: I) -> Option<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    terms
+        .into_iter()
+        .filter_map(|term| {
+            let term = term.as_ref().trim();
+            (!term.is_empty()).then(|| format!("\"{}\"*", term.replace('"', "\"\"")))
+        })
+        .reduce(|expr, term| format!("{expr} OR {term}"))
+}
+
+/// [`match_expression`] over the words of `input`, for search as you type: the last word also
+/// matches as a prefix (`refac` becomes `"refac"*`), unless the input ends in whitespace, which
+/// marks the word as finished. A word of several tokens (`foo-ba`) is a phrase whose last token is
+/// the prefix.
+///
+/// No `prefix=` index is needed: FTS5 answers a prefix query by merging the doclists of every
+/// indexed term starting with it, which is slower but costs no disk.
+///
+/// Returns `None` when the input has no searchable words.
+#[must_use]
+pub fn prefix_match_expression(input: &str) -> Option<String> {
+    let expr = match_expression(input.split_whitespace())?;
+    if input.ends_with(char::is_whitespace) {
+        Some(expr)
+    } else {
+        Some(format!("{expr}*"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+    use std::ops::Range;
+
+    use pretty_assertions::assert_eq;
+    use rstest::rstest;
+    use sqlx::Row;
+
+    use super::*;
+
+    #[rstest]
+    #[case::single(&["deploy"], Some(r#""deploy"*"#))]
+    #[case::many(&["key", "perms"], Some(r#""key"* OR "perms"*"#))]
+    #[case::phrase(&["key perms", "x"], Some(r#""key perms"* OR "x"*"#))]
+    #[case::quote(&[r#"a"b"#], Some(r#""a""b"*"#))]
+    #[case::blank(&["   "], None)]
+    fn any_expression_ors_prefix_terms(#[case] terms: &[&str], #[case] want: Option<&str>) {
+        assert_eq!(match_any_expression(terms).as_deref(), want);
+    }
+
+    /// Insert `body` (sanitized) into an in-memory FTS5 table, then return the `highlight()` output
+    /// for a query matching `term`. `bind_highlight` lives only on `Query`, so this fetches via
+    /// `query()` + `Row` rather than the ergonomic `query_scalar`.
+    async fn highlight_roundtrip(h: TextHighlighter, body: &str, term: &str) -> String {
+        let sqlite = crate::db::sqlite::Sqlite::builder_in_memory().open().await.unwrap();
+        let mut conn = sqlite.pool().acquire().await.unwrap();
+
+        crate::db::query::<Sqlite>("create virtual table docs using fts5(body)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        crate::db::query::<Sqlite>("insert into docs (body) values (?)")
+            .bind_highlightable(h, body)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+
+        let row = crate::db::query::<Sqlite>(
+            "select highlight(docs, 0, ?, ?) as body from docs where docs match ?",
+        )
+        .bind_highlight(h)
+        .bind(term)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+        row.try_get("body").unwrap()
+    }
+
+    // `highlight()` wraps matches with the default markers; `ranges()` then indexes those matches in
+    // the raw (still-marked) output.
+    #[rstest]
+    #[case::start_of_body("error here", "error", vec![3..8], vec!["error"])]
+    #[case::middle_of_body("the build failed now", "failed", vec![13..19], vec!["failed"])]
+    #[case::multibyte_prefix("café error", "error", vec![9..14], vec!["error"])]
+    #[case::multibyte_match("the café", "café", vec![7..12], vec!["café"])]
+    // FTS5 folds case, but highlight() wraps the original-case bytes, so both hits keep their case.
+    #[case::two_matches_case_preserved("Error and error", "error", vec![3..8, 19..24], vec!["Error", "error"])]
+    // A stray default marker in the source is stripped on insert, so it produces no phantom span.
+    #[case::stray_source_marker("a\u{E000}b error", "error", vec![6..11], vec!["error"])]
+    #[tokio::test]
+    async fn highlight_round_trips_through_fts5(
+        #[case] body: &str,
+        #[case] term: &str,
+        #[case] expected: Vec<Range<usize>>,
+        #[case] hits: Vec<&str>,
+    ) {
+        let h = TextHighlighter::default();
+        let marked = highlight_roundtrip(h, body, term).await;
+        // Sanitizing the highlight() output reconstructs the stored (sanitized) body.
+        assert_eq!(h.sanitize(&marked), h.sanitize(body));
+
+        let hl = h.as_highlighted(marked.as_str());
+        let ranges: Vec<Range<usize>> = hl.ranges().collect();
+        assert_eq!(ranges.as_slice(), expected.as_slice());
+
+        let raw: &str = hl.as_ref();
+        let got: Vec<&str> = ranges.iter().map(|r| &raw[r.clone()]).collect();
+        assert_eq!(got.as_slice(), hits.as_slice());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn highlight_of_an_unmatched_column_yields_no_ranges() {
+        let h = TextHighlighter::default();
+        let sqlite = crate::db::sqlite::Sqlite::builder_in_memory().open().await.unwrap();
+        let mut conn = sqlite.pool().acquire().await.unwrap();
+
+        crate::db::query::<Sqlite>("create virtual table docs using fts5(title, body)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        crate::db::query::<Sqlite>("insert into docs (title, body) values (?, ?)")
+            .bind_highlightable(h, "alpha")
+            .bind_highlightable(h, "beta gamma")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+
+        // Match the title column but highlight the body column: highlight() inserts no markers.
+        let row = crate::db::query::<Sqlite>(
+            "select highlight(docs, 1, ?, ?) as body from docs where docs match ?",
+        )
+        .bind_highlight(h)
+        .bind("alpha")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+        let marked: String = row.try_get("body").unwrap();
+
+        assert_eq!(h.as_highlighted(marked.as_str()).ranges().count(), 0);
+        assert!(matches!(h.sanitize(&marked), Cow::Borrowed(_)));
+    }
+
+    #[rstest]
+    #[case::single_term(&["error"], Some("\"error\""))]
+    #[case::terms_are_anded(&["build", "failed"], Some("\"build\" \"failed\""))]
+    #[case::words_of_a_term_are_a_phrase(&["build failed", "now"], Some(r#""build failed" "now""#))]
+    #[case::embedded_quote_is_doubled(&["a\"b"], Some("\"a\"\"b\""))]
+    #[case::surrounding_whitespace_trimmed(&["  spaced  "], Some("\"spaced\""))]
+    #[case::blank_term_is_skipped(&["x", " "], Some("\"x\""))]
+    // `:` would be an FTS5 column filter raw; quoting keeps it a literal.
+    #[case::operator_char_kept_literal(&["refused:"], Some("\"refused:\""))]
+    #[case::no_terms_is_none(&[], None)]
+    #[case::whitespace_only_is_none(&["  \t\n "], None)]
+    fn match_expression_escapes_each_term(#[case] terms: &[&str], #[case] expected: Option<&str>) {
+        assert_eq!(match_expression(terms).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::single_term("refac", Some("\"refac\"*"))]
+    #[case::only_the_last_term("cargo tes", Some("\"cargo\" \"tes\"*"))]
+    #[case::trailing_whitespace_finishes_the_term("cargo ", Some("\"cargo\""))]
+    #[case::embedded_quote_is_doubled("a\"b", Some("\"a\"\"b\"*"))]
+    #[case::empty_is_none("", None)]
+    #[case::whitespace_only_is_none("  \t ", None)]
+    fn prefix_match_expression_prefixes_the_last_term(
+        #[case] input: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(prefix_match_expression(input).as_deref(), expected);
+    }
+
+    /// A prefix expression matches the partial token, a phrase with a partial last token, and
+    /// punctuation-only terms (a phrase of no tokens) quietly match nothing rather than erroring.
+    #[rstest]
+    #[case::partial_token("refac", 1)]
+    #[case::partial_phrase("foo-ba", 1)]
+    #[case::finished_term_is_not_a_prefix("refac ", 0)]
+    #[case::punctuation_only("()", 0)]
+    #[case::operator_soup("***", 0)]
+    #[tokio::test]
+    async fn prefix_match_expression_runs_against_fts5(#[case] input: &str, #[case] hits: i64) {
+        let sqlite = crate::db::sqlite::Sqlite::builder_in_memory().open().await.unwrap();
+        let mut conn = sqlite.pool().acquire().await.unwrap();
+        crate::db::query::<Sqlite>("create virtual table docs using fts5(body)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        crate::db::query::<Sqlite>("insert into docs(body) values ('refactor the foo-bar thing')")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+
+        let n =
+            crate::db::query_scalar::<Sqlite, i64>("select count(*) from docs where docs match ?")
+                .bind(prefix_match_expression(input).unwrap())
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(n, hits);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn bind_match_query_neutralizes_fts5_operators() {
+        // `refused:` is a column filter to raw FTS5 (a hard error); bound as a MATCH query it must
+        // instead match the literal token in the stored body.
+        let sqlite = crate::db::sqlite::Sqlite::builder_in_memory().open().await.unwrap();
+        let mut conn = sqlite.pool().acquire().await.unwrap();
+        crate::db::query::<Sqlite>("create virtual table docs using fts5(body)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        crate::db::query::<Sqlite>("insert into docs(body) values ('connection refused: oops')")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+
+        let row = crate::db::query::<Sqlite>("select count(*) as n from docs where docs match ?")
+            .bind_match_query(["refused:"])
+            .expect("non-blank query")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(row.try_get::<i64, _>("n").unwrap(), 1);
+    }
+}

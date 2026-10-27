@@ -14,7 +14,7 @@ First, create the service unit file
 [Unit]
 Description=Start the Atuin server syncing service
 After=network-online.target
-Wants=network-online.target systemd-networkd-wait-online.service
+Wants=network-online.target
 
 [Service]
 ExecStart=atuin-server start

@@ -225,9 +225,34 @@ metadata:
 
 Note that this configuration will store the database folder _outside_ the Kubernetes cluster, in the folder `/Users/firstname.lastname/.kube/database` of the host system by configuring the `storageClassName` to be `manual`. In a real enterprise setup, you would probably want to store the database content permanently in the cluster, and not in the host system.
 
-You should also change the password string in `ATUIN_DB_PASSWORD` and `ATUIN_DB_URI` in the`secrets.yaml` file to a more secure one.
+You should also change the password string in `ATUIN_DB_PASSWORD` and
+`ATUIN_DB_URI` in the `secrets.yaml` file to a more secure one.
 
-The Atuin service is exposed on port `30530` of the host system. That's configured by the `nodePort` property. Kubernetes has a strict rule that you aren't allowed to expose a port numbered lower than 30000. To make the clients work, set the port in your `config.toml` file, for example `sync_address = "http://192.168.1.10:30530"`.
+!!! tip "Secure passwords"
+
+    For extra safety, we recommend using [Kubernetes
+    secrets](https://kubernetes.io/docs/concepts/configuration/secret/). Atuin
+    can read passwords from a file. Pass the path of the password file via the
+    `ATUIN_DB_PASSWORD_FILE` environment variable, and remove the password
+    from `ATUIN_DB_URI` in `secrets.yaml`
+    (`postgres://atuin@postgres/atuin`):
+
+    ```yaml
+    env:
+      - name: ATUIN_DB_PASSWORD_FILE
+        value: /run/secrets/atuin/ATUIN_DB_PASSWORD
+    volumeMounts:
+      - mountPath: /run/secrets/atuin
+        name: atuin-secrets
+        readOnly: true
+    volumes:
+      - name: atuin-secrets
+        secret:
+          secretName: atuin-secrets
+          items:
+            - key: ATUIN_DB_PASSWORD
+              path: ATUIN_DB_PASSWORD
+    ```
 
 Deploy the Atuin server using `kubectl`:
 
@@ -239,6 +264,28 @@ Deploy the Atuin server using `kubectl`:
 ```
 
 The sample files above are also in the [k8s folder](https://github.com/atuinsh/atuin/tree/main/k8s) of the `atuin` repository.
+
+## Service links
+
+Kubernetes gives each pod environment variables for every
+[Service](https://kubernetes.io/docs/concepts/services-networking/service/#environment-variables)
+in its namespace. For the Service named `atuin` above, that includes
+`ATUIN_PORT=tcp://<cluster IP>:8888`, which isn't a port number. Since
+`ATUIN_*` variables override `server.toml`, the server ignores an
+`ATUIN_PORT` of that form with a warning, and uses `port` from `server.toml`
+or the default, 8888. The other variables a service link sets, such as
+`ATUIN_SERVICE_HOST`, match no setting.
+
+To choose the port yourself, set `ATUIN_PORT` in the container's `env`, as
+`atuin.yaml` does, which takes precedence over the service link. Or turn
+service links off for the pod:
+
+```yaml
+spec:
+  template:
+    spec:
+      enableServiceLinks: false
+```
 
 ## Creating backups of the Postgres database
 
