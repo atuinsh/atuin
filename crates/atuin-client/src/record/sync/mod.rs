@@ -214,7 +214,7 @@ impl SyncSession {
 
         let series = sample?;
 
-        let record = match self.client.records(&series).one().await {
+        let record = match self.client.records(&series).first_from(0).await {
             Ok(Some(record)) => record,
             Ok(None) => return None,
             Err(e) => {
@@ -451,16 +451,13 @@ impl Keyed<'_> {
         // never fetch the hole before it. Start from the actual missing index; records already
         // present above it will be "unnecessarily" redownloaded, but this is a no-op.
         let first_missing_local =
-            store.first_gap(series).await.map_err(|e| SyncError::LocalStoreError {
+            store.first_gap(series, 0).await.map_err(|e| SyncError::LocalStoreError {
                 msg: format!("{e:#}"),
             })?;
 
-        // One higher than the latest record index we have locally. The case described above where
-        // we have a hole in the sequence of record indices should not happen in practice; this
-        // variable is used to detect that situation so we can print a warning.
-        //
-        // TODO: This adds a slight runtime cost, but while the packfile feature is new, let's err
-        // on the side of catching potential problems.
+        // The latest record index we have locally. A hole below it should be rare, so we warn,
+        // then step over any holes the server can't fill instead of re-downloading everything
+        // above them on every sync.
         let latest = store
             .last(series)
             .await
@@ -469,19 +466,19 @@ impl Keyed<'_> {
             })?
             .map(|record| record.idx);
 
-        if first_missing_local != latest.map_or(0, |n| n + 1) {
-            tracing::warn!(
-                "first missing record index is {first_missing_local}, but latest record is {}",
-                std::fmt::from_fn(|f| {
-                    match latest {
-                        Some(n) => write!(f, "{n}"),
-                        None => write!(f, "(none)"),
-                    }
-                }),
-            );
-        }
+        let start = match latest {
+            Some(head) if first_missing_local < head => {
+                tracing::warn!(
+                    "first missing record index is {first_missing_local}, but latest record is \
+                     {head}"
+                );
+                // `None`: the server holds nothing from the hole up, so there is nothing to fetch.
+                self.first_fetchable(series, first_missing_local).await?.unwrap_or(remote + 1)
+            }
+            _ => first_missing_local,
+        };
 
-        let expected = (remote + 1).saturating_sub(first_missing_local);
+        let expected = (remote + 1).saturating_sub(start);
 
         println!(
             "Downloading {} records from {}/{}",
@@ -503,12 +500,45 @@ impl Keyed<'_> {
             .progress_chars("#>-"),
         );
 
-        let chunks = (first_missing_local..first_missing_local + expected).chunks(page_size);
+        let chunks = (start..start + expected).chunks(page_size);
         let ret = self.download_pages(series, chunks, &pb).await?;
 
         pb.finish_with_message("Downloaded records");
 
         Ok(ret)
+    }
+
+    /// The first index at or after `gap` that we lack and the server has, if any. `gap` must be an
+    /// index we lack.
+    async fn first_fetchable(
+        &self,
+        series: &RecordSeriesKey,
+        mut gap: RecordIdx,
+    ) -> Result<Option<RecordIdx>, SyncError> {
+        loop {
+            let first = self.session.client.records(series).first_from(gap).await.map_err(|e| {
+                SyncError::RemoteRequestError {
+                    msg: format!("{e:#}"),
+                }
+            })?;
+            let Some(record) = first else {
+                return Ok(None);
+            };
+            // `<` only if the server ignores `start`; settle on `gap` rather than loop on it.
+            if record.idx <= gap {
+                return Ok(Some(gap));
+            }
+
+            gap = self.session.store.first_gap(series, record.idx).await.map_err(|e| {
+                SyncError::LocalStoreError {
+                    msg: format!("{e:#}"),
+                }
+            })?;
+            // The server just returned `record.idx`, so if we lack it, it's fetchable.
+            if gap == record.idx {
+                return Ok(Some(gap));
+            }
+        }
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?manifest.id), err)]
@@ -520,11 +550,12 @@ impl Keyed<'_> {
         let store = &self.session.store;
 
         // Skip only if this manifest's whole covered range is already present locally.
-        let first_gap = store
-            .first_gap(&RecordSeriesKey::new(view.record.host.id, RecordTag::History))
+        let range = view.range();
+        let present = store
+            .count_in(&RecordSeriesKey::new(view.record.host.id, RecordTag::History), &range)
             .await
             .map_err(PackfileDownloadError::Store)?;
-        if first_gap >= view.range().end {
+        if present == range.end - range.start {
             // Range already available locally. Return the IDs.
             let existing = view
                 .load_encrypted_packed_records(store)
@@ -1691,7 +1722,7 @@ mod packfile_sync_tests {
     /// already-local check. The lower manifest must NOT read the raised store head as proof its
     /// own range is present -- its range can still be an unfilled hole below the head, and it must
     /// download and fill it. The old head-index test (`last().idx >= end - 1`) got this wrong and
-    /// silently dropped the lower range ("packfiles not unpacking"); the `first_gap` check does not.
+    /// silently dropped the lower range ("packfiles not unpacking"); the `count_in` check does not.
     #[rstest]
     #[tokio::test]
     async fn download_packed_fills_a_hole_a_higher_range_masks(

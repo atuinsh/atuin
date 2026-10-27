@@ -3,6 +3,7 @@
 // by tag/host
 
 use std::ffi::OsStr;
+use std::ops::Range;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -404,24 +405,45 @@ impl SqliteStore {
         Ok(0)
     }
 
-    /// The smallest `idx >= 0` with no record for `(host, tag)`: Unlike `last().idx + 1`, this
+    /// The smallest `idx >= from` with no record for `(host, tag)`: Unlike `last().idx + 1`, this
     /// points at an interior hole when one exists.
-    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
-    pub async fn first_gap(&self, series: &RecordSeriesKey) -> Result<RecordIdx> {
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, from = from), err)]
+    pub async fn first_gap(&self, series: &RecordSeriesKey, from: RecordIdx) -> Result<RecordIdx> {
         let gap: Option<i64> = db::query_scalar(
             "select min(idx) from (
-                 select idx + 1 as idx from store where host = ?1 and tag = ?2
+                 select idx + 1 as idx from store where host = ?1 and tag = ?2 and idx >= ?3
                  union
-                 select 0
+                 select ?3
              ) as candidates
-             where idx not in (select idx from store where host = ?1 and tag = ?2)",
+             where idx not in (select idx from store where host = ?1 and tag = ?2 and idx >= ?3)",
         )
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
+        .bind(i64::conv(from))
         .fetch_one(self.sqlite.pool())
         .await?;
 
-        Ok(u64::conv(gap.unwrap_or(0)))
+        Ok(gap.map_or(from, u64::conv))
+    }
+
+    /// Get the total number of records in the given range.
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, ?range), err)]
+    pub async fn count_in(
+        &self,
+        series: &RecordSeriesKey,
+        range: &Range<RecordIdx>,
+    ) -> Result<u64> {
+        let count: i64 = db::query_scalar(
+            "select count(*) from store where host = ?1 and tag = ?2 and idx >= ?3 and idx < ?4",
+        )
+        .bind(series.host_id.as_hyphenated().to_string())
+        .bind(series.tag.as_str())
+        .bind(i64::conv(range.start))
+        .bind(i64::conv(range.end))
+        .fetch_one(self.sqlite.pool())
+        .await?;
+
+        Ok(u64::conv(count))
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, idx, limit), err)]
@@ -762,19 +784,19 @@ mod tests {
         };
 
         // Empty stream -> frontier is 0.
-        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 0);
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone()), 0).await.unwrap(), 0);
 
         // Contiguous 0,1,2 -> frontier is the next idx, 3.
         for idx in [0, 1, 2] {
             store.push(&at(idx)).await.unwrap();
         }
-        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 3);
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone()), 0).await.unwrap(), 3);
 
         // Add 4,5 but not 3: the frontier drops back to the hole, not the head + 1.
         for idx in [4, 5] {
             store.push(&at(idx)).await.unwrap();
         }
-        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 3);
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone()), 0).await.unwrap(), 3);
     }
 
     #[rstest]
