@@ -1,10 +1,13 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::num::NonZeroUsize;
 
 use atuin_client::history::History;
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
-use atuin_common::userio::{out, outln};
-use crossterm::style::{Color, ResetColor, SetAttribute, SetForegroundColor};
+use crossterm::style::{
+    Attribute, Color, ContentStyle, ResetColor, SetAttribute, SetForegroundColor,
+};
 use easy_cast::Conv;
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
@@ -177,79 +180,113 @@ fn strip_leading_env_vars(command: &str) -> &str {
     command[token_start_pos..].trim()
 }
 
-pub fn pretty_print(stats: Stats, ngram_size: usize, theme: &Theme) {
-    let max = stats.top.iter().map(|x| x.1).max().unwrap();
-    let num_pad = usize::conv(max.ilog10()) + 1;
+/// [`Stats`] for a person to read: a row per top command, with a bar of its count, then the
+/// totals.
+pub struct StatsReport<'a> {
+    stats: &'a Stats,
+    ngram_size: usize,
+    /// Colours the bars and counts. Without it the report has no escape codes, as a pipe or a file
+    /// wants.
+    theme: Option<&'a Theme>,
+}
 
-    // Find the length of the longest command name for each column
-    let column_widths = stats
-        .top
-        .iter()
-        .map(|(commands, _)| commands.iter().map(|c| c.len()).collect::<Vec<usize>>())
-        .fold(vec![0; ngram_size], |acc, item| {
-            acc.iter().zip(item.iter()).map(|(a, i)| *std::cmp::max(a, i)).collect()
-        });
-
-    for (command, count) in stats.top {
-        let gray = SetForegroundColor(match theme.as_style(Meaning::Muted).foreground_color {
-            Some(color) => color,
-            None => Color::Grey,
-        });
-        let bold = SetAttribute(crossterm::style::Attribute::Bold);
-
-        let in_ten = 10 * count / max;
-
-        out!("[");
-        out!(
-            "{}",
-            SetForegroundColor(match theme.get_error().foreground_color {
-                Some(color) => color,
-                None => Color::Red,
-            })
-        );
-
-        for i in 0..in_ten {
-            if i == 2 {
-                out!(
-                    "{}",
-                    SetForegroundColor(match theme.get_warning().foreground_color {
-                        Some(color) => color,
-                        None => Color::Yellow,
-                    })
-                );
-            }
-
-            if i == 5 {
-                out!(
-                    "{}",
-                    SetForegroundColor(match theme.get_info().foreground_color {
-                        Some(color) => color,
-                        None => Color::Green,
-                    })
-                );
-            }
-
-            out!("▮");
+impl<'a> StatsReport<'a> {
+    #[must_use]
+    pub const fn new(stats: &'a Stats, ngram_size: usize, theme: Option<&'a Theme>) -> Self {
+        Self {
+            stats,
+            ngram_size,
+            theme,
         }
-
-        for _ in in_ten..10 {
-            out!(" ");
-        }
-
-        let formatted_command = command
-            .iter()
-            .zip(column_widths.iter())
-            .map(|(cmd, width)| format!("{cmd:width$}"))
-            .collect::<Vec<_>>()
-            .join(" | ");
-
-        outln!(
-            "{ResetColor}] {gray}{count:num_pad$}{ResetColor} \
-             {bold}{formatted_command}{ResetColor}"
-        );
     }
-    outln!("Total commands:   {}", stats.total_commands);
-    outln!("Unique commands:  {}", stats.unique_commands);
+}
+
+impl fmt::Display for StatsReport<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Codes {
+            error,
+            warning,
+            info,
+            muted,
+            bold,
+            reset,
+        } = self.theme.map(Codes::new).unwrap_or_default();
+
+        // `compute` always finds a top command, but a `Stats` can be built without one.
+        let max = self.stats.top.iter().map(|(_, count)| *count).max().and_then(NonZeroUsize::new);
+        if let Some(max) = max {
+            let num_pad = usize::conv(max.ilog10()) + 1;
+
+            // The longest command in each column.
+            let column_widths = self
+                .stats
+                .top
+                .iter()
+                .map(|(commands, _)| commands.iter().map(|c| c.len()).collect::<Vec<usize>>())
+                .fold(vec![0; self.ngram_size], |acc, item| {
+                    acc.iter().zip(item.iter()).map(|(a, i)| *std::cmp::max(a, i)).collect()
+                });
+
+            for (command, count) in &self.stats.top {
+                // The bar is red, then yellow from its third block and green from its sixth.
+                let in_ten = 10 * count / max;
+                write!(f, "[{error}")?;
+                for i in 0..in_ten {
+                    match i {
+                        2 => f.write_str(&warning)?,
+                        5 => f.write_str(&info)?,
+                        _ => {}
+                    }
+                    f.write_str("▮")?;
+                }
+                for _ in in_ten..10 {
+                    f.write_str(" ")?;
+                }
+
+                let formatted_command = command
+                    .iter()
+                    .zip(column_widths.iter())
+                    .map(|(cmd, width)| format!("{cmd:width$}"))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+
+                writeln!(
+                    f,
+                    "{reset}] {muted}{count:num_pad$}{reset} {bold}{formatted_command}{reset}"
+                )?;
+            }
+        }
+
+        writeln!(f, "Total commands:   {}", self.stats.total_commands)?;
+        write!(f, "Unique commands:  {}", self.stats.unique_commands)
+    }
+}
+
+/// The escape codes a [`StatsReport`] writes, each empty for a report without a theme.
+#[derive(Default)]
+struct Codes {
+    error: String,
+    warning: String,
+    info: String,
+    muted: String,
+    bold: String,
+    reset: String,
+}
+
+impl Codes {
+    fn new(theme: &Theme) -> Self {
+        let fg = |style: ContentStyle, fallback: Color| {
+            SetForegroundColor(style.foreground_color.unwrap_or(fallback)).to_string()
+        };
+        Self {
+            error: fg(theme.get_error(), Color::Red),
+            warning: fg(theme.get_warning(), Color::Yellow),
+            info: fg(theme.get_info(), Color::Green),
+            muted: fg(theme.as_style(Meaning::Muted), Color::Grey),
+            bold: SetAttribute(Attribute::Bold).to_string(),
+            reset: ResetColor.to_string(),
+        }
+    }
 }
 
 #[must_use]
@@ -313,14 +350,64 @@ pub fn compute(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use atuin_client::history::History;
     use atuin_client::settings::Settings;
+    use atuin_client::theme::{Meaning, Theme};
+    use crossterm::style::ContentStyle;
     use rstest::*;
     use time::OffsetDateTime;
 
     use super::{
-        compute, interesting_command, split_at_pipe, split_common_prefix, strip_leading_env_vars,
+        Stats, StatsReport, compute, interesting_command, split_at_pipe, split_common_prefix,
+        strip_leading_env_vars,
     };
+
+    fn stats(top: Vec<(Vec<&str>, usize)>) -> Stats {
+        Stats {
+            total_commands: 3,
+            unique_commands: 2,
+            top: top
+                .into_iter()
+                .map(|(commands, count)| (commands.into_iter().map(str::to_owned).collect(), count))
+                .collect(),
+        }
+    }
+
+    /// The top count fills the bar, and each column is as wide as its longest command.
+    #[rstest]
+    #[case::one_column(
+        vec![(vec!["git"], 2), (vec!["ls"], 1)],
+        1,
+        "[▮▮▮▮▮▮▮▮▮▮] 2 git\n[▮▮▮▮▮     ] 1 ls \n"
+    )]
+    #[case::two_columns(
+        vec![(vec!["git", "grep"], 10), (vec!["cat", "jq"], 3)],
+        2,
+        "[▮▮▮▮▮▮▮▮▮▮] 10 git | grep\n[▮▮▮       ]  3 cat | jq  \n"
+    )]
+    #[case::no_top_command(vec![], 1, "")]
+    fn a_plain_report_lines_up_the_bars_and_columns(
+        #[case] top: Vec<(Vec<&str>, usize)>,
+        #[case] ngram_size: usize,
+        #[case] rows: &str,
+    ) {
+        let report = StatsReport::new(&stats(top), ngram_size, None).to_string();
+        assert_eq!(report, format!("{rows}Total commands:   3\nUnique commands:  2"));
+    }
+
+    /// Only a report with a theme writes escape codes, so a pipe gets plain text.
+    #[rstest]
+    fn only_a_themed_report_has_escape_codes(#[values(false, true)] themed: bool) {
+        let styles = [Meaning::AlertError, Meaning::AlertWarn, Meaning::AlertInfo, Meaning::Base]
+            .map(|meaning| (meaning, ContentStyle::default()));
+        let theme = Theme::new("test".to_owned(), None, HashMap::from(styles));
+
+        let report = StatsReport::new(&stats(vec![(vec!["git"], 1)]), 1, themed.then_some(&theme))
+            .to_string();
+        assert_eq!(report.contains('\x1b'), themed, "{report:?}");
+    }
 
     #[rstest]
     fn ignored_env_vars() {

@@ -6,7 +6,7 @@ use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
 use atuin_common::logs::USER;
 use atuin_common::userio::outln;
-use atuin_history::stats::{Stats, compute, split_common_prefix};
+use atuin_history::stats::{Stats, StatsReport, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
 use time::{Date, Duration, Month, OffsetDateTime, Time};
@@ -339,7 +339,7 @@ pub async fn run(
     outln!("   That's ~{} commands every day\n", stats.total_commands / 365);
 
     outln!("Your Top Commands:");
-    atuin_history::stats::pretty_print(stats.clone(), 1, theme);
+    outln!("{}", StatsReport::new(&stats, 1, Some(theme)));
     outln!();
 
     print_fun_facts(&wrapped_stats, &stats, year);

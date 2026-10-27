@@ -1,7 +1,9 @@
+use std::io::{self, IsTerminal as _, Write as _};
+
 use atuin_client::database::{Sqlite, current_context};
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_client::theme::Theme;
-use atuin_history::stats::{compute, pretty_print};
+use atuin_history::stats::{StatsReport, compute};
 use clap::Parser;
 use eyre::Result;
 use interim::parse_date_string;
@@ -91,7 +93,8 @@ impl Cmd {
         let stats = compute(settings, &history, self.count, self.ngram_size);
 
         if let Some(stats) = stats {
-            pretty_print(stats, self.ngram_size, theme);
+            let theme = io::stdout().is_terminal().then_some(theme);
+            writeln!(io::stdout(), "{}", StatsReport::new(&stats, self.ngram_size, theme))?;
         }
 
         Ok(())
