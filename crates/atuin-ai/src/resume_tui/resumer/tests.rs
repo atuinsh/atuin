@@ -286,6 +286,31 @@ async fn a_session_on_disk_resumes_directly(dirs: Dirs) {
     assert_eq!(resume.plan.cwd.as_deref(), Some(dirs.elsewhere.as_path()));
 }
 
+/// Reading a copy can move it (a rollout Codex compressed, made plain again): a `{path}` template
+/// names where it is now.
+#[rstest]
+#[tokio::test]
+async fn a_copy_moved_by_reading_it_resumes_where_it_is_now(dirs: Dirs) {
+    let compressed = dirs.elsewhere.join("rollout-abc-123.jsonl.zst");
+    let plain = dirs.elsewhere.join("rollout-abc-123.jsonl");
+    let machine = FakeMachine {
+        found: HashMap::from([("abc-123".to_owned(), compressed)]),
+        tip: Some(LocalTip {
+            native_path: plain.clone(),
+            ..fake::local_tip(&[], None)
+        }),
+        ..FakeMachine::default()
+    };
+    let templates = AiSessionResume {
+        codex: Some("my-codex {path}".to_owned()),
+        ..AiSessionResume::default()
+    };
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine, &dirs.switched);
+    let local = row(HarnessKind::Codex, "abc-123", &dirs.elsewhere, false);
+    let resume = resumer.plan(&local).await.unwrap();
+    assert_eq!(resume.plan.args, [plain.to_str().unwrap()]);
+}
+
 /// Another host's session is restored from sync when resumed: planning writes nothing, and the
 /// session resumes in the same place in this checkout of its repository.
 #[rstest]

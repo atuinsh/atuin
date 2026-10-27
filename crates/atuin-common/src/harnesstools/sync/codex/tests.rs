@@ -96,6 +96,33 @@ async fn the_tip_records_where_the_copy_works(dir: TempDir) {
     assert_eq!(base.cwd, Some(PathBuf::from("/work")));
 }
 
+/// A rollout Codex compressed is made plain again, as Codex does to append to it, keeping when it
+/// was last written: the copy is the same as before it was compressed.
+#[rstest]
+#[tokio::test]
+async fn a_compressed_rollout_is_made_plain_to_resume(dir: TempDir) {
+    let text = fixture(PAGINATED);
+    let thread = thread(&text);
+    let path = rollout(dir.path(), &thread, &text, 20);
+    let plain = local_tip_in(dir.path(), &thread).await.unwrap().unwrap();
+    let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let compressed = path.with_extension("jsonl.zst");
+    std::fs::write(
+        &compressed,
+        zstd::encode_all(std::fs::read(&path).unwrap().as_slice(), 3).unwrap(),
+    )
+    .unwrap();
+    File::options().write(true).open(&compressed).unwrap().set_modified(at).unwrap();
+    std::fs::remove_file(&path).unwrap();
+
+    let tip = local_tip_in(dir.path(), &thread).await.unwrap().unwrap();
+    assert_eq!(tip.native_path, path);
+    assert!(!compressed.exists());
+    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), at);
+    assert_eq!(tip.tip_source_id, plain.tip_source_id);
+    assert_eq!(tip.stamp, plain.stamp);
+}
+
 /// Appending the rows past the tip numbers each new line on from the rollout's last; Codex
 /// resumes from the last row, and capture reads back nothing it did not sync. The thread's
 /// writer lock is taken while writing, where Codex keeps them, and let go after.

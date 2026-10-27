@@ -22,7 +22,7 @@ use crate::harnesstools::session::{
     Change, Checkpoint, FilePatch, Hunk, Listener, Message, MessageError, Observable, Patch,
     RuntimeError, Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
 };
-use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
+use crate::io::{FollowLines, Line, LineReader, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
@@ -181,13 +181,18 @@ pub struct CodexListener {
 
 impl CodexListener {
     /// The session a codex rollout file holds (see [`session_id_of`]), or `None` if `path` is
-    /// not one.
+    /// not one. A compressed rollout is one only while its plain sibling is gone, which Codex
+    /// reads over it (codex-rs `should_skip_compressed_sibling`): both are there while Codex
+    /// compresses or decompresses it (see [`is_compressed`]).
     fn session_id(path: &Path) -> Option<SessionId> {
         let name = path.file_name()?.to_string_lossy();
-        if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
-            return None;
-        }
-        Some(session_id_of(&path.file_stem()?.to_string_lossy()))
+        let plain = match name.strip_suffix(".zst") {
+            Some(plain) if path.with_file_name(plain).exists() => return None,
+            Some(plain) => plain,
+            None => &name,
+        };
+        let stem = plain.strip_suffix(".jsonl").filter(|stem| stem.starts_with("rollout-"))?;
+        Some(session_id_of(stem))
     }
 
     /// Build a read-once session for an accepted codex rollout file (no change signal), or `None`.
@@ -257,7 +262,7 @@ impl CodexSession {
         let path = self.path.clone();
         let found = self
             .pool
-            .run(move || File::open(path).and_then(|file| Line::ending_at(&file, from.at)))
+            .run(move || open_file(&path).and_then(|file| Line::ending_at(&file, from.at)))
             .await
             .map_err(io::Error::other)
             .and_then(|found| found);
@@ -282,18 +287,36 @@ impl CodexSession {
     }
 
     /// The rollout's lines from byte `start`: followed on each change while `changes` lives, or
-    /// read once to the end without it.
+    /// read once to the end without it or when compressed (never written to, see
+    /// [`is_compressed`]).
     fn lines(
         path: &Path,
         start: u64,
         changes: Option<watch::Receiver<FileStat>>,
         pool: BlockingPool,
     ) -> impl Stream<Item = io::Result<Line>> + Send + 'static {
+        if is_compressed(path) {
+            let path = path.to_owned();
+            return async_stream::stream! {
+                let file = pool.run(move || open_file(&path)).await.map_err(io::Error::other);
+                match file.and_then(|file| file) {
+                    Ok(file) => {
+                        let lines = PooledReadLines::new(LineReader::at(file, start), pool);
+                        for await line in FollowLines::new(lines).read_to_end() {
+                            yield line;
+                        }
+                    }
+                    Err(err) => yield Err(err),
+                }
+            }
+            .left_stream();
+        }
         let lines = FollowLines::new(PooledReadLines::new(PathLineReader::at(path, start), pool));
-        match changes {
+        let lines = match changes {
             Some(changes) => lines.follow(changes).left_stream(),
             None => lines.read_to_end().right_stream(),
-        }
+        };
+        lines.right_stream()
     }
 
     fn stamper(&self, start: u64) -> Stamper {
@@ -661,6 +684,34 @@ pub fn command_exit_code(path: &Path, item: &str) -> Option<i64> {
     std::str::from_utf8(&digits).ok()?.parse().ok()
 }
 
+/// Whether the rollout at `path` is compressed (`.jsonl.zst`): Codex (0.162.1+, codex-rs
+/// `rollout/compression.rs`) compresses one left a week, removing the plain file, and decompresses
+/// it back to `.jsonl` (removing this) before it appends to it again, so one is never written to.
+fn is_compressed(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "zst")
+}
+
+/// The rollout at `path`, read from its start: decompressed as it is read, when compressed.
+fn open_rollout(path: &Path) -> io::Result<Box<dyn Read + Send>> {
+    let file = File::open(path)?;
+    Ok(if is_compressed(path) {
+        Box::new(zstd::Decoder::new(file)?)
+    } else {
+        Box::new(file)
+    })
+}
+
+/// The rollout at `path` as a file to seek in: a compressed one decompressed into a temporary
+/// file, which goes when it closes.
+fn open_file(path: &Path) -> io::Result<File> {
+    if !is_compressed(path) {
+        return File::open(path);
+    }
+    let mut copy = tempfile::tempfile()?;
+    io::copy(&mut open_rollout(path)?, &mut copy)?;
+    Ok(copy)
+}
+
 /// Where `needle` last starts in the first `end` bytes of `file`, looking back no further than
 /// `limit` bytes, read in chunks.
 fn rfind(file: &mut File, end: u64, needle: &[u8], limit: u64) -> io::Result<Option<u64>> {
@@ -693,11 +744,8 @@ pub(crate) fn own_meta_at(path: &Path, id: &str) -> Option<serde_json::Value> {
 /// The own `session_meta` payload of the rollout at `path`, which is its first line.
 fn first_own_meta(path: &Path, session: &SessionId) -> Option<serde_json::Value> {
     let mut first = String::new();
-    std::io::BufRead::read_line(
-        &mut std::io::BufReader::new(std::fs::File::open(path).ok()?),
-        &mut first,
-    )
-    .ok()?;
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(open_rollout(path).ok()?), &mut first)
+        .ok()?;
     let mut line: CodexMessage = serde_json::from_str(&first).ok()?;
     line.context.session = Some(session.clone());
     line.own_meta().cloned()
@@ -736,7 +784,8 @@ fn base_tail(path: &Path, base: &SessionId, end: u64) -> Option<MessageId> {
 
     let mut tail = None;
     let mut usage_recorded = false;
-    let lines = std::io::BufRead::lines(std::io::BufReader::new(File::open(file).ok()?.take(end)));
+    let lines =
+        std::io::BufRead::lines(std::io::BufReader::new(open_rollout(&file).ok()?.take(end)));
     for line in lines {
         let Ok(mut m) = serde_json::from_str::<CodexMessage>(&line.ok()?) else {
             continue;
@@ -753,7 +802,7 @@ fn base_tail(path: &Path, base: &SessionId, end: u64) -> Option<MessageId> {
 /// long rollout is never held in memory whole.
 fn prefix_contains(path: &Path, end: u64, needle: &[u8]) -> std::io::Result<bool> {
     const CHUNK: usize = 64 * 1024;
-    let mut file = std::fs::File::open(path)?.take(end);
+    let mut file = open_rollout(path)?.take(end);
     let finder = memchr::memmem::Finder::new(needle);
     let keep = needle.len().saturating_sub(1);
     let mut window: Vec<u8> = Vec::with_capacity(CHUNK + keep);
@@ -1103,6 +1152,11 @@ impl CodexMessage {
     /// (`response_item`, or before 0.32.0 a bare item), a compaction, or a message between agents.
     /// Everything else (session, turn and world state, usage, events) names no item.
     fn is_item(&self) -> bool {
+        // Of a voice conversation's items (codex-rs `RealtimeItemContent`), what was said; the
+        // rest mark where it started, ended, or showed an agent's item.
+        if self.kind == "realtime_item" {
+            return self.payload_type() == Some("transcript_segment");
+        }
         !matches!(
             self.kind.as_str(),
             "event_msg"
@@ -1111,7 +1165,6 @@ impl CodexMessage {
                 | "world_state"
                 | "retained_context"
                 | "security_risk_score"
-                | "realtime_item"
                 | "inter_agent_communication_metadata"
                 | "compacted"
                 | "state"
@@ -1292,9 +1345,10 @@ impl Message for CodexMessage {
             return Role::Assistant;
         }
         // Messages between agents (codex-rs `ResponseItem::AgentMessage`, `RolloutItem::
-        // InterAgentCommunication`): the harness delivered them, no user typed them.
+        // InterAgentCommunication`): an agent wrote them, a task or a subagent's answer, and
+        // Codex hands them to the model as the assistant's (`to_response_input_item`).
         if self.kind == "inter_agent_communication" {
-            return Role::System;
+            return Role::Assistant;
         }
         if self.file_changes().is_some() {
             return Role::Tool;
@@ -1310,7 +1364,17 @@ impl Message for CodexMessage {
                 | "image_generation_call"
                 | "reasoning",
             ) => Role::Assistant,
-            Some("agent_message") => Role::System,
+            // The task a subagent is given is its prompt, as opencode's and Claude Code's are.
+            Some("agent_message")
+                if payload.is_some_and(|p| {
+                    p["content"][0]["text"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("Message Type: NEW_TASK\n"))
+                }) =>
+            {
+                Role::User
+            }
+            Some("agent_message") => Role::Assistant,
             Some(kind) if self.is_item() && is_opaque_item(kind) => Role::System,
             Some("function_call_output" | "custom_tool_call_output" | "tool_search_output") => {
                 Role::Tool
@@ -1400,6 +1464,9 @@ impl Message for CodexMessage {
                 tool_use(call_id("id"), "image_generation", &payload["revised_prompt"])
             }
             Some(kind) if is_opaque_item(kind) => Vec::new(),
+            Some("transcript_segment") => {
+                vec![Content::Text(payload["text"].as_str().unwrap_or_default().to_owned())]
+            }
             Some("tool_search_call") => tool_use(
                 call_id(if payload["call_id"].is_string() {
                     "call_id"
@@ -1837,6 +1904,42 @@ mod tests {
             .unwrap();
         found.sort();
         assert_eq!(found, [(live.to_owned(), true), (archived.to_owned(), false)]);
+    }
+
+    /// A rollout Codex compressed (codex-rs `compress_rollout_if_cold_blocking`: zstd level 3,
+    /// the plain file removed) reads as the plain file did, past a checkpoint the plain file's
+    /// read took too, so a session captured before it was compressed is not captured again.
+    #[rstest]
+    #[tokio::test]
+    async fn a_compressed_rollout_reads_as_its_plain_file() {
+        let home = tempfile::tempdir().unwrap();
+        let plain = fixture("session1.jsonl");
+        let name = "rollout-2026-09-19T00-00-00-0a1b2c3d-4e5f-6789-abcd-ef0123456789.jsonl";
+        let compressed = home.path().join(format!("{name}.zst"));
+        let bytes = zstd::encode_all(std::fs::read(&plain).unwrap().as_slice(), 3).unwrap();
+        std::fs::write(&compressed, bytes).unwrap();
+        let read = |path: PathBuf, from: Option<Checkpoint>| async move {
+            let session = CodexSession::open(SessionId::from("s".to_owned()), path, pool());
+            let lines: Vec<(Checkpoint, CodexMessage)> =
+                session.messages_from(from).try_collect().await.unwrap();
+            lines.into_iter().map(|(at, m)| (at, m.id(), m.content())).collect::<Vec<_>>()
+        };
+
+        let sessions =
+            CodexSessions::builder().root(home.path().to_path_buf()).pool(pool()).build();
+        let found: Vec<CodexSession> = sessions.existing().unwrap().try_collect().await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id().as_ref(), "0a1b2c3d-4e5f-6789-abcd-ef0123456789");
+        let whole = read(compressed.clone(), None).await;
+        assert_eq!(whole, read(plain.clone(), None).await);
+        let (mid, ..) = whole[whole.len() / 2];
+        assert_eq!(read(compressed, Some(mid)).await, read(plain, Some(mid)).await);
+
+        // While Codex decompresses it back, the plain file is the one read.
+        std::fs::write(home.path().join(name), "").unwrap();
+        let found: Vec<CodexSession> = sessions.existing().unwrap().try_collect().await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, home.path().join(name));
     }
 
     fn rollout(dir: &Path) -> PathBuf {
@@ -3057,23 +3160,62 @@ mod tests {
         })]);
     }
 
-    /// A message from another agent (multi-agent v2, codex-rs `ResponseItem::AgentMessage`) was
-    /// delivered by the harness; its encrypted payload is not kept. From a codex 0.156.1 run.
+    /// A message from another agent (multi-agent v2, codex-rs `ResponseItem::AgentMessage`) is
+    /// the assistant's, such as a subagent's answer, but for the task a subagent is given, which is
+    /// its prompt; its encrypted payload is not kept. From codex 0.156.1 and 0.162.1 runs.
     #[rstest]
-    fn an_agent_message_is_system_without_its_ciphertext() {
-        let m = line(&serde_json::json!({
-            "timestamp": "2026-09-24T02:51:10.389Z", "ordinal": 9, "type": "response_item",
-            "payload": {"type": "agent_message", "id": "amsg_01a0d152-f6b5-7200-a223-914e6099d827",
-                "author": "/root", "recipient": "/root/helper_task", "content": [
-                    {"type": "input_text", "text": "Message Type: NEW_TASK\nTask name: \
-                        /root/helper_task\nSender: /root\nPayload:\n"},
-                    {"type": "encrypted_content", "encrypted_content": "gAAAAB..."}]},
-        }));
-        assert_eq!(m.role(), Role::System);
-        assert_eq!(m.content(), vec![Content::Text(
-            "Message Type: NEW_TASK\nTask name: /root/helper_task\nSender: /root\nPayload:\n"
-                .to_owned()
-        )]);
+    #[case::new_task(serde_json::json!({
+        "timestamp": "2026-09-24T02:51:10.389Z", "ordinal": 9, "type": "response_item",
+        "payload": {"type": "agent_message", "id": "amsg_01a0d152-f6b5-7200-a223-914e6099d827",
+            "author": "/root", "recipient": "/root/helper_task", "content": [
+                {"type": "input_text", "text": "Message Type: NEW_TASK\nTask name: \
+                    /root/helper_task\nSender: /root\nPayload:\n"},
+                {"type": "encrypted_content", "encrypted_content": "gAAAAB..."}]},
+    }), Role::User, "Message Type: NEW_TASK\nTask name: /root/helper_task\nSender: /root\nPayload:\n")]
+    #[case::final_answer(serde_json::json!({
+        "timestamp": "2026-10-14T16:21:01.947Z", "ordinal": 61, "type": "response_item",
+        "payload": {"type": "agent_message", "id": "amsg_01a13b37-997b-72f1-96b8-a26daf79b121",
+            "author": "/root/word_reply", "recipient": "/root", "content": [
+                {"type": "input_text", "text": "Message Type: FINAL_ANSWER\nTask name: /root\n\
+                    Sender: /root/word_reply\nPayload:\nSUBMARINE"}],
+            "internal_chat_message_metadata_passthrough": {
+                "turn_id": "01a13b37-82b5-7c01-85cb-bc17a26998e1", "create_time": 1_791_994_861.9}},
+        "metadata": {"client_authored": false, "user_input_order": 6},
+    }), Role::Assistant,
+        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/word_reply\nPayload:\nSUBMARINE")]
+    #[case::inter_agent_communication(serde_json::json!({
+        "type": "inter_agent_communication", "payload": {"id": "amsg_1", "author": "/root/w",
+            "recipient": "/root", "other_recipients": [], "content": "done", "trigger_turn": false},
+    }), Role::Assistant, "done")]
+    fn an_agent_message_is_kept_without_its_ciphertext(
+        #[case] raw: serde_json::Value,
+        #[case] role: Role,
+        #[case] text: &str,
+    ) {
+        let m = line(&raw);
+        assert_eq!(m.role(), role);
+        assert_eq!(m.content(), vec![Content::Text(text.to_owned())]);
+    }
+
+    /// What was said in a voice conversation is kept, as whoever said it (codex-rs
+    /// `RealtimeItem`); its other items are bookkeeping.
+    #[rstest]
+    #[case::user("user", Role::User)]
+    #[case::assistant("assistant", Role::Assistant)]
+    fn a_voice_transcript_segment_is_conversation(#[case] role: &str, #[case] expected: Role) {
+        let id = "01a14000-0000-7000-8000-000000000001";
+        let m = line(&serde_json::json!({"timestamp": "2026-10-20T10:00:00.000Z", "ordinal": 7,
+            "type": "realtime_item", "payload": {"id": id, "realtime_session_id": "rs_1",
+                "type": "transcript_segment", "role": role, "text": "what's failing in CI?"}}));
+        assert_eq!(m.id(), Some(MessageId::from(id.to_owned())));
+        assert_eq!(m.role(), expected);
+        assert_eq!(m.content(), vec![Content::Text("what's failing in CI?".to_owned())]);
+
+        let started = line(&serde_json::json!({"type": "realtime_item", "payload": {
+            "id": "01a14000-0000-7000-8000-000000000000", "realtime_session_id": "rs_1",
+            "type": "realtime_session_started"}}));
+        assert_eq!(started.id(), None);
+        assert!(started.content().is_empty());
     }
 
     /// An image generation's result is the image itself, never kept.

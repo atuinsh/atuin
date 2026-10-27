@@ -619,10 +619,15 @@ impl HarnessResumer {
                 if !session.cwd.as_deref().is_some_and(Path::is_dir) {
                     target.cwd = Some(resolve_cwd(session.cwd.as_deref(), &self.context).cwd);
                 }
-                let target = target.with_native_path(native);
                 // Where this copy works, as it records; else where the session works here,
                 // which for another host's session isn't where it was recorded.
                 let tip = self.machine.local_tip(harness, id).await;
+                // Reading the copy can move it: a rollout Codex compressed is made plain again.
+                let native = match &tip {
+                    Ok(Some(tip)) if !native.exists() => tip.native_path.clone(),
+                    _ => native,
+                };
+                let target = target.with_native_path(native);
                 let recorded = tip.as_ref().ok().and_then(|t| t.as_ref()?.cwd.clone());
                 let dir = recorded
                     .filter(|dir| dir.is_dir())
