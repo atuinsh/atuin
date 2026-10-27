@@ -37,7 +37,7 @@ pub async fn run(settings: &Arc<Settings>) -> Result<()> {
             frequency: settings.sync_frequency,
             last_sync: last_sync.to_offset(settings.timezone.0),
         }),
-        // Only with auto sync, as since `atuin status` began (#830).
+        // Shown only with auto sync, as it has been since `atuin status` began (#830).
         remote: settings.auto_sync.then(|| Remote {
             address: settings.sync_address.clone(),
             username: me.username,
@@ -50,7 +50,7 @@ pub async fn run(settings: &Arc<Settings>) -> Result<()> {
 
 /// What `atuin sync status` shows.
 struct SyncStatus {
-    /// How often this machine syncs, and when it last did, when it syncs on its own.
+    /// How often this machine syncs on its own, and when it last did; `None` without auto sync.
     auto_sync: Option<AutoSync>,
     remote: Option<Remote>,
 }

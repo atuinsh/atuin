@@ -4,17 +4,16 @@ use std::time::Duration;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::{DbLocation, Settings};
-use atuin_common::env;
-use atuin_common::logs::USER;
 use atuin_common::path::{AbsPathBuf, PathExt};
 use atuin_common::shell::{Shell, shell_name};
 use atuin_common::string::NonEmptyOrExt as _;
 use atuin_common::userio::outln;
+use atuin_common::{env, userio};
 use colored::Colorize;
 use eyre::Result;
 use serde::Serialize;
 use sysinfo::{Disks, System, get_current_pid};
-use tracing::{instrument, warn};
+use tracing::instrument;
 
 #[derive(Debug, Serialize)]
 struct ShellInfo {
@@ -321,8 +320,7 @@ impl SettingPaths {
                 continue;
             };
             if path.as_path().is_dangling_symlink() {
-                tracing::warn!(
-                    target: USER,
+                userio::log::warn!(
                     "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin",
                     path.display()
                 );
@@ -409,12 +407,12 @@ fn checks(info: &DoctorDump, settings: &Settings) {
     let openbsd_warning = "[System] OpenBSD is not officially supported.";
 
     if cfg!(target_os = "openbsd") {
-        warn!(target: USER, "{openbsd_warning}");
+        userio::log::warn!("{openbsd_warning}");
     }
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
-        warn!(target: USER, "{zfs_error}");
+        userio::log::warn!("{zfs_error}");
     }
 
     info.atuin.setting_paths.verify();
@@ -422,24 +420,24 @@ fn checks(info: &DoctorDump, settings: &Settings) {
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
         let active = atuin_common::dirs::config_path("config.toml");
         let warning = super::info::shadowed_config_warning(&legacy, &active);
-        warn!(target: USER, "[Config] {warning}.");
+        userio::log::warn!("[Config] {warning}.");
     }
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_data_dir(&settings.data_dir) {
         let warning = super::info::shadowed_data_dir_warning(&legacy, &settings.data_dir);
-        warn!(target: USER, "[Data] {warning}.");
+        userio::log::warn!("[Data] {warning}.");
     }
 
     // Shell
     if info.shell.name == "bash" {
         if !info.shell.plugins.iter().any(|p| p == "blesh" || p == "bash-preexec") {
-            warn!(target: USER, "{bash_plugin_error}");
+            userio::log::warn!("{bash_plugin_error}");
         }
 
         if info.shell.plugins.iter().any(|plugin| plugin == "atuin")
             && info.shell.plugins.iter().any(|plugin| plugin == "blesh")
             && info.shell.preexec.as_ref().is_some_and(|val| val == "none")
         {
-            warn!(target: USER, "{blesh_integration_error}");
+            userio::log::warn!("{blesh_integration_error}");
         }
     }
 }

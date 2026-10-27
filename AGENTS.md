@@ -96,13 +96,14 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Feature flags: `client`, `sync`, `daemon`, `clipboard`, `check-update`.
 - Output: no `print!`/`println!`/`eprint!`/`eprintln!` outside tests (clippy `print_stdout` and
   `print_stderr`). Log with `tracing`, and send a message the user should read with
-  `target: atuin_common::logs::USER`. Write what a program reads (an init script, a value a shell
-  captures, data for a script) to stdout directly, `writeln!(io::stdout(), ..)?`, so the call
-  says where it goes. Make a report the user reads a type that implements `Display`, like
-  `atuin_history::stats::StatsReport`, and write it to stdout the same way. The rest of talking to
-  the user is `atuin_common::userio`: the line the shell widget reads goes through `widgetln!`,
-  and a question through `Prompt`, or `Confirm` for a yes or no one. Use the print macros only
-  where no logging is set up, under an `#[expect]` that says why.
+  `atuin_common::userio::log`'s `info!`, `warn!` or `error!`. Write what a program reads (an init
+  script, a value a shell captures, data for a script) to stdout directly,
+  `writeln!(io::stdout(), ..)?`, so the call says where it goes. Make a report the user reads a type
+  that implements `Display`, like `atuin_history::stats::StatsReport`, and write it to stdout the
+  same way. Ask a question with `atuin_common::userio`'s `Prompt`, `Confirm` for a yes or no one, or
+  `Secret` for a password. The line the shell widget reads is an
+  `atuin_common::shell::WidgetAnswer`. Use the print macros only where no logging is set up, under
+  an `#[expect]` that says why.
 
 ## Testing
 

@@ -1,10 +1,10 @@
 use atuin_client::settings::Settings;
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use atuin_common::userio::{Confirm, DefaultAnswer};
 use colored::Colorize;
 use eyre::Result;
 use toml_edit::{DocumentMut, value};
-use tracing::{info, instrument};
+use tracing::instrument;
 
 #[instrument(level = "trace", skip_all, err)]
 pub async fn run(_settings: &Settings) -> Result<()> {
@@ -51,9 +51,9 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     if changed {
         tokio::fs::write(config_file, doc.to_string()).await?;
 
-        info!(target: USER, "Settings updated successfully");
+        userio::log::info!("Settings updated successfully");
     } else {
-        info!(target: USER, "No settings changed");
+        userio::log::info!("No settings changed");
     }
 
     Ok(())

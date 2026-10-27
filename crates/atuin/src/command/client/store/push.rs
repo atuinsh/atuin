@@ -6,11 +6,10 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, Operation, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use atuin_domain::record::{HostId, RecordTag};
 use clap::Args;
 use eyre::{Context as _, Result};
-use tracing::info;
 use uuid::Uuid;
 
 use crate::i18n::fl;
@@ -45,8 +44,8 @@ impl Push {
         let host_id = settings.host_id().await?;
 
         if self.force {
-            info!(target: USER, "Forcing remote store overwrite!");
-            info!(target: USER, "Clearing remote store");
+            userio::log::info!("Forcing remote store overwrite!");
+            userio::log::info!("Clearing remote store");
 
             let caps = atuin_client::api_client::caps_client(settings)?;
             let client = Client::new(
@@ -127,7 +126,7 @@ impl Push {
 
         let (uploaded, _) = keyed.sync_remote(operations).await?;
 
-        info!(target: USER, "Uploaded {uploaded} records");
+        userio::log::info!("Uploaded {uploaded} records");
 
         Ok(())
     }

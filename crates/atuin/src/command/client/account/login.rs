@@ -7,12 +7,10 @@ use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
-use atuin_common::logs::USER;
-use atuin_common::userio::{Prompt, outln};
+use atuin_common::userio;
+use atuin_common::userio::{Prompt, Secret, outln};
 use clap::Parser;
 use eyre::{Context, Result, bail};
-use rpassword::prompt_password;
-use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretString};
 
 use super::PasswordArg;
@@ -43,17 +41,17 @@ impl Cmd {
     pub async fn run(&self, settings: &Arc<Settings>, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
-                tracing::info!(target: USER, "{}", fl!("account-hub-authenticated"));
-                tracing::info!(target: USER, "{}", fl!("account-run-logout"));
+                userio::log::info!("{}", fl!("account-hub-authenticated"));
+                userio::log::info!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::Legacy { .. } => {
-                tracing::info!(target: USER, "{}", fl!("login-legacy-logged-in"));
-                tracing::info!(target: USER, "{}", fl!("account-run-logout"));
+                userio::log::info!("{}", fl!("login-legacy-logged-in"));
+                userio::log::info!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::HubViaCli { .. } => {
-                tracing::info!(target: USER, "{}", fl!("login-upgrading-legacy"));
+                userio::log::info!("{}", fl!("login-upgrading-legacy"));
             }
             SyncAuth::NotLoggedIn { .. } => {}
         }
@@ -86,8 +84,10 @@ impl Cmd {
             // Headless login via v0 API (for CI / scripting).
             let client = auth::auth_client(settings).await;
 
-            let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
-                .unwrap_or_else(read_user_password);
+            let password = match PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())? {
+                Some(password) => password,
+                None => Secret::new(&fl!("prompt-password")).ask()?.unwrap_or_default(),
+            };
 
             self.prompt_and_store_key(settings, store).await?;
 
@@ -99,7 +99,7 @@ impl Cmd {
                 match response {
                     AuthResponse::Success { session, auth_type } => break (session, auth_type),
                     AuthResponse::TwoFactorRequired => {
-                        let Some(code) = read_user_input(&fl!("prompt-two-factor-code")) else {
+                        let Some(code) = Prompt::new(&fl!("prompt-two-factor-code")).ask()? else {
                             bail!(fl!("login-totp-required"));
                         };
                         totp_code = Some(code);
@@ -115,8 +115,8 @@ impl Cmd {
                 meta.save_hub_session(&session).await?;
             } else {
                 meta.save_session(&session).await?;
-                tracing::info!(target: USER, "{}", fl!("account-not-migrated-note"));
-                tracing::info!(target: USER, "{}", fl!("account-not-migrated-hint"));
+                userio::log::info!("{}", fl!("account-not-migrated-note"));
+                userio::log::info!("{}", fl!("account-not-migrated-hint"));
             }
         } else {
             // Interactive login via browser OAuth flow.
@@ -137,16 +137,21 @@ impl Cmd {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
 
-        tracing::info!(target: USER, "{}", fl!("login-success"));
+        userio::log::info!("{}", fl!("login-success"));
         Ok(())
     }
 
     /// Legacy login: always prompt for username/password interactively
     /// (or accept them via flags).
     async fn run_legacy_login(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
-        let username = or_user_input(self.username.clone(), &fl!("prompt-username"));
-        let password = PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())?
-            .unwrap_or_else(read_user_password);
+        let username = match self.username.clone() {
+            Some(username) => username,
+            None => Prompt::new(&fl!("prompt-username")).ask()?.unwrap_or_default(),
+        };
+        let password = match PasswordArg::resolve(self.password.as_ref(), io::stdin().lock())? {
+            Some(password) => password,
+            None => Secret::new(&fl!("prompt-password")).ask()?.unwrap_or_default(),
+        };
 
         self.prompt_and_store_key(settings, store).await?;
 
@@ -163,12 +168,12 @@ impl Cmd {
             }
         }
 
-        tracing::info!(target: USER, "{}", fl!("login-legacy-success"));
+        userio::log::info!("{}", fl!("login-legacy-success"));
         Ok(())
     }
 
     async fn ensure_hub_session(&self, settings: &Settings, hub_address: &url::Url) -> Result<()> {
-        tracing::info!(target: USER, "Authenticating with Atuin Hub...");
+        userio::log::info!("Authenticating with Atuin Hub...");
 
         let mut session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
 
@@ -192,7 +197,7 @@ impl Cmd {
             )
             .await?;
 
-        tracing::info!(target: USER, "Authentication complete, saving session token");
+        userio::log::info!("Authentication complete, saving session token");
 
         atuin_client::hub::save_session(&token, settings).await?;
 
@@ -202,12 +207,11 @@ impl Cmd {
     async fn prompt_and_store_key(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
         let key_path = &settings.key_path;
 
-        tracing::info!(target: USER, "{}", fl!("login-key-important"));
-        tracing::info!(target: USER, "{}", fl!("login-key-same-everywhere"));
-        tracing::info!(target: USER, "{}", fl!("login-key-find"));
-        tracing::info!(target: USER, "{}", fl!("login-key-secret"));
-        tracing::info!(
-            target: USER,
+        userio::log::info!("{}", fl!("login-key-important"));
+        userio::log::info!("{}", fl!("login-key-same-everywhere"));
+        userio::log::info!("{}", fl!("login-key-find"));
+        userio::log::info!("{}", fl!("login-key-secret"));
+        userio::log::info!(
             "{}",
             fl!("login-key-read-more", url = atuin_common::docs::url("guide/sync/#login"))
         );
@@ -218,7 +222,7 @@ impl Cmd {
         loop {
             let key = match flag_key.take() {
                 Some(key) => key,
-                None => match read_user_input::<SecretString>(&fl!("prompt-key-or-existing")) {
+                None => match Prompt::new(&fl!("prompt-key-or-existing")).ask::<SecretString>()? {
                     Some(key) => key,
                     // Stdin is exhausted, so re-prompting would spin forever.
                     None => bail!(fl!("login-no-key-provided")),
@@ -231,7 +235,7 @@ impl Cmd {
                     if !interactive {
                         bail!(msg);
                     }
-                    tracing::warn!(target: USER, "{msg}");
+                    userio::log::warn!("{msg}");
                     continue;
                 }
 
@@ -247,11 +251,7 @@ impl Cmd {
             match paseto_v4::Key::try_from_mnemonic(key.expose_secret()) {
                 Ok(key) => return store_key(settings, store, &key).await,
                 Err(err) if interactive => {
-                    tracing::warn!(
-                        target: USER,
-                        "{}",
-                        fl!("login-key-try-again", error = err.to_string())
-                    );
+                    userio::log::warn!("{}", fl!("login-key-try-again", error = err.to_string()));
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -274,11 +274,11 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
         return Ok(());
     }
 
-    tracing::info!(target: USER, "{}", fl!("login-reencrypting"));
+    userio::log::info!("{}", fl!("login-reencrypting"));
     store.re_encrypt(&current_key, key).await?;
     crate::command::client::store::invalidate_ai_sessions(settings).await;
 
-    tracing::info!(target: USER, "{}", fl!("login-writing-key"));
+    userio::log::info!("{}", fl!("login-writing-key"));
     key.overwrite_path(key_path)?;
 
     Ok(())
@@ -314,17 +314,16 @@ async fn verify_key_against_remote(
                     return Err(logout_wrong_key(settings).await.into());
                 }
 
-                tracing::warn!(target: USER, "{}", fl!("login-key-mismatch"));
-                tracing::info!(target: USER, "{}", fl!("login-key-find-correct"));
+                userio::log::warn!("{}", fl!("login-key-mismatch"));
+                userio::log::info!("{}", fl!("login-key-find-correct"));
 
-                let input = read_user_input::<SecretString>(&fl!("prompt-key-or-logout"));
+                let input = Prompt::new(&fl!("prompt-key-or-logout")).ask::<SecretString>()?;
                 match input {
                     Some(input) if !input.expose_secret().is_empty() => {
                         match paseto_v4::Key::try_from_mnemonic(input.expose_secret()) {
                             Ok(candidate) => key = candidate,
                             Err(err) => {
-                                tracing::warn!(
-                                    target: USER,
+                                userio::log::warn!(
                                     "{}",
                                     fl!("login-key-try-again", error = err.to_string())
                                 );
@@ -339,7 +338,7 @@ async fn verify_key_against_remote(
                 // Non-key error (e.g. transient network issue). Don't fail the
                 // login — the user is authenticated and can sync later when the
                 // network recovers.
-                tracing::warn!(target: USER, "could not verify encryption key against remote: {e}");
+                userio::log::warn!("could not verify encryption key against remote: {e}");
                 return Ok(());
             }
         }
@@ -354,32 +353,6 @@ async fn logout_wrong_key(settings: &Settings) -> CliError {
         let _ = meta.delete_hub_session().await;
     }
     CliError::LoginWrongKey
-}
-
-#[must_use]
-pub(super) fn or_user_input(value: Option<String>, prompt: &str) -> String {
-    value.unwrap_or_else(|| read_user_input(prompt).unwrap_or_default())
-}
-
-#[must_use]
-pub(super) fn read_user_password() -> SecretString {
-    read_secret(&fl!("prompt-password"))
-}
-
-/// Prompt on the tty without echo.
-#[must_use]
-pub(super) fn read_secret(prompt: &str) -> SecretString {
-    let secret =
-        Zeroizing::new(prompt_password(format!("{prompt}: ")).expect("Failed to read from input"));
-    // `From<&str>` copies; `From<String>` would shrink the buffer and free the old one unwiped.
-    SecretString::from(secret.as_str())
-}
-
-/// Returns `None` if stdin reached end of input before a line was read. The distinction matters
-/// for the key prompts, which re-prompt on a blank line but must not spin forever once stdin is
-/// exhausted.
-pub(super) fn read_user_input<T: for<'a> From<&'a str>>(prompt: &str) -> Option<T> {
-    Prompt::new(&format!("{prompt}: ")).ask().expect("Failed to read from input")
 }
 
 #[cfg(test)]

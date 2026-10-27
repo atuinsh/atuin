@@ -5,7 +5,8 @@ use atuin_client::logs::FromSettings;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme;
-use atuin_common::logs::{self, LogConfig};
+use atuin_common::logs::LogConfig;
+use atuin_common::userio;
 use clap::Subcommand;
 use clap_couture::Couture;
 use eyre::{Result, WrapErr};
@@ -308,10 +309,7 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
             Self::InternalDecoy => {
-                tracing::error!(
-                    target: logs::USER,
-                    "this command is not meant to be accessed directly"
-                );
+                userio::log::error!("this command is not meant to be accessed directly");
                 std::process::exit(1);
             }
             _ => {}
@@ -430,8 +428,11 @@ impl Cmd {
 
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => Some(LogConfig {
-                file: logs::FileConfig::from_settings(&settings.logs, &settings.logs.daemon),
-                stderr: cmd.show_logs().then(logs::StderrConfig::verbose),
+                file: atuin_common::logs::FileConfig::from_settings(
+                    &settings.logs,
+                    &settings.logs.daemon,
+                ),
+                stderr: cmd.show_logs().then(atuin_common::logs::StderrConfig::verbose),
             }),
 
             #[cfg(feature = "ai")]

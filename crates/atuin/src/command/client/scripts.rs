@@ -6,7 +6,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use atuin_common::userio::{Confirm, DefaultAnswer, Prompt, outln};
 use atuin_scripts::execution::{
     build_executable_script, execute_script_interactive, template_script, template_variables,
@@ -16,7 +16,7 @@ use atuin_scripts::store::script::Script;
 use clap::{Parser, Subcommand};
 use eyre::{Context as _, OptionExt, Result, bail};
 use tempfile::NamedTempFile;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, instrument};
 
 use crate::i18n::fl;
 
@@ -189,12 +189,12 @@ impl Cmd {
                                 // Convert the bytes to a string and forward to script
                                 let input = String::from_utf8_lossy(&buffer[0..n]).to_string();
                                 if let Err(e) = sender.send(input).await {
-                                    warn!(target: USER, "failed to send input to script: {e}");
+                                    userio::log::warn!("failed to send input to script: {e}");
                                     break;
                                 }
                             },
                             Err(e) => {
-                                warn!(target: USER, "failed to read from stdin: {e}");
+                                userio::log::warn!("failed to read from stdin: {e}");
                                 break;
                             }
                         }
@@ -212,7 +212,7 @@ impl Cmd {
 
         let code = exit_code.unwrap_or(-1);
         if code != 0 {
-            warn!(target: USER, "script exited with code {code}");
+            userio::log::warn!("script exited with code {code}");
         }
 
         Ok(code)
@@ -310,8 +310,8 @@ impl Cmd {
                         .insert(key.to_string(), serde_json::Value::String(value.to_string()));
                     debug!("Using CLI variable: {}={}", key, value);
                 } else {
-                    warn!(target: USER, "ignoring malformed variable specification: {var_str}");
-                    info!(target: USER, "Variables should be specified as KEY=VALUE");
+                    userio::log::warn!("ignoring malformed variable specification: {var_str}");
+                    userio::log::info!("Variables should be specified as KEY=VALUE");
                 }
             }
 
@@ -321,13 +321,13 @@ impl Cmd {
 
             // If there are variables in the template that weren't specified on the command line, prompt for them
             if !remaining_vars.is_empty() {
-                info!(target: USER, "This script contains template variables that need values:");
+                userio::log::info!("This script contains template variables that need values:");
 
                 for var in remaining_vars {
-                    let question = format!("Enter value for '{var}': ");
+                    let question = format!("Enter value for '{var}':");
                     let value = Prompt::new(&question).ask::<String>().map_or_else(
                         |_| {
-                            warn!(target: USER, "failed to read input for variable '{var}'");
+                            userio::log::warn!("failed to read input for variable '{var}'");
                             // Provide an empty string as fallback
                             String::new()
                         },
@@ -362,7 +362,7 @@ impl Cmd {
         let scripts = script_db.list().await?;
 
         if scripts.is_empty() {
-            info!(target: USER, "No scripts found");
+            userio::log::info!("No scripts found");
         } else {
             outln!("Available scripts:");
             for script in scripts {
@@ -505,7 +505,7 @@ impl Cmd {
             // Rebuild the database to apply changes
             script_store.build(&script_db).await?;
 
-            info!(target: USER, "Script '{}' updated successfully!", edit.name);
+            userio::log::info!("Script '{}' updated successfully!", edit.name);
 
             Ok(())
         } else {
@@ -527,7 +527,7 @@ impl Cmd {
             if !delete.force {
                 let question = format!("Are you sure you want to delete script '{}'?", delete.name);
                 if !Confirm::new(&question, DefaultAnswer::No).ask()? {
-                    info!(target: USER, "Deletion cancelled");
+                    userio::log::info!("Deletion cancelled");
                     return Ok(());
                 }
             }
@@ -538,7 +538,7 @@ impl Cmd {
             // Rebuild the database to apply changes
             script_store.build(&script_db).await?;
 
-            info!(target: USER, "Script '{}' deleted successfully", delete.name);
+            userio::log::info!("Script '{}' deleted successfully", delete.name);
             Ok(())
         } else {
             bail!("script '{}' not found", delete.name);

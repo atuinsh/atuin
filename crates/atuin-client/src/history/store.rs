@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use atuin_common::encryption::paseto_v4;
 use atuin_common::futures::stream::chunk_by_bounded;
-use atuin_common::logs::USER;
 use atuin_common::rmp::decode::Bytes;
+use atuin_common::userio;
 use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
@@ -334,8 +334,7 @@ impl HistoryStore {
         }
 
         if skipped > 0 {
-            warn!(
-                target: USER,
+            userio::log::warn!(
                 "skipped {skipped} history records that could not be decrypted or decoded; run \
                  `atuin store verify` to check your store, and `atuin store purge` to remove \
                  broken records locally"

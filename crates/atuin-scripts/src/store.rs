@@ -1,6 +1,6 @@
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4;
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
 };
@@ -97,8 +97,7 @@ impl ScriptStore {
         }
 
         if skipped > 0 {
-            tracing::warn!(
-                target: USER,
+            userio::log::warn!(
                 "skipped {skipped} script records that could not be decrypted or decoded"
             );
         }

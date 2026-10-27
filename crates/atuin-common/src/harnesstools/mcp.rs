@@ -174,7 +174,7 @@ async fn add_to_config(
             crate::fs::write_new(path, text.as_bytes())?;
         }
     }
-    tracing::info!(target: crate::logs::USER, "Added MCP server atuin to {}", path.display());
+    crate::userio::log::info!("Added MCP server atuin to {}", path.display());
     Ok(())
 }
 

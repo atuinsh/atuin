@@ -1,7 +1,6 @@
 use atuin_client::settings::Settings;
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use eyre::{Result, bail};
-use tracing::info;
 
 use crate::i18n::fl;
 
@@ -18,14 +17,13 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let hub_address = settings.hub_endpoint();
 
     if hub_token.is_some() {
-        tracing::info!(target: USER, "{}", fl!("link-both-sessions"));
+        userio::log::info!("{}", fl!("link-both-sessions"));
     } else {
-        tracing::info!(target: USER, "{}", fl!("link-hub-login-first"));
+        userio::log::info!("{}", fl!("link-hub-login-first"));
 
         let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
 
-        info!(
-            target: USER,
+        userio::log::info!(
             "{}\n{}",
             if session.open_in_browser() {
                 fl!("account-hub-browser-opened")
@@ -44,11 +42,11 @@ pub async fn run(settings: &Settings) -> Result<()> {
             .await?;
 
         atuin_client::hub::save_session(&token, settings).await?;
-        tracing::info!(target: USER, "{}", fl!("link-hub-complete"));
+        userio::log::info!("{}", fl!("link-hub-complete"));
     }
 
     atuin_client::hub::link_account(&hub_address, &cli_token, settings).await?;
-    tracing::info!(target: USER, "{}", fl!("link-success"));
+    userio::log::info!("{}", fl!("link-success"));
 
     Ok(())
 }

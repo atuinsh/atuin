@@ -4,13 +4,13 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use atuin_common::userio::outln;
 use atuin_history::stats::{Stats, StatsReport, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
 use time::{Date, Duration, Month, OffsetDateTime, Time};
-use tracing::{info, instrument};
+use tracing::instrument;
 
 #[derive(Debug)]
 struct WrappedStats {
@@ -313,8 +313,7 @@ pub async fn run(
 
     let history = db.range(start, end).await?;
     if history.is_empty() {
-        info!(
-            target: USER,
+        userio::log::info!(
             "Your history for {year} is empty!\nMaybe 'atuin import' could help you import your \
              previous history 🪄"
         );
@@ -322,8 +321,7 @@ pub async fn run(
     }
 
     let Some(stats) = compute(settings, &history, 10, 1) else {
-        info!(
-            target: USER,
+        userio::log::info!(
             "No commands found in your {year} history. Run a command or check your config for \
              commands ignored by stats.ignored_commands."
         );

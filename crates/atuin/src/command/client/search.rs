@@ -11,13 +11,11 @@ use atuin_client::theme::Theme;
 use atuin_client::tui::cursor;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::filter::OrFilter;
-use atuin_common::logs::USER;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::userio::widgetln;
-use atuin_common::utils;
+use atuin_common::{userio, utils};
 use clap::Parser;
 use eyre::{Context as _, Result, bail};
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use super::history::ListMode;
 
@@ -218,20 +216,20 @@ impl Cmd {
         let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
         if self.interactive {
-            let item = interactive::history(&query, &settings, db, &history_store, theme).await?;
+            let answer = interactive::history(&query, &settings, db, &history_store, theme).await?;
 
             if let Some(result_file) = self.result_file {
                 let mut file = File::create(result_file)?;
-                write!(file, "{item}")?;
+                write!(file, "{answer}")?;
             } else if !stdout().is_terminal() {
                 // stdout is not a terminal - likely command substitution like VAR=$(atuin search -i)
                 // Write to stdout so it gets captured. This requires some care on Windows, as the current
                 // console code page or `[Console]::OutputEncoding` on PowerShell may be different from UTF-8.
-                writeln!(stdout(), "{item}")?;
+                writeln!(stdout(), "{answer}")?;
             } else if stderr().is_terminal() {
-                widgetln!("{}", item.escape_non_printable());
+                writeln!(stderr(), "{}", answer.to_string().escape_non_printable())?;
             } else {
-                widgetln!("{item}");
+                answer.send()?;
             }
         } else {
             // An empty `--author` / `--shell` list means no filtering on that field.
@@ -270,7 +268,7 @@ impl Cmd {
                 // sorry
                 while !entries.is_empty() {
                     for entry in &entries {
-                        info!(target: USER, "deleting {}", entry.id);
+                        userio::log::info!("deleting {}", entry.id);
                     }
 
                     super::history::delete_history_entries(&settings, &history_store, &db, entries)

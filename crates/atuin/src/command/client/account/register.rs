@@ -4,13 +4,13 @@ use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
-use atuin_common::logs::USER;
+use atuin_common::userio;
+use atuin_common::userio::{Prompt, Secret};
 use clap::Parser;
 use eyre::{Result, bail};
 use secrecy::ExposeSecret;
 
 use super::PasswordArg;
-use super::login::or_user_input;
 use crate::i18n::fl;
 
 #[derive(Parser, Debug)]
@@ -30,18 +30,18 @@ impl Cmd {
     pub async fn run(&self, settings: &Arc<Settings>, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
-                tracing::info!(target: USER, "{}", fl!("account-hub-authenticated"));
-                tracing::info!(target: USER, "{}", fl!("account-run-logout"));
+                userio::log::info!("{}", fl!("account-hub-authenticated"));
+                userio::log::info!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::Legacy { .. } => {
-                tracing::info!(target: USER, "{}", fl!("register-legacy-already"));
-                tracing::info!(target: USER, "{}", fl!("account-run-logout"));
+                userio::log::info!("{}", fl!("register-legacy-already"));
+                userio::log::info!("{}", fl!("account-run-logout"));
                 return Ok(());
             }
             SyncAuth::HubViaCli { .. } => {
-                tracing::info!(target: USER, "{}", fl!("register-has-legacy-session"));
-                tracing::info!(target: USER, "{}", fl!("register-logout-first"));
+                userio::log::info!("{}", fl!("register-has-legacy-session"));
+                userio::log::info!("{}", fl!("register-logout-first"));
                 return Ok(());
             }
             SyncAuth::NotLoggedIn { .. } => {}
@@ -79,8 +79,8 @@ impl Cmd {
                             meta.save_hub_session(&session).await?;
                         } else {
                             meta.save_session(&session).await?;
-                            tracing::info!(target: USER, "{}", fl!("account-not-migrated-note"));
-                            tracing::info!(target: USER, "{}", fl!("account-not-migrated-hint"));
+                            userio::log::info!("{}", fl!("account-not-migrated-note"));
+                            userio::log::info!("{}", fl!("account-not-migrated-hint"));
                         }
                     }
                     AuthResponse::TwoFactorRequired => {
@@ -90,10 +90,10 @@ impl Cmd {
 
                 let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
-                tracing::info!(target: USER, "{}", fl!("register-success-key"));
-                tracing::info!(target: USER, "{}", fl!("register-key-warning"));
+                userio::log::info!("{}", fl!("register-success-key"));
+                userio::log::info!("{}", fl!("register-key-warning"));
             } else {
-                tracing::info!(target: USER, "{}", fl!("register-headless-incomplete"));
+                userio::log::info!("{}", fl!("register-headless-incomplete"));
 
                 // Interactive registration: delegate to the browser OAuth flow.
                 // Registration on Hub happens on the website; the CLI just needs
@@ -110,12 +110,21 @@ impl Cmd {
             }
         } else {
             // Legacy registration flow
-            tracing::info!(target: USER, "{}", fl!("register-legacy-start"));
+            userio::log::info!("{}", fl!("register-legacy-start"));
 
-            let username = or_user_input(self.username.clone(), &fl!("prompt-username"));
-            let email = or_user_input(self.email.clone(), &fl!("prompt-email"));
-            let password = PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())?
-                .unwrap_or_else(super::login::read_user_password);
+            let username = match self.username.clone() {
+                Some(username) => username,
+                None => Prompt::new(&fl!("prompt-username")).ask()?.unwrap_or_default(),
+            };
+            let email = match self.email.clone() {
+                Some(email) => email,
+                None => Prompt::new(&fl!("prompt-email")).ask()?.unwrap_or_default(),
+            };
+            let password =
+                match PasswordArg::resolve(self.password.as_ref(), std::io::stdin().lock())? {
+                    Some(password) => password,
+                    None => Secret::new(&fl!("prompt-password")).ask()?.unwrap_or_default(),
+                };
 
             if password.expose_secret().is_empty() {
                 bail!(fl!("account-provide-password"));
@@ -135,8 +144,8 @@ impl Cmd {
 
             let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
-            tracing::info!(target: USER, "{}", fl!("register-success-key"));
-            tracing::info!(target: USER, "{}", fl!("register-key-warning"));
+            userio::log::info!("{}", fl!("register-success-key"));
+            userio::log::info!("{}", fl!("register-key-warning"));
         }
 
         Ok(())

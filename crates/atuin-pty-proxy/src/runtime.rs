@@ -3,16 +3,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_common::logs::USER;
 use atuin_common::os::unix::io::{ReadRetryingExt as _, WriteAllExt as _};
 use atuin_common::os::unix::tty::{Access, AsyncTty, TtyId};
+use atuin_common::userio;
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use rustix::termios::SpecialCodeIndex;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, watch};
-use tracing::error;
 
 use crate::debug::RESET;
 use crate::foreground::{ForegroundUpdater, pty_parent_fd};
@@ -132,7 +131,7 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
             let path = atuin_common::fs::RemoveOnDropPath(socket_path);
             Ok::<_, InitError>((server, path))
         })
-        .inspect_err(|e| error!(target: USER, "atuin pty-proxy failed to initialize server: {e}"))
+        .inspect_err(|e| userio::log::error!("atuin pty-proxy failed to initialize server: {e}"))
         .ok();
 
     let (msg_tx, msg_rx) = mpsc::channel::<Msg>(64);

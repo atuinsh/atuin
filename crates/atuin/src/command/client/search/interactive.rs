@@ -11,7 +11,7 @@ use atuin_client::settings::{
     CursorStyle, ExitMode, FilterMode, KeymapMode, PreviewStrategy, RequestedSearchMode,
     SearchMode, Settings, UiColumn,
 };
-use atuin_common::shell::Shell;
+use atuin_common::shell::{Shell, WidgetAnswer};
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use easy_cast::Conv;
 use eyre::Result;
@@ -49,9 +49,6 @@ use crate::command::client::search::keybindings::KeymapSet;
 use crate::command::client::theme::{Meaning, Theme};
 
 const TAB_TITLES: [&str; 2] = ["Search", "Inspect"];
-
-/// Tells the shell integration to execute the returned line instead of inserting it.
-const ACCEPT_PREFIX: &str = "__atuin_accept__:";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum InputAction {
@@ -1815,7 +1812,7 @@ pub async fn history(
     mut db: Sqlite,
     history_store: &HistoryStore,
     theme: &Theme,
-) -> Result<String> {
+) -> Result<WidgetAnswer> {
     let inline_height = if settings.shell_up_key_binding {
         settings.inline_height_shell_up_key_binding.unwrap_or(settings.inline_height)
     } else {
@@ -2247,13 +2244,13 @@ pub async fn history(
     let chain = is_command_chaining.then_some(original_query.as_str());
 
     match result {
-        InputAction::AcceptInspecting => Ok(inspecting
-            .map(|entry| selection_output(entry, app.cd, accept, None, &shell))
-            .unwrap_or_default()),
+        InputAction::AcceptInspecting => Ok(inspecting.map_or(WidgetAnswer::Keep, |entry| {
+            selection_output(entry, app.cd, accept, None, &shell)
+        })),
         InputAction::Accept(index) if index < results.len() => {
             Ok(selection_output(results.swap_remove(index), app.cd, accept, chain, &shell))
         }
-        InputAction::ReturnOriginal => Ok(String::new()),
+        InputAction::ReturnOriginal => Ok(WidgetAnswer::Keep),
         InputAction::Copy(index) => {
             let cmd = if app.tab_index == 1 {
                 inspecting.map(|entry| entry.command)
@@ -2268,13 +2265,13 @@ pub async fn history(
             {
                 tracing::warn!(?e, "failed to copy to clipboard");
             }
-            Ok(String::new())
+            Ok(WidgetAnswer::Keep)
         }
         InputAction::ReturnQuery | InputAction::Accept(_) => {
             // Either:
             // * index == RETURN_QUERY, in which case we should return the input
             // * out of bounds -> usually implies no selected entry so we return the input
-            Ok(app.search.input.into_inner())
+            Ok(WidgetAnswer::Edit(app.search.input.into_inner()))
         }
         InputAction::Continue
         | InputAction::Redraw
@@ -2287,26 +2284,26 @@ pub async fn history(
     }
 }
 
-/// The line returned to the shell for the selected `entry`; empty returns the original command line.
+/// What the shell widget gets for the selected `entry`.
 fn selection_output(
     entry: History,
     cd: bool,
     accept: bool,
     chain: Option<&str>,
     shell: &Shell,
-) -> String {
+) -> WidgetAnswer {
     let command = if cd {
         match cd_command(&entry.cwd, shell) {
             Some(command) => command,
-            None => return String::new(),
+            None => return WidgetAnswer::Keep,
         }
     } else {
         entry.command
     };
     match chain {
-        Some(query) => format!("{} {command}", query.trim_end()),
-        None if accept => format!("{ACCEPT_PREFIX}{command}"),
-        None => command,
+        Some(query) => WidgetAnswer::Edit(format!("{} {command}", query.trim_end())),
+        None if accept => WidgetAnswer::Run(command),
+        None => WidgetAnswer::Edit(command),
     }
 }
 
@@ -2842,7 +2839,7 @@ mod tests {
             .build()
             .into();
         assert_eq!(
-            selection_output(entry, cd, accept, chain, &Shell::Bash),
+            selection_output(entry, cd, accept, chain, &Shell::Bash).to_string(),
             expected.replacen('/', &on_host("/"), 1)
         );
     }

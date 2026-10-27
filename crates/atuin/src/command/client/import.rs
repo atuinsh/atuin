@@ -13,13 +13,12 @@ use atuin_client::import::xonsh_sqlite::XonshSqlite;
 use atuin_client::import::zsh::Zsh;
 use atuin_client::import::zsh_histdb::ZshHistDb;
 use atuin_client::import::{Importer, Loader};
-use atuin_common::env;
-use atuin_common::logs::USER;
+use atuin_common::{env, userio};
 use clap::Parser;
 use easy_cast::Conv;
 use eyre::Result;
 use indicatif::ProgressBar;
-use tracing::{error, info, instrument};
+use tracing::instrument;
 
 use crate::i18n::fl;
 
@@ -67,19 +66,19 @@ impl Cmd {
             "          \u{1f422}          \n",
             "======================",
         );
-        info!(target: USER, "{BANNER}");
-        info!(target: USER, "Importing history...");
+        userio::log::info!("{BANNER}");
+        userio::log::info!("Importing history...");
 
         match self {
             Self::Auto => {
                 if cfg!(windows) {
                     return if env::var("PSModulePath").is_ok() {
-                        info!(target: USER, "Detected PowerShell");
+                        userio::log::info!("Detected PowerShell");
                         import::<PowerShell>(db).await
                     } else {
-                        error!(target: USER, "could not detect the current shell");
-                        info!(target: USER, "Please run atuin import <SHELL>.");
-                        info!(target: USER, "To view a list of shells, run atuin import.");
+                        userio::log::error!("could not detect the current shell");
+                        userio::log::info!("Please run atuin import <SHELL>.");
+                        userio::log::info!("To view a list of shells, run atuin import.");
                         Ok(())
                     };
                 }
@@ -90,46 +89,41 @@ impl Cmd {
                 let shell = env::var("SHELL").unwrap_or_else(|_| String::from("NO_SHELL"));
 
                 if xonsh_histfile.to_lowercase().ends_with(".json") {
-                    info!(target: USER, "Detected Xonsh");
+                    userio::log::info!("Detected Xonsh");
                     import::<Xonsh>(db).await
                 } else if xonsh_histfile.to_lowercase().ends_with(".sqlite") {
-                    info!(target: USER, "Detected Xonsh (SQLite backend)");
+                    userio::log::info!("Detected Xonsh (SQLite backend)");
                     import::<XonshSqlite>(db).await
                 } else if shell.ends_with("/zsh") {
                     if let Ok(path) = ZshHistDb::histpath() {
-                        info!(
-                            target: USER,
+                        userio::log::info!(
                             "Detected Zsh-HistDb, using :{}",
                             path.to_string_lossy()
                         );
                         import::<ZshHistDb>(db).await
                     } else {
-                        info!(target: USER, "Detected ZSH");
+                        userio::log::info!("Detected ZSH");
                         import::<Zsh>(db).await
                     }
                 } else if shell.ends_with("/fish") {
-                    info!(target: USER, "Detected Fish");
+                    userio::log::info!("Detected Fish");
                     import::<Fish>(db).await
                 } else if shell.ends_with("/bash") {
-                    info!(target: USER, "Detected Bash");
+                    userio::log::info!("Detected Bash");
                     import::<Bash>(db).await
                 } else if shell.ends_with("/nu") {
                     if let Ok(path) = NuHistDb::histpath() {
-                        info!(
-                            target: USER,
-                            "Detected Nu-HistDb, using :{}",
-                            path.to_string_lossy()
-                        );
+                        userio::log::info!("Detected Nu-HistDb, using :{}", path.to_string_lossy());
                         import::<NuHistDb>(db).await
                     } else {
-                        info!(target: USER, "Detected Nushell");
+                        userio::log::info!("Detected Nushell");
                         import::<Nu>(db).await
                     }
                 } else if shell.ends_with("/pwsh") {
-                    info!(target: USER, "Detected PowerShell");
+                    userio::log::info!("Detected PowerShell");
                     import::<PowerShell>(db).await
                 } else {
-                    error!(target: USER, "cannot import {shell} history");
+                    userio::log::error!("cannot import {shell} history");
                     Ok(())
                 }
             }
@@ -185,7 +179,7 @@ impl Loader for HistoryImporter<'_> {
 }
 
 async fn import<I: Importer + Send>(db: &Sqlite) -> Result<()> {
-    info!(target: USER, "Importing history from {}", I::NAME);
+    userio::log::info!("Importing history from {}", I::NAME);
 
     let mut importer = I::new().await?;
     let len = importer.entries().await?;
@@ -193,6 +187,6 @@ async fn import<I: Importer + Send>(db: &Sqlite) -> Result<()> {
     importer.load(&mut loader).await?;
     loader.flush().await?;
 
-    info!(target: USER, "Import complete!");
+    userio::log::info!("Import complete!");
     Ok(())
 }

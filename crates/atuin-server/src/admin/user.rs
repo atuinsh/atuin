@@ -2,13 +2,12 @@
 
 use std::io::{self, IsTerminal as _};
 
-use atuin_common::logs::USER;
-use atuin_common::userio::{Confirm, DefaultAnswer};
+use atuin_common::userio;
+use atuin_common::userio::{Confirm, DefaultAnswer, Secret};
 use atuin_common::utils::crypto_random_string;
 use clap::Subcommand;
 use eyre::{Context as _, Result, bail};
 use secrecy::{ExposeSecret as _, SecretString};
-use tracing::info;
 
 use crate::db::models::{HashedPassword, NewUser, NewUsername, User};
 use crate::db::{DbError, DynDatabase};
@@ -68,7 +67,7 @@ async fn create(db: &dyn DynDatabase, username: NewUsername, email: String) -> R
         .await
         .wrap_err_with(|| format!("failed to create {}", user.username))?;
 
-    info!(target: USER, "created {}", user.username);
+    userio::log::info!("created {}", user.username);
     Ok(())
 }
 
@@ -77,7 +76,7 @@ async fn set_password(db: &dyn DynDatabase, username: &str) -> Result<()> {
     user.password = HashedPassword::new(read_password()?).await;
     db.update_user_password(&user).await.wrap_err("failed to update the password")?;
 
-    info!(target: USER, "changed the password of {username}");
+    userio::log::info!("changed the password of {username}");
     Ok(())
 }
 
@@ -88,7 +87,7 @@ async fn delete(db: &dyn DynDatabase, username: &str, yes: bool) -> Result<()> {
     }
     db.delete_user(&user).await.wrap_err("failed to delete the user")?;
 
-    info!(target: USER, "deleted {username}");
+    userio::log::info!("deleted {username}");
     Ok(())
 }
 
@@ -100,30 +99,26 @@ async fn get_user(db: &dyn DynDatabase, username: &str) -> Result<User> {
     }
 }
 
-/// Read a password from a no-echo prompt, or from the first line of stdin when it is not a
-/// terminal.
+/// Read a password from a no-echo prompt, typed twice, or from the first line of stdin when it is
+/// not a terminal.
 fn read_password() -> Result<SecretString> {
-    let password = if io::stdin().is_terminal() {
-        prompt_password()?
-    } else {
-        let mut line = String::new();
-        io::stdin().read_line(&mut line).wrap_err("failed to read the password from stdin")?;
-        line.truncate(line.trim_end_matches(['\r', '\n']).len());
-        SecretString::from(line)
-    };
+    let password = Secret::new("New password:")
+        .ask()
+        .wrap_err("failed to read the password")?
+        .unwrap_or_default();
+
+    if io::stdin().is_terminal() {
+        let repeated = Secret::new("Repeat the new password:")
+            .ask()
+            .wrap_err("failed to read the password")?
+            .unwrap_or_default();
+        if password.expose_secret() != repeated.expose_secret() {
+            bail!("the passwords do not match");
+        }
+    }
 
     if password.expose_secret().is_empty() {
         bail!("the password is empty");
-    }
-    Ok(password)
-}
-
-fn prompt_password() -> Result<SecretString> {
-    let password = SecretString::from(rpassword::prompt_password("New password: ")?);
-    let repeated = SecretString::from(rpassword::prompt_password("Repeat the new password: ")?);
-
-    if password.expose_secret() != repeated.expose_secret() {
-        bail!("the passwords do not match");
     }
     Ok(password)
 }

@@ -1,10 +1,10 @@
 use atuin_client::settings::{Settings, UpdateChannel};
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use atuin_common::userio::outln;
 use axoupdater::{AxoUpdater, UpdateRequest};
 use clap::Parser;
 use eyre::{Result, bail, eyre};
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::i18n::fl;
 
@@ -79,11 +79,11 @@ impl Cmd {
         };
 
         if self.check {
-            info!(target: USER, "Checking for updates on the {channel} channel...");
+            userio::log::info!("Checking for updates on the {channel} channel...");
             return match updater.query_new_version().await? {
                 Some(new) if new > &current.parse()? => {
                     outln!("Update available: v{current} -> v{new}");
-                    info!(target: USER, "Run `atuin update` to install it");
+                    userio::log::info!("Run `atuin update` to install it");
                     Ok(())
                 }
                 _ => {
@@ -94,24 +94,24 @@ impl Cmd {
         }
 
         if let Some(version) = &self.version {
-            info!(target: USER, "Updating to atuin v{version}...");
+            userio::log::info!("Updating to atuin v{version}...");
         } else {
-            info!(target: USER, "Checking for updates on the {channel} channel...");
+            userio::log::info!("Checking for updates on the {channel} channel...");
         }
 
         match updater.run().await? {
             Some(result) => {
-                info!(
-                    target: USER,
+                userio::log::info!(
                     "Updated atuin v{current} -> v{} ({})",
-                    result.new_version, result.new_version_tag
+                    result.new_version,
+                    result.new_version_tag
                 );
-                info!(target: USER, "Restart your shell sessions to pick up the new version");
+                userio::log::info!("Restart your shell sessions to pick up the new version");
                 Ok(())
             }
             None if self.version.is_some() => Err(eyre!("update did not run")),
             None => {
-                info!(target: USER, "atuin v{current} is up to date");
+                userio::log::info!("atuin v{current} is up to date");
                 Ok(())
             }
         }

@@ -1,5 +1,6 @@
 #[cfg(unix)]
 use std::ffi::OsStr;
+use std::io::{self, Write as _};
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
@@ -235,6 +236,31 @@ fn parse_getent(output: &[u8]) -> Option<&[u8]> {
         .nth(6)
         .map(<[u8]>::trim_ascii)
         .filter(|s| !s.is_empty())
+}
+
+/// What a shell widget reads back from atuin, to put on the command line.
+///
+/// Its `Display` is the line the widget reads. The widgets run atuin with stdout and stderr
+/// swapped (`3>&1 1>&2 2>&3`), so a TUI can draw on the terminal while the widget captures stderr,
+/// which [`WidgetAnswer::send`] writes to.
+#[derive(Debug, derive_more::Display)]
+pub enum WidgetAnswer {
+    /// Put the command on the command line to edit.
+    #[display("{_0}")]
+    Edit(String),
+    /// Run the command straight away.
+    #[display("__atuin_accept__:{_0}")]
+    Run(String),
+    /// Leave the command line as it was.
+    #[display("")]
+    Keep,
+}
+
+impl WidgetAnswer {
+    /// Write the answer to stderr, which the widget captures.
+    pub fn send(&self) -> io::Result<()> {
+        writeln!(io::stderr(), "{self}")
+    }
 }
 
 #[cfg(all(test, unix))]

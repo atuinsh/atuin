@@ -1,11 +1,11 @@
 use atuin_client::auth::{self, AuthClient, MutateResponse};
 use atuin_client::settings::Settings;
-use atuin_common::logs::USER;
+use atuin_common::userio;
+use atuin_common::userio::{Prompt, Secret};
 use clap::Parser;
 use eyre::{Result, bail};
 use secrecy::{ExposeSecret, SecretString};
 
-use super::login::read_secret;
 use crate::i18n::fl;
 
 #[derive(Parser, Debug)]
@@ -28,17 +28,19 @@ impl Cmd {
 
         let client = auth::auth_client(settings).await;
 
-        let current_password = self
-            .current_password
-            .clone()
-            .unwrap_or_else(|| read_secret(&fl!("prompt-current-password")));
+        let current_password = match self.current_password.clone() {
+            Some(password) => password,
+            None => Secret::new(&fl!("prompt-current-password")).ask()?.unwrap_or_default(),
+        };
 
         if current_password.expose_secret().is_empty() {
             bail!(fl!("change-password-provide-current"));
         }
 
-        let new_password =
-            self.new_password.clone().unwrap_or_else(|| read_secret(&fl!("prompt-new-password")));
+        let new_password = match self.new_password.clone() {
+            Some(password) => password,
+            None => Secret::new(&fl!("prompt-new-password")).ask()?.unwrap_or_default(),
+        };
 
         if new_password.expose_secret().is_empty() {
             bail!(fl!("change-password-provide-new"));
@@ -55,14 +57,13 @@ impl Cmd {
                 MutateResponse::Success => break,
                 MutateResponse::TwoFactorRequired => {
                     totp_code = Some(
-                        super::login::read_user_input(&fl!("prompt-two-factor-code"))
-                            .unwrap_or_default(),
+                        Prompt::new(&fl!("prompt-two-factor-code")).ask()?.unwrap_or_default(),
                     );
                 }
             }
         }
 
-        tracing::info!(target: USER, "{}", fl!("change-password-success"));
+        userio::log::info!("{}", fl!("change-password-success"));
 
         Ok(())
     }

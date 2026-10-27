@@ -3,7 +3,7 @@
 use std::io::{self, Write as _};
 use std::net::SocketAddr;
 
-use atuin_common::logs::USER;
+use atuin_common::userio::log::USER;
 use atuin_server::admin::AdminCmd;
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 use clap::Parser;

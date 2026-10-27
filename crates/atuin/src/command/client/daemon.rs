@@ -7,7 +7,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
 use atuin_daemon::grpc::versioning::{BUILD_STR, VersionMatchError};
 use atuin_daemon::service::address::DaemonAddress;
@@ -89,7 +89,7 @@ impl Cmd {
         let launch = self.launch();
         match self.subcmd {
             None => {
-                tracing::warn!(target: USER, "`atuin daemon` is deprecated, use `atuin daemon start`");
+                userio::log::warn!("`atuin daemon` is deprecated, use `atuin daemon start`");
                 run(settings, false, launch).await
             }
             Some(SubCmd::Start { force, .. }) => run(settings, force, launch).await,
@@ -223,7 +223,7 @@ pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
         Ok(Err(err)) if is_legacy_daemon_error(&err) => Ok(()),
         Ok(projected) => projected,
         Err(_) => {
-            tracing::info!(target: USER, "Indexing threads in the background");
+            userio::log::info!("Indexing threads in the background");
             Ok(())
         }
     }
@@ -310,22 +310,22 @@ pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
     let service = match ActiveService::find(settings).await {
         Ok(Some(service)) => service,
         Ok(None) => {
-            tracing::info!(target: USER, "Daemon is not running");
+            userio::log::info!("Daemon is not running");
             return Ok(());
         }
         // One that can't answer can't be asked to stop either.
         Err(ServiceFindError::Find(FindError::Unresponsive(_))) => {
             ActiveService::evict(&settings.daemon).await?;
-            tracing::info!(target: USER, "Daemon stopped");
+            userio::log::info!("Daemon stopped");
             return Ok(());
         }
         Err(err) => return Err(err.into()),
     };
 
     match service.stop().await {
-        Ok(()) => tracing::info!(target: USER, "Daemon stopped"),
+        Ok(()) => userio::log::info!("Daemon stopped"),
         Err(StopError::Pidfile(PidfileWaitError::StillHeld { .. })) => {
-            tracing::info!(target: USER, "Daemon may still be shutting down");
+            userio::log::info!("Daemon may still be shutting down");
         }
         Err(err) => return Err(err.into()),
     }
@@ -336,20 +336,20 @@ pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
 pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> Result<()> {
     let service = match ActiveService::find(settings).await {
         Ok(Some(service)) => {
-            tracing::info!(target: USER, "Restarting daemon...");
+            userio::log::info!("Restarting daemon...");
             service.restart().await?
         }
         Ok(None) if only_if_running => {
-            tracing::info!(target: USER, "No daemon running");
+            userio::log::info!("No daemon running");
             return Ok(());
         }
         Ok(None) => {
-            tracing::info!(target: USER, "No daemon running");
-            tracing::info!(target: USER, "Starting daemon...");
+            userio::log::info!("No daemon running");
+            userio::log::info!("Starting daemon...");
             ActiveService::find_or_spawn(settings).await?
         }
         Err(ServiceFindError::Find(FindError::Unresponsive(_))) => {
-            tracing::info!(target: USER, "Daemon isn't answering, replacing it...");
+            userio::log::info!("Daemon isn't answering, replacing it...");
             ActiveService::evict(&settings.daemon).await?;
             ActiveService::find_or_spawn(settings).await?
         }
@@ -358,9 +358,9 @@ pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> R
 
     let status = service.into_client().status().await?;
 
-    tracing::info!(target: USER, "Daemon restarted");
-    tracing::info!(target: USER, "  PID:      {}", status.pid);
-    tracing::info!(target: USER, "  Version:  {}", status.version);
+    userio::log::info!("Daemon restarted");
+    userio::log::info!("  PID:      {}", status.pid);
+    userio::log::info!("  Version:  {}", status.version);
 
     Ok(())
 }

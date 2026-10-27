@@ -6,7 +6,6 @@ use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
 use atuin_common::path::PathBufExt as _;
-use atuin_common::userio::widgetln;
 use easy_cast::Conv;
 use eyre::{Context as _, Result, bail};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -527,12 +526,13 @@ fn wait_for_login_confirmation() -> Result<bool> {
 
 fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) -> io::Result<()> {
     if output_for_hook {
-        match outcome {
-            ExitOutcome::Execute(output) => widgetln!("__atuin_ai_execute__:{output}"),
-            ExitOutcome::Insert(output) => widgetln!("__atuin_ai_insert__:{output}"),
-            ExitOutcome::Cancel => widgetln!("__atuin_ai_cancel__"),
-        }
-        return Ok(());
+        // The hook runs this with stdout and stderr swapped, and captures stderr.
+        let mut hook = io::stderr();
+        return match outcome {
+            ExitOutcome::Execute(output) => writeln!(hook, "__atuin_ai_execute__:{output}"),
+            ExitOutcome::Insert(output) => writeln!(hook, "__atuin_ai_insert__:{output}"),
+            ExitOutcome::Cancel => writeln!(hook, "__atuin_ai_cancel__"),
+        };
     }
 
     match outcome {

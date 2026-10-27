@@ -38,9 +38,9 @@
 //! - `--as-is`, `--switch` and `--branch` need an id naming a single session that can resume here:
 //!   anything else is an error (listing the sessions an id names), never the picker, which would
 //!   drop them.
-//! - From the shell widget (`--shell-widget`), the result goes to stderr using the history
-//!   search's protocol: `__atuin_accept__:<cmd>` to run it, plain `<cmd>` to edit it, nothing to
-//!   leave the command line alone.
+//! - From the shell widget (`--shell-widget`), the result is a [`WidgetAnswer`], as from the
+//!   history search: the command to run, the command to edit, or nothing to leave the command line
+//!   alone.
 //! - Standalone on a terminal, resuming changes directory and execs the harness.
 //! - With `--print`, or when stdout is not a terminal, the command is printed instead.
 //! - The picker needs a terminal: without one, it fails saying to name the session instead.
@@ -53,8 +53,8 @@ use std::sync::Arc;
 use atuin_client::ai_session::{Analysis, AtuinSessionId, HarnessKind, HarnessSession, SourceId};
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
+use atuin_common::shell::WidgetAnswer;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::userio::widgetln;
 use clap::Args;
 use eyre::{Result, bail};
 
@@ -66,8 +66,6 @@ use crate::resume_tui::source::{Relation, harness_label};
 use crate::resume_tui::{
     Outcome, Picker, ResumeContext, ResumePlan, Resumer, SessionRow, SessionSource, startup,
 };
-
-const ACCEPT_PREFIX: &str = "__atuin_accept__:";
 
 /// Ids shorter than this are treated as search text, so a short word can't resume by accident.
 const MIN_ID_PREFIX: usize = 6;
@@ -759,12 +757,12 @@ fn finish(outcome: Outcome, output: Output) -> Result<()> {
     match output {
         Output::Widget => {
             let line = printable_line(&plan)?;
-            if run {
-                widgetln!("{ACCEPT_PREFIX}{line}");
+            let answer = if run {
+                WidgetAnswer::Run(line)
             } else {
-                widgetln!("{line}");
-            }
-            Ok(())
+                WidgetAnswer::Edit(line)
+            };
+            Ok(answer.send()?)
         }
         Output::Exec if run => exec(&plan),
         Output::Print | Output::Exec => {

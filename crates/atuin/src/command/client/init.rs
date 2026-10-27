@@ -1,10 +1,10 @@
 use std::io;
 
 use atuin_client::settings::{Settings, Tmux};
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use clap::{Parser, ValueEnum};
 use eyre::Result;
-use tracing::{instrument, warn};
+use tracing::instrument;
 
 use crate::i18n::fl;
 
@@ -107,8 +107,7 @@ impl Cmd {
             Shell::Fish => atuin_pty_proxy::Shell::Fish,
             Shell::Nu => atuin_pty_proxy::Shell::Nu,
             Shell::Xonsh | Shell::PowerShell => {
-                warn!(
-                    target: USER,
+                userio::log::warn!(
                     "pty_proxy.enabled is set, but atuin pty-proxy does not support this shell"
                 );
                 return Ok(());
@@ -121,8 +120,7 @@ impl Cmd {
     #[cfg(not(all(feature = "pty-proxy", unix)))]
     fn pty_proxy_init(&self, settings: &Settings) -> io::Result<()> {
         if settings.pty_proxy.enabled {
-            warn!(
-                target: USER,
+            userio::log::warn!(
                 "pty_proxy.enabled is set, but this build of atuin does not include pty-proxy \
                  support"
             );
@@ -133,8 +131,7 @@ impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         if !settings.paths_ok() {
-            warn!(
-                target: USER,
+            userio::log::warn!(
                 "settings paths are broken, so atuin shell hooks are disabled; run `atuin doctor` \
                  to diagnose"
             );

@@ -3,12 +3,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Target for messages meant for the user, as opposed to diagnostics.
-///
-/// No module path can start with a hyphenated name, so target prefix matching never mixes it up
-/// with a module's events.
-pub const USER: &str = "atuin-user";
-
 /// Log level for file logging. Maps to tracing's LevelFilter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]

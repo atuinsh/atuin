@@ -3,8 +3,8 @@ use std::error;
 use std::io::{Error, ErrorKind};
 use std::sync::LazyLock;
 
-use atuin_common::logs::USER;
 use atuin_common::path::PathBufExt as _;
+use atuin_common::userio;
 use config::{Config, File as ConfigFile, FileFormat};
 use palette::named;
 use serde::{Deserialize, Serialize};
@@ -145,8 +145,7 @@ impl Theme {
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
-                            tracing::warn!(
-                                target: USER,
+                            userio::log::warn!(
                                 "tried to load string as a color unsuccessfully: ({name}={color}) \
                                  {err}"
                             );
@@ -461,8 +460,7 @@ impl ThemeManager {
         };
 
         if debug && name != theme_config.theme.name {
-            tracing::warn!(
-                target: USER,
+            userio::log::warn!(
                 "your theme config name is not the name of your loaded theme {} != {}",
                 name,
                 theme_config.theme.name
@@ -489,7 +487,7 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    tracing::warn!(target: USER, "could not load theme {name}: {err}");
+                    userio::log::warn!("could not load theme {name}: {err}");
                     built_ins.get("(none)").unwrap()
                 }
             },

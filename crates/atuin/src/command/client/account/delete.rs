@@ -1,11 +1,11 @@
 use atuin_client::auth::{self, AuthClient, MutateResponse};
 use atuin_client::settings::Settings;
-use atuin_common::logs::USER;
+use atuin_common::userio;
+use atuin_common::userio::{Prompt, Secret};
 use clap::Parser;
 use eyre::{Result, bail};
 use secrecy::{ExposeSecret, SecretString};
 
-use super::login::{read_user_input, read_user_password};
 use crate::i18n::fl;
 
 #[derive(Parser, Debug)]
@@ -25,7 +25,10 @@ impl Cmd {
 
         let client = auth::auth_client(settings).await;
 
-        let password = self.password.clone().unwrap_or_else(read_user_password);
+        let password = match self.password.clone() {
+            Some(password) => password,
+            None => Secret::new(&fl!("prompt-password")).ask()?.unwrap_or_default(),
+        };
 
         if password.expose_secret().is_empty() {
             bail!(fl!("delete-provide-password"));
@@ -39,8 +42,9 @@ impl Cmd {
             match response {
                 MutateResponse::Success => break,
                 MutateResponse::TwoFactorRequired => {
-                    totp_code =
-                        Some(read_user_input(&fl!("prompt-two-factor-code")).unwrap_or_default());
+                    totp_code = Some(
+                        Prompt::new(&fl!("prompt-two-factor-code")).ask()?.unwrap_or_default(),
+                    );
                 }
             }
         }
@@ -50,7 +54,7 @@ impl Cmd {
         meta.delete_session().await?;
         meta.delete_hub_session().await?;
 
-        tracing::info!(target: USER, "{}", fl!("delete-success"));
+        userio::log::info!("{}", fl!("delete-success"));
 
         Ok(())
     }

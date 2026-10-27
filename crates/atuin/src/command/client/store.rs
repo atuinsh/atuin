@@ -5,8 +5,8 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
-use atuin_common::logs::USER;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
+use atuin_common::userio;
 use atuin_domain::record::{
     EncryptedData, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
 };
@@ -14,7 +14,7 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
 use time::{OffsetDateTime, UtcOffset};
-use tracing::{info, instrument, warn};
+use tracing::instrument;
 
 #[cfg(feature = "daemon")]
 use crate::command::client::daemon;
@@ -67,7 +67,7 @@ pub enum Cmd {
 /// has already happened.
 pub async fn invalidate_ai_sessions(settings: &Settings) {
     if let Err(err) = atuin_client::ai_session::invalidate_sidecar(settings).await {
-        warn!(target: USER, "failed to schedule a rebuild of the threads index: {err}");
+        userio::log::warn!("failed to schedule a rebuild of the threads index: {err}");
     }
 }
 
@@ -141,7 +141,7 @@ impl Cmd {
                 #[cfg(not(feature = "daemon"))]
                 let rewritten = store.compact().await?;
 
-                info!(target: USER, "Rewrote {rewritten} records");
+                userio::log::info!("Rewrote {rewritten} records");
                 Ok(())
             }
             Self::Verify(verify) => verify.run(settings, store).await,
@@ -200,15 +200,15 @@ impl StoreStatus {
             for (tag, idx) in tags.into_iter().sorted_by(|(a, _), (b, _)| a.cmp(b)) {
                 let key = RecordSeriesKey::new(host, tag.clone());
                 series.push(SeriesStatus {
-                    first: store.first(&key).await?.map(|r| SeriesEnd::new(&r, offset)),
-                    last: store.last(&key).await?.map(|r| SeriesEnd::new(&r, offset)),
                     tag,
                     idx,
+                    first: store.first(&key).await?.map(|r| SeriesEnd::new(&r, offset)),
+                    last: store.last(&key).await?.map(|r| SeriesEnd::new(&r, offset)),
                 });
             }
             hosts.push(HostStatus {
-                current: host == host_id,
                 host,
+                current: host == host_id,
                 series,
             });
         }

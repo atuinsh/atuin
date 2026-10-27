@@ -1,5 +1,5 @@
 use atuin_client::settings::Settings;
-use atuin_common::logs::USER;
+use atuin_common::userio;
 use atuin_common::userio::outln;
 
 use crate::{SHA, VERSION};
@@ -33,10 +33,10 @@ pub fn run(settings: &Settings) {
     outln!("{print_out}");
 
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
-        tracing::warn!(target: USER, "{}", shadowed_config_warning(&legacy, &config_file));
+        userio::log::warn!("{}", shadowed_config_warning(&legacy, &config_file));
     }
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_data_dir(&settings.data_dir) {
-        tracing::warn!(target: USER, "{}", shadowed_data_dir_warning(&legacy, &settings.data_dir));
+        userio::log::warn!("{}", shadowed_data_dir_warning(&legacy, &settings.data_dir));
     }
 }
 
