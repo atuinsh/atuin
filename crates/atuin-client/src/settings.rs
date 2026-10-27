@@ -1706,7 +1706,7 @@ impl Settings {
         file: impl config::Source + Send + Sync + 'static,
         env: Environment,
     ) -> ConfigBuilder<DefaultState> {
-        builder.add_source(file).add_source(env)
+        builder.add_source(CanonicalAliases::new(file)).add_source(env)
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
@@ -1975,14 +1975,6 @@ impl Settings {
         config: Config,
         file: Option<&config::Value>,
     ) -> Result<(Self, Vec<String>)> {
-        let mut config = config;
-        if let Some(file) = file {
-            // Defaults insert the canonical name (`enabled`). Serde then rejects the alias
-            // (`enable`) as a duplicate of that field. Keep the file's alias and drop the
-            // default when the file does not also set the canonical key.
-            Self::keep_file_aliases(&mut config, file);
-        }
-
         let mut unknown = BTreeSet::new();
         let settings = serde_ignored::deserialize(config, |path| {
             let Some(file) = file else {
@@ -2044,48 +2036,35 @@ impl Settings {
     const SERDE_ALIASES: &[(&[&str], &str, &str)] =
         &[(&["pty_proxy"], "enable", "enabled"), (&["daemon"], "enable", "enabled")];
 
-    fn keep_file_aliases(config: &mut Config, file: &config::Value) {
+    /// Renames each alias in `file` to its canonical name, unless the file also sets the
+    /// canonical key. Defaults insert the canonical name (`enabled`), so serde would reject a
+    /// file's alias (`enable`) as a duplicate of that field.
+    fn canonicalize_file_aliases(file: &mut config::Map<String, config::Value>) {
         for (table, alias, canonical) in Self::SERDE_ALIASES {
-            let file_has_alias = Self::table_key(file, table, alias).is_some();
-            let file_has_canonical = Self::table_key(file, table, canonical).is_some();
-            if file_has_alias && !file_has_canonical {
-                Self::remove_table_key(&mut config.cache, table, canonical);
+            let Some(map) = Self::table_mut(file, table) else {
+                continue;
+            };
+            if map.contains_key(*canonical) {
+                continue;
+            }
+            if let Some(value) = map.remove(*alias) {
+                map.insert((*canonical).to_owned(), value);
             }
         }
     }
 
-    fn table_key<'a>(
-        value: &'a config::Value,
+    fn table_mut<'a>(
+        file: &'a mut config::Map<String, config::Value>,
         table: &[&str],
-        key: &str,
-    ) -> Option<&'a config::Value> {
-        let mut current = value;
+    ) -> Option<&'a mut config::Map<String, config::Value>> {
+        let mut current = file;
         for segment in table {
-            let config::ValueKind::Table(map) = &current.kind else {
+            let config::ValueKind::Table(map) = &mut current.get_mut(*segment)?.kind else {
                 return None;
             };
-            current = map.get(*segment)?;
+            current = map;
         }
-        let config::ValueKind::Table(map) = &current.kind else {
-            return None;
-        };
-        map.get(key)
-    }
-
-    fn remove_table_key(value: &mut config::Value, table: &[&str], key: &str) {
-        let mut current = value;
-        for segment in table {
-            let config::ValueKind::Table(map) = &mut current.kind else {
-                return;
-            };
-            let Some(next) = map.get_mut(*segment) else {
-                return;
-            };
-            current = next;
-        }
-        if let config::ValueKind::Table(map) = &mut current.kind {
-            map.remove(key);
-        }
+        Some(current)
     }
 
     /// Warning text for `keys`, or `None` when there is nothing to report.
@@ -2123,18 +2102,15 @@ impl Settings {
     /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
     pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
         let data_dir = atuin_common::dirs::unconfigured_data_dir();
-        let file =
-            Config::builder().add_source(ConfigFile::from_str(toml, FileFormat::Toml)).build()?;
-        let mut config = Self::with_lenient_paths(
+        let config = Self::with_lenient_paths(
             Self::with_legacy_threads(
                 Self::builder_with_data_dir(&data_dir)?
-                    .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+                    .add_source(CanonicalAliases::new(ConfigFile::from_str(toml, FileFormat::Toml)))
                     .build()?,
             )?,
             Self::path_defaults(&data_dir),
         )?;
 
-        Self::keep_file_aliases(&mut config, &file.cache);
         let settings: Self = config.try_deserialize()?;
         settings.ui.validate()?;
         Ok(())
@@ -2151,6 +2127,29 @@ impl Default for Settings {
             .expect("Could not build config")
             .try_deserialize()
             .expect("Could not deserialize config")
+    }
+}
+
+/// A config file source with its aliases renamed to their canonical names, so that layering the
+/// environment on top overrides them (`ATUIN_DAEMON__ENABLED` over a file's `[daemon] enable`).
+#[derive(Debug)]
+struct CanonicalAliases(Box<dyn config::Source + Send + Sync>);
+
+impl CanonicalAliases {
+    fn new(file: impl config::Source + Send + Sync + 'static) -> Self {
+        Self(Box::new(file))
+    }
+}
+
+impl config::Source for CanonicalAliases {
+    fn clone_into_box(&self) -> Box<dyn config::Source + Send + Sync> {
+        Box::new(Self(self.0.clone_into_box()))
+    }
+
+    fn collect(&self) -> Result<config::Map<String, config::Value>, config::ConfigError> {
+        let mut file = self.0.collect()?;
+        Settings::canonicalize_file_aliases(&mut file);
+        Ok(file)
     }
 }
 
@@ -3042,6 +3041,28 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
         assert!(!settings.keys.scroll_exits);
         assert_eq!(settings.filter_mode, Some(FilterMode::Directory));
         assert_eq!(settings.theme.debug, Some(true));
+    }
+
+    #[rstest]
+    #[case::daemon("daemon", "ATUIN_DAEMON__ENABLED")]
+    #[case::pty_proxy("pty_proxy", "ATUIN_PTY_PROXY__ENABLED")]
+    fn environment_overrides_a_file_alias(#[case] table: &str, #[case] var: &str) {
+        let toml = format!("[{table}]\nenable = true\n");
+        let (settings, unknown) =
+            load_with_env(&toml, &[(var, "false")]).expect("alias with override should load");
+        assert!(unknown.is_empty(), "{unknown:?}");
+        let enabled = match table {
+            "daemon" => settings.daemon.enabled,
+            _ => settings.pty_proxy.enabled,
+        };
+        assert!(!enabled, "{var}=false must override `[{table}] enable = true`");
+
+        let (settings, _) = load_with_env(&toml, &[]).expect("alias alone should load");
+        let enabled = match table {
+            "daemon" => settings.daemon.enabled,
+            _ => settings.pty_proxy.enabled,
+        };
+        assert!(enabled, "`[{table}] enable = true` must apply without an override");
     }
 
     #[rstest]
