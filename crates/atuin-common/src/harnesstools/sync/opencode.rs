@@ -15,7 +15,9 @@
 //! and it is no fast-forward ([`SyncError::Unsupported`]: a copy that stopped mid-reply is forked).
 //! Neither is a message that would land before the local last one (opencode would read it in among
 //! the others by creation time and id), nor a session with a revert pending, which would remove
-//! what is appended.
+//! what is appended. Nor is anything appended to a session opencode 2.0 holds (its `session_v2`
+//! and `session_message` rows, read after 1.x's for the tip): its `opencode session import` only
+//! writes a session it doesn't hold yet. A copy with nothing to catch up resumes as it is.
 //!
 //! **Liveness.** opencode records no running session anywhere: any opencode running here in the
 //! session's directory (or below it, or where that can't be told) may be writing it; so may one
@@ -26,7 +28,7 @@
 //! reply alone is not: a copy restore or catch-up wrote from a reply synced half-way keeps it
 //! unfinished for good.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -40,8 +42,8 @@ use super::{
 };
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::opencode::rehydrate::{export_minting, run_import};
+use crate::harnesstools::opencode::session::default_db;
 use crate::harnesstools::opencode::session::projection::{Projected, projected};
-use crate::harnesstools::opencode::session::{self, default_db};
 use crate::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 
 impl SessionSync for Opencode {
@@ -88,6 +90,11 @@ impl SessionSync for Opencode {
         Err(SyncError::Unsupported(OPENCODE_SWITCH))
     }
 }
+
+/// Why a session opencode 2.0 holds is never caught up: its `opencode session import` only
+/// writes sessions it doesn't hold yet.
+const OPENCODE_2_APPEND: &str =
+    "opencode 2 can't add to a session it already holds, so it can't be caught up; fork it instead";
 
 /// Why an opencode session is never switched to another branch.
 pub(super) const OPENCODE_SWITCH: &str = "opencode keeps its sessions in a database, which can't \
@@ -175,17 +182,14 @@ pub(super) async fn local_tip_in(db: &Path, id: &str) -> Result<Option<LocalTip>
     match projected(db, id).await {
         Ok(Some(found)) => Ok(Some(LocalTip {
             native_path: db.to_path_buf(),
-            known_source_ids: found.rows.iter().cloned().collect(),
-            merged: HashMap::new(),
+            known_source_ids: found.rows.iter().chain(found.merged.keys()).cloned().collect(),
+            merged: found.merged.clone(),
             tip_source_id: found.rows.last().cloned(),
             stamp: stamp(&found),
             modified: updated(&found),
             cwd: Some(found.directory.clone()),
             unswitchable: Some(OPENCODE_SWITCH),
         })),
-        Ok(None) if session::locate(db, id).await.is_some() => {
-            Err(SyncError::Unsupported("opencode 2.0 sessions can't be caught up yet"))
-        }
         Ok(None) => Ok(None),
         Err(err) => Err(SyncError::Other(format!("reading opencode's database: {err}"))),
     }
@@ -222,6 +226,9 @@ where
             appended: Vec::new(),
             tip_source_id: base.tip_source_id.clone(),
         });
+    }
+    if current.next {
+        return Err(SyncError::Unsupported(OPENCODE_2_APPEND));
     }
     if !current.directory.is_dir() {
         return Err(SyncError::Other(format!(

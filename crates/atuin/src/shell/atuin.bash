@@ -429,7 +429,7 @@ __atuin_history() {
     fi
 }
 
-# `atuin ai resume`: pick a captured AI coding-agent session. The result uses
+# `atuin threads resume`: pick a captured AI coding-agent session. The result uses
 # the same protocol as the history search: `__atuin_accept__:` runs it.
 __atuin_ai_resume() {
     # READLINE_LINE and READLINE_POINT are only supported by bash >= 4.0 or
@@ -439,7 +439,7 @@ __atuin_ai_resume() {
         local READLINE_LINE="" READLINE_POINT=0
 
     local __atuin_output
-    if ! __atuin_output=$(ATUIN_SHELL=bash ATUIN_QUERY=$READLINE_LINE atuin ai resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-); then
+    if ! __atuin_output=$(ATUIN_SHELL=bash ATUIN_QUERY=$READLINE_LINE atuin threads resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-); then
         [[ $__atuin_output ]] && printf '%s\n' "$__atuin_output" >&2
         return 1
     fi

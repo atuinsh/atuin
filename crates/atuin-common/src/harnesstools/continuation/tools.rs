@@ -4,6 +4,7 @@
 //! target's API takes. A model reads a call to a tool it doesn't have, and its result, like any
 //! other: it just can't make that call again.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -314,22 +315,10 @@ fn input_for(target: AnyHarness, input: Value) -> Value {
     }
 }
 
-/// A result's output as text, which every target writes as a tool's output: the text of its
-/// blocks (Claude Code's and pi's `text`, Codex's `input_text`), else its JSON.
-pub(super) fn output_text(output: &Value) -> String {
-    match output {
-        Value::Null => UNCAPTURED_OUTPUT.to_owned(),
-        Value::String(text) => text.clone(),
-        Value::Array(blocks) => blocks
-            .iter()
-            .map(|block| match block {
-                Value::String(text) => text.clone(),
-                _ => block["text"].as_str().map_or_else(|| block.to_string(), str::to_owned),
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        other => other.to_string(),
-    }
+/// A result's output as text, which every target writes as a tool's output (see
+/// [`ToolResult::output_text`]).
+pub(super) fn output_text(result: &ToolResult) -> String {
+    result.output_text().map_or_else(|| UNCAPTURED_OUTPUT.to_owned(), Cow::into_owned)
 }
 
 /// Call ids for the target, unique within the session.
@@ -435,7 +424,7 @@ pub(super) fn carry(
     };
     let result = ToolResult {
         call: id,
-        output: Value::String(output_text(&result.output)),
+        output: Value::String(output_text(result)),
         error: result.error,
     };
     (call, result)
@@ -505,7 +494,12 @@ mod tests {
     #[case::uncaptured(Value::Null, UNCAPTURED_OUTPUT)]
     #[case::structured(json!({"exit": 0}), r#"{"exit":0}"#)]
     fn outputs_become_text(#[case] output: Value, #[case] want: &str) {
-        assert_eq!(output_text(&output), want);
+        let result = ToolResult {
+            call: ToolCallId::from("c1".to_owned()),
+            output,
+            error: false,
+        };
+        assert_eq!(output_text(&result), want);
     }
 
     #[rstest]

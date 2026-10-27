@@ -1,29 +1,30 @@
-use std::io::Write;
 use std::num::NonZeroU16;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::JoinHandle;
 
 use atuin_common::os::unix::tty::TtyId;
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};
+use atuin_common::path::PathBufExt as _;
 use easy_cast::Conv;
+use tokio::io::AsyncWriteExt as _;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::capture::{CaptureConfig, CommandCaptureTracker};
-use crate::debug::MarkerDebugHighlighter;
+use crate::parser::Output;
 
 pub enum Msg {
-    Data(Vec<u8>),
+    Data(Output),
     Resize {
         rows: u16,
         cols: u16,
     },
-    ScreenRequest(mpsc::Sender<Vec<u8>>),
+    ScreenRequest(oneshot::Sender<Vec<u8>>),
 }
 
 /// The path to the PTY proxy socket for the given terminal.
 pub fn socket_path(tty_id: TtyId) -> Result<PathBuf, SecureTempDirError> {
-    Ok(socket_dir()?.join(socket_name(tty_id)))
+    Ok(socket_dir()?.joined(socket_name(tty_id)))
 }
 
 /// The name of the PTY proxy socket for the given terminal.
@@ -35,7 +36,7 @@ fn socket_name(tty_id: TtyId) -> String {
 /// The directory in which PTY proxy sockets are stored.
 fn socket_dir() -> Result<PathBuf, SecureTempDirError> {
     let uid = atuin_common::os::unix::uid();
-    let dir = atuin_common::os::unix::tmp_dir().join(format!("atuin-{uid}"));
+    let dir = atuin_common::os::unix::tmp_dir().into_path_buf().joined(format!("atuin-{uid}"));
     create_secure_temp_dir(dir)
 }
 
@@ -66,18 +67,19 @@ fn live_socket(mut socket_dir: PathBuf, tty: TtyId) -> Option<PathBuf> {
     Some(socket_dir)
 }
 
-pub struct ParserOptions {
+pub struct EmulatorOptions {
     pub command_capture: Option<CaptureConfig>,
     pub debug_markers: bool,
 }
 
-struct Parser {
-    emulator: vt100::Parser,
+struct Emulator {
+    /// The screen the socket hands out.
+    screen: vt100::Parser,
     tracker: Option<CommandCaptureTracker>,
-    highlighter: Option<MarkerDebugHighlighter>,
+    debug_markers: bool,
 }
 
-impl Parser {
+impl Emulator {
     /// How many lines of scrollback the snapshot emulator can hold.
     ///
     /// Scrollback allows for better handling of terminal resizes: without scrollback, if the
@@ -93,29 +95,22 @@ impl Parser {
     /// in the terminal -- otherwise our emulator would badly drift from the parent terminal.
     const SCROLLBACK_CAPACITY: usize = 50;
 
-    fn new(rows: NonZeroU16, cols: NonZeroU16, options: ParserOptions) -> Self {
+    fn new(rows: NonZeroU16, cols: NonZeroU16, options: EmulatorOptions) -> Self {
         Self {
-            emulator: vt100::Parser::new(rows, cols, Self::SCROLLBACK_CAPACITY),
+            screen: vt100::Parser::new(rows, cols, Self::SCROLLBACK_CAPACITY),
             tracker: options.command_capture.map(|c| CommandCaptureTracker::new(rows, cols, c)),
-            highlighter: options.debug_markers.then(MarkerDebugHighlighter::new),
+            debug_markers: options.debug_markers,
         }
     }
 
     fn handle_msg(&mut self, msg: Msg) {
         match msg {
-            Msg::Data(raw_data) => {
+            Msg::Data(output) => {
                 if let Some(tracker) = &mut self.tracker {
-                    tracker.push(&raw_data);
+                    tracker.push(&output);
                 }
-
-                let highlighted;
-                let data: &[u8] = if let Some(highlighter) = &mut self.highlighter {
-                    highlighted = highlighter.render(&raw_data);
-                    &highlighted
-                } else {
-                    &raw_data
-                };
-                self.emulator.process(data);
+                let labelled = self.debug_markers.then(|| output.with_marker_labels());
+                self.screen.process(labelled.as_deref().unwrap_or(output.data()));
             }
             Msg::Resize { rows, cols } => {
                 // `vt100` dimensions can't be 0. Upstream would panic; now our `atuin-vt100` fork
@@ -123,34 +118,44 @@ impl Parser {
                 // dimensions to 1.
                 let rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
                 let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
-                self.emulator.screen_mut().set_size(rows, cols);
+                self.screen.screen_mut().set_size(rows, cols);
                 if let Some(tracker) = &mut self.tracker {
                     tracker.resize(rows, cols);
                 }
             }
             Msg::ScreenRequest(reply_tx) => {
-                let _ = reply_tx.send(encode_screen(&self.emulator));
+                let _ = reply_tx.send(encode_screen(&self.screen));
             }
         }
     }
 }
 
-pub fn spawn_parser_thread(
+/// Run the emulator, fed by `screen_rx`, on a runtime and thread of its own.
+///
+/// Emulation is the one CPU-bound job in the proxy, and on the I/O runtime it would hold up the
+/// forwarding of keystrokes and output behind it.
+pub fn spawn_emulator(
     rows: u16,
     cols: u16,
-    screen_rx: Receiver<Msg>,
-    options: ParserOptions,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
+    mut screen_rx: mpsc::Receiver<Msg>,
+    options: EmulatorOptions,
+) -> std::io::Result<JoinHandle<()>> {
+    // No drivers: the emulator does no I/O and sets no timers, so the runtime sleeps on a condvar
+    // between messages.
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    let emulate = async move {
         // `vt100` dimensions can't be 0. Upstream would panic; now our `atuin-vt100` fork requires
         // dimensions to be `NonZeroU16` to ensure we don't hit those panics. Clamp dimensions to 1.
         let rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
         let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
-        let mut parser = Parser::new(rows, cols, options);
-        for msg in screen_rx {
-            parser.handle_msg(msg);
+        let mut emulator = Emulator::new(rows, cols, options);
+        while let Some(msg) = screen_rx.recv().await {
+            emulator.handle_msg(msg);
         }
-    })
+    };
+    std::thread::Builder::new()
+        .name("atuin-pty-emulator".into())
+        .spawn(move || runtime.block_on(emulate))
 }
 
 /// The PTY proxy server.
@@ -161,34 +166,28 @@ pub struct SocketServer {
 impl SocketServer {
     /// Create a new socket server.
     ///
-    /// The server will start running once [`Self::spawn`] is called.
+    /// The server will start answering once [`Self::serve`] is called.
     pub fn new(path: &std::path::Path) -> std::io::Result<Self> {
         Ok(Self {
             listener: UnixListener::bind(path)?,
         })
     }
 
-    /// Start running the socket server on the current thread.
-    pub fn run(self, msg_tx: &SyncSender<Msg>) {
-        for stream in self.listener.incoming() {
-            let Ok(mut stream) = stream else {
-                break;
-            };
+    /// Answer each connection with a snapshot of the screen.
+    pub async fn serve(self, msg_tx: mpsc::Sender<Msg>) -> std::io::Result<()> {
+        self.listener.set_nonblocking(true)?;
+        let listener = tokio::net::UnixListener::from_std(self.listener)?;
+        loop {
+            let (mut stream, _) = listener.accept().await?;
 
-            let (reply_tx, reply_rx) = mpsc::channel();
-            if msg_tx.send(Msg::ScreenRequest(reply_tx)).is_err() {
-                break;
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if msg_tx.send(Msg::ScreenRequest(reply_tx)).await.is_err() {
+                return Ok(());
             }
-            if let Ok(data) = reply_rx.recv() {
-                let _ = stream.write_all(&data);
-                let _ = stream.flush();
+            if let Ok(data) = reply_rx.await {
+                let _ = stream.write_all(&data).await;
             }
         }
-    }
-
-    /// Start running the socket server on a new thread.
-    pub fn spawn(self, msg_tx: SyncSender<Msg>) -> std::thread::JoinHandle<()> {
-        std::thread::spawn(move || self.run(&msg_tx))
     }
 }
 
@@ -229,6 +228,7 @@ fn encode_screen(parser: &vt100::Parser) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::Receiver;
     use std::time::Duration;
 
     use atuin_client::history::HistoryId;
@@ -237,6 +237,7 @@ mod tests {
 
     use super::*;
     use crate::capture::{CommandCapture, CommandCaptureSink};
+    use crate::parser::Parser;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -422,41 +423,45 @@ mod tests {
             .collect()
     }
 
-    /// Ask a parser thread for its screen, waiting for it to work through the queue first.
-    fn request_screen(msg_tx: &SyncSender<Msg>) -> Vec<u8> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        msg_tx.send(Msg::ScreenRequest(reply_tx)).expect("parser thread alive");
-        reply_rx.recv_timeout(TIMEOUT).expect("parser thread still answering")
+    /// Ask an emulator for its screen, waiting for it to work through the queue first.
+    async fn request_screen(msg_tx: &mpsc::Sender<Msg>) -> Vec<u8> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        msg_tx.send(Msg::ScreenRequest(reply_tx)).await.expect("emulator alive");
+        tokio::time::timeout(TIMEOUT, reply_rx)
+            .await
+            .expect("emulator still answering")
+            .expect("emulator alive")
     }
 
     #[rstest]
-    fn init_small_and_wrap(#[values(0, 1, 2, 3)] rows: u16, #[values(0, 1, 2, 3)] cols: u16) {
-        let (msg_tx, msg_rx) = mpsc::sync_channel(8);
-        spawn_parser_thread(rows, cols, msg_rx, plain());
-        msg_tx.send(Msg::Data(b"hello world".to_vec())).expect("parser thread alive");
+    #[tokio::test]
+    async fn init_small_and_wrap(#[values(0, 1, 2, 3)] rows: u16, #[values(0, 1, 2, 3)] cols: u16) {
+        let (msg_tx, msg_rx) = mpsc::channel(8);
+        spawn_emulator(rows, cols, msg_rx, plain()).expect("emulator starts");
+        msg_tx.send(output(b"hello world")).await.expect("emulator alive");
 
         // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
-        assert_eq!(size_of(&request_screen(&msg_tx)), (rows.max(1), cols.max(1)));
+        assert_eq!(size_of(&request_screen(&msg_tx).await), (rows.max(1), cols.max(1)));
     }
 
     #[rstest]
     fn resize_small_and_wrap(
-        #[with(1, 1)] mut parser: Parser,
+        #[with(1, 1)] mut emulator: Emulator,
         #[values(0, 1, 2, 3)] rows: u16,
         #[values(0, 1, 2, 3)] cols: u16,
     ) {
-        parser.handle_msg(Msg::Resize { rows, cols });
-        parser.handle_msg(Msg::Data(b"hello world".to_vec()));
+        emulator.handle_msg(Msg::Resize { rows, cols });
+        emulator.handle_msg(output(b"hello world"));
 
         // Dimensions are clamped to (1, 1) because vt100 dimensions must be positive.
-        assert_eq!(size_of(&encode_screen(&parser.emulator)), (rows.max(1), cols.max(1)));
+        assert_eq!(size_of(&encode_screen(&emulator.screen)), (rows.max(1), cols.max(1)));
     }
 
     #[rstest]
-    fn encodes_the_screen_contents_and_cursor(#[with(3, 10)] mut parser: Parser) {
-        parser.handle_msg(Msg::Data(b"one\r\ntwo".to_vec()));
+    fn encodes_the_screen_contents_and_cursor(#[with(3, 10)] mut emulator: Emulator) {
+        emulator.handle_msg(output(b"one\r\ntwo"));
 
-        let blob = encode_screen(&parser.emulator);
+        let blob = encode_screen(&emulator.screen);
         assert_eq!(size_of(&blob), (3, 10));
         assert_eq!(cursor_of(&blob), (1, 3));
 
@@ -469,7 +474,7 @@ mod tests {
     #[rstest]
     fn a_resize_is_forwarded_to_the_capture_tracker() {
         let (sink, captures) = capture_sink();
-        let mut parser = Parser::new(nonzero(6), nonzero(20), ParserOptions {
+        let mut emulator = Emulator::new(nonzero(6), nonzero(20), EmulatorOptions {
             command_capture: Some(CaptureConfig {
                 sink,
                 max_output_bytes: 1024 * 1024,
@@ -477,9 +482,9 @@ mod tests {
             debug_markers: false,
         });
 
-        parser.handle_msg(Msg::Data(format!("\x1b]18188735;C;{HID}\x07abcdefghij").into_bytes()));
-        parser.handle_msg(Msg::Resize { rows: 6, cols: 5 });
-        parser.handle_msg(Msg::Data(format!("klmno\r\n\x1b]18188735;D;{HID}\x07").into_bytes()));
+        emulator.handle_msg(output(format!("\x1b]18188735;C;{HID}\x07abcdefghij")));
+        emulator.handle_msg(Msg::Resize { rows: 6, cols: 5 });
+        emulator.handle_msg(output(format!("klmno\r\n\x1b]18188735;D;{HID}\x07")));
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
@@ -494,25 +499,27 @@ mod tests {
     }
 
     #[rstest]
-    fn the_parser_thread_feeds_the_capture_sink() {
+    #[tokio::test]
+    async fn the_emulator_feeds_the_capture_sink() {
         let (sink, captures) = capture_sink();
-        let (msg_tx, msg_rx) = mpsc::sync_channel(8);
-        spawn_parser_thread(24, 80, msg_rx, ParserOptions {
+        let (msg_tx, msg_rx) = mpsc::channel(8);
+        spawn_emulator(24, 80, msg_rx, EmulatorOptions {
             command_capture: Some(CaptureConfig {
                 sink,
                 max_output_bytes: 1024 * 1024,
             }),
             debug_markers: false,
-        });
+        })
+        .expect("emulator starts");
 
         msg_tx
-            .send(Msg::Data(
-                format!("$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07")
-                    .into_bytes(),
-            ))
-            .expect("parser thread alive");
+            .send(output(format!(
+                "$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07"
+            )))
+            .await
+            .expect("emulator alive");
         // A screen request only comes back once the data above has been handled.
-        let blob = request_screen(&msg_tx);
+        let blob = request_screen(&msg_tx).await;
         assert_eq!(size_of(&blob), (24, 80));
 
         let captures: Vec<_> = captures.try_iter().collect();
@@ -528,7 +535,7 @@ mod tests {
         // has to see the raw stream -- otherwise the captured output is prefixed with a
         // label and `output_observed_bytes` counts them.
         let (sink, captures) = capture_sink();
-        let mut parser = Parser::new(nonzero(6), nonzero(40), ParserOptions {
+        let mut emulator = Emulator::new(nonzero(6), nonzero(40), EmulatorOptions {
             command_capture: Some(CaptureConfig {
                 sink,
                 max_output_bytes: 1024 * 1024,
@@ -536,10 +543,9 @@ mod tests {
             debug_markers: true,
         });
 
-        parser.handle_msg(Msg::Data(
-            format!("$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07")
-                .into_bytes(),
-        ));
+        emulator.handle_msg(output(format!(
+            "$ echo hi\r\n\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07"
+        )));
 
         let captures: Vec<_> = captures.try_iter().collect();
         assert_eq!(captures.len(), 1);
@@ -547,33 +553,38 @@ mod tests {
         assert_eq!(captures[0].1.output_observed_bytes, u64::conv(b"hi\r\n".len()));
 
         // The screen snapshot, on the other hand, is where the labels belong.
-        let rows = rows_of(&encode_screen(&parser.emulator)).join("\n");
+        let rows = rows_of(&encode_screen(&emulator.screen)).join("\n");
         assert!(rows.contains("[atuin: output start]"), "{rows:?}");
         assert!(rows.contains("[atuin: output end]"), "{rows:?}");
     }
 
     #[rstest]
-    fn a_parser_without_a_sink_still_tracks_the_screen(#[with(6, 20)] mut parser: Parser) {
-        parser.handle_msg(Msg::Data(
-            format!("\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07").into_bytes(),
-        ));
+    fn an_emulator_without_a_sink_still_tracks_the_screen(#[with(6, 20)] mut emulator: Emulator) {
+        emulator.handle_msg(output(format!(
+            "\x1b]18188735;C;{HID}\x07hi\r\n\x1b]18188735;D;{HID}\x07"
+        )));
 
-        assert!(rows_of(&encode_screen(&parser.emulator))[0].contains("hi"));
+        assert!(rows_of(&encode_screen(&emulator.screen))[0].contains("hi"));
     }
 
     fn nonzero(value: u16) -> NonZeroU16 {
         NonZeroU16::new(value).expect("test dimensions are non-zero")
     }
 
-    /// A [`Parser`] with no capture sink, for the tests that only look at the screen.
+    /// An [`Emulator`] with no capture sink, for the tests that only look at the screen.
     #[fixture]
-    fn parser(#[default(24)] rows: u16, #[default(80)] cols: u16) -> Parser {
-        Parser::new(nonzero(rows), nonzero(cols), plain())
+    fn emulator(#[default(24)] rows: u16, #[default(80)] cols: u16) -> Emulator {
+        Emulator::new(nonzero(rows), nonzero(cols), plain())
     }
 
-    /// Parser options with nothing enabled.
-    fn plain() -> ParserOptions {
-        ParserOptions {
+    /// The child printing `data`, read with a parser of its own, so `data` must be whole.
+    fn output(data: impl Into<Vec<u8>>) -> Msg {
+        Msg::Data(Parser::new().read(data.into()))
+    }
+
+    /// Emulator options with nothing enabled.
+    fn plain() -> EmulatorOptions {
+        EmulatorOptions {
             command_capture: None,
             debug_markers: false,
         }
@@ -581,7 +592,7 @@ mod tests {
 
     /// A capture sink that funnels every `(history id, capture)` into the returned receiver.
     fn capture_sink() -> (CommandCaptureSink, Receiver<(HistoryId, CommandCapture)>) {
-        let (sender, received) = mpsc::channel();
+        let (sender, received) = std::sync::mpsc::channel();
         let sink = Box::new(move |history_id, capture| {
             sender.send((history_id, capture)).expect("test receiver is still alive");
         });

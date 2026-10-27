@@ -15,10 +15,10 @@
 //!   result as an ordinary tool call and result, losing the block types the API needs to replay
 //!   them, and a bare `tool_use` with no `tool_result` after it is invalid. Both are dropped
 //!   (one captured without its input becomes a note, as below).
-//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it): the API rejects a `tool_use` whose `input` is not an object, so each becomes a note in its turn's
 //!   text (`[ran a shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its `tool_result` is dropped.
-//!   The run of assistant lines the dropped results stood between is merged into its first line,
+//!   The run of assistant lines the dropped results stood between is merged into its last line,
 //!   so user and assistant turns still alternate ([`Flatten::Runs`]). Re-captured, that line keeps
 //!   its `uuid` (capture already holds it: nothing is pushed), and the lines merged away and the
 //!   results are not there to capture again. The line records which synced rows went into it
@@ -40,6 +40,8 @@
 //!
 //! A [fork](crate::harnesstools::fork) is written the same way under its own id, every line
 //! naming the line it copies in `forkedFrom`, as `/branch` writes it.
+//!
+//! [`Flatten::Runs`]: crate::harnesstools::rehydrate::Flatten::Runs
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -50,13 +52,14 @@ use time::macros::format_description;
 
 use super::session::{default_root, locate};
 use crate::harnesstools::rehydrate::{
-    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
-    break_line_cycles, flatten_uncaptured_calls, on_parent_cycles, record_merged,
+    RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, break_line_cycles,
+    merge_uncaptured_runs, on_parent_cycles, record_merged,
 };
 use crate::harnesstools::resume;
 use crate::harnesstools::session::{
     Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
 };
+use crate::path::PathBufExt as _;
 
 /// The longest project directory name Claude Code writes before shortening it with a hash
 /// (`Kne` in CC 2.1.283).
@@ -88,7 +91,7 @@ pub(crate) fn rehydrate_into(
     }
     let dir = root.join(project_dir_name(&session.cwd));
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.jsonl", session.id));
+    let path = dir.joined(format!("{}.jsonl", session.id));
     crate::fs::write_new(&path, transcript(session).as_bytes()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::AlreadyExists {
             RehydrateError::AlreadyExists(path.clone())
@@ -167,9 +170,12 @@ pub(crate) fn transcript(session: &RehydrateSession) -> String {
 /// ([`Flatten::Runs`]): for a whole transcript, or for rows appended to one ending on the line
 /// `after`, which the first of them then hangs from. The rows written as no line of their own are
 /// recorded on the lines they went into ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)).
+///
+/// [`Flatten::Runs`]: crate::harnesstools::rehydrate::Flatten::Runs
 pub(crate) fn lines(session: &RehydrateSession, after: Option<&str>) -> Vec<Value> {
+    let (messages, hosts) = merge_uncaptured_runs(&session.messages);
     let session = &RehydrateSession {
-        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
+        messages,
         ..session.clone()
     };
     let mut writer = Writer::new(session, after);
@@ -178,6 +184,11 @@ pub(crate) fn lines(session: &RehydrateSession, after: Option<&str>) -> Vec<Valu
     }
     let mut lines = writer.lines;
     break_line_cycles(&mut lines, "uuid", &["parentUuid", "logicalParentUuid"]);
+    for (row, into) in &mut writer.merged {
+        if let Some(host) = hosts.get(row) {
+            into.clone_from(host);
+        }
+    }
     record_merged(&mut lines, &writer.merged, |l| l["uuid"].as_str().map(str::to_owned));
     lines
 }

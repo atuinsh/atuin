@@ -7,10 +7,12 @@ use atuin_client::history::{AuthorPattern, History};
 use atuin_client::settings::FilterMode;
 use atuin_common::ansi;
 use atuin_common::filter::OrFilter;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::time::UtcOffsetExt;
 use easy_cast::Conv;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
+use serde::Deserialize;
 use strum_macros::{EnumIter, EnumString, IntoStaticStr};
 
 const DEFAULT_FILE_READ_LINES: u64 = 100;
@@ -20,6 +22,7 @@ pub const DEFAULT_HISTORY_RESULTS: i64 = 10;
 pub const MAX_HISTORY_RESULTS: i64 = 50;
 pub mod descriptor;
 pub mod output;
+pub mod search_terms;
 pub mod session;
 
 pub use output::get::AtuinOutputToolCall;
@@ -33,7 +36,7 @@ use crate::permissions::rule::Rule;
 /// `?`, and `[...]` via `glob_match`.
 fn path_matches_scope(path: &Path, scope: &str) -> bool {
     let path = if path.is_relative() {
-        std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir().map(|cwd| cwd.joined(path)).unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
     };
@@ -318,7 +321,7 @@ impl ReadToolCall {
     pub fn resolved_path(&self) -> PathBuf {
         if self.path.is_relative() {
             std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
+                .map(|cwd| cwd.joined(&self.path))
                 .unwrap_or_else(|_| self.path.clone())
         } else {
             self.path.clone()
@@ -377,8 +380,8 @@ impl ReadToolCall {
 
                 if numbered.len() > 100_000 {
                     ToolOutcome::Error(format!(
-                        "Error: file is too large to read ({} bytes in {} lines); use view_range \
-                         to read a subset of the file",
+                        "Error: file is too large to read ({} bytes in {} lines); use read_file \
+                         with offset and a smaller limit to read a subset of the file",
                         numbered.len(),
                         lines.len()
                     ))
@@ -452,7 +455,7 @@ impl EditToolCall {
     pub fn resolved_path(&self) -> PathBuf {
         if self.path.is_relative() {
             std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
+                .map(|cwd| cwd.joined(&self.path))
                 .unwrap_or_else(|_| self.path.clone())
         } else {
             self.path.clone()
@@ -642,7 +645,7 @@ impl WriteToolCall {
     pub fn resolved_path(&self) -> PathBuf {
         if self.path.is_relative() {
             std::env::current_dir()
-                .map(|cwd| cwd.join(&self.path))
+                .map(|cwd| cwd.joined(&self.path))
                 .unwrap_or_else(|_| self.path.clone())
         } else {
             self.path.clone()
@@ -1026,62 +1029,47 @@ impl From<HistorySearchFilterMode> for FilterMode {
     }
 }
 
+/// `atuin_history`'s arguments as sent. An argument the schema doesn't list is an error rather
+/// than ignored.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryArgs {
+    query: String,
+    filter_modes: Option<Vec<String>>,
+    limit: Option<i64>,
+    only_failed: Option<bool>,
+    authors: Option<Vec<String>>,
+}
+
 impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        // Optional; JSON null counts as omitted because models often send
-        // null for optional params. A missing scope means a global search —
-        // evals showed that forcing the model to pick a scope on every call
-        // made it stop calling the tool at all.
-        let filter_modes = match value.get("filter_modes") {
-            None | Some(serde_json::Value::Null) => Vec::new(),
-            Some(v) => v
-                .as_array()
-                .ok_or_else(|| eyre::eyre!("filter_modes must be an array"))?
-                .iter()
-                .map(|v| {
-                    let mode = v.as_str().ok_or_else(|| eyre::eyre!("Invalid filter mode"))?;
-                    mode.parse::<HistorySearchFilterMode>()
-                        .map_err(|_| eyre::eyre!("Invalid filter mode: {mode}"))
-                })
-                .collect::<Result<Vec<HistorySearchFilterMode>>>()?,
-        };
+        // Every field but `query` is optional, and JSON null counts as omitted because models
+        // often send null for optional params. A missing scope means a global search — evals
+        // showed that forcing the model to pick a scope on every call made it stop calling the
+        // tool at all.
+        let args = HistoryArgs::deserialize(value)?;
 
-        let query = value
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| eyre::eyre!("Missing query"))?;
+        let filter_modes = args
+            .filter_modes
+            .unwrap_or_default()
+            .iter()
+            .map(|mode| {
+                mode.parse::<HistorySearchFilterMode>()
+                    .map_err(|_| eyre::eyre!("Invalid filter mode: {mode}"))
+            })
+            .collect::<Result<Vec<HistorySearchFilterMode>>>()?;
 
-        let limit = value
-            .get("limit")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(DEFAULT_HISTORY_RESULTS)
-            .clamp(1, MAX_HISTORY_RESULTS);
-
-        let only_failed = value.get("only_failed").and_then(|v| v.as_bool()).unwrap_or(false);
-
-        let authors = match value.get("authors") {
-            Some(authors) => authors
-                .as_array()
-                .ok_or_else(|| eyre::eyre!("authors must be an array of strings"))?
-                .iter()
-                .map(|v| {
-                    v.as_str()
-                        .map(AuthorPattern::from)
-                        .ok_or_else(|| eyre::eyre!("authors entries must be strings"))
-                })
-                .collect::<Result<Vec<AuthorPattern>>>()?,
-            None => Vec::new(),
-        };
         // An omitted or empty `authors` array means no author filtering.
-        let authors = OrFilter::from_list(authors).unwrap_or_default();
+        let authors = args.authors.unwrap_or_default().into_iter().map(AuthorPattern::from);
+        let authors = OrFilter::from_list(authors.collect::<Vec<_>>()).unwrap_or_default();
 
         Ok(Self {
             filter_modes,
-            query: query.to_string(),
-            limit,
-            only_failed,
+            query: args.query,
+            limit: args.limit.unwrap_or(DEFAULT_HISTORY_RESULTS).clamp(1, MAX_HISTORY_RESULTS),
+            only_failed: args.only_failed.unwrap_or(false),
             authors,
         })
     }
@@ -1111,12 +1099,16 @@ impl PermissibleToolCall for AtuinHistoryToolCall {
 }
 
 impl AtuinHistoryToolCall {
-    pub(crate) async fn execute(&self, db: &atuin_client::database::Sqlite) -> ToolOutcome {
+    pub(crate) async fn execute(
+        &self,
+        db: &atuin_client::database::Sqlite,
+        settings: &atuin_client::settings::Settings,
+    ) -> ToolOutcome {
         use atuin_client::database::{self, DbSearchMode, OptFilters};
 
         // query_context rather than current_context: when running outside an
         // atuin-hooked shell (e.g. as an MCP server) there is no ATUIN_SESSION.
-        let context = match database::query_context().await {
+        let context = match database::query_context(settings).await {
             Ok(ctx) => ctx,
             Err(e) => return ToolOutcome::Error(format!("Failed to get history context: {e}")),
         };
@@ -1377,6 +1369,13 @@ mod tests {
     }
 
     #[rstest]
+    fn atuin_history_rejects_unknown_arguments() {
+        let input = serde_json::json!({ "query": "cargo", "since": "2h" });
+        let err = AtuinHistoryToolCall::try_from(&input).unwrap_err().to_string();
+        assert!(err.contains("`since`") && err.contains("`only_failed`"), "{err}");
+    }
+
+    #[rstest]
     fn atuin_history_author_and_failure_filters_parse() {
         let input = serde_json::json!({ "query": "cargo" });
 
@@ -1496,7 +1495,7 @@ mod tests {
     fn relative_multi_segment_glob(#[case] scope: &str, #[case] expected: bool) {
         // This matches against the path relative to cwd
         let cwd = std::env::current_dir().unwrap();
-        let abs = cwd.join("crates").join("atuin-ai").join("src").join("lib.rs");
+        let abs = cwd.joined("crates").joined("atuin-ai").joined("src").joined("lib.rs");
         let tool = read_tool(abs.to_str().unwrap());
         assert_eq!(tool.matches_rule(&read_rule(Some(scope))), expected);
     }
@@ -1788,7 +1787,7 @@ mod tests {
             let file_path = dir.path().join("config.toml");
             std::fs::write(&file_path, "[db]\nhost = localhost\nport = 5432\n").unwrap();
 
-            let snapshot_dir = dir.path().join("snapshots").join("session-1");
+            let snapshot_dir = dir.path().join("snapshots").joined("session-1");
             let mut tracker = FileReadTracker::default();
             let mut store = SnapshotStore::open(snapshot_dir.clone()).unwrap();
 
@@ -1910,7 +1909,7 @@ mod tests {
             let file_path = dir.path().join("config.toml");
             std::fs::write(&file_path, "a = 1\nb = 2\n").unwrap();
 
-            let snapshot_dir = dir.path().join("snapshots").join("session-1");
+            let snapshot_dir = dir.path().join("snapshots").joined("session-1");
             let mut tracker = FileReadTracker::default();
             let mut store = SnapshotStore::open(snapshot_dir).unwrap();
 
@@ -2022,7 +2021,7 @@ mod tests {
 
         #[rstest]
         fn creates_parent_directories(tempdir: tempfile::TempDir) {
-            let path = tempdir.path().join("sub").join("dir").join("file.txt");
+            let path = tempdir.path().join("sub").joined("dir").joined("file.txt");
 
             let call = WriteToolCall {
                 path: path.clone(),

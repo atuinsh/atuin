@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 #[cfg(feature = "octavo")]
 use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
+use atuin_common::string::StrExt;
 #[cfg(feature = "octavo")]
 use atuin_domain::caps::OctavoCap;
 #[cfg(feature = "octavo")]
@@ -16,9 +19,17 @@ use eyre::WrapErr;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 use tracing::instrument;
 
+#[cfg(all(feature = "ai", feature = "daemon"))]
+use crate::command::client::ai_sessions;
 #[cfg(feature = "daemon")]
 use crate::command::client::daemon;
 use crate::i18n::fl;
+
+mod path;
+use path::TomlPath;
+
+mod comment;
+use comment::enable_example;
 
 #[derive(Subcommand, Debug)]
 #[command(infer_subcommands = true)]
@@ -40,8 +51,8 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    #[instrument(level = "trace", skip_all)]
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match self {
             Self::Get(get) => get.run(settings).await,
             Self::Set(set) => set.run(settings).await,
@@ -67,7 +78,7 @@ pub struct GetCmd {
 }
 
 impl GetCmd {
-    pub async fn run(&self, _settings: &Settings) -> Result<()> {
+    pub async fn run(&self, settings: &Settings) -> Result<()> {
         let key = self.key.trim();
         if key.is_empty() || key.contains(char::is_whitespace) {
             eyre::bail!("Config key must be non-empty and must not contain whitespace");
@@ -77,12 +88,12 @@ impl GetCmd {
             println!("Config file:");
             self.print_current_value(key, "  ").await?;
             println!("\nResolved:");
-            Self::print_effective_value(key, "  ");
+            Self::print_effective_value(settings, key, "  ");
             return Ok(());
         }
 
         if self.resolved {
-            Self::print_effective_value(key, "");
+            Self::print_effective_value(settings, key, "");
         } else {
             self.print_current_value(key, "").await?;
         }
@@ -95,7 +106,7 @@ impl GetCmd {
         let config_str = tokio::fs::read_to_string(&config_file).await?;
         let doc = config_str.parse::<Document<_>>()?;
 
-        let current = get_deep_key(&doc, key);
+        let current = get_deep_key(doc.as_item(), key);
 
         match current {
             Some(item) if item.is_table() || item.is_inline_table() => {
@@ -117,8 +128,8 @@ impl GetCmd {
         Ok(())
     }
 
-    fn print_effective_value(key: &str, prefix: &str) {
-        match Settings::get_config_value(key) {
+    fn print_effective_value(settings: &Settings, key: &str, prefix: &str) {
+        match settings.get_config_value(key) {
             Ok(value) => {
                 for line in value.lines() {
                     println!("{prefix}{line}");
@@ -180,15 +191,14 @@ impl SetCmd {
             eyre::bail!("Config key must be non-empty and must not contain whitespace");
         }
 
-        let mut doc: DocumentMut = config_str.parse()?;
+        let doc: DocumentMut = config_str.parse()?;
 
         // When using auto type detection, try to match the existing value's type
         // so we don't accidentally change e.g. "300" (string) to 300 (integer)
         let existing_type = detect_existing_type(&doc, key);
         let value = self.parse_value(existing_type.as_ref())?;
-        set_deep_key(&mut doc, key, value)?;
+        let updated = update_config(config_str, [(key, value)])?;
 
-        let updated = doc.to_string();
         Settings::validate_str(&updated).map_err(|e| {
             eyre::eyre!(
                 "cannot update config: setting '{key}' to '{}' would make your configuration \
@@ -264,10 +274,19 @@ pub enum Feature {
     #[cfg(feature = "octavo")]
     #[value(help = fl!("value-config-feature-octavo"))]
     Octavo,
+    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[value(help = fl!("value-config-feature-threads"), alias = "ai-sessions")]
+    Threads,
 }
 
 impl EnableCmd {
-    pub async fn run(self, settings: &Settings) -> Result<()> {
+    pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
+        #[cfg(all(feature = "ai", feature = "daemon"))]
+        if self.feature == Feature::Threads {
+            ai_sessions::enable(settings, &mut ai_sessions::Terminal::stdio()).await?;
+            return Ok(());
+        }
+
         #[cfg(feature = "octavo")]
         let octavo = match self.feature {
             Feature::Octavo => {
@@ -277,7 +296,7 @@ impl EnableCmd {
                 };
                 Some(onboarding)
             }
-            Feature::Daemon | Feature::OutputCapture => None,
+            _ => None,
         };
 
         let config_file = Settings::get_config_path()?;
@@ -302,13 +321,28 @@ impl EnableCmd {
         // up. A running daemon with autostart off may be externally managed (systemd, launchd),
         // so leave that one alone and tell the user instead.
         #[cfg(feature = "daemon")]
-        if settings.daemon.enabled && !settings.daemon.autostart {
-            println!("Restart the Atuin daemon and your shell for the change to take effect.");
-            return backfilled;
-        } else if let Err(e) = daemon::restart_cmd(settings, false).await {
-            eprintln!(
-                "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
-            );
+        {
+            // `settings` predates the edit, which may have switched the daemon and its autostart
+            // on: with them off, the restart would fork the daemon rather than install the launchd
+            // agent.
+            let settings = match Settings::new() {
+                Ok(settings) => settings,
+                Err(e) => {
+                    eprintln!(
+                        "Could not read the new config to restart the Atuin daemon: {e}\nRun \
+                         `atuin daemon restart` manually."
+                    );
+                    return backfilled;
+                }
+            };
+            if settings.daemon.enabled && !settings.daemon.autostart {
+                println!("Restart the Atuin daemon and your shell for the change to take effect.");
+                return backfilled;
+            } else if let Err(e) = daemon::restart_cmd(&settings, false).await {
+                eprintln!(
+                    "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
+                );
+            }
         }
 
         println!("Restart your shell for the change to take effect.");
@@ -316,27 +350,33 @@ impl EnableCmd {
         backfilled
     }
 
-    fn get_updated_config(&self, config_str: &str, daemon_enabled: bool) -> Result<String> {
-        let mut doc: DocumentMut = config_str.parse()?;
+    pub(super) fn get_updated_config(
+        &self,
+        config_str: &str,
+        daemon_enabled: bool,
+    ) -> Result<String> {
+        let mut changes = Vec::new();
 
         // An already-running daemon may be managed externally (systemd, launchd), so leave
         // its autostart alone.
         if !daemon_enabled {
-            set_deep_key(&mut doc, "daemon.enabled", Value::from(true))?;
-            set_deep_key(&mut doc, "daemon.autostart", Value::from(true))?;
+            changes.push(("daemon.enabled", Value::from(true)));
+            changes.push(("daemon.autostart", Value::from(true)));
         }
 
         match self.feature {
-            Feature::Daemon => set_deep_key(&mut doc, "search_mode", Value::from("daemon-fuzzy"))?,
+            Feature::Daemon => changes.push(("search_mode", Value::from("daemon-fuzzy"))),
             Feature::OutputCapture => {
-                set_deep_key(&mut doc, "pty_proxy.enabled", Value::from(true))?;
-                set_deep_key(&mut doc, "output.enabled", Value::from(true))?;
+                changes.push(("pty_proxy.enabled", Value::from(true)));
+                changes.push(("output.enabled", Value::from(true)));
             }
             #[cfg(feature = "octavo")]
-            Feature::Octavo => set_deep_key(&mut doc, "octavo.enabled", Value::from(true))?,
+            Feature::Octavo => changes.push(("octavo.enabled", Value::from(true))),
+            #[cfg(all(feature = "ai", feature = "daemon"))]
+            Feature::Threads => changes.push(("threads.capture", Value::from(true))),
         }
 
-        let updated = doc.to_string();
+        let updated = update_config(config_str, changes)?;
         Settings::validate_str(&updated)
             .map_err(|e| eyre::eyre!("cannot update config: it would be invalid\n\n{e}"))?;
 
@@ -374,7 +414,7 @@ impl OctavoOnboarding {
 /// Asks the user to enable Octavo, and whether to upload the history they already have; `None`
 /// if they decline.
 #[cfg(feature = "octavo")]
-async fn onboard_octavo(settings: &Settings) -> Result<Option<OctavoOnboarding>> {
+async fn onboard_octavo(settings: &Arc<Settings>) -> Result<Option<OctavoOnboarding>> {
     let login = match HubClient::new(settings)?.login(settings).await {
         Ok(login) => login,
         Err(HubCallError::NotLoggedIn) => eyre::bail!(fl!("config-enable-octavo-not-logged-in")),
@@ -419,7 +459,7 @@ async fn onboard_octavo(settings: &Settings) -> Result<Option<OctavoOnboarding>>
     };
 
     // Opened before the config says Octavo is on, so a queue that can't be opened leaves it off.
-    let queue = UploadQueue::open(Settings::octavo_queue_path())
+    let queue = UploadQueue::open(settings.octavo_queue_path())
         .await
         .wrap_err("failed to open Octavo's upload queue")?;
 
@@ -450,10 +490,17 @@ impl DisableCmd {
                     );
                     return Ok(());
                 }
+                // Only stopped, the launchd agent would start again at the next login.
+                if let Err(e) = atuin_daemon::service::ActiveService::remove_launchd_agent().await {
+                    eprintln!("Could not remove the Atuin daemon's launchd agent: {e}");
+                }
             }
             Feature::OutputCapture => restart_autostarted_daemon(settings).await,
             #[cfg(feature = "octavo")]
             Feature::Octavo => restart_autostarted_daemon(settings).await,
+            // The daemon notices the change itself, and the shell doesn't care.
+            #[cfg(feature = "ai")]
+            Feature::Threads => return Ok(()),
         }
 
         println!("Restart your shell for the change to take effect.");
@@ -462,24 +509,25 @@ impl DisableCmd {
     }
 
     fn get_updated_config(&self, config_str: &str) -> Result<String> {
-        let mut doc: DocumentMut = config_str.parse()?;
+        let doc: DocumentMut = config_str.parse()?;
+        let mut changes = Vec::new();
 
         match self.feature {
             Feature::Daemon => {
-                set_deep_key(&mut doc, "daemon.enabled", Value::from(false))?;
-                set_deep_key(&mut doc, "daemon.autostart", Value::from(false))?;
+                changes.push(("daemon.enabled", Value::from(false)));
+                changes.push(("daemon.autostart", Value::from(false)));
                 if doc.get("search_mode").and_then(Item::as_str) == Some("daemon-fuzzy") {
-                    set_deep_key(&mut doc, "search_mode", Value::from("fuzzy"))?;
+                    changes.push(("search_mode", Value::from("fuzzy")));
                 }
             }
-            Feature::OutputCapture => {
-                set_deep_key(&mut doc, "output.enabled", Value::from(false))?;
-            }
+            Feature::OutputCapture => changes.push(("output.enabled", Value::from(false))),
             #[cfg(feature = "octavo")]
-            Feature::Octavo => set_deep_key(&mut doc, "octavo.enabled", Value::from(false))?,
+            Feature::Octavo => changes.push(("octavo.enabled", Value::from(false))),
+            #[cfg(all(feature = "ai", feature = "daemon"))]
+            Feature::Threads => changes.push(("threads.capture", Value::from(false))),
         }
 
-        let updated = doc.to_string();
+        let updated = update_config(config_str, changes)?;
         Settings::validate_str(&updated)
             .map_err(|e| eyre::eyre!("cannot update config: it would be invalid\n\n{e}"))?;
 
@@ -510,7 +558,7 @@ impl PrintCmd {
         let doc = config_str.parse::<Document<_>>()?;
 
         if let Some(key) = &self.key {
-            let current = get_deep_key(&doc, key);
+            let current = get_deep_key(doc.as_item(), key);
 
             if let Some(current) = current {
                 if current.is_table() || current.is_inline_table() {
@@ -554,9 +602,9 @@ fn dump_table(table: &dyn TableLike, prefix: &str, stack: &mut Vec<String>) -> R
     Ok(())
 }
 
-fn get_deep_key<'doc>(doc: &'doc Document<String>, key: &str) -> Option<&'doc Item> {
+fn get_deep_key<'doc>(root: &'doc Item, key: &str) -> Option<&'doc Item> {
     let parts = key.split('.');
-    let mut current: Option<&Item> = Some(doc.as_item());
+    let mut current: Option<&Item> = Some(root);
 
     for part in parts {
         current = current.and_then(|item| item.as_table_like()).and_then(|table| table.get(part));
@@ -591,28 +639,102 @@ fn detect_existing_type(doc: &DocumentMut, key: &str) -> Option<ValueType> {
     }
 }
 
-fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
-    let parts: Vec<&str> = key.split('.').collect();
+/// Apply a list of changes to the config.
+///
+/// `changes` is a list of key-value pairs that should be set in `config`. The keys may be dotted
+/// paths, as expected by [`set_deep_key`].
+///
+/// If `config` doesn't already contain a key, this function tries to insert it at an intelligent
+/// location -- at or near a commented-out example of that key if one exists. See [`enable_example`]
+/// for more information.
+fn update_config<'a, C>(config: &str, changes: C) -> Result<String>
+where
+    // These bounds allow passing arrays or `Vec`s. Don't try changing the `AsRef`-slice bound to
+    // `for<'c> &'c C: IntoIterator<Item = &'c C::Item>` for more flexibility: it causes compilation
+    // to fail on macOS due to a recursive impl from the `objc2` crate. See
+    // <https://github.com/rust-lang/rust/issues/136856> for more info.
+    C: IntoIterator<Item = (&'a str, Value)> + AsRef<[C::Item]>,
+{
+    let mut config = config;
+    let mut owned_config;
 
-    if parts.is_empty() {
-        eyre::bail!("empty config key");
+    for (key, _) in changes.as_ref() {
+        let path = TomlPath::parse_dotted_simple(key);
+        if let Some(new_config) = enable_example(config, path) {
+            owned_config = new_config;
+            config = &owned_config;
+        }
     }
+
+    let mut doc: DocumentMut = config.parse()?;
+    for (key, value) in changes {
+        set_deep_key(&mut doc, key, value)?;
+    }
+
+    Ok(doc.to_string())
+}
+
+fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
+    let mut parts = key.split('.');
+    let Some(last) = parts.next_back() else {
+        eyre::bail!("empty config key");
+    };
+    let parent = parts;
+
+    // Check whether setting the key will create a new table. If so, ensure it ends up at the end of
+    // the file, after any trailing comments. Otherwise, `toml_edit` will likely put it above an
+    // unrelated block of comments that could be example keys for a different table, thereby
+    // invalidating the examples.
+    let will_create_table = parent
+        .clone()
+        .try_fold(doc.as_item(), |item, part| item.as_table_like()?.get(part))
+        .is_none();
+
+    // Take the document's trailing comments so we can reapply them in the correct place.
+    let mut trailing = if will_create_table
+        && let Some(trailing) = doc.trailing().as_str()
+        && !trailing.is_empty()
+    {
+        let ends_with_blank = trailing.lines().next_back().is_some_and(StrExt::is_space_or_empty);
+        let trailing = trailing.strip_suffix('\n').unwrap_or(trailing);
+        let trailing = format!(
+            "{trailing}\n{}",
+            if ends_with_blank {
+                ""
+            } else {
+                "\n"
+            },
+        );
+        doc.set_trailing("");
+        Some(trailing)
+    } else {
+        None
+    };
 
     let mut current: &mut dyn TableLike = doc.as_table_mut();
 
     // Navigate/create intermediate tables
-    for &part in &parts[..parts.len() - 1] {
+    for part in parent {
         if !current.contains_key(part) {
-            current.insert(part, Item::Table(Table::new()));
+            let mut table = Table::new();
+
+            // Ensure the new table ends up at the end. Note that tables with the same position are
+            // written in insertion order.
+            table.set_position(Some(isize::MAX));
+
+            // Reapply the comments from the end of the file above this table.
+            if let Some(comments) = trailing.take() {
+                table.decor_mut().set_prefix(comments);
+            }
+            current.insert(part, Item::Table(table));
         }
+
         current = current
             .get_mut(part)
             .expect("just inserted or already exists")
             .as_table_like_mut()
             .ok_or_else(|| eyre::eyre!("'{}' exists but is not a table", part))?;
     }
-
-    let last = *parts.last().unwrap();
 
     // Don't silently overwrite a table with a scalar value
     if let Some(existing) = current.get(last)
@@ -645,11 +767,9 @@ mod tests {
 
     use super::*;
 
-    /// Call [`set_deep_key`] and reserialize.
+    /// Call [`update_config`] with a single key.
     fn set(input: &str, key: &str, value: Value) -> String {
-        let mut doc: DocumentMut = input.parse().expect("test input should parse as TOML");
-        set_deep_key(&mut doc, key, value).expect("set_deep_key should succeed");
-        doc.to_string()
+        update_config(input, [(key, value)]).expect("the update should succeed")
     }
 
     #[rstest]
@@ -717,18 +837,53 @@ mod tests {
         Value::from(true),
         "[sync]\nrecords = true\n\n[keys]\nscroll_exits = true\n"
     )]
-    #[case::lands_above_a_commented_out_block_in_a_table(
-        "[sync]\n## how often\n# frequency = \"5m\"\n",
+    #[case::creates_a_missing_table_after_the_last_tables_comments(
+        "[ui]\nx = 1\n## more\n# y = 2\n",
+        "a.b",
+        Value::from(1),
+        "[ui]\nx = 1\n## more\n# y = 2\n\n[a]\nb = 1\n"
+    )]
+    #[case::creates_a_missing_table_after_comments_without_a_trailing_newline(
+        "[ui]\n## more\n# y = 2",
+        "a.b",
+        Value::from(1),
+        "[ui]\n## more\n# y = 2\n\n[a]\nb = 1\n"
+    )]
+    #[case::creates_a_missing_table_after_comments_and_a_blank_line(
+        "[ui]\n## more\n# y = 2\n\n",
+        "a.b",
+        Value::from(1),
+        "[ui]\n## more\n# y = 2\n\n[a]\nb = 1\n"
+    )]
+    #[case::creates_a_missing_table_after_comments_and_a_line_of_spaces(
+        "[ui]\n## more\n# y = 2\n  \n",
+        "a.b",
+        Value::from(1),
+        "[ui]\n## more\n# y = 2\n  \n[a]\nb = 1\n"
+    )]
+    #[case::creates_a_missing_table_after_root_comments(
+        "x = 1\n## more\n# y = 2\n",
+        "a.b",
+        Value::from(1),
+        "x = 1\n## more\n# y = 2\n\n[a]\nb = 1\n"
+    )]
+    #[case::creates_missing_nested_tables_after_the_comments(
+        "[ui]\n## more\n# y = 2\n",
+        "a.b.c",
+        Value::from(1),
+        "[ui]\n## more\n# y = 2\n\n[a]\n\n[a.b]\nc = 1\n"
+    )]
+    #[case::creates_a_missing_subtable_at_the_end_not_before_the_next_tables_comments(
+        "[daemon]\nx = 1\n## more\n# y = 2\n\n[ui]\nz = 3\n",
+        "daemon.sub.b",
+        Value::from(1),
+        "[daemon]\nx = 1\n## more\n# y = 2\n\n[ui]\nz = 3\n\n[daemon.sub]\nb = 1\n"
+    )]
+    #[case::lands_above_prose_comments_in_a_table(
+        "[sync]\n## how often\n",
         "sync.frequency",
         Value::from("10m"),
-        "[sync]\nfrequency = \"10m\"\n## how often\n# frequency = \"5m\"\n"
-    )]
-    #[case::root_key_leaves_commented_out_settings_alone(
-        "# atuin config\n\n## enable sync\n# auto_sync = true\n\nenter_accept = true\n",
-        "auto_sync",
-        Value::from(false),
-        "# atuin config\n\n## enable sync\n# auto_sync = true\n\nenter_accept = true\nauto_sync = \
-         false\n"
+        "[sync]\nfrequency = \"10m\"\n## how often\n"
     )]
     fn set_adds_a_missing_key_without_touching_existing_content(
         #[case] input: &str,
@@ -739,7 +894,84 @@ mod tests {
         assert_eq!(set(input, key, value), expected);
     }
 
-    #[test]
+    /// The key is placed by [`comment::enable_example`], which has the tests of where; these check
+    /// that its value is then set as asked.
+    #[rstest]
+    #[case::uncommenting_an_example(
+        "[sync]\n## how often\n# frequency = \"5m\"\n",
+        "sync.frequency",
+        Value::from("10m"),
+        "[sync]\n## how often\nfrequency = \"10m\"\n"
+    )]
+    #[case::uncommenting_an_example_of_another_type(
+        "## how often\n# sync_frequency=\"5m\" # or 0\n",
+        "sync_frequency",
+        Value::from(0),
+        "## how often\nsync_frequency=0 # or 0\n"
+    )]
+    #[case::inserting_after_an_example(
+        "## filters\n# history_filter = [\n#   \"^secret\",\n# ]\n\nauto_sync = true\n",
+        "history_filter",
+        Value::from("fuzzy"),
+        "## filters\n# history_filter = [\n#   \"^secret\",\n# ]\nhistory_filter = \
+         \"fuzzy\"\n\nauto_sync = true\n"
+    )]
+    #[case::inserting_after_an_example_of_another_type(
+        "# sync_frequency = \"5m\"\n",
+        "sync_frequency",
+        Value::from(true),
+        "# sync_frequency = \"5m\"\nsync_frequency = true\n"
+    )]
+    #[case::already_set_elsewhere(
+        "## how often\n# sync_frequency = \"5m\"\n\nsync_frequency = \"1h\"\n",
+        "sync_frequency",
+        Value::from("10m"),
+        "## how often\n# sync_frequency = \"5m\"\n\nsync_frequency = \"10m\"\n"
+    )]
+    fn set_a_documented_key(
+        #[case] input: &str,
+        #[case] key: &str,
+        #[case] value: Value,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(set(input, key, value), expected);
+    }
+
+    /// The motivating case: the value lands on the documented line, not at the top of the file.
+    #[rstest]
+    fn set_search_mode_in_the_default_config() {
+        let config = Settings::example_config();
+        let updated = set_cmd("search_mode", "daemon-fuzzy")
+            .get_updated_config(config)
+            .expect("the update should be accepted");
+
+        let expected = config
+            .replacen("# search_mode = \"fuzzy\"", "search_mode = \"daemon-fuzzy\"", 1)
+            .replace("\r\n", "\n"); // toml_edit always writes LF line endings
+        assert_eq!(updated, expected);
+    }
+
+    /// A new table goes after every comment in the file, which all document existing tables.
+    #[rstest]
+    fn set_a_key_in_a_new_table_in_the_default_config() {
+        let config = Settings::example_config();
+        // toml_edit always writes LF line endings.
+        let expected = format!("{config}\n[a]\nb = 1\n").replace("\r\n", "\n");
+        assert_eq!(set(config, "a.b", Value::from(1)), expected);
+    }
+
+    #[rstest]
+    fn new_tables_from_one_update_all_go_after_the_comments() {
+        let updated = update_config("[ui]\n## more\n# y = 2\n", [
+            ("a.x", Value::from(1)),
+            ("b.y", Value::from(2)),
+        ])
+        .expect("the update should succeed");
+
+        assert_eq!(updated, "[ui]\n## more\n# y = 2\n\n[a]\nx = 1\n\n[b]\ny = 2\n");
+    }
+
+    #[rstest]
     fn setting_the_same_key_twice_keeps_its_comment() {
         let once = set(
             "[sync]\n# how often to sync\nfrequency = \"5m\" # unit is flexible\n",
@@ -817,6 +1049,24 @@ mod tests {
         "[daemon]\nenabled = true\nautostart = false\n\n[pty_proxy]\nenabled = \
          true\n\n[output]\nenabled = true\n"
     )]
+    #[cfg_attr(
+        all(feature = "ai", feature = "daemon"),
+        case::threads(
+            Feature::Threads,
+            "",
+            false,
+            "[daemon]\nenabled = true\nautostart = true\n\n[threads]\ncapture = true\n"
+        )
+    )]
+    #[cfg_attr(
+        all(feature = "ai", feature = "daemon"),
+        case::threads_with_daemon_already_enabled(
+            Feature::Threads,
+            "[daemon]\nenabled = true\nautostart = false\n",
+            true,
+            "[daemon]\nenabled = true\nautostart = false\n\n[threads]\ncapture = true\n"
+        )
+    )]
     fn enable_writes(
         #[case] feature: Feature,
         #[case] input: &str,
@@ -833,6 +1083,14 @@ mod tests {
     #[rstest]
     #[case::daemon(Feature::Daemon, "", "[daemon]\nenabled = false\nautostart = false\n")]
     #[case::output_capture(Feature::OutputCapture, "", "[output]\nenabled = false\n")]
+    #[cfg_attr(
+        all(feature = "ai", feature = "daemon"),
+        case::threads(
+            Feature::Threads,
+            "[daemon]\nenabled = true\n\n[threads]\ncapture = true\n",
+            "[daemon]\nenabled = true\n\n[threads]\ncapture = false\n"
+        )
+    )]
     #[case::daemon_search(
         Feature::Daemon,
         "search_mode = \"daemon-fuzzy\"\n[daemon]\nenabled = true",

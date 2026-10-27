@@ -1,4 +1,5 @@
 use std::num::NonZeroU64;
+use std::sync::Arc;
 
 use atuin_client::api_client::Client;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -38,8 +39,8 @@ pub struct Push {
 }
 
 impl Push {
-    pub async fn run(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
-        let host_id = Settings::host_id().await?;
+    pub async fn run(&self, settings: &Arc<Settings>, store: SqliteStore) -> Result<()> {
+        let host_id = settings.host_id().await?;
 
         if self.force {
             println!("Forcing remote store overwrite!");
@@ -86,7 +87,7 @@ impl Push {
         if !self.force
             && let Some(err) = keyed.key_valid_against(&remote_index).await
         {
-            return Err(crate::print_error::format_sync_error(err));
+            return Err(err.into());
         }
 
         let operations = SyncSession::operations(diff)?;

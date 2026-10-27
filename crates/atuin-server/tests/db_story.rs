@@ -1,11 +1,12 @@
-use std::env::{self, temp_dir};
+use std::env::temp_dir;
 
 use atuin_common::db::DbUrl;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::utils::{crypto_random_string, uuid_v7};
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag,
 };
-use atuin_server::db::models::{NewSession, NewUser, User};
+use atuin_server::db::models::{HashedPassword, NewSession, NewUser, User};
 use atuin_server::db::{DbError, DbSettings, DynDatabase};
 use rstest::rstest;
 use sqlx::migrate::MigrateDatabase;
@@ -14,7 +15,7 @@ use url::Url;
 fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
     let db_uri = env_uri.unwrap_or_else(|| {
         let dir = temp_dir();
-        let file = dir.join("atuin_test_db_");
+        let file = dir.joined("atuin_test_db_");
         let filename = file.to_str().unwrap();
         format!("sqlite://{filename}")
     });
@@ -29,11 +30,12 @@ fn get_settings(env_uri: Option<String>) -> eyre::Result<DbSettings> {
 
     Ok(DbSettings {
         db_uri: db_uri.parse()?,
+        db_password_file: None,
     })
 }
 
 async fn create_test_db() -> eyre::Result<DbSettings> {
-    let var = env::var("ATUIN_TEST_DB_URI").ok();
+    let var = atuin_common::env::var("ATUIN_TEST_DB_URI").ok();
     let settings = get_settings(var)?;
 
     match &settings.db_uri {
@@ -95,9 +97,9 @@ async fn test_full_db_story() -> eyre::Result<()> {
 async fn run_the_test(db: &dyn DynDatabase) -> eyre::Result<()> {
     // register a user
     let new_user = NewUser {
-        username: "foo".to_owned(),
+        username: "foo".parse()?,
         email: "foo@example.com".to_owned(),
-        password: "hunter2".to_owned(),
+        password: HashedPassword::new("hunter2".into()).await,
     };
     let user_id = db.add_user(&new_user).await?;
     assert_ne!(user_id, 0);
@@ -117,19 +119,20 @@ async fn run_the_test(db: &dyn DynDatabase) -> eyre::Result<()> {
     assert_eq!(session.user_id, user_id);
 
     let user = db.get_user("foo").await?;
-    assert_eq!(user.password, "hunter2");
+    assert!(user.password.verify("hunter2".into()).await);
 
     // Lets change the password
     let user = User {
         email: "foo@example.com".to_owned(),
         id: user_id,
-        password: "hunter3".to_owned(),
+        password: HashedPassword::new("hunter3".into()).await,
         username: "foo".to_owned(),
     };
     db.update_user_password(&user).await?;
 
     let user = db.get_user("foo").await?;
-    assert_eq!(user.password, "hunter3");
+    assert!(user.password.verify("hunter3".into()).await);
+    assert!(!user.password.verify("hunter2".into()).await);
 
     // add a bunch of records
     let host_a = Host::new(HostId(uuid_v7()));
@@ -202,9 +205,9 @@ async fn test_add_user_with_session_is_atomic() -> eyre::Result<()> {
     let db = atuin_server::connect(settings.db_uri.clone()).await?;
 
     let new_user = NewUser {
-        username: "combined".to_owned(),
+        username: "combined".parse()?,
         email: "combined@example.com".to_owned(),
-        password: "hunter2".to_owned(),
+        password: HashedPassword::new("hunter2".into()).await,
     };
     let token = crypto_random_string::<24>();
 

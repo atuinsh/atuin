@@ -28,7 +28,7 @@ let
       pkg-config
     ];
 
-    buildInputs = [ openssl ] ++ lib.optionals stdenv.isDarwin [ libiconv ];
+    buildInputs = [ openssl ] ++ lib.optionals stdenv.hostPlatform.isDarwin [ libiconv ];
 
     OPENSSL_NO_VENDOR = 1;
 

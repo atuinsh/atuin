@@ -8,7 +8,9 @@ use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::TryInitError;
 
+mod held;
 mod otel;
+pub use held::HeldEvents;
 use otel::OtelCtx;
 pub use otel::OtelCtxEnableError;
 
@@ -56,7 +58,7 @@ impl LogCtx {
         config: &LogConfig,
     ) -> Result<Self, LogCtxEnableError> {
         // ATUIN_LOG env var overrides config file level settings
-        let filter: EnvFilter = std::env::var("ATUIN_LOG")
+        let filter: EnvFilter = atuin_common::env::var("ATUIN_LOG")
             .map_or_else(|_| get_base_filter(config), |s| filter::Builder::default().parse_lossy(s))
             .add_directive("sqlx_sqlite::regexp=off".parse().unwrap());
 

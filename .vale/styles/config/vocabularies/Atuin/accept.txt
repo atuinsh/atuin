@@ -56,6 +56,7 @@ histdb
 IDE
 ignorespace
 Infracost
+launchd
 LLM
 loopback
 matcher
@@ -90,6 +91,7 @@ tmux
 toolchain
 tooltips
 Traefik
+uncomment
 unhighlighted
 unstyled
 walkthrough

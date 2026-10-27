@@ -240,14 +240,14 @@ _atuin_up_search_viins() {
     _atuin_up_search --keymap-mode=vim-insert
 }
 
-# `atuin ai resume`: pick a captured AI coding-agent session. The result uses
+# `atuin threads resume`: pick a captured AI coding-agent session. The result uses
 # the same protocol as the history search: `__atuin_accept__:` runs it.
 _atuin_ai_resume() {
     emulate -L zsh
     zle -I
 
     local output __atuin_status
-    output=$(ATUIN_SHELL=zsh ATUIN_QUERY=$BUFFER atuin ai resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-)
+    output=$(ATUIN_SHELL=zsh ATUIN_QUERY=$BUFFER atuin threads resume --shell-widget "$@" 3>&1 1>&2 2>&3 3>&-)
     __atuin_status=$?
 
     zle reset-prompt

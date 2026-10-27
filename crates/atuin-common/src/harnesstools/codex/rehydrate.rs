@@ -12,7 +12,8 @@
 //!   their `id`, or with none when capture keyed them on their `call_id` (`<call_id>#out` for an
 //!   output);
 //! - the files an applied patch changed, as the `item_completed` event of a `FileChange` item
-//!   (under the patch's call, in the turn it was applied in), which Codex shows the diff from on
+//!   (under the item it was read from, else the patch's call, in the turn it was applied in, after
+//!   the call it was made in), which Codex shows the diff from on
 //!   resume; capture reads it back as the same row, whether it first read a legacy rollout's
 //!   `patch_apply_end` or a paginated one's `item_completed`;
 //! - usage, as the line it was captured from: a `token_usage_record` under its response (or the
@@ -45,7 +46,7 @@
 //!   API by `id`, which a store-less request cannot resolve. The model's earlier reasoning is not
 //!   something it needs to continue, so these items are left out, and re-capture has no row to
 //!   compare them with.
-//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it). A
 //!   `function_call`'s `arguments` must be a string of JSON, a `custom_tool_call`'s `input` a
 //!   string, a `local_shell_call`'s `action` an object: Codex cannot read the line back, let alone
@@ -63,6 +64,9 @@
 //! - **Tool output**: written back as captured. A call kept with its input but not its output
 //!   (withheld by a policy, or over the size limit) gets [`UNCAPTURED_OUTPUT`] as its output (an
 //!   empty `tools` list for a tool search).
+//! - **Whether a script's command failed** (Codex 0.160 runs tools through a script, `exec`):
+//!   Codex says it only in the command's own event, which is not written back; re-captured, the
+//!   output reads as a success.
 //! - Rows whose line carries nothing Codex needs back: thread names (Codex keeps those in its
 //!   `session_index.jsonl` now) and other events.
 //! - Content kinds a line of the kind cannot carry (text inside a tool call, and so on).
@@ -81,8 +85,9 @@ use crate::harnesstools::rehydrate::{
 };
 use crate::harnesstools::resume::is_plain_name;
 use crate::harnesstools::session::{
-    Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
+    Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, UNREADABLE_SUMMARY, Usage,
 };
+use crate::path::PathBufExt as _;
 
 /// What Codex puts ahead of a compaction summary (codex-rs
 /// `prompts/templates/compact/summary_prefix.md`), which its reader strips again.
@@ -132,7 +137,13 @@ pub(crate) async fn rehydrate_into(
         // naming another rollout that exists means Codex has moved the thread on: leave it.
         Err(RehydrateError::AlreadyExists(existing)) if existing.starts_with(root) => {
             return match super::state_db::point_at(home, &thread, None, &existing).await {
-                Ok(_) | Err(super::state_db::StateDbError::Elsewhere(_)) => {
+                Ok(pointed) => {
+                    if pointed == super::state_db::Pointed::Repointed {
+                        forget_history(home, &thread).await;
+                    }
+                    Err(RehydrateError::AlreadyExists(existing))
+                }
+                Err(super::state_db::StateDbError::Elsewhere(_)) => {
                     Err(RehydrateError::AlreadyExists(existing))
                 }
                 Err(err) => Err(RehydrateError::Other(format!(
@@ -149,7 +160,16 @@ pub(crate) async fn rehydrate_into(
             path.display()
         )));
     }
+    forget_history(home, &thread).await;
     Ok(path)
+}
+
+/// Forget Codex's history of thread `thread`, if it holds one: it was projected from a rollout
+/// now gone.
+async fn forget_history(home: &Path, thread: &str) {
+    if let Err(err) = super::state_db::forget_history(home, thread).await {
+        tracing::warn!(%err, thread, "Codex may go on showing the rollout restored over");
+    }
 }
 
 /// [`rehydrate`] under the sessions directory `root`.
@@ -181,16 +201,17 @@ pub(crate) fn write(root: &Path, session: &RehydrateSession) -> Result<PathBuf, 
     }
     let dir = root
         .join(format!("{:04}", started.year()))
-        .join(format!("{:02}", u8::from(started.month())))
-        .join(format!("{:02}", started.day()));
+        .joined(format!("{:02}", u8::from(started.month())))
+        .joined(format!("{:02}", started.day()));
     std::fs::create_dir_all(&dir)?;
     let base = inherited_history(root, session);
+    let provider = root.parent().map_or_else(|| DEFAULT_PROVIDER.to_owned(), provider);
     let mut text = String::new();
-    for line in rollout(session, base) {
+    for line in rollout(session, base, &provider) {
         text.push_str(&line.to_string());
         text.push('\n');
     }
-    let path = dir.join(&name);
+    let path = dir.joined(&name);
     create_new(&path, text.as_bytes())?;
     Ok(path)
 }
@@ -233,8 +254,8 @@ enum CallKind {
 /// The rollout's lines: its `session_meta`, then each message's, numbered on from it: from 0, or
 /// for a rollout continuing the history `base` names, from where that ends (its
 /// `end_ordinal_exclusive`, as Codex numbers such a rollout: codex-rs `ordinal.rs`).
-fn rollout(session: &RehydrateSession, base: Option<Value>) -> Vec<Value> {
-    let mut header = header(session);
+fn rollout(session: &RehydrateSession, base: Option<Value>, provider: &str) -> Vec<Value> {
+    let mut header = header(session, provider);
     let first = base.as_ref().and_then(|b| b["end_ordinal_exclusive"].as_u64()).unwrap_or(0);
     if let Some(base) = base {
         header["payload"]["history_base"] = base;
@@ -282,14 +303,15 @@ fn inherited_history(root: &Path, session: &RehydrateSession) -> Option<Value> {
 /// every line numbered (`ordinal`), which Codex keeps numbering from the last line's when it
 /// continues the rollout.
 ///
-/// The meta is the session as it is resumed here: its cwd is this machine's. It names no
-/// `model_provider`, which capture does not keep: Codex takes a rollout without one for its
-/// configured provider, where one naming another would be hidden from `codex resume`'s picker.
-/// Nor does it carry `base_instructions`, which Codex then renders from its current model's.
+/// The meta is the session as it is resumed here: its cwd is this machine's, and its
+/// `model_provider` (which capture does not keep) is the one Codex is configured with
+/// ([`provider`]): one naming another would be hidden from `codex resume`'s picker, and Codex
+/// (0.162) indexes a rollout naming none under an empty provider, which it then fails to resume
+/// with. It does not carry `base_instructions`, which Codex then renders from its current model's.
 /// Its `cli_version` is a development build's, which capture (like Codex) reads as a Codex
 /// older than per-call usage records, so that `token_count` lines count as usage again when that
 /// is what they were captured as; `token_usage_record` lines are read as records either way.
-pub(crate) fn header(session: &RehydrateSession) -> Value {
+pub(crate) fn header(session: &RehydrateSession, provider: &str) -> Value {
     let thread = session::resume_id(&session.id);
     let mut meta = json!({
         "session_id": thread,
@@ -300,6 +322,7 @@ pub(crate) fn header(session: &RehydrateSession) -> Value {
         "cli_version": "0.0.0",
         "source": "cli",
         "history_mode": "paginated",
+        "model_provider": provider,
     });
     if let Some(branch) = &session.git_branch {
         meta["git"] = json!({"branch": branch});
@@ -316,6 +339,18 @@ pub(crate) fn header(session: &RehydrateSession) -> Value {
         }
     }
     line(&stamp(session.started_at), "session_meta", meta)
+}
+
+/// The provider Codex uses when its config names none.
+const DEFAULT_PROVIDER: &str = "openai";
+
+/// The `model_provider` Codex home `home`'s `config.toml` names, else Codex's default.
+fn provider(home: &Path) -> String {
+    std::fs::read_to_string(home.join("config.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
+        .and_then(|doc| doc.get("model_provider")?.as_str().map(str::to_owned))
+        .unwrap_or_else(|| DEFAULT_PROVIDER.to_owned())
 }
 
 /// The lines one captured row is written as (none for a row the rollout cannot carry): `lines`,
@@ -521,12 +556,15 @@ fn message_lines(
         };
     }
     match message.content.as_slice() {
+        // One whose summary was unreadable is empty, as Codex writes one the API compacted: Codex
+        // resumes it from the prompts before it, not the whole conversation.
         [Content::Summary(summary)] => {
-            vec![line(
-                &at,
-                "compacted",
-                json!({"message": format!("{COMPACTION_PREAMBLE}{summary}")}),
-            )]
+            let message = if summary == UNREADABLE_SUMMARY {
+                String::new()
+            } else {
+                format!("{COMPACTION_PREAMBLE}{summary}")
+            };
+            vec![line(&at, "compacted", json!({ "message": message }))]
         }
         [Content::Error(why)] => {
             let payload = match message.stop_reason {
@@ -552,7 +590,9 @@ fn message_lines(
 
 /// The `item_completed` event of a `FileChange` item, which Codex shows an applied patch's diff
 /// from on resume: each file as Codex records it (`{"type": "add", "content"}`, `delete` the
-/// same, `{"type": "update", "unified_diff", "move_path"}`). Its turn is filled in by [`turns`].
+/// same, `{"type": "update", "unified_diff", "move_path"}`), under the item capture read it
+/// from (a Codex 0.160 script's names only itself, `exec-...`), else its call. Its turn is filled
+/// in by [`turns`].
 fn file_change(
     session: &RehydrateSession,
     message: &RehydrateMessage,
@@ -574,12 +614,13 @@ fn file_change(
         .collect();
     let millis =
         i64::try_from(message.timestamp.unix_timestamp_nanos() / 1_000_000).unwrap_or_default();
+    let item = message.source_id.strip_suffix("#patch").unwrap_or(patch.call.as_ref());
     line(
         at,
         "event_msg",
         json!({"type": "item_completed", "thread_id": session::resume_id(&session.id),
             "turn_id": "",
-            "item": {"type": "FileChange", "id": patch.call, "changes": changes,
+            "item": {"type": "FileChange", "id": item, "changes": changes,
                 "status": "completed"},
             "started_at_ms": millis, "completed_at_ms": millis}),
     )
@@ -823,7 +864,7 @@ pub(crate) mod tests {
     use crate::sync::BlockingPool;
 
     pub fn fixture(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex").join(name)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures/codex").joined(name)
     }
 
     pub async fn read(id: &str, path: PathBuf) -> Vec<CodexMessage> {
@@ -890,6 +931,7 @@ pub(crate) mod tests {
                 role: m.role(),
                 content,
                 model,
+                provider: None,
                 usage,
                 stop_reason: m.stop_reason(),
                 turn_id: m.turn_id(),
@@ -956,6 +998,21 @@ pub(crate) mod tests {
         let again = captured(&id, &read(&id, path).await);
         let expected: Vec<RehydrateMessage> = original.into_iter().filter(carried).collect();
         pretty_assertions::assert_eq!(keys(&again), keys(&expected));
+    }
+
+    #[rstest]
+    #[case::configured("model_provider = \"ollama\"\n", "ollama")]
+    #[case::default("model = \"gpt-5\"\n", "openai")]
+    fn a_rehydrated_rollout_names_the_configured_provider(
+        #[case] config: &str,
+        #[case] expected: &str,
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("config.toml"), config).unwrap();
+        let path = write(&home.path().join("sessions"), &session(ID, vec![])).unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        let meta: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(meta["payload"]["model_provider"], expected);
     }
 
     /// The rollout at `path` is in Codex's paginated history mode, its lines numbered from 0 on
@@ -1064,6 +1121,7 @@ pub(crate) mod tests {
             role,
             content,
             model: None,
+            provider: None,
             usage: None,
             stop_reason: None,
             turn_id: None,
@@ -1088,6 +1146,41 @@ pub(crate) mod tests {
             output: json!(output),
             error,
         })
+    }
+
+    /// A compaction comes back as a `compacted` line: with its summary, or, where that couldn't
+    /// be read, empty, as Codex writes one the API compacted, which it resumes from the prompts
+    /// before it rather than the whole conversation.
+    #[rstest]
+    #[case::readable("We fixed the parser.", true)]
+    #[case::unreadable(UNREADABLE_SUMMARY, false)]
+    #[tokio::test]
+    async fn a_compaction_comes_back_as_codex_writes_it(
+        #[case] summary: &str,
+        #[case] preamble: bool,
+    ) {
+        let text = |t: &str| vec![Content::Text(t.to_owned())];
+        let messages = vec![
+            row(ID, 0, Role::Other("session_meta".into()), vec![]),
+            row("msg_u1", 1, Role::User, text("fix it")),
+            row("msg_a1", 2, Role::Assistant, text("fixed")),
+            row("syn-1", 3, Role::System, vec![Content::Summary(summary.to_owned())]),
+            row("msg_u2", 4, Role::User, text("thanks")),
+        ];
+        let lines = turn_lines(&messages);
+        let compacted = lines.iter().find(|l| l["type"] == "compacted").unwrap();
+        let message = compacted["payload"]["message"].as_str().unwrap();
+        assert_eq!(message.starts_with(COMPACTION_PREAMBLE), preamble);
+        assert_eq!(message.ends_with(summary), preamble);
+
+        let root = tempfile::tempdir().unwrap();
+        let path = write(root.path(), &session(ID, messages)).unwrap();
+        let summaries: Vec<Content> = captured(ID, &read(ID, path).await)
+            .into_iter()
+            .flat_map(|row| row.content)
+            .filter(|c| matches!(c, Content::Summary(_)))
+            .collect();
+        assert_eq!(summaries, [Content::Summary(summary.to_owned())]);
     }
 
     /// Rows from older rollouts: items keyed on their `call_id`, a `token_count` keyed on the
@@ -1138,10 +1231,21 @@ pub(crate) mod tests {
     }
 
     /// An applied patch comes back as the `FileChange` item Codex shows its diff from, in the
-    /// turn it was applied in, and recaptures as the same row.
+    /// turn it was applied in, and recaptures as the same row: the call's own item, or one of a
+    /// Codex 0.160 script's, which names only itself.
     #[rstest]
+    #[case::call("call_2#patch", "apply_patch", "*** Begin Patch\n*** End Patch")]
+    #[case::script(
+        "exec-2#patch",
+        "exec",
+        "await tools.apply_patch(\"*** Begin Patch\\n*** Update File: a.rs\\n*** End Patch\")"
+    )]
     #[tokio::test]
-    async fn a_patch_comes_back_as_its_file_changes() {
+    async fn a_patch_comes_back_as_its_file_changes(
+        #[case] patch_id: &str,
+        #[case] tool: &str,
+        #[case] input: &str,
+    ) {
         use crate::harnesstools::session::{FilePatch, Hunk};
 
         let update = FilePatch {
@@ -1174,12 +1278,8 @@ pub(crate) mod tests {
         let messages = vec![
             row(ID, 0, Role::Other("session_meta".into()), vec![]),
             row("msg_u1", 1, Role::User, text("fix it")),
-            row("ctc_2", 2, Role::Assistant, vec![tool_use(
-                "call_2",
-                "apply_patch",
-                json!("*** Begin Patch\n*** End Patch"),
-            )]),
-            row("call_2#patch", 3, Role::Tool, vec![Content::Patch(patch)]),
+            row("ctc_2", 2, Role::Assistant, vec![tool_use("call_2", tool, json!(input))]),
+            row(patch_id, 3, Role::Tool, vec![Content::Patch(patch)]),
             row("ctco_2", 3, Role::Tool, vec![tool_result("call_2", "Done", false)]),
             row("msg_a1", 4, Role::Assistant, text("fixed")),
         ];
@@ -1343,6 +1443,20 @@ pub(crate) mod tests {
         assert_eq!(std::fs::read(&first).unwrap(), before);
     }
 
+    /// Restoring a thread whose rollout is gone forgets the history Codex projected of it from
+    /// that rollout, which it projects again from the restored one.
+    #[rstest]
+    #[tokio::test]
+    async fn a_restore_forgets_codexs_history_of_the_rollout_gone() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("sessions");
+        let thread = session::resume_id(ID);
+        let history = super::super::state_db::tests::history(home.path(), &[thread]).await;
+
+        rehydrate_into(&root, home.path(), &session(ID, vec![])).await.unwrap();
+        assert_eq!(super::super::state_db::tests::projected(&history, thread).await, 0);
+    }
+
     /// A rollout whose index row can't be pointed at it is left where it is: Codex may be
     /// resuming the thread from it already.
     #[rstest]
@@ -1404,6 +1518,7 @@ pub(crate) mod tests {
         }
         // The rollout an earlier restore wrote, before its index update failed.
         let left = write(&root, &session(ID, vec![])).unwrap();
+        let history = super::super::state_db::tests::history(home.path(), &[thread]).await;
 
         let err = rehydrate_into(&root, home.path(), &session(ID, vec![])).await.unwrap_err();
         assert!(matches!(&err, RehydrateError::AlreadyExists(path) if *path == left), "{err}");
@@ -1416,6 +1531,8 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(std::path::Path::new(&named), left);
         <sqlx::SqliteConnection as sqlx::Connection>::close(conn).await.unwrap();
+        // Codex's history of the gone rollout is forgotten too.
+        assert_eq!(super::super::state_db::tests::projected(&history, thread).await, 0);
     }
 
     #[rstest]
@@ -1423,7 +1540,7 @@ pub(crate) mod tests {
         let home = tempfile::tempdir().unwrap();
         let archive = home.path().join("archived_sessions");
         std::fs::create_dir_all(&archive).unwrap();
-        let archived = archive.join(format!("rollout-2026-01-01T00-00-00-{ID}.jsonl"));
+        let archived = archive.joined(format!("rollout-2026-01-01T00-00-00-{ID}.jsonl"));
         std::fs::write(&archived, "{}\n").unwrap();
         assert!(matches!(
             write(&home.path().join("sessions"), &session(ID, vec![])),

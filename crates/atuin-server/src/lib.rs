@@ -15,6 +15,7 @@ mod metrics;
 mod router;
 mod trace;
 
+pub mod admin;
 pub mod db;
 
 pub use settings::{Settings, example_config};
@@ -76,7 +77,7 @@ pub async fn connect(db_uri: OwnedDbUrl) -> DbResult<Arc<dyn DynDatabase>> {
 }
 
 async fn connect_and_build_router(settings: Settings) -> Result<Router> {
-    let database = connect(settings.db_settings.db_uri.clone())
+    let database = connect(settings.db_settings.connect_url()?)
         .await
         .wrap_err_with(|| format!("failed to connect to db: {:?}", settings.db_settings))?;
 

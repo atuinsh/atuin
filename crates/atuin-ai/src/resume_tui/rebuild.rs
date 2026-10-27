@@ -1,4 +1,4 @@
-//! Whether the daemon is rebuilding the session index the picker reads.
+//! Whether the daemon is rebuilding the threads index the picker reads.
 //!
 //! During `atuin store rebuild ai-session` (or a purge, or right after the daemon starts) the
 //! daemon empties the sidecar and replays it from the record store in the background, so the
@@ -18,7 +18,7 @@ use tokio::sync::watch;
 /// How long a probe may take, connecting included, before the daemon counts as unreachable.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
-/// The daemon is rebuilding the session index.
+/// The daemon is rebuilding the threads index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rebuilding {
     /// Records replayed, and roughly how many there are to replay.
@@ -32,11 +32,11 @@ impl Rebuilding {
         let (replayed, pending) = self.progress;
         if pending > 0 {
             format!(
-                "rebuilding the session index: {replayed} of {pending} records; results may be \
+                "rebuilding the threads index: {replayed} of {pending} records; results may be \
                  incomplete"
             )
         } else {
-            "rebuilding the session index; results may be incomplete".to_owned()
+            "rebuilding the threads index; results may be incomplete".to_owned()
         }
     }
 }
@@ -50,15 +50,13 @@ pub trait RebuildProbe: Send + Sync {
 
 /// Asks the daemon over its socket, without starting it, giving up after [`PROBE_TIMEOUT`].
 pub struct DaemonProbe {
-    settings: Settings,
+    settings: Arc<Settings>,
 }
 
 impl DaemonProbe {
     #[must_use]
-    pub fn new(settings: &Settings) -> Self {
-        Self {
-            settings: settings.clone(),
-        }
+    pub const fn new(settings: Arc<Settings>) -> Self {
+        Self { settings }
     }
 }
 
@@ -97,6 +95,7 @@ pub fn watch(probe: Arc<dyn RebuildProbe>, every: Duration) -> watch::Receiver<O
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::path::AbsPathBuf;
     use parking_lot::Mutex;
     use rstest::rstest;
 
@@ -140,9 +139,9 @@ mod tests {
     #[rstest]
     #[case::progress(
         at(1200, 5000),
-        "rebuilding the session index: 1200 of 5000 records; results may be incomplete"
+        "rebuilding the threads index: 1200 of 5000 records; results may be incomplete"
     )]
-    #[case::nothing_to_replay(at(0, 0), "rebuilding the session index; results may be incomplete")]
+    #[case::nothing_to_replay(at(0, 0), "rebuilding the threads index; results may be incomplete")]
     fn the_status_says_how_far_it_has_got(#[case] rebuilding: Rebuilding, #[case] want: &str) {
         assert_eq!(rebuilding.status(), want);
     }
@@ -154,10 +153,11 @@ mod tests {
     async fn an_unreachable_daemon_says_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let mut settings = Settings::utc();
-        settings.daemon.socket_path = Some(dir.path().join("nobody.sock"));
-        settings.daemon.pidfile_path = dir.path().join("atuin-daemon.pid").to_string_lossy().into();
+        settings.daemon.socket_path = AbsPathBuf::new(dir.path().join("nobody.sock")).ok();
+        settings.daemon.pidfile_path =
+            AbsPathBuf::new(dir.path().join("atuin-daemon.pid")).unwrap();
         let started = std::time::Instant::now();
-        assert_eq!(DaemonProbe::new(&settings).rebuilding().await, None);
+        assert_eq!(DaemonProbe::new(Arc::new(settings)).rebuilding().await, None);
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(!dir.path().join("nobody.sock").exists(), "no daemon was started");
     }

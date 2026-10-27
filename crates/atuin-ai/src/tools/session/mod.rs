@@ -1,5 +1,5 @@
-//! MCP tools over AI-agent sessions captured by the daemon: `atuin_ai_session_list`,
-//! `atuin_ai_session_search`, and `atuin_ai_session_read`.
+//! MCP tools over AI-agent sessions captured by the daemon: `atuin_threads_list`,
+//! `atuin_threads_search`, and `atuin_threads_read`.
 
 pub mod caller;
 pub mod list;
@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use atuin_client::ai_session::{HarnessKind, HarnessSession, Session, SessionFilter};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::ParentKind;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::time::OffsetDateTimeExt;
 use atuin_daemon::AiClient;
 use futures::{StreamExt, TryStreamExt};
@@ -22,8 +23,8 @@ use crate::tools::ToolOutcome;
 async fn connect(settings: &Settings) -> Result<AiClient, ToolOutcome> {
     AiClient::from_settings(settings).await.map_err(|e| {
         ToolOutcome::Error(format!(
-            "AI sessions are unavailable: could not connect to the Atuin daemon ({e}). Shell \
-             history search still works."
+            "Threads are unavailable: could not connect to the Atuin daemon ({e}). Shell history \
+             search still works."
         ))
     })
 }
@@ -76,7 +77,7 @@ fn resolve_cwd(cwd: Option<&str>) -> Result<Option<PathBuf>, ToolOutcome> {
                  directory, so it cannot be resolved. Pass the project's absolute path."
             )));
         };
-        dir.join(path)
+        dir.joined(path)
     };
     Ok(Some(normalise(&joined)))
 }
@@ -301,7 +302,7 @@ mod tests {
     fn resolve_cwd_expands_home() {
         let home = std::env::home_dir().unwrap();
         assert_eq!(resolve_cwd(Some("~")).ok().unwrap(), Some(home.clone()));
-        assert_eq!(resolve_cwd(Some("~/src/x")).ok().unwrap(), Some(home.join("src/x")));
+        assert_eq!(resolve_cwd(Some("~/src/x")).ok().unwrap(), Some(home.joined("src/x")));
     }
 
     #[rstest]

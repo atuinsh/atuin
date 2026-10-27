@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 pub struct MessageEnricher {
     harness: HarnessKind,
     sessions: HashMap<String, SessionState>,
-    /// Whether capture keeps the patches of calls (`ai.capture_tools`).
+    /// Whether capture keeps the patches of calls (`threads.capture_tools`).
     patches: bool,
 }
 
@@ -72,9 +72,12 @@ impl MessageEnricher {
     ) {
         let mut occurrences = HashMap::new();
         for id in synthetic {
-            if let Some((hash, ordinal)) = parse_synthetic(id) {
+            // The last ordinal there is can't be counted past: no read made it, so it is malformed.
+            if let Some((hash, ordinal)) = parse_synthetic(id)
+                && let Some(after) = ordinal.checked_add(1)
+            {
                 let next = occurrences.entry(hash).or_insert(0);
-                *next = (*next).max(ordinal + 1);
+                *next = (*next).max(after);
             }
         }
         let mut replayed = BTreeMap::new();
@@ -119,7 +122,11 @@ impl MessageEnricher {
                 // A line keyed on its content: the reader cannot know which of identical lines it
                 // is, and names the first; the newest row of that content captured is the one
                 // (none: the line made no row, and there is nothing to follow).
-                Some((hash, _)) => state.occurrences.get(&hash).map(|&n| synthetic_id(hash, n - 1)),
+                Some((hash, _)) => state
+                    .occurrences
+                    .get(&hash)
+                    .and_then(|n| n.checked_sub(1))
+                    .map(|n| synthetic_id(hash, n)),
                 None => Some(follows),
             };
         }
@@ -131,12 +138,12 @@ impl MessageEnricher {
             state.parent_kind = m.parent_kind();
             state.native_parent = true;
         }
-        // A session continued from another (`atuin ai resume --in`), maybe another harness's:
+        // A session continued from another (`atuin threads resume --in`), maybe another harness's:
         // its first line, which the harness wrote itself, names it. Unless the harness names a
         // parent itself: a fork of a continuation (Claude Code `--fork-session`, Codex and
         // opencode forks, Pi `/fork`) copies the marker with the rest, but forks the
         // continuation, not the session the marker names. An opencode fork's marker
-        // (`atuin ai resume --fork`) stands for the link opencode can't write: it names the parent
+        // (`atuin threads resume --fork`) stands for the link opencode can't write: it names the parent
         // as a harness would, and a marker copied in after it doesn't replace it.
         if !state.native_parent
             && let Some((harness, parent, kind)) = continuation::linked_from_message(m)
@@ -221,6 +228,7 @@ fn build(
     let usage = m.usage();
     let stop_reason = m.stop_reason();
     let model = m.model();
+    let provider = m.provider();
     let cwd = m.cwd();
     let git_branch = m.git_branch();
     if m.id().is_none()
@@ -241,7 +249,7 @@ fn build(
             let hash = content_hash(session, m);
             let ordinal = state.occurrences.entry(hash).or_insert(0);
             let id = synthetic_id(hash, *ordinal);
-            *ordinal += 1;
+            *ordinal = ordinal.saturating_add(1);
             id
         }
     };
@@ -271,6 +279,7 @@ fn build(
             .role(m.role())
             .content(content)
             .model(model)
+            .provider(provider)
             .usage(usage)
             .stop_reason(stop_reason)
             .cwd(cwd)
@@ -415,6 +424,19 @@ mod tests {
     fn synthetic_ids_parse_back(#[case] ordinal: u32) {
         let id = synthetic_id(0x00ab_cdef_0123_4567, ordinal);
         assert_eq!(parse_synthetic(&id), Some((0x00ab_cdef_0123_4567, ordinal)));
+    }
+
+    /// A row keeps the provider its line names.
+    #[rstest]
+    fn rows_keep_their_provider(#[values(HarnessKind::Pi, HarnessKind::Omp)] harness: HarnessKind) {
+        let raw = serde_json::json!({
+            "type": "message", "id": "a1", "timestamp": "2026-10-16T18:39:48.190Z",
+            "message": {"role": "assistant", "content": "hi", "provider": "openai-codex",
+                "model": "gpt-5.6-luna"},
+        });
+        let line = AnyMessage::from(serde_json::from_value::<PiMessage>(raw).unwrap());
+        let msg = one(harness, &line).unwrap();
+        assert_eq!(msg.provider.as_deref(), Some("openai-codex"));
     }
 
     #[rstest]
@@ -747,6 +769,21 @@ mod tests {
         assert_eq!(again[0].parent, None);
     }
 
+    /// A stored id that reads as content-keyed at the last ordinal there is (a native id made to
+    /// look like one: Claude Code takes any `uuid`) can't be counted past: it is passed over as
+    /// malformed, and capture goes on.
+    #[rstest]
+    fn a_stored_synthetic_id_at_the_last_ordinal_is_passed_over() {
+        let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
+        let untimed = ccode(&serde_json::json!({"type": "ai-title", "aiTitle": "Renamed"}));
+        let (hash, _) = parse_synthetic(&MessageEnricher::source_id(&session(), &untimed)).unwrap();
+        n.resume(&session(), None, &[], None, &[synthetic_id(hash, u32::MAX)]);
+
+        let rows = rows(&mut n, &session(), &[untimed.clone(), untimed]);
+        let ids: Vec<_> = rows.into_iter().map(|m| m.source_id).collect();
+        assert_eq!(ids, [synthetic_id(hash, 0), synthetic_id(hash, 1)]);
+    }
+
     /// Codex lines name no parent: each row names the row captured before it, a content-keyed
     /// one included, passing over lines capture keeps no row of.
     #[rstest]
@@ -986,7 +1023,7 @@ mod parser_contract {
         );
     }
 
-    // ---- Continuations (`atuin ai resume --in`) ----
+    // ---- Continuations (`atuin threads resume --in`) ----
 
     const ORIGINAL: &str = "019a0d14-f276-77d3-b955-89d5b0151306";
 
@@ -1123,7 +1160,7 @@ mod parser_contract {
         }
     }
 
-    /// An opencode fork (`atuin ai resume --fork`) names its original in a fork marker, in text
+    /// An opencode fork (`atuin threads resume --fork`) names its original in a fork marker, in text
     /// opencode wrote itself (here a Claude Code `isMeta` line, read the same way): its rows are a
     /// fork of the original, and a continuation's marker copied in after it doesn't move them.
     #[rstest]

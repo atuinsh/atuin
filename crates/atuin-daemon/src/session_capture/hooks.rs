@@ -15,6 +15,9 @@ pub enum Point {
     ReplayIncomplete,
     /// A replay has reprojected, before reporting. A panic fault panics it.
     ReplayBeforeSettle,
+    /// Capture is handling a line, its session's read just (re)opened if it was, before its
+    /// bookkeeping is set up. A panic fault panics the handling.
+    Capturing,
     /// Capture made its record pending, before pushing it. A panic fault panics the capture.
     CapturePushing,
     /// Capture pushed its record, before projecting it. A panic fault panics the capture.

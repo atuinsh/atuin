@@ -188,10 +188,23 @@ impl<S: AsRef<str>> HighlightedText<S> {
         self.ranges().next().is_some()
     }
 
-    /// Each line as its own highlighted text. A match never spans a newline, so every span stays
-    /// within one line.
-    pub fn lines(&self) -> impl Iterator<Item = HighlightedText<&str>> + '_ {
-        self.data.as_ref().lines().map(|line| self.highlighter.as_highlighted(line))
+    /// Each line as its own highlighted text. A match that runs onto the next line is split into
+    /// a match on each, so every span stays within one line.
+    pub fn lines(&self) -> impl Iterator<Item = HighlightedText<Cow<'_, str>>> + '_ {
+        let [open, close] = self.highlighter.markers();
+        self.data.as_ref().lines().scan(false, move |inside, line| {
+            let continued = *inside;
+            if let Some(at) = line.rfind([open, close]) {
+                *inside = line[at..].starts_with(open);
+            }
+            let line = match (continued, *inside) {
+                (false, false) => Cow::Borrowed(line),
+                (true, false) => Cow::Owned(format!("{open}{line}")),
+                (false, true) => Cow::Owned(format!("{line}{close}")),
+                (true, true) => Cow::Owned(format!("{open}{line}{close}")),
+            };
+            Some(self.highlighter.as_highlighted(line))
+        })
     }
 
     /// The marker-free text together with the byte range of every match within *that* text --
@@ -649,6 +662,9 @@ mod tests {
     #[case::single("a «b»", vec![("a b", true)])]
     #[case::mixed("x\n«hit» here\ny\n", vec![("x", false), ("hit here", true), ("y", false)])]
     #[case::blank_lines("\n\n«a»", vec![("", false), ("", false), ("a", true)])]
+    // FTS5 marks a phrase that runs onto the next line as one span.
+    #[case::span_across_lines("«a\nb» c", vec![("a", true), ("b c", true)])]
+    #[case::span_across_a_blank_line("«a\n\nb»", vec![("a", true), ("", true), ("b", true)])]
     #[case::empty("", vec![])]
     fn lines_keep_each_lines_own_markers(#[case] body: &str, #[case] expected: Vec<(&str, bool)>) {
         let hl = highlighter().as_highlighted(body);

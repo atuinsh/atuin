@@ -14,6 +14,10 @@ use i18n_embed::unic_langid::LanguageIdentifier;
     clippy::same_name_method,
     reason = "RustEmbed derives inherent `get`/`iter` next to its trait methods, as sibling impls"
 )]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "RustEmbed's derive canonicalizes its folder in debug builds"
+)]
 mod embed {
     #[derive(rust_embed::RustEmbed)]
     #[folder = "i18n"]
@@ -30,7 +34,7 @@ pub static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
     fn requested_language() -> Option<LanguageIdentifier> {
         let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .into_iter()
-            .find_map(|var| std::env::var(var).ok().filter(|locale| !locale.is_empty()))?;
+            .find_map(|var| atuin_common::env::var(var).ok().filter(|locale| !locale.is_empty()))?;
         language_from_locale(&locale)
     }
 

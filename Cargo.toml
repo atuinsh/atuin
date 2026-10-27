@@ -4,7 +4,7 @@ members = ["crates/*"]
 exclude = ["ui/backend"]
 
 [workspace.package]
-version = "18.23.0"
+version = "18.24.2"
 authors = ["Ellie Huxtable <ellie@atuin.sh>"]
 rust-version = "1.95.0"
 license = "MIT"
@@ -13,19 +13,20 @@ repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
-atuin-ai = { path = "crates/atuin-ai", version = "18.23.0", default-features = false }
-atuin-client = { path = "crates/atuin-client", version = "18.23.0" }
-atuin-common = { path = "crates/atuin-common", version = "18.23.0" }
-atuin-daemon = { path = "crates/atuin-daemon", version = "18.23.0", default-features = false }
-atuin-domain = { path = "crates/atuin-domain", version = "18.23.0" }
-atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.23.0" }
-atuin-history = { path = "crates/atuin-history", version = "18.23.0" }
-atuin-kv = { path = "crates/atuin-kv", version = "18.23.0" }
-atuin-octavo = { path = "crates/atuin-octavo", version = "18.23.0" }
-atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.23.0", default-features = false }
-atuin-scripts = { path = "crates/atuin-scripts", version = "18.23.0" }
-atuin-server = { path = "crates/atuin-server", version = "18.23.0" }
+atuin-ai = { path = "crates/atuin-ai", version = "18.24.2", default-features = false }
+atuin-client = { path = "crates/atuin-client", version = "18.24.2" }
+atuin-common = { path = "crates/atuin-common", version = "18.24.2" }
+atuin-daemon = { path = "crates/atuin-daemon", version = "18.24.2", default-features = false }
+atuin-domain = { path = "crates/atuin-domain", version = "18.24.2" }
+atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.24.2" }
+atuin-history = { path = "crates/atuin-history", version = "18.24.2" }
+atuin-kv = { path = "crates/atuin-kv", version = "18.24.2" }
+atuin-octavo = { path = "crates/atuin-octavo", version = "18.24.2" }
+atuin-pty-proxy = { path = "crates/atuin-pty-proxy", version = "18.24.2", default-features = false }
+atuin-scripts = { path = "crates/atuin-scripts", version = "18.24.2" }
+atuin-server = { path = "crates/atuin-server", version = "18.24.2" }
 atuin-vt100 = "0.19"
+atuin-vte = "0.15"
 
 ansi-to-tui = { version = "8", default-features = false }
 arboard = { version = "3", default-features = false }
@@ -42,6 +43,7 @@ bytesize = { version = "2", features = ["serde"] }
 chrono = "0.4"
 chrono-humanize = "0.2"
 clap = { version = "4", features = ["derive"] }
+clap-couture = { version = "0.1", default-features = false, features = ["derive", "markdown"] }
 clap_complete = "4"
 clap_complete_nushell = "4"
 colored = "3"
@@ -52,7 +54,6 @@ daemonix = "0.1"
 dashmap = "6"
 derive_more = { version = "2", features = ["add", "add_assign", "as_ref", "deref", "display", "error", "from", "into", "debug"] }
 dirs = "6"
-divan = "0.1"
 # easy-cast 0.5.5+ raises its MSRV to 1.96.
 #
 # The assert_nonzero feature patches a bug fixed in:
@@ -99,12 +100,17 @@ norm = { version = "0.1", features = ["fzf-v2"] }
 notify = "8"
 notify-debouncer-full = "0.7"
 num-traits = "0.2"
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSURL"] }
+objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 opentelemetry = "0.32"
 opentelemetry-otlp = "0.32"
 opentelemetry_sdk = "0.32"
 palette = { version = "0.7", features = ["serializing"] }
 parking_lot = "0.12"
+percent-encoding = "2"
 portable-pty = "0.9"
+plist = { version = "1", default-features = false }
 pretty_assertions = "1"
 proptest = "1"
 prost = "0.14"
@@ -114,6 +120,7 @@ pulldown-cmark = "0.13"
 rand = { version = "0.8", features = ["std"] }
 ratatui = "0.30"
 ratatui-core = "0.1"
+ref-cast = "1"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "stream", "gzip", "zstd"] }
 reqwest-middleware = "0.5"
@@ -127,7 +134,7 @@ runtime-format = "0.1"
 # bundled SQLite), with unlock_notify as sqlx has it, for shared-cache in-memory databases.
 rusqlite = { version = "0.32", features = ["unlock_notify"] }
 rust-embed = "8"
-rustix = { version = "1", features = ["process", "fs", "pty", "termios", "stdio", "event"] }
+rustix = { version = "1", features = ["event", "fs", "net", "param", "process", "pty", "stdio", "termios"] }
 schemars = "1"
 secrecy = { version = "0.10", features = ["serde"] }
 rusty_paserk = { version = "0.5", default-features = false, features = ["v4", "serde"] }
@@ -139,10 +146,10 @@ serde_ignored = "0.1"
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_regex = "1"
 serde_with = "3"
+service-manager = { package = "atuin-service-manager", version = "0.12", default-features = false }
+sha2 = "0.10"
 shellexpand = "3"
 shlex = "2"
-# held at 0.3: crossterm 0.29 pins signal-hook 0.3; bumping would add a 2nd copy
-signal-hook = "0.3"
 sql-builder = "3"
 sqlx = { version = "0.9", features = ["runtime-tokio", "time", "uuid"] }
 strum = { version = "0.27", features = ["strum_macros"] }
@@ -188,8 +195,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 # held at 0.11: 0.12 pulls hashlink 0.12 (a 2nd copy vs sqlx's 0.11) + an encoding_rs/multiversion subtree
 yaml-rust2 = "0.11"
 zeroize = "1"
-# held at 0.13: compression-codecs (via reqwest) pins zstd 0.13; bumping would add a 2nd copy
-zstd = "0.13"
+zstd = "0.14"
 
 # Dependencies that are pure hot loops (the bundled SQLite and the record-store
 # crypto) run 10x+ slower unoptimized, which makes every test that touches a

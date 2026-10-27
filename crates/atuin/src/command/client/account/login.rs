@@ -1,11 +1,14 @@
 use std::io::{self, IsTerminal};
+use std::sync::Arc;
 
 use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
-use atuin_common::utils::env_nonempty;
+use atuin_common::env::var_nonempty;
+#[cfg(feature = "daemon")]
+use atuin_daemon::service::ActiveService;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
@@ -13,6 +16,7 @@ use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretString};
 
 use super::PasswordArg;
+use crate::error::CliError;
 use crate::i18n::fl;
 
 const KEY_ENV: &str = "ATUIN_ENCRYPTION_KEY";
@@ -47,7 +51,7 @@ fn get_input<T: for<'a> From<&'a str>>() -> Result<Option<T>> {
 }
 
 impl Cmd {
-    pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Arc<Settings>, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
                 println!("{}", fl!("account-hub-authenticated"));
@@ -82,7 +86,7 @@ impl Cmd {
     fn scripted_key(&self) -> Option<SecretString> {
         self.key
             .clone()
-            .or_else(|| env_nonempty(KEY_ENV)?.into_string().ok().map(SecretString::from))
+            .or_else(|| var_nonempty(KEY_ENV)?.into_string().ok().map(SecretString::from))
     }
 
     /// Hub login: use the browser flow unless the username was provided for headless use.
@@ -114,7 +118,7 @@ impl Cmd {
                 }
             };
 
-            let meta = Settings::meta_store().await?;
+            let meta = settings.meta_store().await?;
             let is_hub_token =
                 auth_type.as_deref() == Some("hub") || atuin_client::meta::is_hub_token(&session);
 
@@ -139,7 +143,7 @@ impl Cmd {
 
         // Silently attempt to link CLI account to Hub if one exists
         if let Ok(cli_token) = settings.session_token().await
-            && let Err(e) = atuin_client::hub::link_account(&endpoint, &cli_token).await
+            && let Err(e) = atuin_client::hub::link_account(&endpoint, &cli_token, settings).await
         {
             tracing::debug!("Could not link CLI account to Hub: {}", e);
         }
@@ -162,7 +166,7 @@ impl Cmd {
 
         match response {
             AuthResponse::Success { session, .. } => {
-                Settings::meta_store().await?.save_session(&session).await?;
+                settings.meta_store().await?.save_session(&session).await?;
             }
             AuthResponse::TwoFactorRequired => {
                 // Legacy server doesn't support 2FA, so this shouldn't happen.
@@ -174,7 +178,7 @@ impl Cmd {
         Ok(())
     }
 
-    async fn ensure_hub_session(&self, _settings: &Settings, hub_address: &url::Url) -> Result<()> {
+    async fn ensure_hub_session(&self, settings: &Settings, hub_address: &url::Url) -> Result<()> {
         tracing::info!("Authenticating with Atuin Hub...");
 
         let mut session = atuin_client::hub::HubAuthSession::start(hub_address).await?;
@@ -201,7 +205,7 @@ impl Cmd {
 
         tracing::info!("Authentication complete, saving session token");
 
-        atuin_client::hub::save_session(&token).await?;
+        atuin_client::hub::save_session(&token, settings).await?;
 
         Ok(())
     }
@@ -276,18 +280,51 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
         return Ok(());
     }
 
+    // The daemon holds the key in memory, so stop it before it writes records under the old one
+    // while the store is rewritten, and start it again once the new key is written. A daemon systemd
+    // or launchd runs can't be stopped from here, only restarted after. One can be running without
+    // `daemon.enabled`, started by `atuin threads`.
+    #[cfg(feature = "daemon")]
+    let stopped = match ActiveService::find(settings).await {
+        Ok(Some(daemon)) => daemon.stop().await.is_ok(),
+        _ => false,
+    };
+
     println!("\n{}", fl!("login-reencrypting"));
     store.re_encrypt(&current_key, key).await?;
-    crate::command::client::store::invalidate_ai_sessions().await;
+    crate::command::client::store::invalidate_ai_sessions(settings).await;
 
     println!("{}", fl!("login-writing-key"));
     key.overwrite_path(key_path)?;
 
+    #[cfg(feature = "daemon")]
+    if let Err(e) = start_daemon(settings, stopped).await {
+        eprintln!("{}", fl!("login-daemon-start-failed", error = format!("{e:#}")));
+    }
+
+    Ok(())
+}
+
+/// Start the daemon on the new key if it was stopped, and restart one running on the old key, such
+/// as one a shell hook started while it was stopped.
+#[cfg(feature = "daemon")]
+async fn start_daemon(settings: &Settings, stopped: bool) -> Result<()> {
+    let running = ActiveService::find(settings).await?;
+    if running.is_none() && !stopped {
+        return Ok(());
+    }
+
+    println!("{}", fl!("login-starting-daemon"));
+    if let Some(daemon) = running {
+        daemon.restart().await?;
+    } else {
+        ActiveService::find_or_spawn(settings).await?;
+    }
     Ok(())
 }
 
 async fn verify_key_against_remote(
-    settings: &Settings,
+    settings: &Arc<Settings>,
     store: &SqliteStore,
     interactive: bool,
 ) -> Result<()> {
@@ -313,7 +350,7 @@ async fn verify_key_against_remote(
             None => return store_key(settings, store, &key).await,
             Some(SyncError::WrongKey) => {
                 if !interactive {
-                    logout_wrong_key().await;
+                    return Err(logout_wrong_key(settings).await.into());
                 }
 
                 println!("\n{}", fl!("login-key-mismatch"));
@@ -333,7 +370,7 @@ async fn verify_key_against_remote(
                         }
                     }
                     // A blank line or exhausted stdin both mean "give up".
-                    _ => logout_wrong_key().await,
+                    _ => return Err(logout_wrong_key(settings).await.into()),
                 }
             }
             Some(e) => {
@@ -348,14 +385,13 @@ async fn verify_key_against_remote(
 }
 
 /// Roll back the saved session so the user is not left in a half-authenticated
-/// state with a key that can't read the data, then exit.
-async fn logout_wrong_key() -> ! {
-    if let Ok(meta) = Settings::meta_store().await {
+/// state with a key that can't read the data, and get the error that says so.
+async fn logout_wrong_key(settings: &Settings) -> CliError {
+    if let Ok(meta) = settings.meta_store().await {
         let _ = meta.delete_session().await;
         let _ = meta.delete_hub_session().await;
     }
-    crate::print_error::print_error(&fl!("login-wrong-key-title"), &fl!("login-wrong-key-body"));
-    std::process::exit(1);
+    CliError::LoginWrongKey
 }
 
 #[must_use]

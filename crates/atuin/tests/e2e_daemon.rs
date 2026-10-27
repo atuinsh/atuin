@@ -7,6 +7,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use atuin_common::path::PathBufExt as _;
 use atuin_daemon::client::HistoryClient;
 use common::{FreshEnv, Process, SESSION, TIMEOUT, marker, output, wait_until};
 use rstest::{fixture, rstest};
@@ -21,6 +22,32 @@ fn daemon() -> Daemon {
     Daemon {
         foreground: None,
         env: FreshEnv::new(),
+    }
+}
+
+impl Daemon {
+    /// Start the daemon in the foreground, and wait until it is healthy.
+    async fn start_foreground(&mut self) {
+        self.foreground = Some(Process::spawn(self.env.atuin(&["daemon", "start", "--show-logs"])));
+        tokio::time::timeout(TIMEOUT, async {
+            loop {
+                let process = self.foreground.as_mut().unwrap();
+                assert!(
+                    process.child.try_wait().unwrap().is_none(),
+                    "daemon exited during startup: {}",
+                    process.logs()
+                );
+                if let Ok(mut client) = HistoryClient::new(self.env.socket()).await
+                    && let Ok(status) = client.status().await
+                    && status.healthy
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("daemon never became healthy");
     }
 }
 
@@ -39,37 +66,15 @@ async fn fresh_daemon_serves_history(
     #[case] autostart: bool,
     #[values(1, 4)] writers: usize,
 ) {
-    daemon.env.write_config(&format!(
-        "local_timeout = 15\n[daemon]\nenabled = true\nautostart = {autostart}\n"
-    ));
-    assert!(!daemon.env.data_dir().join("key").exists());
-    assert!(!daemon.env.data_dir().join("history.db").exists());
+    daemon.env.write_config(&format!("[daemon]\nenabled = true\nautostart = {autostart}\n"));
+    assert!(!daemon.env.data_dir().joined("key").exists());
+    assert!(!daemon.env.data_dir().joined("history.db").exists());
     assert!(!daemon.env.socket().exists());
 
     // Check socket and startup-lock reuse after shutdown.
     for _ in 0..2 {
         if !autostart {
-            daemon.foreground =
-                Some(Process::spawn(daemon.env.atuin(&["daemon", "start", "--show-logs"])));
-            tokio::time::timeout(TIMEOUT, async {
-                loop {
-                    let process = daemon.foreground.as_mut().unwrap();
-                    assert!(
-                        process.child.try_wait().unwrap().is_none(),
-                        "daemon exited during startup: {}",
-                        process.logs()
-                    );
-                    if let Ok(mut client) = HistoryClient::new(daemon.env.socket()).await
-                        && let Ok(status) = client.status().await
-                        && status.healthy
-                    {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            })
-            .await
-            .expect("daemon never became healthy");
+            daemon.start_foreground().await;
         }
 
         // Spawn all writers first to exercise concurrent autostart.
@@ -103,12 +108,12 @@ async fn fresh_daemon_serves_history(
         assert!(status.healthy);
         assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
         let pidfile =
-            std::fs::read_to_string(daemon.env.data_dir().join("atuin-daemon.pid")).unwrap();
+            std::fs::read_to_string(daemon.env.data_dir().joined("atuin-daemon.pid")).unwrap();
         assert_eq!(pidfile.lines().next().unwrap(), status.pid.to_string());
         if let Some(process) = &daemon.foreground {
             assert_eq!(process.child.id(), status.pid);
         }
-        assert!(daemon.env.data_dir().join("key").is_file());
+        assert!(daemon.env.data_dir().joined("key").is_file());
 
         let expected: Vec<_> =
             ids.iter().zip(&commands).map(|(id, command)| format!("{id}\t7\t{command}")).collect();
@@ -136,9 +141,7 @@ async fn fresh_daemon_serves_history(
 #[case::cancel(1)]
 #[tokio::test]
 async fn history_end_does_not_autostart_daemon(daemon: Daemon, #[case] exit: i64) {
-    daemon.env.write_config(
-        "local_timeout = 15\nstore_failed = false\n[daemon]\nenabled = true\nautostart = true\n",
-    );
+    daemon.env.write_config("store_failed = false\n[daemon]\nenabled = true\nautostart = true\n");
 
     let mut start = daemon.env.atuin(&["history", "start", "--", &format!("echo {}", marker())]);
     start.env("ATUIN_SESSION", SESSION);
@@ -155,6 +158,19 @@ async fn history_end_does_not_autostart_daemon(daemon: Daemon, #[case] exit: i64
     assert!(daemon.env.run(&["daemon", "status"]).contains("Daemon is not running"));
 }
 
+/// A daemon started in the foreground listens on the socket a crashed one left behind, which
+/// nothing answers on.
+#[rstest]
+#[tokio::test]
+async fn foreground_daemon_replaces_a_stale_socket(mut daemon: Daemon) {
+    daemon.env.write_config("local_timeout = 15\n[daemon]\nenabled = true\nautostart = false\n");
+    // Bound and closed without being removed, as a crash leaves it.
+    drop(std::os::unix::net::UnixListener::bind(daemon.env.socket()).unwrap());
+    assert!(daemon.env.socket().exists());
+
+    daemon.start_foreground().await;
+}
+
 /// With the daemon enabled but not running (and not allowed to start), history is saved locally
 /// instead of being dropped (#3866). The fallback warns, unless `--hook` silences logging.
 #[rstest]
@@ -163,7 +179,7 @@ async fn history_falls_back_to_local_when_daemon_not_running(
     daemon: Daemon,
     #[values(false, true)] hook: bool,
 ) {
-    daemon.env.write_config("local_timeout = 15\n[daemon]\nenabled = true\nautostart = false\n");
+    daemon.env.write_config("[daemon]\nenabled = true\nautostart = false\n");
     let command = format!("echo {}", marker());
     let hook_arg: &[&str] = if hook {
         &["--hook"]
@@ -206,7 +222,7 @@ async fn stale_ai_session_index(env: &FreshEnv) -> PathBuf {
     use atuin_common::harnesstools::session::{Content, Role};
 
     std::fs::create_dir_all(env.data_dir()).unwrap();
-    let path = env.data_dir().join("ai_session_sidecar.db");
+    let path = env.data_dir().joined("threads.db");
     let db = AiSessionDatabase::open(&path).await.unwrap();
     let msg = Message::builder()
         .id(atuin_domain::record::RecordId(atuin_common::utils::uuid_v7()))
@@ -235,7 +251,7 @@ async fn indexed_sessions(path: &Path) -> usize {
 #[rstest]
 #[tokio::test]
 async fn ai_session_rebuild_goes_through_the_daemon(daemon: Daemon) {
-    daemon.env.write_config("local_timeout = 15\n[daemon]\nenabled = true\nautostart = true\n");
+    daemon.env.write_config("[daemon]\nenabled = true\nautostart = true\n");
     let index = stale_ai_session_index(&daemon.env).await;
 
     let out = daemon.env.run(&["store", "rebuild", "ai-session"]);
@@ -259,12 +275,10 @@ async fn ai_session_rebuild_without_the_daemon_fails_and_touches_nothing(
     #[values(false, true)] enabled: bool,
     #[values(false, true)] purge: bool,
 ) {
-    daemon.env.write_config(&format!(
-        "local_timeout = 15\n[daemon]\nenabled = {enabled}\nautostart = false\n"
-    ));
+    daemon.env.write_config(&format!("[daemon]\nenabled = {enabled}\nautostart = false\n"));
     let index = stale_ai_session_index(&daemon.env).await;
     atuin_common::encryption::paseto_v4::Key::generate()
-        .try_write_path(&daemon.env.data_dir().join("key"))
+        .try_write_path(&daemon.env.data_dir().joined("key"))
         .unwrap();
 
     let args: &[&str] = if purge {
@@ -276,10 +290,10 @@ async fn ai_session_rebuild_without_the_daemon_fails_and_touches_nothing(
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "{stderr}");
     if !enabled {
-        assert!(stderr.contains("AI sessions need the daemon"), "{stderr}");
+        assert!(stderr.contains("Threads need the daemon"), "{stderr}");
     }
     if purge {
-        assert!(stderr.contains("atuin store rebuild ai-session"), "{stderr}");
+        assert!(stderr.contains("atuin store rebuild threads"), "{stderr}");
     }
     assert!(!daemon.env.socket().exists(), "the daemon should not have been started");
     assert_eq!(indexed_sessions(&index).await, 1, "the index was touched");

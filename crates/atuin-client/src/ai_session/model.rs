@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
+use atuin_common::harnesstools::pi::Flavour;
 use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use atuin_common::harnesstools::session::{
-    Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage,
+    Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
 };
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId};
@@ -23,6 +24,7 @@ pub enum HarnessKind {
     Copilot = 3,
     Opencode = 4,
     Pi = 5,
+    Omp = 6,
 }
 
 impl From<&AnyHarness> for HarnessKind {
@@ -31,7 +33,10 @@ impl From<&AnyHarness> for HarnessKind {
             AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
             AnyHarness::Codex(_) => Self::Codex,
             AnyHarness::Opencode(_) => Self::Opencode,
-            AnyHarness::Pi(_) => Self::Pi,
+            AnyHarness::Pi(pi) => match pi.flavour() {
+                Flavour::Pi => Self::Pi,
+                Flavour::Omp => Self::Omp,
+            },
         }
     }
 }
@@ -46,7 +51,8 @@ impl HarnessKind {
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
-            Self::Pi => Some(AnyHarness::Pi(pi::Pi)),
+            Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
+            Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
             Self::Copilot | Self::Unknown => None,
         }
     }
@@ -121,6 +127,34 @@ impl AtuinSessionId {
     pub fn has_prefix(&self, prefix: &str) -> bool {
         Self::prefix_range(prefix).is_some_and(|(low, high)| (low..=high).contains(self))
     }
+
+    /// The id as the UI shows it: its last [`Self::SHORT_LEN`] hex digits. The leading digits
+    /// are the start time, shared by every session started around then; these are random.
+    #[must_use]
+    pub fn short(&self) -> String {
+        let hex = self.to_string();
+        hex[hex.len() - Self::SHORT_LEN..].to_owned()
+    }
+
+    pub const SHORT_LEN: usize = 8;
+
+    /// The fewest hex digits a suffix takes to name an id, so a short word doesn't match one by
+    /// chance.
+    pub const MIN_SUFFIX_LEN: usize = 6;
+
+    /// Whether the id's displayed form ends with `suffix`, of at least [`Self::MIN_SUFFIX_LEN`]
+    /// hex digits.
+    #[must_use]
+    pub fn has_suffix(&self, suffix: &str) -> bool {
+        Self::is_suffix(suffix) && self.to_string().ends_with(&suffix.to_ascii_lowercase())
+    }
+
+    /// Whether `suffix` is one [`Self::has_suffix`] can match.
+    #[must_use]
+    pub fn is_suffix(suffix: &str) -> bool {
+        (Self::MIN_SUFFIX_LEN..=32).contains(&suffix.len())
+            && suffix.bytes().all(|b| b.is_ascii_hexdigit())
+    }
 }
 
 impl std::str::FromStr for AtuinSessionId {
@@ -194,6 +228,24 @@ pub struct Message {
     #[builder(default)]
     #[serde(skip)]
     pub host: Option<HostId>,
+    /// Who served [`Self::model`] (`openai-codex`, say), for the harnesses that reopen a session
+    /// on a model by provider and model (pi, omp, opencode). Last, and left out when `None`, so a
+    /// record without one is still the v2 layout; one with it is v3 (see
+    /// [`AiSessionRecord::version`]).
+    ///
+    /// [`AiSessionRecord::version`]: super::AiSessionRecord::version
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+impl Message {
+    /// The earliest and latest [`Self::timestamp`] stored: a day inside the years
+    /// [`OffsetDateTime`] can name, so either is still a date in any offset. A harness line can
+    /// name an instant past them (Claude Code's `9999-12-31T23:59:59-23:59` is in year 10000 in
+    /// UTC), which capture and the sidecar hold to these.
+    pub const EARLIEST: OffsetDateTime = time::macros::datetime!(-9999-01-02 0:00 UTC);
+    pub const LATEST: OffsetDateTime = time::macros::datetime!(9999-12-30 0:00 UTC);
 }
 
 /// [`Message::parent_kind`] as a record holds it: `None` for a kind this build does not know,
@@ -222,6 +274,7 @@ impl From<Message> for RehydrateMessage {
             role: m.role,
             content: m.content,
             model: m.model,
+            provider: m.provider,
             usage: m.usage,
             stop_reason: m.stop_reason,
             turn_id: m.turn_id,
@@ -357,6 +410,82 @@ impl Session {
     }
 }
 
+/// Who a message is from, as a search's [`SessionFilter::roles`] tells them apart: tool output
+/// is [`Self::Tool`] whatever its envelope role, and whatever is neither the person, the model
+/// nor a tool was written by the harness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MessageRole {
+    User,
+    Assistant,
+    Tool,
+    Harness,
+}
+
+impl MessageRole {
+    #[must_use]
+    pub fn of(role: &Role, content: &[Content]) -> Self {
+        if is_tool_output(content) {
+            return Self::Tool;
+        }
+        match role {
+            Role::User => Self::User,
+            Role::Assistant => Self::Assistant,
+            Role::Tool => Self::Tool,
+            Role::System | Role::Other(_) => Self::Harness,
+        }
+    }
+}
+
+/// The kinds of content block a message holds, as a bit set: stored with each message so queries
+/// can classify it (see [`MessageRole`]) without decoding its content.
+///
+/// The bits are stored, so never renumber or reuse one: a new kind of block takes the next free
+/// bit (there are 63), and needs a sidecar migration that rebuilds the projection, as
+/// `0002_message_blocks.sql` does, so rows stored before it get the bit too. A block this build
+/// does not know arrives as [`Content::Other`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, From, Into)]
+pub struct ContentBlocks(pub i64);
+
+impl ContentBlocks {
+    pub const TEXT: i64 = 1;
+    pub const REASONING: i64 = 1 << 1;
+    pub const TOOL_USE: i64 = 1 << 2;
+    pub const TOOL_RESULT: i64 = 1 << 3;
+    /// A tool result that reported an error; always with [`Self::TOOL_RESULT`].
+    pub const TOOL_ERROR: i64 = 1 << 4;
+    pub const PATCH: i64 = 1 << 5;
+    pub const SUMMARY: i64 = 1 << 6;
+    pub const ERROR: i64 = 1 << 7;
+    pub const OTHER: i64 = 1 << 8;
+    pub const REASONING_SUMMARY: i64 = 1 << 9;
+    /// What tool output holds: anything else makes a message more than tool output.
+    pub const TOOL_OUTPUT: i64 = Self::TOOL_RESULT | Self::TOOL_ERROR | Self::PATCH;
+
+    #[must_use]
+    pub fn of(content: &[Content]) -> Self {
+        Self(content.iter().fold(0, |bits, block| {
+            bits | match block {
+                Content::Text(_) => Self::TEXT,
+                Content::Reasoning(_) => Self::REASONING,
+                Content::ToolUse(_) => Self::TOOL_USE,
+                Content::ToolResult(result) if result.error => Self::TOOL_RESULT | Self::TOOL_ERROR,
+                Content::ToolResult(_) => Self::TOOL_RESULT,
+                Content::Patch(_) => Self::PATCH,
+                Content::Summary(_) => Self::SUMMARY,
+                Content::Error(_) => Self::ERROR,
+                Content::Other(_) => Self::OTHER,
+                Content::ReasoningSummary { .. } => Self::REASONING_SUMMARY,
+            }
+        }))
+    }
+
+    /// [`is_tool_output`], from the blocks alone.
+    #[must_use]
+    pub const fn is_tool_output(self) -> bool {
+        self.0 != 0 && self.0 & !Self::TOOL_OUTPUT == 0
+    }
+}
+
 /// Which sessions a listing or search returns. An absent field is not a filter; every present
 /// one must hold.
 ///
@@ -383,23 +512,29 @@ pub struct SessionFilter {
     /// Return only roots, each carrying its [`Session::child_count`], with the sessions grouped
     /// under it counting toward it: in a search, a child's match is its root's.
     pub roots_only: bool,
+    /// Leave out subagents (and children of unknown kind, read as subagents): with
+    /// [`Self::roots_only`], their matches no longer count toward their root.
+    pub exclude_subagents: bool,
+    /// Only sessions with a message from one of these roles (any, when empty); in a search, only
+    /// such messages match.
+    pub roles: Vec<MessageRole>,
     /// Active at or after this time (its `updated_at`).
     pub updated_since: Option<OffsetDateTime>,
 }
 
-/// How a search query's terms match a message.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// What a search looks for, and how it matches a message.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SearchTerms {
-    /// Every term, each as a whole word (`app` finds `app`, not `apple`).
-    #[default]
-    All,
-    /// [`Self::All`] for search as you type: the last term also matches as a prefix, unless
-    /// the query ends in whitespace (see
+    /// Every term, each as whole words (`app` finds `app`, not `apple`). A term of several words
+    /// is a phrase: they must appear together, in that order.
+    All(Vec<String>),
+    /// A line being typed (search as you type): [`Self::All`] over its whitespace-separated
+    /// words, the last also matching as a prefix unless the line ends in whitespace (see
     /// [`atuin_common::db::sqlite::fts::prefix_match_expression`]).
-    Typed,
+    Typed(String),
     /// Any term, each as a prefix: the fallback when no message holds every term (see
     /// [`atuin_common::db::sqlite::fts::match_any_expression`]).
-    Any,
+    Any(Vec<String>),
 }
 
 /// What a session's preview shows, read without the content of every message (see
@@ -492,6 +627,22 @@ mod tests {
         assert_eq!(hex(&body), V1_LAYOUT);
     }
 
+    /// A record written before [`Message::provider`] reads back without one.
+    #[rstest]
+    fn a_v2_record_reads_without_a_provider() {
+        let bytes: Vec<u8> = (0..V1_LAYOUT.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&V1_LAYOUT[i..i + 2], 16).unwrap())
+            .collect();
+        let (kind, body) = bytes.split_first().unwrap();
+        let mut record = vec![*kind];
+        record.extend(zstd::bulk::compress(body, 0).unwrap());
+
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record, &RecordVersion::V2).unwrap();
+        assert_eq!(read, record_message());
+    }
+
     #[rstest]
     fn a_v0_record_is_no_longer_read() {
         let record = AiSessionRecord::Message(record_message()).serialize();
@@ -499,10 +650,39 @@ mod tests {
         assert!(matches!(err, DecodeError::Retired(RecordVersion::V0)));
     }
 
+    /// A message v2 readers can't decode (naming omp, or with a provider) is written as v3, and
+    /// reads back.
+    #[rstest]
+    #[case::pi(HarnessKind::Pi, None, None, RecordVersion::V2)]
+    #[case::omp(HarnessKind::Omp, None, None, RecordVersion::V3)]
+    #[case::continued_from_omp(HarnessKind::Pi, Some(HarnessKind::Omp), None, RecordVersion::V3)]
+    #[case::with_a_provider(HarnessKind::Omp, None, Some("openai-codex"), RecordVersion::V3)]
+    fn omp_messages_are_v3(
+        #[case] harness: HarnessKind,
+        #[case] parent: Option<HarnessKind>,
+        #[case] provider: Option<&str>,
+        #[case] want: RecordVersion,
+    ) {
+        let handle = |harness| HarnessSession {
+            harness,
+            session: NativeSessionId::from("s".to_owned()),
+        };
+        let mut msg = record_message();
+        msg.session = handle(harness);
+        msg.parent = parent.map(handle);
+        msg.provider = provider.map(str::to_owned);
+        let record = AiSessionRecord::Message(msg.clone());
+
+        assert_eq!(record.version(), want);
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record.serialize(), &want).unwrap();
+        assert_eq!(read, msg);
+    }
+
     #[rstest]
     fn an_unknown_version_is_refused() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        let version = RecordVersion::Other("v3".to_owned());
+        let version = RecordVersion::Other("v4".to_owned());
         let err = AiSessionRecord::deserialize(&record, &version).unwrap_err();
         assert!(matches!(err, DecodeError::UnknownVersion(v) if v == version));
     }
@@ -644,5 +824,19 @@ mod tests {
         let id: AtuinSessionId = "01a0d147-e745-7ae2-8000-0123456789ab".parse().unwrap();
         assert_eq!(id.to_string(), "01a0d147e7457ae280000123456789ab");
         assert_eq!(id.has_prefix(prefix), matches);
+    }
+
+    #[rstest]
+    #[case::short("456789ab", true)]
+    #[case::shortest("6789ab", true)]
+    #[case::upper("6789AB", true)]
+    #[case::whole("01a0d147e7457ae280000123456789ab", true)]
+    #[case::too_short("789ab", false)]
+    #[case::other("6789ac", false)]
+    #[case::not_hex("6789ag", false)]
+    fn a_suffix_names_the_ids_it_ends(#[case] suffix: &str, #[case] matches: bool) {
+        let id: AtuinSessionId = "01a0d147-e745-7ae2-8000-0123456789ab".parse().unwrap();
+        assert_eq!(id.short(), "456789ab");
+        assert_eq!(id.has_suffix(suffix), matches);
     }
 }

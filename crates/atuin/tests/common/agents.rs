@@ -10,6 +10,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use atuin_common::path::PathBufExt as _;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -36,7 +37,7 @@ impl Agent {
         }
     }
 
-    /// Its executable, and the name `atuin ai resume --in` takes.
+    /// Its executable, and the name `atuin threads resume --in` takes.
     pub fn program(self) -> &'static str {
         match self {
             Self::Claude => "claude",
@@ -186,7 +187,9 @@ impl Transcript {
         let id = agent.new_id();
         let started = tick();
         let path = match agent {
-            Agent::Claude => agent.root(home).join(claude_project(cwd)).join(format!("{id}.jsonl")),
+            Agent::Claude => {
+                agent.root(home).joined(claude_project(cwd)).joined(format!("{id}.jsonl"))
+            }
             Agent::Codex => {
                 let day = started.format(time::macros::format_description!("[year]/[month]/[day]"));
                 let stamp = started.format(time::macros::format_description!(
@@ -194,8 +197,8 @@ impl Transcript {
                 ));
                 agent
                     .root(home)
-                    .join(day.unwrap())
-                    .join(format!("rollout-{}-{id}.jsonl", stamp.unwrap()))
+                    .joined(day.unwrap())
+                    .joined(format!("rollout-{}-{id}.jsonl", stamp.unwrap()))
             }
             Agent::Pi => {
                 let dir = format!(
@@ -203,7 +206,7 @@ impl Transcript {
                     cwd.display().to_string().trim_matches('/').replace('/', "-")
                 );
                 let stamp = rfc3339(started).replace([':', '.'], "-");
-                agent.root(home).join(dir).join(format!("{stamp}_{id}.jsonl"))
+                agent.root(home).joined(dir).joined(format!("{stamp}_{id}.jsonl"))
             }
             Agent::Opencode => agent.root(home),
         };
@@ -261,11 +264,11 @@ impl Transcript {
     pub fn claude_subagent(parent: &Self, cwd: &Path, turns: &[Turn]) -> Self {
         assert_eq!(parent.agent, Agent::Claude);
         let id = format!("agent-{}", &short()[16..]);
-        let dir = parent.path.with_extension("").join("subagents");
+        let dir = parent.path.with_extension("").joined("subagents");
         fs::create_dir_all(&dir).unwrap();
         let subagent = Self {
             agent: Agent::Claude,
-            path: dir.join(format!("{id}.jsonl")),
+            path: dir.joined(format!("{id}.jsonl")),
             id,
         };
         subagent.append(cwd, turns);
@@ -292,6 +295,33 @@ impl Transcript {
             }
         }
         None
+    }
+
+    /// Rename the opencode session `title`, as `Session.setTitle` does: a `session.updated.1` row
+    /// with the session's info, `time.updated` bumped to now.
+    pub fn rename(&self, title: &str) {
+        assert_eq!(self.agent, Agent::Opencode, "only opencode's sessions are renamed here");
+        let (directory, created) = rusqlite::Connection::open(&self.path)
+            .unwrap()
+            .query_row(
+                "SELECT directory, time_created FROM session WHERE id = ?1",
+                [&self.id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        let home = self.path.ancestors().nth(4).unwrap();
+        opencode_events(home, &[(
+            "session.updated.1",
+            json!({
+                "sessionID": self.id,
+                "info": {
+                    "id": self.id,
+                    "title": title,
+                    "directory": directory,
+                    "time": {"created": created, "updated": millis(tick())},
+                },
+            }),
+        )]);
     }
 
     /// The transcript as it stands.
@@ -642,6 +672,18 @@ fn opencode_events(home: &Path, events: &[(&str, Value)]) {
                         info["directory"].as_str(),
                         info["title"].as_str(),
                         info["time"]["created"].as_i64()
+                    ],
+                )
+                .unwrap();
+            }
+            "session.updated.1" => {
+                let info = &data["info"];
+                tx.execute(
+                    "UPDATE session SET title = ?2, time_updated = ?3 WHERE id = ?1",
+                    rusqlite::params![
+                        session,
+                        info["title"].as_str(),
+                        info["time"]["updated"].as_i64()
                     ],
                 )
                 .unwrap();

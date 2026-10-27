@@ -2,7 +2,6 @@
 name = "atuin-client"
 edition = "2024"
 description = "client library for atuin"
-autobenches = false
 
 authors.workspace = true
 homepage.workspace = true
@@ -18,6 +17,7 @@ sync = ["reqwest", "dep:reqwest-middleware"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
+octavo = []
 # Derive the protobuf enum traits on domain enums the daemon extern-paths into its codegen.
 proto = ["dep:prost"]
 # Statically link (vendor) OpenSSL for native-tls instead of using the system
@@ -58,7 +58,6 @@ serde_ignored = { workspace = true }
 serde_json = { workspace = true }
 serde_regex = { workspace = true }
 serde_with = { workspace = true }
-shellexpand = { workspace = true }
 sql-builder = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 rusqlite = { workspace = true }
@@ -94,7 +93,6 @@ zstd = { workspace = true }
 [dev-dependencies]
 # This crate's tests require the `test-utils` feature in atuin-common.
 atuin-common = { workspace = true, features = ["test-utils"] }
-divan = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rmp-serde = { workspace = true }
@@ -103,10 +101,6 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 wiremock = { workspace = true }
-
-[[bench]]
-name = "benchmarks"
-harness = false
 
 [lints]
 workspace = true

@@ -1,5 +1,5 @@
 //! AI coding-agent sessions, end to end: captured from each agent's own transcripts by the daemon,
-//! synced between machines, and resumed with `atuin ai resume` -- restored, caught up, forked,
+//! synced between machines, and resumed with `atuin threads resume` -- restored, caught up, forked,
 //! switched or continued in another agent -- by the real binary, against transcripts written the
 //! way each agent writes them.
 //!
@@ -20,10 +20,12 @@ mod agents;
 mod ai;
 
 use std::path::Path;
+use std::process::Stdio;
 
 use agents::{Agent, Transcript, Turn, said, whole, word};
 use ai::{Machine, SyncServer, shared_dir, succeeded};
 use atuin_common::harnesstools::resume::quote;
+use atuin_common::path::PathBufExt as _;
 use atuin_common::secrets::REDACTED;
 use regex::Regex;
 use rstest::{fixture, rstest};
@@ -45,7 +47,7 @@ fn project() -> TempDir {
 
 /// Whether `query` finds session `id` in `machine`'s search.
 fn finds(machine: &Machine, query: &str, id: &str) -> bool {
-    let found = machine.run(&["ai", "session", "search", query, "--style", "json"]);
+    let found = machine.run(&["threads", "search", query, "--style", "json"]);
     let found: serde_json::Value = serde_json::from_str(&found).unwrap();
     found.as_array().unwrap().iter().any(|m| m["session"]["session_id"] == id)
 }
@@ -66,8 +68,8 @@ fn capture_keeps_the_conversation_and_tool_calls(
     #[values(Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi)] agent: Agent,
     #[values(true, false)] capture_tools: bool,
 ) {
-    let ai = format!("capture_sessions = true\ncapture_tools = {capture_tools}\n");
-    let mut machine = Machine::with_config("", &ai);
+    let threads = format!("capture = true\ncapture_tools = {capture_tools}\n");
+    let mut machine = Machine::with_config("", &threads);
     machine.start_daemon();
     let secret = format!("ghp_{}{}", &word()[1..], "abcd");
     let mut turns = vec![Turn::new(), Turn::new()];
@@ -122,7 +124,7 @@ fn capture_keeps_the_conversation_and_tool_calls(
 fn capture_applies_the_history_and_output_filters_to_agent_commands(project: TempDir) {
     let top =
         "history_filter = [\"^echo dropped-\"]\n[output]\ncommand_filter = [\"^echo quiet-\"]\n";
-    let mut machine = Machine::with_config(top, "capture_sessions = true\n");
+    let mut machine = Machine::with_config(top, "capture = true\n");
     machine.start_daemon();
     let mut turns = vec![Turn::new(), Turn::new(), Turn::new()];
     turns[0].command = format!("echo dropped-{}", word());
@@ -164,27 +166,61 @@ fn capture_follows_a_transcript_exactly_once_across_restarts(
     machine.wait_until_said(&transcript.id, &said(&turns));
 }
 
-/// Turning capture on in the config takes effect in the running daemon, which then captures what
-/// the agents wrote while it was off.
+/// An opencode session renamed after its conversation is listed, and found, under its new title
+/// at once, not only once another message carries it.
+#[rstest]
+fn a_renamed_session_is_listed_under_its_new_title(machine: Machine, project: TempDir) {
+    let turns = [Turn::new()];
+    let transcript = Transcript::create(machine.home(), Agent::Opencode, project.path(), &turns);
+    machine.wait_until_said(&transcript.id, &said(&turns));
+
+    let title = format!("renamed {}", word());
+    transcript.rename(&title);
+    ai::wait_for("the session to be listed under its new title", || {
+        let listed = machine.session(&transcript.id).unwrap()["title"].clone();
+        if listed == title.as_str() {
+            Ok(())
+        } else {
+            Err(format!("it is listed as {listed}"))
+        }
+    });
+    assert!(finds(&machine, last_word(&title), &transcript.id), "the new title didn't find it");
+}
+
+/// Turning capture on in the config takes effect in the running daemon, which captures the
+/// sessions the agents work in from then on. One they wrote while it was off is history, left
+/// alone until the agent goes on with it, and then captured whole; or until `atuin threads
+/// import` brings it in.
 #[rstest]
 fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
-    let mut machine = Machine::with_config("", "capture_sessions = false\n");
+    let mut machine = Machine::with_config("", "capture = false\n");
     machine.start_daemon();
-    let turns = [Turn::new()];
-    let transcript = Transcript::create(machine.home(), Agent::Claude, project.path(), &turns);
+    let old: Vec<Turn> = (0..2).map(|_| Turn::new()).collect();
+    let resumed = Transcript::create(machine.home(), Agent::Claude, project.path(), &old[..1]);
+    let idle = [Turn::new()];
+    let untouched = Transcript::create(machine.home(), Agent::Claude, project.path(), &idle);
     // Longer than the daemon takes to see a new transcript when capturing.
     std::thread::sleep(std::time::Duration::from_secs(3));
     assert_eq!(machine.sessions(), Vec::<serde_json::Value>::new(), "captured while off");
 
-    let config = machine.home().join(".config/atuin/config.toml");
-    let on = std::fs::read_to_string(&config)
-        .unwrap()
-        .replace("capture_sessions = false", "capture_sessions = true");
+    let config = machine.env.config_file();
+    let on = std::fs::read_to_string(&config).unwrap().replace("capture = false", "capture = true");
     std::fs::write(&config, on).unwrap();
-    machine.wait_until_said(&transcript.id, &said(&turns));
+    // Longer than the daemon takes to see the config change.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let new = [Turn::new()];
+    let started = Transcript::create(machine.home(), Agent::Claude, project.path(), &new);
+    machine.wait_until_said(&started.id, &said(&new));
+
+    resumed.append(project.path(), &old[1..]);
+    machine.wait_until_said(&resumed.id, &said(&old));
+    assert_eq!(machine.session(&untouched.id), None, "history captured unasked");
+
+    machine.run(&["threads", "import"]);
+    machine.wait_until_said(&untouched.id, &said(&idle));
 }
 
-/// The command `atuin ai resume --print` prints to resume `transcript` in its own agent, from
+/// The command `atuin threads resume --print` prints to resume `transcript` in its own agent, from
 /// `cwd`.
 fn resume_line(transcript: &Transcript, cwd: &Path) -> String {
     let id = transcript.id.as_str();
@@ -220,8 +256,46 @@ fn a_subagent_resumes_as_the_session_it_works_for(machine: Machine, project: Tem
     assert!(stderr.contains(&format!("{} is a subagent", subagent.id)), "{stderr}");
 }
 
+/// Without a terminal (an agent, a script) the picker can't open: it says so, and how to resume a
+/// session without it.
+#[rstest]
+#[case::no_query(&[])]
+#[case::a_query(&["picker"])]
+fn the_picker_needs_a_terminal(machine: Machine, #[case] args: &[&str]) {
+    let stderr = ai::failed(&machine.resume(args, machine.home()));
+    assert_eq!(stderr.lines().next().unwrap(), NEEDS_A_TERMINAL);
+}
+
+const NEEDS_A_TERMINAL: &str = "Error: the picker needs a terminal; to resume without one, name \
+                                the thread: `atuin threads resume <id>` (`atuin threads list` \
+                                lists them)";
+
+/// Nor with only stdout on a terminal, and that not its own (`setsid -w atuin threads resume
+/// </dev/null` in a terminal): there's no terminal to read keys from.
+#[rstest]
+fn the_picker_needs_a_terminal_to_read_keys_from(machine: Machine) {
+    use std::os::unix::process::CommandExt;
+
+    use rustix::fs::{Mode, OFlags};
+    use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+
+    let pty = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
+    grantpt(&pty).unwrap();
+    unlockpt(&pty).unwrap();
+    let name = ptsname(&pty, Vec::new()).unwrap();
+    let terminal = rustix::fs::open(name.as_c_str(), OFlags::RDWR | OFlags::NOCTTY, Mode::empty());
+    let mut command = machine.atuin(&["threads", "resume"]);
+    command.current_dir(machine.home()).stdin(Stdio::null()).stdout(terminal.unwrap());
+    // SAFETY: `setsid` is async-signal-safe and touches no memory of this process.
+    unsafe {
+        command.pre_exec(|| rustix::process::setsid().map(drop).map_err(Into::into));
+    }
+    let stderr = ai::failed(&command.output().unwrap());
+    assert_eq!(stderr.lines().next().unwrap(), NEEDS_A_TERMINAL);
+}
+
 /// A session whose transcript is on this machine resumes in its agent where it ran, named by the
-/// agent's id, by its atuin id, or by enough of that, and is left as it was. How a name is
+/// agent's id, by its atuin id, by enough of the start or end of that, and is left as it was. How a name is
 /// resolved is the same for every agent; where its transcript is, and how it resumes, isn't.
 #[rstest]
 #[case::claude(Agent::Claude, "agent id")]
@@ -230,6 +304,7 @@ fn a_subagent_resumes_as_the_session_it_works_for(machine: Machine, project: Tem
 #[case::pi(Agent::Pi, "agent id")]
 #[case::by_atuin_id(Agent::Opencode, "atuin id")]
 #[case::by_atuin_id_prefix(Agent::Opencode, "atuin id prefix")]
+#[case::by_short_id(Agent::Opencode, "short id")]
 fn a_local_session_resumes_in_its_agent_where_it_ran(
     machine: Machine,
     project: TempDir,
@@ -246,6 +321,8 @@ fn a_local_session_resumes_in_its_agent_where_it_ran(
     let name = match named_by {
         "agent id" => transcript.id.clone(),
         "atuin id" => atuin_id,
+        // Its end, as the UI shows it.
+        "short id" => atuin_id[atuin_id.len() - 8..].to_owned(),
         // Past the timestamp the id starts with, which sessions started together share.
         _ => atuin_id[..16].to_owned(),
     };
@@ -282,6 +359,9 @@ fn restored(agent: Agent) -> Restored {
     let restored = Transcript::find(here.home(), agent, &original.id)
         .unwrap_or_else(|| panic!("nothing restored: {stdout} {stderr}"));
     assert_eq!(stdout.trim(), resume_line(&restored, project.path()), "{stderr}");
+    // Where it ran is here too, and the status says what was written all the same.
+    assert!(stderr.contains("atuin: restored the thread from sync\n"), "{stderr}");
+    assert!(!stderr.lines().any(|line| line.contains("locked")), "{stderr}");
     Restored {
         _server: server,
         project,
@@ -330,6 +410,27 @@ fn a_session_from_another_machine_restores_as_the_same_session(
     there.wait_until_said(&original.id, &all);
 }
 
+/// A session `atuin sync` brings down is listed as soon as it returns, though the daemon running
+/// beside it never syncs itself.
+#[rstest]
+fn a_session_synced_by_hand_is_listed_at_once(project: TempDir) {
+    let server = SyncServer::start();
+    let (there, here) = Machine::pair_syncing(&server, 0, "capture = true\n");
+    let turns = [Turn::new()];
+    let original = Transcript::create(there.home(), Agent::Claude, project.path(), &turns);
+    there.wait_until_said(&original.id, &said(&turns));
+
+    let downloaded = Regex::new(r"\d+/(\d+) up/down").unwrap();
+    ai::wait_for("a sync to download the session", || {
+        let synced = here.run(&["sync"]);
+        match downloaded.captures(&synced) {
+            Some(counts) if &counts[1] != "0" => Ok(()),
+            _ => Err(synced),
+        }
+    });
+    assert!(here.session(&original.id).is_some(), "not listed once synced");
+}
+
 /// A copy behind the session's other machine catches up with it as it resumes, saying so, and
 /// once caught up resumes as it is.
 #[rstest]
@@ -360,6 +461,34 @@ fn a_copy_behind_another_machine_catches_up_as_it_resumes(
     let (_, stderr) = succeeded(&here.resume(&[&original.id, "--print"], here.home()));
     assert_eq!(stderr, "", "caught up twice");
     assert_eq!(restored.read(), text);
+}
+
+/// A session restored on another machine and gone on with there catches up on the machine it
+/// came from, though its last turn ran a tool capture kept without its input (a note in the
+/// restored copy): the copy goes on from the turn's last row, as the original does.
+#[rstest]
+fn a_session_gone_on_with_elsewhere_catches_up_where_it_came_from(
+    #[values(Agent::Claude, Agent::Pi)] agent: Agent,
+    project: TempDir,
+) {
+    let server = SyncServer::start();
+    let (there, here) =
+        Machine::pair_syncing(&server, 1, "capture = true\ncapture_tools = false\n");
+    let mut turns = vec![Turn::new()];
+    let original = Transcript::create(there.home(), agent, project.path(), &turns);
+    here.wait_until_said(&original.id, &said(&turns));
+    succeeded(&here.resume(&[&original.id, "--print"], here.home()));
+    let restored = Transcript::find(here.home(), agent, &original.id).unwrap();
+    assert!(restored.read().contains("[ran a shell command]"));
+
+    turns.push(Turn::new());
+    restored.append(project.path(), &turns[1..]);
+    there.wait_until_said(&original.id, &said(&turns));
+    let (_, stderr) = succeeded(&there.resume(&[&original.id, "--print"], there.home()));
+    let caught_up =
+        Regex::new(&format!(r"^atuin: caught up: \d+ messages? from {}\n$", here.short_host()));
+    assert!(caught_up.unwrap().is_match(&stderr), "{stderr}");
+    assert!(ai::holds_in_order(&original.read(), &said(&turns)), "not caught up");
 }
 
 /// Where a copy and the session's other machine went different ways, resuming it is a choice:
@@ -425,7 +554,8 @@ fn a_diverged_copy_resumes_only_as_chosen(
         "{stderr}"
     );
     assert!(
-        Path::new(backup).starts_with(here.data_dir().join("ai/switched").join(agent.harness())),
+        Path::new(backup)
+            .starts_with(here.data_dir().joined("ai/switched").joined(agent.harness())),
         "{backup}"
     );
     assert_eq!(std::fs::read_to_string(backup).unwrap(), copy, "the backup isn't the copy");
@@ -433,6 +563,53 @@ fn a_diverged_copy_resumes_only_as_chosen(
     let theirs_now = [said(&turns), said(std::slice::from_ref(&theirs))].concat();
     assert!(ai::holds_in_order(&text, &theirs_now), "not switched:\n{text}");
     assert!(!text.contains(&ours.reply), "our branch is still in it:\n{text}");
+}
+
+/// Continuing a session that went different ways on two machines in another agent carries the
+/// branch `--branch` names, never both interleaved; without one named, it continues nothing,
+/// listing the branches to name.
+#[rstest]
+#[case::claude_to_codex(Agent::Claude, Agent::Codex)]
+#[case::codex_to_claude(Agent::Codex, Agent::Claude)]
+#[case::pi_to_codex(Agent::Pi, Agent::Codex)]
+fn continuing_a_diverged_session_carries_one_branch(#[case] from: Agent, #[case] to: Agent) {
+    let Restored {
+        _server,
+        project,
+        here,
+        there,
+        turns,
+        original,
+        restored,
+    } = restored(from);
+    // Theirs is the newest.
+    let (ours, theirs) = (Turn::new(), Turn::new());
+    restored.append(project.path(), std::slice::from_ref(&ours));
+    original.append(project.path(), std::slice::from_ref(&theirs));
+    ai::wait("both branches", || {
+        let show = here.show(&original.id).to_string();
+        show.contains(&theirs.reply) && show.contains(&ours.reply)
+    });
+
+    let args = [original.id.as_str(), "--in", to.program(), "--print"];
+    let stderr = ai::failed(&here.resume(&args, here.home()));
+    assert!(
+        stderr.contains("it went 2 ways: name the branch to continue with `--branch`:"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&there.short_host()) && stderr.contains("this machine"), "{stderr}");
+
+    let theirs_by = there.short_host();
+    for (branch, kept, dropped) in [(&*theirs_by, &theirs, &ours), ("this", &ours, &theirs)] {
+        let args = [&args[..], &["--branch", branch]].concat();
+        let (stdout, stderr) = succeeded(&here.resume(&args, here.home()));
+        let continued = Transcript::find(here.home(), to, last_word(stdout.trim()))
+            .unwrap_or_else(|| panic!("nothing continued: {stdout} {stderr}"));
+        let text = continued.read();
+        let want = [said(&turns), said(std::slice::from_ref(kept))].concat();
+        assert!(ai::holds_in_order(&text, &want), "{branch:?}: not carried over:\n{text}");
+        assert!(!text.contains(&dropped.reply), "{branch:?}: the other branch came too:\n{text}");
+    }
 }
 
 /// Forking writes the session out as a new one of its agent, with the whole conversation, linked
@@ -462,8 +639,8 @@ fn forking_a_session_leaves_it_and_links_the_fork(
 
 /// Continuing a session in another agent writes it out as a new session of that agent, which
 /// carries the conversation on, each shell command now that agent's own shell tool with what it
-/// printed, and only the reasoning left out, as the status line says. It is linked to the
-/// original as its continuation, and resumed.
+/// printed, and only the reasoning left out. With nothing turned into notes, the status line just
+/// says where it continues. It is linked to the original as its continuation, and resumed.
 #[rstest]
 #[case::claude_to_codex(Agent::Claude, Agent::Codex)]
 #[case::claude_to_pi(Agent::Claude, Agent::Pi)]
@@ -486,7 +663,7 @@ fn continuing_in_another_agent_carries_the_conversation(
     let (stdout, stderr) = succeeded(
         &machine.resume(&[&original.id, "--in", to.program(), "--print"], machine.home()),
     );
-    assert_eq!(stderr.trim(), format!("atuin: continuing in {}: reasoning dropped", to.label()));
+    assert_eq!(stderr.trim(), format!("atuin: continuing in {}", to.label()));
     let continued = machine.wait_for_child(to, &original.id);
     assert_eq!(continued["parent_kind"], "continuation");
     assert_eq!(continued["parent"]["harness"], from.harness());
@@ -529,8 +706,18 @@ fn rebuilding_the_index_reproduces_it(machine: Machine, project: TempDir) {
         ids.iter().map(|id| machine.show(id)).collect()
     };
     let before = index(&machine);
-    let out = machine.run(&["store", "rebuild", "ai-session"]);
+    let out = machine.run(&["store", "rebuild", "threads"]);
     assert!(out.contains("rebuilding"), "{out}");
-    // `ai session` commands wait for the rebuild.
+    // `threads` commands wait for the rebuild.
     assert_eq!(index(&machine), before);
+}
+
+/// A message bigger than gRPC takes by default (4 MiB: a pasted log, a huge file) reads back
+/// whole.
+#[rstest]
+fn a_huge_message_reads_back(machine: Machine, project: TempDir) {
+    let mut turns = [Turn::new()];
+    turns[0].prompt = format!("{} {}", "x".repeat(9 << 19), turns[0].prompt);
+    let transcript = Transcript::create(machine.home(), Agent::Claude, project.path(), &turns);
+    machine.wait_until_said(&transcript.id, &said(&turns));
 }

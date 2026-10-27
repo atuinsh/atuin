@@ -33,6 +33,7 @@ fn captured(jsonl: &str) -> Vec<RehydrateMessage> {
                 role: m.role(),
                 content: m.content(),
                 model: m.model(),
+                provider: None,
                 usage: m.usage(),
                 stop_reason: m.stop_reason(),
                 turn_id: m.turn_id(),
@@ -128,7 +129,7 @@ async fn a_session_reads_back_as_it_was_captured(projects: TempDir, #[case] json
     let path = rehydrate_into(projects.path(), &session).unwrap();
     assert_eq!(
         path,
-        projects.path().join(project_dir_name(&cwd)).join(format!("{}.jsonl", session.id))
+        projects.path().join(project_dir_name(&cwd)).joined(format!("{}.jsonl", session.id))
     );
     assert_eq!(locate(projects.path(), &session.id), Some(path.clone()));
 
@@ -205,7 +206,7 @@ pub fn assert_the_api_takes(lines: &[serde_json::Value]) {
     }
 }
 
-/// What capture syncs with `ai.capture_tools` keeps every call's input and output: written back,
+/// What capture syncs with `threads.capture_tools` keeps every call's input and output: written back,
 /// each is a call and its result again, which the API takes. (Not session2: its call ids were
 /// redacted alike, so its results can't be told apart.)
 #[rstest]
@@ -244,7 +245,7 @@ fn calls_synced_with_their_payloads_come_back_as_calls_the_api_takes(
 
 /// What capture syncs keeps no call's input and no output. Written back, each such call is a
 /// note in its turn's text, which the API takes; re-captured, every line reads back under an id
-/// already synced (so nothing is pushed): a turn's first line with its notes, the lines merged
+/// already synced (so nothing is pushed): a turn's last line with its notes, the lines merged
 /// into it and the results not at all.
 #[rstest]
 #[case::session1(include_str!("../../../../tests/fixtures/ccode/session1.jsonl"))]
@@ -276,7 +277,7 @@ async fn synced_calls_come_back_as_notes_the_api_takes(projects: TempDir, #[case
         .filter(|(_, _, content)| !content.is_empty())
         .collect();
     testing::assert_nothing_new(&synced, again.iter().map(|(id, ..)| id.as_str()));
-    let flattened = flatten_uncaptured_calls(&synced, &Flatten::Runs);
+    let flattened = merge_uncaptured_runs(&synced).0;
     assert_eq!(again, carried(&flattened));
     for row in synced.iter().filter(|m| m.content.iter().any(is_uncaptured)) {
         if let Some((_, _, content)) = again.iter().find(|(id, ..)| *id == row.source_id) {
@@ -319,6 +320,7 @@ fn message(id: &str, parent: Option<&str>, role: Role, content: Vec<Content>) ->
         role,
         content,
         model: None,
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,
@@ -535,7 +537,7 @@ fn line_directories_have_no_trailing_separator(
     let expected = if expected_sub.is_empty() {
         here
     } else {
-        here.join(expected_sub)
+        here.joined(expected_sub)
     };
     assert_eq!(lines(&path)[0]["cwd"], expected.to_string_lossy().as_ref());
 }

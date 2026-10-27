@@ -12,7 +12,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-octavo = ["dep:atuin-octavo"]
+octavo = ["dep:atuin-octavo", "atuin-client/octavo"]
 
 [dependencies]
 async-stream = { workspace = true }
@@ -20,7 +20,9 @@ atuin-client = { workspace = true, features = ["proto"] }
 atuin-common = { workspace = true, features = ["ai", "os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-history = { workspace = true }
+atuin-kv = { workspace = true }
 atuin-octavo = { workspace = true, optional = true }
+atuin-scripts = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
@@ -31,6 +33,7 @@ eyre = { workspace = true }
 fjall = { workspace = true }
 frizbee = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 hyper-util = { workspace = true }
 itertools = { workspace = true }
 lasso = { workspace = true }
@@ -40,6 +43,7 @@ prost-types = { workspace = true }
 regex = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
@@ -55,24 +59,29 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+daemonix = { workspace = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 listenfd = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = { workspace = true }
+# Tells a launchd job's own process from what it runs.
+rustix = { workspace = true }
+service-manager = { workspace = true }
+
 [dev-dependencies]
-atuin-common = { workspace = true, features = ["os", "sqlite"] }
-divan = { workspace = true }
+atuin-common = { workspace = true, features = ["test-utils"] }
 proptest = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
 protox = { workspace = true }
 tonic-prost-build = { workspace = true }
-
-[[bench]]
-name = "output_index"
-harness = false
 
 [lints]
 workspace = true

@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use atuin_common::path::AbsPathBuf;
 use eyre::{Result, WrapErr};
 use notify::event::{EventKind, ModifyKind};
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
@@ -98,12 +99,7 @@ impl SettingsWatcher {
 
     /// Get the config file path.
     fn config_path() -> PathBuf {
-        let config_dir = if let Ok(p) = std::env::var("ATUIN_CONFIG_DIR") {
-            PathBuf::from(p)
-        } else {
-            atuin_common::utils::config_dir()
-        };
-        config_dir.join("config.toml")
+        atuin_common::dirs::config_path("config.toml")
     }
 
     /// Create the file watcher with debouncing.
@@ -125,9 +121,8 @@ impl SettingsWatcher {
 
         // Canonicalize config path for reliable comparison on macOS
         // (handles symlinks like /var -> /private/var)
-        let canonical_config_path = config_path_for_watcher
-            .canonicalize()
-            .unwrap_or_else(|_| config_path_for_watcher.clone());
+        let canonical_config_path = AbsPathBuf::canonicalize(&config_path_for_watcher)
+            .map_or_else(|_| config_path_for_watcher.clone(), PathBuf::from);
 
         // Create file watcher
         let mut watcher = RecommendedWatcher::new(
@@ -148,8 +143,8 @@ impl SettingsWatcher {
                         // (filter out editor temp files, backups, etc.)
                         let is_config_file = event.paths.iter().any(|path| {
                             // Canonicalize for reliable comparison (handles macOS symlinks)
-                            let canonical_event_path =
-                                path.canonicalize().unwrap_or_else(|_| path.clone());
+                            let canonical_event_path = AbsPathBuf::canonicalize(path)
+                                .map_or_else(|_| path.clone(), PathBuf::from);
 
                             // Check if this event is for our config file
                             // (either exact match or the file was renamed to our config)

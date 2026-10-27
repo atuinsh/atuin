@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use atuin_client::ai_session::{Appended, HarnessKind, NativeSessionId};
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::any::AnySessions;
+use atuin_common::harnesstools::session::any::{AnySession, AnySessions};
 use atuin_common::sync::BlockingPool;
 use futures::{Stream, StreamExt};
 
@@ -30,6 +30,11 @@ pub enum ImportProgress {
         failed: u64,
     },
 }
+
+/// How many rows an import stores at a time, a few sessions' worth: each batch is one transaction
+/// in either store, which is most of what storing a row costs. Larger ones import a little faster
+/// but hold the record store's write lock longer, which shell history waits on.
+const BATCH: usize = 1024;
 
 pub struct SessionImporter {
     sink: Arc<Sink>,
@@ -102,67 +107,117 @@ impl SessionImporter {
             let Ok(existing) = sessions.existing() else {
                 return;
             };
-            let mut imports = existing
+            let mut reads = existing
                 .map(|item| {
-                    let sink = sink.clone();
+                    let keeps_patches = sink.keeps_patches();
                     async move {
                         // A scan failure (unreadable directory/entry) is not a session; surface it
                         // so the summary reflects a partial backfill instead of a silent one.
-                        let Ok(session) = item else {
-                            return ImportProgress::ScanFailed { failed: 1 };
-                        };
-                        // One enricher per session: it carries that session's bookkeeping (title,
-                        // timestamps, parent, synthetic ids) across its lines, exactly as live
-                        // capture does, so a backfilled row matches the captured one.
-                        let mut enricher = MessageEnricher::new(kind).keeping_patches(sink.keeps_patches());
-                        let sid = session.id();
-                        let mut imported = 0u64;
-                        let mut skipped = 0u64;
-                        let mut failed = 0u64;
-                        let mut messages = session.read();
-                        let mut done = false;
-                        while !done {
-                            let rows = match messages.next().await {
-                                Some(Ok(message)) => enricher.capture(&sid, &message),
-                                Some(Err(_)) => {
-                                    failed += 1;
-                                    continue;
-                                }
-                                None => {
-                                    done = true;
-                                    enricher.finish(&sid)
-                                }
-                            };
-                            // A bookkeeping line worth no row (matches live capture) is not
-                            // counted: it is neither a new record nor a dedupe skip.
-                            for msg in rows {
-                                match sink.append(msg).await {
-                                    Ok(Appended::New) => imported += 1,
-                                    Ok(Appended::Duplicate) => skipped += 1,
-                                    Err(_) => failed += 1,
-                                }
-                            }
-                        }
-                        ImportProgress::Session {
-                            harness: kind,
-                            session: enricher.handle(&sid).session,
-                            imported,
-                            skipped,
-                            failed,
+                        let session = item.ok()?;
+                        // Decoding and enriching a session's lines is CPU work: on a blocking
+                        // thread, as the runtime's is the daemon's every other request's. (Not the
+                        // pool's: reading the session takes a worker of it.)
+                        let read = tokio::task::spawn_blocking(move || {
+                            futures::executor::block_on(read(kind, keeps_patches, session))
+                        });
+                        match read.await {
+                            Ok(read) => Some(read),
+                            Err(err) => std::panic::resume_unwind(err.into_panic()),
                         }
                     }
                 })
                 .buffer_unordered(concurrency);
-            while let Some(event) = imports.next().await {
-                yield event;
+
+            // Sessions' rows are stored a batch at a time, a session's progress once its are.
+            let mut batch = Vec::new();
+            let mut sessions = Vec::new();
+            loop {
+                match reads.next().await {
+                    Some(None) => {
+                        yield ImportProgress::ScanFailed { failed: 1 };
+                        continue;
+                    }
+                    Some(Some(read)) => {
+                        sessions.push((read.session, read.rows.len(), read.failed));
+                        batch.extend(read.rows);
+                        if batch.len() < BATCH {
+                            continue;
+                        }
+                    }
+                    None if sessions.is_empty() => break,
+                    None => {}
+                }
+
+                // A batch at a time however long a session is, each row's fate `None` if its
+                // batch failed.
+                let mut appended = Vec::with_capacity(batch.len());
+                let mut rows = std::mem::take(&mut batch).into_iter().peekable();
+                while rows.peek().is_some() {
+                    let part: Vec<_> = rows.by_ref().take(BATCH).collect();
+                    let len = part.len();
+                    match sink.append_all(part).await {
+                        Ok(part) => appended.extend(part.into_iter().map(Some)),
+                        Err(_) => appended.extend(std::iter::repeat_n(None, len)),
+                    }
+                }
+                let mut at = 0;
+                for (session, count, failed) in std::mem::take(&mut sessions) {
+                    let rows = &appended[at..at + count];
+                    let new = rows.iter().filter(|a| **a == Some(Appended::New)).count() as u64;
+                    let lost = rows.iter().filter(|a| a.is_none()).count() as u64;
+                    let (imported, skipped, failed) = (new, count as u64 - new - lost, failed + lost);
+                    at += count;
+                    yield ImportProgress::Session {
+                        harness: kind,
+                        session,
+                        imported,
+                        skipped,
+                        failed,
+                    };
+                }
             }
         }
     }
 }
 
+/// Read `session` as live capture would: its rows, and how many of its lines failed to read.
+async fn read(kind: HarnessKind, keeps_patches: bool, session: AnySession) -> Read {
+    // One enricher per session: it carries that session's bookkeeping (title, timestamps,
+    // parent, synthetic ids) across its lines, exactly as live capture does, so a backfilled row
+    // matches the captured one.
+    let mut enricher = MessageEnricher::new(kind).keeping_patches(keeps_patches);
+    let sid = session.id();
+    let mut rows = Vec::new();
+    let mut failed = 0u64;
+    let mut messages = session.read();
+    while let Some(message) = messages.next().await {
+        match message {
+            Ok(message) => rows.extend(enricher.capture(&sid, &message)),
+            Err(_) => failed += 1,
+        }
+    }
+    rows.extend(enricher.finish(&sid));
+    // A bookkeeping line worth no row (matches live capture) is not counted: it is neither a new
+    // record nor a dedupe skip.
+    Read {
+        session: enricher.handle(&sid).session,
+        rows,
+        failed,
+    }
+}
+
+/// One session as an import reads it: its rows, and how many of its lines failed to read.
+struct Read {
+    session: NativeSessionId,
+    rows: Vec<atuin_client::ai_session::Message>,
+    failed: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering::SeqCst;
 
     use atuin_client::ai_session::{
         AiSessionDatabase, AiSessionStore, HarnessSession, NativeSessionId,
@@ -172,10 +227,11 @@ mod tests {
     use atuin_common::harnesstools::pi::session::PiSessions;
     use atuin_domain::record::HostId;
     use futures::StreamExt;
+    use futures::future::BoxFuture;
     use rstest::rstest;
 
     use super::*;
-    use crate::session_capture::AiHarnessSessionCapture;
+    use crate::session_capture::{AiHarnessSessionCapture, hooks};
 
     async fn mem_store() -> AiSessionStore {
         let store = SqliteStore::in_memory(std::time::Duration::from_secs(5)).await.unwrap();
@@ -266,6 +322,87 @@ mod tests {
         assert_eq!(sum_skipped(&second), 3);
         let after_second = sink.sidecar.get_session(&handle).await.unwrap().unwrap().message_count;
         assert_eq!(after_second, after_first);
+    }
+
+    /// Sessions stored a batch at a time are each credited with their own rows: one part stored
+    /// before (an import cut short) counts what was as skipped.
+    #[rstest]
+    #[tokio::test]
+    async fn import_counts_each_session_in_a_batch_as_its_own() {
+        let root = tempfile::tempdir().unwrap();
+        write_pi_session(root.path(), "s1", &["user:hi"]);
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let import = async || -> Vec<_> {
+            SessionImporter::new(sink.clone(), pool())
+                .harness(HarnessKind::Pi, pi_sessions(root.path()))
+                .collect()
+                .await
+        };
+        import().await;
+
+        write_pi_session(root.path(), "s1", &["user:hi", "assistant:yo"]);
+        write_pi_session(root.path(), "s2", &["user:hey", "assistant:hello"]);
+        let mut counts: Vec<_> = import()
+            .await
+            .into_iter()
+            .filter_map(|event| match event {
+                ImportProgress::Session {
+                    session,
+                    imported,
+                    skipped,
+                    ..
+                } => Some((session.to_string(), imported, skipped)),
+                _ => None,
+            })
+            .collect();
+        counts.sort();
+        // The header and the turns.
+        assert_eq!(counts, [("s1".to_owned(), 1, 2), ("s2".to_owned(), 3, 0)]);
+    }
+
+    /// Counts the record pushes capture makes.
+    #[derive(Debug, Default)]
+    struct CountPushes(AtomicUsize);
+
+    impl hooks::Hooks for CountPushes {
+        fn at(&self, point: hooks::Point) -> BoxFuture<'_, hooks::Fault> {
+            if point == hooks::Point::CapturePushing {
+                self.0.fetch_add(1, SeqCst);
+            }
+            Box::pin(async { hooks::Fault::None })
+        }
+    }
+
+    /// A session longer than a batch is still stored a batch at a time, so no transaction holds
+    /// the record store for longer than one batch's takes.
+    #[rstest]
+    #[tokio::test]
+    async fn a_long_session_is_stored_a_batch_at_a_time() {
+        let root = tempfile::tempdir().unwrap();
+        // With its header, two rows past a batch.
+        let turns = vec!["user:hi"; BATCH + 1];
+        write_pi_session(root.path(), "s1", &turns);
+        let pushes = Arc::new(CountPushes::default());
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.hooks = Some(pushes.clone());
+
+        let counts: Vec<_> = SessionImporter::new(Arc::new(sink), pool())
+            .harness(HarnessKind::Pi, pi_sessions(root.path()))
+            .filter_map(async |event| match event {
+                ImportProgress::Session {
+                    imported,
+                    skipped,
+                    failed,
+                    ..
+                } => Some((imported, skipped, failed)),
+                _ => None,
+            })
+            .collect()
+            .await;
+
+        assert_eq!(counts, [(BATCH as u64 + 2, 0, 0)]);
+        assert_eq!(pushes.0.load(SeqCst), 2);
     }
 
     #[rstest]

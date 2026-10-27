@@ -1,8 +1,8 @@
-use std::env;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::db;
+use atuin_common::path::PathBufExt as _;
 use atuin_domain::record::CmdOrigin;
 use easy_cast::{CastFloat, Conv};
 use eyre::{Result, eyre};
@@ -68,15 +68,13 @@ impl HistDbEntry {
 fn xonsh_db_path(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Some(d) = xonsh_data_dir {
-        let mut path = PathBuf::from(d);
-        path.push("xonsh-history.sqlite");
-        return Ok(path);
+        return Ok(PathBuf::from(d).joined("xonsh-history.sqlite"));
     }
 
     // otherwise, fall back to default
     let data_dir = dirs::data_dir().ok_or_else(|| eyre!("Could not determine data directory"))?;
 
-    let hist_file = data_dir.join("xonsh/xonsh-history.sqlite");
+    let hist_file = data_dir.joined("xonsh/xonsh-history.sqlite");
     if hist_file.exists() || cfg!(test) {
         Ok(hist_file)
     } else {
@@ -96,7 +94,7 @@ impl Importer for XonshSqlite {
 
     async fn new() -> Result<Self> {
         // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
-        let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
+        let xonsh_data_dir = atuin_common::env::var("XONSH_DATA_DIR").ok();
         let db_path = get_histfile_path(|| xonsh_db_path(xonsh_data_dir))?;
         let connection_str = db_path.to_str().ok_or_else(|| {
             eyre!("Invalid path for SQLite database: {}", db_path.to_string_lossy())
@@ -138,19 +136,20 @@ impl Importer for XonshSqlite {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
+    #[rstest]
     fn test_db_path_xonsh() {
         let db_path = xonsh_db_path(Some("/home/user/xonsh_data".to_string())).unwrap();
         assert_eq!(db_path, PathBuf::from("/home/user/xonsh_data/xonsh-history.sqlite"));
     }
 
-    #[test]
+    #[rstest]
     fn out_of_range_timestamp_falls_back_to_epoch() {
         let entry = HistDbEntry {
             inp: "echo hello".to_string(),

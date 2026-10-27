@@ -17,7 +17,7 @@ use crate::tools::ClientToolCall;
 pub enum PermissionTarget {
     /// Project-level: `<git_root_or_cwd>/.atuin/permissions.ai.toml`
     Project,
-    /// Global: `~/.config/atuin/permissions.ai.toml`
+    /// Global: `~/.atuin/permissions.ai.toml`
     Global,
 }
 

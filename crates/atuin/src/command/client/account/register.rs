@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{Settings, SyncAuth};
@@ -24,7 +26,7 @@ pub struct Cmd {
 
 impl Cmd {
     #[allow(clippy::too_many_lines)]
-    pub async fn run(&self, settings: &Settings, store: &SqliteStore) -> Result<()> {
+    pub async fn run(&self, settings: &Arc<Settings>, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
                 println!("{}", fl!("account-hub-authenticated"));
@@ -68,7 +70,7 @@ impl Cmd {
 
                 match response {
                     AuthResponse::Success { session, auth_type } => {
-                        let meta = Settings::meta_store().await?;
+                        let meta = settings.meta_store().await?;
                         let is_hub_token = auth_type.as_deref() == Some("hub")
                             || atuin_client::meta::is_hub_token(&session);
 
@@ -127,7 +129,7 @@ impl Cmd {
             )
             .await?;
 
-            let meta = Settings::meta_store().await?;
+            let meta = settings.meta_store().await?;
             meta.save_session(&session.session).await?;
 
             let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;

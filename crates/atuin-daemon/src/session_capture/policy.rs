@@ -15,8 +15,8 @@ use regex::RegexSet;
 
 use super::tools;
 
-/// What a call is kept with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a call is kept with, from the most kept to the least.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Verdict {
     /// Its input and output, as [`ToolCapture`](super::ToolCapture) keeps them.
     Keep,
@@ -39,6 +39,8 @@ pub struct CapturePolicy {
     command_filter: CommandFilter,
     files: SensitiveFiles,
     redactor: Redactor,
+    /// `redactor` with the user's own patterns alone.
+    users: Redactor,
 }
 
 impl Default for CapturePolicy {
@@ -51,6 +53,7 @@ impl Default for CapturePolicy {
             command_filter: CommandFilter::default(),
             files: SensitiveFiles::default(),
             redactor: Redactor::default(),
+            users: Redactor::new(Vec::new(), false),
         }
     }
 }
@@ -65,6 +68,7 @@ impl CapturePolicy {
             command_filter: settings.output.command_filter().clone(),
             files: settings.security.sensitive_files(&settings.key_path),
             redactor: settings.security.redactor(true),
+            users: settings.security.redactor(false),
         }
     }
 
@@ -73,9 +77,27 @@ impl CapturePolicy {
         self.cwd_filter.is_match(&cwd.to_string_lossy())
     }
 
-    /// What `call`, made in `cwd`, is kept with.
+    /// What `call`, made in `cwd`, is kept with: the least any of what it touches is kept with (a
+    /// Codex script runs several tools at once, see [`Access::all`]). A script whose calls
+    /// weren't all read can't be judged: it is dropped, what it ran and wrote with it. (The
+    /// commands it runs still reach shell history, filtered, through Codex's hooks.)
     pub(super) fn judge(&self, call: &ToolUse, cwd: Option<&Path>) -> Verdict {
-        let access = Access::of(&call.name, &call.input);
+        let (accesses, whole) = Access::all(&call.name, &call.input);
+        if !whole {
+            return Verdict::Drop;
+        }
+        let verdict = accesses
+            .iter()
+            .map(|access| self.judge_access(access, cwd))
+            .max()
+            .unwrap_or(Verdict::Keep);
+        if verdict == Verdict::Keep && tools::runs_output_unsafe(&call.input) {
+            return Verdict::WithholdOutput;
+        }
+        verdict
+    }
+
+    fn judge_access(&self, access: &Access, cwd: Option<&Path>) -> Verdict {
         let dir = access.workdir.as_deref().map(Path::new).or(cwd);
         if let Some(command) = &access.command {
             let ignored = self.history_filter.is_match(command)
@@ -93,10 +115,7 @@ impl CapturePolicy {
                 || self.command_filter.is_match(command)
                 || self.files.named_in_command(command, dir)
         });
-        if unsafe_command
-            || access.reads.iter().any(|path| self.files.matches(path, dir))
-            || tools::runs_output_unsafe(&call.input)
-        {
+        if unsafe_command || access.reads.iter().any(|path| self.files.matches(path, dir)) {
             return Verdict::WithholdOutput;
         }
         Verdict::Keep
@@ -107,10 +126,25 @@ impl CapturePolicy {
         self.files.matches(path, cwd)
     }
 
+    #[cfg(test)]
+    pub(super) fn with_redact_patterns(patterns: Vec<regex::Regex>) -> Self {
+        Self {
+            redactor: Redactor::new(patterns.clone(), true),
+            users: Redactor::new(patterns, false),
+            ..Self::default()
+        }
+    }
+
     /// `text` redacted, or `None` when that takes too long (see [`REDACT_BUDGET`]): then it is
     /// better not kept.
     pub(super) fn redact<'a>(&self, text: &'a str) -> Option<Cow<'a, str>> {
         self.redactor.redact_within(text, REDACT_BUDGET)
+    }
+
+    /// [`Self::redact`] with the user's own patterns alone, which, unlike the built-in ones, can
+    /// match across lines, any length.
+    pub(super) fn redact_users<'a>(&self, text: &'a str) -> Option<Cow<'a, str>> {
+        self.users.redact_within(text, REDACT_BUDGET)
     }
 }
 
@@ -137,6 +171,7 @@ pub(super) mod tests {
                 Some(PathBuf::from("/home/me")),
             ),
             redactor: Redactor::default(),
+            users: Redactor::new(Vec::new(), false),
         }
     }
 
@@ -168,6 +203,26 @@ pub(super) mod tests {
     #[case::read_example("Read", json!({"file_path": ".env.example"}), Verdict::Keep)]
     #[case::ordinary("Bash", json!({"command": "cargo test"}), Verdict::Keep)]
     #[case::search("WebSearch", json!({"query": "rust"}), Verdict::Keep)]
+    // Codex 0.160 runs each tool through a script; what it runs is judged as if run directly.
+    #[case::script_history_filter("exec", json!("const r = await tools.exec_command({cmd:\"psql -c 'select 1'\",workdir:\"/w\"});\ntext(r.output);\n"), Verdict::Drop)]
+    #[case::script_command_filter("exec", json!("const r = await tools.exec_command({cmd:\"cat notes.md\", max_output_tokens:200});\ntext(r.output);\n"), Verdict::WithholdOutput)]
+    #[case::script_cwd_filter("exec", json!("await tools.exec_command({cmd:\"ls\",workdir:\"/secret/x\"})"), Verdict::Drop)]
+    #[case::script_secret("exec", json!("await tools.exec_command({cmd:\"atuin login -u me -p hunter2\"})"), Verdict::Drop)]
+    #[case::script_cat_dotenv("exec", json!("await tools.exec_command({cmd:'cat .env'})"), Verdict::WithholdOutput)]
+    #[case::script_patch_dotenv("exec", json!("const patch = \"*** Begin Patch\\n*** Add File: .env\\n+A=1\\n*** End Patch\";\nconst r = await tools.apply_patch(patch);\ntext(r);\n"), Verdict::WithholdWritten)]
+    #[case::script_read_key("exec", json!("await tools.view_image({path:\"~/.ssh/id_ed25519\"})"), Verdict::WithholdOutput)]
+    #[case::script_worst_call("exec", json!("await tools.exec_command({cmd:'cat .env'});\nawait tools.exec_command({cmd:'psql'});"), Verdict::Drop)]
+    #[case::script_computed("exec", json!("const c = `psql ${db}`;\nawait tools.exec_command({cmd: c});"), Verdict::Drop)]
+    // A script not read whole is dropped, whatever it may hide, filtered or not (from review and
+    // validation).
+    #[case::script_misread_regex("exec", json!("if (ok) /\"/.test(x); await tools.exec_command({cmd:\"psql -c 1\"}); const y = \"z\";"), Verdict::Drop)]
+    #[case::script_misread_division("exec", json!("let i = 0; i++ / 2; await tools.exec_command({cmd:\"psql\"});"), Verdict::Drop)]
+    #[case::script_joined_list("exec", json!("await tools.exec_command({cmd: [\"psql\", \"-c 1\"].join(\" \")});"), Verdict::Drop)]
+    #[case::script_appended("exec", json!("let c = \"ps\"; c += \"ql -c 1\"; await tools.exec_command({cmd: c});"), Verdict::Drop)]
+    #[case::script_patch_built("exec", json!("const name = (await tools.exec_command({cmd: \"ls\"})).output.trim();\nawait tools.apply_patch(`*** Begin Patch\\n*** Update File: ${name}\\n+X=3\\n*** End Patch`);"), Verdict::Drop)]
+    #[case::script_split_joined("exec", json!("await tools.exec_command({cmd: \"echo,hi\".split(\",\").join(\" \")});"), Verdict::Drop)]
+    #[case::script_computed_workdir("exec", json!("await tools.exec_command({cmd: \"ls\", workdir: base + \"/x\"});"), Verdict::Drop)]
+    #[case::script_ordinary("exec", json!("const r = await tools.exec_command({cmd:\"cargo test\"});\ntext(r.output);"), Verdict::Keep)]
     fn what_a_call_is_kept_with(
         policy: CapturePolicy,
         #[case] name: &str,

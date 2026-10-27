@@ -137,10 +137,11 @@ mod tests {
     use rstest::rstest;
 
     use super::DisplayRichExt;
+    use crate::path::PathBufExt as _;
 
     /// With no options, output is byte-identical to `Path::display()`.
     #[rstest]
-    #[case(Path::new("relative").join("some").join("dir"))]
+    #[case(Path::new("relative").join("some").joined("dir"))]
     #[case(Path::new("etc").join("hosts"))]
     fn base_output_matches_path_display(#[case] path: PathBuf) {
         assert_eq!(path.display_rich().to_string(), path.display().to_string());
@@ -179,7 +180,7 @@ mod tests {
     /// equal), and passes the path through otherwise.
     #[rstest]
     #[case::strips_prefix(
-        Path::new("home").join("user").join("project").join("src"),
+        Path::new("home").join("user").joined("project").joined("src"),
         Path::new("home").join("user"),
         Path::new("project").join("src").display().to_string()
     )]
@@ -205,7 +206,7 @@ mod tests {
     /// (`~` + separator for `home` itself), and passes through otherwise.
     #[rstest]
     #[case::abbreviates_home(
-        Path::new("home").join("user").join("project"),
+        Path::new("home").join("user").joined("project"),
         Path::new("home").join("user"),
         format!("~{MAIN_SEPARATOR_STR}project")
     )]
@@ -236,7 +237,7 @@ mod tests {
     /// — pinning that edge, which no current caller reaches.
     #[rstest]
     #[case::tilde(
-        Path::new("home").join("user").join("proj"),
+        Path::new("home").join("user").joined("proj"),
         None,
         Some(Path::new("home").join("user")),
         format!("~{MAIN_SEPARATOR_STR}proj{MAIN_SEPARATOR_STR}")

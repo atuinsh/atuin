@@ -5,7 +5,7 @@ use atuin_client::history::HistoryId;
 use atuin_common::string::TrimExt as _;
 use atuin_common::string::bounded_buffer::{self, BoundedBuffer, BufferContents};
 
-use crate::markers::{self, Event, EventChunk, EventChunks};
+use crate::parser::{Event, EventChunk, Output};
 
 /// Clears the screen while maintaining cursor position.
 ///
@@ -53,18 +53,42 @@ impl vt100::Callbacks for Scrollback {
     }
 }
 
-/// The "core" of a [`CommandCaptureTracker`].
-///
-/// This is a separate type to satisfy Rust's borrowing rules. [`CommandCaptureTracker::push`] can't
-/// call other [`CommandCaptureTracker`] methods while [`CommandCaptureTracker::marker_parser`] is
-/// borrowed, so instead we put those methods in a separate type, [`TrackerCore`].
-struct TrackerCore {
+pub struct CommandCaptureTracker {
     emulator: vt100::Parser<Scrollback>,
     sink: CommandCaptureSink,
     output_observed_bytes: u64,
 }
 
-impl TrackerCore {
+impl CommandCaptureTracker {
+    pub fn new(rows: NonZeroU16, cols: NonZeroU16, config: CaptureConfig) -> Self {
+        let CaptureConfig {
+            sink,
+            max_output_bytes,
+        } = config;
+        Self {
+            emulator: vt100::Parser::new_with_callbacks(
+                rows,
+                cols,
+                0,
+                Scrollback::new(bounded_buffer::Limit::split_evenly(max_output_bytes)),
+            ),
+            sink,
+            output_observed_bytes: 0,
+        }
+    }
+
+    pub fn resize(&mut self, rows: NonZeroU16, cols: NonZeroU16) {
+        self.emulator.screen_mut().set_size(rows, cols);
+    }
+
+    pub fn push(&mut self, output: &Output) {
+        for chunk in output.chunks() {
+            self.process_counted(chunk.data);
+            self.handle_chunk(chunk);
+        }
+        self.process_counted(output.trailing_data());
+    }
+
     fn history_id(&self) -> Option<HistoryId> {
         self.emulator.callbacks().history_id
     }
@@ -204,6 +228,7 @@ impl TrackerCore {
         match chunk.event {
             Event::OutputStart(history_id) => self.start_capture(history_id),
             Event::OutputEnd(history_id) => self.end_capture(history_id, chunk.osc_len),
+            Event::Title => {}
         }
     }
 
@@ -216,49 +241,6 @@ impl TrackerCore {
             *count = count.saturating_add(data_len);
         }
     }
-
-    fn handle_chunks(&mut self, mut chunks: EventChunks<'_, '_>) {
-        for chunk in chunks.by_ref() {
-            self.process_counted(chunk.data);
-            self.handle_chunk(chunk);
-        }
-        self.process_counted(chunks.trailing_data());
-    }
-}
-
-pub struct CommandCaptureTracker {
-    marker_parser: markers::Parser,
-    core: TrackerCore,
-}
-
-impl CommandCaptureTracker {
-    pub fn new(rows: NonZeroU16, cols: NonZeroU16, config: CaptureConfig) -> Self {
-        let CaptureConfig {
-            sink,
-            max_output_bytes,
-        } = config;
-        Self {
-            marker_parser: markers::Parser::new(),
-            core: TrackerCore {
-                emulator: vt100::Parser::new_with_callbacks(
-                    rows,
-                    cols,
-                    0,
-                    Scrollback::new(bounded_buffer::Limit::split_evenly(max_output_bytes)),
-                ),
-                sink,
-                output_observed_bytes: 0,
-            },
-        }
-    }
-
-    pub fn resize(&mut self, rows: NonZeroU16, cols: NonZeroU16) {
-        self.core.emulator.screen_mut().set_size(rows, cols);
-    }
-
-    pub fn push(&mut self, data: &[u8]) {
-        self.core.handle_chunks(self.marker_parser.push(data));
-    }
 }
 
 #[cfg(test)]
@@ -269,6 +251,7 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::*;
+    use crate::parser::Parser;
 
     const ROWS: u16 = 24;
     const COLS: u16 = 80;
@@ -289,6 +272,7 @@ mod tests {
     /// A [`CommandCaptureTracker`] together with the captures its sink has been handed.
     struct Tracker {
         inner: CommandCaptureTracker,
+        output: Parser,
         received: Receiver<(HistoryId, CommandCapture)>,
         collected: Vec<(HistoryId, CommandCapture)>,
     }
@@ -303,13 +287,14 @@ mod tests {
                     }),
                     max_output_bytes,
                 }),
+                output: Parser::new(),
                 received,
                 collected: Vec::new(),
             }
         }
 
         fn push(&mut self, data: &[u8]) -> &mut Self {
-            self.inner.push(data);
+            self.inner.push(&self.output.read(data.to_vec()));
             self
         }
 

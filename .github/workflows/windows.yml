@@ -23,7 +23,7 @@ env:
 
 jobs:
   unit-test:
-    # A /merge points the pull request at the commit it landed as, which CI already ran.
+    # A /merge points the pull request at the commit it landed as, which CI runs on main.
     if: github.event.action != 'synchronize' || github.actor != 'atuin-bot'
     strategy:
       matrix:
@@ -87,7 +87,7 @@ jobs:
           retention-days: 14
 
   check:
-    # A /merge points the pull request at the commit it landed as, which CI already ran.
+    # A /merge points the pull request at the commit it landed as, which CI runs on main.
     if: github.event.action != 'synchronize' || github.actor != 'atuin-bot'
     strategy:
       matrix:

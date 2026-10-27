@@ -13,7 +13,8 @@ const PAGINATED: &str = "paginated-compacted.jsonl";
 const LEGACY: &str = "legacy-forked-subagent.jsonl";
 
 fn fixture(name: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex").join(name);
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).joined("tests/fixtures/codex").joined(name);
     std::fs::read_to_string(path).unwrap()
 }
 
@@ -27,7 +28,7 @@ fn thread(text: &str) -> String {
 fn rollout(home: &Path, thread: &str, text: &str, lines: usize) -> PathBuf {
     let dir = home.join("sessions/2026/09/24");
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("rollout-2026-09-24T02-47-48-{thread}.jsonl"));
+    let path = dir.joined(format!("rollout-2026-09-24T02-47-48-{thread}.jsonl"));
     let kept: String = text.lines().take(lines).map(|l| format!("{l}\n")).collect();
     std::fs::write(&path, kept).unwrap();
     path
@@ -54,6 +55,7 @@ async fn synced(path: &Path) -> Vec<RehydrateMessage> {
             role: m.role(),
             content: m.content(),
             model: m.model(),
+            provider: None,
             usage: m.usage(),
             stop_reason: m.stop_reason(),
             turn_id: m.turn_id(),
@@ -92,6 +94,33 @@ async fn behind(home: &Path, cut: usize) -> (String, PathBuf, LocalTip, Vec<Rehy
 async fn the_tip_records_where_the_copy_works(dir: TempDir) {
     let (_, _, base, _) = behind(dir.path(), 20).await;
     assert_eq!(base.cwd, Some(PathBuf::from("/work")));
+}
+
+/// A rollout Codex compressed is made plain again, as Codex does to append to it, keeping when it
+/// was last written: the copy is the same as before it was compressed.
+#[rstest]
+#[tokio::test]
+async fn a_compressed_rollout_is_made_plain_to_resume(dir: TempDir) {
+    let text = fixture(PAGINATED);
+    let thread = thread(&text);
+    let path = rollout(dir.path(), &thread, &text, 20);
+    let plain = local_tip_in(dir.path(), &thread).await.unwrap().unwrap();
+    let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let compressed = path.with_extension("jsonl.zst");
+    std::fs::write(
+        &compressed,
+        zstd::encode_all(std::fs::read(&path).unwrap().as_slice(), 3).unwrap(),
+    )
+    .unwrap();
+    File::options().write(true).open(&compressed).unwrap().set_modified(at).unwrap();
+    std::fs::remove_file(&path).unwrap();
+
+    let tip = local_tip_in(dir.path(), &thread).await.unwrap().unwrap();
+    assert_eq!(tip.native_path, path);
+    assert!(!compressed.exists());
+    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), at);
+    assert_eq!(tip.tip_source_id, plain.tip_source_id);
+    assert_eq!(tip.stamp, plain.stamp);
 }
 
 /// Appending the rows past the tip numbers each new line on from the rollout's last; Codex
@@ -136,7 +165,7 @@ async fn a_fast_forward_numbers_on_from_the_last_line(
     let again = synced(&path).await;
     testing::assert_nothing_new(&all, again.iter().map(|r| r.source_id.as_str()));
     if locks {
-        assert!(!dir.path().join(LOCKS).join(format!("{thread}.lock")).exists(), "let go");
+        assert!(!dir.path().join(LOCKS).joined(format!("{thread}.lock")).exists(), "let go");
     }
 }
 
@@ -147,7 +176,7 @@ async fn a_thread_codex_holds_is_left_alone(dir: TempDir) {
     let locks = dir.path().join(LOCKS);
     std::fs::create_dir_all(&locks).unwrap();
     let (thread, path, base, missing) = behind(dir.path(), 20).await;
-    let held = File::create(locks.join(format!("{thread}.lock"))).unwrap();
+    let held = File::create(locks.joined(format!("{thread}.lock"))).unwrap();
     held.lock().unwrap();
     let before = std::fs::read(&path).unwrap();
     let err = append_in(dir.path(), &thread, &base, &missing, None).unwrap_err();
@@ -213,7 +242,8 @@ async fn their_branch(cut: usize) -> (Vec<RehydrateMessage>, String) {
 /// content), drops what it went on with here, and appends the branch's lines past it, numbered on
 /// from the line kept last; Codex resumes from the branch's head, and capture reads back nothing
 /// the branch doesn't hold. In place, under the thread's writer lock where Codex keeps them, with
-/// the rollout as it was kept whole outside Codex's sessions.
+/// the rollout as it was kept whole outside Codex's sessions. Codex's history of the thread,
+/// projected from the lines the switch cut, is forgotten.
 #[rstest]
 #[case::without_locks(false)]
 #[case::under_the_writer_lock(true)]
@@ -229,6 +259,7 @@ async fn a_switch_writes_the_rollout_out_along_the_branch_in_place(
     let (thread, path, base, _) = behind(dir.path(), 45).await;
     let before = std::fs::read_to_string(&path).unwrap();
     let (rows, head) = their_branch(30).await;
+    let history = state_db::tests::history(dir.path(), &[&thread]).await;
 
     let outcome =
         replace_in(dir.path(), &thread, &base, &rows, None, backups.path()).await.unwrap();
@@ -253,8 +284,10 @@ async fn a_switch_writes_the_rollout_out_along_the_branch_in_place(
     let again = synced(&path).await;
     testing::assert_nothing_new(&rows, again.iter().map(|r| r.source_id.as_str()));
     if locks {
-        assert!(!dir.path().join(LOCKS).join(format!("{thread}.lock")).exists(), "let go");
+        assert!(!dir.path().join(LOCKS).joined(format!("{thread}.lock")).exists(), "let go");
     }
+    let projected = state_db::tests::projected(&history, &thread).await;
+    assert_eq!(projected, 0, "Codex projects its history again, from the branch");
 }
 
 /// Nothing is written to a thread kept in several rollouts (reverted, or named by a segment of
@@ -276,7 +309,7 @@ async fn a_switch_that_cant_be_made_writes_nothing(
         // The thread's first rollout, which a newer one continues.
         let older = dir.path().join("sessions/2026/09/23");
         std::fs::create_dir_all(&older).unwrap();
-        std::fs::write(older.join(format!("rollout-2026-09-23T00-00-00-{thread}.jsonl")), &text)
+        std::fs::write(older.joined(format!("rollout-2026-09-23T00-00-00-{thread}.jsonl")), &text)
             .unwrap();
     }
     let (_, path, base, _) = behind(dir.path(), 45).await;
@@ -292,7 +325,7 @@ async fn a_switch_that_cant_be_made_writes_nothing(
         "locked" => {
             let locks = dir.path().join(LOCKS);
             std::fs::create_dir_all(&locks).unwrap();
-            let lock = File::create(locks.join(format!("{thread}.lock"))).unwrap();
+            let lock = File::create(locks.joined(format!("{thread}.lock"))).unwrap();
             lock.lock().unwrap();
             held = Some(lock);
         }
@@ -432,7 +465,7 @@ async fn the_copy_says_up_front_when_it_cant_be_switched(
             let older = dir.path().join("sessions/2026/09/23");
             std::fs::create_dir_all(&older).unwrap();
             let name = format!("rollout-2026-09-23T00-00-00-{thread}.jsonl");
-            std::fs::write(older.join(name), &text).unwrap();
+            std::fs::write(older.joined(name), &text).unwrap();
         }
         "a segment" => id = format!("{thread}_01a0d14f-0000-7000-8000-000000000000"),
         "history base" => {

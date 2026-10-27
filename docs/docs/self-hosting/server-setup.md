@@ -27,8 +27,8 @@ atuin-server start
 
 ## Configuration
 
-The server's config lives at `~/.config/atuin/server.toml`, separate from the
-client's config.
+The server's config lives at `~/.atuin/server.toml`, separate from the client's
+config.
 
 It looks something like this for PostgreSQL:
 
@@ -48,13 +48,20 @@ ATUIN_OPEN_REGISTRATION=true
 ATUIN_DB_URI="postgres://user:password@hostname/database"
 ```
 
-| Parameter           | Description                                                     |
-| ------------------- | --------------------------------------------------------------- |
-| `db_uri`            | A valid database URI, for saving history (required, no default) |
-| `host`              | The host to listen on (default: 127.0.0.1)                      |
-| `port`              | The TCP port to listen on (default: 8888)                       |
-| `open_registration` | If `true`, accept new user registrations (default: false)       |
-| `path`              | A path to prepend to all routes of the server (default: empty)  |
+An `ATUIN_*` environment variable overrides the same key in `server.toml`. An
+empty one, such as `ATUIN_DB_URI=` left in a compose file, counts as unset.
+`ATUIN_PORT` in the `tcp://10.96.0.12:8888` form, which Kubernetes sets for a
+Service named `atuin`, is ignored with a warning; see
+[Kubernetes](kubernetes.md#service-links).
+
+| Parameter           | Description                                                                |
+| ------------------- | -------------------------------------------------------------------------- |
+| `db_uri`            | A valid database URI, for saving history (required, no default)            |
+| `db_password_file`  | A file holding the database password, kept out of `db_uri` (default: none) |
+| `host`              | The host to listen on (default: 127.0.0.1)                                 |
+| `port`              | The TCP port to listen on (default: 8888)                                  |
+| `open_registration` | If `true`, accept new user registrations (default: false)                  |
+| `path`              | A path to prepend to all routes of the server (default: empty)             |
 
 ## Database
 
@@ -110,6 +117,51 @@ can do so either in `server.toml` or via the environment variable:
         MySQL is currently considered a tier-two database meaning that,
         although we support it, issues are deprioritized in favor of tier-one
         databases -- PostgreSQL and SQLite.
+
+### Keeping the password in a file
+
+Instead of writing the password into `db_uri`, you can keep it in a file, such
+as a [Docker](docker.md#keeping-the-password-in-a-secret) or
+[Kubernetes](kubernetes.md#keeping-the-password-in-a-secret) secret, and point
+`db_password_file` at it:
+
+```toml
+db_uri="postgres://user@hostname/database"
+db_password_file="/run/secrets/atuin_db_password"
+```
+
+Or with environment variables:
+
+```bash
+ATUIN_DB_URI="postgres://user@hostname/database"
+ATUIN_DB_PASSWORD_FILE="/run/secrets/atuin_db_password"
+```
+
+Trailing newlines in the file are ignored, and the rest is used as-is, so
+unlike a password in `db_uri` it doesn't need escaping. `db_uri` must name the
+host, and must not contain a password as well. This works with PostgreSQL and
+MySQL; SQLite has no password.
+
+## Administration
+
+`atuin-server` supports some administration tools.
+
+### User Management
+
+While `open_registration` is `true`, anyone who can reach the server can
+register. To keep a server private, leave it `false` and create accounts on the
+server instead:
+
+```shell
+atuin-server admin user create --email alice@example.com alice
+```
+
+You can also delete users as well as change their passwords.
+
+```shell
+atuin-server admin user set-password alice
+atuin-server admin user delete alice
+```
 
 ## TLS
 

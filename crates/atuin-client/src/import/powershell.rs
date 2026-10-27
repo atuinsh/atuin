@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use atuin_common::path::PathBufExt as _;
 use easy_cast::Conv;
 use eyre::{Result, eyre};
 use time::{Duration, OffsetDateTime};
@@ -28,29 +29,29 @@ fn get_history_path() -> Result<PathBuf> {
     let dir = if cfg!(windows) {
         dirs::data_dir()
             .ok_or_else(|| eyre!("could not determine data directory"))?
-            .join("Microsoft")
-            .join("Windows")
-            .join("PowerShell")
-            .join("PSReadLine")
+            .joined("Microsoft")
+            .joined("Windows")
+            .joined("PowerShell")
+            .joined("PSReadLine")
     } else {
-        std::env::var_os("XDG_DATA_HOME")
+        atuin_common::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .ok_or(())
             .or_else(|_| {
                 let Some(home) = dirs::home_dir() else {
                     eyre::bail!("could not determine home directory");
                 };
-                Ok(home.join(".local").join("share"))
+                Ok(home.joined(".local").joined("share"))
             })?
-            .join("powershell")
-            .join("PSReadLine")
+            .joined("powershell")
+            .joined("PSReadLine")
     };
 
     // The history is stored in a file named `$($Host.Name)_history.txt`.
     // For the default console host shipped by Microsoft,`$Host.Name` is `ConsoleHost`:
     // https://learn.microsoft.com/en-us/dotnet/api/system.management.automation.host.pshost.name#remarks
 
-    let file = dir.join("ConsoleHost_history.txt");
+    let file = dir.joined("ConsoleHost_history.txt");
 
     if file.is_file() {
         Ok(file)

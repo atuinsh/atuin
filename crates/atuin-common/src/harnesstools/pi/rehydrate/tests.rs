@@ -33,6 +33,7 @@ fn captured(jsonl: &str) -> Vec<RehydrateMessage> {
             role: m.role(),
             content: m.content(),
             model: m.model(),
+            provider: None,
             usage: m.usage(),
             stop_reason: m.stop_reason(),
             turn_id: m.turn_id(),
@@ -110,7 +111,7 @@ async fn a_session_reads_back_as_it_was_captured(sessions: TempDir, #[case] json
     let synced = testing::synced_as(captured(jsonl), true);
     let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", &cwd, synced);
     let dir = sessions.path().join("--here--");
-    let path = rehydrate_into(sessions.path(), &dir, &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), &dir, &session).unwrap();
     assert_eq!(path.parent(), Some(dir.as_path()));
     assert_eq!(locate(sessions.path(), &session.id), Some(path.clone()));
 
@@ -136,6 +137,7 @@ fn message(id: &str, parent: Option<&str>, role: Role, content: Vec<Content>) ->
         role,
         content,
         model: Some("claude-sonnet-5".to_owned()),
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,
@@ -175,7 +177,7 @@ fn entries_are_linked_named_and_compacted(sessions: TempDir) {
         })]),
         message("c1", Some("r1"), Role::System, vec![Content::Summary("so far".to_owned())]),
     ]);
-    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let by_id = |id: &str| lines.iter().find(|l| l["id"] == id).cloned().unwrap();
 
@@ -207,7 +209,7 @@ fn the_tree_is_relinked_whatever_the_order(sessions: TempDir) {
         message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]),
         message("a1", Some("x1"), Role::Assistant, vec![Content::Text("hello".to_owned())]),
     ]);
-    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
     assert_eq!(parent("a0"), "u1");
@@ -225,7 +227,7 @@ fn a_parent_cycle_hangs_from_the_entry_before(sessions: TempDir) {
         message("x1", Some("u2"), Role::Other("label".to_owned()), vec![]),
         message("u2", Some("a1"), Role::User, vec![Content::Text("again".to_owned())]),
     ]);
-    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
 
@@ -244,7 +246,7 @@ fn a_cycle_closed_by_clock_skew_is_cut(sessions: TempDir) {
         message("c", Some("d"), Role::User, vec![Content::Text("cycle".to_owned())]),
         message("d", Some("c"), Role::Other("label".to_owned()), vec![]),
     ]);
-    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
 
@@ -258,27 +260,38 @@ fn a_cycle_closed_by_clock_skew_is_cut(sessions: TempDir) {
 fn never_overwrites_a_session(sessions: TempDir) {
     let messages = vec![message("u1", None, Role::User, vec![Content::Text("hi".to_owned())])];
     let s = session("s-once", sessions.path(), messages);
-    let path = rehydrate_into(sessions.path(), &sessions.path().join("a"), &s).unwrap();
-    let err = rehydrate_into(sessions.path(), &sessions.path().join("b"), &s).unwrap_err();
+    let path =
+        rehydrate_into(Flavour::Pi, sessions.path(), &sessions.path().join("a"), &s).unwrap();
+    let err =
+        rehydrate_into(Flavour::Pi, sessions.path(), &sessions.path().join("b"), &s).unwrap_err();
     assert!(matches!(&err, RehydrateError::AlreadyExists(p) if *p == path), "{err:?}");
     assert!(!sessions.path().join("b").exists());
 }
 
-/// A `!command` goes back as the shell entry it was captured from.
+/// A `!command` goes back as the shell entry it was captured from, and omp's `$code` as its
+/// Python one.
 #[rstest]
-fn a_bang_command_is_a_bash_execution(sessions: TempDir) {
+#[case::bash(Flavour::Pi, "!!echo hi", "bashExecution", "command")]
+#[case::python(Flavour::Omp, "$$echo hi", "pythonExecution", "code")]
+fn a_bang_command_is_a_bash_execution(
+    sessions: TempDir,
+    #[case] flavour: Flavour,
+    #[case] typed: &str,
+    #[case] role: &str,
+    #[case] key: &str,
+) {
     let session = session("s-bash", sessions.path(), vec![message("b1", None, Role::User, vec![
-        Content::Text("!!echo hi".to_owned()),
+        Content::Text(typed.to_owned()),
         Content::ToolResult(ToolResult {
             call: crate::harnesstools::session::ToolCallId::from("b1".to_owned()),
             output: json!("hi\n"),
             error: true,
         }),
     ])]);
-    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
-    let entry = &lines(&path)[1];
-    assert_eq!(entry["message"]["role"], "bashExecution");
-    assert_eq!(entry["message"]["command"], "echo hi");
+    let path = rehydrate_into(flavour, sessions.path(), sessions.path(), &session).unwrap();
+    let entry = lines(&path).into_iter().find(|e| e["type"] == "message").unwrap();
+    assert_eq!(entry["message"]["role"], role);
+    assert_eq!(entry["message"][key], "echo hi");
     assert_eq!(entry["message"]["excludeFromContext"], true);
     assert_eq!(entry["message"]["exitCode"], 1);
 }
@@ -326,7 +339,7 @@ fn assert_the_api_takes(lines: &[serde_json::Value]) {
 
 /// What capture syncs keeps no call's input and no output. Written back, each such call is a
 /// note in its turn's text, which the APIs take; re-captured, every entry reads back under an id
-/// already synced (so nothing is pushed): a turn's first message with its notes, the messages
+/// already synced (so nothing is pushed): a turn's last message with its notes, the messages
 /// merged into it and the results not at all.
 #[rstest]
 #[case::mock(include_str!("../../../../tests/fixtures/pi/session-mock-0.85.jsonl"))]
@@ -345,7 +358,7 @@ async fn synced_calls_come_back_as_notes_the_api_takes(sessions: TempDir, #[case
         }
     }
     let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", sessions.path(), synced.clone());
-    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
     let written = lines(&path);
     assert_the_api_takes(&written);
     assert!(!written.iter().any(|l| l["message"]["content"].to_string().contains("toolCall")));
@@ -362,7 +375,7 @@ async fn synced_calls_come_back_as_notes_the_api_takes(sessions: TempDir, #[case
         .filter(|(_, _, content)| !content.is_empty())
         .collect();
     testing::assert_nothing_new(&synced, again.iter().map(|(id, ..)| id.as_str()));
-    let flattened = flatten_uncaptured_calls(&synced, &Flatten::Runs);
+    let flattened = merge_uncaptured_runs(&synced).0;
     assert_eq!(again, carried(&flattened));
 }
 
@@ -392,7 +405,7 @@ fn output_not_captured_says_so(sessions: TempDir) {
             error: false,
         })]),
     ]);
-    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     assert_the_api_takes(&lines);
     assert_eq!(lines[1]["message"]["output"], UNCAPTURED_OUTPUT);
@@ -440,7 +453,7 @@ fn an_edits_result_gets_its_details_back(sessions: TempDir) {
             Content::Patch(patch.clone()),
         ]),
     ]);
-    let path = rehydrate_into(sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
     let lines = lines(&path);
     let result = lines.iter().find(|l| l["id"] == "r1").unwrap();
     assert_eq!(
@@ -449,4 +462,48 @@ fn an_edits_result_gets_its_details_back(sessions: TempDir) {
     );
     let read: PiMessage = serde_json::from_value(result.clone()).unwrap();
     assert!(read.content().contains(&Content::Patch(patch)));
+}
+
+/// A reply names the provider capture kept (omp's), else one guessed from its model, as rows
+/// captured before providers were do.
+#[rstest]
+#[case::captured("gpt-5.6-luna", Some("openai-codex"), Some("openai-codex"))]
+#[case::guessed("gpt-5.6-luna", None, Some("openai"))]
+#[case::unknown("llama-4", None, None)]
+fn a_reply_names_its_provider(
+    sessions: TempDir,
+    #[case] model: &str,
+    #[case] provider: Option<&str>,
+    #[case] want: Option<&str>,
+) {
+    let mut reply = message("a1", None, Role::Assistant, vec![Content::Text("hi".to_owned())]);
+    reply.model = Some(model.to_owned());
+    reply.provider = provider.map(str::to_owned);
+    let session = session("s-provider", sessions.path(), vec![reply]);
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let reply = lines(&path).into_iter().find(|l| l["id"] == "a1").unwrap();
+    assert_eq!(reply["message"]["provider"].as_str(), want);
+}
+
+/// A restored omp session starts with omp's 256-byte title slot, so it reads back as omp's where
+/// pi and omp share a session directory; a pi one has none.
+#[rstest]
+fn an_omp_session_starts_with_its_title_slot(
+    sessions: TempDir,
+    #[values(Flavour::Pi, Flavour::Omp)] flavour: Flavour,
+) {
+    let session = session("s-slot", sessions.path(), vec![message("u1", None, Role::User, vec![
+        Content::Text("hi".to_owned()),
+    ])]);
+    let path = rehydrate_into(flavour, sessions.path(), sessions.path(), &session).unwrap();
+    let body = std::fs::read_to_string(&path).unwrap();
+    let first = body.split_inclusive('\n').next().unwrap();
+    let first_type = serde_json::from_str::<serde_json::Value>(first).unwrap()["type"].clone();
+    match flavour {
+        Flavour::Pi => assert_eq!(first_type, "session"),
+        Flavour::Omp => {
+            assert_eq!((first_type.as_str(), first.len()), (Some("title"), 256));
+            assert_eq!(locate(sessions.path(), "s-slot"), Some(path));
+        }
+    }
 }

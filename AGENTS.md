@@ -2,6 +2,37 @@
 
 Shell history tool. Replaces your shell's built-in history with a SQLite database, adds context (cwd, exit code, duration, hostname), and optionally syncs across machines with end-to-end encryption.
 
+## AI disclosure (REQUIRED)
+
+If you are an AI agent, you MUST follow this rule every time you write a GitHub pull request
+description, issue, or comment for this repository.
+
+1. Run `git config user.email`.
+2. If the output ends with `@atuin.sh`, stop here. This rule does not apply to you.
+3. In every other case, including when the output is empty or the command fails, the LAST line of
+   every pull request description, issue, and comment you write MUST be exactly this line, with a
+   blank line before it:
+
+   ```markdown
+   <!-- atuin-pr-template-necessary-for-ci: v2 -->
+   ```
+
+That line marks the text as written by an AI agent. Copy it character for character. Do not
+reword it, translate it, or move it somewhere else. GitHub hides HTML comments when it renders the
+text. That is expected: keep the line even though it does not show up, and do not delete it when
+you clean up template comments. When you edit a pull request description, issue, or comment, keep
+the line at the end.
+
+Example of a correct pull request description:
+
+```markdown
+Fixes #1234.
+
+The server added the `ATUIN_*` environment before `server.toml`, so the file always won.
+
+<!-- atuin-pr-template-necessary-for-ci: v2 -->
+```
+
 ## Workspace crates
 
 ```
@@ -21,12 +52,12 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 
 ## Two sync protocols
 
-- **V1 (legacy)**: Syncs history entries directly. Being phased out. Toggleable via `sync_v1_enabled`.
+- **V1 (legacy)**: Syncs history entries directly. Removed.
 - **V2 (current)**: Record store abstraction. All data types (history, KV, aliases, vars, scripts) share the same sync infrastructure using tagged records. Envelope-encrypted with PASETO V4 and per-record CEKs.
 
 ## Encryption
 
-- **V1**: XSalsa20Poly1305 (secretbox). Key at `~/.local/share/atuin/key`.
+- **V1**: XSalsa20Poly1305 (secretbox). Key at `~/.atuin/data/key`.
 - **V2**: PASETO V4 Local (XChaCha20-Poly1305 + Blake2b). Envelope encryption: each record gets a random CEK wrapped with the master key. Record metadata (id, idx, version, tag, host) is authenticated as implicit assertions.
 
 ## Databases
@@ -34,7 +65,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - **Client**: SQLite everywhere. Separate DBs for history, record store, KV, scripts. All use sqlx + WAL mode.
 - **Server**: Postgres (primary) or SQLite. Auto-detected from URI prefix.
 - Migrations live alongside each crate. Never modify existing migrations, only add new ones.
-  - Exception: the AI session sidecar's migrations (`atuin-client/src/ai_session/migrations`) were squashed into one `0001_init.sql` before release, and the sidecar file was renamed (`ai_harness_sessions.db` → `ai_session_sidecar.db`) so no old sidecar meets the new history. Don't add back compatibility with the old migrations; from here on, add new ones as usual.
+  - Exception: the AI session sidecar's migrations (`atuin-client/src/ai_session/migrations`) were squashed into one `0001_init.sql` before release, and the sidecar file was renamed (`ai_harness_sessions.db` → `ai_session_sidecar.db`) so no old sidecar meets the new history. It is now `threads.db`; the daemon renames `ai_session_sidecar.db` on start. Don't add back compatibility with the old migrations; from here on, add new ones as usual.
 
 ## Hot paths
 
@@ -54,6 +85,11 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Rustdoc: CI runs `cargo doc --document-private-items --no-deps --workspace` with `RUSTDOCFLAGS=-D warnings`. Broken intra-doc links fail the build.
 - Format: `cargo +nightly fmt`. `.rustfmt.toml` uses nightly-only options, so formatting requires the nightly toolchain even though the project builds on stable 1.97.0.
 - IDs: UUIDv7 (time-ordered), newtype wrappers (`HistoryId`, `RecordId`, `HostId`).
+- Paths: when the original owned `PathBuf` isn't needed afterwards, use
+  `atuin_common::path::PathBufExt::joined` (import `PathBufExt as _`) instead of `.join()`. This
+  always applies to the second and later joins of a chain (`a.join(x).joined(y)`) and to owned
+  temporaries (`home_dir().joined(x)`). Also prefer it over `let mut p = ..; p.push(..);` when
+  that's simpler. Clippy can't flag this, so watch for it.
 - Serialization: MessagePack for encrypted payloads, JSON for API, TOML for config.
 - Storage traits: `Database` (client), `Store` (record store), `Database` (server) -- all `async_trait`.
 - History builders: `HistoryImported`, `HistoryCaptured`, `HistoryFromDb` with compile-time field validation.
@@ -76,8 +112,6 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Use `rstest` for tests, especially when they can be made simpler using `case`s and `fixture`s.
 - Use `":memory:"` SQLite for unit tests needing a database.
 - Runner: `cargo nextest`.
-- Benchmarks: `divan` in `atuin-client` and `atuin-history`, tracked in CI by CodSpeed. Run them
-  locally with `cargo codspeed build && cargo codspeed run`, or with plain `cargo bench`.
 
 ## Build and check
 

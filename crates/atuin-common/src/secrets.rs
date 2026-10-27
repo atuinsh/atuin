@@ -17,10 +17,11 @@
 //!   is nothing in it to take out.
 //!
 //! Patterns come in two kinds. The credential formats (`SECRET_PATTERNS`, and the services' in
-//! `vendors`) are what both see. The credentials recognised by where they sit (in `structural`: a
-//! URL's password, a private key's armour, a value assigned to `DB_PASSWORD`) are only redacted,
-//! so they never keep a command out of history; nor is a value of theirs that is plainly a
-//! stand-in (`${TOKEN}`, `<password>`). A [`Redactor`] also takes the user's own patterns.
+//! `vendors`, along with HashiCorp's tokens where its tools take them) are what both see. The
+//! credentials recognised by where they sit (in `structural`: a URL's password, a private key's
+//! armour, a value assigned to `DB_PASSWORD`) are only redacted, so they never keep a command out
+//! of history; nor is a value of theirs that is plainly a stand-in (`${TOKEN}`, `<password>`). A
+//! [`Redactor`] also takes the user's own patterns.
 //!
 //! Both are best-effort. [`redact`] in particular is applied to rendered terminal output, where a
 //! credential can be broken up by SGR escape sequences, which will not match. (A soft wrap at the
@@ -344,7 +345,10 @@ static SECRET_PATTERNS: &[Pattern] = &[
                 input: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
                 redacted: "https://hooks.slack.com/services/****",
             },
-            Test { input: "T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX", redacted: REDACTED },
+            Test {
+                input: "T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+                redacted: REDACTED,
+            },
         ],
     },
     Pattern {
@@ -439,7 +443,7 @@ struct Table {
     /// is run on its own instead, which, for the many that begin with a literal (`glpat-`), is a
     /// fast search for it.
     set: Option<RegexSet>,
-    regexes: Vec<Regex>,
+    regexes: Cow<'static, [Regex]>,
     spare: Vec<Spare>,
 }
 
@@ -454,6 +458,15 @@ impl Table {
             set,
             regexes: patterns.iter().map(|pattern| compile(pattern)).collect(),
             spare,
+        }
+    }
+
+    /// The vendor formats.
+    fn vendors() -> Self {
+        Self {
+            set: None,
+            regexes: Cow::Borrowed(VENDOR_REGEXES.as_slice()),
+            spare: vec![Spare::Nothing; VENDOR_REGEXES.len()],
         }
     }
 
@@ -476,7 +489,8 @@ fn compile(pattern: &Pattern) -> Regex {
         .unwrap_or_else(|e| panic!("failed to compile regex for {}: {e}", pattern.name))
 }
 
-/// The vendor formats, each compiled on its own (see [`Table::set`]), for [`contains_secret`].
+/// The vendor formats, each compiled on its own (see [`Table::set`]), for [`contains_secret`] and
+/// [`redact`].
 static VENDOR_REGEXES: LazyLock<Vec<Regex>> =
     LazyLock::new(|| vendors::VENDOR_PATTERNS.iter().map(compile).collect());
 
@@ -485,7 +499,7 @@ static VENDOR_REGEXES: LazyLock<Vec<Regex>> =
 static REDACTION: LazyLock<[Table; 3]> = LazyLock::new(|| {
     [
         Table::new(SECRET_PATTERNS.iter().map(|pattern| (pattern, Spare::Nothing)), true),
-        Table::new(vendors::VENDOR_PATTERNS.iter().map(|pattern| (pattern, Spare::Nothing)), false),
+        Table::vendors(),
         Table::new(
             structural::STRUCTURAL_PATTERNS
                 .iter()
@@ -526,8 +540,12 @@ macro_rules! executed {
 
 /// Commands whose output may hold a credential: Atuin's own, and other tools' that print a token,
 /// a password or a key, or the whole environment.
+///
+/// Their word boundaries are ASCII ones: a Unicode `\b` stops the fast engines at the first
+/// non-ASCII byte, and agents' tool calls (whole files, at times) are full of them. Commands are
+/// ASCII anyway.
 static OUTPUT_UNSAFE: LazyLock<RegexSet> = LazyLock::new(|| {
-    RegexSet::new([
+    let patterns = [
         executed!(r"key\b"),
         executed!(r"(?:account\s+)?login\b"),
         executed!(r"(?:account\s+)?register\b"),
@@ -563,8 +581,9 @@ static OUTPUT_UNSAFE: LazyLock<RegexSet> = LazyLock::new(|| {
         ran!(r"printenv\b"),
         // The environment, the shell's variables: alone, not running a command.
         ran!(r"(?:env|set|export\s+-p|declare\s+-[a-zA-Z]*[px])[ \t]*(?:\z|[;&|)\n])"),
-    ])
-    .expect("failed to build output-unsafe set")
+    ];
+    RegexSet::new(patterns.map(|p| p.replace(r"\b", r"(?-u:\b)")))
+        .expect("failed to build output-unsafe set")
 });
 
 /// Whether `command` runs one of the commands whose output may hold a credential (`atuin key`,
@@ -800,8 +819,8 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        REDACTED, REDACTION, Redactor, SECRET_GROUP, contains_secret, history_patterns,
-        output_unsafe, redact, redaction_patterns, vendors,
+        REDACTED, REDACTION, Redactor, SECRET_GROUP, VENDOR_REGEXES, contains_secret,
+        history_patterns, output_unsafe, redact, redaction_patterns, vendors,
     };
 
     pub(super) struct Test {
@@ -856,6 +875,10 @@ mod tests {
         "-k",
         "--password=",
         "--key",
+        "NOMAD_TOKEN",
+        "set -x VAULT_TOKEN",
+        "consul -token",
+        "X-Vault-Token",
     ];
     const GLUE: &[&str] = &[
         "=", ": ", " := ", " => ", " == ", "\"", "'", "]", "[", " ", "  ", "\t", "\n", "****", "*",
@@ -938,7 +961,7 @@ mod tests {
     /// is the credential and which is the variable name holding it.
     #[rstest]
     fn every_pattern_names_its_secret_group() {
-        let regexes = REDACTION.iter().flat_map(|table| &table.regexes);
+        let regexes = REDACTION.iter().flat_map(|table| &*table.regexes);
         for (pattern, regex) in redaction_patterns().zip(regexes) {
             assert!(
                 regex.capture_names().any(|name| name == Some(SECRET_GROUP)),
@@ -946,6 +969,16 @@ mod tests {
                 pattern.name
             );
         }
+    }
+
+    /// `redact` scans with the vendor regexes `contains_secret` compiled, not a second copy with
+    /// match caches of its own on every thread that runs both.
+    #[rstest]
+    fn redaction_shares_the_vendor_regexes() {
+        assert!(
+            REDACTION.iter().any(|table| table.regexes.as_ptr() == VENDOR_REGEXES.as_ptr()),
+            "no redaction table borrows VENDOR_REGEXES"
+        );
     }
 
     #[rstest]
@@ -1043,6 +1076,81 @@ mod tests {
     )]
     // Five stars is not the marker; it is a value, and comes out as the marker.
     #[case::five_stars_are_a_value("AWS_SECRET_ACCESS_KEY=*****", "AWS_SECRET_ACCESS_KEY=****")]
+    // A patch's lines (Codex `apply_patch`, opencode `patchText`, a unified diff) start with
+    // `+`, `-` or ` `: what is set on one is redacted as it would be on its own.
+    #[case::added_to_a_patch(
+        "*** Add File: config/database.yml\n+production:\n+  password: hunter2xyz\n+  host: db",
+        "*** Add File: config/database.yml\n+production:\n+  password: ****\n+  host: db"
+    )]
+    #[case::changed_in_a_patch(
+        "@@\n-spring.datasource.password=old\n+spring.datasource.password=hunter2xyz",
+        "@@\n-spring.datasource.password=****\n+spring.datasource.password=****"
+    )]
+    #[case::added_aws_credentials(
+        "+[default]\n+aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "+[default]\n+aws_secret_access_key = ****"
+    )]
+    #[case::added_env_var("+API_KEY=abcdef1234567\n", "+API_KEY=****\n")]
+    #[case::added_list_item("+  - password: hunter2xyz", "+  - password: ****")]
+    // JSON text, its lines escaped (`\n`): a line it holds is still a line.
+    #[case::patch_in_json_text(
+        r#"{"patchText":"*** Begin Patch\n+password: hunter2xyz\n*** End Patch"}"#,
+        r#"{"patchText":"*** Begin Patch\n+password: ****\n*** End Patch"}"#
+    )]
+    #[case::setting_in_json_text(
+        r#"log: "first\npassword=hunter2xyz""#,
+        r#"log: "first\npassword=****""#
+    )]
+    #[case::env_var_in_json_text(r#""x\nAPI_KEY=abcdef123456""#, r#""x\nAPI_KEY=****""#)]
+    #[case::bearer_in_json_text(
+        r#""result\nBearer abcdefghijklmnopqrstuvwxyz""#,
+        r#""result\nBearer ****""#
+    )]
+    // JSON text clipped mid-string: its last line ends with the text.
+    #[case::clipped_json_text(r#""a\npassword: hunter2"#, r#""a\npassword: ****"#)]
+    #[case::command_in_json_text(
+        r#"{"cmd": "PGPASSWORD=hunter2xyz psql -h db -c select1"}"#,
+        r#"{"cmd": "PGPASSWORD=**** psql -h db -c select1"}"#
+    )]
+    #[case::password_flag_in_a_script(
+        "bash -lc 'docker login --password s3cret'",
+        "bash -lc 'docker login --password ****'"
+    )]
+    #[case::password_flag_in_json_text(
+        r#"{"cmd":"docker login --password s3cret\ndocker push x"}"#,
+        r#"{"cmd":"docker login --password ****\ndocker push x"}"#
+    )]
+    #[case::password_flag_then_command(
+        "docker login --password s3cret; docker push x",
+        "docker login --password ****; docker push x"
+    )]
+    #[case::password_flag_in_a_subshell(
+        "(docker login --password s3cret)&& echo",
+        "(docker login --password ****)&& echo"
+    )]
+    #[case::password_flag_then_and(
+        "docker login --password s3cret&& echo",
+        "docker login --password ****&& echo"
+    )]
+    #[case::clipped_json_line_in_output(
+        "\"a\\naws_secret_access_key = CXAT00ju\nmore output",
+        "\"a\\naws_secret_access_key = ****\nmore output"
+    )]
+    #[case::password_flag_quoted_in_prose("`--password=hunter2xyz`, or", "`--password=****`, or")]
+    #[case::jwt_in_json_text(
+        r#"{"data":"x\teyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"}"#,
+        r#"{"data":"x\t****"}"#
+    )]
+    // A password given on the command line.
+    #[case::password_flag_apart(
+        "docker login -u me --password hunter2xyz r.io",
+        "docker login -u me --password **** r.io"
+    )]
+    // AWS's own files and commands spell the name in lowercase.
+    #[case::lowercase_aws_assignment(
+        "export aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "export aws_secret_access_key=****"
+    )]
     fn redacts(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(&*redact(input), expected);
     }
@@ -1203,7 +1311,7 @@ mod tests {
         fn text_with_nothing_recognisable_is_returned_as_is(
             s in credential_dense().prop_filter("contains a secret", |s| {
                 !contains_secret(s)
-                    && !REDACTION.iter().flat_map(|table| &table.regexes).any(|r| r.is_match(s))
+                    && !REDACTION.iter().flat_map(|table| &*table.regexes).any(|r| r.is_match(s))
             }),
         ) {
             prop_assert!(matches!(redact(&s), Cow::Borrowed(_)));
@@ -1494,6 +1602,57 @@ mod tests {
         assert!(matches!(redact(input), Cow::Owned(_)), "{input:?} should be redacted");
     }
 
+    /// A HashiCorp token has no format to recognise, so a command is kept out of history by where
+    /// the token sits, and only when a literal sits there: a reference holds no token.
+    #[rstest]
+    #[case::prefixed("CONSUL_HTTP_TOKEN=00000000-0000-0000-0000-000000000000 consul members", true)]
+    #[case::spaced_out("$env:VAULT_TOKEN = \"s.Kq3vX9ZbT2mLwR8yNc4pHd7J\"", true)]
+    #[case::fish(
+        "set --global --export CONSUL_HTTP_TOKEN 00000000-0000-0000-0000-000000000000",
+        true
+    )]
+    #[case::flag_after_a_pipe(
+        "true | consul kv get -token \"00000000-0000-0000-0000-000000000000\" a",
+        true
+    )]
+    #[case::flag_on_a_continued_line(
+        "consul members \\\n  -token=00000000-0000-0000-0000-000000000000",
+        true
+    )]
+    #[case::flag_opening_a_continued_line(
+        "nomad job status \\\n-token 00000000-0000-0000-0000-000000000000 web",
+        true
+    )]
+    #[case::header(
+        "curl -H \"X-Consul-Token: 00000000-0000-0000-0000-000000000000\" :8500/v1/agent/members",
+        true
+    )]
+    #[case::header_without_a_blank(
+        "http :8200/v1/sys/health X-Vault-Token:s.Kq3vX9ZbT2mLwR8yNc4pHd7J",
+        true
+    )]
+    #[case::substituted("export NOMAD_TOKEN=$(vault read -field=secret_id nomad/creds/dev)", false)]
+    #[case::referenced("export VAULT_TOKEN=\"${VAULT_TOKEN:-}\"", false)]
+    #[case::fish_substituted("set -gx NOMAD_TOKEN (cat ~/.nomad-token)", false)]
+    #[case::fish_erased("set -e NOMAD_TOKEN", false)]
+    #[case::flag_referenced("nomad job status -token=$NOMAD_TOKEN", false)]
+    #[case::header_substituted(
+        "curl -H \"X-Vault-Token: $(cat token)\" :8200/v1/sys/health",
+        false
+    )]
+    #[case::token_file_flag("consul members -token-file=/etc/consul.d/token", false)]
+    #[case::token_file_variable("export CONSUL_HTTP_TOKEN_FILE=/etc/consul.d/token", false)]
+    #[case::mentioned("grep NOMAD_TOKEN config.hcl", false)]
+    #[case::subcommand("nomad acl token self", false)]
+    #[case::too_short_to_be_a_token("VAULT_TOKEN=root vault status", false)]
+    #[case::flag_of_another_command("consul members; gh -token abcdef123456", false)]
+    fn hashicorp_tokens_are_recognised_where_they_sit(
+        #[case] command: &str,
+        #[case] recognised: bool,
+    ) {
+        assert_eq!(contains_secret(command), recognised, "{command:?}");
+    }
+
     /// The table-driven tests and the planted-credential properties only cover a pattern if it
     /// brings its own cases. Without this floor, `tests: &[]` silently removes a pattern from all
     /// of them and the suite stays green.
@@ -1580,6 +1739,9 @@ mod tests {
     #[case::git_credential("git credential fill", true)]
     #[case::wrapped("bash -lc 'gh auth token'", true)]
     #[case::mentioned("echo gh auth token", false)]
+    #[case::beside_non_ascii("echo 'café ☕'\natuin key", true)]
+    // ASCII word boundaries: a non-ASCII letter ends a word, which errs towards withholding.
+    #[case::non_ascii_suffix("atuin keyé", true)]
     fn commands_whose_output_may_hold_a_credential(#[case] command: &str, #[case] unsafe_: bool) {
         assert_eq!(output_unsafe(command), unsafe_);
     }
@@ -1627,6 +1789,29 @@ mod tests {
     #[case::usage(r#"{"max_tokens": 4096, "input_tokens": 123456789}"#)]
     #[case::count("tokens: 1500")]
     #[case::prose("Set the token in your settings.")]
+    #[case::password_flag_reference("docker login --password \"$REGISTRY_PASSWORD\" r.io")]
+    #[case::password_from_stdin("docker login --password-stdin r.io")]
+    #[case::password_flag_then_flag("mysql --password --host db")]
+    #[case::password_flag_in_help("  -p, --password string   Password")]
+    #[case::password_flag_in_click_help("  --password TEXT  The password")]
+    #[case::password_flag_in_urfave_help("   --password value  the password")]
+    #[case::passwd_flag_in_help("  --passwd FILE")]
+    #[case::password_flag_in_prose("use the --password flag, or see the --password option.")]
+    #[case::password_flag_listed("--password and --user")]
+    #[case::password_flag_in_a_subject("fix(secrets): redact --password flags and more")]
+    #[case::password_flag_reference_in_json_text(
+        r#"{"cmd":"docker login --password \"$REGISTRY_PASSWORD\" r.io"}"#
+    )]
+    #[case::setting_concatenated(r#"password = prompt + "x""#)]
+    #[case::setting_joined(r#"token = base + "/v1""#)]
+    #[case::setting_in_prose(r#"secret: see "docs""#)]
+    #[case::command_in_a_string(r#""VAULT_TOKEN=x vault status""#)]
+    #[case::password_flag_then_or("mysql --password || true")]
+    #[case::password_flag_then_redirect("mysql --password 2>&1 | tee log")]
+    #[case::password_flag_substituted("docker login --password `cat pw` r.io")]
+    #[case::password_flag_in_a_subshell("(mysql --password)")]
+    #[case::added_field("+    token: String,")]
+    #[case::short_lowercase_aws("aws configure get aws_secret_access_key --profile prod")]
     fn stand_ins_are_kept(#[case] input: &str) {
         assert_eq!(redact(input), input);
     }

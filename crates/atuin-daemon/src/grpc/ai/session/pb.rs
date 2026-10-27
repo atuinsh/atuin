@@ -9,8 +9,8 @@ mod codegen {
 use std::path::PathBuf;
 
 use atuin_client::ai_session::{
-    HarnessKind, HarnessSession, MatchedSession as DomainMatchedSession, Session,
-    SessionFilter as DomainSessionFilter, SessionMatch,
+    HarnessKind, HarnessSession, MatchedSession as DomainMatchedSession,
+    MessageRole as DomainMessageRole, Session, SessionFilter as DomainSessionFilter, SessionMatch,
 };
 use atuin_common::string::highlighted::{HighlightedString, HighlightedTextProto};
 use atuin_common::time::OffsetDateTimeExt;
@@ -48,8 +48,31 @@ impl From<&DomainSessionFilter> for SessionFilter {
             harness: value.harness.map(|h| h as i32),
             model: value.model.clone(),
             roots_only: value.roots_only,
+            exclude_subagents: value.exclude_subagents,
+            roles: value.roles.iter().map(|r| MessageRole::from(*r) as i32).collect(),
             updated_since: value.updated_since.map(timestamp),
         }
+    }
+}
+
+impl From<DomainMessageRole> for MessageRole {
+    fn from(value: DomainMessageRole) -> Self {
+        match value {
+            DomainMessageRole::User => Self::User,
+            DomainMessageRole::Assistant => Self::Assistant,
+            DomainMessageRole::Tool => Self::Tool,
+            DomainMessageRole::Harness => Self::Harness,
+        }
+    }
+}
+
+fn role(value: i32) -> Result<DomainMessageRole, ParseError> {
+    match MessageRole::try_from(value) {
+        Ok(MessageRole::User) => Ok(DomainMessageRole::User),
+        Ok(MessageRole::Assistant) => Ok(DomainMessageRole::Assistant),
+        Ok(MessageRole::Tool) => Ok(DomainMessageRole::Tool),
+        Ok(MessageRole::Harness) => Ok(DomainMessageRole::Harness),
+        Ok(MessageRole::Unspecified) | Err(_) => Err(ParseError::UnknownRole(value)),
     }
 }
 
@@ -82,6 +105,8 @@ impl TryFrom<SessionFilter> for DomainSessionFilter {
             harness,
             model: value.model,
             roots_only: value.roots_only,
+            exclude_subagents: value.exclude_subagents,
+            roles: value.roles.into_iter().map(role).collect::<Result<_, _>>()?,
             updated_since: value.updated_since.map(from_timestamp).transpose()?,
         })
     }
@@ -228,6 +253,8 @@ mod tests {
             harness: Some(HarnessKind::Codex),
             model: Some("opus".to_owned()),
             roots_only: true,
+            exclude_subagents: true,
+            roles: vec![DomainMessageRole::User, DomainMessageRole::Tool],
             updated_since: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(90)),
         };
         let decoded = DomainSessionFilter::try_from(SessionFilter::from(&original)).unwrap();

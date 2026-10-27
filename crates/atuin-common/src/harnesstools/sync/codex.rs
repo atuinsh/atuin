@@ -48,20 +48,22 @@ use super::{
     capture_key, check_segment, continuing_from, jsonl_lines, merged_in, modified, past,
     replace_jsonl, require_idle, resumes_from, switched_to,
 };
-use crate::harnesstools::codex::session::{CodexSession, default_root, resume_id, session_id_of};
+use crate::harnesstools::codex::session::{CodexSession, resume_id, session_id_of};
 use crate::harnesstools::codex::{Codex, rehydrate, state_db};
 use crate::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use crate::harnesstools::resume::is_plain_name;
 use crate::harnesstools::session::Session;
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 impl SessionSync for Codex {
     async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
-        local_tip_in(&codex_home(), id).await
+        local_tip_in(&crate::harnesstools::codex::home(), id).await
     }
 
     async fn is_live(&self, id: &str, cwd: Option<&Path>) -> Liveness {
-        let (home, id, cwd) = (codex_home(), id.to_owned(), cwd.map(Path::to_path_buf));
+        let (home, id, cwd) =
+            (crate::harnesstools::codex::home(), id.to_owned(), cwd.map(Path::to_path_buf));
         blocking_liveness(move || {
             let thread = resume_id(&id);
             let newest = is_plain_name(thread)
@@ -84,7 +86,7 @@ impl SessionSync for Codex {
         lines: &[RehydrateMessage],
         options: &AppendOptions<'_>,
     ) -> Result<AppendOutcome, SyncError> {
-        let (home, thread) = (codex_home(), resume_id(id).to_owned());
+        let (home, thread) = (crate::harnesstools::codex::home(), resume_id(id).to_owned());
         let seen = appending(base, &thread, options.cwd);
         let (at, of) = (home.clone(), id.to_owned());
         require_idle(
@@ -102,7 +104,7 @@ impl SessionSync for Codex {
         options: &AppendOptions<'_>,
         backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError> {
-        let (home, thread) = (codex_home(), resume_id(id).to_owned());
+        let (home, thread) = (crate::harnesstools::codex::home(), resume_id(id).to_owned());
         let seen = appending(base, &thread, options.cwd);
         let (at, of) = (home.clone(), id.to_owned());
         require_idle(
@@ -110,12 +112,6 @@ impl SessionSync for Codex {
         )?;
         replace_in(&home, id, base, branch, options.taken_ids, backups).await
     }
-}
-
-/// `$CODEX_HOME`, else `~/.codex`: where `sessions/` is.
-fn codex_home() -> PathBuf {
-    let root = default_root();
-    root.parent().map_or_else(|| root.clone(), Path::to_path_buf)
 }
 
 /// Where Codex keeps its writer locks (codex-rs `WRITER_LOCK_DIR`).
@@ -137,7 +133,7 @@ pub(super) fn liveness(home: &Path, id: &str, procs: &Processes, seen: &Seen) ->
     if !locks.is_dir() {
         return agent_running(procs, "codex", &[], seen);
     }
-    match flock_holder(&locks.join(format!("{thread}.lock")), procs) {
+    match flock_holder(&locks.joined(format!("{thread}.lock")), procs) {
         // Whether Codex on Windows holds the lock as it does elsewhere is unconfirmed: a lock
         // nothing holds there says no more than the processes do.
         Liveness::NotLive if cfg!(windows) => agent_running(procs, "codex", &[], seen),
@@ -202,20 +198,59 @@ fn coordinate(dir: &Path) -> std::io::Result<File> {
 /// The rollouts of thread `thread` under `root` (`<yyyy>/<mm>/<dd>/`, or flat in the archive),
 /// oldest first: named for when each was started.
 fn rollouts_of(root: &Path, thread: &str) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut dirs = vec![root.to_path_buf()];
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().filter_map(Result::ok) {
-            let path = entry.path();
-            if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                dirs.push(path);
-            } else if thread_of(&path).is_some_and(|(t, _)| t == thread) {
-                found.push(path);
-            }
-        }
-    }
+    let mut found: Vec<_> = files_under(root)
+        .filter(|path| thread_of(path).is_some_and(|(t, _)| t == thread))
+        .collect();
     found.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     found
+}
+
+/// The files under `root`, at any depth.
+fn files_under(root: &Path) -> impl Iterator<Item = PathBuf> + use<> {
+    let mut dirs = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    std::iter::from_fn(move || {
+        loop {
+            if let Some(file) = files.pop() {
+                return Some(file);
+            }
+            let dir = dirs.pop()?;
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().filter_map(Result::ok) {
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    dirs.push(entry.path());
+                } else {
+                    files.push(entry.path());
+                }
+            }
+        }
+    })
+}
+
+/// Turn the compressed rollouts (`.jsonl.zst`) of thread `thread` under Codex home `home` back
+/// into plain ones, as Codex does before it appends to one (codex-rs `rollout/compression.rs`),
+/// keeping when each was last written: one whose plain sibling is there is Codex's to finish.
+fn decompress_rollouts(home: &Path, thread: &str) -> Result<(), SyncError> {
+    let compressed: Vec<(PathBuf, PathBuf)> = ["sessions", "archived_sessions"]
+        .into_iter()
+        .flat_map(|root| files_under(&home.join(root)))
+        .filter_map(|path| {
+            let plain = PathBuf::from(path.to_str()?.strip_suffix(".zst")?);
+            let of_thread = thread_of(&plain).is_some_and(|(t, _)| t == thread);
+            (of_thread && !plain.exists()).then_some((path, plain))
+        })
+        .collect();
+    if compressed.is_empty() {
+        return Ok(());
+    }
+    let _lock = WriterLock::acquire(home, thread)?;
+    for (path, plain) in compressed {
+        let mut out = tempfile::NamedTempFile::new_in(plain.parent().unwrap_or(home))?;
+        zstd::stream::copy_decode(File::open(&path)?, &mut out)?;
+        out.as_file().set_modified(std::fs::metadata(&path)?.modified()?)?;
+        out.persist_noclobber(&plain).map_err(|err| err.error)?;
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
 }
 
 /// The thread a rollout file is of, and its own rollout id (the thread's, for its first).
@@ -345,6 +380,7 @@ pub(super) async fn local_tip_in(home: &Path, id: &str) -> Result<Option<LocalTi
     if !is_plain_name(thread) {
         return Ok(None);
     }
+    decompress_rollouts(home, thread)?;
     let Some(path) = rollouts_of(&home.join("sessions"), thread).pop() else {
         return Ok(None);
     };
@@ -499,8 +535,18 @@ pub(super) async fn replace_in(
         taken: taken.cloned(),
         backups: backups.to_path_buf(),
     };
-    let home = home.to_path_buf();
-    blocking(move || replace_rollout(&home, &switch, &rollout.rows)).await
+    let thread = switch.thread.clone();
+    let (rewritten, lock) = {
+        let home = home.to_path_buf();
+        blocking(move || replace_rollout(&home, &switch, &rollout.rows)).await?
+    };
+    // Projected from the lines the switch cut, Codex's history would show the branch left: it is
+    // forgotten before any Codex can load the thread again.
+    if let Err(err) = state_db::forget_history(home, &thread).await {
+        tracing::warn!(%err, thread, "Codex may go on showing the branch switched from");
+    }
+    drop(lock);
+    Ok(rewritten)
 }
 
 /// Why the rollout holding `bytes` can't be written out again along another branch, whatever the
@@ -545,12 +591,12 @@ pub(super) struct Switch {
 /// what follows that line is what went on from it here), its `session_meta` and every line
 /// before as they are; then the branch's rows past it, numbered on from the line kept last, as
 /// [`append_in`] writes them. Codex continues from the last line, so the branch's head must be
-/// the last row written, or merged into it.
+/// the last row written, or merged into it. Hands back the thread's writer lock, still held.
 pub(super) fn replace_rollout(
     home: &Path,
     switch: &Switch,
     rows: &[(u64, String)],
-) -> Result<ReplaceOutcome, SyncError> {
+) -> Result<(ReplaceOutcome, Option<WriterLock>), SyncError> {
     let Switch {
         thread,
         base,
@@ -608,14 +654,14 @@ pub(super) fn replace_rollout(
     let merged = merged_in(&out, &tip.iter().cloned().collect());
     resumes_from(tip.as_deref(), &merged, &end)?;
     let (backup, warning) = replace_jsonl(path, base.stamp, &bytes, &out, backups)?;
-    drop(lock);
-    Ok(ReplaceOutcome {
+    let outcome = ReplaceOutcome {
         native_path: path.clone(),
         appended,
         tip_source_id: tip,
         backup,
         warning,
-    })
+    };
+    Ok((outcome, lock))
 }
 
 /// The rollout `bytes`, up to the end of the line ending at `end` (and never short of its first

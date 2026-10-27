@@ -8,6 +8,7 @@ use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Result, Row};
 use tracing::{debug, instrument};
 
+use crate::store::record::ScriptRecord;
 use crate::store::script::Script;
 
 const SCRIPT_COLUMNS: &str = "id, name, description, shebang, script";
@@ -155,33 +156,39 @@ impl Database {
         Ok(res)
     }
 
-    pub async fn clear(&self) -> Result<()> {
+    async fn clear_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
         debug!("clearing all scripts from sqlite");
 
-        db::query("delete from script_tags").execute(self.sqlite.pool()).await?;
-        db::query("delete from scripts").execute(self.sqlite.pool()).await?;
+        db::query("delete from script_tags").execute(&mut **tx).await?;
+        db::query("delete from scripts").execute(&mut **tx).await?;
 
         Ok(())
     }
 
-    pub async fn delete(&self, id: &str) -> Result<()> {
+    async fn delete_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, id: &str) -> Result<()> {
         debug!("deleting script {}", id);
 
-        db::query("delete from scripts where id = ?1").bind(id).execute(self.sqlite.pool()).await?;
+        db::query("delete from scripts where id = ?1").bind(id).execute(&mut **tx).await?;
 
         // delete all the tags for the script
         db::query("delete from script_tags where script_id = ?1")
             .bind(id)
-            .execute(self.sqlite.pool())
+            .execute(&mut **tx)
             .await?;
 
         Ok(())
     }
 
-    pub async fn update(&self, s: &Script) -> Result<()> {
-        debug!("updating script {:?}", s);
-
+    pub async fn delete(&self, id: &str) -> Result<()> {
         let mut tx = self.sqlite.pool().begin().await?;
+        Self::delete_raw(&mut tx, id).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    async fn update_raw(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, s: &Script) -> Result<()> {
+        debug!("updating script {:?}", s);
 
         // Update the script's base fields
         db::query(
@@ -193,13 +200,13 @@ impl Database {
         .bind(s.shebang.as_str())
         .bind(s.script.as_str())
         .bind(s.id.to_string())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
         // Delete all existing tags for this script
         db::query("delete from script_tags where script_id = ?1")
             .bind(s.id.to_string())
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
 
         // Insert new tags
@@ -210,8 +217,39 @@ impl Database {
             )
             .bind(s.id.to_string())
             .bind(tag)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn update(&self, s: &Script) -> Result<()> {
+        let mut tx = self.sqlite.pool().begin().await?;
+        Self::update_raw(&mut tx, s).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Replace every script with the outcome of replaying `records`, in one transaction: readers
+    /// keep seeing the previous scripts until the new ones are all in place, and a failed replay
+    /// leaves them as they were.
+    pub async fn replay(&self, records: &[ScriptRecord]) -> Result<()> {
+        debug!("replaying {} script records into sqlite", records.len());
+
+        let mut tx = self.sqlite.pool().begin().await?;
+
+        // Replaying over what is already there would trip the unique name index (e.g. a renamed
+        // script), so start from nothing.
+        Self::clear_raw(&mut tx).await?;
+
+        for record in records {
+            match record {
+                ScriptRecord::Create(script) => Self::save_raw(&mut tx, script).await?,
+                ScriptRecord::Update(script) => Self::update_raw(&mut tx, script).await?,
+                ScriptRecord::Delete(id) => Self::delete_raw(&mut tx, &id.to_string()).await?,
+            }
         }
 
         tx.commit().await?;
@@ -340,5 +378,53 @@ mod test {
 
         let loaded = db.list().await.unwrap();
         assert_eq!(loaded.len(), 0);
+    }
+    #[rstest]
+    #[tokio::test]
+    async fn replay_applies_records_in_order(#[future] db: Database) {
+        let db = db.await;
+        let kept = Script::builder().name("kept".to_owned()).script("a".to_owned()).build();
+        let renamed = Script::builder().name("old".to_owned()).script("b".to_owned()).build();
+        let removed = Script::builder().name("removed".to_owned()).script("c".to_owned()).build();
+        let mut renamed_after = renamed.clone();
+        renamed_after.name = "new".to_owned();
+
+        db.replay(&[
+            ScriptRecord::Create(kept),
+            ScriptRecord::Create(renamed),
+            ScriptRecord::Create(removed.clone()),
+            ScriptRecord::Update(renamed_after),
+            ScriptRecord::Delete(removed.id),
+        ])
+        .await
+        .unwrap();
+
+        let mut names: Vec<_> = db.list().await.unwrap().into_iter().map(|s| s.name).collect();
+        names.sort();
+        assert_eq!(names, ["kept", "new"]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_failed_replay_leaves_the_previous_scripts(#[future] db: Database, script: Script) {
+        let db = db.await;
+        db.save(&script).await.unwrap();
+
+        // Renaming onto a name another script holds trips the unique name index partway through.
+        let first = Script::builder().name("taken".to_owned()).script("a".to_owned()).build();
+        let second = Script::builder().name("free".to_owned()).script("b".to_owned()).build();
+        let mut second_renamed = second.clone();
+        second_renamed.name = "taken".to_owned();
+
+        let replayed = db
+            .replay(&[
+                ScriptRecord::Create(first),
+                ScriptRecord::Create(second),
+                ScriptRecord::Update(second_renamed),
+            ])
+            .await;
+
+        assert!(replayed.is_err());
+        assert_eq!(db.list().await.unwrap(), [script]);
     }
 }

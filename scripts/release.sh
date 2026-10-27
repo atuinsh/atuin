@@ -321,7 +321,25 @@ update_changelog() {
 }
 
 # ════════════════════════════════════════════════════════════════════
-# 6. Commit and push
+# 6. Contributors
+# ════════════════════════════════════════════════════════════════════
+
+update_contributors() {
+    step "Contributors"
+
+    # `atuin contributors` prints this file. LC_ALL=C keeps the order the
+    # same on macOS and Linux.
+    git log --format='%aN <%aE>' \
+        | grep -vE '\[bot\]|^atuin-bot ' \
+        | LC_ALL=C sort -uf > CONTRIBUTORS
+
+    local added
+    added=$(git diff --numstat -- CONTRIBUTORS | cut -f1)
+    success "${BOLD}${added:-0}${NC} new contributor(s)"
+}
+
+# ════════════════════════════════════════════════════════════════════
+# 7. Commit and push
 # ════════════════════════════════════════════════════════════════════
 
 commit_and_push() {
@@ -337,7 +355,7 @@ commit_and_push() {
 }
 
 # ════════════════════════════════════════════════════════════════════
-# 7. Pull request
+# 8. Pull request
 # ════════════════════════════════════════════════════════════════════
 
 extract_changelog_entry() {
@@ -410,7 +428,7 @@ EOF
 }
 
 # ════════════════════════════════════════════════════════════════════
-# 8. Tag
+# 9. Tag
 # ════════════════════════════════════════════════════════════════════
 
 tag_release() {
@@ -429,7 +447,7 @@ tag_release() {
 }
 
 # ════════════════════════════════════════════════════════════════════
-# 9. Publish to crates.io
+# 10. Publish to crates.io
 # ════════════════════════════════════════════════════════════════════
 
 publish_crates() {
@@ -489,6 +507,7 @@ main() {
     get_version
     update_versions
     update_changelog
+    update_contributors
     commit_and_push
     create_pr
     tag_release

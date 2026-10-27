@@ -52,7 +52,7 @@ pub enum Shell {
 pub struct RuntimeOptions {
     pub(crate) debug_markers: bool,
     pub(crate) shell: Vec<OsString>,
-    pub(crate) command_capture: Option<CaptureConfig>,
+    pub(crate) command_capture: Box<dyn FnOnce() -> Option<CaptureConfig>>,
     pub(crate) child_umask: Option<u32>,
 }
 
@@ -60,7 +60,7 @@ impl RuntimeOptions {
     fn new(
         debug_markers: bool,
         shell: Vec<OsString>,
-        command_capture: Option<CaptureConfig>,
+        command_capture: Box<dyn FnOnce() -> Option<CaptureConfig>>,
         child_umask: Option<u32>,
     ) -> Self {
         Self {
@@ -73,10 +73,17 @@ impl RuntimeOptions {
 }
 
 impl PtyProxy {
+    /// `command_capture` is called on the proxy's runtime, so it can spawn the task that drains
+    /// what its sink is handed.
+    ///
     /// `child_umask` is the umask to restore in the spawned shell. Atuin sets
     /// a restrictive process-wide umask early in startup, which the shell
     /// would otherwise inherit (#3695).
-    pub fn run(self, command_capture: Option<CaptureConfig>, child_umask: Option<u32>) {
+    pub fn run(
+        self,
+        command_capture: impl FnOnce() -> Option<CaptureConfig> + 'static,
+        child_umask: Option<u32>,
+    ) {
         if self.cmd.is_some() && !self.shell.is_empty() {
             eprintln!("atuin pty-proxy: --shell only applies when no subcommand is given");
             std::process::exit(2);
@@ -91,7 +98,7 @@ impl PtyProxy {
             None => runtime::main(RuntimeOptions::new(
                 self.debug_markers,
                 self.shell,
-                command_capture,
+                Box::new(command_capture),
                 child_umask,
             )),
         }
@@ -112,13 +119,13 @@ fn detect_shell(cli_shell: Option<Shell>) -> Result<Shell, String> {
         return Ok(shell);
     }
 
-    if let Ok(shell) = std::env::var("ATUIN_SHELL")
+    if let Ok(shell) = atuin_common::env::var("ATUIN_SHELL")
         && let Some(shell) = shell_from_name(&shell)
     {
         return Ok(shell);
     }
 
-    if let Ok(shell) = std::env::var("SHELL")
+    if let Ok(shell) = atuin_common::env::var("SHELL")
         && let Some(shell) = shell_from_name(&shell)
     {
         return Ok(shell);
@@ -142,7 +149,7 @@ fn shell_from_name(name: &str) -> Option<Shell> {
 }
 
 fn env_flag(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
+    atuin_common::env::var(name).is_ok_and(|value| {
         matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
     })
 }
@@ -153,6 +160,9 @@ fn env_flag(name: &str) -> bool {
 /// won't spawn another. This lets `atuin init` embed the preamble (via the `pty_proxy.enabled`
 /// setting) without conflicting with an existing standalone `atuin pty-proxy init` line in shell
 /// config.
+///
+/// The script execs only once `atuin __internal pty-proxy-active` has run and answered `0`: when
+/// `atuin` can't run by name, a failed `exec` would end the shell before its first prompt.
 #[must_use]
 pub fn init_script(shell: Shell) -> &'static str {
     match shell {
@@ -168,19 +178,69 @@ pub fn init_script(shell: Shell) -> &'static str {
 /// spawns the same binary that sourced the init, rather than resolving via `$PATH` (which can
 /// pick the wrong installation when the user has, for instance, both `/usr/bin/bash` and
 /// `/opt/homebrew/bin/bash`).
-const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]] &&
-  [[ -z ${__atuin_pty_proxy_owns_tty-} ]]
-then
-  __atuin_pty_proxy_owns_tty=0
+const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+  # Unexported, so a second copy of this preamble reuses the answer while child shells ask again.
+  # A failed check leaves it empty.
+  if [[ -z ${__atuin_pty_proxy_answer+x} ]]; then
+    __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null) ||
+      __atuin_pty_proxy_answer=
+  fi
+  if [[ -z ${__atuin_pty_proxy_owns_tty-} ]]; then
+    if [[ $__atuin_pty_proxy_answer = 1 ]]; then
+      __atuin_pty_proxy_owns_tty=1
+    else
+      __atuin_pty_proxy_owns_tty=0
+    fi
+  fi
 
-  # Check whether this terminal is already running in an Atuin PTY proxy.
-  if ! __atuin_pty_proxy_answer=$(atuin __internal pty-proxy-active 2>/dev/null); then
+  # Check if we're allowed to spawn a PTY proxy in this shell. If false, this is most commonly
+  # because the shell was started with `-ic <command>` or `-i <file>`, and spawning a proxy would
+  # fail to forward those arguments.
+  __atuin_pty_proxy_spawning_allowed() {
+    if [[ -n ${ZSH_VERSION-} ]]; then
+      # If `-c` was passed, return false.
+      [[ -n ${ZSH_EXECUTION_STRING+x} ]] && return 1
+
+      # If missing ZSH_ARGZERO, default to true.
+      [[ -z ${ZSH_ARGZERO-} ]] && return 0
+
+      # If ZSH_ARGZERO starts with "-" but the shell isn't a login shell, we're executing
+      # a file, so return false.
+      [[ $ZSH_ARGZERO == -* ]] && ! [[ -o login ]] && return 1
+
+      # Get basename of ZSH_ARGZERO and strip leading "-" (matches how ZSH_NAME is calculated)
+      # and compare to ZSH_NAME. If they're different, we're executing a file, so return false.
+      [[ ${${ZSH_ARGZERO:t}#-} != "$ZSH_NAME" ]] && return 1
+
+      # Finally, return true iff $ZSH_ARGZERO (minus leading "-") is an executable. This
+      # is what we use when spawning the proxy, so we would necessarily fail otherwise.
+      local zsh="${${ZSH_ARGZERO#-}:c}"
+      [[ $zsh == */* ]] && [[ -x $zsh ]] && ! [[ -d $zsh ]]
+    elif [[ -n ${BASH_VERSION-} ]]; then
+      # If `-c` was passed, return false.
+      [[ $- == *c* ]] && return 1
+
+      # If $0 starts with "-" but the shell isn't a login shell, we're executing a file,
+      # so return false.
+      [[ $0 == -* ]] && ! shopt -q login_shell && return 1
+
+      # Finally, return true iff $0 (minus leading "-") is the same file as $BASH or matches
+      # the basename of $BASH.
+      [[ ${0#-} -ef $BASH ]] || [[ ${0#-} == "${BASH##*/}" ]]
+    else
+      true
+    fi
+  }
+
+  if [[ $__atuin_pty_proxy_answer != 0 ]]; then
+    # Either this terminal is already running in an Atuin PTY proxy, or `atuin` can't be run by
+    # name here and exec'ing it would end the shell.
     :
-  elif [[ $__atuin_pty_proxy_answer = 1 ]]; then
-    __atuin_pty_proxy_owns_tty=1
   elif [[ -n ${ATUIN_PTY_PROXY_FAILED-} ]]; then
     # If the PTY proxy failed to spawn its server, stop here instead of endlessly
     # trying to spawn more proxies.
+    :
+  elif ! __atuin_pty_proxy_spawning_allowed; then
     :
   elif [[ -n "${BASH_VERSION:-}" ]]; then
     __atuin_pty_proxy_args=(--shell "$BASH")
@@ -196,16 +256,21 @@ then
     # a bare command name ("zsh") rather than a path; the :c modifier
     # resolves that to an absolute path via $PATH, leaves an absolute path
     # unchanged, and leaves an unresolvable name as-is.
-    __atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}"
-    __atuin_pty_proxy_args=(--shell "${${__atuin_pty_proxy_zsh#-}:c}")
+    if [[ -n ${ZSH_ARGZERO-} ]]; then
+      __atuin_pty_proxy_zsh=${${ZSH_ARGZERO#-}:c}
+    else
+      __atuin_pty_proxy_zsh=$(command -v zsh)
+    fi
+    __atuin_pty_proxy_args=(--shell "$__atuin_pty_proxy_zsh")
     if [[ -o login ]]; then
-        __atuin_pty_proxy_args+=(--shell -l)
+      __atuin_pty_proxy_args+=(--shell -l)
     fi
     exec atuin pty-proxy "${__atuin_pty_proxy_args[@]}"
   else
     exec atuin pty-proxy
   fi
-  unset __atuin_pty_proxy_answer
+
+  unset -f __atuin_pty_proxy_spawning_allowed
 fi
 "#;
 
@@ -215,16 +280,19 @@ fi
 // on stdin, making it necessarily not a tty. This is also why we do `</dev/tty` when invoking
 // `atuin pty-proxy` if stdin is not a terminal.
 const FISH_INIT: &str = r#"if status is-interactive; and test -t 1
-    and not set -q __atuin_pty_proxy_owns_tty
+    if not set -q __atuin_pty_proxy_answer
+        set -g __atuin_pty_proxy_answer (atuin __internal pty-proxy-active 2>/dev/null)
+        or set -g __atuin_pty_proxy_answer
+    end
+    if not set -q __atuin_pty_proxy_owns_tty
+        if test "$__atuin_pty_proxy_answer" = 1
+            set -g __atuin_pty_proxy_owns_tty 1
+        else
+            set -g __atuin_pty_proxy_owns_tty 0
+        end
+    end
 
-    set -g __atuin_pty_proxy_owns_tty 0
-    set -l __atuin_pty_proxy_answer (atuin __internal pty-proxy-active 2>/dev/null)
-    set -l __atuin_pty_proxy_status $status
-
-    if test $__atuin_pty_proxy_status -ne 0
-    else if test "$__atuin_pty_proxy_answer" = 1
-        set -g __atuin_pty_proxy_owns_tty 1
-    else if not set -q ATUIN_PTY_PROXY_FAILED
+    if test "$__atuin_pty_proxy_answer" = 0; and not set -q ATUIN_PTY_PROXY_FAILED
         set __atuin_pty_proxy_args --shell (status fish-path)
         if status is-login
             set -a __atuin_pty_proxy_args --shell -l
@@ -242,17 +310,22 @@ end
 ///
 /// Nushell cannot dynamically source the output of `atuin init nu`, so only the pty-proxy
 /// preamble is emitted here; users must also set up `atuin init nu` separately.
-const NU_INIT: &str = r#"if (is-terminal --stdin) and (is-terminal --stdout) and ('__atuin_pty_proxy' not-in $env) {
-    # Use a record rather than a plain string so the variable doesn't get exported
-    # to child processes -- we want each child shell to perform its own detection.
-    $env.__atuin_pty_proxy = { owns_tty: false }
+const NU_INIT: &str = r#"if (is-terminal --stdin) and (is-terminal --stdout) {
+    if $env.__atuin_pty_proxy?.answer? == null {
+        let atuin_proxy_check = (do -i { atuin __internal pty-proxy-active } | complete)
+        let answer = if $atuin_proxy_check.exit_code == 0 {
+            $atuin_proxy_check.stdout | str trim
+        } else {
+            ""
+        }
 
-    let atuin_proxy_check = (do -i { atuin __internal pty-proxy-active } | complete)
+        # Use a record rather than a plain string so the variable doesn't get exported
+        # to child processes -- we want each child shell to perform its own detection.
+        let pty_proxy = ($env.__atuin_pty_proxy? | default { owns_tty: ($answer == "1") })
+        $env.__atuin_pty_proxy = ($pty_proxy | insert answer $answer)
+    }
 
-    if $atuin_proxy_check.exit_code != 0 {
-    } else if ($atuin_proxy_check.stdout | str trim) == "1" {
-        $env.__atuin_pty_proxy = { owns_tty: true }
-    } else if ('ATUIN_PTY_PROXY_FAILED' not-in $env) {
+    if $env.__atuin_pty_proxy.answer == "0" and 'ATUIN_PTY_PROXY_FAILED' not-in $env {
         mut pty_proxy_args = [--shell $nu.current-exe]
         if $nu.is-login {
             $pty_proxy_args = ($pty_proxy_args ++ [--shell -l])
@@ -301,9 +374,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case(Shell::Bash, "[[ -z ${__atuin_pty_proxy_owns_tty-} ]]")]
-    #[case(Shell::Fish, "not set -q __atuin_pty_proxy_owns_tty")]
-    #[case(Shell::Nu, "'__atuin_pty_proxy' not-in $env")]
+    #[case(Shell::Bash, "[[ -z ${__atuin_pty_proxy_answer+x} ]]")]
+    #[case(Shell::Fish, "not set -q __atuin_pty_proxy_answer")]
+    #[case(Shell::Nu, "$env.__atuin_pty_proxy?.answer? == null")]
     fn init_no_ops_when_emitted_twice(#[case] shell: Shell, #[case] guard: &str) {
         // `atuin init` embeds the preamble, and users may also still have a standalone
         // `atuin pty-proxy init` line. Whichever copy runs first decides; the second must not
@@ -324,16 +397,26 @@ mod tests {
         // zsh: capture ZSH_ARGZERO (with PATH fallback), strip the leading
         // dash present on login shells, then resolve a bare command name to
         // an absolute path with the :c modifier before forwarding it.
-        assert!(posix.contains(r#"__atuin_pty_proxy_zsh="${ZSH_ARGZERO:-$(command -v zsh)}""#));
-        assert!(
-            posix.contains(r#"__atuin_pty_proxy_args=(--shell "${${__atuin_pty_proxy_zsh#-}:c}")"#)
-        );
+        assert!(posix.contains(r"__atuin_pty_proxy_zsh=${${ZSH_ARGZERO#-}:c}"));
+        assert!(posix.contains(r"__atuin_pty_proxy_zsh=$(command -v zsh)"));
+        assert!(posix.contains(r#"__atuin_pty_proxy_args=(--shell "$__atuin_pty_proxy_zsh")"#));
 
         let fish = init_script(Shell::Fish);
         assert!(fish.contains("set __atuin_pty_proxy_args --shell (status fish-path)"));
 
         let nu = init_script(Shell::Nu);
         assert!(nu.contains("mut pty_proxy_args = [--shell $nu.current-exe]"));
+    }
+
+    #[rstest]
+    #[case::bash(Shell::Bash, "[[ $- == *c* ]]")]
+    #[case::zsh(Shell::Zsh, "[[ -n ${ZSH_EXECUTION_STRING+x} ]]")]
+    fn bash_zsh_init_skips_shells_started_with_a_command(
+        #[case] shell: Shell,
+        #[case] expected: &str,
+    ) {
+        // `bash -ic cmd` and `zsh -ic cmd` are interactive, but re-execing them would drop `cmd`.
+        assert!(init_script(shell).contains(expected));
     }
 
     #[rstest]

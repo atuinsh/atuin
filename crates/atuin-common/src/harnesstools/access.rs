@@ -6,6 +6,8 @@ use serde_json::{Map, Value};
 
 use crate::harnesstools::note::command_line;
 
+mod script;
+
 /// What a tool call touches.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Access {
@@ -24,6 +26,23 @@ const PATH_KEYS: &[&str] = &["file_path", "filePath", "path", "notebook_path", "
 const PATHS_KEYS: &[&str] = &["paths", "file_paths", "filePaths", "files"];
 
 impl Access {
+    /// What the call `name`, with `input`, touches: what [`Self::of`] finds, or for a Codex `exec`
+    /// script (`input` the JavaScript it runs, see the `script` module), what each tool call it
+    /// makes does; and whether that is all it touches. It isn't for a script not read whole (a
+    /// call's arguments not all literals, `tools` used other than in such calls, a string, regex or
+    /// comment left open): what that runs or writes can't be told, nor judged in pieces against
+    /// filters written for whole commands (`^psql`), and only the calls that were read are given.
+    #[must_use]
+    pub fn all(name: &str, input: &Value) -> (Vec<Self>, bool) {
+        let script = match input {
+            Value::String(text) if name == "exec" && object(input).is_none() => text,
+            _ => return (vec![Self::of(name, input)], true),
+        };
+        let calls = script::calls(script);
+        let accesses = calls.calls.iter().map(|call| Self::of(&call.name, &call.input)).collect();
+        (accesses, calls.whole)
+    }
+
     /// What the call `name`, with `input`, touches. Tools are known by name, case aside and
     /// without an MCP server's prefix (`mcp__fs__write_file`): shells by the command they run, and
     /// a writer by the paths it's given; any other tool given a path reads it (a read, a search,
@@ -234,5 +253,84 @@ mod tests {
     #[case::uncaptured("Read", Value::Null, Access::default())]
     fn what_a_call_touches(#[case] name: &str, #[case] input: Value, #[case] want: Access) {
         assert_eq!(Access::of(name, &input), want);
+    }
+
+    /// Codex 0.160 runs every tool through a script (`exec`); each call it makes is an access.
+    /// The scripts are as real runs wrote them.
+    #[rstest]
+    #[case::one_command(
+        "const r = await tools.exec_command({cmd:\"echo dropme-kilopear\",workdir:\"/w\",yield_time_ms:10000,max_output_tokens:100});\ntext(r.output);\n",
+        vec![shell("echo dropme-kilopear", Some("/w"))],
+    )]
+    #[case::quoted_keys_and_escapes(
+        r#"text(await tools.exec_command({cmd:"rg -n 'a|b' x \\(y\\) \"q\"","max_output_tokens":5000}));"#,
+        vec![shell(r#"rg -n 'a|b' x \(y\) "q""#, None)],
+    )]
+    #[case::parallel(
+        "const results = await Promise.allSettled([\ntools.exec_command({cmd:\"jj st\",\"max_output_tokens\":4000}),\ntools.exec_command({cmd:'cat .env', max_output_tokens:5000})]);\nresults.forEach(text);",
+        vec![shell("jj st", None), shell("cat .env", None)],
+    )]
+    #[case::template(
+        "await tools.exec_command({cmd: `printf 'a\\nb' > .env`})",
+        vec![Access { writes: vec![".env".into()], ..shell("printf 'a\nb' > .env", None) }],
+    )]
+    #[case::patch_by_name(
+        "const patch = \"*** Begin Patch\\n*** Add File: fox.txt\\n+foxtrotpear\\n*** End Patch\";\nconst r = await tools.apply_patch(patch);\ntext(r);\n",
+        vec![writes(&["fox.txt"])],
+    )]
+    #[case::regex_holding_a_quote(
+        "text(ALL_TOOLS.filter(x=>/\"|search/i.test(x.name)));\ntext(await tools.exec_command({cmd:\"ls -a .codex\"}));",
+        vec![shell("ls -a .codex", None)],
+    )]
+    #[case::no_tools("text(1 + 1)", vec![])]
+    fn what_a_script_touches(#[case] script: &str, #[case] want: Vec<Access>) {
+        assert_eq!(Access::all("exec", &json!(script)).0, want);
+    }
+
+    /// What a script runs isn't known where it builds a command or a patch from pieces, or uses
+    /// `tools` some way not read (from review and validation's adversarial scripts); it is where
+    /// every call is of literals.
+    #[rstest]
+    #[case::joined_list(
+        "await tools.exec_command({cmd: [\"echo\", \"dropme-e\"].join(\" \")});",
+        false
+    )]
+    #[case::split_joined(
+        "await tools.exec_command({cmd: \"echo,dropme-v\".split(\",\").join(\" \")});",
+        false
+    )]
+    #[case::template_of_pieces(
+        "await tools.exec_command({cmd: `echo ${\"drop\" + \"me\"}-h`});",
+        false
+    )]
+    #[case::appended(
+        "let c = \"echo\"; c += \" dropme-u\"; await tools.exec_command({cmd: c});",
+        false
+    )]
+    #[case::computed_workdir(
+        "await tools.exec_command({cmd: \"ls\", workdir: base + \"/secret\"});",
+        false
+    )]
+    #[case::patch_interpolated(
+        "await tools.apply_patch(`*** Begin Patch\\n*** Update File: ${name}\\n+X=3\\n*** End \
+         Patch`);",
+        false
+    )]
+    #[case::indexed("await tools[\"apply_patch\"](patch);", false)]
+    #[case::literal(
+        "const p = \"*** Begin Patch\\n*** End Patch\";\nawait tools.apply_patch(p);\ntext(`done \
+         ${1}`);",
+        true
+    )]
+    fn what_a_script_runs_is_known_only_read_whole(#[case] script: &str, #[case] known: bool) {
+        assert_eq!(Access::all("exec", &json!(script)).1, known);
+    }
+
+    /// Only Codex's `exec` script is read as one; any other call is one access.
+    #[rstest]
+    #[case::other_tool("Bash", json!({"command": "ls"}))]
+    #[case::exec_with_arguments("exec", json!(r#"{"cmd":"ls"}"#))]
+    fn a_call_not_a_script_is_one_access(#[case] name: &str, #[case] input: Value) {
+        assert_eq!(Access::all(name, &input), (vec![Access::of(name, &input)], true));
     }
 }

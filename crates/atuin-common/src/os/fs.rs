@@ -15,7 +15,8 @@ impl FdIdentity {
     /// Matches [`FdIdentityExt::identity`] for the same file, but lets a caller that already has
     /// (or can cheaply `stat`) the path avoid an extra open + fd dup.
     #[cfg(unix)]
-    pub(crate) fn from_metadata(meta: &std::fs::Metadata) -> Self {
+    #[must_use]
+    pub fn from_metadata(meta: &std::fs::Metadata) -> Self {
         use std::os::unix::fs::MetadataExt;
 
         Self {

@@ -5,7 +5,6 @@ arg-gen-completions-shell = Set the shell for generating completions
 arg-gen-completions-out-dir = Set the output directory
 output-search-disabled = output capture is disabled. run `atuin config enable output-capture` to enable
 output-search-empty-query = blank query provided. please run 'atuin output search --help'
-daemon-remove-socket-failed = failed to remove daemon socket { $path }: { $source }
 hook-malformed-json = hook payload is not valid JSON at line { $line }, column { $column }
 output-search-connect-failed = could not connect to the daemon
 output-search-daemon-failed = the daemon failed to search command output
@@ -53,10 +52,11 @@ login-key-file-invalid = The key in existing key file at '{ $path }' is invalid
 login-key-try-again = { $error }. Please try again.
 login-reencrypting = Re-encrypting local store with new key
 login-writing-key = Writing new key
+login-starting-daemon = Starting the daemon with the new key
+login-daemon-start-failed = Restart the Atuin daemon so it uses the new key: { $error }
 login-key-load-failed = could not load encryption key for verification
 login-key-mismatch = The encryption key on this machine does not match the data on the server.
 login-key-find-correct = You can find the correct key by running 'atuin key' on a machine that already syncs successfully.
-login-wrong-key-title = Wrong encryption key
 login-wrong-key-body =
     The encryption key on this machine does not match the data on the server. You have been logged out.
 
@@ -94,6 +94,14 @@ sync-status-last-sync = Last sync: { $time }
 sync-status-remote = [Remote]
 sync-status-address = Address: { $address }
 sync-status-username = Username: { $username }
+cli-category-ai = AI:
+cli-category-sync = Sync & account:
+cli-category-sync-description = *Keep your history in sync across machines*
+cli-category-data = Data:
+cli-category-data-description = *Synced data beyond your shell history*
+cli-category-setup = Setup:
+cli-category-setup-description = *Install, configure, and troubleshoot Atuin*
+cli-category-advanced = Advanced:
 cmd-search = Interactive history search
 cmd-stats = Calculate statistics for your history
 cmd-account = Manage your sync account
@@ -103,12 +111,13 @@ cmd-doctor = Run the doctor to check for common issues
 cmd-update = Update atuin to the latest version on your release channel
 cmd-hook = Manage AI-agent shell hooks
 cmd-mcp = Start an MCP server exposing history search to AI tools (stdio)
+cmd-mcp-install = Connect an AI agent to atuin's MCP server
+arg-mcp-install-agent = Agent to connect (claude-code, codex, opencode or pi)
 cmd-wrapped = Show a fun, year-in-review recap of your shell history
-arg-wrapped-year = Year to recap (defaults to last year)
+arg-wrapped-year = Year to recap (defaults to last year, or this year in December)
 cmd-default-config = Print the default atuin configuration (config.toml)
 cmd-info = Information about Atuin data locations and ENV vars
-cmd-daemon = {"*"}Experimental* Manage the background daemon
-cmd-__internal_ = We want to exclude the `__internal` subcommand from Clap's `infer_subcommands`; otherwise, a user could access it simply by typing `atuin _`. However, Clap has no way to disable `infer_subcommands` for a single command. As a workaround, we define a dummy command with the same name but with an extra understore, which forces `__internal` to be typed out in entirety, since any prefix of the name would be ambiguous
+cmd-daemon = Manage the background daemon
 cmd-account-register = Register a new account
 cmd-account-delete = Delete your account, and all synced data
 cmd-account-change-password = Change your password
@@ -140,6 +149,7 @@ arg-config-disable-feature = The feature to disable
 value-config-feature-daemon = The background daemon and daemon-backed search
 value-config-feature-output-capture = Command output capture, via the daemon and the pty proxy
 value-config-feature-octavo = Use Octavo, once it is enabled for your account on the hub
+value-config-feature-threads = Capture your AI coding agents' threads, to search and resume them
 config-enable-octavo-not-logged-in = You are not logged in to the hub, so it cannot say whether Octavo is enabled for your account. Run 'atuin login' first.
 config-enable-octavo-not-enabled = Octavo is not enabled for your account on { $address }.
 config-enable-octavo-description = Octavo is Atuin's sync for sharing and searching your history.
@@ -148,6 +158,19 @@ config-enable-octavo-declined = Octavo was not enabled.
 config-enable-octavo-backfill = Also upload the { $count } entries already in your history, not just new commands.
 config-enable-octavo-backfilled = Queued { $count } history entries for upload.
 config-enable-octavo-backfill-old = { $count } entries recorded before Atuin v14 were left out: Octavo only takes the history ids Atuin has used since.
+
+threads-offer = Enable threads?
+threads-offer-description = Atuin records your coding agents' threads (Claude Code, Codex, opencode and Pi), so you can search them and resume them here or on another machine. They're encrypted and synced like your history.
+threads-enabled = Threads are on: threads your agents work in from now on are captured.
+threads-import = Import past threads?
+threads-import-description = Bring in the threads your agents already have on this machine too.
+threads-import-tools = Tool calls are included.
+threads-import-later = Run 'atuin threads import' any time to import past threads.
+threads-no-daemon = The Atuin daemon couldn't be started: { $error }
+    Start it, then run 'atuin threads import' to import past threads.
+threads-import-failed = Couldn't import past threads: { $error }
+    Run 'atuin threads import' to try again.
+threads-failed = Couldn't enable threads: { $error }
 arg-config-print-key = Print the value of a specific key and all its children
 arg-daemon-daemonize = Internal flag for daemonization
 arg-daemon-show-logs = Also write daemon logs to the console (useful for debugging)
@@ -220,18 +243,13 @@ cmd-import-xonsh-sqlite = Import history from xonsh sqlite db
 arg-init-disable-ctrl-r = Disable the binding of CTRL-R to atuin
 arg-init-disable-up-arrow = Disable the binding of the Up Arrow key to atuin
 arg-init-disable-ai = Disable the binding of ? to Atuin AI
-arg-init-bind-ai-resume = Bind CTRL-] to atuin ai resume (zsh, bash and fish; off by default: it replaces the shell's own binding)
+arg-init-bind-ai-resume = Bind CTRL-] to atuin threads resume (zsh, bash and fish; off by default: it replaces the shell's own binding)
 value-init-shell-zsh = Zsh setup
 value-init-shell-bash = Bash setup
 value-init-shell-fish = Fish setup
 value-init-shell-nu = Nu setup
 value-init-shell-xonsh = Xonsh setup
 value-init-shell-powershell = PowerShell setup
-cmd-__internal-pty-proxy-active = Check whether the current terminal belongs to a live PTY proxy
-    .long = 
-        Check whether the current terminal belongs to a live PTY proxy.
-
-        Prints `0` or `1` to stdout. This command is used by shell hooks to determine whether the PTY proxy is in use.
 cmd-kv-set = Set a key-value pair
 arg-kv-set-key = Key to set
 arg-kv-set-value = Value to store (reads from stdin if not provided)
@@ -247,7 +265,7 @@ cmd-kv-rebuild = Rebuild the KV store
 cmd-output-search = Full-text search over captured command output
 value-output-search-style-json = A single JSON array of match objects
 value-output-search-style-ndjson = Newline-delimited JSON: one match object per line
-arg-output-search-query = Words to search for; all must appear. Use `--` before a query that starts with `-`
+arg-output-search-query = Words to search for; all must appear. Quote words to find them together, in that order. Use `--` before a query that starts with `-`
 arg-output-search-limit = Maximum number of matches to return
 arg-output-search-context = Show only the matching lines, with this many lines of context on either side; without it, each match's whole output
 arg-output-search-style = How matches are rendered
@@ -337,9 +355,9 @@ cmd-store-purge = Delete all records in the store that cannot be decrypted with 
 cmd-store-verify = Verify that all records in the store can be decrypted with the current key
 cmd-store-push = Push all records to the remote sync server (one way sync)
 cmd-store-pull = Pull records from the remote sync server (one way sync)
-arg-store-pull-force = Force push records
+arg-store-pull-force = Force pull records
     .long = 
-        Force push records
+        Force pull records
 
         This will first wipe the local store, and then download all records from the remote
 arg-store-pull-page = Page Size
@@ -370,6 +388,7 @@ arg-key-base64 = Switch to base64 output of the key
 cmd-status = Display the sync status
 arg-update-check = Check whether an update is available without installing it
 arg-update-version = Update (or roll back) to a specific version, e.g. "18.9.0" or "18.9.0-nightly.1", instead of the channel's latest release
+arg-update-prerelease = Update to the latest prerelease, as if `update_channel = "nightly"` were set
 cmd-pty-proxy = PTY proxy for atuin
 cmd-uuid = Generate a UUID
 cmd-gen-completions = Generate shell completions

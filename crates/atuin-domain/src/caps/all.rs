@@ -50,11 +50,13 @@ impl Capability for PackfileCap {
     }
 }
 
+#[cfg(feature = "octavo")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OctavoCap {
     pub version: u32,
 }
 
+#[cfg(feature = "octavo")]
 impl Capability for OctavoCap {
     fn static_name() -> &'static str {
         "sh.atuin.server/octavo"

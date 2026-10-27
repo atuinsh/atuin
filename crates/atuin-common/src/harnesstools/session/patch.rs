@@ -391,13 +391,17 @@ fn hunk_header(line: &str) -> Option<Hunk> {
 /// `hunks` as pi's `edit` tool writes its `details.diff` (`generateDiffString`): each line its
 /// prefix, its line number padded to the widest, a space and its text (`+` lines numbered in the
 /// new file, the rest in the old), with `...` for the lines skipped before and between hunks. Also
-/// the first changed line, numbered in the new file (`firstChangedLine`).
+/// the first changed line, numbered in the new file (`firstChangedLine`). Numbers past the last a
+/// line number holds (a malformed header's) stay at it.
 #[must_use]
 pub fn pi_diff(hunks: &[Hunk]) -> (String, Option<u64>) {
     let width = hunks
         .iter()
         // The last line each side shows.
-        .map(|h| (h.old_start + h.old_lines).max(h.new_start + h.new_lines).saturating_sub(1))
+        .map(|h| {
+            let old = h.old_start.saturating_add(h.old_lines);
+            old.max(h.new_start.saturating_add(h.new_lines)).saturating_sub(1)
+        })
         .max()
         .unwrap_or(0)
         .to_string()
@@ -414,18 +418,21 @@ pub fn pi_diff(hunks: &[Hunk]) -> (String, Option<u64>) {
             let number = match prefix {
                 "+" => {
                     first.get_or_insert(new);
-                    new += 1;
-                    new - 1
+                    let number = new;
+                    new = new.saturating_add(1);
+                    number
                 }
                 "-" => {
                     first.get_or_insert(new);
-                    old += 1;
-                    old - 1
+                    let number = old;
+                    old = old.saturating_add(1);
+                    number
                 }
                 " " => {
-                    old += 1;
-                    new += 1;
-                    old - 1
+                    let number = old;
+                    old = old.saturating_add(1);
+                    new = new.saturating_add(1);
+                    number
                 }
                 _ => continue,
             };
@@ -616,6 +623,16 @@ mod tests {
             "  1 one\n- 2 two\n+ 2 TWO\n  3 three\n    ...\n  9 nine\n+10 nine and a half\n 10 ten"
         );
         assert_eq!(first, Some(2));
+    }
+
+    /// A hunk header numbering lines past what a line number holds (a malformed or crafted one)
+    /// writes the last number there is rather than overflow.
+    #[rstest]
+    fn writes_pi_diffs_of_hunks_numbered_past_the_last_line() {
+        let hunks = vec![hunk((u64::MAX, u64::MAX), (u64::MAX, 2), &[" a", "-b", "+B", " c"])];
+        let (diff, first) = pi_diff(&hunks);
+        assert_eq!(diff.lines().count(), 5, "{diff}");
+        assert_eq!(first, Some(u64::MAX));
     }
 
     fn line() -> impl Strategy<Value = String> {

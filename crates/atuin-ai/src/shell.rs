@@ -1,8 +1,4 @@
 pub const ZSH_INIT: &str = r#"
-_atuin_ai_cleanup() {
-    true
-}
-
 # zle reset-prompt anchors the repaint at the cursor row: a multi-line
 # prompt grows *upward*, overwriting whatever the inline TUI left on the
 # rows above. Pad with prompt-height - 1 newlines first so the repaint
@@ -29,12 +25,10 @@ self-atuin-ai-question-mark() {
         # conversation the TUI printed.
         printf '\033]133;C\007' > /dev/tty
         local output
-        output=$(atuin ai inline --hook 3>&1 1>&2 2>&3)
-
-        # Clean up the inline viewport
-        _atuin_ai_cleanup
-
-        if [[ $output == __atuin_ai_print__:* ]]; then
+        if ! output=$(atuin ai inline --hook 3>&1 1>&2 2>&3); then
+            [[ -n $output ]] && print -r -- "$output" >/dev/tty
+            _atuin_ai_reset_prompt
+        elif [[ $output == __atuin_ai_print__:* ]]; then
             echo "${output#__atuin_ai_print__:}"
             _atuin_ai_reset_prompt
         elif [[ $output == __atuin_ai_cancel__ ]]; then
@@ -79,9 +73,10 @@ _atuin_ai_question_mark() {
         # resize-time prompt reflow.
         printf '\033]133;C\007' > /dev/tty
         local output
-        output=$(atuin ai inline --hook 3>&1 1>&2 2>&3)
-
-        if [[ $output == __atuin_ai_print__:* ]]; then
+        if ! output=$(atuin ai inline --hook 3>&1 1>&2 2>&3); then
+            [[ $output ]] && printf '%s\n' "$output" >&2
+            __atuin_insert_line ""
+        elif [[ $output == __atuin_ai_print__:* ]]; then
             echo "${output#__atuin_ai_print__:}"
             __atuin_insert_line ""
         elif [[ $output == __atuin_ai_cancel__ ]]; then
@@ -128,8 +123,12 @@ function _atuin_ai_question_mark
 
         # Run atuin ai inline, swapping stdout and stderr
         set -l output (atuin ai inline --hook 3>&1 1>&2 2>&3 | string collect)
+        set -l atuin_status $pipestatus[1]
 
-        if string match --quiet '__atuin_ai_print__:*' "$output"
+        if test $atuin_status -ne 0
+            test -n "$output"; and printf '%s\n' "$output" >&2
+            commandline -f repaint
+        else if string match --quiet '__atuin_ai_print__:*' "$output"
             echo (string replace "__atuin_ai_print__:" "" -- "$output" | string collect)
             commandline -f repaint
         else if test "$output" = "__atuin_ai_cancel__"

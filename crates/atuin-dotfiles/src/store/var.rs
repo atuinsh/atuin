@@ -231,7 +231,7 @@ impl VarStore {
     }
 
     pub async fn build(&self) -> Result<()> {
-        let dir = atuin_common::utils::dotfiles_cache_dir();
+        let dir = atuin_common::dirs::dotfiles_cache_dir();
         tokio::fs::create_dir_all(dir.clone()).await?;
 
         let env = self.vars().await?;

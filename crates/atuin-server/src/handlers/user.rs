@@ -3,8 +3,6 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use argon2::password_hash::SaltString;
-use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use atuin_common::utils::crypto_random_string;
 use atuin_domain::api::{
     ChangePasswordRequest, ChangePasswordResponse, DeleteUserResponse, LoginRequest, LoginResponse,
@@ -14,23 +12,13 @@ use axum::Json;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::StatusCode;
 use metrics::counter;
-use rand::rngs::OsRng;
 use reqwest::header::CONTENT_TYPE;
-use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
 use crate::db::DbError;
-use crate::db::models::NewUser;
+use crate::db::models::{HashedPassword, NewUser, NewUsername};
 use crate::router::{AppState, UserAuth};
-
-pub fn verify_str(hash: &str, password: &SecretString) -> bool {
-    let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
-    let Ok(hash) = PasswordHash::new(hash) else {
-        return false;
-    };
-    arg2.verify_password(password.expose_secret().as_bytes(), &hash).is_ok()
-}
 
 // Try to send a Discord webhook once - if it fails, we don't retry. "At most once", and best effort.
 // Don't return the status because if this fails, we don't really care.
@@ -90,24 +78,17 @@ pub async fn register(
             .with_status(StatusCode::BAD_REQUEST));
     }
 
-    for c in register.username.chars() {
-        match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' => {}
-            _ => {
-                return Err(ErrorResponse::reply(
-                    "Only alphanumeric and hyphens (-) are allowed in usernames",
-                )
-                .with_status(StatusCode::BAD_REQUEST));
-            }
-        }
-    }
-
-    let hashed = hash_secret(&register.password);
+    let Ok(username) = register.username.parse::<NewUsername>() else {
+        return Err(ErrorResponse::reply(
+            "Only alphanumeric and hyphens (-) are allowed in usernames",
+        )
+        .with_status(StatusCode::BAD_REQUEST));
+    };
 
     let new_user = NewUser {
         email: register.email.clone(),
-        username: register.username.clone(),
-        password: hashed,
+        username,
+        password: HashedPassword::new(register.password).await,
     };
 
     // 24 bytes encoded as base64
@@ -175,15 +156,13 @@ pub async fn change_password(
 ) -> Result<Json<ChangePasswordResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
 
-    let verified = verify_str(user.password.as_str(), &change_password.current_password);
-    if !verified {
+    if !user.password.verify(change_password.current_password).await {
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
         );
     }
 
-    let hashed = hash_secret(&change_password.new_password);
-    user.password = hashed;
+    user.password = HashedPassword::new(change_password.new_password).await;
 
     if let Err(e) = db.update_user_password(&user).await {
         error!("failed to change user password: {}", e);
@@ -201,7 +180,7 @@ pub async fn change_password(
 pub async fn login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     state: State<AppState>,
-    login: Json<LoginRequest>,
+    Json(login): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
     let db = &state.0.database;
     let user = match db.get_user(login.username.borrow()).await {
@@ -230,9 +209,7 @@ pub async fn login(
         }
     };
 
-    let verified = verify_str(user.password.as_str(), &login.password);
-
-    if !verified {
+    if !user.password.verify(login.password).await {
         warn!(user.id = user.id, "login failed: incorrect password");
         return Err(
             ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
@@ -245,11 +222,4 @@ pub async fn login(
         session: session.token,
         auth: Some("cli".into()),
     }))
-}
-
-fn hash_secret(password: &SecretString) -> String {
-    let arg2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = arg2.hash_password(password.expose_secret().as_bytes(), &salt).unwrap();
-    hash.to_string()
 }

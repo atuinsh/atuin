@@ -2,7 +2,8 @@
 //!
 //! **Tip.** pi continues from the last entry of the file, whatever it is (`_buildIndex` in
 //! pi-coding-agent 0.85 `session-manager.ts`: the leaf is the last entry after the header), and
-//! builds the context from it up through `parentId`.
+//! builds the context from it up through `parentId`. omp 18.12.4+ marks an entry it writes off
+//! the branch it is on with that branch's tip (`activeLeafId`), and continues from that.
 //!
 //! **Append.** The rows are written by the rehydrate writer, each hanging from the entry its row
 //! was written after, the first from the tip. The last of them is then the file's last entry, so
@@ -28,15 +29,15 @@ use super::{
     capture_key, check_segment, continuing_from, descends, jsonl_lines, kept_lines, modified, past,
     replace_jsonl, require_idle, resumes_from, switched_to, with_merged,
 };
-use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::rehydrate::{self, Continuing};
 use crate::harnesstools::pi::session::{PiMessage, default_root, locate, resolve_parent_blocking};
+use crate::harnesstools::pi::{Flavour, Pi};
 use crate::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 use crate::harnesstools::session::SessionId;
 
 impl SessionSync for Pi {
     async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
-        let (root, id) = (default_root(), id.to_owned());
+        let (root, id) = (default_root(self.flavour()), id.to_owned());
         blocking(move || match locate(&root, &id) {
             Some(path) => Ok(Some(File::read(&path)?.tip(&path))),
             None => Ok(None),
@@ -45,7 +46,8 @@ impl SessionSync for Pi {
     }
 
     async fn is_live(&self, id: &str, cwd: Option<&Path>) -> Liveness {
-        let (root, id, cwd) = (default_root(), id.to_owned(), cwd.map(Path::to_path_buf));
+        let flavour = self.flavour();
+        let (root, id, cwd) = (default_root(flavour), id.to_owned(), cwd.map(Path::to_path_buf));
         blocking_liveness(move || {
             let file = locate(&root, &id);
             let seen = Seen {
@@ -53,7 +55,7 @@ impl SessionSync for Pi {
                 changing: file.as_deref().is_some_and(|f| changed_lately(modified(f))),
                 names: names(&id, file.as_deref()),
             };
-            liveness(&Processes::here(), &seen)
+            liveness(flavour, &Processes::here(), &seen)
         })
         .await
     }
@@ -65,8 +67,10 @@ impl SessionSync for Pi {
         lines: &[RehydrateMessage],
         options: &AppendOptions<'_>,
     ) -> Result<AppendOutcome, SyncError> {
-        let seen = appending(base, id, options.cwd);
-        require_idle(blocking_liveness(move || liveness(&Processes::here(), &seen)).await)?;
+        let (seen, flavour) = (appending(base, id, options.cwd), self.flavour());
+        require_idle(
+            blocking_liveness(move || liveness(flavour, &Processes::here(), &seen)).await,
+        )?;
         let (base, lines) = (base.clone(), lines.to_vec());
         let taken = options.taken_ids.cloned();
         blocking(move || append_to(&base, &lines, taken.as_ref())).await
@@ -80,18 +84,20 @@ impl SessionSync for Pi {
         options: &AppendOptions<'_>,
         backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError> {
-        let seen = appending(base, id, options.cwd);
-        require_idle(blocking_liveness(move || liveness(&Processes::here(), &seen)).await)?;
+        let (seen, flavour) = (appending(base, id, options.cwd), self.flavour());
+        require_idle(
+            blocking_liveness(move || liveness(flavour, &Processes::here(), &seen)).await,
+        )?;
         let (base, branch, backups) = (base.clone(), branch.to_vec(), backups.to_path_buf());
         let taken = options.taken_ids.cloned();
         blocking(move || replace_to(&base, &branch, taken.as_ref(), &backups)).await
     }
 }
 
-/// Whether a pi process may be writing the session `seen`: [`Liveness::Unknown`] while any that
-/// may be runs ([`agent_running`]).
-pub(super) fn liveness(procs: &Processes, seen: &Seen) -> Liveness {
-    agent_running(procs, "pi", &["pi-coding-agent"], seen)
+/// Whether a `flavour` process may be writing the session `seen`: [`Liveness::Unknown`] while
+/// any that may be runs ([`agent_running`]). Both are packaged as `pi-coding-agent`.
+pub(super) fn liveness(flavour: Flavour, procs: &Processes, seen: &Seen) -> Liveness {
+    agent_running(procs, flavour.binary(), &["pi-coding-agent"], seen)
 }
 
 /// Session `id`, as [`SessionSync::append`] to the file `base` read takes it, last seen working
@@ -118,6 +124,10 @@ pub(super) struct File {
     cwd: Option<String>,
     /// Every entry after the header, as pi indexes it: `(id, parentId, type)`.
     entries: Vec<(String, Option<String>, String)>,
+    /// The entry pi continues from: the last one, unless omp wrote one off the branch it was on
+    /// (late usage, a background result), which names that branch's tip as its `activeLeafId`
+    /// (omp 18.12.4+ `session-entries.ts` `sessionEntryLeafId`; `null` clears it).
+    leaf: Option<String>,
     /// The id capture gives each line it keeps a row of: its own, else (a line from before ids,
     /// or one pi gave an id when it converted a version 1 file) one keyed on its content.
     known: HashSet<String>,
@@ -139,12 +149,14 @@ impl File {
             version: 1,
             cwd: None,
             entries: Vec::new(),
+            leaf: None,
             known: HashSet::new(),
         };
         // pi skips a line it cannot parse, and capture reports it and reads on.
         let parsed: Vec<Value> = jsonl_lines(&bytes)
             .filter_map(|line| crate::json::js::from_slice::<Value>(line).ok())
             .collect();
+        let mut self_selected = None;
         for entry in &parsed {
             let kind = entry["type"].as_str().unwrap_or_default();
             if kind == "session" {
@@ -158,11 +170,22 @@ impl File {
             let Some(id) = entry["id"].as_str() else {
                 continue;
             };
+            file.leaf = match entry.get("activeLeafId") {
+                Some(leaf) => leaf.as_str().map(str::to_owned),
+                None => Some(id.to_owned()),
+            };
+            if file.leaf.as_deref() == Some(id) {
+                self_selected.clone_from(&file.leaf);
+            }
             file.entries.push((
                 id.to_owned(),
                 entry["parentId"].as_str().map(str::to_owned),
                 kind.to_owned(),
             ));
+        }
+        // A leaf no entry has any more is the last entry that named itself (omp `rebuild`).
+        if file.leaf.as_ref().is_some_and(|leaf| !file.entries.iter().any(|(id, ..)| id == leaf)) {
+            file.leaf = self_selected;
         }
         // Keyed as capture keys them, under the session the header names (capture reads no
         // session without one), each line as capture reads it: a fork's header names its parent
@@ -189,10 +212,10 @@ impl File {
         })
     }
 
-    /// The entry pi continues from, as capture keys it: the last one. `None` for one with no id
-    /// of its own to capture (pi gave it one converting a version 1 file), which no row names.
+    /// The entry pi continues from, as capture keys it. `None` for one with no id of its own to
+    /// capture (pi gave it one converting a version 1 file), which no row names.
     fn leaf(&self) -> Option<&str> {
-        self.entries.last().map(|(id, ..)| id.as_str()).filter(|id| self.known.contains(*id))
+        self.leaf.as_deref().filter(|id| self.known.contains(*id))
     }
 
     pub(super) fn tip(self, path: &Path) -> LocalTip {

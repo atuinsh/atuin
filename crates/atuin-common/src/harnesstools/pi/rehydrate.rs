@@ -15,13 +15,13 @@
 //!   history since the previous compaction. A branch summary is written the same way.
 //! - **Settings entries** (model and thinking-level changes, labels, extension state) carry no
 //!   content and are skipped, so pi starts on its configured thinking level; the model is named
-//!   by each assistant turn, its provider guessed from the model's name, and pi falls back to its
-//!   default model when it can't use it. A system-role text entry is skipped too.
-//! - **Tool calls captured without their input** (`ai.capture_tools` off, or a policy withheld
+//!   by each assistant turn, its provider as captured or (for rows captured before providers were) guessed from the model's name,
+//!   and pi falls back to its default model when it can't use it. A system-role text entry is skipped too.
+//! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it): pi-ai sends a `toolCall` without `arguments` as an empty input to Anthropic and as
 //!   `"null"` to OpenAI, a call on nothing either way, so each becomes a note in its turn's text
 //!   (`[ran a shell command]`; see [`tool_note`](crate::harnesstools::note::tool_note)) and its
-//!   `toolResult` is dropped. The run of assistant messages the dropped results stood between is merged into its first one, so the
+//!   `toolResult` is dropped. The run of assistant messages the dropped results stood between is merged into its last one, so the
 //!   turns still alternate ([`Flatten::Runs`]). Re-captured, that entry keeps its id (capture
 //!   already holds it: nothing is pushed), and the entries merged away and the results are not
 //!   there to capture again. The entry records which synced rows went into it
@@ -35,6 +35,8 @@
 //! - A `!command` keeps its command, output and whether it failed, not its exit code; one from a
 //!   v1 file (no entry ids) has its result renamed after the id it is written under.
 //! - The title is written as a `session_info` entry, under the id of the row that set it.
+//!
+//! [`Flatten::Runs`]: crate::harnesstools::rehydrate::Flatten::Runs
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -43,10 +45,11 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
+use super::Flavour;
 use super::session::{default_root, locate, new_session_dir};
 use crate::harnesstools::rehydrate::{
-    Flatten, RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT,
-    break_line_cycles, flatten_uncaptured_calls, on_parent_cycles, record_merged,
+    RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, break_line_cycles,
+    merge_uncaptured_runs, on_parent_cycles, record_merged,
 };
 use crate::harnesstools::resume;
 use crate::harnesstools::session::{Content, Patch, Role, StopReason, ToolResult, Usage, patch};
@@ -58,10 +61,14 @@ const VERSION: u32 = 3;
 /// every session directory [`Harness::locate`] searches for one already holding it.
 ///
 /// [`Harness::locate`]: crate::harnesstools::Harness::locate
-pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
+pub async fn rehydrate(
+    flavour: Flavour,
+    session: &RehydrateSession,
+) -> Result<PathBuf, RehydrateError> {
     let session = session.clone();
     tokio::task::spawn_blocking(move || {
-        rehydrate_into(&default_root(), &new_session_dir(&session.cwd), &session)
+        let dir = new_session_dir(flavour, &session.cwd);
+        rehydrate_into(flavour, &default_root(flavour), &dir, &session)
     })
     .await
     .map_err(|e| RehydrateError::Other(e.to_string()))?
@@ -69,6 +76,7 @@ pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateE
 
 /// [`rehydrate`], looking for an existing copy under `root` and writing into `dir`.
 pub(crate) fn rehydrate_into(
+    flavour: Flavour,
     root: &Path,
     dir: &Path,
     session: &RehydrateSession,
@@ -88,7 +96,11 @@ pub(crate) fn rehydrate_into(
     // pi's own name: the start time with `:` and `.` made file-safe, then the id.
     let started = timestamp(session.started_at).replace([':', '.'], "-");
     let path = dir.join(format!("{started}_{}.jsonl", session.id));
-    crate::fs::write_new(&path, transcript(session).as_bytes()).map_err(|e| {
+    let mut body = transcript(session);
+    if flavour == Flavour::Omp {
+        body.insert_str(0, &title_slot(session.started_at));
+    }
+    crate::fs::write_new(&path, body.as_bytes()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::AlreadyExists {
             RehydrateError::AlreadyExists(path.clone())
         } else {
@@ -103,6 +115,18 @@ fn timestamp(at: OffsetDateTime) -> String {
     let format =
         format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
     at.to_offset(time::UtcOffset::UTC).format(&format).unwrap_or_default()
+}
+
+/// omp's title slot (omp `session-title-slot.ts`): the `title` line every omp session starts
+/// with, exactly 256 bytes with its newline, which omp rewrites in place. Untitled, so omp names
+/// the session. It is also what tells an omp session from a pi one where both keep sessions.
+fn title_slot(at: OffsetDateTime) -> String {
+    const SLOT_BYTES: usize = 256;
+    let slot = |pad: &str| {
+        json!({"type": "title", "v": 1, "title": "", "updatedAt": timestamp(at), "pad": pad})
+            .to_string()
+    };
+    slot(&" ".repeat(SLOT_BYTES - 1 - slot("").len())) + "\n"
 }
 
 /// Milliseconds since the epoch, as pi times its messages.
@@ -145,13 +169,16 @@ pub(crate) struct Continuing<'a> {
 /// ([`Flatten::Runs`]), and its title when `title`: for a whole session, or for rows appended to
 /// the file `continuing` describes. The rows written as no entry of their own are recorded on the
 /// entries they went into ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)).
+///
+/// [`Flatten::Runs`]: crate::harnesstools::rehydrate::Flatten::Runs
 pub(crate) fn lines(
     session: &RehydrateSession,
     continuing: &Continuing<'_>,
     title: bool,
 ) -> Vec<Value> {
+    let (messages, hosts) = merge_uncaptured_runs(&session.messages);
     let session = &RehydrateSession {
-        messages: flatten_uncaptured_calls(&session.messages, &Flatten::Runs),
+        messages,
         ..session.clone()
     };
     let mut writer = Writer::new(session, continuing);
@@ -163,6 +190,11 @@ pub(crate) fn lines(
     }
     let mut lines = writer.lines;
     break_line_cycles(&mut lines, "id", &["parentId"]);
+    for (row, into) in &mut writer.merged {
+        if let Some(host) = hosts.get(row) {
+            into.clone_from(host);
+        }
+    }
     record_merged(&mut lines, &writer.merged, |l| l["id"].as_str().map(str::to_owned));
     lines
 }
@@ -411,8 +443,9 @@ fn tool_result_content(output: &Value) -> Value {
     }
 }
 
-/// A `!command` the user ran in pi's shell: captured as its command line and a result named
-/// after the entry (a v1 entry, which had no id, by its time: it is named after its id now).
+/// A `!command` the user ran in pi's shell (or `$code` in omp's Python kernel): captured as its
+/// command line and a result named after the entry (a v1 entry, which had no id, by its time: it
+/// is named after its id now).
 fn bash_execution(m: &RehydrateMessage, at: i64) -> Option<Value> {
     let [
         Content::Text(line),
@@ -428,15 +461,20 @@ fn bash_execution(m: &RehydrateMessage, at: i64) -> Option<Value> {
     if call.as_ref() != m.source_id && !call.as_ref().starts_with("bash:") {
         return None;
     }
-    let (command, hidden) = match line.strip_prefix("!!") {
-        Some(command) => (command, true),
-        None => (line.strip_prefix('!')?, false),
+    let (sigil, role, key) = match line.chars().next()? {
+        '!' => ('!', "bashExecution", "command"),
+        '$' => ('$', "pythonExecution", "code"),
+        _ => return None,
     };
-    Some(json!({
+    let line = &line[1..];
+    let (command, hidden) = match line.strip_prefix(sigil) {
+        Some(command) => (command, true),
+        None => (line, false),
+    };
+    let mut entry = json!({
         "type": "message",
         "message": {
-            "role": "bashExecution",
-            "command": command,
+            "role": role,
             "output": if output.is_null() { json!(UNCAPTURED_OUTPUT) } else { output.clone() },
             "exitCode": i32::from(*error),
             "cancelled": false,
@@ -444,7 +482,9 @@ fn bash_execution(m: &RehydrateMessage, at: i64) -> Option<Value> {
             "excludeFromContext": hidden,
             "timestamp": at,
         },
-    }))
+    });
+    entry["message"][key] = json!(command);
+    Some(entry)
 }
 
 fn assistant_entry(m: &RehydrateMessage, at: i64) -> Option<Value> {
@@ -470,7 +510,9 @@ fn assistant_entry(m: &RehydrateMessage, at: i64) -> Option<Value> {
         return None;
     }
     let mut message = json!({"role": "assistant", "content": content});
-    if let Some(provider) = m.model.as_deref().and_then(provider_of) {
+    if let Some(provider) =
+        m.provider.as_deref().or_else(|| m.model.as_deref().and_then(provider_of))
+    {
         message["provider"] = json!(provider);
     }
     if let Some(model) = &m.model {

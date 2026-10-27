@@ -1,8 +1,8 @@
-use std::env;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use atuin_common::path::PathBufExt as _;
 use atuin_domain::record::CmdOrigin;
 use easy_cast::CastFloat;
 use eyre::{Result, eyre};
@@ -47,15 +47,13 @@ pub struct Xonsh {
 fn xonsh_hist_dir(xonsh_data_dir: Option<String>) -> Result<PathBuf> {
     // if running within xonsh, this will be available
     if let Some(d) = xonsh_data_dir {
-        let mut path = PathBuf::from(d);
-        path.push("history_json");
-        return Ok(path);
+        return Ok(PathBuf::from(d).joined("history_json"));
     }
 
     // otherwise, fall back to default
     let data_dir = dirs::data_dir().ok_or_else(|| eyre!("Could not determine data directory"))?;
 
-    let hist_dir = data_dir.join("xonsh/history_json");
+    let hist_dir = data_dir.joined("xonsh/history_json");
     if hist_dir.exists() || cfg!(test) {
         Ok(hist_dir)
     } else {
@@ -109,7 +107,7 @@ impl Importer for Xonsh {
 
     async fn new() -> Result<Self> {
         // wrap xonsh-specific path resolver in general one so that it respects $HISTPATH
-        let xonsh_data_dir = env::var("XONSH_DATA_DIR").ok();
+        let xonsh_data_dir = atuin_common::env::var("XONSH_DATA_DIR").ok();
         let hist_dir = get_histdir_path(|| xonsh_hist_dir(xonsh_data_dir))?;
         let sessions = load_sessions(&hist_dir)?;
         let cmd_origin = CmdOrigin::probe_current();
@@ -156,13 +154,14 @@ impl Importer for Xonsh {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
     use crate::import::tests::TestLoader;
 
-    #[test]
+    #[rstest]
     fn test_hist_dir_xonsh() {
         let hist_dir = xonsh_hist_dir(Some("/home/user/xonsh_data".to_string())).unwrap();
         assert_eq!(hist_dir, PathBuf::from("/home/user/xonsh_data/history_json"));

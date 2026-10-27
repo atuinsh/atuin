@@ -48,14 +48,21 @@ default = [
     "daemon",
     "ai",
     "pty-proxy",
-    "octavo",
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
-octavo = ["sync", "daemon", "atuin-daemon/octavo", "dep:atuin-octavo"]
+# Not a default feature until Octavo ships; release artifacts build without it.
+octavo = [
+    "sync",
+    "daemon",
+    "atuin-client/octavo",
+    "atuin-daemon/octavo",
+    "atuin-domain/octavo",
+    "dep:atuin-octavo",
+]
 hex = ["pty-proxy"]
 clipboard = ["dep:arboard", "atuin-ai?/clipboard"]
 check-update = ["atuin-client/check-update"]
@@ -79,7 +86,7 @@ atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
-atuin-client = { path = "../atuin-client", version = "18.23.0", optional = true, default-features = false }
+atuin-client = { path = "../atuin-client", version = "18.24.2", optional = true, default-features = false }
 atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
@@ -96,6 +103,7 @@ async-stream = { workspace = true, optional = true }
 async-trait = { workspace = true }
 axoupdater = { workspace = true, optional = true }
 clap = { workspace = true }
+clap-couture = { workspace = true }
 clap_complete = { workspace = true }
 clap_complete_nushell = { workspace = true }
 colored = { workspace = true }
@@ -149,9 +157,6 @@ arboard = { workspace = true, optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { workspace = true, optional = true, features = ["wayland-data-control"] }
 
-[target.'cfg(unix)'.dependencies]
-daemonix = { workspace = true }
-
 # Enable tree-sitter shell parsing on platforms where tree-sitter's bundled C
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
 # Windows cross-compiles, and potentially other exotic targets.
@@ -166,9 +171,9 @@ tree-sitter-powershell = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+atuin-common = { workspace = true, features = ["test-utils"] }
 # An in-process sync server for the AI session e2e tests (tests/e2e_ai_sessions.rs).
 atuin-server = { workspace = true }
-divan = { workspace = true }
 parking_lot = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
@@ -176,10 +181,6 @@ rstest = { workspace = true }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
-
-[[bench]]
-name = "render_char"
-harness = false
 
 # for the PTY e2e tests (tests/e2e_pty.rs)
 [target.'cfg(unix)'.dev-dependencies]

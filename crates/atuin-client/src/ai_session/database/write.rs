@@ -19,7 +19,7 @@ use super::watermark::BUMP_GENERATION;
 use super::{
     AiSessionDatabase, Appended, CallRow, Claimant, DbError, Generation, SessionKey, Tokens,
 };
-use crate::ai_session::{AtuinSessionId, Message};
+use crate::ai_session::{AtuinSessionId, ContentBlocks, Message};
 
 /// Long enough to wait out the other connection's write, as sqlx's default is.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -181,6 +181,7 @@ pub struct PreparedMessage {
     role: String,
     content: String,
     content_z: Option<Vec<u8>>,
+    blocks: ContentBlocks,
     stop_reason: Option<String>,
     title_change: Option<String>,
     body: String,
@@ -196,6 +197,7 @@ impl PreparedMessage {
             role: serde_json::to_string(&msg.role)?,
             content,
             content_z,
+            blocks: ContentBlocks::of(&msg.content),
             stop_reason: msg.stop_reason.as_ref().map(serde_json::to_string).transpose()?,
             title_change: msg.title_change.as_ref().map(serde_json::to_string).transpose()?,
             body: AiSessionDatabase::searchable_body(&msg),
@@ -206,27 +208,41 @@ impl PreparedMessage {
     }
 }
 
+/// A row [`AiSessionDatabase::append_all`] appended, not projected before.
+#[derive(Debug, Clone)]
+pub struct NewRow {
+    pub message: Message,
+    /// Whether it began its session.
+    pub started: bool,
+}
+
 impl AiSessionDatabase {
     /// Append each of `msgs` in order, in one transaction, unless an invalidation since
     /// `generation`: see [`Self::append_all`].
     pub(super) fn append_page(
         conn: &mut Connection,
         interned: &mut Interned,
-        msgs: &[PreparedMessage],
+        msgs: Vec<PreparedMessage>,
         generation: Generation,
-    ) -> Result<bool, DbError> {
+    ) -> Result<Option<Vec<NewRow>>, DbError> {
         interned.transaction(|interned| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let current: i64 = query_scalar("SELECT generation FROM projection_state WHERE id = 0")
                 .fetch_one(&tx)?;
             if current != generation.0 {
-                return Ok((false, false));
+                return Ok((None, false));
             }
+            let mut new = Vec::new();
             for msg in msgs {
-                Self::append_in(&tx, interned, msg)?;
+                if let (Appended::New, started) = Self::append_in(&tx, interned, &msg)? {
+                    new.push(NewRow {
+                        message: msg.msg,
+                        started,
+                    });
+                }
             }
             tx.commit()?;
-            Ok((true, true))
+            Ok((Some(new), true))
         })
     }
 
@@ -238,7 +254,7 @@ impl AiSessionDatabase {
     ) -> Result<Appended, DbError> {
         interned.transaction(|interned| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let appended = Self::append_in(&tx, interned, msg)?;
+            let (appended, _) = Self::append_in(&tx, interned, msg)?;
             tx.commit()?;
             Ok((appended, true))
         })
@@ -248,7 +264,7 @@ impl AiSessionDatabase {
         conn: &Connection,
         interned: &mut Interned,
         prepared: &PreparedMessage,
-    ) -> Result<Appended, DbError> {
+    ) -> Result<(Appended, bool), DbError> {
         let msg = &prepared.msg;
         let harness = msg.session.harness as i64;
         let session_id = msg.session.session.as_ref();
@@ -265,8 +281,7 @@ impl AiSessionDatabase {
             Self::fold_usage(msg.usage.as_ref());
         // Unlike the others, a row's reasoning stays NULL when unreported: most harnesses never
         // break it out, and zero would claim the call did not reason.
-        let usage_reasoning =
-            msg.usage.and_then(|u| u.reasoning).map(|n| i64::try_from(n).unwrap_or(i64::MAX));
+        let usage_reasoning = msg.usage.and_then(|u| u.reasoning).map(Self::row_tokens);
         let cwd = msg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
         let host = msg.host.map(Self::host_repr);
 
@@ -299,8 +314,9 @@ impl AiSessionDatabase {
                 id, harness, session, source_id, parent_harness, parent_session_id,
                 parent_source_id, timestamp, role, content, content_z, cwd, git_branch, model,
                 usage_input, usage_output, usage_cache_read, usage_cache_write,
-                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                usage_reasoning, stop_reason, usage_present, turn_id, title_change, host, blocks,
+                provider
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session, source_id) DO NOTHING",
         )
         .bind(id)
@@ -327,6 +343,8 @@ impl AiSessionDatabase {
         .bind(msg.turn_id.as_deref())
         .bind(prepared.title_change.as_deref())
         .bind(interned.id(conn, host.as_deref())?)
+        .bind(prepared.blocks.0)
+        .bind(interned.id(conn, msg.provider.as_deref())?)
         .execute(conn)?;
 
         if inserted.rows_affected() == 0 {
@@ -340,7 +358,7 @@ impl AiSessionDatabase {
                 .bind(atuin_id)
                 .bind(session)
                 .execute(conn)?;
-            return Ok(Appended::Duplicate);
+            return Ok((Appended::Duplicate, false));
         }
 
         let rowid = inserted.last_insert_rowid();
@@ -535,7 +553,7 @@ impl AiSessionDatabase {
             }
         }
 
-        Ok(Appended::New)
+        Ok((Appended::New, !existed))
     }
 
     /// What decides a session's claim on a shared model call (see [`Self::attribute_call`]),

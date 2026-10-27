@@ -10,6 +10,8 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
+use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::resume;
@@ -19,12 +21,12 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Change, Checkpoint, FilePatch, Hunk, Listener, Message, MessageError, Observable, Patch,
-    RuntimeError, Session, SessionId, Sessions, WatchError, scan_sessions,
+    RuntimeError, Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
+use crate::path::{AbsPathBuf, PathBufExt as _};
 use crate::sync::BlockingPool;
-use crate::utils::{env_nonempty, home_dir};
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct CcodeSessions {
@@ -43,10 +45,10 @@ impl CcodeSessions {
 /// Claude Code's projects directory: `$CLAUDE_CONFIG_DIR/projects`, else
 /// `~/.claude/projects`.
 pub(crate) fn default_root() -> PathBuf {
-    env_nonempty("CLAUDE_CONFIG_DIR")
+    var_nonempty("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".claude"))
-        .join("projects")
+        .unwrap_or_else(|| home_dir().joined(".claude"))
+        .joined("projects")
 }
 
 /// The transcript of session `id` under the projects directory `root`:
@@ -62,7 +64,7 @@ pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
         .ok()?
         .filter_map(Result::ok)
         .filter(|project| project.file_type().is_ok_and(|t| t.is_dir()))
-        .map(|project| project.path().join(&name))
+        .map(|project| project.path().joined(&name))
         .find(|path| path.is_file())
 }
 
@@ -173,7 +175,7 @@ impl Listener for CcodeListener {
         let pool = self.pool;
         async_stream::stream! {
             // The watcher reports paths under the canonical root.
-            let projects = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+            let projects = AbsPathBuf::canonicalize(&root).map_or_else(|_| root.clone(), PathBuf::from);
             let files = TreeWatcher::builder()
                 .filter(move |path| is_transcript(&projects, path))
                 .watch(&root);
@@ -352,6 +354,11 @@ impl Session for CcodeSession {
             }
         }
     }
+
+    async fn changed_after(mut self, since: std::time::SystemTime) -> Option<Self> {
+        modified_after(self.changes.as_mut(), since).await?;
+        Some(self)
+    }
 }
 
 /// The id of the last line read that has one, which a `compact_boundary` that kept messages
@@ -451,10 +458,15 @@ pub struct CcodeMessage {
     /// Who submitted a user line: absent or `{"kind": "human"}` for the user.
     origin: Option<Box<serde_json::Value>>,
     is_meta: Option<bool>,
+    /// Set on every line of a subagent's transcript.
+    is_sidechain: Option<bool>,
     is_compact_summary: Option<bool>,
     is_api_error_message: Option<bool>,
-    /// The error class of an API error line (`rate_limit`, `unknown`, ...).
+    /// The error class of an API error line (`rate_limit`, `unknown`, ...), or what went wrong
+    /// on an `api_error` system line (`{message, formatted, ...}`).
     error: Option<Box<serde_json::Value>>,
+    /// On an assistant line whose response stream was cut off.
+    is_aborted_mid_stream: Option<bool>,
     /// Present on the user lines that carry a tool's result (the tool's own record of it).
     tool_use_result: Option<ToolUseResult>,
     /// What the user typed when rejecting a tool call, on the line with its `tool_result`.
@@ -848,12 +860,19 @@ impl CcodeMessage {
         }
     }
 
+    /// The line's `message`, on a user or assistant line. Other lines that carry one are
+    /// bookkeeping: an `api-request-blob` (2.1.300+) logs a message of an API request, which
+    /// repeats the conversation and the context Claude Code sent with it.
+    fn message(&self) -> Option<&serde_json::Value> {
+        self.message.as_deref().filter(|_| matches!(self.kind.as_str(), "user" | "assistant"))
+    }
+
     /// The line's raw content: `message.content`, or a system line's top-level `content`.
     /// Other lines' top-level `content` is bookkeeping: a `queue-operation` copies the prompt it
     /// queued, which reaches the transcript again as the user line or `queued_command` it
     /// becomes.
     fn raw_content(&self) -> Option<&serde_json::Value> {
-        match &self.message {
+        match self.message() {
             Some(message) => Some(&message["content"]),
             None => self.content.as_deref().filter(|_| self.kind == "system"),
         }
@@ -861,7 +880,7 @@ impl CcodeMessage {
 
     /// The line's role as written: `message.role`, else its `type`.
     fn raw_role(&self) -> &str {
-        self.message.as_deref().and_then(|m| m["role"].as_str()).unwrap_or(self.kind.as_str())
+        self.message().and_then(|m| m["role"].as_str()).unwrap_or(self.kind.as_str())
     }
 
     /// The text a line opens with, peeked without cloning its blocks.
@@ -881,7 +900,7 @@ impl CcodeMessage {
     /// Claude Code wrote this assistant line itself (an API error, a canned reply).
     fn is_synthetic(&self) -> bool {
         self.is_api_error()
-            || self.message.as_deref().is_some_and(|m| m["model"].as_str() == Some(SYNTHETIC_MODEL))
+            || self.message().is_some_and(|m| m["model"].as_str() == Some(SYNTHETIC_MODEL))
     }
 
     /// A `queued_command` attachment: a prompt delivered while the agent was busy (the user's,
@@ -899,9 +918,18 @@ impl CcodeMessage {
             && human_origin(queued.get("origin"))
     }
 
-    /// A user-role line Claude Code wrote itself rather than the user typing it.
+    /// Whether a queued command is a message from another agent: the one that spawned this one
+    /// (`coordinator`) or a `peer`, through `SendMessage`. It prompts this agent, as a subagent's
+    /// task does.
+    fn queued_by_agent(queued: &serde_json::Value) -> bool {
+        matches!(queued["origin"]["kind"].as_str(), Some("coordinator" | "peer"))
+    }
+
+    /// A user-role line Claude Code wrote itself rather than the user typing it. A subagent's
+    /// first line is its task, even when it is `isMeta` (a forked skill's prompt).
     fn injected_user_line(&self) -> bool {
-        self.is_meta == Some(true)
+        let task = self.is_sidechain == Some(true) && self.parent_uuid.is_none();
+        (self.is_meta == Some(true) && !task)
             || !human_origin(self.origin.as_deref())
             || self.first_text().is_some_and(|text| {
                 let text = text.trim_start();
@@ -933,9 +961,14 @@ impl CcodeMessage {
             && self.first_text().is_some_and(|text| text.trim_start().starts_with("<command-"))
     }
 
+    /// The subtype of a system line.
+    fn system_subtype(&self) -> Option<&str> {
+        self.subtype.as_deref().filter(|_| self.kind == "system")
+    }
+
     /// Thinking tokens the call reported (`usage.output_tokens_details.thinking_tokens`).
     fn thinking_tokens(&self) -> Option<u64> {
-        self.message.as_deref()?["usage"]["output_tokens_details"]["thinking_tokens"].as_u64()
+        self.message()?["usage"]["output_tokens_details"]["thinking_tokens"].as_u64()
     }
 }
 
@@ -947,13 +980,20 @@ impl Message for CcodeMessage {
     fn role(&self) -> Role {
         if self.kind == "attachment" {
             return match self.queued_command() {
-                Some(queued) if Self::queued_by_user(queued) => Role::User,
+                Some(queued) if Self::queued_by_user(queued) || Self::queued_by_agent(queued) => {
+                    Role::User
+                }
                 Some(_) => Role::System,
                 None => Role::Other(self.kind.clone()),
             };
         }
         if self.is_compact_summary == Some(true) {
             return Role::System;
+        }
+        // A recap of the session Claude Code shows the user on their return: not context the
+        // model is given, nor a compaction summary, as a system row with a summary is taken for.
+        if self.system_subtype() == Some("away_summary") {
+            return Role::Other("away_summary".to_owned());
         }
         if self.typed_local_command() {
             return Role::User;
@@ -991,9 +1031,26 @@ impl Message for CcodeMessage {
                 _ => Vec::new(),
             };
         }
+        // A failed request Claude Code is retrying: no content, only what went wrong.
+        if self.system_subtype() == Some("api_error") {
+            let error = self.error.as_deref();
+            let text = error.and_then(|e| e["formatted"].as_str().or(e["message"].as_str()));
+            return text.map(|text| Content::Error(text.to_owned())).into_iter().collect();
+        }
         let Some(raw) = self.raw_content() else {
             return Vec::new();
         };
+        let wrapped =
+            |wrap: fn(String) -> Content| joined_text(raw).map(wrap).into_iter().collect();
+        match self.system_subtype() {
+            Some("away_summary") => return wrapped(Content::Summary),
+            // The notice that the model's safeguards stopped a response. Other notices (an idle
+            // compaction, auto mode) are not part of the conversation.
+            Some("informational") if joined_text(raw).is_some_and(|t| t.contains("safeguards")) => {
+                return wrapped(Content::Error);
+            }
+            _ => {}
+        }
         if self.is_compact_summary == Some(true) {
             return joined_text(raw)
                 .map(|text| Content::Summary(compact_summary(&text).to_owned()))
@@ -1051,7 +1108,7 @@ impl Message for CcodeMessage {
         if self.is_synthetic() {
             return None;
         }
-        self.message.as_deref()?.get("model")?.as_str().map(str::to_owned)
+        self.message()?.get("model")?.as_str().map(str::to_owned)
     }
 
     fn usage(&self) -> Option<Usage> {
@@ -1059,7 +1116,7 @@ impl Message for CcodeMessage {
         if self.is_synthetic() {
             return None;
         }
-        let usage = self.message.as_deref()?.get("usage")?;
+        let usage = self.message()?.get("usage")?;
         if usage.is_null() {
             return None;
         }
@@ -1082,6 +1139,9 @@ impl Message for CcodeMessage {
         if self.is_api_error() {
             return Some(StopReason::Error);
         }
+        if self.is_aborted_mid_stream == Some(true) {
+            return Some(StopReason::Aborted);
+        }
         // An interrupt is recorded as a user line; it is the turn that it ends.
         if self.raw_role() == "user"
             && self
@@ -1090,7 +1150,7 @@ impl Message for CcodeMessage {
         {
             return Some(StopReason::Aborted);
         }
-        Some(ccode_stop_reason(self.message.as_deref()?.get("stop_reason")?.as_str()?))
+        Some(ccode_stop_reason(self.message()?.get("stop_reason")?.as_str()?))
     }
 
     fn cwd(&self) -> Option<PathBuf> {
@@ -1130,7 +1190,7 @@ impl Message for CcodeMessage {
         if self.is_synthetic() {
             return None;
         }
-        self.message.as_deref()?.get("id")?.as_str().map(str::to_owned)
+        self.message()?.get("id")?.as_str().map(str::to_owned)
     }
 
     /// The title a metadata line sets: `custom-title` (`/rename`), `agent-name` (the name
@@ -1246,7 +1306,7 @@ mod tests {
     async fn existing_skips_files_that_are_not_transcripts(projects: Projects) {
         let workflow = projects.project.join("0b3c/subagents/workflows/run1");
         std::fs::create_dir_all(&workflow).unwrap();
-        for path in [projects.project.join("0b3c.jsonl"), workflow.join("journal.jsonl")] {
+        for path in [projects.project.join("0b3c.jsonl"), workflow.joined("journal.jsonl")] {
             std::fs::write(path, line("user", "user", serde_json::json!("hi")) + "\n").unwrap();
         }
         let sessions =
@@ -1512,7 +1572,10 @@ mod tests {
             .unwrap();
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events(|_| std::future::ready(None)).take(2).try_collect(),
+            listener
+                .events(std::time::SystemTime::UNIX_EPOCH, |_| std::future::ready(None))
+                .take(2)
+                .try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
@@ -1548,13 +1611,97 @@ mod tests {
             Checkpoint::new(u64::try_from(first.len()).unwrap(), first.trim_end().as_bytes());
         let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            listener.events(move |_| std::future::ready(Some(from))).take(1).try_collect(),
+            listener
+                .events(std::time::SystemTime::UNIX_EPOCH, move |_| std::future::ready(Some(from)))
+                .take(1)
+                .try_collect(),
         )
         .await
         .expect("events() did not produce within 10s")
         .unwrap();
         assert_eq!(events[0].message.role(), Role::Assistant);
         assert_eq!(events[0].checkpoint.at, u64::try_from(body.len()).unwrap());
+    }
+
+    /// A transcript with nothing stored of it that nobody has written to since `since` is history,
+    /// left alone until it is written to, and then read whole; or, stored meanwhile (imported),
+    /// from where that left off.
+    #[rstest]
+    #[case::untouched(false, vec![Role::User, Role::Assistant])]
+    #[case::imported_meanwhile(true, vec![Role::Assistant])]
+    #[tokio::test]
+    async fn events_leave_an_untouched_transcript_alone_until_it_changes(
+        projects: Projects,
+        #[case] imported: bool,
+        #[case] read: Vec<Role>,
+    ) {
+        use std::io::Write as _;
+
+        let path = projects.project.join("77777777-7777-7777-7777-777777777777.jsonl");
+        let first = line("user", "user", serde_json::json!("hi"));
+        std::fs::write(&path, first.clone() + "\n").unwrap();
+        let since = std::time::SystemTime::now();
+        // Older than the clock slack allows for, but not so old the content poll stops looking
+        // at it (filesystem events alone are slow on macOS).
+        let minute_ago = since - std::time::Duration::from_secs(60);
+        File::options().write(true).open(&path).unwrap().set_modified(minute_ago).unwrap();
+
+        let listener = CcodeSessions::builder()
+            .root(projects.root.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
+        let stored = std::sync::Arc::new(parking_lot::Mutex::new(None));
+        let checkpoint = {
+            let stored = std::sync::Arc::clone(&stored);
+            move |_: &SessionId| std::future::ready(*stored.lock())
+        };
+        let mut events = Box::pin(listener.events(since, checkpoint));
+        let early = tokio::time::timeout(std::time::Duration::from_secs(1), events.next()).await;
+        assert!(early.is_err(), "read before it changed");
+
+        if imported {
+            let end = u64::try_from(first.len() + 1).unwrap();
+            *stored.lock() = Some(Checkpoint::new(end, first.as_bytes()));
+        }
+        let reply =
+            line("assistant", "assistant", serde_json::json!([{"type": "text", "text": "yo"}]));
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{reply}").unwrap();
+        let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            events.take(read.len()).try_collect(),
+        )
+        .await
+        .expect("events() did not produce within 10s")
+        .unwrap();
+        let roles: Vec<Role> = events.iter().map(|event| event.message.role()).collect();
+        assert_eq!(roles, read);
+    }
+
+    /// File times come from a coarser clock: one written just before `since` may be new.
+    #[rstest]
+    #[tokio::test]
+    async fn events_read_a_transcript_written_just_before_since_at_once(projects: Projects) {
+        let path = projects.project.join("88888888-8888-8888-8888-888888888888.jsonl");
+        std::fs::write(&path, line("user", "user", serde_json::json!("hi")) + "\n").unwrap();
+        let since = std::time::SystemTime::now() + std::time::Duration::from_secs(1);
+
+        let listener = CcodeSessions::builder()
+            .root(projects.root.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
+        let events: Vec<SessionEvent<CcodeMessage>> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            listener.events(since, |_| std::future::ready(None)).take(1).try_collect(),
+        )
+        .await
+        .expect("events() did not produce within 10s")
+        .unwrap();
+        assert_eq!(events[0].message.role(), Role::User);
     }
 
     /// A nested subagent's transcript followed before Claude Code wrote its metadata takes its
@@ -1710,11 +1857,30 @@ mod tests {
         assert!(m.content().is_empty());
     }
 
+    /// An `api-request-blob` (2.1.300+) logs one message of an API request: it repeats the
+    /// conversation, so it is no row of its own.
+    #[rstest]
+    #[case::user("user")]
+    #[case::assistant("assistant")]
+    #[case::system("system")]
+    fn api_request_blob_is_no_message(#[case] role: &str) {
+        let m = parse(&serde_json::json!({
+            "type": "api-request-blob", "hash": "5e19c0ffee",
+            "message": {"role": role, "content": [{"type": "text", "text": "Tool loaded."}]},
+        }));
+        assert!(m.content().is_empty());
+        assert!(m.id().is_none() && m.usage().is_none() && m.model().is_none());
+    }
+
     /// A prompt the user types while the agent is busy is written only as a `queued_command`
     /// attachment (`attachment.prompt`); Claude Code treats it as the user's turn.
     #[rstest]
     #[case::origin_human(serde_json::json!({"origin": {"kind": "human"}}))]
     #[case::prompt_mode(serde_json::json!({"commandMode": "prompt"}))]
+    // From another agent through `SendMessage` (CC 2.1.310): it prompts this one.
+    #[case::coordinator(serde_json::json!({"isMeta": true, "origin": {"kind": "coordinator"}}))]
+    #[case::peer(serde_json::json!({"commandMode": "prompt", "isMeta": true,
+        "origin": {"kind": "peer", "from": "a1", "senderTaskId": "a1"}}))]
     fn queued_prompt_is_user_text(#[case] extra: serde_json::Value) {
         let mut attachment =
             serde_json::json!({"type": "queued_command", "prompt": "also check forks please"});
@@ -1730,7 +1896,6 @@ mod tests {
     /// Background task results are delivered through the same queue; they are not the user's.
     #[rstest]
     #[case::task_notification(serde_json::json!({"commandMode": "task-notification"}))]
-    #[case::peer(serde_json::json!({"origin": {"kind": "peer", "from": "a1"}}))]
     #[case::meta(serde_json::json!({"isMeta": true}))]
     fn queued_harness_message_is_system(#[case] extra: serde_json::Value) {
         let mut attachment = serde_json::json!({"type": "queued_command",
@@ -1894,6 +2059,72 @@ mod tests {
         assert_eq!(m.content(), vec![Content::Error("API Error: 529 Overloaded".into())]);
     }
 
+    /// A request Claude Code retries is recorded as an `api_error` system line with no content
+    /// (real line, CC 2.1.291).
+    #[rstest]
+    fn retried_api_error_keeps_what_went_wrong() {
+        let m = parse(&serde_json::json!({
+            "type": "system", "subtype": "api_error", "level": "error", "uuid": "b078",
+            "parentUuid": "1688", "error": {"message": "Connection error.",
+                "formatted": "Connection dropped (ECONNRESET)",
+                "connection": {"code": "ECONNRESET"}, "isNetworkDown": false},
+            "retryInMs": 606, "retryAttempt": 1, "maxRetries": 10, "source": "connection_retry",
+        }));
+        assert_eq!(m.role(), Role::System);
+        assert_eq!(m.content(), vec![Content::Error("Connection dropped (ECONNRESET)".into())]);
+    }
+
+    /// The notice that the safeguards stopped a response is kept (real line, CC 2.1.296).
+    #[rstest]
+    #[case::refusal(
+        "Opus 5.5's safeguards stopped the response above · continuing once with that noted"
+    )]
+    fn safeguard_notice_is_kept(#[case] text: &str) {
+        let m = parse(&serde_json::json!({
+            "type": "system", "subtype": "informational", "content": text, "isMeta": false,
+            "level": "notice", "uuid": "0f06", "parentUuid": "f6f9",
+        }));
+        assert_eq!(m.content(), vec![Content::Error(text.into())]);
+    }
+
+    /// The recap Claude Code writes when the user comes back (CC 2.1.296 to 2.1.310) is a summary,
+    /// but no system row: those with a summary are compaction summaries, which resume writes back.
+    #[rstest]
+    fn away_recap_is_a_summary_of_its_own_role() {
+        let text = "You asked whether deleting a Hub account leaves the linked CLI account \
+                    behind. Next, run the two lookup queries. (disable recaps in /config)";
+        let m = parse(&serde_json::json!({
+            "parentUuid": "2eaa", "isSidechain": false, "type": "system",
+            "subtype": "away_summary", "content": text, "uuid": "f065", "isMeta": false,
+        }));
+        assert_eq!(m.role(), Role::Other("away_summary".into()));
+        assert_eq!(m.content(), vec![Content::Summary(text.into())]);
+    }
+
+    /// A forked skill's subagent starts on the skill's prompt, written `isMeta` like the skill
+    /// text Claude Code injects into the main thread (real shape, CC 2.1.300): it is the task.
+    #[rstest]
+    fn subagent_task_prompt_is_user_text() {
+        let prompt = "`high effort → 8 inline angles`\n\nYou are reviewing for **recall**.";
+        let m = parse(&serde_json::json!({
+            "parentUuid": null, "isSidechain": true, "agentId": "a12b", "type": "user",
+            "message": {"role": "user", "content": prompt}, "isMeta": true, "uuid": "d477",
+        }));
+        assert_eq!(m.role(), Role::User);
+        assert_eq!(m.content(), vec![Content::Text(prompt.into())]);
+    }
+
+    /// A response whose stream was cut off was aborted (real line, CC 2.1.296).
+    #[rstest]
+    fn response_aborted_mid_stream_is_aborted() {
+        let m = parse(&serde_json::json!({
+            "type": "assistant", "uuid": "9009", "isAbortedMidStream": true,
+            "message": {"id": "msg_1", "role": "assistant", "stop_reason": null,
+                "content": [{"type": "text", "text": "## Layer 3"}]},
+        }));
+        assert_eq!(m.stop_reason(), Some(StopReason::Aborted));
+    }
+
     /// Lines Claude Code writes into the user's side of the conversation are not user text.
     #[rstest]
     #[case::meta(serde_json::json!({"isMeta": true,
@@ -1908,6 +2139,8 @@ mod tests {
         "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}}))]
     #[case::fork_directive(serde_json::json!({
         "message": {"role": "user", "content": "<fork-boilerplate>\nYou are a worker fork."}}))]
+    #[case::subagent_meta(serde_json::json!({"isMeta": true, "isSidechain": true,
+        "parentUuid": "d477", "message": {"role": "user", "content": "Base directory for this skill"}}))]
     fn injected_user_line_is_system(#[case] extra: serde_json::Value) {
         let mut raw = serde_json::json!({"type": "user", "uuid": "m1"});
         raw.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());

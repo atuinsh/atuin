@@ -13,6 +13,9 @@ pub struct Cmd {
 
     #[arg(long, conflicts_with = "check", help = fl!("arg-update-version"))]
     version: Option<String>,
+
+    #[arg(long, conflicts_with = "version", help = fl!("arg-update-prerelease"))]
+    prerelease: bool,
 }
 
 impl Cmd {
@@ -22,6 +25,11 @@ impl Cmd {
 
         let mut updater = AxoUpdater::new_for("atuin");
         updater.disable_installer_output();
+        if let Ok(token) = atuin_common::env::var("ATUIN_GITHUB_TOKEN")
+            && !token.is_empty()
+        {
+            updater.set_github_token(&token);
+        }
 
         // The install receipt is written by the shell/powershell installers.
         // No receipt means atuin came from a package manager, which should
@@ -48,7 +56,13 @@ impl Cmd {
             );
         }
 
-        let request = match (&self.version, settings.update_channel) {
+        let update_channel = if self.prerelease {
+            UpdateChannel::Nightly
+        } else {
+            settings.update_channel
+        };
+
+        let request = match (&self.version, update_channel) {
             (Some(version), _) => {
                 UpdateRequest::SpecificVersion(version.trim_start_matches('v').to_string())
             }
@@ -57,7 +71,7 @@ impl Cmd {
         };
         updater.configure_version_specifier(request);
 
-        let channel = match settings.update_channel {
+        let channel = match update_channel {
             UpdateChannel::Stable => "stable",
             UpdateChannel::Nightly => "nightly",
         };

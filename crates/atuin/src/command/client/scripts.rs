@@ -131,15 +131,19 @@ impl Cmd {
         }
 
         // Open the file in the user's preferred editor
-        let editor_str = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+        let editor_str = atuin_common::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
 
         // Use shlex to safely split the string into shell-like parts.
         let parts = shlex::split(&editor_str).ok_or_eyre("Failed to parse editor command")?;
         let (command, args) = parts.split_first().ok_or_eyre("No editor command found")?;
 
-        let status = std::process::Command::new(command).args(args).arg(&path).status()?;
+        let status = std::process::Command::new(command)
+            .args(args)
+            .arg(&path)
+            .status()
+            .wrap_err_with(|| format!("failed to open editor `{command}`"))?;
         if !status.success() {
-            bail!("failed to open editor");
+            bail!("editor `{command}` failed ({status})");
         }
 
         // Read back the edited content
@@ -223,7 +227,7 @@ impl Cmd {
         let script_content = if let Some(count_opt) = new_script.last {
             // Get the last N commands from history, plus 1 to exclude the command that runs this script
             let count = count_opt.unwrap_or(1) + 1; // Add 1 to the count to exclude the current command
-            let context = atuin_client::database::current_context().await?;
+            let context = atuin_client::database::current_context(settings).await?;
 
             // Get the last N+1 commands, filtering by the default mode
             let filters = [settings.default_filter_mode(context.git_root.is_some())];
@@ -277,7 +281,7 @@ impl Cmd {
 
         script_store.create(script).await?;
 
-        script_store.build(script_db).await?;
+        script_store.build(&script_db).await?;
 
         Ok(())
     }
@@ -499,7 +503,7 @@ impl Cmd {
             script_store.update(script).await?;
 
             // Rebuild the database to apply changes
-            script_store.build(script_db).await?;
+            script_store.build(&script_db).await?;
 
             println!("Script '{}' updated successfully!", edit.name);
 
@@ -536,7 +540,7 @@ impl Cmd {
             script_store.delete(script.id).await?;
 
             // Rebuild the database to apply changes
-            script_store.build(script_db).await?;
+            script_store.build(&script_db).await?;
 
             println!("Script '{}' deleted successfully", delete.name);
             Ok(())
@@ -552,7 +556,7 @@ impl Cmd {
         store: SqliteStore,
         history_db: &Sqlite,
     ) -> Result<()> {
-        let host_id = Settings::host_id().await?;
+        let host_id = settings.host_id().await?;
         let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
             .context("could not load or generate encryption key")?;
 
@@ -576,5 +580,30 @@ impl Cmd {
                 Self::handle_delete(settings, delete, script_store, script_db).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::ErrorKind;
+
+    use atuin_common::env::MockEnv;
+    use rstest::rstest;
+
+    use super::Cmd;
+
+    #[rstest]
+    #[case("missing-editor")]
+    #[case("missing editor")]
+    fn missing_editor_reports_the_command_and_preserves_the_io_error(#[case] name: &str) {
+        let env = MockEnv::install();
+        let dir = tempfile::tempdir().unwrap();
+        let editor = dir.path().join(name);
+        env.set("EDITOR", format!("'{}' --wait", editor.display()));
+
+        let error = Cmd::open_editor(Some("echo hello")).unwrap_err();
+
+        assert_eq!(error.to_string(), format!("failed to open editor `{}`", editor.display()));
+        assert_eq!(error.downcast_ref::<std::io::Error>().unwrap().kind(), ErrorKind::NotFound);
     }
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atuin_client::api_client;
 use atuin_client::settings::Settings;
 use atuin_common::time::DurationExt;
@@ -7,7 +9,7 @@ use eyre::{Result, bail};
 use crate::i18n::fl;
 use crate::{SHA, VERSION};
 
-pub async fn run(settings: &Settings) -> Result<()> {
+pub async fn run(settings: &Arc<Settings>) -> Result<()> {
     if !settings.logged_in().await? {
         bail!(fl!("sync-status-not-logged-in"));
     }
@@ -23,7 +25,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
     )?;
 
     let me = client.me().await?;
-    let last_sync = Settings::last_sync().await?;
+    let last_sync = settings.last_sync().await?;
 
     println!("{}\n", fl!("sync-status-version", version = VERSION, sha = SHA));
 

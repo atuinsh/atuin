@@ -220,13 +220,13 @@ struct Dirs {
 #[fixture]
 fn dirs() -> Dirs {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().join("checkouts").join("atuin");
+    let repo = tmp.path().join("checkouts").joined("atuin");
     let here = repo.join("docs");
     let elsewhere = tmp.path().join("elsewhere");
-    for dir in [&here, &repo.join("crates").join("atuin"), &elsewhere] {
+    for dir in [&here, &repo.join("crates").joined("atuin"), &elsewhere] {
         std::fs::create_dir_all(dir).unwrap();
     }
-    let switched = tmp.path().join("data").join("ai").join("switched");
+    let switched = tmp.path().join("data").joined("ai").joined("switched");
     Dirs {
         _tmp: tmp,
         here,
@@ -247,8 +247,7 @@ fn context(dirs: &Dirs) -> ResumeContext {
 }
 
 fn resumer(dirs: &Dirs, machine: &FakeMachine) -> HarnessResumer {
-    HarnessResumer::on(context(dirs), AiSessionResume::default(), machine.clone())
-        .keeping_switched_in(&dirs.switched)
+    HarnessResumer::on(context(dirs), AiSessionResume::default(), machine.clone(), &dirs.switched)
 }
 
 fn row(harness: HarnessKind, id: &str, cwd: &Path, remote: bool) -> SessionRow {
@@ -285,6 +284,31 @@ async fn a_session_on_disk_resumes_directly(dirs: Dirs) {
     assert_eq!(resume.restore, None);
     assert_eq!(resume.plan.args, ["--session", "/t/abc-123.jsonl"]);
     assert_eq!(resume.plan.cwd.as_deref(), Some(dirs.elsewhere.as_path()));
+}
+
+/// Reading a copy can move it (a rollout Codex compressed, made plain again): a `{path}` template
+/// names where it is now.
+#[rstest]
+#[tokio::test]
+async fn a_copy_moved_by_reading_it_resumes_where_it_is_now(dirs: Dirs) {
+    let compressed = dirs.elsewhere.join("rollout-abc-123.jsonl.zst");
+    let plain = dirs.elsewhere.join("rollout-abc-123.jsonl");
+    let machine = FakeMachine {
+        found: HashMap::from([("abc-123".to_owned(), compressed)]),
+        tip: Some(LocalTip {
+            native_path: plain.clone(),
+            ..fake::local_tip(&[], None)
+        }),
+        ..FakeMachine::default()
+    };
+    let templates = AiSessionResume {
+        codex: Some("my-codex {path}".to_owned()),
+        ..AiSessionResume::default()
+    };
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine, &dirs.switched);
+    let local = row(HarnessKind::Codex, "abc-123", &dirs.elsewhere, false);
+    let resume = resumer.plan(&local).await.unwrap();
+    assert_eq!(resume.plan.args, [plain.to_str().unwrap()]);
 }
 
 /// Another host's session is restored from sync when resumed: planning writes nothing, and the
@@ -374,7 +398,7 @@ async fn a_path_template_plans_a_restore_and_resumes_the_restored_transcript(dir
         pi: Some("my-pi --session {path}".to_owned()),
         ..AiSessionResume::default()
     };
-    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone());
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone(), &dirs.switched);
     let remote = row(HarnessKind::Pi, "abc-123", Path::new("/gone/proj"), true);
 
     let resume = resumer.plan(&remote).await.unwrap();
@@ -469,8 +493,8 @@ fn resumes_where_it_ran_or_nearest_here(
     let restore = resolve_cwd(original.as_deref(), &context(&dirs));
     let expected = match expect {
         Expect::Original => dirs.elsewhere,
-        Expect::RepoSubdir => dirs.repo.join("crates"),
-        Expect::RepoNamesake => dirs.repo.join("crates").join("atuin"),
+        Expect::RepoSubdir => dirs.repo.joined("crates"),
+        Expect::RepoNamesake => dirs.repo.joined("crates").joined("atuin"),
         Expect::RepoRoot => dirs.repo,
         Expect::Here => dirs.here,
     };
@@ -496,21 +520,21 @@ fn a_checkout_named_twice_resumes_where_the_current_directory_is(
     #[case] cwd: Cwd,
     #[case] expected: &str,
 ) {
-    let outer = dirs.repo.join("other").join("atuin").join("crates");
+    let outer = dirs.repo.join("other").joined("atuin").joined("crates");
     let inner = dirs.repo.join("crates");
     std::fs::create_dir_all(outer.join("deeper")).unwrap();
     std::fs::create_dir_all(inner.join("deeper")).unwrap();
     let context = ResumeContext {
         cwd: match cwd {
-            Cwd::InOuter => outer.join("deeper"),
-            Cwd::InInner => inner.join("deeper"),
+            Cwd::InOuter => outer.joined("deeper"),
+            Cwd::InInner => inner.joined("deeper"),
             Cwd::Elsewhere => dirs.here.clone(),
         },
         ..context(&dirs)
     };
     let original = Path::new("/work/atuin/other/atuin/crates");
     let restore = resolve_cwd(Some(original), &context);
-    let expected: PathBuf = expected.split('/').fold(dirs.repo, |p, c| p.join(c));
+    let expected: PathBuf = expected.split('/').fold(dirs.repo, |p, c| p.joined(c));
     assert_eq!(restore.cwd, expected);
 }
 
@@ -549,6 +573,7 @@ impl SessionSource for Worked {
             role,
             content,
             model: None,
+            provider: None,
             usage: None,
             stop_reason: None,
             turn_id: None,
@@ -581,7 +606,7 @@ async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
-    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi).await.unwrap();
+    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi, None).await.unwrap();
 
     let written = machine.written.lock().clone();
     let [new] = written.as_slice() else {
@@ -598,10 +623,7 @@ async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
     assert_eq!(continued.plan.program, "pi");
     assert_eq!(continued.plan.args, ["--session", path.as_str()]);
     assert_eq!(continued.plan.cwd.as_deref(), Some(dirs.elsewhere.as_path()));
-    assert_eq!(
-        continued.status(),
-        "continuing in Pi: 1 tool call becomes a note, reasoning dropped"
-    );
+    assert_eq!(continued.status(), "continuing in Pi: 1 tool call becomes a note");
 }
 
 /// A session with no messages isn't continued anywhere, and nothing is written: there is
@@ -615,7 +637,7 @@ async fn an_empty_session_is_not_continued(
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
-    let err = resumer.continue_in(&Synced, &session, target).await.unwrap_err();
+    let err = resumer.continue_in(&Synced, &session, target, None).await.unwrap_err();
     assert_eq!(err, NotResumable::Empty(continuation::NothingToContinue));
     assert_eq!(err.to_string(), "nothing to continue: the session has no messages");
     assert!(machine.written.lock().is_empty());
@@ -650,11 +672,11 @@ async fn a_path_template_target_is_offered_and_resumes_the_written_session(dirs:
         pi: Some("pi --session {path}".to_owned()),
         ..AiSessionResume::default()
     };
-    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone());
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine.clone(), &dirs.switched);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, true);
     assert!(resumer.continue_targets(&session).contains(&HarnessKind::Pi));
 
-    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi).await.unwrap();
+    let continued = resumer.continue_in(&Worked, &session, HarnessKind::Pi, None).await.unwrap();
     let written = machine.written.lock().clone();
     let path = format!("/restored/{}.jsonl", written[0].id);
     assert_eq!(continued.plan.args, ["--session", path.as_str()]);
@@ -671,11 +693,17 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     };
     let resumer = resumer(&dirs, &machine);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
-    assert_eq!(resumer.continue_targets(&session), [HarnessKind::Codex, HarnessKind::Pi]);
+    assert_eq!(resumer.continue_targets(&session), [
+        HarnessKind::Codex,
+        HarnessKind::Pi,
+        HarnessKind::Omp
+    ]);
 
-    let err = resumer.continue_in(&Worked, &session, HarnessKind::Opencode).await.unwrap_err();
+    let err =
+        resumer.continue_in(&Worked, &session, HarnessKind::Opencode, None).await.unwrap_err();
     assert_eq!(err, NotResumable::NotInstalled("opencode".to_owned()));
-    let err = resumer.continue_in(&Worked, &session, HarnessKind::ClaudeCode).await.unwrap_err();
+    let err =
+        resumer.continue_in(&Worked, &session, HarnessKind::ClaudeCode, None).await.unwrap_err();
     assert!(matches!(err, NotResumable::Continue("Claude Code", _)), "{err}");
     assert!(machine.written.lock().is_empty());
 
@@ -706,6 +734,8 @@ fn finds_programs_on_path_and_by_path_on_unix() {
 #[cfg(windows)]
 #[rstest]
 fn finds_programs_on_path_and_by_path_on_windows() {
+    use atuin_common::env;
+
     // `cmd` is found as `cmd.exe` through PATHEXT, on PATH or by its path.
     assert!(on_path("cmd"));
     assert!(on_path("cmd.exe"));
@@ -713,7 +743,7 @@ fn finds_programs_on_path_and_by_path_on_windows() {
     // resolve to were it a `.cmd` or `.bat` script.
     let found = find_program("cmd").unwrap();
     assert!(found.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe")), "{found:?}");
-    let system32 = std::path::Path::new(&std::env::var("SystemRoot").unwrap()).join("System32");
+    let system32 = std::path::Path::new(&env::var("SystemRoot").unwrap()).join("System32");
     assert!(on_path(system32.join("cmd").to_str().unwrap()));
     assert!(on_path(system32.join("cmd.exe").to_str().unwrap()));
     assert!(!on_path(r"C:\nonexistent\cmd"));
@@ -753,7 +783,7 @@ async fn a_relative_template_program_is_found_from_the_sessions_directory(dirs: 
         claude: Some("./bin/wrapper --resume {id}".to_owned()),
         ..AiSessionResume::default()
     };
-    let resumer = HarnessResumer::on(context(&dirs), templates, machine);
+    let resumer = HarnessResumer::on(context(&dirs), templates, machine, &dirs.switched);
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
 
     // Not in the session's directory: not installed, whatever the picker's own directory has.
@@ -827,7 +857,8 @@ async fn a_fork_is_a_new_session_of_its_own_harness(dirs: Dirs) {
         missing_programs: vec!["claude"],
         ..FakeMachine::default()
     };
-    let without = HarnessResumer::on(context(&dirs), AiSessionResume::default(), missing);
+    let without =
+        HarnessResumer::on(context(&dirs), AiSessionResume::default(), missing, &dirs.switched);
     assert!(!without.can_fork(&session));
 }
 
@@ -924,7 +955,7 @@ async fn catch_up_in(
 /// it isn't here, resumed as it is when it is at the head, the rows it lacks appended when it is
 /// behind; anything else is a choice, with nothing written.
 #[rstest]
-#[case::not_here(None, None, false, "/restored/s.jsonl", &[])]
+#[case::not_here(None, None, false, "/restored/s.jsonl restored the thread from sync", &[])]
 #[case::at_the_head(Some((&["a", "b", "c", "d"][..], "d")), None, false, "/t/s.jsonl", &[])]
 #[case::behind(
     Some((&["a", "b"][..], "b")),
@@ -1054,7 +1085,7 @@ async fn an_agent_is_looked_for_where_the_session_works_here(
     #[case] appends: bool,
 ) {
     let agent_in = match agent {
-        Agent::InTheMappedDir => dirs.repo.join("crates").join("atuin"),
+        Agent::InTheMappedDir => dirs.repo.join("crates").joined("atuin"),
         Agent::Unrelated => dirs.elsewhere.clone(),
     };
     let machine = FakeMachine {
@@ -1112,7 +1143,7 @@ fn synced_with_a_title(diverged: bool) -> Vec<atuin_client::ai_session::Message>
 }
 
 /// A session with no copy here is restored along the head named, else, when it diverged, along
-/// its newest head (whether `atuin ai resume` catches it up or the picker restores it), with the
+/// its newest head (whether `atuin threads resume` catches it up or the picker restores it), with the
 /// rows off the tree that go with it; one that went one way is restored from every row synced of
 /// it, as before.
 #[rstest]
@@ -1153,6 +1184,52 @@ async fn a_session_not_here_is_restored_along_one_branch(
     assert_eq!(ids, want);
 }
 
+/// A session continued in another harness carries one branch, as a restore does: the head named,
+/// else, when it diverged, the newest (as the picker continues it), saying whose; never every
+/// branch's messages at once.
+#[rstest]
+#[case::one_way(false, None, &["a", "b", "c", "d"], None)]
+#[case::diverged(true, None, &["a", "b", "x", "y"], Some("this machine"))]
+#[case::diverged_named(true, Some("d"), &["a", "b", "c", "d"], Some("@00000002"))]
+#[tokio::test]
+async fn a_session_is_continued_along_one_branch(
+    dirs: Dirs,
+    #[case] diverged: bool,
+    #[case] head: Option<&str>,
+    #[case] want: &[&str],
+    #[case] along: Option<&str>,
+) {
+    use atuin_common::harnesstools::session::Content;
+
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let mut session = row(HarnessKind::ClaudeCode, "s", &dirs.elsewhere, true);
+    session.handle = fake::synced_handle();
+    let source = fake::FakeSource::from_rows(vec![session.clone()])
+        .with_synced(&session.handle, fake::synced_rows(diverged));
+    let head = head.map(|h| SourceId::from(h.to_owned()));
+    let continued = resumer.continue_in(&source, &session, HarnessKind::Codex, head.as_ref());
+    let status = continued.await.unwrap().status();
+    // Which branch it carries, when it carries one of several, the picker says.
+    let says = along.map(|host| format!("; along {host}'s branch")).unwrap_or_default();
+    assert_eq!(status, format!("continuing in Codex{says}"));
+
+    let written = machine.written.lock().clone();
+    let [continued] = written.as_slice() else {
+        panic!("one session written: {written:?}");
+    };
+    let said: Vec<String> = continued
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|c| match c {
+            Content::Text(text) => text.strip_prefix("message ").map(str::to_owned),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(said, want);
+}
+
 /// The plan, the catch-up and the append all look for an agent where this machine's copy
 /// records working, when it records a directory that is there: not where the session row says
 /// (another host's newer directory, maybe). Else where the session works here; else anywhere.
@@ -1166,7 +1243,7 @@ async fn an_agent_is_looked_for_where_the_copy_works(
     #[case] recorded: bool,
     #[case] exists: bool,
 ) {
-    let copy_dir = dirs.repo.join("crates").join("atuin");
+    let copy_dir = dirs.repo.join("crates").joined("atuin");
     let copy_dir = if exists {
         copy_dir
     } else {
@@ -1193,10 +1270,10 @@ async fn an_agent_is_looked_for_where_the_copy_works(
     // An agent where the copy works holds the append, wherever the session row says.
     if recorded && exists {
         let mut tip = fake::local_tip(&["a", "b"], Some("b"));
-        tip.cwd = Some(dirs.repo.join("crates").join("atuin"));
+        tip.cwd = Some(dirs.repo.join("crates").joined("atuin"));
         let machine = FakeMachine {
             tip: Some(tip),
-            agent_in: Some(dirs.repo.join("crates").join("atuin")),
+            agent_in: Some(dirs.repo.join("crates").joined("atuin")),
             ..FakeMachine::default()
         };
         let caught = catch_up(&dirs, machine, false).await;
@@ -1229,7 +1306,7 @@ async fn a_copy_gone_since_it_was_located_is_restored(dirs: Dirs) {
     machine.found.insert("s".to_owned(), PathBuf::from("/t/s.jsonl"));
     let written = machine.written.clone();
     let caught = catch_up(&dirs, machine, false).await;
-    assert_eq!(caught, ("/restored/s.jsonl".to_owned(), vec![]));
+    assert_eq!(caught, ("/restored/s.jsonl restored the thread from sync".to_owned(), vec![]));
     assert_eq!(written.lock().len(), 1);
 }
 

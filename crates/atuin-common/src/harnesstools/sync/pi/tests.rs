@@ -43,6 +43,7 @@ fn row(id: &str, parent: &str, role: Role) -> RehydrateMessage {
         role,
         content: vec![Content::Text(format!("said {id}"))],
         model: Some("m".to_owned()),
+        provider: None,
         usage: None,
         stop_reason: None,
         turn_id: None,
@@ -87,6 +88,29 @@ fn a_fast_forward_resumes_from_the_last_entry(dir: TempDir) {
     let bytes = std::fs::read(&path).unwrap();
     let first: Value = serde_json::from_slice(jsonl_lines(&bytes).nth(3).unwrap()).unwrap();
     assert_eq!(first["parentId"], "aaaa0002");
+}
+
+/// omp 18.12.4+ writes late usage (a title's, say) off the branch it is on, naming that branch's
+/// tip as the entry's `activeLeafId` (session-entries.ts `sessionEntryLeafId`); omp continues
+/// from that tip, and from the last entry that named itself when the tip is gone.
+#[rstest]
+#[case::named(json!("aaaa0001"), Some("aaaa0001"))]
+#[case::cleared(json!(null), None)]
+#[case::gone(json!("cccc0009"), Some("aaaa0002"))]
+fn an_omp_entry_off_the_branch_keeps_its_tip(
+    dir: TempDir,
+    #[case] active: Value,
+    #[case] tip: Option<&str>,
+) {
+    let mut bytes = local(3);
+    let late = json!({"type": "model_usage", "id": "cccc0001", "parentId": "aaaa0002",
+        "timestamp": "2026-09-28T10:00:02.000Z", "activeLeafId": active, "purpose": "title",
+        "role": "tiny", "api": "openai-responses", "provider": "openai", "model": "gpt-5.6-mini",
+        "usage": {"input": 300, "output": 12, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 312},
+        "stopReason": "stop"});
+    bytes.extend(jsonl(&[late]));
+    let path = write(&dir, &bytes);
+    assert_eq!(File::read(&path).unwrap().tip(&path).tip_source_id.as_deref(), tip);
 }
 
 /// The ids capture gives the lines of session `id`, kept in `path`, reading them as it does.
@@ -176,7 +200,7 @@ fn what_is_no_clean_fast_forward_is_refused(
 #[case::none(b"bash\0".as_slice(), Liveness::NotLive)]
 fn any_pi_running_may_be_writing(dir: TempDir, #[case] cmdline: &[u8], #[case] expected: Liveness) {
     let procs = procs(dir.path(), &[Fake::running(9, cmdline, "1")]);
-    assert_eq!(liveness(&procs, &Seen::default()), expected);
+    assert_eq!(liveness(Flavour::Pi, &procs, &Seen::default()), expected);
 }
 
 /// pi hides its command line behind its name: which session a pi works on is told only by where
@@ -193,7 +217,7 @@ fn a_pi_is_told_apart_by_where_it_works(
         cwd: Some(dir.path().join(works_in)),
         ..live::entry(9, "pi", &["pi"], 1)
     }]);
-    assert_eq!(liveness(&procs, &live::cwd(Some(dir.path().join("proj")))), expected);
+    assert_eq!(liveness(Flavour::Pi, &procs, &live::cwd(Some(dir.path().join("proj")))), expected);
 }
 
 /// A pi working elsewhere may have the session open from there (`pi --session <file>`): it counts
@@ -228,7 +252,7 @@ fn a_pi_elsewhere_counts_when_named_or_writing(
         ..live::entry(9, "pi", cmd, 1)
     }]);
     let seen = appending(&base, "5e55e55e-0000-4000-8000-000000000002", Some(&proj));
-    assert_eq!(liveness(&procs, &seen), expected);
+    assert_eq!(liveness(Flavour::Pi, &procs, &seen), expected);
 }
 
 /// A session file that went its own way here after sharing a turn with a tool call in it:
@@ -451,4 +475,133 @@ fn a_switch_writes_the_rows_beside_the_tree_that_go_with_the_branch(dir: TempDir
     let tip = after.tip(&path);
     assert!(tip.is_tip("syn-0000000000000003"), "the title merged into the last entry");
     assert!(!tip.known_source_ids.contains("syn-0000000000000001"));
+}
+
+/// Switching a copy restored from sync to a branch that leaves it inside a run merged into its
+/// last entry writes the run again as far as the branch shares it: what the shared rows said,
+/// and nothing the rest of the run did.
+#[rstest]
+#[case::off_the_call("aaaa0002")]
+#[case::off_its_result("aaaa0010")]
+fn a_switch_inside_a_merged_run_keeps_its_text(dir: TempDir, #[case] from: &str) {
+    use crate::harnesstools::session::{ToolResult, ToolUse};
+
+    let backups = tempfile::tempdir().unwrap();
+    let mut rows = their_branch();
+    rows.truncate(3);
+    rows[1].content.push(Content::ToolUse(ToolUse {
+        id: "call_1".to_owned().into(),
+        name: "bash".to_owned(),
+        input: Value::Null,
+    }));
+    rows[2].content = vec![Content::ToolResult(ToolResult {
+        call: "call_1".to_owned().into(),
+        output: Value::Null,
+        error: false,
+    })];
+    rows.push(row("aaaa0003", "aaaa0010", Role::Assistant));
+    let session = RehydrateSession {
+        id: "5e55e55e-0000-4000-8000-000000000002".to_owned(),
+        title: None,
+        cwd: PathBuf::from("/work/proj"),
+        original_cwd: None,
+        git_branch: None,
+        model: None,
+        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        messages: rows.clone(),
+        fork_of: None,
+    };
+    let continuing = Continuing {
+        after: None,
+        kept_from: None,
+    };
+    let mut lines = vec![header(3)];
+    lines.extend(rehydrate::lines(&session, &continuing, false));
+    let path = write(&dir, &jsonl(&lines));
+    let base = File::read(&path).unwrap().tip(&path);
+    assert_eq!(base.tip_source_id.as_deref(), Some("aaaa0003"));
+    rows.truncate(rows.iter().position(|m| m.source_id == from).unwrap() + 1);
+    rows.extend([row("bbbb0001", from, Role::User), row("bbbb0002", "bbbb0001", Role::Assistant)]);
+
+    let outcome = replace_to(&base, &rows, None, backups.path()).unwrap();
+
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("bbbb0002"));
+    let bytes = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    assert!(bytes.contains("said aaaa0002"), "the shared reply is gone:\n{bytes}");
+    assert!(!bytes.contains("said aaaa0003"), "the reply the branch left kept:\n{bytes}");
+}
+
+/// Switching a copy restored from sync, whose run of two calls kept without their input sits
+/// around a failed call, to a branch that leaves it past the failed call writes the run again
+/// from before its first row: the failed call's entry holds none of the run's text, so cutting
+/// there would lose the first call's.
+#[rstest]
+fn a_switch_inside_a_merged_run_past_a_failed_call_keeps_its_text(dir: TempDir) {
+    use crate::harnesstools::session::{ToolResult, ToolUse};
+
+    let backups = tempfile::tempdir().unwrap();
+    let call = |id: &str, parent: &str| {
+        let mut m = row(id, parent, Role::Assistant);
+        m.content.push(Content::ToolUse(ToolUse {
+            id: format!("call_{id}").into(),
+            name: "bash".to_owned(),
+            input: Value::Null,
+        }));
+        m
+    };
+    let result = |id: &str, call: &str| {
+        let mut m = row(id, call, Role::Tool);
+        m.content = vec![Content::ToolResult(ToolResult {
+            call: format!("call_{call}").into(),
+            output: Value::Null,
+            error: false,
+        })];
+        m
+    };
+    let mut first = row("aaaa0001", "", Role::User);
+    first.parent_source_id = None;
+    let mut failed = row("eeee0001", "aaaa0010", Role::Assistant);
+    failed.content = vec![Content::Error("overloaded".to_owned())];
+    let mut rows = vec![
+        first,
+        call("aaaa0002", "aaaa0001"),
+        result("aaaa0010", "aaaa0002"),
+        failed,
+        call("aaaa0003", "eeee0001"),
+        result("aaaa0011", "aaaa0003"),
+        row("aaaa0004", "aaaa0011", Role::Assistant),
+    ];
+    let session = RehydrateSession {
+        id: "5e55e55e-0000-4000-8000-000000000002".to_owned(),
+        title: None,
+        cwd: PathBuf::from("/work/proj"),
+        original_cwd: None,
+        git_branch: None,
+        model: None,
+        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        messages: rows.clone(),
+        fork_of: None,
+    };
+    let continuing = Continuing {
+        after: None,
+        kept_from: None,
+    };
+    let mut lines = vec![header(3)];
+    lines.extend(rehydrate::lines(&session, &continuing, false));
+    let path = write(&dir, &jsonl(&lines));
+    let base = File::read(&path).unwrap().tip(&path);
+    assert_eq!(base.tip_source_id.as_deref(), Some("aaaa0004"));
+    rows.truncate(6);
+    rows.extend([
+        row("bbbb0001", "aaaa0011", Role::User),
+        row("bbbb0002", "bbbb0001", Role::Assistant),
+    ]);
+
+    let outcome = replace_to(&base, &rows, None, backups.path()).unwrap();
+
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("bbbb0002"));
+    let bytes = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    assert!(bytes.contains("said aaaa0002"), "the reply before the failed call is gone:\n{bytes}");
+    assert!(bytes.contains("said aaaa0003"), "the reply after the failed call is gone:\n{bytes}");
+    assert!(!bytes.contains("said aaaa0004"), "the reply the branch left kept:\n{bytes}");
 }

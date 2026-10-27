@@ -1,12 +1,13 @@
-//! `atuin ai resume`: an interactive picker over captured AI coding-agent sessions.
+//! `atuin threads resume`: an interactive picker over captured AI coding-agent sessions.
 //!
-//! A ratatui view built to look and behave like the history search (`atuin search -i`): the same
-//! header, tabs and `[ MODE ] >` input box, preview pane, `invert`/`style`/`inline_height`, enter
-//! vs tab accept, and emacs/vim keymaps ([`keymap`]). Accepting a session asks where to resume
-//! it: in its own harness, or continued in another ([`chooser`]).
+//! A ratatui view that behaves like the history search (`atuin search -i`): its input box,
+//! `invert`/`style`/`inline_height`, enter vs tab accept, and emacs/vim keymaps ([`keymap`]). Its
+//! list shows each session on two lines, grouped by day; the pane beside it, and Inspect, read the
+//! whole conversation ([`reader`]). Accepting a session asks where to resume it, under it in the
+//! list: in its own harness, or continued in another ([`chooser`]).
 //!
 //! It depends on two seams:
-//! - [`SessionSource`] lists, searches and previews sessions;
+//! - [`SessionSource`] lists, searches, previews and reads sessions;
 //! - [`Resumer`] turns a session into a resume command, or says why it can't be resumed.
 
 pub mod catchup;
@@ -18,9 +19,11 @@ pub mod keymap;
 mod markdown;
 pub mod panel;
 pub mod query;
+pub mod reader;
 pub mod rebuild;
 pub mod render;
 pub mod resumer;
+mod select;
 pub mod sidecar;
 pub mod source;
 pub mod state;
@@ -36,6 +39,7 @@ use std::time::{Duration, Instant};
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::settings::Settings;
 use atuin_client::theme::{Meaning, Theme};
+use atuin_common::path::PathBufExt as _;
 use eyre::Result;
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
@@ -46,7 +50,8 @@ use self::catchup::{Branch, CatchUp};
 use self::chooser::Destination;
 use self::resumer::{Continued, Forked, NotResumable, Resume, Switched};
 use self::state::{
-    CHILDREN, Continuing, InputAction, PLAN, PREVIEW, Pending, Picked, RESTORE, State, Writing,
+    CHILDREN, Continuing, InputAction, PLAN, PREVIEW, Pending, Picked, RESTORE, State, TRANSCRIPT,
+    Writing,
 };
 use self::worker::{Request, Requests, Response};
 
@@ -58,8 +63,32 @@ const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 const REFRESH_IDLE: std::time::Duration = std::time::Duration::from_secs(2);
 /// While the selection moves faster than this (a held arrow key), details wait until it settles.
 const SETTLE: Duration = Duration::from_millis(60);
-/// How often the picker asks the daemon whether it is rebuilding the session index.
+/// The most frames left out in a row while input waits, so a flood of it still shows.
+const MAX_SKIPPED: u32 = 8;
+/// How often the picker asks the daemon whether it is rebuilding the threads index.
 const REBUILD_PROBE_EVERY: Duration = Duration::from_secs(2);
+
+/// When `atuin threads resume` started, for [`startup`]'s timings.
+static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Note in the log how long after starting the picker got to `step` (the first call starts the
+/// clock). Only the first time each step is reached, so a slow start can be told apart from a
+/// slow step later on.
+pub fn startup(step: &'static str) {
+    static SEEN: parking_lot::Mutex<Vec<&'static str>> = parking_lot::const_mutex(Vec::new());
+    let started = *STARTED.get_or_init(Instant::now);
+    let first = {
+        let mut seen = SEEN.lock();
+        let first = !seen.contains(&step);
+        if first {
+            seen.push(step);
+        }
+        first
+    };
+    if first {
+        tracing::info!(elapsed = ?started.elapsed(), "ai resume startup: {step}");
+    }
+}
 
 /// Where the picker runs: what its filter modes resolve against.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -74,8 +103,8 @@ pub struct ResumeContext {
 
 impl ResumeContext {
     /// The current directory, repository, branch and host.
-    pub async fn current() -> Result<Self> {
-        let ctx = atuin_client::database::query_context().await?;
+    pub async fn current(settings: &Settings) -> Result<Self> {
+        let ctx = atuin_client::database::query_context(settings).await?;
         // `$PWD` as it is set, which may end in a separator: rebuilt from its components, so a
         // session restored or continued here isn't written with `…/dir/` as its directory.
         let cwd: PathBuf = Path::new(&ctx.cwd).components().collect();
@@ -96,7 +125,7 @@ impl ResumeContext {
 ///
 /// [`in_git_repo`]: atuin_common::utils::in_git_repo
 fn checkout(cwd: &Path) -> (Option<PathBuf>, Option<String>) {
-    let root = atuin_common::utils::git_checkout_root(&cwd.to_string_lossy());
+    let root = atuin_common::utils::git_checkout_root(cwd);
     let branch = root.as_deref().and_then(current_branch);
     (root, branch)
 }
@@ -122,7 +151,7 @@ fn current_branch(root: &Path) -> Option<String> {
     } else {
         dot_git
     };
-    let head = fs_err::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = fs_err::read_to_string(git_dir.joined("HEAD")).ok()?;
     head.trim().strip_prefix("ref: refs/heads/").map(str::to_owned)
 }
 
@@ -138,13 +167,13 @@ pub enum Outcome {
 }
 
 pub struct Picker<'a> {
-    pub settings: &'a Settings,
+    pub settings: &'a Arc<Settings>,
     pub theme: &'a Theme,
     pub source: Arc<dyn SessionSource>,
     pub resumer: Arc<dyn Resumer>,
     pub context: ResumeContext,
     pub query: String,
-    /// Overrides `[ai.sessions] inline_height` and the top-level `inline_height`.
+    /// Overrides `[threads] inline_height` and the top-level `inline_height`.
     pub inline_height: Option<u16>,
     /// A session the query named by id that can't be resumed: open on it, showing why.
     pub preselect: Option<(SessionRow, NotResumable)>,
@@ -182,17 +211,20 @@ impl Settle {
 }
 
 /// Ask the worker for whatever the current view needs and doesn't have yet.
-fn request_details(state: &mut State, requests: &Requests, settle: &mut Settle) {
+fn request_details(state: &mut State, requests: &Requests) {
     state.forget_unanswered();
     let Some(row) = state.selected().cloned() else {
         return;
     };
     let handle = row.handle.clone();
-    if !settle.ready(&handle, Instant::now()) {
+    if state.settling {
         return;
     }
     if state.wants_preview(&handle) && state.requested.insert((handle.clone(), PREVIEW)) {
         requests.send(Request::Preview(handle.clone()));
+    }
+    if state.wants_transcript(&handle) && state.requested.insert((handle.clone(), TRANSCRIPT)) {
+        requests.send(Request::Transcript(handle.clone()));
     }
     // Inspect lists the forks; the detail pane and the preview count them. A row with nothing
     // grouped under it has none (one with only subagents has none either, which takes asking).
@@ -234,35 +266,34 @@ fn request_plan(state: &mut State, requests: &Requests, row: &SessionRow) {
 }
 
 fn send_search(state: &mut State, requests: &Requests) {
-    if let Some((generation, mode, filter)) = state.next_search() {
-        requests.send(Request::Search {
-            generation,
-            mode,
-            filter,
-        });
+    if let Some((generation, filter)) = state.next_search() {
+        requests.send(Request::Search { generation, filter });
     }
 }
 
 /// Apply a worker response.
-fn apply_response(state: &mut State, response: Response, requests: &Requests) {
+fn apply_response(state: &mut State, response: Response) {
     match response {
-        Response::Results {
-            generation,
-            mode,
-            rows,
-        } => match rows {
+        Response::Results { generation, rows } => match rows {
             Ok(rows) => {
-                if state.apply_results(generation, mode, rows) {
-                    // A widened workspace needs a new search.
-                    send_search(state, requests);
-                }
+                startup("first results");
+                // (An empty workspace falling back to every session is searched again at the
+                // end of the loop, as after any change to the filter.)
+                state.apply_results(generation, rows);
             }
             Err(e) if generation == state.issued => {
                 state.status = Some((format!("search failed: {e}"), Meaning::AlertError));
             }
             Err(_) => {}
         },
-        Response::Preview(handle, preview) => state.apply_preview(handle, preview),
+        Response::Preview(handle, preview) => {
+            startup("first preview");
+            state.apply_preview(handle, preview);
+        }
+        Response::Transcript(handle, read) => {
+            startup("first transcript");
+            state.apply_transcript(handle, read);
+        }
         Response::Children(handle, children) => {
             state.children.insert(handle, children);
         }
@@ -308,7 +339,7 @@ fn respond(
                 return None;
             }
         }
-        response => apply_response(state, response, requests),
+        response => apply_response(state, response),
     }
     let (row, pending) = state.pending.clone()?;
     if !state.plans.contains_key(&row.handle) {
@@ -410,7 +441,7 @@ fn complete(
     let row = row.clone();
     let Some(plan) = state.plans.get(&row.handle).cloned() else {
         state.pending = Some((row, action));
-        state.status = Some(("locating the session…".to_owned(), Meaning::Annotation));
+        state.status = Some(("locating the thread…".to_owned(), Meaning::Annotation));
         return None;
     };
     let outcome = match (plan, action) {
@@ -453,7 +484,7 @@ fn complete(
     outcome
 }
 
-/// A new choice (an enter, tab, ctrl-y or alt-enter on a session, or a line of the chooser
+/// A new choice (an enter, tab, ctrl-y or ctrl-x on a session, or a line of the chooser
 /// picked) supersedes any older one still waiting: the original's plan or restore, whose answer
 /// then finishes nothing, and a continuation or fork, whose answer is then ignored and which the
 /// worker drops if it hasn't started writing it. One already being written is left to finish (see
@@ -522,7 +553,7 @@ fn resume_original(
 }
 
 /// Open the chooser on `row` (the session acted on), and read what continuing it elsewhere
-/// would flatten, for the chooser to show.
+/// would flatten: whether there's anything to fork, and the status line a continuation shows.
 fn open_chooser(
     state: &mut State,
     row: &SessionRow,
@@ -535,7 +566,7 @@ fn open_chooser(
     request_flatten(state, requests);
 }
 
-/// alt-enter (vim normal `F`, Inspect's `f`): the chooser on the session acted on, forking it
+/// ctrl-x (vim normal `F`, Inspect's `f`): the chooser on the session acted on, forking it
 /// selected, whether or not `resume_chooser` is on; enter in it then does what `action` (enter's)
 /// does.
 fn ask_fork(state: &mut State, action: Pending, resumer: &dyn Resumer, requests: &Requests) {
@@ -598,9 +629,9 @@ fn start_fork(
     requests: &Requests,
 ) {
     if action == Pending::Copy {
-        let id = resumer::quote(row.handle.session.as_ref());
+        let id = row.atuin_id;
         let pick = branch.map(|b| format!(" --branch {}", resumer::quote(&b.selector)));
-        copy(state, &format!("atuin ai resume {id} --fork{}", pick.unwrap_or_default()));
+        copy(state, &format!("atuin resume {id} --fork{}", pick.unwrap_or_default()));
         return;
     }
     let status = match &branch {
@@ -654,9 +685,9 @@ fn start_switch(
     requests: &Requests,
 ) {
     if action == Pending::Copy {
-        let id = resumer::quote(row.handle.session.as_ref());
+        let id = row.atuin_id;
         let pick = resumer::quote(&branch.selector);
-        copy(state, &format!("atuin ai resume {id} --switch --branch {pick}"));
+        copy(state, &format!("atuin resume {id} --switch --branch {pick}"));
         return;
     }
     let status = format!("switching to {}'s…", branch.host);
@@ -722,9 +753,9 @@ fn start_continuation(
     requests: &Requests,
 ) {
     if action == Pending::Copy {
-        let id = resumer::quote(row.handle.session.as_ref());
+        let id = row.atuin_id;
         let into = source::harness_arg(target).unwrap_or_default();
-        copy(state, &format!("atuin ai resume {id} --in {into}"));
+        copy(state, &format!("atuin resume {id} --in {into}"));
         return;
     }
     let flattened = state.flattened.get(&row.handle).and_then(|f| f.as_ref().ok());
@@ -774,19 +805,26 @@ fn finish_continuation(
 
 /// What ctrl-y copies to resume `row`, planned as `resume`, in its own harness. Copying writes
 /// nothing, so when running the harness's own command wouldn't do (the session has to be
-/// restored from sync, or caught up with it, first), it is `atuin ai resume <id>`, which does
+/// restored from sync, or caught up with it, first), it is `atuin resume <atuin id>`, which does
 /// that when run.
 fn resume_line(row: &SessionRow, resume: &Resume) -> String {
     if resume.restore.is_none() && !resume.catch_up {
         return resumer::shell_line(&resume.plan);
     }
-    format!("atuin ai resume {}", resumer::quote(row.handle.session.as_ref()))
+    format!("atuin resume {}", row.atuin_id)
 }
 
-/// Put `line` on the clipboard, saying so in the status row.
+/// Put `line` on the clipboard, saying so in the status row (its first line, when it has more).
 fn copy(state: &mut State, line: &str) {
+    let mut lines = line.lines();
+    let first = lines.next().unwrap_or_default();
+    let more = if lines.next().is_some() {
+        " …"
+    } else {
+        ""
+    };
     state.status = Some(match set_clipboard(line) {
-        Ok(()) => (format!("copied: {line}"), Meaning::AlertInfo),
+        Ok(()) => (format!("copied: {first}{more}"), Meaning::AlertInfo),
         Err(e) => (format!("copy failed: {e}"), Meaning::AlertError),
     });
 }
@@ -797,7 +835,7 @@ impl Picker<'_> {
     #[allow(clippy::too_many_lines)]
     pub async fn run(self) -> Result<(Outcome, Option<String>)> {
         let settings = self.settings;
-        let sessions = &settings.ai.sessions;
+        let sessions = &settings.threads;
         let inline_height =
             self.inline_height.or(sessions.inline_height).unwrap_or(settings.inline_height);
         // Fullscreen when the inline viewport doesn't fit, or stdout is captured (inline needs
@@ -828,17 +866,25 @@ impl Picker<'_> {
         } else if !self.matches.is_empty() {
             state.pin_matches(self.matches);
         }
+        let source = self.source.clone();
         let (requests, mut responses) = worker::spawn(self.source, self.resumer.clone());
         let resumer = self.resumer.as_ref();
-        let mut rebuilding =
-            rebuild::watch(Arc::new(rebuild::DaemonProbe::new(settings)), REBUILD_PROBE_EVERY);
+        let mut rebuilding = rebuild::watch(
+            Arc::new(rebuild::DaemonProbe::new(Arc::clone(settings))),
+            REBUILD_PROBE_EVERY,
+        );
         let mut probing = true;
 
         if inline_height > 0 {
             terminal.clear()?;
         }
+        startup("terminal ready");
         // Paint before the first search answers, so the picker shows up immediately.
         terminal.draw(|f| state.draw(f, settings, self.theme))?;
+        startup("first frame drawn");
+        // The sessions as of the last idle refresh that came back, and the one in flight.
+        let mut searched = None;
+        let mut refreshing = None;
         send_search(&mut state, &requests);
 
         let mut events = terminal::Events::new();
@@ -851,10 +897,23 @@ impl Picker<'_> {
         let mut settle = Settle::default();
         // What to tell the user once the picker is gone (a continuation's status line).
         let mut note = None;
+        // Frames left out in a row while input waits.
+        let mut skipped = 0;
         let outcome = 'render: loop {
-            request_details(&mut state, &requests, &mut settle);
-            terminal.draw(|f| state.draw(f, settings, self.theme))?;
-            state.preview_drawn(Instant::now());
+            state.settling =
+                state.selected().is_some_and(|row| !settle.ready(&row.handle, Instant::now()));
+            // Keys come faster than frames on a slow terminal: catch up with them before
+            // drawing, so the selection keeps up with a held arrow key.
+            if events.behind() && skipped < MAX_SKIPPED {
+                skipped += 1;
+            } else {
+                skipped = 0;
+                terminal.draw(|f| state.draw(f, settings, self.theme))?;
+                state.preview_drawn(Instant::now());
+                // After drawing, so what's asked for is what this frame shows (whether a reader
+                // is on screen, after ctrl-o or a resize).
+                request_details(&mut state, &requests);
+            }
             let hold_ends = state.hold_ends();
 
             tokio::select! {
@@ -872,6 +931,10 @@ impl Picker<'_> {
                         InputAction::Resume => Some(Pending::Resume),
                         InputAction::ReturnCommand => Some(Pending::Edit),
                         InputAction::Copy => Some(Pending::Copy),
+                        InputAction::CopyText(text) => {
+                            copy(&mut state, &text);
+                            None
+                        }
                         InputAction::Fork => {
                             let enter = if settings.enter_accept {
                                 Pending::Resume
@@ -901,6 +964,8 @@ impl Picker<'_> {
                         break 'render outcome;
                     }
                 }
+                // The reader's spinner turns.
+                () = tokio::time::sleep(state::SPIN), if state.spinning => {}
                 // The selection settled: ask for its details (at the top of the loop).
                 () = tokio::time::sleep_until(settle.due.unwrap_or_else(Instant::now).into()),
                     if settle.due.is_some() => {}
@@ -908,13 +973,17 @@ impl Picker<'_> {
                 () = tokio::time::sleep_until(hold_ends.unwrap_or_else(Instant::now).into()),
                     if hold_ends.is_some() => {}
                 _ = tick.tick() => {
-                    // Not while typing or browsing: the list shouldn't move under the cursor.
+                    // Not while typing or browsing: the list shouldn't move under the cursor. Nor
+                    // when nothing has changed since.
                     if last_input.elapsed() >= REFRESH_IDLE
                         && last_refresh.elapsed() >= REFRESH_EVERY
-                        && let Some((generation, mode, filter)) = state.refresh()
+                        && let stamp = source.stamp()
+                        && (stamp.is_none() || stamp != searched)
+                        && let Some((generation, filter)) = state.refresh()
                     {
+                        refreshing = Some((generation, stamp));
                         last_refresh = std::time::Instant::now();
-                        requests.send(Request::Search { generation, mode, filter });
+                        requests.send(Request::Search { generation, filter });
                     }
                 }
                 changed = rebuilding.changed(), if probing => {
@@ -938,6 +1007,12 @@ impl Picker<'_> {
                         tracing::error!("the session picker's workers stopped");
                         break Outcome::Cancelled;
                     };
+                    // A failed refresh is tried again, changes or not.
+                    if let Response::Results { generation, rows: Ok(_), .. } = &response
+                        && let Some((_, stamp)) = refreshing.take_if(|(g, _)| g == generation)
+                    {
+                        searched = stamp;
+                    }
                     let finished = match response {
                         Response::Continued(id, result) => {
                             finish_continuation(&mut state, id, result)
@@ -987,19 +1062,27 @@ impl Picker<'_> {
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
 fn set_clipboard(s: &str) -> Result<()> {
-    let mut ctx = arboard::Clipboard::new()?;
-    ctx.set_text(s.to_owned())?;
-    // Read it back so the clipboard owner keeps it after we exit.
-    ctx.get_text()?;
-    Ok(())
+    // Over SSH the system clipboard is the remote machine's, if it has one: the terminal's is
+    // the one wanted.
+    if atuin_common::env::var_os("SSH_CONNECTION").is_some() {
+        return Ok(terminal::copy(s)?);
+    }
+    let system = || -> Result<()> {
+        let mut ctx = arboard::Clipboard::new()?;
+        ctx.set_text(s.to_owned())?;
+        // Read it back so the clipboard owner keeps it after we exit.
+        ctx.get_text()?;
+        Ok(())
+    };
+    system().or_else(|_| Ok(terminal::copy(s)?))
 }
 
 #[cfg(not(all(
     feature = "clipboard",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 )))]
-fn set_clipboard(_s: &str) -> Result<()> {
-    eyre::bail!("this build has no clipboard support")
+fn set_clipboard(s: &str) -> Result<()> {
+    Ok(terminal::copy(s)?)
 }
 
 #[cfg(test)]

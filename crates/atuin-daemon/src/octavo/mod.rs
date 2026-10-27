@@ -16,7 +16,6 @@ pub struct Octavo {
 }
 
 impl Octavo {
-    #[cfg(feature = "octavo")]
     pub async fn open(
         settings: &Settings,
         handle: DaemonHandle,
@@ -24,7 +23,7 @@ impl Octavo {
     ) -> Self {
         // Once Octavo has been on here, deletions keep reaching it with uploads off, so what the
         // user deletes locally leaves Octavo too.
-        if !settings.octavo.enabled && !Settings::octavo_queue_path().exists() {
+        if !settings.octavo.enabled && !settings.octavo_queue_path().exists() {
             return Self::nop();
         }
 
@@ -37,16 +36,6 @@ impl Octavo {
                 Self::nop()
             }
         }
-    }
-
-    #[cfg(not(feature = "octavo"))]
-    #[allow(clippy::unused_async)]
-    pub async fn open(
-        _settings: &Settings,
-        _handle: DaemonHandle,
-        _outputs: Arc<OutputStore>,
-    ) -> Self {
-        Self::nop()
     }
 
     #[must_use]

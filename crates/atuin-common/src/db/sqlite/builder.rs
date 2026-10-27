@@ -27,6 +27,7 @@ pub enum Journaling {
 pub struct SqliteBuilder<'a> {
     input: &'a OsStr,
     timeout: Duration,
+    busy_timeout: Option<Duration>,
     journal: Option<Journaling>,
     synchronous: SqliteSynchronous,
     foreign_keys: bool,
@@ -75,6 +76,7 @@ impl<'a> SqliteBuilder<'a> {
         Self {
             input,
             timeout: Duration::from_secs(5),
+            busy_timeout: None,
             journal: Some(Journaling::Wal {
                 max_size_hint: Self::DEFAULT_MAX_WAL_SIZE,
             }),
@@ -89,6 +91,14 @@ impl<'a> SqliteBuilder<'a> {
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// How long a statement waits for another connection's lock before failing with "database is
+    /// locked" (sqlite's busy timeout): sqlx's 5s when unset.
+    #[must_use]
+    pub fn busy_timeout(mut self, timeout: Duration) -> Self {
+        self.busy_timeout = Some(timeout);
         self
     }
 
@@ -148,6 +158,9 @@ impl<'a> SqliteBuilder<'a> {
             .foreign_keys(self.foreign_keys)
             .read_only(self.read_only)
             .create_if_missing(!self.read_only);
+        if let Some(busy) = self.busy_timeout {
+            opts = opts.busy_timeout(busy);
+        }
 
         match self.journal {
             // The journal mode is the owner's to set: changing it needs a write.
