@@ -96,10 +96,13 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Feature flags: `client`, `sync`, `daemon`, `clipboard`, `check-update`.
 - Output: no `print!`/`println!`/`eprint!`/`eprintln!` outside tests (clippy `print_stdout` and
   `print_stderr`). Log with `tracing`, and send a message the user should read with
-  `target: atuin_common::logs::USER`. Write a command's result with `atuin_common::out::{out!,
-  outln!}`, and the line the shell widget reads with `widgetln!`; none of them panic once the
-  reader has gone. Ask with `atuin_common::prompt::Prompt`. Print directly only where no logging
-  is set up, under an `#[expect]` that says why.
+  `target: atuin_common::logs::USER`. Write what a program reads (an init script, a value a shell
+  captures, data for a script) to stdout directly, `writeln!(io::stdout(), ..)?`, so the call
+  says where it goes. Make a report the user reads a type that implements `Display`, like
+  `atuin_history::stats::StatsReport`, and write it to stdout the same way. The rest of talking to
+  the user is `atuin_common::userio`: the line the shell widget reads goes through `widgetln!`,
+  and a question through `Prompt`, or `Confirm` for a yes or no one. Use the print macros only
+  where no logging is set up, under an `#[expect]` that says why.
 
 ## Testing
 
