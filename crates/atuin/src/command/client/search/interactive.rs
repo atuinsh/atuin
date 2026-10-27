@@ -2460,7 +2460,7 @@ mod tests {
     use super::KeyboardEnhancementState;
 
     #[cfg(not(target_os = "windows"))]
-    #[test]
+    #[rstest]
     fn keyboard_enhancement_push_and_pop_are_paired() {
         let mut enabled = KeyboardEnhancementState::new(true);
         let flags = enabled.flags_to_push().unwrap();

@@ -2099,7 +2099,7 @@ mod tests {
         assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
     }
 
-    #[test]
+    #[rstest]
     fn keyboard_enhancement_defaults_and_overrides() -> Result<()> {
         let default: Settings = Settings::builder()?.build()?.try_deserialize()?;
         assert!(default.keyboard_enhancement);
