@@ -15,8 +15,8 @@ use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::LogConfig;
 use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
 use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
-use atuin_common::utils;
 use atuin_common::utils::normalize_optional_string;
+use atuin_common::{userio, utils};
 #[cfg(feature = "daemon")]
 use atuin_daemon::grpc::history::pb::{
     TailHistoryReply, tail_history_reply::Event as TailEventProto,
@@ -238,7 +238,7 @@ pub fn print_list(
 
         // Check for formatting errors before attempting to write
         if let Err(err) = args.status() {
-            eprintln!("ERROR: history output failed with: {err}");
+            userio::log::error!("history output failed with: {err}");
             std::process::exit(1);
         }
 
@@ -252,17 +252,17 @@ pub fn print_list(
             }
             Ok(Err(err)) => {
                 if err.kind() != io::ErrorKind::BrokenPipe {
-                    eprintln!("ERROR: Failed to write history output: {err}");
+                    userio::log::error!("failed to write history output: {err}");
                     std::process::exit(1);
                 }
             }
             Err(_) => {
-                eprintln!("ERROR: Format string caused a formatting error.");
-                eprintln!(
+                userio::log::error!("format string caused a formatting error");
+                userio::log::info!(
                     "This may be due to an unsupported format string containing special \
                      characters."
                 );
-                eprintln!(
+                userio::log::info!(
                     "Please check your format string syntax and ensure literal braces are \
                      properly escaped."
                 );
@@ -283,7 +283,7 @@ fn check_for_write_errors(write: Result<(), io::Error>) {
     if let Err(err) = write {
         // Ignore broken pipe (issue #626)
         if err.kind() != io::ErrorKind::BrokenPipe {
-            eprintln!("ERROR: History output failed with the following error: {err}");
+            userio::log::error!("history output failed with the following error: {err}");
             std::process::exit(1);
         }
     }
@@ -351,18 +351,20 @@ fn parse_fmt(format: &str) -> ParsedFmt<'_> {
     match ParsedFmt::new(format) {
         Ok(fmt) => fmt,
         Err(err) => {
-            eprintln!("ERROR: History formatting failed with the following error: {err}");
+            userio::log::error!("history formatting failed with the following error: {err}");
 
             if format.contains('"') && (format.contains(":{") || format.contains(",{")) {
-                eprintln!("It looks like you're trying to create JSON output.");
-                eprintln!("For JSON, you need to escape literal braces by doubling them:");
-                eprintln!("Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'");
+                userio::log::info!("It looks like you're trying to create JSON output.");
+                userio::log::info!("For JSON, you need to escape literal braces by doubling them:");
+                userio::log::info!(
+                    "Example: '{{\"command\":\"{{command}}\",\"time\":\"{{time}}\"}}'"
+                );
             } else {
-                eprintln!(
+                userio::log::info!(
                     "If your formatting string contains literal curly braces, you need to escape \
                      them by doubling:"
                 );
-                eprintln!("Use {{{{ for literal {{ and }}}} for literal }}");
+                userio::log::info!("Use {{{{ for literal {{ and }}}} for literal }}");
             }
             std::process::exit(1)
         }
@@ -552,7 +554,9 @@ pub(super) async fn start_history_entry(
         match handle_daemon_start(settings, h.clone()).await {
             Ok(id) => return Ok(Some(id)),
             Err(e) => {
-                warn!("failed to start history via the daemon; saving it locally instead: {e:#}");
+                userio::log::warn!(
+                    "failed to start history via the daemon; saving it locally instead: {e:#}"
+                );
             }
         }
     }
@@ -578,7 +582,9 @@ pub(super) async fn end_history_entry(
         match handle_daemon_end(settings, id, exit, duration).await {
             Ok(()) => return Ok(()),
             Err(e) => {
-                warn!("failed to end history via the daemon; ending it locally instead: {e:#}");
+                userio::log::warn!(
+                    "failed to end history via the daemon; ending it locally instead: {e:#}"
+                );
             }
         }
     }
@@ -643,9 +649,10 @@ async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
         Ok(login) => login,
         Err(HubCallError::NotLoggedIn) => return,
         Err(err) => {
-            warn!(
-                ?err,
-                "failed to learn which hub user is logged in; deletions won't reach octavo"
+            userio::log::warn!(
+                "failed to learn which Hub user is logged in, so deletions won't reach Octavo: \
+                 {:#}",
+                eyre::Report::new(err)
             );
             return;
         }
@@ -656,7 +663,10 @@ async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
     let queued =
         async { UploadQueue::open(path).await?.push_deletions(login.user_id(), stored).await };
     if let Err(err) = queued.await {
-        warn!(?err, "failed to queue history deletions for octavo; they will not reach it");
+        userio::log::warn!(
+            "failed to queue history deletions for Octavo, so they won't reach it: {:#}",
+            eyre::Report::new(err)
+        );
     }
 }
 
@@ -949,8 +959,8 @@ impl Cmd {
 
         while let Some(reply) = stream.message().await? {
             if let Some(TailEventProto::Lagged(lagged)) = &reply.event {
-                eprintln!(
-                    "WARNING: atuin daemon dropped {} history events; tail fell behind",
+                userio::log::warn!(
+                    "atuin daemon dropped {} history events; tail fell behind",
                     lagged.dropped
                 );
                 continue;
@@ -1030,11 +1040,11 @@ impl Cmd {
 
         match matches.len() {
             0 => {
-                println!("No entries to prune.");
+                userio::log::info!("No entries to prune.");
                 return Ok(());
             }
-            1 => println!("Found 1 entry to prune."),
-            n => println!("Found {n} entries to prune."),
+            1 => userio::log::info!("Found 1 entry to prune."),
+            n => userio::log::info!("Found {n} entries to prune."),
         }
 
         if dry_run {
@@ -1053,7 +1063,7 @@ impl Cmd {
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             for entry in &matches {
-                eprintln!("deleting {}", entry.id);
+                userio::log::info!("deleting {}", entry.id);
             }
 
             delete_history_entries(settings, &history_store, db, matches).await?;
@@ -1071,9 +1081,9 @@ impl Cmd {
         dry_run: bool,
     ) -> Result<()> {
         if dupkeep == 0 {
-            eprintln!(
+            userio::log::error!(
                 "\"--dupkeep 0\" would keep 0 copies of duplicate commands and thus delete all of \
-                 them! Use \"atuin search --delete ...\" if you really want that."
+                 them; use \"atuin search --delete ...\" if you really want that"
             );
             std::process::exit(1);
         }
@@ -1082,11 +1092,11 @@ impl Cmd {
 
         match matches.len() {
             0 => {
-                println!("No duplicates to delete.");
+                userio::log::info!("No duplicates to delete.");
                 return Ok(());
             }
-            1 => println!("Found 1 duplicate to delete."),
-            n => println!("Found {n} duplicates to delete."),
+            1 => userio::log::info!("Found 1 duplicate to delete."),
+            n => userio::log::info!("Found {n} duplicates to delete."),
         }
 
         if dry_run {
@@ -1105,7 +1115,7 @@ impl Cmd {
             let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
             for entry in &matches {
-                eprintln!("deleting {}", entry.id);
+                userio::log::info!("deleting {}", entry.id);
             }
 
             delete_history_entries(settings, &history_store, db, matches).await?;

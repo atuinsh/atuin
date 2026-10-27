@@ -6,9 +6,9 @@ use std::ffi::OsStr;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::db;
 use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
 use atuin_common::encryption::paseto_v4;
+use atuin_common::{db, userio};
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
@@ -660,7 +660,7 @@ impl SqliteStore {
             match record.clone().decrypt(key) {
                 Ok(_) => {}
                 Err(_) => {
-                    println!("Failed to decrypt {}, deleting", record.id.as_hyphenated());
+                    userio::log::info!("Failed to decrypt {}, deleting", record.id.as_hyphenated());
 
                     self.delete(record.id).await?;
                 }

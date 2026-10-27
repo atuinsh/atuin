@@ -4,6 +4,7 @@ use std::io::{Error, ErrorKind};
 use std::sync::LazyLock;
 
 use atuin_common::path::PathBufExt as _;
+use atuin_common::userio;
 use config::{Config, File as ConfigFile, FileFormat};
 use palette::named;
 use serde::{Deserialize, Serialize};
@@ -144,8 +145,8 @@ impl Theme {
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
                         if debug {
-                            tracing::warn!(
-                                "Tried to load string as a color unsuccessfully: ({name}={color}) \
+                            userio::log::warn!(
+                                "tried to load string as a color unsuccessfully: ({name}={color}) \
                                  {err}"
                             );
                         }
@@ -459,8 +460,8 @@ impl ThemeManager {
         };
 
         if debug && name != theme_config.theme.name {
-            tracing::warn!(
-                "Your theme config name is not the name of your loaded theme {} != {}",
+            userio::log::warn!(
+                "your theme config name is not the name of your loaded theme {} != {}",
                 name,
                 theme_config.theme.name
             );
@@ -486,7 +487,7 @@ impl ThemeManager {
             None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
                 Ok(theme) => theme,
                 Err(err) => {
-                    tracing::warn!("Could not load theme {name}: {err}");
+                    userio::log::warn!("could not load theme {name}: {err}");
                     built_ins.get("(none)").unwrap()
                 }
             },
@@ -678,7 +679,7 @@ mod theme_tests {
         assert_eq!(captured_logs.len(), 1);
         assert_eq!(
             captured_logs[0].message,
-            "Could not load theme nonsolarized: cannot load theme file: only built-in themes are \
+            "could not load theme nonsolarized: cannot load theme file: only built-in themes are \
              enabled"
         );
         assert_eq!(captured_logs[0].level, tracing::Level::WARN);
@@ -709,13 +710,13 @@ mod theme_tests {
             assert_eq!(captured_logs.len(), 2);
             assert_eq!(
                 captured_logs[0].message,
-                "Your theme config name is not the name of your loaded theme config_theme != \
+                "your theme config name is not the name of your loaded theme config_theme != \
                  mytheme"
             );
             assert_eq!(captured_logs[0].level, tracing::Level::WARN);
             assert_eq!(
                 captured_logs[1].message,
-                "Tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such \
+                "tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such \
                  color in palette"
             );
             assert_eq!(captured_logs[1].level, tracing::Level::WARN);

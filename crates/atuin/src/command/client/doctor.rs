@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::{DbLocation, Settings};
-use atuin_common::env;
 use atuin_common::path::{AbsPathBuf, PathExt};
 use atuin_common::shell::{Shell, shell_name};
 use atuin_common::string::NonEmptyOrExt as _;
+use atuin_common::{env, userio};
 use colored::Colorize;
 use eyre::Result;
 use serde::Serialize;
@@ -319,8 +319,8 @@ impl SettingPaths {
                 continue;
             };
             if path.as_path().is_dangling_symlink() {
-                eprintln!(
-                    "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin.",
+                userio::log::warn!(
+                    "{} (${path_env_var}) is a broken symlink. This may cause issues with Atuin",
                     path.display()
                 );
             }
@@ -393,29 +393,25 @@ impl DoctorDump {
 fn checks(info: &DoctorDump, settings: &Settings) {
     println!(); // spacing
     //
-    let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952".bold().red();
+    let zfs_error = "[Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952";
     let bash_plugin_error = format!(
         "[Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh (>= \
          0.4) be installed. An older ble.sh may not be detected. so ignore this if you have \
          ble.sh >= 0.4 set up! Read more here: {}",
         atuin_common::docs::url("guide/installation/#installing-the-shell-plugin")
-    )
-    .bold()
-    .red();
+    );
     let blesh_integration_error = "[Shell] Atuin and ble.sh seem to be loaded in the session, but \
                                    the integration does not seem to be working. Please check the \
-                                   setup in .bashrc."
-        .bold()
-        .red();
-    let openbsd_warning = "[System] OpenBSD is not officially supported.".bold().red();
+                                   setup in .bashrc.";
+    let openbsd_warning = "[System] OpenBSD is not officially supported.";
 
     if cfg!(target_os = "openbsd") {
-        println!("{openbsd_warning}");
+        userio::log::warn!("{openbsd_warning}");
     }
 
     // ZFS: https://github.com/atuinsh/atuin/issues/952
     if info.system.disks.iter().any(|d| d.filesystem == "zfs") {
-        println!("{zfs_error}");
+        userio::log::warn!("{zfs_error}");
     }
 
     info.atuin.setting_paths.verify();
@@ -423,24 +419,24 @@ fn checks(info: &DoctorDump, settings: &Settings) {
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
         let active = atuin_common::dirs::config_path("config.toml");
         let warning = super::info::shadowed_config_warning(&legacy, &active);
-        println!("{}", format!("[Config] {warning}").bold().red());
+        userio::log::warn!("[Config] {warning}.");
     }
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_data_dir(&settings.data_dir) {
         let warning = super::info::shadowed_data_dir_warning(&legacy, &settings.data_dir);
-        println!("{}", format!("[Data] {warning}").bold().red());
+        userio::log::warn!("[Data] {warning}.");
     }
 
     // Shell
     if info.shell.name == "bash" {
         if !info.shell.plugins.iter().any(|p| p == "blesh" || p == "bash-preexec") {
-            println!("{bash_plugin_error}");
+            userio::log::warn!("{bash_plugin_error}");
         }
 
         if info.shell.plugins.iter().any(|plugin| plugin == "atuin")
             && info.shell.plugins.iter().any(|plugin| plugin == "blesh")
             && info.shell.preexec.as_ref().is_some_and(|val| val == "none")
         {
-            println!("{blesh_integration_error}");
+            userio::log::warn!("{blesh_integration_error}");
         }
     }
 }

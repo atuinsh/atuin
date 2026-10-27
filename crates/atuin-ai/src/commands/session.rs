@@ -16,6 +16,7 @@ use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
 use atuin_common::string::highlighted::HighlightedString;
+use atuin_common::userio;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::{import_sessions_event, tail_sessions_event};
 use chrono::{DateTime, Utc};
@@ -167,9 +168,8 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
     };
 
     if !settings.threads.capture {
-        // stderr so it never pollutes piped stdout (json/ndjson).
-        eprintln!(
-            "note: thread capture is off. Run `atuin config enable threads` to record new threads."
+        userio::log::warn!(
+            "thread capture is off; run `atuin config enable threads` to record new threads"
         );
     }
 
@@ -183,11 +183,13 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
         client
             .wait_for_sessions(|progress| {
                 if reported.is_none() {
-                    eprintln!("Threads are being rebuilt from the record store; waiting...");
+                    userio::log::info!(
+                        "Threads are being rebuilt from the record store; waiting..."
+                    );
                 }
                 let (replayed, pending) = progress;
                 if reported != Some(progress) && pending > 0 {
-                    eprintln!("  {replayed} of {pending} records replayed");
+                    userio::log::info!("  {replayed} of {pending} records replayed");
                 }
                 reported = Some(progress);
             })

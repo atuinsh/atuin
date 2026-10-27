@@ -12,7 +12,7 @@ use atuin_client::tui::cursor;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::filter::OrFilter;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::utils;
+use atuin_common::{userio, utils};
 use clap::Parser;
 use eyre::{Context as _, Result};
 use tracing::instrument;
@@ -273,7 +273,7 @@ impl Cmd {
                 // sorry
                 while !entries.is_empty() {
                     for entry in &entries {
-                        eprintln!("deleting {}", entry.id);
+                        userio::log::info!("deleting {}", entry.id);
                     }
 
                     super::history::delete_history_entries(&settings, &history_store, &db, entries)

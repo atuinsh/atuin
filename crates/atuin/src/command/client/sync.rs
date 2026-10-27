@@ -6,6 +6,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::userio;
 use atuin_domain::record::{RecordId, RecordTag};
 use clap::Subcommand;
 use clap_couture::Couture;
@@ -108,23 +109,26 @@ async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteSt
 
     build(settings, &store, db, &downloaded).await?;
 
-    println!("{}", fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len()));
+    userio::log::info!(
+        "{}",
+        fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len())
+    );
 
     let history_length = db.history_count(true).await?;
     let store_history_length = store.len_tag(&RecordTag::History).await?;
 
     if u64::conv(history_length) > store_history_length {
-        println!(
+        userio::log::info!(
             "{}",
             fl!("sync-history-mismatch", index = history_length, store = store_history_length)
         );
-        println!("{}", fl!("sync-store-init"));
+        userio::log::info!("{}", fl!("sync-store-init"));
 
         // Internally we use the global filter mode, so this context is ignored.
         // don't recurse or loop here.
         history_store.init_store(db, settings).await?;
 
-        println!("{}", fl!("sync-rerun"));
+        userio::log::info!("{}", fl!("sync-rerun"));
 
         // we'll want to run sync once more, as there will now be stuff to upload -- re-key the same
         // session rather than reconnecting.
@@ -132,13 +136,14 @@ async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteSt
 
         build(settings, &store, db, &downloaded).await?;
 
-        println!("{}", fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len()));
+        userio::log::info!(
+            "{}",
+            fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len())
+        );
     }
 
-    println!(
-        "{}",
-        fl!("sync-complete", count = db.history_count(true).await?, force = force.to_string())
-    );
+    let count = db.history_count(true).await?;
+    userio::log::info!("{}", fl!("sync-complete", count = count, force = force.to_string()));
 
     Ok(())
 }
@@ -159,7 +164,7 @@ pub(super) async fn build(
         && !downloaded.is_empty()
         && let Err(e) = daemon::project_synced_ai_sessions(settings).await
     {
-        eprintln!("Warning: failed to build threads: {e}");
+        userio::log::warn!("failed to build threads: {e}");
     }
 
     built

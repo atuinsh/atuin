@@ -19,6 +19,7 @@ use std::num::NonZeroU64;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::sync::MutEagerFutureCell;
+use atuin_common::userio;
 use atuin_domain::caps::{PackfileCap, PageSizeCap};
 use atuin_domain::record::{
     Diff, EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
@@ -355,7 +356,7 @@ impl Keyed<'_> {
             .progress_chars("#>-"),
         );
 
-        println!(
+        userio::log::info!(
             "Uploading {} records to {}/{}",
             expected,
             series.host_id.0.as_simple(),
@@ -483,7 +484,7 @@ impl Keyed<'_> {
 
         let expected = (remote + 1).saturating_sub(first_missing_local);
 
-        println!(
+        userio::log::info!(
             "Downloading {} records from {}/{}",
             expected,
             series.host_id.0.as_simple(),
@@ -605,7 +606,7 @@ impl Keyed<'_> {
         while let Some((i, result)) = downloads.next().await {
             match result {
                 Ok(expanded) => ids.extend(expanded),
-                Err(e) if e.is_permanent() => error!(
+                Err(e) if e.is_permanent() => userio::log::error!(
                     manifest_id = %page[i].id,
                     host = %page[i].host.id,
                     idx = page[i].idx,

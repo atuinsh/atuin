@@ -6,6 +6,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme;
 use atuin_common::logs::{self, LogConfig};
+use atuin_common::userio;
 use clap::Subcommand;
 use clap_couture::Couture;
 use eyre::{Result, WrapErr};
@@ -312,7 +313,7 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
             Self::InternalDecoy => {
-                eprintln!("error: this command is not meant to be accessed directly");
+                userio::log::error!("this command is not meant to be accessed directly");
                 std::process::exit(1);
             }
             _ => {}

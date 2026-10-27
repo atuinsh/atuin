@@ -7,6 +7,7 @@ use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError, codex};
 use atuin_common::path::PathBufExt as _;
+use atuin_common::userio;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
 use tracing::instrument;
@@ -75,25 +76,31 @@ async fn install(agent_name: &str) -> Result<()> {
 
     match harness.install_hooks().await {
         Ok(path) => {
-            eprintln!("Atuin hooks installed for {}. Path: {}", harness.name(), path.display());
+            userio::log::info!(
+                "Atuin hooks installed for {}. Path: {}",
+                harness.name(),
+                path.display()
+            );
             if harness.name() == "codex" {
                 // Codex runs only the hooks the user trusted (see `codex::hook_trust`).
                 let config = path.with_file_name("config.toml");
-                eprintln!("Trusted them in Codex's config: {}", config.display());
+                userio::log::info!("Trusted them in Codex's config: {}", config.display());
             }
             if let Some(hint) = reload_hint(harness.name()) {
-                eprintln!("{hint}");
+                userio::log::info!("{hint}");
             }
         }
         Err(InstallHookError::AlreadyInstalled) => {
-            eprintln!("{}: hooks already installed, skipping", harness.name());
+            userio::log::info!("{}: hooks already installed, skipping", harness.name());
         }
         Err(err) => return Err(err.into()),
     }
 
     if cfg!(feature = "ai") {
         let name = harness.name();
-        eprintln!("To let {name} search your history too, run `atuin mcp install {name}`.");
+        userio::log::info!(
+            "To let {name} search your history too, run `atuin mcp install {name}`."
+        );
     }
 
     Ok(())

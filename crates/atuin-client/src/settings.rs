@@ -12,6 +12,7 @@ use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeT
 use atuin_common::time::{
     AsDisableableDuration, AsDuration, Days, Minutes, NonZeroDuration, Seconds,
 };
+use atuin_common::userio;
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::builder::DefaultState;
@@ -1555,10 +1556,10 @@ impl Settings {
             match ShellExpanded::expand(&raw) {
                 Ok(_) => {}
                 Err(ExpandError::Empty) => {
-                    tracing::warn!("{key} is empty, so Atuin uses its default");
+                    userio::log::warn!("{key} is empty, so Atuin uses its default");
                     emptied.push((key, default));
                 }
-                Err(err @ ExpandError::Variable { .. }) => tracing::warn!(
+                Err(err @ ExpandError::Variable { .. }) => userio::log::warn!(
                     "{key}: failed to expand {raw:?} ({err}), so Atuin uses it as written; write \
                      $$ for a literal $"
                 ),

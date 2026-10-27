@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 
+use atuin_common::userio;
 use eyre::Result;
 use tempfile::NamedTempFile;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -169,11 +170,11 @@ pub async fn execute_script_interactive(
     tokio::spawn(async move {
         while let Some(input) = stdin_rx.recv().await {
             if let Err(e) = stdin.write_all(input.as_bytes()).await {
-                eprintln!("Error writing to stdin: {e}");
+                userio::log::error!("failed to write to stdin: {e}");
                 break;
             }
             if let Err(e) = stdin.flush().await {
-                eprintln!("Error flushing stdin: {e}");
+                userio::log::error!("failed to flush stdin: {e}");
                 break;
             }
         }
@@ -192,16 +193,16 @@ pub async fn execute_script_interactive(
                 Ok(0) => break, // End of stdout
                 Ok(n) => {
                     if let Err(e) = stdout_writer.write_all(&buffer[0..n]).await {
-                        eprintln!("Error writing to stdout: {e}");
+                        userio::log::error!("failed to write to stdout: {e}");
                         break;
                     }
                     if let Err(e) = stdout_writer.flush().await {
-                        eprintln!("Error flushing stdout: {e}");
+                        userio::log::error!("failed to flush stdout: {e}");
                         break;
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error reading from process stdout: {e}");
+                    userio::log::error!("failed to read from process stdout: {e}");
                     break;
                 }
             }
@@ -220,16 +221,16 @@ pub async fn execute_script_interactive(
                 Ok(0) => break, // End of stderr
                 Ok(n) => {
                     if let Err(e) = stderr_writer.write_all(&buffer[0..n]).await {
-                        eprintln!("Error writing to stderr: {e}");
+                        userio::log::error!("failed to write to stderr: {e}");
                         break;
                     }
                     if let Err(e) = stderr_writer.flush().await {
-                        eprintln!("Error flushing stderr: {e}");
+                        userio::log::error!("failed to flush stderr: {e}");
                         break;
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error reading from process stderr: {e}");
+                    userio::log::error!("failed to read from process stderr: {e}");
                     break;
                 }
             }
@@ -249,7 +250,7 @@ pub async fn execute_script_interactive(
                 status
             }
             Err(e) => {
-                eprintln!("Error waiting for child process: {e}");
+                userio::log::error!("failed to wait for child process: {e}");
                 // Send a default error code
                 let _ = exit_code_tx.send(-1).await;
                 return;
@@ -258,11 +259,11 @@ pub async fn execute_script_interactive(
 
         // Wait for stdout/stderr tasks to complete
         if let Err(e) = stdout_handle.await {
-            eprintln!("Error joining stdout task: {e}");
+            userio::log::error!("failed to join stdout task: {e}");
         }
 
         if let Err(e) = stderr_handle.await {
-            eprintln!("Error joining stderr task: {e}");
+            userio::log::error!("failed to join stderr task: {e}");
         }
 
         // Send the exit code

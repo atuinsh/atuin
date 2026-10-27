@@ -6,6 +6,7 @@ use std::time::Duration;
 use async_stream::try_stream;
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::url::UrlAppendExt;
+use atuin_common::userio;
 use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ATUIN_VERSION, ChangePasswordRequest, ErrorResponse,
     LoginRequest, LoginResponse, MeResponse, PackfileDownloadResponse, PackfileResponse,
@@ -235,12 +236,10 @@ pub fn ensure_version(response: &Response) -> Result<bool> {
 
     // If the client is newer than the server
     if version.major < ATUIN_VERSION.major {
-        println!(
-            "Atuin version mismatch! In order to successfully sync, the server needs to run a \
-             newer version of Atuin"
+        userio::log::warn!(
+            "version mismatch: to sync, the server needs to run a newer version of Atuin (client: \
+             {ATUIN_CARGO_VERSION}, server: {version})"
         );
-        println!("Client: {ATUIN_CARGO_VERSION}");
-        println!("Server: {version}");
 
         return Ok(false);
     }
