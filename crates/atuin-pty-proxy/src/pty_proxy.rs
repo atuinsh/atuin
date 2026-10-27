@@ -233,8 +233,9 @@ const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]];
   }
 
   if [[ $__atuin_pty_proxy_answer != 0 ]]; then
-    # Either this terminal is already running in an Atuin PTY proxy, or `atuin` can't be run by
-    # name here and exec'ing it would end the shell.
+    # This terminal is already running in an Atuin PTY proxy, or we couldn't run `atuin`,
+    # or there's some other reason we shouldn't spawn a proxy (e.g., in a Linux virtual
+    # console, which would interfere with programs that need console access).
     :
   elif [[ -n ${ATUIN_PTY_PROXY_FAILED-} ]]; then
     # If the PTY proxy failed to spawn its server, stop here instead of endlessly

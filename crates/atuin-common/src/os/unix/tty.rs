@@ -50,6 +50,21 @@ impl TtyId {
         use rustix::stdio::{stderr, stdin, stdout};
         [stdin(), stdout(), stderr()].into_iter().find_map(Self::from_fd)
     }
+
+    /// Whether this terminal is a Linux virtual console (`/dev/tty1`, `/dev/tty2`, etc).
+    ///
+    /// Always returns false on other platforms.
+    #[must_use]
+    pub fn is_virtual_console(self) -> bool {
+        // From <https://github.com/torvalds/linux/blob/v7.3/Documentation/admin-guide/devices.txt>:
+        // virtual consoles are char major 4, minor 0 to 63.
+        const TTY_MAJOR: u32 = 4;
+        const MAX_VT_MINOR: u32 = 63;
+
+        cfg!(target_os = "linux")
+            && rustix::fs::major(self.rdev) == TTY_MAJOR
+            && rustix::fs::minor(self.rdev) <= MAX_VT_MINOR
+    }
 }
 
 /// A terminal descriptor in non-blocking mode.
@@ -203,6 +218,36 @@ mod tests {
             assert_eq!(id.dev as u64, meta.dev());
             assert_eq!(id.rdev as u64, meta.rdev());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[rstest]
+    #[case::tty0(4, 0, true)]
+    #[case::tty1(4, 1, true)]
+    #[case::tty63(4, 63, true)]
+    #[case::ttys0(4, 64, false)]
+    #[case::console(5, 1, false)]
+    #[case::dev_tty(5, 0, false)]
+    #[case::ptmx(5, 2, false)]
+    #[case::pts0(136, 0, false)]
+    fn virtual_consoles_are_recognised_by_device_number(
+        #[case] major: u32,
+        #[case] minor: u32,
+        #[case] expected: bool,
+    ) {
+        let id = TtyId {
+            dev: 0,
+            rdev: rustix::fs::makedev(major, minor),
+        };
+
+        assert_eq!(id.is_virtual_console(), expected);
+    }
+
+    #[rstest]
+    fn a_pty_is_not_a_virtual_console(pty: (File, File, PathBuf)) {
+        let (_master, slave, _path) = pty;
+
+        assert!(!TtyId::from_fd(&slave).unwrap().is_virtual_console());
     }
 
     /// Serialises the tests that swap this process's stdin.
