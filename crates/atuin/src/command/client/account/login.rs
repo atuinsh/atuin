@@ -7,6 +7,8 @@ use atuin_client::record::sync::{ClientSource, SyncError, SyncSession};
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
+#[cfg(feature = "daemon")]
+use atuin_daemon::service::ActiveService;
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use rpassword::prompt_password;
@@ -278,6 +280,16 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
         return Ok(());
     }
 
+    // The daemon holds the key in memory, so stop it before it writes records under the old one
+    // while the store is rewritten, and start it again once the new key is written. A daemon systemd
+    // or launchd runs can't be stopped from here, only restarted after. One can be running without
+    // `daemon.enabled`, started by `atuin threads`.
+    #[cfg(feature = "daemon")]
+    let stopped = match ActiveService::find(settings).await {
+        Ok(Some(daemon)) => daemon.stop().await.is_ok(),
+        _ => false,
+    };
+
     println!("\n{}", fl!("login-reencrypting"));
     store.re_encrypt(&current_key, key).await?;
     crate::command::client::store::invalidate_ai_sessions(settings).await;
@@ -285,6 +297,29 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
     println!("{}", fl!("login-writing-key"));
     key.overwrite_path(key_path)?;
 
+    #[cfg(feature = "daemon")]
+    if let Err(e) = start_daemon(settings, stopped).await {
+        eprintln!("{}", fl!("login-daemon-start-failed", error = format!("{e:#}")));
+    }
+
+    Ok(())
+}
+
+/// Start the daemon on the new key if it was stopped, and restart one running on the old key, such
+/// as one a shell hook started while it was stopped.
+#[cfg(feature = "daemon")]
+async fn start_daemon(settings: &Settings, stopped: bool) -> Result<()> {
+    let running = ActiveService::find(settings).await?;
+    if running.is_none() && !stopped {
+        return Ok(());
+    }
+
+    println!("{}", fl!("login-starting-daemon"));
+    if let Some(daemon) = running {
+        daemon.restart().await?;
+    } else {
+        ActiveService::find_or_spawn(settings).await?;
+    }
     Ok(())
 }
 
