@@ -109,26 +109,28 @@ async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteSt
 
     build(settings, &store, db, &downloaded).await?;
 
-    userio::log::info!(
-        "{}",
-        fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len())
+    userio::log::localized::info!(
+        "sync-up-down",
+        uploaded = uploaded,
+        downloaded = downloaded.len()
     );
 
     let history_length = db.history_count(true).await?;
     let store_history_length = store.len_tag(&RecordTag::History).await?;
 
     if u64::conv(history_length) > store_history_length {
-        userio::log::info!(
-            "{}",
-            fl!("sync-history-mismatch", index = history_length, store = store_history_length)
+        userio::log::localized::info!(
+            "sync-history-mismatch",
+            index = history_length,
+            store = store_history_length
         );
-        userio::log::info!("{}", fl!("sync-store-init"));
+        userio::log::localized::info!("sync-store-init");
 
         // Internally we use the global filter mode, so this context is ignored.
         // don't recurse or loop here.
         history_store.init_store(db, settings).await?;
 
-        userio::log::info!("{}", fl!("sync-rerun"));
+        userio::log::localized::info!("sync-rerun");
 
         // we'll want to run sync once more, as there will now be stuff to upload -- re-key the same
         // session rather than reconnecting.
@@ -136,14 +138,15 @@ async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteSt
 
         build(settings, &store, db, &downloaded).await?;
 
-        userio::log::info!(
-            "{}",
-            fl!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len())
+        userio::log::localized::info!(
+            "sync-up-down",
+            uploaded = uploaded,
+            downloaded = downloaded.len()
         );
     }
 
     let count = db.history_count(true).await?;
-    userio::log::info!("{}", fl!("sync-complete", count = count, force = force.to_string()));
+    userio::log::localized::info!("sync-complete", count = count, force = force.to_string());
 
     Ok(())
 }
