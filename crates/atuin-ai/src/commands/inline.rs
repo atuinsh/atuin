@@ -104,10 +104,7 @@ pub async fn run(
     Ok(())
 }
 
-#[expect(
-    clippy::disallowed_macros,
-    reason = "ai inline owns the terminal and logs only to its file"
-)]
+#[expect(clippy::print_stdout, reason = "ai inline owns the terminal and logs only to its file")]
 async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
     if let Some(token) = atuin_client::hub::get_session_token(settings).await? {
         debug!("Found Hub session, using existing token");
@@ -477,10 +474,7 @@ fn render_setup_options(
     Ok(())
 }
 
-#[expect(
-    clippy::disallowed_macros,
-    reason = "ai inline owns the terminal and logs only to its file"
-)]
+#[expect(clippy::print_stdout, reason = "ai inline owns the terminal and logs only to its file")]
 async fn set_ai_enabled(enabled: bool) -> Result<()> {
     let config_file = Settings::get_config_path()?;
     let config_str = tokio::fs::read_to_string(&config_file).await?;

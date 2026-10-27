@@ -184,7 +184,7 @@ pub fn output(command: Command) -> String {
 }
 
 /// Says why a test returns early: it passes all the same, with no other trace of being skipped.
-#[expect(clippy::disallowed_macros, reason = "tells whoever runs the tests why one is skipped")]
+#[expect(clippy::print_stderr, reason = "tells whoever runs the tests why one is skipped")]
 pub fn skip(why: impl std::fmt::Display) {
     eprintln!("skipping: {why}");
 }

@@ -11,7 +11,7 @@ use atuin_daemon::client::classify_error;
 use super::TestEnv;
 use super::corpus::{self, HistoryGen, seed_record_store};
 
-#[expect(clippy::disallowed_macros, reason = "reports how long each tier took")]
+#[expect(clippy::print_stderr, reason = "reports how long each tier took")]
 pub fn report(label: &str, rows: usize, started: Instant) {
     eprintln!("[scale] {label}: {rows} rows in {:?}", started.elapsed());
 }

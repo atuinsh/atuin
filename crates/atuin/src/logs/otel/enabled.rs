@@ -96,7 +96,7 @@ impl OtelCtx {
 
 impl Drop for OtelCtx {
     #[expect(
-        clippy::disallowed_macros,
+        clippy::print_stderr,
         reason = "tracing can't be used safely while the OTEL provider shuts down"
     )]
     fn drop(&mut self) {

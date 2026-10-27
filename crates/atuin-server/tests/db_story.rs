@@ -68,7 +68,7 @@ impl TestDb {
 }
 
 impl Drop for TestDb {
-    #[expect(clippy::disallowed_macros, reason = "drop can't return the teardown failure")]
+    #[expect(clippy::print_stderr, reason = "drop can't return the teardown failure")]
     fn drop(&mut self) {
         let settings = self.settings.clone();
         let _ = std::thread::spawn(move || {

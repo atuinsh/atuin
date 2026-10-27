@@ -100,7 +100,7 @@ pub enum Error {
 }
 
 #[expect(
-    clippy::disallowed_macros,
+    clippy::print_stderr,
     reason = "the terminal must show why pty-proxy failed, wherever it logs"
 )]
 async fn run(options: RuntimeOptions) -> Result<i32, Error> {

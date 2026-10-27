@@ -94,6 +94,12 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Storage traits: `Database` (client), `Store` (record store), `Database` (server) -- all `async_trait`.
 - History builders: `HistoryImported`, `HistoryCaptured`, `HistoryFromDb` with compile-time field validation.
 - Feature flags: `client`, `sync`, `daemon`, `clipboard`, `check-update`.
+- Output: no `print!`/`println!`/`eprint!`/`eprintln!` outside tests (clippy `print_stdout` and
+  `print_stderr`). Log with `tracing`, and send a message the user should read with
+  `target: atuin_common::logs::USER`. Write a command's result with `atuin_common::out::{out!,
+  outln!}`, and the line the shell widget reads with `widgetln!`; none of them panic once the
+  reader has gone. Ask with `atuin_common::prompt::Prompt`. Print directly only where no logging
+  is set up, under an `#[expect]` that says why.
 
 ## Testing
 

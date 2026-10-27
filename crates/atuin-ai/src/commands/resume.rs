@@ -417,7 +417,7 @@ async fn direct_target(
     Ok(Some((row, note)))
 }
 
-#[expect(clippy::disallowed_macros, reason = "resume logs only to its file")]
+#[expect(clippy::print_stderr, reason = "resume logs only to its file")]
 pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
     startup("started");
     if let Some(mode) = cmd.filter_mode {
@@ -793,7 +793,7 @@ fn printable_line(plan: &ResumePlan) -> Result<String> {
 }
 
 /// Change into the session's directory and replace this process with the harness.
-#[expect(clippy::disallowed_macros, reason = "resume logs only to its file")]
+#[expect(clippy::print_stderr, reason = "resume logs only to its file")]
 fn exec(plan: &ResumePlan) -> Result<()> {
     // On Windows, spawn the file the resumability check found (`claude.cmd`), which the bare name
     // would not resolve to. It is looked up as the check looked it up (a relative path against the
