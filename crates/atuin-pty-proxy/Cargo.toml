@@ -26,6 +26,7 @@ portable-pty = { workspace = true }
 rustix = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 parking_lot = { workspace = true }

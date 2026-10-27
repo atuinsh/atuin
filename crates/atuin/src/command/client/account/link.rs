@@ -1,7 +1,7 @@
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
-use atuin_common::userio::outln;
 use eyre::{Result, bail};
+use tracing::info;
 
 use crate::i18n::fl;
 
@@ -24,12 +24,16 @@ pub async fn run(settings: &Settings) -> Result<()> {
 
         let session = atuin_client::hub::HubAuthSession::start(&hub_address).await?;
 
-        if session.open_in_browser() {
-            outln!("{}", fl!("account-hub-browser-opened"));
-        } else {
-            outln!("{}", fl!("account-hub-open-url"));
-        }
-        outln!("{}", session.auth_url);
+        info!(
+            target: USER,
+            "{}\n{}",
+            if session.open_in_browser() {
+                fl!("account-hub-browser-opened")
+            } else {
+                fl!("account-hub-open-url")
+            },
+            session.auth_url
+        );
 
         let token = session
             .wait_for_completion(

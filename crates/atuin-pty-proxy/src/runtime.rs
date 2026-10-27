@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atuin_common::logs::USER;
 use atuin_common::os::unix::io::{ReadRetryingExt as _, WriteAllExt as _};
 use atuin_common::os::unix::tty::{Access, AsyncTty, TtyId};
 use crossterm::terminal;
@@ -11,6 +12,7 @@ use rustix::termios::SpecialCodeIndex;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, watch};
+use tracing::error;
 
 use crate::debug::RESET;
 use crate::foreground::{ForegroundUpdater, pty_parent_fd};
@@ -99,10 +101,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "the terminal must show why pty-proxy failed, wherever it logs"
-)]
 async fn run(options: RuntimeOptions) -> Result<i32, Error> {
     let (cols, rows) = terminal::size()?;
     let pty_system = native_pty_system();
@@ -134,12 +132,7 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
             let path = atuin_common::fs::RemoveOnDropPath(socket_path);
             Ok::<_, InitError>((server, path))
         })
-        .map_err(|e| {
-            // If we're unable to initialize the PTY server (e.g., failed to create the socket),
-            // print the error and continue rather than returning it, so the user still gets a
-            // shell.
-            eprintln!("atuin pty-proxy: failed to initialize server: {e}");
-        })
+        .inspect_err(|e| error!(target: USER, "atuin pty-proxy failed to initialize server: {e}"))
         .ok();
 
     let (msg_tx, msg_rx) = mpsc::channel::<Msg>(64);
