@@ -268,21 +268,30 @@ fn never_overwrites_a_session(sessions: TempDir) {
     assert!(!sessions.path().join("b").exists());
 }
 
-/// A `!command` goes back as the shell entry it was captured from.
+/// A `!command` goes back as the shell entry it was captured from, and omp's `$code` as its
+/// Python one.
 #[rstest]
-fn a_bang_command_is_a_bash_execution(sessions: TempDir) {
+#[case::bash(Flavour::Pi, "!!echo hi", "bashExecution", "command")]
+#[case::python(Flavour::Omp, "$$echo hi", "pythonExecution", "code")]
+fn a_bang_command_is_a_bash_execution(
+    sessions: TempDir,
+    #[case] flavour: Flavour,
+    #[case] typed: &str,
+    #[case] role: &str,
+    #[case] key: &str,
+) {
     let session = session("s-bash", sessions.path(), vec![message("b1", None, Role::User, vec![
-        Content::Text("!!echo hi".to_owned()),
+        Content::Text(typed.to_owned()),
         Content::ToolResult(ToolResult {
             call: crate::harnesstools::session::ToolCallId::from("b1".to_owned()),
             output: json!("hi\n"),
             error: true,
         }),
     ])]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
-    let entry = &lines(&path)[1];
-    assert_eq!(entry["message"]["role"], "bashExecution");
-    assert_eq!(entry["message"]["command"], "echo hi");
+    let path = rehydrate_into(flavour, sessions.path(), sessions.path(), &session).unwrap();
+    let entry = lines(&path).into_iter().find(|e| e["type"] == "message").unwrap();
+    assert_eq!(entry["message"]["role"], role);
+    assert_eq!(entry["message"][key], "echo hi");
     assert_eq!(entry["message"]["excludeFromContext"], true);
     assert_eq!(entry["message"]["exitCode"], 1);
 }

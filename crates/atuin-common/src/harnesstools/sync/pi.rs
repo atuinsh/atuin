@@ -2,7 +2,8 @@
 //!
 //! **Tip.** pi continues from the last entry of the file, whatever it is (`_buildIndex` in
 //! pi-coding-agent 0.85 `session-manager.ts`: the leaf is the last entry after the header), and
-//! builds the context from it up through `parentId`.
+//! builds the context from it up through `parentId`. omp 18.12.4+ marks an entry it writes off
+//! the branch it is on with that branch's tip (`activeLeafId`), and continues from that.
 //!
 //! **Append.** The rows are written by the rehydrate writer, each hanging from the entry its row
 //! was written after, the first from the tip. The last of them is then the file's last entry, so
@@ -123,6 +124,10 @@ pub(super) struct File {
     cwd: Option<String>,
     /// Every entry after the header, as pi indexes it: `(id, parentId, type)`.
     entries: Vec<(String, Option<String>, String)>,
+    /// The entry pi continues from: the last one, unless omp wrote one off the branch it was on
+    /// (late usage, a background result), which names that branch's tip as its `activeLeafId`
+    /// (omp 18.12.4+ `session-entries.ts` `sessionEntryLeafId`; `null` clears it).
+    leaf: Option<String>,
     /// The id capture gives each line it keeps a row of: its own, else (a line from before ids,
     /// or one pi gave an id when it converted a version 1 file) one keyed on its content.
     known: HashSet<String>,
@@ -144,12 +149,14 @@ impl File {
             version: 1,
             cwd: None,
             entries: Vec::new(),
+            leaf: None,
             known: HashSet::new(),
         };
         // pi skips a line it cannot parse, and capture reports it and reads on.
         let parsed: Vec<Value> = jsonl_lines(&bytes)
             .filter_map(|line| crate::json::js::from_slice::<Value>(line).ok())
             .collect();
+        let mut self_selected = None;
         for entry in &parsed {
             let kind = entry["type"].as_str().unwrap_or_default();
             if kind == "session" {
@@ -163,11 +170,22 @@ impl File {
             let Some(id) = entry["id"].as_str() else {
                 continue;
             };
+            file.leaf = match entry.get("activeLeafId") {
+                Some(leaf) => leaf.as_str().map(str::to_owned),
+                None => Some(id.to_owned()),
+            };
+            if file.leaf.as_deref() == Some(id) {
+                self_selected.clone_from(&file.leaf);
+            }
             file.entries.push((
                 id.to_owned(),
                 entry["parentId"].as_str().map(str::to_owned),
                 kind.to_owned(),
             ));
+        }
+        // A leaf no entry has any more is the last entry that named itself (omp `rebuild`).
+        if file.leaf.as_ref().is_some_and(|leaf| !file.entries.iter().any(|(id, ..)| id == leaf)) {
+            file.leaf = self_selected;
         }
         // Keyed as capture keys them, under the session the header names (capture reads no
         // session without one), each line as capture reads it: a fork's header names its parent
@@ -194,10 +212,10 @@ impl File {
         })
     }
 
-    /// The entry pi continues from, as capture keys it: the last one. `None` for one with no id
-    /// of its own to capture (pi gave it one converting a version 1 file), which no row names.
+    /// The entry pi continues from, as capture keys it. `None` for one with no id of its own to
+    /// capture (pi gave it one converting a version 1 file), which no row names.
     fn leaf(&self) -> Option<&str> {
-        self.entries.last().map(|(id, ..)| id.as_str()).filter(|id| self.known.contains(*id))
+        self.leaf.as_deref().filter(|id| self.known.contains(*id))
     }
 
     pub(super) fn tip(self, path: &Path) -> LocalTip {

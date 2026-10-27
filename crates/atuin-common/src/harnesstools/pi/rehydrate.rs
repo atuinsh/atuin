@@ -443,8 +443,9 @@ fn tool_result_content(output: &Value) -> Value {
     }
 }
 
-/// A `!command` the user ran in pi's shell: captured as its command line and a result named
-/// after the entry (a v1 entry, which had no id, by its time: it is named after its id now).
+/// A `!command` the user ran in pi's shell (or `$code` in omp's Python kernel): captured as its
+/// command line and a result named after the entry (a v1 entry, which had no id, by its time: it
+/// is named after its id now).
 fn bash_execution(m: &RehydrateMessage, at: i64) -> Option<Value> {
     let [
         Content::Text(line),
@@ -460,15 +461,20 @@ fn bash_execution(m: &RehydrateMessage, at: i64) -> Option<Value> {
     if call.as_ref() != m.source_id && !call.as_ref().starts_with("bash:") {
         return None;
     }
-    let (command, hidden) = match line.strip_prefix("!!") {
-        Some(command) => (command, true),
-        None => (line.strip_prefix('!')?, false),
+    let (sigil, role, key) = match line.chars().next()? {
+        '!' => ('!', "bashExecution", "command"),
+        '$' => ('$', "pythonExecution", "code"),
+        _ => return None,
     };
-    Some(json!({
+    let line = &line[1..];
+    let (command, hidden) = match line.strip_prefix(sigil) {
+        Some(command) => (command, true),
+        None => (line, false),
+    };
+    let mut entry = json!({
         "type": "message",
         "message": {
-            "role": "bashExecution",
-            "command": command,
+            "role": role,
             "output": if output.is_null() { json!(UNCAPTURED_OUTPUT) } else { output.clone() },
             "exitCode": i32::from(*error),
             "cancelled": false,
@@ -476,7 +482,9 @@ fn bash_execution(m: &RehydrateMessage, at: i64) -> Option<Value> {
             "excludeFromContext": hidden,
             "timestamp": at,
         },
-    }))
+    });
+    entry["message"][key] = json!(command);
+    Some(entry)
 }
 
 fn assistant_entry(m: &RehydrateMessage, at: i64) -> Option<Value> {

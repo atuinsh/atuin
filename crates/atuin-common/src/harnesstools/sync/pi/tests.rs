@@ -90,6 +90,29 @@ fn a_fast_forward_resumes_from_the_last_entry(dir: TempDir) {
     assert_eq!(first["parentId"], "aaaa0002");
 }
 
+/// omp 18.12.4+ writes late usage (a title's, say) off the branch it is on, naming that branch's
+/// tip as the entry's `activeLeafId` (session-entries.ts `sessionEntryLeafId`); omp continues
+/// from that tip, and from the last entry that named itself when the tip is gone.
+#[rstest]
+#[case::named(json!("aaaa0001"), Some("aaaa0001"))]
+#[case::cleared(json!(null), None)]
+#[case::gone(json!("cccc0009"), Some("aaaa0002"))]
+fn an_omp_entry_off_the_branch_keeps_its_tip(
+    dir: TempDir,
+    #[case] active: Value,
+    #[case] tip: Option<&str>,
+) {
+    let mut bytes = local(3);
+    let late = json!({"type": "model_usage", "id": "cccc0001", "parentId": "aaaa0002",
+        "timestamp": "2026-09-28T10:00:02.000Z", "activeLeafId": active, "purpose": "title",
+        "role": "tiny", "api": "openai-responses", "provider": "openai", "model": "gpt-5.6-mini",
+        "usage": {"input": 300, "output": 12, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 312},
+        "stopReason": "stop"});
+    bytes.extend(jsonl(&[late]));
+    let path = write(&dir, &bytes);
+    assert_eq!(File::read(&path).unwrap().tip(&path).tip_source_id.as_deref(), tip);
+}
+
 /// The ids capture gives the lines of session `id`, kept in `path`, reading them as it does.
 async fn captured(id: &str, path: &Path) -> HashSet<String> {
     use futures::TryStreamExt;
