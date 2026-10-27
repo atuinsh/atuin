@@ -91,7 +91,7 @@ impl AtuinCmd {
             }
 
             Self::Contributors => {
-                contributors::run();
+                contributors::run()?;
                 Ok(())
             }
             Self::Uuid => {

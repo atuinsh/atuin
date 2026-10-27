@@ -1,3 +1,5 @@
+use std::fmt;
+use std::io::{self, Write as _};
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
@@ -5,12 +7,13 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
-use atuin_common::userio::outln;
-use atuin_domain::record::RecordSeriesKey;
+use atuin_domain::record::{
+    EncryptedData, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
+};
 use clap::Subcommand;
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 use tracing::{info, instrument, warn};
 
 #[cfg(feature = "daemon")]
@@ -153,48 +156,99 @@ impl Cmd {
     }
 
     pub async fn status(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
+        let status = StoreStatus::query(settings, &store).await?;
+        // Each host's block already ends with a blank line.
+        write!(io::stdout(), "{status}")?;
+        Ok(())
+    }
+}
+
+/// What `atuin store status` shows: each host's record series, with their first and last records.
+struct StoreStatus {
+    /// Sorted by host, and each host's series by tag.
+    hosts: Vec<HostStatus>,
+}
+
+struct HostStatus {
+    host: HostId,
+    /// Whether it is the machine running the command.
+    current: bool,
+    series: Vec<SeriesStatus>,
+}
+
+struct SeriesStatus {
+    tag: RecordTag,
+    idx: RecordIdx,
+    first: Option<SeriesEnd>,
+    last: Option<SeriesEnd>,
+}
+
+/// The record at one end of a series.
+struct SeriesEnd {
+    id: RecordId,
+    created: OffsetDateTime,
+}
+
+impl StoreStatus {
+    async fn query(settings: &Settings, store: &SqliteStore) -> Result<Self> {
         let host_id = settings.host_id().await?;
-        let offset = time::UtcOffset::local_or_utc();
+        let offset = UtcOffset::local_or_utc();
 
-        let status = store.status().await?;
+        let mut hosts = Vec::new();
+        for (host, tags) in store.status().await?.hosts.into_iter().sorted_by_key(|(h, _)| *h) {
+            let mut series = Vec::new();
+            for (tag, idx) in tags.into_iter().sorted_by(|(a, _), (b, _)| a.cmp(b)) {
+                let key = RecordSeriesKey::new(host, tag.clone());
+                series.push(SeriesStatus {
+                    first: store.first(&key).await?.map(|r| SeriesEnd::new(&r, offset)),
+                    last: store.last(&key).await?.map(|r| SeriesEnd::new(&r, offset)),
+                    tag,
+                    idx,
+                });
+            }
+            hosts.push(HostStatus {
+                current: host == host_id,
+                host,
+                series,
+            });
+        }
 
-        // TODO: should probs build some data structure and then pretty-print it or smth
-        for (host, st) in status.hosts.iter().sorted_by_key(|(h, _)| *h) {
-            let host_string = if host == &host_id {
-                format!("host: {} <- CURRENT HOST", host.0.as_hyphenated())
+        Ok(Self { hosts })
+    }
+}
+
+impl SeriesEnd {
+    fn new(record: &Record<EncryptedData>, offset: UtcOffset) -> Self {
+        Self {
+            id: record.id,
+            created: OffsetDateTime::from_unix_nanos_u64(record.timestamp).to_offset(offset),
+        }
+    }
+}
+
+impl fmt::Display for StoreStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for host in &self.hosts {
+            let current = if host.current {
+                " <- CURRENT HOST"
             } else {
-                format!("host: {}", host.0.as_hyphenated())
+                ""
             };
+            writeln!(f, "host: {}{current}", host.host.0.as_hyphenated())?;
 
-            outln!("{host_string}");
-
-            for (tag, idx) in st.iter().sorted_by_key(|(tag, _)| *tag) {
-                outln!("\tstore: {tag}");
-
-                let series = RecordSeriesKey::new(*host, tag.clone());
-                let first = store.first(&series).await?;
-                let last = store.last(&series).await?;
-
-                outln!("\t\tidx: {idx}");
-
-                if let Some(first) = first {
-                    outln!("\t\tfirst: {}", first.id.0.as_hyphenated());
-
-                    let time =
-                        OffsetDateTime::from_unix_nanos_u64(first.timestamp).to_offset(offset);
-                    outln!("\t\t\tcreated: {time}");
-                }
-
-                if let Some(last) = last {
-                    outln!("\t\tlast: {}", last.id.0.as_hyphenated());
-
-                    let time =
-                        OffsetDateTime::from_unix_nanos_u64(last.timestamp).to_offset(offset);
-                    outln!("\t\t\tcreated: {time}");
+            for series in &host.series {
+                writeln!(f, "\tstore: {}", series.tag)?;
+                writeln!(f, "\t\tidx: {}", series.idx)?;
+                for (end, record) in [("first", &series.first), ("last", &series.last)] {
+                    let Some(record) = record else {
+                        continue;
+                    };
+                    writeln!(f, "\t\t{end}: {}", record.id.0.as_hyphenated())?;
+                    writeln!(f, "\t\t\tcreated: {}", record.created)?;
                 }
             }
 
-            outln!();
+            writeln!(f)?;
         }
 
         Ok(())

@@ -1,3 +1,5 @@
+use std::fmt;
+use std::io::{self, Write as _};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,9 +8,9 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::logs::USER;
-use atuin_common::userio::outln;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
-use atuin_daemon::grpc::versioning::BUILD_STR;
+use atuin_daemon::grpc::versioning::{BUILD_STR, VersionMatchError};
+use atuin_daemon::service::address::DaemonAddress;
 use atuin_daemon::service::{
     ActiveService, FindError, Launch, PidfileWaitError, ServiceClaim, ServiceFindError, StopError,
 };
@@ -233,33 +235,75 @@ pub async fn compact_store(settings: &Settings) -> Result<u64> {
 }
 
 async fn status_cmd(settings: &Settings) -> Result<()> {
-    let Some(service) = ActiveService::find(settings).await? else {
-        outln!("Daemon is not running");
-        return Ok(());
-    };
+    let status = DaemonStatus::query(settings).await?;
+    writeln!(io::stdout(), "{status}")?;
+    Ok(())
+}
 
-    match service.ensure_our_build() {
-        Ok(()) => {
-            let address = service.address().clone();
-            let status = service.into_client().status().await?;
-            outln!("Daemon running");
-            outln!("  PID:      {}", status.pid);
-            outln!("  Version:  {}", status.version);
-            outln!("  Build:    {BUILD_STR}");
-            outln!("  Healthy:  {}", status.healthy);
-            outln!("  Address:  {address}");
-        }
-        Err(reason) if reason.peer_is_newer() => {
-            outln!("Daemon running (newer than this client)");
-            outln!("  Reason: {reason}");
-        }
-        Err(reason) => {
-            outln!("Daemon running (needs restart)");
-            outln!("  Reason: {reason}");
+/// What `atuin daemon status` says about the daemon.
+enum DaemonStatus {
+    NotRunning,
+    /// This client's build, answering.
+    Running {
+        pid: u32,
+        version: String,
+        healthy: bool,
+        address: DaemonAddress,
+    },
+    /// A build newer than this client, which leaves it running.
+    Newer(VersionMatchError),
+    /// Another build, which a restart replaces with this client's.
+    NeedsRestart(VersionMatchError),
+}
+
+impl DaemonStatus {
+    async fn query(settings: &Settings) -> Result<Self> {
+        let Some(service) = ActiveService::find(settings).await? else {
+            return Ok(Self::NotRunning);
+        };
+
+        match service.ensure_our_build() {
+            Ok(()) => {
+                let address = service.address().clone();
+                let status = service.into_client().status().await?;
+                Ok(Self::Running {
+                    pid: status.pid,
+                    version: status.version,
+                    healthy: status.healthy,
+                    address,
+                })
+            }
+            Err(reason) if reason.peer_is_newer() => Ok(Self::Newer(reason)),
+            Err(reason) => Ok(Self::NeedsRestart(reason)),
         }
     }
+}
 
-    Ok(())
+impl fmt::Display for DaemonStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotRunning => f.write_str("Daemon is not running"),
+            Self::Running {
+                pid,
+                version,
+                healthy,
+                address,
+            } => {
+                writeln!(f, "Daemon running")?;
+                writeln!(f, "  PID:      {pid}")?;
+                writeln!(f, "  Version:  {version}")?;
+                writeln!(f, "  Build:    {BUILD_STR}")?;
+                writeln!(f, "  Healthy:  {healthy}")?;
+                write!(f, "  Address:  {address}")
+            }
+            Self::Newer(reason) => {
+                write!(f, "Daemon running (newer than this client)\n  Reason: {reason}")
+            }
+            Self::NeedsRestart(reason) => {
+                write!(f, "Daemon running (needs restart)\n  Reason: {reason}")
+            }
+        }
+    }
 }
 
 pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
