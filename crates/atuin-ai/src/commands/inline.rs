@@ -1,3 +1,4 @@
+use std::io::{self, Write as _};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -197,7 +198,6 @@ fn snapshots_dir(settings: &Settings) -> PathBuf {
     path
 }
 
-#[expect(clippy::disallowed_macros, reason = "the inline TUI starts on a fresh line")]
 async fn run_inline_tui(
     ctx: AppContext,
     initial_prompt: Option<String>,
@@ -357,7 +357,7 @@ async fn run_inline_tui(
         user_context_cache: Default::default(),
     };
 
-    println!();
+    writeln!(io::stdout())?;
 
     let app = AiApp::new(
         fsm,
@@ -393,21 +393,18 @@ enum SetupChoice {
     Cancel,
 }
 
-#[expect(clippy::disallowed_macros, reason = "the user picks an option below this header")]
 fn prompt_ai_setup() -> Result<SetupChoice> {
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use crossterm::{cursor, terminal};
 
     let options = ["Enable Atuin AI", "Disable ? Keybind", "Cancel"];
     let mut selected: usize = 0;
-    let mut stdout = std::io::stdout();
+    let mut stdout = io::stdout();
 
     // Print header before raw mode so newlines render correctly.
     // Use stdout because the shell hook swaps stdout/stderr — stdout goes
     // to the terminal in both hook and non-hook modes.
-    println!();
-    println!("  Atuin AI is not yet configured.");
-    println!();
+    write!(stdout, "\n  Atuin AI is not yet configured.\n\n")?;
 
     terminal::enable_raw_mode().context("failed to enable raw mode")?;
     struct Guard;
