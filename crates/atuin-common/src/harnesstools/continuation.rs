@@ -141,6 +141,7 @@ fn label(harness: AnyHarness) -> &'static str {
     match harness {
         AnyHarness::ClaudeCode(_) => "Claude Code",
         AnyHarness::Codex(_) => "Codex",
+        AnyHarness::Grok(_) => "Grok Build",
         AnyHarness::Opencode(_) => "opencode",
         AnyHarness::Pi(pi) => match pi.flavour() {
             Flavour::Pi => "Pi",
@@ -459,7 +460,7 @@ impl Rows {
         }
         let calling = Some(StopReason::ToolUse);
         match self.target {
-            AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_) => {
+            AnyHarness::ClaudeCode(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_) => {
                 let content = text.into_iter().chain(calls.into_iter().map(Content::ToolUse));
                 self.push(at, Role::Assistant, content.collect(), calling);
                 if matches!(self.target, AnyHarness::ClaudeCode(_)) {
@@ -790,7 +791,9 @@ impl Ids {
     fn session(&self) -> String {
         match self.target {
             AnyHarness::ClaudeCode(_) => Uuid::new_v4().to_string(),
-            AnyHarness::Codex(_) | AnyHarness::Pi(_) => Uuid::now_v7().to_string(),
+            AnyHarness::Codex(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_) => {
+                Uuid::now_v7().to_string()
+            }
             AnyHarness::Opencode(_) => {
                 opencode::rehydrate::mint_session(self.now, &Uuid::new_v4().to_string())
             }
@@ -805,7 +808,7 @@ impl Ids {
     fn row(&mut self, at: OffsetDateTime) -> String {
         loop {
             let id = match self.target {
-                AnyHarness::ClaudeCode(_) => Uuid::new_v4().to_string(),
+                AnyHarness::ClaudeCode(_) | AnyHarness::Grok(_) => Uuid::new_v4().to_string(),
                 AnyHarness::Codex(_) => format!("syn-{}", Uuid::new_v4().as_simple()),
                 AnyHarness::Opencode(_) => {
                     opencode::rehydrate::mint_part(at, &Uuid::new_v4().to_string())

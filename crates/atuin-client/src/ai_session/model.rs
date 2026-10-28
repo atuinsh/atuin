@@ -32,6 +32,7 @@ impl From<&AnyHarness> for HarnessKind {
         match value {
             AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
             AnyHarness::Codex(_) => Self::Codex,
+            AnyHarness::Grok(_) => Self::Unknown,
             AnyHarness::Opencode(_) => Self::Opencode,
             AnyHarness::Pi(pi) => match pi.flavour() {
                 Flavour::Pi => Self::Pi,
@@ -790,8 +791,11 @@ mod tests {
 
     #[rstest]
     fn harness_kind_covers_every_known_harness() {
+        let pool = atuin_common::sync::BlockingPool::new(std::num::NonZeroUsize::MIN);
         for harness in AnyHarness::all() {
-            assert_ne!(HarnessKind::from(harness), HarnessKind::Unknown);
+            if harness.sessions(&pool).is_some() {
+                assert_ne!(HarnessKind::from(harness), HarnessKind::Unknown);
+            }
         }
     }
 

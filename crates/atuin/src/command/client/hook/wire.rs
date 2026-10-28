@@ -11,6 +11,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 pub enum WireToolName {
     /// The tool the agent requested is a Bash command.
+    #[serde(alias = "run_terminal_command")]
     Bash,
     /// Unrecognized wire tool name.
     #[serde(other)]
@@ -75,7 +76,7 @@ pub enum WireToolResponse {
     /// Other harnesses return more details.
     /// TODO(markovejnovic): Should we split the enum per-harness?
     Object {
-        #[serde(rename = "exitCode", default)]
+        #[serde(rename = "exitCode", alias = "exit_code", default)]
         exit_code: Option<i64>,
     },
 }

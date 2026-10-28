@@ -149,6 +149,7 @@ async fn read(source: AnyHarness) -> RehydrateSession {
             .unwrap();
             session_of(id, rows_of(&lines))
         }
+        AnyHarness::Grok(_) => unreachable!("Grok sessions are not enabled here"),
     }
 }
 
@@ -158,8 +159,9 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     let uuid = |s: &str| Uuid::parse_str(s).is_ok();
     match target {
         AnyHarness::ClaudeCode(_) => assert!(uuid(id), "{id}"),
-        AnyHarness::Codex(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
-        AnyHarness::Pi(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
+        AnyHarness::Codex(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_) => {
+            assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7);
+        }
         AnyHarness::Opencode(_) => {
             let rest = id.strip_prefix("ses_").unwrap();
             assert_eq!(rest.len(), 26, "{id}");
@@ -172,7 +174,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
         let id = m.source_id.as_str();
         assert!(seen.insert(id), "{id} is used twice");
         match target {
-            AnyHarness::ClaudeCode(_) => assert!(uuid(id), "{id}"),
+            AnyHarness::ClaudeCode(_) | AnyHarness::Grok(_) => assert!(uuid(id), "{id}"),
             AnyHarness::Codex(_) => assert!(id.starts_with("syn-"), "{id}"),
             AnyHarness::Opencode(_) => {
                 assert!(id.starts_with("prt_") && id.len() == 30, "{id}");
@@ -286,7 +288,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
             // A message of calls, then one of their results.
             AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
             // A message of calls, then a result each.
-            AnyHarness::Pi(_) => rows[n + 1..=n + called.len()]
+            AnyHarness::Grok(_) | AnyHarness::Pi(_) => rows[n + 1..=n + called.len()]
                 .iter()
                 .flat_map(|r| {
                     assert_eq!(r.role, Role::Tool);
@@ -409,6 +411,7 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
             );
             rows
         }
+        AnyHarness::Grok(_) => unreachable!("Grok sessions are not enabled here"),
     }
 }
 
