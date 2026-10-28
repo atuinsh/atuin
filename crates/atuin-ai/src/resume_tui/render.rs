@@ -1632,12 +1632,8 @@ impl State {
                 actions.push(("↑/↓", "move".to_owned(), 0));
                 actions.push(("c/esc", "collapse".to_owned(), 0));
             } else {
-                if settings.enter_accept {
-                    actions.push(("enter", "resume".to_owned(), 0));
-                    edit(&mut actions);
-                } else {
-                    actions.push(("enter", "edit command".to_owned(), 0));
-                }
+                actions.push(("enter", "resume".to_owned(), 0));
+                edit(&mut actions);
                 actions.push(("ctrl-y", "copy".to_owned(), 3));
                 let forks = self.target().and_then(|r| self.children.get(&r.handle));
                 if forks.is_some_and(|f| !f.is_empty()) {
@@ -1649,9 +1645,7 @@ impl State {
             && let Some(row) = self.selected()
         {
             let agent = harness_label(row.handle.harness);
-            let enter = if !settings.enter_accept {
-                "edit command".to_owned()
-            } else if row.handle.harness.harness().is_none() {
+            let enter = if row.handle.harness.harness().is_none() {
                 // Nothing atuin can resume or continue it in (a Copilot session).
                 "can't resume here".to_owned()
             } else if settings.threads.resume_chooser {
@@ -1667,9 +1661,7 @@ impl State {
                 }
             };
             actions.push(("enter", enter, 0));
-            if settings.enter_accept {
-                edit(&mut actions);
-            }
+            edit(&mut actions);
             actions.push(("ctrl-y", "copy".to_owned(), 3));
             // The only way into Inspect: kept longest.
             actions.push(("ctrl-o", "inspect".to_owned(), 1));

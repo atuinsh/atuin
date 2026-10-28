@@ -2,9 +2,9 @@
 //! ([`atuin_client::tui::key`]).
 //!
 //! The bindings mirror the history search's defaults wherever an action exists in both, so muscle
-//! memory carries over: ctrl-r cycles the filter, ctrl-o toggles Inspect, tab edits, enter follows
-//! `enter_accept`, and vim users get normal/insert modes. Where a chosen session resumes (its own
-//! harness, forked, or continued in another) is asked by the chooser, which has keys of its own
+//! memory carries over: ctrl-r cycles the filter, ctrl-o toggles Inspect, tab edits, and vim users
+//! get normal/insert modes. Enter always resumes, whatever `enter_accept` says. Where a chosen
+//! session resumes (its own harness, forked, or continued in another) is asked by the chooser, which has keys of its own
 //! (see [`super::chooser`]). ctrl-x (vim normal `F`, Inspect `f`) opens it on the fork, and
 //! ctrl-t cycles the agent: neither is bound in the history search by default, and no key here
 //! needs alt.
@@ -139,9 +139,9 @@ pub struct KeymapSet {
 impl KeymapSet {
     pub fn defaults(settings: &Settings) -> Self {
         Self {
-            emacs: emacs(settings),
-            vim_normal: vim_normal(settings),
-            vim_insert: vim_insert(settings),
+            emacs: emacs(),
+            vim_normal: vim_normal(),
+            vim_insert: vim_insert(),
             inspector: inspector(settings),
         }
     }
@@ -160,16 +160,8 @@ fn key(s: &str) -> KeyInput {
     KeyInput::parse(s).unwrap_or_else(|e| panic!("invalid default key {s:?}: {e}"))
 }
 
-fn enter_action(settings: &Settings) -> Action {
-    if settings.enter_accept {
-        Action::Resume
-    } else {
-        Action::ReturnCommand
-    }
-}
-
 /// Bindings every tab shares.
-fn add_common(km: &mut Keymap, settings: &Settings) {
+fn add_common(km: &mut Keymap) {
     km.bind(key("ctrl-c"), Action::ReturnOriginal);
     km.bind(key("ctrl-g"), Action::ReturnOriginal);
     km.bind(key("ctrl-o"), Action::ToggleTab);
@@ -178,8 +170,8 @@ fn add_common(km: &mut Keymap, settings: &Settings) {
     km.bind(key("ctrl-r"), Action::CycleFilterMode);
     km.bind(key("ctrl-t"), Action::CycleAgent);
     km.bind(key("ctrl-l"), Action::Redraw);
-    km.bind(key("enter"), enter_action(settings));
-    km.bind(key("ctrl-m"), enter_action(settings));
+    km.bind(key("enter"), Action::Resume);
+    km.bind(key("ctrl-m"), Action::Resume);
     km.bind(key("ctrl-x"), Action::Fork);
     km.bind(key("up"), Action::SelectPrevious);
     km.bind(key("down"), Action::SelectNext);
@@ -198,9 +190,9 @@ fn add_common(km: &mut Keymap, settings: &Settings) {
     km.bind(key("alt-pagedown"), Action::PreviewPageDown);
 }
 
-pub fn emacs(settings: &Settings) -> Keymap {
+pub fn emacs() -> Keymap {
     let mut km = Keymap::default();
-    add_common(&mut km, settings);
+    add_common(&mut km);
 
     km.bind(key("esc"), Action::Exit);
     km.bind(key("ctrl-["), Action::Exit);
@@ -238,9 +230,9 @@ pub fn emacs(settings: &Settings) -> Keymap {
     km
 }
 
-pub fn vim_normal(settings: &Settings) -> Keymap {
+pub fn vim_normal() -> Keymap {
     let mut km = Keymap::default();
-    add_common(&mut km, settings);
+    add_common(&mut km);
 
     km.bind(key("esc"), Action::Exit);
     km.bind(key("ctrl-["), Action::Exit);
@@ -278,8 +270,8 @@ pub fn vim_normal(settings: &Settings) -> Keymap {
     km
 }
 
-pub fn vim_insert(settings: &Settings) -> Keymap {
-    let mut km = emacs(settings);
+pub fn vim_insert() -> Keymap {
+    let mut km = emacs();
     km.bind(key("esc"), Action::VimEnterNormal);
     km.bind(key("ctrl-["), Action::VimEnterNormal);
     km
@@ -290,7 +282,7 @@ pub fn vim_insert(settings: &Settings) -> Keymap {
 /// list instead of between sessions, and esc or `c` collapses it.
 pub fn inspector(settings: &Settings) -> Keymap {
     let mut km = Keymap::default();
-    add_common(&mut km, settings);
+    add_common(&mut km);
     km.bind(key("esc"), Action::Exit);
     km.bind(key("ctrl-["), Action::Exit);
     km.bind(key("q"), Action::Exit);
@@ -316,8 +308,7 @@ mod tests {
 
     #[rstest]
     fn shared_bindings_match_the_history_search() {
-        let settings = Settings::utc();
-        for km in [emacs(&settings), vim_normal(&settings), vim_insert(&settings)] {
+        for km in [emacs(), vim_normal(), vim_insert()] {
             assert_eq!(resolve(&km, "ctrl-r"), Some(Action::CycleFilterMode));
             assert_eq!(resolve(&km, "ctrl-y"), Some(Action::Copy));
             assert_eq!(resolve(&km, "ctrl-o"), Some(Action::ToggleTab));
@@ -353,9 +344,7 @@ mod tests {
     #[rstest]
     fn preview_keys_are_shared_and_free() {
         let settings = Settings::utc();
-        for km in
-            [emacs(&settings), vim_normal(&settings), vim_insert(&settings), inspector(&settings)]
-        {
+        for km in [emacs(), vim_normal(), vim_insert(), inspector(&settings)] {
             for (k, action) in [
                 ("shift-up", Action::PreviewUp),
                 ("alt-up", Action::PreviewUp),
@@ -378,47 +367,45 @@ mod tests {
     #[rstest]
     fn fork_keys_are_free_and_shared() {
         let settings = Settings::utc();
-        let modes = [emacs(&settings), vim_normal(&settings), vim_insert(&settings)];
+        let modes = [emacs(), vim_normal(), vim_insert()];
         for km in modes.iter().chain([&inspector(&settings)]) {
             assert_eq!(resolve(km, "ctrl-x"), Some(Action::Fork));
             assert_eq!(resolve(km, "alt-enter"), None);
         }
-        assert_eq!(resolve(&vim_normal(&settings), "F"), Some(Action::Fork));
+        assert_eq!(resolve(&vim_normal(), "F"), Some(Action::Fork));
         assert_eq!(resolve(&inspector(&settings), "f"), Some(Action::Fork));
-        assert_eq!(resolve(&emacs(&settings), "f"), None, "typed into the query");
+        assert_eq!(resolve(&emacs(), "f"), None, "typed into the query");
     }
 
     #[rstest]
-    fn enter_follows_enter_accept() {
+    fn enter_resumes_whatever_enter_accept_says() {
         let mut settings = Settings::utc();
-        settings.enter_accept = true;
-        assert_eq!(resolve(&emacs(&settings), "enter"), Some(Action::Resume));
-        settings.enter_accept = false;
-        assert_eq!(resolve(&emacs(&settings), "enter"), Some(Action::ReturnCommand));
-        assert_eq!(resolve(&inspector(&settings), "enter"), Some(Action::ReturnCommand));
+        for enter_accept in [true, false] {
+            settings.enter_accept = enter_accept;
+            assert_eq!(resolve(&emacs(), "enter"), Some(Action::Resume));
+            assert_eq!(resolve(&inspector(&settings), "enter"), Some(Action::Resume));
+        }
     }
 
     #[rstest]
     fn esc_exits_emacs_but_enters_normal_mode_from_insert() {
-        let settings = Settings::utc();
-        assert_eq!(resolve(&emacs(&settings), "esc"), Some(Action::Exit));
-        assert_eq!(resolve(&vim_insert(&settings), "esc"), Some(Action::VimEnterNormal));
-        assert_eq!(resolve(&vim_normal(&settings), "esc"), Some(Action::Exit));
+        assert_eq!(resolve(&emacs(), "esc"), Some(Action::Exit));
+        assert_eq!(resolve(&vim_insert(), "esc"), Some(Action::VimEnterNormal));
+        assert_eq!(resolve(&vim_normal(), "esc"), Some(Action::Exit));
     }
 
     #[rstest]
     fn ctrl_d_returns_original_only_on_empty_input() {
-        let km = emacs(&Settings::utc());
+        let km = emacs();
         assert_eq!(km.resolve(&key("ctrl-d"), true), Some(Action::ReturnOriginal));
         assert_eq!(km.resolve(&key("ctrl-d"), false), Some(Action::DeleteCharAfter));
     }
 
     #[rstest]
     fn vim_normal_has_gg_sequence_and_plain_letters_are_unbound_in_emacs() {
-        let settings = Settings::utc();
-        let normal = vim_normal(&settings);
+        let normal = vim_normal();
         assert_eq!(resolve(&normal, "g g"), Some(Action::ScrollToTop));
         assert!(normal.has_sequence_starting_with(&SingleKey::parse("g").unwrap()));
-        assert_eq!(resolve(&emacs(&settings), "j"), None);
+        assert_eq!(resolve(&emacs(), "j"), None);
     }
 }

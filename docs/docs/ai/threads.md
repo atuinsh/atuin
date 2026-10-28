@@ -341,8 +341,7 @@ picker says which.
 
 In the chooser, ++up++ / ++down++ (or ++k++ / ++j++) move, ++f++ moves to the
 fork, a digit picks that line, and ++esc++ goes back to the list. ++enter++ does what the key that
-opened the chooser did: it resumes (or, without `enter_accept`, puts the
-command on your command line), and after ++tab++ it edits. ++tab++ in the
+opened the chooser did: it resumes, and after ++tab++ it edits. ++tab++ in the
 chooser always edits. ++ctrl+y++ copies the command.
 
 ++ctrl+x++ in the list or Inspect opens the chooser with the fork selected
@@ -383,7 +382,8 @@ session.
 ## Settings
 
 The picker follows the history search's `style`, `invert`, `show_preview`,
-`max_preview_height`, `enter_accept`, `keymap_mode` and theme settings. Its own
+`max_preview_height`, `keymap_mode` and theme settings. ++enter++ always resumes,
+whatever `enter_accept` says. Its own
 go under `[threads]`:
 
 ```toml

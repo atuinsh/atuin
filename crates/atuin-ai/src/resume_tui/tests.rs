@@ -975,7 +975,7 @@ async fn untitled_shows_everywhere() {
 
 /// Enter on a session asks where to resume it: its own harness first and selected, then the
 /// other harnesses installed here, under a rule, to continue it in. Enter picks the
-/// selected line the way the key that opened it asked (resume, with `enter_accept`), tab edits,
+/// selected line the way the key that opened it asked (resume), tab edits,
 /// a digit picks its line, and nothing reaches the query while it's open.
 #[rstest]
 #[tokio::test]
@@ -1035,7 +1035,7 @@ async fn the_chooser_offers_the_original_first_then_the_others() {
     assert!(state.chooser.is_none(), "esc goes back to the list");
 }
 
-/// Opened with tab (or enter without `enter_accept`), the chooser edits whichever line is picked,
+/// Opened with tab, the chooser edits whichever line is picked,
 /// and says so.
 #[rstest]
 #[tokio::test]

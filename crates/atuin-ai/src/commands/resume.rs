@@ -1,8 +1,7 @@
 //! `atuin threads resume [QUERY]`: pick a captured AI coding-agent session and resume it.
 //!
 //! - A QUERY that is a session id (or a unique prefix of one) resumes it directly, no picker.
-//!   From the shell widget, `enter_accept` decides whether it runs or lands on the command line;
-//!   a session that can't be resumed opens the picker on it, so the reason shows. An id that
+//!   A session that can't be resumed opens the picker on it, so the reason shows. An id that
 //!   names several sessions (a prefix of several, or one id several agents have) opens the
 //!   picker on them, to pick one; without a terminal to run it on, it fails, listing them.
 //! - A session whose transcript isn't on this machine (recorded on another host, or deleted) is
@@ -453,7 +452,7 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
         if output != Output::Widget {
             eprintln!("atuin: {}", status.escape_non_printable());
         }
-        return finish(direct_outcome(plan, output, settings.enter_accept), output);
+        return finish(Outcome::Resume(plan), output);
     }
 
     let mut preselect = None;
@@ -494,7 +493,7 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
                 {
                     eprintln!("atuin: {}", status.escape_non_printable());
                 }
-                return finish(direct_outcome(plan, output, settings.enter_accept), output);
+                return finish(Outcome::Resume(plan), output);
             }
             Err(why) => preselect = Some(picker_on(row, why, flag, picker_has_a_terminal())?),
         }
@@ -735,17 +734,6 @@ async fn fork_plan(
         status.push_str(&format!("; {note}"));
     }
     Ok((forked.plan, status))
-}
-
-/// What a session named by id does without the picker. Standalone, `atuin threads resume <id>` resumes
-/// it. The widget passes whatever is on the command line, so there it follows `enter_accept` like
-/// the picker's enter: without it, the command lands on the command line to be checked first.
-fn direct_outcome(plan: ResumePlan, output: Output, enter_accept: bool) -> Outcome {
-    if output == Output::Widget && !enter_accept {
-        Outcome::Edit(plan)
-    } else {
-        Outcome::Resume(plan)
-    }
 }
 
 fn finish(outcome: Outcome, output: Output) -> Result<()> {
@@ -1128,27 +1116,6 @@ mod tests {
                 assert!(err.contains("abc^"), "{err}");
             }
         }
-    }
-
-    #[rstest]
-    #[case(Output::Widget, false, false)]
-    #[case(Output::Widget, true, true)]
-    #[case(Output::Exec, false, true)]
-    #[case(Output::Print, false, true)]
-    fn a_direct_match_from_the_widget_follows_enter_accept(
-        #[case] output: Output,
-        #[case] enter_accept: bool,
-        #[case] runs: bool,
-    ) {
-        let plan = ResumePlan {
-            program: "claude".to_owned(),
-            args: vec!["--resume".to_owned(), "abc".to_owned()],
-            cwd: None,
-            cwd_requirement: atuin_common::harnesstools::resume::CwdRequirement::Preferred,
-            native_path: None,
-        };
-        let outcome = direct_outcome(plan, output, enter_accept);
-        assert_eq!(matches!(outcome, Outcome::Resume(_)), runs, "{outcome:?}");
     }
 
     /// `atuin threads resume <id> --in <harness>` continues the session the id names, and plans

@@ -23,8 +23,7 @@
 //! heads, newest first, forks from that head; the newest fork is preselected when an agent here
 //! has the session open (and no switch line is offered then).
 //!
-//! The chooser keeps the key's meaning: opened with enter it resumes (or edits, without
-//! `enter_accept`), opened with tab it edits, and tab in it always edits.
+//! The chooser keeps the key's meaning: opened with enter it resumes, opened with tab it edits, and tab in it always edits.
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_client::theme::{Meaning, Theme};

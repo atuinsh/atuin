@@ -158,9 +158,9 @@ fn current_branch(root: &Path) -> Option<String> {
 /// How the picker ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Resume the session now (enter, with `enter_accept`).
+    /// Resume the session now (enter).
     Resume(ResumePlan),
-    /// Put the command on the command line (tab, or enter without `enter_accept`).
+    /// Put the command on the command line (tab).
     Edit(ResumePlan),
     /// Esc, ctrl-c or ctrl-g: leave the command line as it was.
     Cancelled,
@@ -936,12 +936,7 @@ impl Picker<'_> {
                             None
                         }
                         InputAction::Fork => {
-                            let enter = if settings.enter_accept {
-                                Pending::Resume
-                            } else {
-                                Pending::Edit
-                            };
-                            ask_fork(&mut state, enter, resumer, &requests);
+                            ask_fork(&mut state, Pending::Resume, resumer, &requests);
                             None
                         }
                         InputAction::Pick(picked) => {
