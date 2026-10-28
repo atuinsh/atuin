@@ -675,6 +675,19 @@ impl AiSessionDatabase {
         }))
     }
 
+    /// The sessions of `harness` with a checkpoint stored.
+    pub async fn checkpointed_sessions(
+        &self,
+        harness: HarnessKind,
+    ) -> Result<Vec<NativeSessionId>, DbError> {
+        let ids: Vec<String> =
+            db::query_scalar("SELECT session_id FROM checkpoints WHERE harness = ?")
+                .bind(harness as i64)
+                .fetch_all(self.db.pool())
+                .await?;
+        Ok(ids.into_iter().map(NativeSessionId::from).collect())
+    }
+
     pub async fn set_checkpoint(
         &self,
         session: &HarnessSession,
@@ -1934,6 +1947,7 @@ impl QueryTerms {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::Path;
 
     use atuin_common::db;
@@ -2074,6 +2088,40 @@ mod tests {
         };
         db.set_checkpoint(&session, latest).await.unwrap();
         assert_eq!(db.checkpoint(&session).await.unwrap(), Some(latest));
+    }
+
+    #[rstest]
+    #[case::claude_code(HarnessKind::ClaudeCode, &["a", "b"])]
+    #[case::codex(HarnessKind::Codex, &["c"])]
+    #[case::none(HarnessKind::Pi, &[])]
+    #[tokio::test]
+    async fn checkpointed_sessions_names_only_the_harness_asked_for(
+        #[case] harness: HarnessKind,
+        #[case] expected: &[&str],
+    ) {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        for (harness, session) in [
+            (HarnessKind::ClaudeCode, "a"),
+            (HarnessKind::ClaudeCode, "b"),
+            (HarnessKind::Codex, "c"),
+        ] {
+            let handle = HarnessSession {
+                harness,
+                session: NativeSessionId::from(session.to_owned()),
+            };
+            db.set_checkpoint(&handle, Checkpoint {
+                at: 1,
+                digest: 0,
+                generation: 0,
+            })
+            .await
+            .unwrap();
+        }
+        let expected: HashSet<NativeSessionId> =
+            expected.iter().map(|id| NativeSessionId::from((*id).to_owned())).collect();
+        let stored: HashSet<NativeSessionId> =
+            db.checkpointed_sessions(harness).await.unwrap().into_iter().collect();
+        assert_eq!(stored, expected);
     }
 
     #[rstest]

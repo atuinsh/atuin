@@ -333,6 +333,7 @@ type Events = BoxStream<'static, Result<SessionEvent<OpencodeMessage>, CaptureEr
 type Stored = Arc<Mutex<HashMap<SessionId, Checkpoint>>>;
 
 fn events(path: &Path, replay: ReplayBehavior, stored: &Stored) -> Events {
+    let checkpointed = stored.lock().keys().cloned().collect();
     let stored = Arc::clone(stored);
     OpencodeSessions::builder()
         .db(path)
@@ -340,7 +341,7 @@ fn events(path: &Path, replay: ReplayBehavior, stored: &Stored) -> Events {
         .build()
         .listener()
         .unwrap()
-        .events(std::time::SystemTime::UNIX_EPOCH, move |id| {
+        .events(std::time::SystemTime::UNIX_EPOCH, checkpointed, move |id| {
             let from = stored.lock().get(id).copied();
             async move { from }
         })
@@ -886,7 +887,7 @@ async fn an_untouched_session_is_left_alone_until_it_is_updated(#[future] db: Db
         .build()
         .listener()
         .unwrap()
-        .events(since, |_| async { None })
+        .events(since, HashSet::new(), |_| async { None })
         .boxed();
     quiet(&mut stream).await;
 

@@ -117,6 +117,17 @@ async fn listen(
     since: SystemTime,
 ) -> Result<(), RuntimeError> {
     let listener = sessions.listener()?;
+    let checkpointed = match sink.sidecar.checkpointed_sessions(kind).await {
+        Ok(ids) => ids.into_iter().map(|id| SessionId::from(String::from(id))).collect(),
+        Err(e) => {
+            tracing::warn!(
+                ?e,
+                ?kind,
+                "failed to read ai-session checkpoints; resuming each session once it changes"
+            );
+            HashSet::new()
+        }
+    };
     // Sessions `events()` has just (re)opened, with the checkpoint each was handed: set before
     // the new read yields anything, so its first event finds it here.
     let opened: Opened = Arc::default();
@@ -131,7 +142,8 @@ async fn listen(
             }
         }
     };
-    capture(kind, &sink, listener.events(since, checkpoint), &opened, UNTIMED_GRACE).await;
+    let events = listener.events(since, checkpointed, checkpoint);
+    capture(kind, &sink, events, &opened, UNTIMED_GRACE).await;
     Ok(())
 }
 
@@ -174,7 +186,7 @@ async fn capture(
     // one that changes under the same stream started over from the beginning of a transcript
     // replaced or cut short under it, which the line reader says, as positions can't (the new
     // content's first line may end past where the old content was read to).
-    // ponytail: kept for every session seen, as `events()` keeps its handles.
+    // ponytail: kept for every session ever read.
     let mut reads: HashMap<SessionId, u32> = HashMap::new();
 
     loop {
@@ -1041,13 +1053,14 @@ mod tests {
                 }
             }
         };
-        let events = listener.events(SystemTime::UNIX_EPOCH, checkpoint).map(|ev| {
-            ev.map(|ev| SessionEvent {
-                session: ev.session,
-                checkpoint: ev.checkpoint,
-                message: AnyMessage::Ccode(ev.message),
-            })
-        });
+        let events =
+            listener.events(SystemTime::UNIX_EPOCH, HashSet::new(), checkpoint).map(|ev| {
+                ev.map(|ev| SessionEvent {
+                    session: ev.session,
+                    checkpoint: ev.checkpoint,
+                    message: AnyMessage::Ccode(ev.message),
+                })
+            });
         let run = capture(HarnessKind::ClaudeCode, &sink, events, &opened, UNTIMED_GRACE);
         let check = async {
             let settle = |want: usize| {

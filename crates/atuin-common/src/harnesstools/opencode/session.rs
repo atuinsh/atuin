@@ -2968,7 +2968,7 @@ mod tests {
             .build()
             .listener()
             .unwrap()
-            .events(SystemTime::UNIX_EPOCH, |_| async { None })
+            .events(SystemTime::UNIX_EPOCH, HashSet::new(), |_| async { None })
             .boxed()
     }
 
