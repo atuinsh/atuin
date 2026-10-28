@@ -1,6 +1,6 @@
 # Integrations
 
-This page covers integrations with shell plugins and tools. For information about how Atuin's shell hooks work and troubleshooting embedded terminals (IDEs, AI coding assistants, etc.), see [Shell Integration and Interoperability](guide/shell-integration.md).
+This page covers integrations with shell plugins and tools. For information about how Atuin's shell hooks work and troubleshooting embedded terminals (IDEs, SI coding assistants, etc.), see [Shell Integration and Interoperability](guide/shell-integration.md).
 
 ## zsh-autosuggestions
 
@@ -36,6 +36,6 @@ ble/util/import/eval-after-load core-complete '
 
 ## Embedded Terminals and IDEs
 
-Atuin may not work out of the box in embedded terminals found in IDEs (JetBrains' RustRover or PyCharm, VS Code, etc.) or AI coding assistants (Claude Code, etc.). This is because these tools often start non-interactive shells that don't source your shell configuration.
+Atuin may not work out of the box in embedded terminals found in IDEs (JetBrains' RustRover or PyCharm, VS Code, etc.) or SI coding assistants (Claude Code, etc.). This is because these tools often start non-interactive shells that don't source your shell configuration.
 
 For solutions and workarounds, see [Shell Integration and Interoperability](guide/shell-integration.md).

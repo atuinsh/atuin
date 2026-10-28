@@ -144,7 +144,7 @@ async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteSt
 }
 
 /// [`crate::sync::build`], then have a running daemon rebuild its search index and project the new
-/// AI sessions, even if building the other stores failed: it owns those indexes, and otherwise sees
+/// SI sessions, even if building the other stores failed: it owns those indexes, and otherwise sees
 /// only what it syncs itself, or finds as it starts.
 pub(super) async fn build(
     settings: &Settings,
@@ -159,7 +159,7 @@ pub(super) async fn build(
         if let Err(e) = daemon::rebuild_search_index(settings).await {
             eprintln!("Warning: failed to rebuild the daemon's search index: {e}");
         }
-        if let Err(e) = daemon::project_synced_ai_sessions(settings).await {
+        if let Err(e) = daemon::project_synced_si_sessions(settings).await {
             eprintln!("Warning: failed to build threads: {e}");
         }
     }

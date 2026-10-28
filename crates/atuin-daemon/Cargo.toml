@@ -17,7 +17,7 @@ octavo = ["dep:atuin-octavo", "atuin-client/octavo"]
 [dependencies]
 async-stream = { workspace = true }
 atuin-client = { workspace = true, features = ["proto"] }
-atuin-common = { workspace = true, features = ["ai", "os", "proto", "sqlite"] }
+atuin-common = { workspace = true, features = ["si", "os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-history = { workspace = true }
 atuin-kv = { workspace = true }

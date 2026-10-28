@@ -23,11 +23,11 @@ pub struct Cmd {
     #[clap(long, help = fl!("arg-init-disable-up-arrow"))]
     disable_up_arrow: bool,
 
-    #[clap(long, help = fl!("arg-init-disable-ai"))]
-    disable_ai: bool,
+    #[clap(long, alias = "disable-ai", help = fl!("arg-init-disable-si"))]
+    disable_si: bool,
 
-    #[clap(long, help = fl!("arg-init-bind-ai-resume"))]
-    bind_ai_resume: bool,
+    #[clap(long, alias = "bind-ai-resume", help = fl!("arg-init-bind-si-resume"))]
+    bind_si_resume: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
@@ -52,12 +52,12 @@ pub enum Shell {
 struct StaticInitOptions<'a> {
     pub enable_up_arrow: bool,
     pub enable_ctrl_r: bool,
-    #[cfg_attr(not(feature = "ai"), allow(dead_code))]
-    pub enable_ai: bool,
+    #[cfg_attr(not(feature = "si"), allow(dead_code))]
+    pub enable_si: bool,
     /// Bind ctrl-] to `atuin threads resume`. Off unless asked for: it replaces the shell's own
     /// binding (character search). The widgets are defined either way.
-    #[cfg_attr(not(feature = "ai"), allow(dead_code))]
-    pub enable_ai_resume: bool,
+    #[cfg_attr(not(feature = "si"), allow(dead_code))]
+    pub enable_si_resume: bool,
     pub tmux: &'a Tmux,
 }
 
@@ -91,8 +91,8 @@ impl Cmd {
         StaticInitOptions {
             enable_up_arrow: !self.disable_up_arrow,
             enable_ctrl_r: !self.disable_ctrl_r,
-            enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
-            enable_ai_resume: self.bind_ai_resume && settings.ai.enabled.unwrap_or(true),
+            enable_si: !self.disable_si && settings.si.enabled.unwrap_or(true),
+            enable_si_resume: self.bind_si_resume && settings.si.enabled.unwrap_or(true),
             tmux: &settings.tmux,
         }
     }
@@ -161,13 +161,13 @@ mod tests {
 
     use super::Cmd;
 
-    /// ctrl-] stays the shell's own unless `--bind-ai-resume` asks for the resume picker.
+    /// ctrl-] stays the shell's own unless `--bind-si-resume` asks for the resume picker.
     #[rstest]
     #[case::default(&[], false)]
-    #[case::asked(&["--bind-ai-resume"], true)]
-    fn ai_resume_is_bound_only_when_asked(#[case] args: &[&str], #[case] bound: bool) {
+    #[case::asked(&["--bind-si-resume"], true)]
+    fn si_resume_is_bound_only_when_asked(#[case] args: &[&str], #[case] bound: bool) {
         let settings = Settings::utc();
         let cmd = Cmd::try_parse_from([&["init", "zsh"], args].concat()).unwrap();
-        assert_eq!(cmd.to_options(&settings).enable_ai_resume, bound);
+        assert_eq!(cmd.to_options(&settings).enable_si_resume, bound);
     }
 }

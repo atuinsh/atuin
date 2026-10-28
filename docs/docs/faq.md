@@ -35,14 +35,14 @@ eval "$(atuin init zsh --disable-up-arrow)"
 
 See [key binding](configuration/key-binding.md) for more
 
-## How do I remove the default question mark binding for Atuin AI?
+## How do I remove the default question mark binding for Atuin SI?
 
 Open your shell config file, find the line containing `atuin init`.
 
-Add `--disable-ai`, e.g.:
+Add `--disable-si`, e.g.:
 
 ```shell
-eval "$(atuin init zsh --disable-ai)"
+eval "$(atuin init zsh --disable-si)"
 ```
 
 ## How do I edit a command instead of running it immediately?
@@ -88,7 +88,7 @@ the default features:
 cargo build --release --no-default-features --features client,daemon,clipboard
 ```
 
-This compiles out the update checker, the sync commands, and AI.
+This compiles out the update checker, the sync commands, and SI.
 
 ## I didn't set up sync, and now I have to reinstall my system!
 

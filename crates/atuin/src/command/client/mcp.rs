@@ -28,7 +28,7 @@ pub struct Cmd {
 impl Cmd {
     pub async fn run(self, db: &Sqlite, settings: Settings) -> Result<()> {
         match self.action {
-            None => Box::pin(atuin_ai::mcp::run(db, Arc::new(settings))).await,
+            None => Box::pin(atuin_si::mcp::run(db, Arc::new(settings))).await,
             Some(Action::Install { agent: Some(agent) }) => {
                 install(AnyHarness::from_name(&agent)?).await?;
                 print_capture_tip();

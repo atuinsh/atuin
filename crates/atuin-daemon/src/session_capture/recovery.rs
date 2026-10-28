@@ -1,4 +1,4 @@
-//! Recovery of the AI-session sidecar: startup recovery and rebuilds, coordinated by one actor.
+//! Recovery of the SI-session sidecar: startup recovery and rebuilds, coordinated by one actor.
 //!
 //! The sidecar is a projection of the record store, and capture's dedup index: capture pushes a
 //! line to the record store only if the sidecar does not hold it yet, so a sidecar missing
@@ -9,13 +9,13 @@
 //! state itself (it is the only writer of its watch channel), how many wipes there have been
 //! (`gen`), the replay running and whether startup recovery succeeded. It takes one message at a
 //! time: rebuild requests, the sync worker finding a series it must not forget beside capture
-//! (see [`AiSessionStore::reproject_beside_capture`]), and replays reporting they are done (a
+//! (see [`SiSessionStore::reproject_beside_capture`]), and replays reporting they are done (a
 //! supervisor task turns a replay that panicked or was aborted into a report too). It wipes
 //! inline, holding capture's lock, so nothing interleaves with a wipe but what the locks allow.
 //! A wipe is a rebuild's (everything) or the sync worker's (the one host's sessions): both hold
 //! capture off first, and are replayed after.
 //!
-//! [`AiSessionStore::reproject_beside_capture`]: atuin_client::ai_session::AiSessionStore::reproject_beside_capture
+//! [`SiSessionStore::reproject_beside_capture`]: atuin_client::si_session::SiSessionStore::reproject_beside_capture
 //!
 //! Its decisions are a pure transition function, [`CoordState::step`], from an [`Event`] to the
 //! [`Effect`]s the coordinator then carries out; a wipe's outcome is fed back as an event, and so
@@ -30,7 +30,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::ai_session::{BuildError, DbError, ReprojectProgress};
+use atuin_client::si_session::{BuildError, DbError, ReprojectProgress};
 use atuin_domain::record::HostId;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
@@ -93,10 +93,10 @@ impl Backoff {
 /// What a wipe empties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Scope {
-    /// Everything ([`atuin_client::ai_session::AiSessionDatabase::reset`]): a rebuild.
+    /// Everything ([`atuin_client::si_session::SiSessionDatabase::reset`]): a rebuild.
     All,
     /// The sessions of the host whose series changed
-    /// ([`atuin_client::ai_session::AiSessionDatabase::forget_host`]).
+    /// ([`atuin_client::si_session::SiSessionDatabase::forget_host`]).
     Host,
 }
 
@@ -427,7 +427,7 @@ impl Coordinator {
                     let wiped = self.wipe(scope, host).await;
                     let ok = wiped.is_ok();
                     if let Err(err) = wiped {
-                        tracing::error!(?err, ?scope, "failed to empty the ai-session sidecar");
+                        tracing::error!(?err, ?scope, "failed to empty the si-session sidecar");
                         wipe_error = Some(err);
                     }
                     effects.extend(self.core.step(Event::WipeDone { ok }));
@@ -454,12 +454,12 @@ impl Coordinator {
         if state == StoreState::Unavailable {
             if self.core.recovered {
                 tracing::error!(
-                    "the ai-session sidecar could not be replayed; capture and import paused \
+                    "the si-session sidecar could not be replayed; capture and import paused \
                      until a rebuild succeeds or restart"
                 );
             } else {
                 tracing::error!(
-                    "the ai-session sidecar could not be recovered; capture and import disabled \
+                    "the si-session sidecar could not be recovered; capture and import disabled \
                      until restart"
                 );
             }
@@ -479,7 +479,7 @@ impl Coordinator {
                 (Scope::Host, Some(host)) => {
                     tracing::warn!(
                         %host,
-                        "ai-session records rewritten under capture: holding capture off to \
+                        "si-session records rewritten under capture: holding capture off to \
                          replay them"
                     );
                     self.sink.sidecar.forget_host(host).await.map(|_| ())
@@ -509,7 +509,7 @@ impl Coordinator {
             let result = match task.await {
                 Ok(result) => result,
                 Err(err) => {
-                    tracing::error!(?err, "the ai-session sidecar replay stopped unexpectedly");
+                    tracing::error!(?err, "the si-session sidecar replay stopped unexpectedly");
                     ReplayResult::Panicked
                 }
             };
@@ -528,7 +528,7 @@ impl Coordinator {
         tracing::info!(
             ?delay,
             retry,
-            "the ai-session sidecar replay kept being invalidated; replaying again after a backoff"
+            "the si-session sidecar replay kept being invalidated; replaying again after a backoff"
         );
         let timer = tokio::spawn(async move {
             tokio::time::sleep(delay).await;
@@ -558,16 +558,16 @@ async fn run_replay(sink: Arc<Sink>, progress: ReprojectProgress) -> ReplayResul
                 replayed = stats.replayed,
                 restarted = stats.restarted,
                 elapsed = ?started.elapsed(),
-                "ai-session sidecar replayed"
+                "si-session sidecar replayed"
             );
             ReplayResult::Ok
         }
         Err(BuildError::Incomplete) => {
-            tracing::warn!("the ai-session sidecar replay kept being invalidated");
+            tracing::warn!("the si-session sidecar replay kept being invalidated");
             ReplayResult::Incomplete
         }
         Err(err) => {
-            tracing::error!(?err, "failed to reproject the ai-session sidecar");
+            tracing::error!(?err, "failed to reproject the si-session sidecar");
             ReplayResult::Failed
         }
     }

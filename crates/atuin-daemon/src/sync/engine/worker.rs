@@ -5,10 +5,10 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sync::{ClientSource, SyncError as ClientSyncError, SyncSession};
 use atuin_client::settings::Settings;
+use atuin_client::si_session::{SiSessionDatabase, SiSessionStore};
 use atuin_common::futures::Backoff;
 use atuin_domain::record::RecordId;
 use futures::StreamExt;
@@ -38,8 +38,8 @@ pub struct Worker {
     history_store: HistoryStore,
     /// The kv and scripts dbs, rebuilt after a sync that brought records of theirs.
     replayed: ReplayedStores,
-    /// Tells [`spawn_ai_session_projector`] records were downloaded; `None` without a sidecar.
-    ai_session_projector: Option<mpsc::UnboundedSender<()>>,
+    /// Tells [`spawn_si_session_projector`] records were downloaded; `None` without a sidecar.
+    si_session_projector: Option<mpsc::UnboundedSender<()>>,
 }
 
 /// Errors that prevent the sync worker from starting.
@@ -82,25 +82,25 @@ impl From<SyncTickError> for ControlFlow<()> {
     }
 }
 
-/// Project downloaded AI-session records into the sidecar: each signal (a sync downloaded some)
+/// Project downloaded SI-session records into the sidecar: each signal (a sync downloaded some)
 /// reprojects everything past the watermarks, so records a failed or interrupted earlier one left
 /// out are retried too. Signals that queued up meanwhile are taken together.
 ///
 /// Nothing is projected until startup recovery is over, and each reprojection takes
-/// [`AiSessionDatabase::lock_reprojection`], so one runs at a time beside recovery's and
+/// [`SiSessionDatabase::lock_reprojection`], so one runs at a time beside recovery's and
 /// rebuilds' replays: two at once would race each other's watermarks. A rebuild's wipe landing
 /// meanwhile fails its watermark moves (compare-and-set on the sidecar's generation), and it
 /// starts over. This host's own series is included, under capture's lock
-/// ([`AiSessionDatabase::lock_local_projection`]): its own records can arrive from the server
+/// ([`SiSessionDatabase::lock_local_projection`]): its own records can arrive from the server
 /// (a reinstall that kept the host id), and capture dedups against the sidecar.
 ///
 /// This never sets the store's state, and never deletes a row of this host (see
 /// [`Recovery::project_synced`]): a series rewritten under its watermark whose forgetting would
 /// is handed to the recovery coordinator, which holds capture off while it forgets and replays
 /// it. The task ends once the sender is dropped.
-pub fn spawn_ai_session_projector(
-    store: AiSessionStore,
-    db: AiSessionDatabase,
+pub fn spawn_si_session_projector(
+    store: SiSessionStore,
+    db: SiSessionDatabase,
     recovery: Recovery,
 ) -> mpsc::UnboundedSender<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<()>();
@@ -118,8 +118,8 @@ impl Worker {
     pub async fn new(
         handle: DaemonHandle,
         index: Arc<RwLock<SearchIndex>>,
-        ai_session_db: Option<AiSessionDatabase>,
-        ai_session_recovery: Recovery,
+        si_session_db: Option<SiSessionDatabase>,
+        si_session_recovery: Recovery,
     ) -> Result<Self, StartError> {
         let host_id = handle.settings().await.host_id().await.map_err(StartError::HostId)?;
 
@@ -135,21 +135,21 @@ impl Worker {
             host_id,
             encryption_key.clone(),
         );
-        let ai_session_store = AiSessionStore::builder()
+        let si_session_store = SiSessionStore::builder()
             .store(handle.store().clone())
             .host_id(host_id)
             .key(encryption_key.clone())
             .build();
 
-        let ai_session_projector = ai_session_db
-            .map(|db| spawn_ai_session_projector(ai_session_store, db, ai_session_recovery));
+        let si_session_projector = si_session_db
+            .map(|db| spawn_si_session_projector(si_session_store, db, si_session_recovery));
 
         Ok(Self {
             handle,
             index,
             history_store,
             replayed,
-            ai_session_projector,
+            si_session_projector,
         })
     }
 
@@ -239,7 +239,7 @@ impl Worker {
 
         // Queued rather than awaited: the projector may still be waiting out startup recovery, and
         // that must not hold up this sync or the next.
-        if let Some(projector) = &self.ai_session_projector
+        if let Some(projector) = &self.si_session_projector
             && !downloaded_records.is_empty()
         {
             let _ = projector.send(());
@@ -316,29 +316,29 @@ impl Worker {
 mod tests {
     use std::time::Duration;
 
-    use atuin_client::ai_session::{
-        AiSessionDatabase, AiSessionStore, HarnessKind, HarnessSession, Message, NativeSessionId,
+    use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_client::si_session::{
+        HarnessKind, HarnessSession, Message, NativeSessionId, SiSessionDatabase, SiSessionStore,
         SourceId,
     };
-    use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4::Key;
     use atuin_common::harnesstools::session::{Content, Role};
     use atuin_domain::record::{HostId, RecordId};
     use rstest::rstest;
     use time::OffsetDateTime;
 
-    use super::spawn_ai_session_projector;
-    use crate::session_capture::{AiHarnessSessionCapture, StoreState};
+    use super::spawn_si_session_projector;
+    use crate::session_capture::{SiHarnessSessionCapture, StoreState};
 
     #[rstest]
     #[tokio::test]
-    async fn downloaded_ai_sessions_are_projected_after_recovery() {
-        let store = AiSessionStore::builder()
+    async fn downloaded_si_sessions_are_projected_after_recovery() {
+        let store = SiSessionStore::builder()
             .store(SqliteStore::in_memory(Duration::from_secs(5)).await.unwrap())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let db = SiSessionDatabase::in_memory().await.unwrap();
         let msg = Message::builder()
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(HarnessSession {
@@ -353,8 +353,8 @@ mod tests {
         store.push(&msg).await.unwrap();
         let projected = async || db.contains_message(&msg.session, &msg.source_id).await.unwrap();
 
-        let (capture, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
-        let projector = spawn_ai_session_projector(store, db.clone(), capture.recovery());
+        let (capture, state) = SiHarnessSessionCapture::with_state(StoreState::Recovering).await;
+        let projector = spawn_si_session_projector(store, db.clone(), capture.recovery());
         // Accepted at once, so a sync never waits on recovery.
         projector.send(()).unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;

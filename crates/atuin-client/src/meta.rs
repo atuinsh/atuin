@@ -201,7 +201,7 @@ impl MetaStore {
         Ok(logged_in)
     }
 
-    // Hub session methods (separate from sync session, used for Hub-specific features like AI)
+    // Hub session methods (separate from sync session, used for Hub-specific features like SI)
 
     pub async fn hub_session_token(&self) -> Result<Option<SecretString>> {
         Ok(self.get(KEY_HUB_SESSION).await?.map(SecretString::from))

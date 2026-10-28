@@ -40,7 +40,7 @@ If `ATUIN_HISTORY_AUTHOR` isn't set, Atuin defaults to the local shell username.
 Many development tools include embedded terminals:
 
 - **IDEs**: JetBrains' RustRover and PyCharm, IntelliJ, VS Code, Cursor, Zed
-- **AI coding assistants**: Claude Code, GitHub Copilot CLI, Aider
+- **SI coding assistants**: Claude Code, GitHub Copilot CLI, Aider
 - **Container environments**: Docker, Podman, devcontainers
 
 These tools often spawn shells differently than your regular terminal, which can prevent Atuin from working.

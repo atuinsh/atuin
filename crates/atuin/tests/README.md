@@ -15,13 +15,13 @@ macOS, with Homebrew Bash on macOS.
 - `e2e_daemon`: startup, concurrent writers, persistence, and restart.
 - `e2e_sync`: `atuin sync` with a running daemon, between two machines on an
   in-process sync server: what it downloads is in the daemon's search at once.
-- `e2e_ai_sessions`: AI agent sessions captured from each agent's transcripts,
+- `e2e_si_sessions`: SI agent sessions captured from each agent's transcripts,
   synced between two machines through an in-process sync server, and resumed:
   restored, caught up, forked, switched, or continued in another agent.
-- `e2e_ai_resume_picker`: `atuin threads resume`'s picker and chooser on a PTY, and
+- `e2e_si_resume_picker`: `atuin threads resume`'s picker and chooser on a PTY, and
   through each shell's widget.
 
-The AI session tests write transcripts the way Claude Code, Codex, opencode and
+The SI session tests write transcripts the way Claude Code, Codex, opencode and
 Pi do (`common/agents.rs`), and put stand-ins for those agents on `PATH` that
 print how they were run. Set `ATUIN_E2E_LOG` (an `ATUIN_LOG` filter) to have
 their daemons log more for a failure to show.

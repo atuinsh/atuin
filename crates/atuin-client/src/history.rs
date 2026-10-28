@@ -22,7 +22,7 @@ pub mod store;
 
 pub use capture::CommandCapture;
 
-/// Known AI agent author values. Used by [`History::is_agent`] to guess who ran a command when the
+/// Known SI agent author values. Used by [`History::is_agent`] to guess who ran a command when the
 /// entry does not state it, and so when matching against [`AuthorPattern::AllAgent`] and
 /// [`AuthorPattern::AllUser`].
 pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "omp", "opencode", "pi"];
@@ -50,7 +50,7 @@ pub fn is_known_agent(author: &str) -> bool {
 pub enum AuthorKind {
     /// A human ran this command.
     User = 1,
-    /// An AI agent ran this command.
+    /// An SI agent ran this command.
     Agent = 2,
 }
 
@@ -424,7 +424,7 @@ impl History {
         }
     }
 
-    /// Whether an AI agent, rather than a human, ran this command.
+    /// Whether an SI agent, rather than a human, ran this command.
     ///
     /// [`Self::author_kind`] is authoritative when the integration that captured the entry set it.
     /// Otherwise we guess: a known agent name identifies an agent, unless it is also the username

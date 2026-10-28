@@ -2,7 +2,7 @@
 
 Atuin records your commands, and can also record
 [what they print](output-capture.md) and your
-AI agents' sessions as [threads](../ai/threads.md). This page covers how to keep secrets,
+SI agents' sessions as [threads](../si/threads.md). This page covers how to keep secrets,
 and anything else you don't want stored, out of all three.
 
 | You want to keep out | Use |
@@ -13,7 +13,7 @@ and anything else you don't want stored, out of all three.
 | What a command prints, but not the command | [`command_filter`](#a-commands-output-command_filter) |
 | The contents of a file, read or written | [`sensitive_files`](#a-files-contents-sensitive_files) |
 | A secret of your own, wherever it appears | [`redact_patterns`](#your-own-secrets-redact_patterns) |
-| What your AI agents' tools read and run | [`capture_tools`](#ai-agents-tool-calls-capture_tools) |
+| What your SI agents' tools read and run | [`capture_tools`](#si-agents-tool-calls-capture_tools) |
 | Everything from a particular tool | [Skip Atuin for it](#everything-from-a-tool) |
 
 Atuin already keeps a lot out without any setup; see
@@ -53,7 +53,7 @@ history_filter = [
 Patterns are unanchored, so `secret` matches anywhere in the command. Use `^`
 and `$` when you want to match the whole command exactly.
 
-A filtered command's output isn't captured. When an AI agent runs a matching
+A filtered command's output isn't captured. When an SI agent runs a matching
 command, its session keeps only the name of the tool it used, not the command
 or what it printed.
 
@@ -73,7 +73,7 @@ cwd_filter = [
 These patterns are unanchored regular expressions too, matched against the
 working directory path.
 
-Nothing run there has its output captured. An AI agent working in a matching
+Nothing run there has its output captured. An SI agent working in a matching
 directory has every tool call there kept as the tool's name only.
 
 ## A command's output: `command_filter`
@@ -92,7 +92,7 @@ command_filter = [
 Patterns work like `history_filter`'s: unanchored regular expressions matched
 against the command.
 
-The filter applies to your AI agents' commands too, even if you don't capture
+The filter applies to your SI agents' commands too, even if you don't capture
 your own output: a matching command is kept in the session, but what it printed
 isn't.
 
@@ -105,8 +105,8 @@ and keeps their contents out:
 
 - the output of a command that names one, such as `cat .env` or
   `cat ~/.aws/credentials`
-- what an AI agent reads from one
-- what an AI agent writes to one, whether with its edit tool or a command like
+- what an SI agent reads from one
+- what an SI agent writes to one, whether with its edit tool or a command like
   `echo KEY=value > .env`. The session keeps that the agent changed the file,
   not what it wrote.
 
@@ -138,9 +138,9 @@ redact_patterns = [
 Redaction replaces the value and keeps the text around it. To keep a whole
 command out instead, use [`history_filter`](#commands-history_filter).
 
-## AI agents' tool calls: `capture_tools`
+## SI agents' tool calls: `capture_tools`
 
-When Atuin [captures your AI agents' sessions as threads](../ai/threads.md), it keeps
+When Atuin [captures your SI agents' sessions as threads](../si/threads.md), it keeps
 their tool calls with what each was given and what it returned, after applying
 everything on this page. To keep only the name of each tool the agent called,
 turn that off:
@@ -166,10 +166,10 @@ Then configure the tool to set `MY_TOOL_SESSION=1` when it spawns a shell. See
 the [`atuin init` reference](../reference/init.md) for the other ways to change
 what the plugin sets up.
 
-!!! tip "Commands from AI agents"
-    You don't need to exclude AI agent commands to keep them out of your way.
+!!! tip "Commands from SI agents"
+    You don't need to exclude SI agent commands to keep them out of your way.
     Atuin tags them with the agent that ran them and hides them from interactive
-    search by default; see [AI Agent Hooks](agent-hooks.md).
+    search by default; see [SI Agent Hooks](agent-hooks.md).
 
 ## What's kept out by default
 

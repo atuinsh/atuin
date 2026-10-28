@@ -19,7 +19,7 @@ Feature coverage varies by shell:
   <thead>
     <tr>
       <th class="tier">Tier</th><th>Shell</th><th>History search</th><th>Inline popup</th>
-      <th>Atuin AI</th><th>pty-proxy</th>
+      <th>Atuin SI</th><th>pty-proxy</th>
     </tr>
   </thead>
   <tbody>
@@ -93,10 +93,10 @@ modifier keys, function keys (++"Fn1"++–++"Fn24"++), media keys, and the super
 Terminal — are limited to basic key combinations. For details, see [Advanced
 key binding](configuration/advanced-key-binding.md).
 
-## AI agents
+## SI agents
 
-Atuin records commands run by AI coding agents through their hook systems. See
-[AI agent hooks](guide/agent-hooks.md) for setup. The supported agents are
+Atuin records commands run by SI coding agents through their hook systems. See
+[SI agent hooks](guide/agent-hooks.md) for setup. The supported agents are
 _Claude Code_, _Codex_, _Copilot_, _opencode_ and _pi_.
 
 ## Getting help

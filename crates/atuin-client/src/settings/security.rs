@@ -9,13 +9,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Security {
     /// Regular expressions for credentials of your own, redacted wherever Atuin redacts: in
-    /// captured command output and in AI sessions. A pattern's `secret` group is what goes, where
+    /// captured command output and in SI sessions. A pattern's `secret` group is what goes, where
     /// it names one (`api-key: (?<secret>\w+)`), else all it matches.
     #[serde(with = "serde_regex", default, skip_serializing)]
     pub redact_patterns: Vec<Regex>,
 
     /// Files of your own whose contents are credentials, on top of the built-in ones (`.env`,
-    /// `~/.ssh/id_*`, `~/.aws/credentials`, ...): what an AI agent reads out of them or writes to
+    /// `~/.ssh/id_*`, `~/.aws/credentials`, ...): what an SI agent reads out of them or writes to
     /// them is not captured, nor the output of a command naming one. A glob without a `/` is
     /// matched against a file's name (`*.secret`); one with a `/` against its path
     /// (`~/work/creds/**`).

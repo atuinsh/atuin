@@ -188,9 +188,9 @@ function _atuin_search
     commandline -f repaint
 end
 
-# `atuin threads resume`: pick a captured AI coding-agent session. The result uses
+# `atuin threads resume`: pick a captured SI coding-agent session. The result uses
 # the same protocol as the history search: `__atuin_accept__:` runs it.
-function _atuin_ai_resume
+function _atuin_si_resume
     set -l keymap_mode
     switch $fish_key_bindings
         case fish_vi_key_bindings fish_hybrid_key_bindings
@@ -227,6 +227,11 @@ function _atuin_ai_resume
     end
 
     commandline -f repaint
+end
+
+# The old name of `_atuin_si_resume`.
+function _atuin_ai_resume
+    _atuin_si_resume $argv
 end
 
 function _atuin_bind_up

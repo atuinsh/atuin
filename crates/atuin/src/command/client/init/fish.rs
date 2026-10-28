@@ -30,10 +30,10 @@ fn print_bindings(
 }
 
 /// ctrl-] opens `atuin threads resume`, in the default and insert modes.
-fn print_ai_resume_bindings(indent: &str, options: &StaticInitOptions<'_>, key: &str) {
-    if cfg!(feature = "ai") && options.enable_ai_resume {
-        println!("{indent}bind {key} _atuin_ai_resume");
-        println!("{indent}bind -M insert {key} _atuin_ai_resume");
+fn print_si_resume_bindings(indent: &str, options: &StaticInitOptions<'_>, key: &str) {
+    if cfg!(feature = "si") && options.enable_si_resume {
+        println!("{indent}bind {key} _atuin_si_resume");
+        println!("{indent}bind -M insert {key} _atuin_si_resume");
     }
 }
 
@@ -56,7 +56,7 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
             "bind -M insert ctrl-r _atuin_search",
             "bind -M insert up _atuin_bind_up",
         );
-        print_ai_resume_bindings(&indent, options, "ctrl-]");
+        print_si_resume_bindings(&indent, options, "ctrl-]");
 
         println!("else");
 
@@ -79,13 +79,13 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
             ]
             .join("; "),
         );
-        print_ai_resume_bindings(&indent, options, r"\c]");
+        print_si_resume_bindings(&indent, options, r"\c]");
 
         println!("end");
 
-        #[cfg(feature = "ai")]
-        if options.enable_ai {
-            println!("{}", atuin_ai::shell::FISH_INIT);
+        #[cfg(feature = "si")]
+        if options.enable_si {
+            println!("{}", atuin_si::shell::FISH_INIT);
         }
     }
 }

@@ -33,13 +33,13 @@ conflicts with other programs and terminals.
 
 [OSC]: https://en.wikipedia.org/wiki/ANSI_escape_code#Operating_System_Command_sequences
 
-That capture is what lets AI tools see what actually happened, rather than
+That capture is what lets SI tools see what actually happened, rather than
 guessing from the command alone:
 
-- [Atuin AI](../ai/introduction.md) can answer "why did that fail?" by reading
+- [Atuin SI](../si/introduction.md) can answer "why did that fail?" by reading
   the real error, via its `AtuinOutput` tool
 - External agents such as Claude Code and Cursor can do the same through Atuin's
-  [MCP server](../ai/mcp.md)
+  [MCP server](../si/mcp.md)
 
 Output capture needs **both** pty-proxy and the daemon running. Nothing is
 captured by default. See [Capturing Command Output](../guide/output-capture.md)

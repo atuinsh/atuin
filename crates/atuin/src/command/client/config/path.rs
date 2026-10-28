@@ -8,7 +8,7 @@ impl<'a> TomlPath<'a> {
         Self(Vec::new())
     }
 
-    /// Parse a dot-separated path, like `ai.sessions.resume`.
+    /// Parse a dot-separated path, like `si.sessions.resume`.
     ///
     /// This uses the same parsing logic as [`super::set_deep_key`], in that it does not handle
     /// quoted keys like `a."b.c".d`.
@@ -38,7 +38,7 @@ mod tests {
 
     #[rstest]
     #[case::a_key("search_mode", &["search_mode"])]
-    #[case::a_nested_key("ai.sessions.resume", &["ai", "sessions", "resume"])]
+    #[case::a_nested_key("si.sessions.resume", &["si", "sessions", "resume"])]
     fn parse(#[case] dotted: &str, #[case] expected: &[&str]) {
         assert_eq!(TomlPath::parse_dotted_simple(dotted), joined(expected));
     }

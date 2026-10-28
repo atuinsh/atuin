@@ -19,7 +19,7 @@ mod external;
 #[derive(Subcommand, Couture)]
 #[command(infer_subcommands = true)]
 #[couture(categories = {
-    "ai" = { title = fl!("cli-category-ai") },
+    "si" = { title = fl!("cli-category-si") },
     "sync" = {
         title = fl!("cli-category-sync"),
         description = fl!("cli-category-sync-description"),

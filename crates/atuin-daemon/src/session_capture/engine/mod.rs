@@ -4,7 +4,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use atuin_client::ai_session::{
+use atuin_client::si_session::{
     Appended, DbError, HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
 use atuin_common::harnesstools::AnyHarness;
@@ -85,17 +85,17 @@ where
         match AssertUnwindSafe(listen()).catch_unwind().await {
             Ok(Err(RuntimeError::NotFound(_))) => {}
             Ok(Err(e)) => {
-                tracing::warn!(?e, ?kind, ?delay, "ai-session listener failed; retrying");
+                tracing::warn!(?e, ?kind, ?delay, "si-session listener failed; retrying");
             }
             Ok(Ok(())) => {
-                tracing::warn!(?kind, ?delay, "ai-session listener ended; restarting it");
+                tracing::warn!(?kind, ?delay, "si-session listener ended; restarting it");
             }
             Err(panic) => {
                 tracing::error!(
                     panic = panic_message(&*panic),
                     ?kind,
                     ?delay,
-                    "ai-session capture panicked; restarting it"
+                    "si-session capture panicked; restarting it"
                 );
             }
         }
@@ -229,7 +229,7 @@ async fn capture(
                         panic = panic_message(&*panic),
                         ?kind,
                         %session,
-                        "capturing an ai-session line panicked; passing over it"
+                        "capturing an si-session line panicked; passing over it"
                     );
                     // Its bookkeeping may be half set up (not warmed yet, or half captured): set
                     // up again from what the sidecar holds of the session, whichever read of its
@@ -281,7 +281,7 @@ async fn restarted(
     untimed: &mut HashMap<SessionId, (Instant, Checkpoint)>,
     session: &SessionId,
 ) {
-    tracing::debug!(%session, "ai-session transcript replaced or cut short; reading it again");
+    tracing::debug!(%session, "si-session transcript replaced or cut short; reading it again");
     untimed.remove(session);
     let rows = enricher.finish(session);
     hold(sink, held, session, rows).await;
@@ -301,7 +301,7 @@ async fn hold(sink: &Sink, held: &mut Held, session: &SessionId, rows: Vec<Messa
     let mut failed = Vec::new();
     for msg in pending.into_iter().chain(rows) {
         if let Err(e) = append(sink, msg.clone()).await {
-            tracing::warn!(?e, %session, "failed to capture ai-session message; holding it");
+            tracing::warn!(?e, %session, "failed to capture si-session message; holding it");
             failed.push(msg);
         }
     }
@@ -332,7 +332,7 @@ pub(super) async fn store(
     }
     for msg in rows {
         if let Err(e) = append(sink, msg).await {
-            tracing::warn!(?e, "failed to capture ai-session message");
+            tracing::warn!(?e, "failed to capture si-session message");
             stuck.insert(session.clone());
         }
     }
@@ -342,7 +342,7 @@ pub(super) async fn store(
     // ponytail: one checkpoint write per row; batch per session on idle if it shows up in
     // profiles.
     if let Err(e) = sink.sidecar.set_checkpoint(&enricher.handle(session), checkpoint).await {
-        tracing::warn!(?e, "failed to record ai-session checkpoint");
+        tracing::warn!(?e, "failed to record si-session checkpoint");
     }
 }
 
@@ -353,7 +353,7 @@ pub(super) async fn append(sink: &Sink, msg: Message) -> Result<Appended, Append
     loop {
         match sink.append(msg.clone()).await {
             Err(AppendError::Unavailable) => {
-                tracing::debug!("ai-session store unavailable; capture paused until it is ready");
+                tracing::debug!("si-session store unavailable; capture paused until it is ready");
                 if state.wait_for(|state| *state == StoreState::Ready).await.is_err() {
                     return Err(AppendError::Unavailable);
                 }
@@ -440,7 +440,7 @@ pub(super) async fn warm(
     let mut failures = 0;
     loop {
         let Ok(locks) = sink.lock_ready().await else {
-            tracing::debug!(%session, "ai-session store unavailable; warm-up paused until ready");
+            tracing::debug!(%session, "si-session store unavailable; warm-up paused until ready");
             if state.wait_for(|state| *state == StoreState::Ready).await.is_err() {
                 // The store's state can no longer change: nothing will be appended either.
                 return;
@@ -465,7 +465,7 @@ pub(super) async fn warm(
                     ?e,
                     %session,
                     ?delay,
-                    "failed to warm a resumed ai-session up from the sidecar; retrying"
+                    "failed to warm a resumed si-session up from the sidecar; retrying"
                 );
                 tokio::time::sleep(delay).await;
             }
@@ -537,7 +537,7 @@ async fn inject(sink: &Sink, step: WarmStep) -> Result<(), WarmError> {
 /// The checkpoint stored for a session, if any; the session checks it against its source itself.
 async fn checkpoint_of(sink: &Sink, kind: HarnessKind, session: &SessionId) -> Option<Checkpoint> {
     sink.sidecar.checkpoint(&handle_of(kind, session)).await.unwrap_or_else(|e| {
-        tracing::warn!(?e, %session, "failed to read ai-session checkpoint; reading from the start");
+        tracing::warn!(?e, %session, "failed to read si-session checkpoint; reading from the start");
         None
     })
 }
@@ -575,18 +575,18 @@ mod tests {
     }
 
     async fn sink() -> Sink {
-        use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
         use atuin_client::record::sqlite_store::SqliteStore;
+        use atuin_client::si_session::{SiSessionDatabase, SiSessionStore};
         use atuin_common::encryption::paseto_v4::Key;
         use atuin_domain::record::HostId;
 
         let store = SqliteStore::in_memory(super::super::NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(store)
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        Sink::new(records, AiSessionDatabase::in_memory().await.unwrap())
+        Sink::new(records, SiSessionDatabase::in_memory().await.unwrap())
     }
 
     /// After a restart the session still knows every source's title: a generated title, then

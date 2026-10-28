@@ -8,12 +8,12 @@ use tracing::instrument;
 
 #[instrument(level = "trace", skip_all, err)]
 pub async fn run(_settings: &Settings) -> Result<()> {
-    let enable_ai = prompt(
-        "Atuin AI",
-        "This will enable command generation and other AI features via the question mark key",
+    let enable_si = prompt(
+        "Atuin SI",
+        "This will enable command generation and other SI features via the question mark key",
         Some(
-            "By default, Atuin AI only has access to the name and version of your operating \
-             system and shell - your shell history is not sent to the AI.",
+            "By default, Atuin SI only has access to the name and version of your operating \
+             system and shell - your shell history is not sent to the SI.",
         ),
         DefaultAnswer::Yes,
     )?;
@@ -30,12 +30,12 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     let mut doc = config_str.parse::<DocumentMut>()?;
 
     let mut changed = false;
-    if enable_ai {
+    if enable_si {
         changed = true;
-        if !doc.contains_key("ai") {
-            doc["ai"] = toml_edit::table();
+        if !doc.contains_key("si") {
+            doc["si"] = toml_edit::table();
         }
-        doc["ai"]["enabled"] = value(true);
+        doc["si"]["enabled"] = value(true);
     }
 
     if enable_daemon {

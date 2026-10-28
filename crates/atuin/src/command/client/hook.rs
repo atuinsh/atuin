@@ -91,7 +91,7 @@ async fn install(agent_name: &str) -> Result<()> {
         Err(err) => return Err(err.into()),
     }
 
-    if cfg!(feature = "ai") {
+    if cfg!(feature = "si") {
         let name = harness.name();
         eprintln!("To let {name} search your history too, run `atuin mcp install {name}`.");
     }

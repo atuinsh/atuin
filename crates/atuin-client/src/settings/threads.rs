@@ -1,7 +1,7 @@
 //! `[threads]`: capturing coding agents' threads, and the `atuin threads resume` picker.
 //!
 //! Before `[threads]`, these were `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`,
-//! which are still read for any it doesn't set (see `Settings::with_legacy_threads`).
+//! which are still read for any it doesn't set (see `Settings::with_legacy_keys`).
 //!
 //! Only the picker-specific knobs live here. The look and feel (`style`, `invert`, `show_preview`,
 //! `max_preview_height`, `enter_accept`, `keymap_mode`, `theme`) is read from the top-level
@@ -10,12 +10,12 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use crate::ai_session::HarnessKind;
+use crate::si_session::HarnessKind;
 
 /// Which threads the picker shows, cycled with ctrl-r in this order (see [`Self::CYCLE`]).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub enum AiSessionFilterMode {
+pub enum SiSessionFilterMode {
     /// Every thread, from every host.
     Global,
     /// Threads recorded on this host.
@@ -28,7 +28,7 @@ pub enum AiSessionFilterMode {
     Branch,
 }
 
-impl AiSessionFilterMode {
+impl SiSessionFilterMode {
     /// The order ctrl-r cycles through the modes, wrapping around: from every thread (where the
     /// picker opens) narrowing to the workspace, its branch and the directory, then this host's.
     /// The picker lists them in this order.
@@ -65,7 +65,7 @@ impl AiSessionFilterMode {
 /// For example: `claude = "claude --resume {id} --permission-mode plan"`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
-pub struct AiSessionResume {
+pub struct SiSessionResume {
     #[serde(alias = "claude-code", alias = "claude_code")]
     pub claude: Option<String>,
     pub codex: Option<String>,
@@ -74,7 +74,7 @@ pub struct AiSessionResume {
     pub omp: Option<String>,
 }
 
-impl AiSessionResume {
+impl SiSessionResume {
     /// The configured template for `harness`, if any.
     #[must_use]
     pub fn template(&self, harness: HarnessKind) -> Option<&str> {
@@ -108,7 +108,7 @@ pub struct Threads {
     /// The filter the picker opens in. Unset: `global`. A mode that can't apply here opens in
     /// `workspace` inside a git repository (`branch` on a detached `HEAD`), else in `global`; and
     /// `workspace` opens in `global` when the workspace has no threads at all.
-    pub filter_mode: Option<AiSessionFilterMode>,
+    pub filter_mode: Option<SiSessionFilterMode>,
 
     /// Height of the inline picker. Unset: the top-level `inline_height`.
     pub inline_height: Option<u16>,
@@ -125,7 +125,7 @@ pub struct Threads {
     pub mouse: Option<bool>,
 
     /// Per-harness resume command templates.
-    pub resume: AiSessionResume,
+    pub resume: SiSessionResume,
 }
 
 impl Default for Threads {
@@ -137,7 +137,7 @@ impl Default for Threads {
             inline_height: None,
             resume_chooser: true,
             mouse: None,
-            resume: AiSessionResume::default(),
+            resume: SiSessionResume::default(),
         }
     }
 }
@@ -173,7 +173,7 @@ mod tests {
         .unwrap();
         assert!(parsed.capture);
         assert!(!parsed.capture_tools);
-        assert_eq!(parsed.filter_mode, Some(AiSessionFilterMode::Global));
+        assert_eq!(parsed.filter_mode, Some(SiSessionFilterMode::Global));
         assert_eq!(parsed.inline_height, Some(20));
         assert!(!parsed.resume_chooser);
         assert_eq!(parsed.mouse, Some(false));

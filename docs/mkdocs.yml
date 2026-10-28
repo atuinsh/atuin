@@ -79,16 +79,26 @@ plugins:
         - github-actions[bot]
   - redirects:
       redirect_maps:
-        "ai/sessions.md": "ai/threads.md"
-        "cli/ai/command-output.md": "ai/command-output.md"
-        "cli/ai/introduction.md": "ai/introduction.md"
-        "cli/ai/mcp.md": "ai/mcp.md"
-        "cli/ai/self-hosting.md": "ai/self-hosting.md"
-        "cli/ai/settings.md": "ai/settings.md"
-        "cli/ai/skills.md": "ai/skills.md"
-        "cli/ai/slash-commands.md": "ai/slash-commands.md"
-        "cli/ai/tools-permissions.md": "ai/tools-permissions.md"
-        "cli/ai/user-context.md": "ai/user-context.md"
+        "ai/sessions.md": "si/threads.md"
+        "ai/command-output.md": "si/command-output.md"
+        "ai/introduction.md": "si/introduction.md"
+        "ai/mcp.md": "si/mcp.md"
+        "ai/self-hosting.md": "si/self-hosting.md"
+        "ai/settings.md": "si/settings.md"
+        "ai/skills.md": "si/skills.md"
+        "ai/slash-commands.md": "si/slash-commands.md"
+        "ai/threads.md": "si/threads.md"
+        "ai/tools-permissions.md": "si/tools-permissions.md"
+        "ai/user-context.md": "si/user-context.md"
+        "cli/ai/command-output.md": "si/command-output.md"
+        "cli/ai/introduction.md": "si/introduction.md"
+        "cli/ai/mcp.md": "si/mcp.md"
+        "cli/ai/self-hosting.md": "si/self-hosting.md"
+        "cli/ai/settings.md": "si/settings.md"
+        "cli/ai/skills.md": "si/skills.md"
+        "cli/ai/slash-commands.md": "si/slash-commands.md"
+        "cli/ai/tools-permissions.md": "si/tools-permissions.md"
+        "cli/ai/user-context.md": "si/user-context.md"
         "cli/configuration/advanced-key-binding.md": "configuration/advanced-key-binding.md"
         "cli/configuration/config.md": "configuration/config.md"
         "cli/configuration/key-binding.md": "configuration/key-binding.md"
@@ -132,11 +142,11 @@ plugins:
         Atuin replaces your shell's built-in history with a SQLite database, adding context
         (cwd, exit code, duration, hostname) and optionally syncing across machines with
         end-to-end encryption. These docs cover the CLI tool - installation, configuration,
-        usage, self-hosting, and AI features.
+        usage, self-hosting, and SI features.
       sections:
         Overview:
           - index.md: Getting started with Atuin - quickstart, supported shells, and links.
-          - support.md: Support tiers and the platform/shell/feature matrix - which shells, OSes, terminals, and AI agents are supported and how well.
+          - support.md: Support tiers and the platform/shell/feature matrix - which shells, OSes, terminals, and SI agents are supported and how well.
         Guide:
           - guide/getting-started.md: First steps - install, import history, and start using Atuin.
           - guide/installation.md: Install via script, Homebrew, WinGet, Cargo, Nix, or from source.
@@ -145,7 +155,7 @@ plugins:
           - guide/basic-usage.md: What Atuin records, how to use the TUI, and common config tweaks.
           - guide/advanced-usage.md: Filter modes (global, host, session, directory, workspace) and search modes (prefix, fulltext, fuzzy, daemon-fuzzy).
           - guide/shell-integration.md: How shell hooks work, environment variables, and embedded terminals.
-          - guide/agent-hooks.md: Capture commands from AI coding agents (Claude Code, Codex, opencode, pi) and filter by author.
+          - guide/agent-hooks.md: Capture commands from SI coding agents (Claude Code, Codex, opencode, pi) and filter by author.
           - guide/excluding-commands.md: Keep commands, their output, credential files and your own secrets out of history, captured output and threads, by goal - ignorespace, history_filter, cwd_filter, command_filter, sensitive_files, redact_patterns, capture_tools.
           - guide/output-capture.md: Capture what each command printed - setup, reading and searching it, what's kept, privacy, and disk retention.
           - guide/delete-history.md: Delete single entries, bulk delete by query, remove duplicates, or wipe everything.
@@ -178,17 +188,17 @@ plugins:
           - self-hosting/docker.md: Deploy with Docker or Docker Compose.
           - self-hosting/kubernetes.md: Full Kubernetes deployment with Postgres, secrets, and ingress.
           - self-hosting/systemd.md: Systemd service unit with hardening options.
-        AI:
-          - ai/introduction.md: Atuin AI - command generation and lookup via LLM from your terminal.
-          - ai/settings.md: AI configuration in config.toml - enabled, endpoint, session timeout.
-          - ai/slash-commands.md: Slash commands available in Atuin AI.
-          - ai/user-context.md: Send additional context to the LLM via TERMINAL.md files and dynamic shell substitution.
-          - ai/skills.md: Reusable instruction sets (skills) for Atuin AI - playbooks, conventions, workflows.
-          - ai/tools-permissions.md: Tools the AI can use (shell, filesystem) and permission files to control access.
-          - ai/command-output.md: Let Atuin AI read command outputs - capture via pty-proxy and the daemon.
-          - ai/threads.md: Threads - search and resume the AI coding-agent sessions the daemon captures, and rebuild their index.
-          - ai/mcp.md: Built-in MCP server exposing history search and command output to Claude Code, Cursor, and other AI tools.
-          - ai/self-hosting.md: Self-hosting the Atuin AI backend.
+        SI:
+          - si/introduction.md: Atuin SI - command generation and lookup via LLM from your terminal.
+          - si/settings.md: SI configuration in config.toml - enabled, endpoint, session timeout.
+          - si/slash-commands.md: Slash commands available in Atuin SI.
+          - si/user-context.md: Send additional context to the LLM via TERMINAL.md files and dynamic shell substitution.
+          - si/skills.md: Reusable instruction sets (skills) for Atuin SI - playbooks, conventions, workflows.
+          - si/tools-permissions.md: Tools the SI can use (shell, filesystem) and permission files to control access.
+          - si/command-output.md: Let Atuin SI read command outputs - capture via pty-proxy and the daemon.
+          - si/threads.md: Threads - search and resume the SI coding-agent sessions the daemon captures, and rebuild their index.
+          - si/mcp.md: Built-in MCP server exposing history search and command output to Claude Code, Cursor, and other SI tools.
+          - si/self-hosting.md: Self-hosting the Atuin SI backend.
         Misc:
           - known-issues.md: Known issues with ZFS and network filesystems.
           - integrations.md: Integrations with zsh-autosuggestions, zsh-vi-mode, ble.sh, and mcfly.
@@ -266,7 +276,7 @@ nav:
       - Basic usage: guide/basic-usage.md
       - Advanced usage: guide/advanced-usage.md
       - Shell Integration: guide/shell-integration.md
-      - AI Agent Hooks: guide/agent-hooks.md
+      - SI Agent Hooks: guide/agent-hooks.md
       - Keeping secrets out: guide/excluding-commands.md
       - Capturing command output: guide/output-capture.md
       - Deleting history: guide/delete-history.md
@@ -299,16 +309,16 @@ nav:
       - Docker: self-hosting/docker.md
       - Kubernetes: self-hosting/kubernetes.md
       - Systemd: self-hosting/systemd.md
-  - AI:
-      - Introduction: ai/introduction.md
-      - Settings: ai/settings.md
-      - "Slash Commands": ai/slash-commands.md
-      - "User-Defined Context": ai/user-context.md
-      - Skills: ai/skills.md
-      - "Tools & Permissions": ai/tools-permissions.md
-      - "Reading Command Output": ai/command-output.md
-      - "MCP Server": ai/mcp.md
-      - "Self Hosting & Local Models": ai/self-hosting.md
+  - SI:
+      - Introduction: si/introduction.md
+      - Settings: si/settings.md
+      - "Slash Commands": si/slash-commands.md
+      - "User-Defined Context": si/user-context.md
+      - Skills: si/skills.md
+      - "Tools & Permissions": si/tools-permissions.md
+      - "Reading Command Output": si/command-output.md
+      - "MCP Server": si/mcp.md
+      - "Self Hosting & Local Models": si/self-hosting.md
   - Known Issues: known-issues.md
   - Integrations: integrations.md
   - FAQ: faq.md

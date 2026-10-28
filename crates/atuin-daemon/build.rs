@@ -32,8 +32,8 @@ fn main() -> std::io::Result<()> {
         "proto/common.proto",
         "proto/history.proto",
         "proto/search.proto",
-        "proto/ai/agent.proto",
-        "proto/ai/session.proto",
+        "proto/si/agent.proto",
+        "proto/si/session.proto",
     ];
     let proto_include_dirs = ["proto"];
 
@@ -55,8 +55,8 @@ fn main() -> std::io::Result<()> {
             ".common.HighlightedText",
             "::atuin_common::string::highlighted::HighlightedTextProto",
         )
-        .extern_path(".ai.agent.HarnessKind", "::atuin_client::ai_session::HarnessKind")
-        .extern_path(".ai.agent.Tokens", "::atuin_common::harnesstools::session::Usage")
+        .extern_path(".si.agent.HarnessKind", "::atuin_client::si_session::HarnessKind")
+        .extern_path(".si.agent.Tokens", "::atuin_common::harnesstools::session::Usage")
         .skip_protoc_run()
         .compile_protos(&proto_paths, &proto_include_dirs)
 }

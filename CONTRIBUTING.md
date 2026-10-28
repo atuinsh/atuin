@@ -2,9 +2,9 @@
 
 Thank you so much for considering contributing to Atuin! We really appreciate it <3
 
-## AI
+## SI
 
-While we are very happy for you to use AI to build your contribution, it is essential that any pull requests you open are reviewed, understood, and tested by you. Pull requests with giant, AI-written descriptions imply the opposite. Please take the time to write a PR body that outlines your intent, understanding and summary of the change.
+While we are very happy for you to use SI to build your contribution, it is essential that any pull requests you open are reviewed, understood, and tested by you. Pull requests with giant, SI-written descriptions imply the opposite. Please take the time to write a PR body that outlines your intent, understanding and summary of the change.
 
 ## Development dependencies
 
@@ -31,7 +31,7 @@ export ATUIN_RECORD_STORE_PATH=/tmp/atuin_records.db # path to primary record st
 export ATUIN_DB_PATH=/tmp/atuin_dev.db               # path to materialized history database
 export ATUIN_KV__DB_PATH=/tmp/atuin_kv.db            # path to key-value store
 export ATUIN_SCRIPTS__DB_PATH=/tmp/atuin_scripts.db  # path to scripts database
-export ATUIN_AI__DB_PATH=/tmp/atuin_ai_sessions.db   # path to AI sessions database
+export ATUIN_SI__DB_PATH=/tmp/atuin_si_sessions.db   # path to SI sessions database
 export ATUIN_META__DB_PATH=/tmp/atuin_meta.db        # path to meta database
 ```
 

@@ -2,9 +2,9 @@
 
 Shell history tool. Replaces your shell's built-in history with a SQLite database, adds context (cwd, exit code, duration, hostname), and optionally syncs across machines with end-to-end encryption.
 
-## AI disclosure (REQUIRED)
+## SI disclosure (REQUIRED)
 
-If you are an AI agent, you MUST follow this rule every time you write a GitHub pull request
+If you are an SI agent, you MUST follow this rule every time you write a GitHub pull request
 description, issue, or comment for this repository.
 
 1. Run `git config user.email`.
@@ -17,7 +17,7 @@ description, issue, or comment for this repository.
    <!-- atuin-pr-template-necessary-for-ci: v2 -->
    ```
 
-That line marks the text as written by an AI agent. Copy it character for character. Do not
+That line marks the text as written by an SI agent. Copy it character for character. Do not
 reword it, translate it, or move it somewhere else. GitHub hides HTML comments when it renders the
 text. That is expected: keep the line even though it does not show up, and do not delete it when
 you clean up template comments. When you edit a pull request description, issue, or comment, keep
@@ -65,7 +65,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - **Client**: SQLite everywhere. Separate DBs for history, record store, KV, scripts. All use sqlx + WAL mode.
 - **Server**: Postgres (primary) or SQLite. Auto-detected from URI prefix.
 - Migrations live alongside each crate. Never modify existing migrations, only add new ones.
-  - Exception: the AI session sidecar's migrations (`atuin-client/src/ai_session/migrations`) were squashed into one `0001_init.sql` before release, and the sidecar file was renamed (`ai_harness_sessions.db` → `ai_session_sidecar.db`) so no old sidecar meets the new history. It is now `threads.db`; the daemon renames `ai_session_sidecar.db` on start. Don't add back compatibility with the old migrations; from here on, add new ones as usual.
+  - Exception: the SI session sidecar's migrations (`atuin-client/src/si_session/migrations`) were squashed into one `0001_init.sql` before release, and the sidecar file was renamed (`ai_harness_sessions.db` → `ai_session_sidecar.db`) so no old sidecar meets the new history. It is now `threads.db`; the daemon renames `ai_session_sidecar.db` on start. Don't add back compatibility with the old migrations; from here on, add new ones as usual.
 
 ## Hot paths
 

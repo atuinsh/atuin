@@ -22,8 +22,8 @@ mod account;
 #[cfg(feature = "daemon")]
 mod daemon;
 
-#[cfg(all(feature = "ai", feature = "daemon"))]
-mod ai_sessions;
+#[cfg(all(feature = "si", feature = "daemon"))]
+mod si_sessions;
 
 mod config;
 mod default_config;
@@ -36,7 +36,7 @@ mod info;
 mod init;
 mod internal;
 mod kv;
-#[cfg(feature = "ai")]
+#[cfg(feature = "si")]
 mod mcp;
 #[cfg(feature = "daemon")]
 mod output;
@@ -51,7 +51,7 @@ mod wrapped;
 
 #[derive(Subcommand, Debug, Couture)]
 #[command(infer_subcommands = true)]
-#[couture(inherit = ["ai", "sync", "data", "setup", "advanced"])]
+#[couture(inherit = ["si", "sync", "data", "setup", "advanced"])]
 pub enum Cmd {
     // Variant order sets the `--help` command list order, so keep the commands users reach for
     // most (search, sync, stats) at the top and the plumbing/config commands lower down.
@@ -125,26 +125,26 @@ pub enum Cmd {
     #[couture(category = "advanced")]
     Hook(hook::Cmd),
 
-    /// Run the AI assistant
-    #[cfg(feature = "ai")]
-    #[command(subcommand)]
-    #[couture(category = "ai")]
-    Ai(atuin_ai::commands::Command),
+    /// Run the SI assistant
+    #[cfg(feature = "si")]
+    #[command(subcommand, alias = "ai")]
+    #[couture(category = "si")]
+    Si(atuin_si::commands::Command),
 
     /// Search, read and resume your coding agents' captured threads
-    #[cfg(feature = "ai")]
+    #[cfg(feature = "si")]
     #[command(subcommand)]
-    #[couture(category = "ai")]
-    Threads(atuin_ai::commands::ThreadsCmd),
+    #[couture(category = "si")]
+    Threads(atuin_si::commands::ThreadsCmd),
 
     /// Pick a captured coding-agent thread and resume it (short for `atuin threads resume`)
-    #[cfg(feature = "ai")]
-    #[couture(category = "ai")]
-    Resume(atuin_ai::commands::ResumeCmd),
+    #[cfg(feature = "si")]
+    #[couture(category = "si")]
+    Resume(atuin_si::commands::ResumeCmd),
 
-    #[cfg(feature = "ai")]
+    #[cfg(feature = "si")]
     #[command(about = fl!("cmd-mcp"))]
-    #[couture(category = "ai")]
+    #[couture(category = "si")]
     Mcp(mcp::Cmd),
 
     #[command(about = fl!("cmd-wrapped"))]
@@ -198,20 +198,20 @@ pub enum Cmd {
 
 impl Cmd {
     pub fn run(self) -> Result<()> {
-        // `atuin threads` and `atuin resume` are `atuin ai`'s, so they run exactly as those do, and
+        // `atuin threads` and `atuin resume` are `atuin si`'s, so they run exactly as those do, and
         // `atuin threads enable` is `atuin config enable threads`.
-        #[cfg(feature = "ai")]
+        #[cfg(feature = "si")]
         match self {
             #[cfg(feature = "daemon")]
-            Self::Threads(atuin_ai::commands::ThreadsCmd::Enable)
-            | Self::Ai(atuin_ai::commands::Command::Threads(
-                atuin_ai::commands::ThreadsCmd::Enable,
+            Self::Threads(atuin_si::commands::ThreadsCmd::Enable)
+            | Self::Si(atuin_si::commands::Command::Threads(
+                atuin_si::commands::ThreadsCmd::Enable,
             )) => {
                 let feature = config::Feature::Threads;
                 return Self::Config(config::Cmd::Enable(config::EnableCmd { feature })).run();
             }
-            Self::Threads(cmd) => return Self::Ai(cmd.into()).run(),
-            Self::Resume(cmd) => return Self::Ai(atuin_ai::commands::Command::Resume(cmd)).run(),
+            Self::Threads(cmd) => return Self::Si(cmd.into()).run(),
+            Self::Resume(cmd) => return Self::Si(atuin_si::commands::Command::Resume(cmd)).run(),
             _ => {}
         }
 
@@ -224,9 +224,9 @@ impl Cmd {
             atuin_daemon::service::Subproc::daemonize()?;
         }
 
-        #[cfg(feature = "ai")]
-        let use_multi_thread_runtime = matches!(&self, Self::Ai(_));
-        #[cfg(not(feature = "ai"))]
+        #[cfg(feature = "si")]
+        let use_multi_thread_runtime = matches!(&self, Self::Si(_));
+        #[cfg(not(feature = "si"))]
         let use_multi_thread_runtime = false;
 
         let Some(future) = self.run_inner()? else {
@@ -290,7 +290,7 @@ impl Cmd {
     }
 
     #[allow(clippy::too_many_lines)]
-    // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
+    // `atuin_si::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
     // await points.
     #[allow(clippy::future_not_send)]
     async fn run_async(self, mut settings: Settings) -> Result<()> {
@@ -378,19 +378,19 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(_) => unreachable!(),
 
-            #[cfg(feature = "ai")]
+            #[cfg(feature = "si")]
             Self::Threads(_) | Self::Resume(_) => unreachable!(),
 
-            #[cfg(feature = "ai")]
-            Self::Ai(cli) => {
+            #[cfg(feature = "si")]
+            Self::Si(cli) => {
                 // Resume is what threads are for, so while capture is off it offers to turn it
                 // on, every time.
                 #[cfg(feature = "daemon")]
-                if let atuin_ai::commands::Command::Resume(cmd) = &cli
+                if let atuin_si::commands::Command::Resume(cmd) = &cli
                     && !settings.threads.capture
                     && cmd.is_interactive()
-                    && let Some(mut term) = ai_sessions::Terminal::tty()
-                    && let Some(enabled) = ai_sessions::offer(&settings, &mut term).await
+                    && let Some(mut term) = si_sessions::Terminal::tty()
+                    && let Some(enabled) = si_sessions::offer(&settings, &mut term).await
                 {
                     settings = enabled;
                 }
@@ -398,7 +398,7 @@ impl Cmd {
                 // Resume reads the threads database itself, which a daemon of an older build
                 // keeps at an older schema: replace one, as history does, when Atuin manages it.
                 #[cfg(feature = "daemon")]
-                if matches!(cli, atuin_ai::commands::Command::Resume(_))
+                if matches!(cli, atuin_si::commands::Command::Resume(_))
                     && settings.daemon.enabled
                     && settings.daemon.autostart
                     && let Err(e) = daemon::ready_client(&settings).await
@@ -409,14 +409,14 @@ impl Cmd {
                 // Threads commands talk to the daemon: start or replace it as history does,
                 // instead of failing against a stopped or stale one.
                 #[cfg(feature = "daemon")]
-                if matches!(cli, atuin_ai::commands::Command::Threads(_)) {
+                if matches!(cli, atuin_si::commands::Command::Threads(_)) {
                     daemon::ready_client(&settings).await?;
                 }
 
-                atuin_ai::commands::run(cli, settings).await
+                atuin_si::commands::run(cli, settings).await
             }
 
-            #[cfg(feature = "ai")]
+            #[cfg(feature = "si")]
             Self::Mcp(cmd) => cmd.run(&db, settings).await,
         }
     }
@@ -435,8 +435,8 @@ impl Cmd {
                 stderr: cmd.show_logs().then(logs::StderrConfig::verbose),
             }),
 
-            #[cfg(feature = "ai")]
-            Self::Ai(cmd) => cmd.log_config(settings),
+            #[cfg(feature = "si")]
+            Self::Si(cmd) => cmd.log_config(settings),
 
             Self::Internal(cmd) => cmd.log_config(),
 
@@ -476,32 +476,32 @@ mod tests {
         case::change_new(&["account", "change-password", "--new-password", SECRET])
     )]
     #[case::rekey(&["store", "rekey", SECRET])]
-    #[cfg_attr(feature = "ai", case::ai_token(&["ai", "inline", "--api-token", SECRET]))]
+    #[cfg_attr(feature = "si", case::si_token(&["si", "inline", "--api-token", SECRET]))]
     fn debug_redacts_argv_secrets(#[case] args: &[&str]) {
         let cli = Cli::try_parse_from(std::iter::once("atuin").chain(args.iter().copied()))
             .expect("the argv parses");
         assert!(!format!("{:?}", cli.cmd).contains(SECRET));
     }
 
-    /// `atuin resume`, `atuin threads resume` and (as it was) `atuin ai resume` take the same.
-    #[cfg(feature = "ai")]
+    /// `atuin resume`, `atuin threads resume` and (as it was) `atuin si resume` take the same.
+    #[cfg(feature = "si")]
     #[rstest]
     #[case::short(&["resume"])]
     #[case::threads(&["threads", "resume"])]
-    #[case::ai(&["ai", "resume"])]
+    #[case::si(&["si", "resume"])]
     fn resume_parses_everywhere(#[case] command: &[&str]) {
         let args = std::iter::once(&"atuin").chain(command).chain(&["0199abcdef", "--in", "codex"]);
         Cli::try_parse_from(args).expect("the argv parses");
     }
 
-    /// `atuin ai session` is still `atuin threads`.
-    #[cfg(feature = "ai")]
+    /// `atuin si session` is still `atuin threads`.
+    #[cfg(feature = "si")]
     #[rstest]
-    fn ai_session_is_still_threads() {
-        let cli = Cli::try_parse_from(["atuin", "ai", "session", "list", "--style", "json"])
+    fn si_session_is_still_threads() {
+        let cli = Cli::try_parse_from(["atuin", "si", "session", "list", "--style", "json"])
             .expect("the argv parses");
         assert!(
-            matches!(cli.cmd, Cmd::Ai(atuin_ai::commands::Command::Threads(_))),
+            matches!(cli.cmd, Cmd::Si(atuin_si::commands::Command::Threads(_))),
             "{:?}",
             cli.cmd
         );

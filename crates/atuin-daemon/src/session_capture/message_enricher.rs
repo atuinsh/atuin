@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use atuin_client::ai_session::{
+use atuin_client::si_session::{
     HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
 use atuin_common::harnesstools::continuation;
@@ -254,7 +254,7 @@ fn build(
         }
     };
     // Codex lines name no parent: each row follows the row captured before it, so the rows of
-    // two hosts continuing one rollout part where they did (see `AiSessionDatabase::analyse`).
+    // two hosts continuing one rollout part where they did (see `SiSessionDatabase::analyse`).
     // An applied patch's row hangs beside the line rather than on it, so the rows around it link
     // the same whether it was captured or not (a rollout captured before patches were, read
     // again): a branch's rows take it from the row it hangs from (`Analysis::rows_for`).

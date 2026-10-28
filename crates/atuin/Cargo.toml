@@ -46,13 +46,15 @@ default = [
     "clipboard",
     "check-update",
     "daemon",
-    "ai",
+    "si",
     "pty-proxy",
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
-daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
-ai = ["atuin-ai"]
+daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-si?/daemon"]
+si = ["atuin-si"]
+# The old name of `si`.
+ai = ["si"]
 pty-proxy = ["dep:atuin-pty-proxy"]
 # Not a default feature until Octavo ships; release artifacts build without it.
 octavo = [
@@ -64,7 +66,7 @@ octavo = [
     "dep:atuin-octavo",
 ]
 hex = ["pty-proxy"]
-clipboard = ["dep:arboard", "atuin-ai?/clipboard"]
+clipboard = ["dep:arboard", "atuin-si?/clipboard"]
 check-update = ["atuin-client/check-update"]
 vendored-tls = ["atuin-client?/vendored-tls"]
 # `atuin update`: self-update via the cargo-dist install receipt. Not a
@@ -82,12 +84,12 @@ profiling-traced = [
 ]
 
 [dependencies]
-atuin-ai = { workspace = true, optional = true }
+atuin-si = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
 atuin-client = { path = "../atuin-client", version = "18.24.2", optional = true, default-features = false }
-atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
+atuin-common = { workspace = true, features = ["si", "db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
@@ -161,7 +163,7 @@ arboard = { workspace = true, optional = true, features = ["wayland-data-control
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
 # Windows cross-compiles, and potentially other exotic targets.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))'.dependencies]
-atuin-ai = { workspace = true, optional = true, features = ["tree-sitter"] }
+atuin-si = { workspace = true, optional = true, features = ["tree-sitter"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 tree-sitter-fish = { workspace = true }
@@ -172,7 +174,7 @@ windows-sys = { workspace = true }
 
 [dev-dependencies]
 atuin-common = { workspace = true, features = ["test-utils"] }
-# An in-process sync server for the AI session e2e tests (tests/e2e_ai_sessions.rs).
+# An in-process sync server for the SI session e2e tests (tests/e2e_si_sessions.rs).
 atuin-server = { workspace = true }
 parking_lot = { workspace = true }
 proptest = { workspace = true }

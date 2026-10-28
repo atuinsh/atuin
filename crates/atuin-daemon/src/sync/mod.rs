@@ -7,4 +7,4 @@ mod engine;
 
 pub use engine::SyncEngine;
 #[cfg(test)]
-pub use engine::spawn_ai_session_projector;
+pub use engine::spawn_si_session_projector;

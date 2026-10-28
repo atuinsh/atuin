@@ -2,7 +2,7 @@
 
 Atuin can store what each command printed next to its history entry. You can
 then read it back in the inspector UI, search across it with `atuin output
-search`, and let [Atuin AI](../ai/command-output.md) or other AI tools read
+search`, and let [Atuin SI](../si/command-output.md) or other SI tools read
 what a command actually did.
 
 Output capture is off by default. It needs
@@ -54,12 +54,12 @@ captured command:
 atuin output search connection refused
 ```
 
-### From AI tools
+### From SI tools
 
-- [Atuin AI](../ai/command-output.md) reads a command's output when you ask it
+- [Atuin SI](../si/command-output.md) reads a command's output when you ask it
   why something failed.
 - Claude Code, Cursor, and other agents can read and search it through Atuin's
-  [MCP server](../ai/mcp.md).
+  [MCP server](../si/mcp.md).
 
 ## What gets captured
 
@@ -111,9 +111,9 @@ recording that it's missing.
   [Keeping secrets out](excluding-commands.md#a-commands-output-command_filter).
 - Captured output stays on your machine. **It isn't synced**, even with
   [sync](sync.md) set up. We're actively working on supporting this.
-- Atuin AI only sends output to the LLM when it asks for a specific command's
+- Atuin SI only sends output to the LLM when it asks for a specific command's
   output, and asks your permission first by default. See [Reading Command
-  Output](../ai/command-output.md#permissions).
+  Output](../si/command-output.md#permissions).
 
 ## Storage and retention
 

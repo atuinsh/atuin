@@ -51,7 +51,7 @@ impl Pull {
         let pulled = self.pull(settings, store, db).await;
         // Records only this machine had are gone, and the threads index must forget what
         // they projected: rebuilt from what the store holds now, however far the pull got.
-        let reset = super::reset_ai_sessions_after(settings).await;
+        let reset = super::reset_si_sessions_after(settings).await;
         match (pulled, reset) {
             (Err(pull), Err(reset)) => {
                 eprintln!("{reset:?}");
@@ -120,7 +120,7 @@ impl Pull {
 
         println!("Downloaded {} records", downloaded.len());
 
-        // On --force the daemon rebuilds the AI sessions from scratch after this.
+        // On --force the daemon rebuilds the SI sessions from scratch after this.
         if self.force {
             crate::sync::build(settings, &store, db, Some(&downloaded)).await?;
         } else {

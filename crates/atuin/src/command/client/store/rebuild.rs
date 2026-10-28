@@ -37,7 +37,7 @@ impl Rebuild {
 
             // The daemon owns the sidecar, and rebuilds it. `ai-session` is the threads' record tag.
             "threads" | "ai-session" => {
-                super::reset_ai_sessions(settings).await?;
+                super::reset_si_sessions(settings).await?;
                 println!("The daemon is rebuilding the threads index");
             }
 

@@ -50,17 +50,17 @@ SQLite opens as written.
     mkdir -p ~/.atuin
     ```
 
-    Check whether you have any AI-related files in `~/.atuin`:
+    Check whether you have any SI-related files in `~/.atuin`:
 
     ```sh
-    ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills -e TERMINAL.md
+    ls ~/.atuin | grep -Fxe permissions.si.toml -e skills -e TERMINAL.md
     ```
 
     If you do, please expand and follow this section:
 
-    ??? note "Migrating home-scoped AI config"
+    ??? note "Migrating home-scoped SI config"
 
-        In older installations, `permissions.ai.toml`, `skills`, or
+        In older installations, `permissions.si.toml`, `skills`, or
         `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas
         in newer installations, they are applied *globally*. The existence of
         `~/.atuin/config.toml` is what determines whether the new or old
@@ -68,18 +68,18 @@ SQLite opens as written.
         interpreted as global.
 
         Before you move your `config.toml` to `~/.atuin`, review the existing
-        AI files in `~/.atuin`, especially `permissions.ai.toml`. Anything
+        SI files in `~/.atuin`, especially `permissions.si.toml`. Anything
         you're ok with being made global can be left as-is (global is likely
         not too different from applying to your entire home directory anyway);
         anything else should be deleted or moved to subdirectories (meaning
         moving it into `~/subdir/.atuin/` for each subdirectory).
 
-        After you've confirmed that the AI items in `~/.atuin` can be
-        interpreted as global, check whether any AI items appear in both
+        After you've confirmed that the SI items in `~/.atuin` can be
+        interpreted as global, check whether any SI items appear in both
         `~/.atuin` and `~/.config/atuin`:
 
         ```sh
-        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills \
+        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.si.toml -e skills \
             -e TERMINAL.md | sort | uniq -d
         ```
 
@@ -92,7 +92,7 @@ SQLite opens as written.
 
     ```sh
     cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
-        -e themes -e skills -e permissions.ai.toml -e TERMINAL.md) ~/.atuin/
+        -e themes -e skills -e permissions.si.toml -e TERMINAL.md) ~/.atuin/
     ```
 
     Then, move your data:
@@ -446,8 +446,8 @@ history_filter = [
 
 A filtered command's output isn't captured either. To keep a command in history
 but not its output, use [`command_filter`](#command_filter) in `[output]`. The
-filter applies to the commands your AI agents run too: a matching call is
-[captured](../ai/threads.md#whats-captured) with its tool's name only.
+filter applies to the commands your SI agents run too: a matching call is
+[captured](../si/threads.md#whats-captured) with its tool's name only.
 
 ### `cwd_filter`
 
@@ -465,7 +465,7 @@ This supports regular expressions, so you can hide pretty much whatever you want
 
 After updating that parameter, you can run [the prune command](../reference/prune.md) to remove old history entries that match the new filters.
 
-A [thread](../ai/threads.md#whats-captured) captured in a matching
+A [thread](../si/threads.md#whats-captured) captured in a matching
 directory keeps only the names of the tools its agent called there.
 
 ### `store_failed`
@@ -496,7 +496,7 @@ to save it if any of them match. The patterns currently cover:
 | Google Cloud | Commands setting `GOOGLE_SERVICE_ACCOUNT_KEY`, and API keys |
 | GitHub | Personal access tokens (old and new), OAuth access tokens (app and user), app installation tokens, and refresh tokens |
 | GitLab | Personal, deploy, runner, CI/CD job, feed, SCIM, agent and OAuth tokens |
-| AI providers | Anthropic, OpenAI, OpenRouter, Groq, xAI, Perplexity, Pinecone, LangSmith and Hugging Face keys |
+| SI providers | Anthropic, OpenAI, OpenRouter, Groq, xAI, Perplexity, Pinecone, LangSmith and Hugging Face keys |
 | Slack | Bot, user, app and config tokens, and webhook URLs |
 | Stripe | Live, test and restricted keys |
 | Package registries | npm, PyPI, RubyGems, Clojars, Docker Hub and Artifactory tokens |
@@ -510,7 +510,7 @@ For the exact expressions, see
 [`secrets.rs`](https://github.com/atuinsh/atuin/blob/main/crates/atuin-common/src/secrets.rs).
 
 The same patterns are applied to captured command output, and to
-[threads](../ai/threads.md#whats-captured). A command whose own text is
+[threads](../si/threads.md#whats-captured). A command whose own text is
 clean can still print a credential, so recognised values in the captured
 output are replaced with `****` before storage. Only the value is replaced; the
 variable name or flag beside it stays. Output is also checked for credentials
@@ -780,7 +780,7 @@ frecency_score_multiplier = 2.0
 ### Filtering by author
 
 Interactive search shows only commands you ran yourself, hiding those recorded
-by AI coding agents through [agent hooks](../guide/agent-hooks.md). This isn't
+by SI coding agents through [agent hooks](../guide/agent-hooks.md). This isn't
 currently configurable in `config.toml`.
 
 To filter by author on the command line, use `atuin search --author`. See
@@ -1241,9 +1241,9 @@ such as `gh auth token`, `gcloud auth print-access-token`,
 environment (`printenv`, `env`); and commands that name a
 [sensitive file](#sensitive_files), such as `cat .env`.
 
-The filter also applies to the commands your AI agents run, whether or not
+The filter also applies to the commands your SI agents run, whether or not
 output capture is enabled: a matching call is
-[captured](../ai/threads.md#whats-captured) without its output.
+[captured](../si/threads.md#whats-captured) without its output.
 
 ### `sync`
 
@@ -1257,7 +1257,7 @@ set to.
 
 Settings under `[security]` add to Atuin's built-in rules for keeping
 credentials out of what it stores: captured command output and
-[threads](../ai/threads.md#whats-captured). For which setting to reach for,
+[threads](../si/threads.md#whats-captured). For which setting to reach for,
 see [Keeping Secrets Out of Atuin](../guide/excluding-commands.md).
 
 ```toml
@@ -1293,7 +1293,7 @@ with these patterns only.
 Default: `[]`
 
 Files whose contents are credentials, on top of the built-in ones. The output
-of a command naming one isn't stored. An AI agent's reads of one aren't
+of a command naming one isn't stored. An SI agent's reads of one aren't
 captured, and nor is what it writes to one.
 
 A glob without a `/` matches a file's name wherever it is. A glob with a `/`
@@ -1322,7 +1322,7 @@ The built-in files are:
   gcloud credential files, `~/.kube/config`, `~/.docker/config.json`, the
   `gh` and `glab` logins, and Cargo, RubyGems and Terraform Cloud credentials
 - `~/.gnupg/private-keys-v1.d` and `~/.password-store`
-- the AI agents' own logins: `~/.claude/.credentials.json`,
+- the SI agents' own logins: `~/.claude/.credentials.json`,
   `~/.codex/auth.json`, opencode's and Pi's `auth.json`
 - Atuin's encryption key (typically `~/.atuin/data/key`, or
   `~/.local/share/atuin/key` in older installs)
@@ -1383,19 +1383,19 @@ compatibility.
 retention = "4d"
 ```
 
-### ai
+### si
 
-A sub-object with specific options for AI logging:
+A sub-object with specific options for SI logging:
 
-* `enabled` - whether to output AI logs; defaults to `logs.enabled`
-* `file` - the filename to use for the AI logs; defaults to `"ai.log"`. Always relative to `logs.dir`.
-* `level` - override the log level for the AI logs; defaults to `logs.level`
-* `retention` - how long to keep AI logs; defaults to `logs.retention`
+* `enabled` - whether to output SI logs; defaults to `logs.enabled`
+* `file` - the filename to use for the SI logs; defaults to `"si.log"`. Always relative to `logs.dir`.
+* `level` - override the log level for the SI logs; defaults to `logs.level`
+* `retention` - how long to keep SI logs; defaults to `logs.retention`
 
 ```toml
-[logs.ai]
+[logs.si]
 enabled = true
-file = "ai.log"
+file = "si.log"
 level = "info"
 retention = "4d"
 ```
@@ -1557,6 +1557,6 @@ so commands are shown unhighlighted there.
 syntax_highlight = false
 ```
 
-## ai
+## si
 
-The settings for Atuin AI are listed in [a separate section](../ai/settings.md).
+The settings for Atuin SI are listed in [a separate section](../si/settings.md).

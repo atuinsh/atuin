@@ -184,12 +184,12 @@ pub async fn rebuild_history(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-/// Have the daemon rebuild its AI sessions from the record store (see
-/// `AiClient::rebuild_sessions`), first starting or replacing it (via [`ready_client`]) as the
-/// other AI session commands do.
-pub async fn rebuild_ai_sessions(settings: &Settings) -> Result<()> {
+/// Have the daemon rebuild its SI sessions from the record store (see
+/// `SiClient::rebuild_sessions`), first starting or replacing it (via [`ready_client`]) as the
+/// other SI session commands do.
+pub async fn rebuild_si_sessions(settings: &Settings) -> Result<()> {
     ready_client(settings).await?;
-    let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
+    let mut client = atuin_daemon::SiClient::from_settings(settings).await?;
     client.rebuild_sessions().await
 }
 
@@ -209,20 +209,20 @@ async fn running_daemon_of_our_build(settings: &Settings) -> Option<ActiveServic
     Some(service)
 }
 
-/// How long a sync waits for the daemon to project the AI sessions it downloaded. A large store
+/// How long a sync waits for the daemon to project the SI sessions it downloaded. A large store
 /// takes longer; the daemon carries on regardless.
 const PROJECT_SYNCED_WAIT: Duration = Duration::from_secs(10);
 
-/// Have a running daemon project the AI session records this process synced into the record
+/// Have a running daemon project the SI session records this process synced into the record
 /// store, returning once they are listed or, after [`PROJECT_SYNCED_WAIT`], leaving the daemon to
 /// finish on its own. Never starts or replaces one, though launchd starts its agent for the
 /// connection: a daemon started later, or replacing one too old to be asked, projects them as it
 /// starts.
-pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
+pub async fn project_synced_si_sessions(settings: &Settings) -> Result<()> {
     if running_daemon_of_our_build(settings).await.is_none() {
         return Ok(());
     }
-    let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
+    let mut client = atuin_daemon::SiClient::from_settings(settings).await?;
     match tokio::time::timeout(PROJECT_SYNCED_WAIT, client.project_synced()).await {
         Ok(Err(err)) if is_legacy_daemon_error(&err) => Ok(()),
         Ok(projected) => projected,

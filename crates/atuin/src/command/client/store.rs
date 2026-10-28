@@ -56,21 +56,21 @@ pub enum Cmd {
     Pull(pull::Pull),
 }
 
-/// Have the daemon reproject the ai-session sidecar in full on its next start, after a command
+/// Have the daemon reproject the si-session sidecar in full on its next start, after a command
 /// re-encrypted the records under it: they say what they said, so what is projected stays and
 /// the replay only has to cover it again with the new key. Best effort: the maintenance itself
 /// has already happened.
-pub async fn invalidate_ai_sessions(settings: &Settings) {
-    if let Err(err) = atuin_client::ai_session::invalidate_sidecar(settings).await {
+pub async fn invalidate_si_sessions(settings: &Settings) {
+    if let Err(err) = atuin_client::si_session::invalidate_sidecar(settings).await {
         eprintln!("Failed to schedule a rebuild of the threads index: {err}");
     }
 }
 
-/// Have the daemon delete the ai-session index and rebuild it from the record store alone, after
+/// Have the daemon delete the si-session index and rebuild it from the record store alone, after
 /// a command deleted records under it (or asked for a rebuild): a replay only adds, so what the
 /// deleted records projected would otherwise stay.
 ///
-/// Only the daemon does it, started for it as for the other AI session commands: it owns the
+/// Only the daemon does it, started for it as for the other SI session commands: it owns the
 /// index, rebuilds at once, reports the rebuild to readers meanwhile, and holds capture while its
 /// dedup gate cannot be trusted. Deleting the file from here could leave a running daemon serving
 /// an empty index, and capture pushing duplicate records. So when the daemon is disabled, or
@@ -79,7 +79,7 @@ pub async fn invalidate_ai_sessions(settings: &Settings) {
     not(feature = "daemon"),
     expect(clippy::unused_async, reason = "only the daemon rebuilds")
 )]
-pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
+pub async fn reset_si_sessions(settings: &Settings) -> Result<()> {
     #[cfg(feature = "daemon")]
     {
         if !settings.daemon.enabled {
@@ -88,7 +88,7 @@ pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
                  config) to rebuild the threads index"
             );
         }
-        daemon::rebuild_ai_sessions(settings)
+        daemon::rebuild_si_sessions(settings)
             .await
             .wrap_err("the daemon could not rebuild the threads index")
     }
@@ -99,14 +99,14 @@ pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
     }
 }
 
-/// [`reset_ai_sessions`] for commands that have already deleted records: a failure says the
+/// [`reset_si_sessions`] for commands that have already deleted records: a failure says the
 /// index is now stale, and how to fix it. Nothing to do when there is no index yet: the daemon
 /// builds it from the records as they are now.
-pub async fn reset_ai_sessions_after(settings: &Settings) -> Result<()> {
-    if !atuin_client::ai_session::sidecar_path(settings).exists() {
+pub async fn reset_si_sessions_after(settings: &Settings) -> Result<()> {
+    if !atuin_client::si_session::sidecar_path(settings).exists() {
         return Ok(());
     }
-    reset_ai_sessions(settings).await.wrap_err(
+    reset_si_sessions(settings).await.wrap_err(
         "the records changed, but the threads index was not rebuilt and still lists what they \
          held: run `atuin store rebuild threads` once the daemon is enabled and running",
     )

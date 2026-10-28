@@ -239,9 +239,9 @@ _atuin_up_search_viins() {
     _atuin_up_search --keymap-mode=vim-insert
 }
 
-# `atuin threads resume`: pick a captured AI coding-agent session. The result uses
+# `atuin threads resume`: pick a captured SI coding-agent session. The result uses
 # the same protocol as the history search: `__atuin_accept__:` runs it.
-_atuin_ai_resume() {
+_atuin_si_resume() {
     emulate -L zsh
     zle -I
 
@@ -270,11 +270,11 @@ _atuin_ai_resume() {
         fi
     fi
 }
-_atuin_ai_resume_vicmd() {
-    _atuin_ai_resume --keymap-mode=vim-normal
+_atuin_si_resume_vicmd() {
+    _atuin_si_resume --keymap-mode=vim-normal
 }
-_atuin_ai_resume_viins() {
-    _atuin_ai_resume --keymap-mode=vim-insert
+_atuin_si_resume_viins() {
+    _atuin_si_resume --keymap-mode=vim-insert
 }
 
 add-zsh-hook preexec _atuin_preexec
@@ -287,9 +287,13 @@ zle -N atuin-search-viins _atuin_search_viins
 zle -N atuin-up-search _atuin_up_search
 zle -N atuin-up-search-vicmd _atuin_up_search_vicmd
 zle -N atuin-up-search-viins _atuin_up_search_viins
-zle -N atuin-ai-resume _atuin_ai_resume
-zle -N atuin-ai-resume-vicmd _atuin_ai_resume_vicmd
-zle -N atuin-ai-resume-viins _atuin_ai_resume_viins
+zle -N atuin-si-resume _atuin_si_resume
+zle -N atuin-si-resume-vicmd _atuin_si_resume_vicmd
+zle -N atuin-si-resume-viins _atuin_si_resume_viins
+# The old names of these widgets.
+zle -N atuin-ai-resume _atuin_si_resume
+zle -N atuin-ai-resume-vicmd _atuin_si_resume_vicmd
+zle -N atuin-ai-resume-viins _atuin_si_resume_viins
 
 # These are compatibility widget names for "atuin <= 17.2.1" users.
 zle -N _atuin_search_widget _atuin_search

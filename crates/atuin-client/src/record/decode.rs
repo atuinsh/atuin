@@ -86,7 +86,7 @@ mod tests {
                 Record::builder()
                     .host(host.clone())
                     .version(RecordVersion::V1)
-                    .tag(RecordTag::AiSession)
+                    .tag(RecordTag::SiSession)
                     .idx(idx as u64)
                     .data(DecryptedData(data.clone()))
                     .build()

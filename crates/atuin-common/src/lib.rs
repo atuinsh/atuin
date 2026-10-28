@@ -11,7 +11,7 @@ pub mod env;
 pub mod filter;
 pub mod fs;
 pub mod futures;
-#[cfg(feature = "ai")]
+#[cfg(feature = "si")]
 pub mod harnesstools;
 #[cfg(feature = "io")]
 pub mod io;

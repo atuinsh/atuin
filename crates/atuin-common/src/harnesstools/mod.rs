@@ -1,4 +1,4 @@
-//! Tools for interacting and operating on different AI harnesses.
+//! Tools for interacting and operating on different SI harnesses.
 
 use std::path::PathBuf;
 

@@ -26,8 +26,9 @@ pub enum RecordTag {
     ConfigShellAlias,
     #[strum(serialize = "packfile")]
     Packfile,
+    /// Still `ai-session` on the wire: records synced under that tag must keep matching.
     #[strum(serialize = "ai-session")]
-    AiSession,
+    SiSession,
     /// Legacy code supported arbitrary types, so we need to support this.
     #[strum(default, transparent)]
     Other(String),
@@ -53,7 +54,7 @@ impl RecordTag {
             | Self::Script
             | Self::DotfilesVar
             | Self::ConfigShellAlias
-            | Self::AiSession
+            | Self::SiSession
             | Self::Other(_) => false,
         }
     }
@@ -67,7 +68,7 @@ impl RecordTag {
             Self::ConfigShellAlias => 4,
             Self::Packfile => 5,
             Self::Other(_) => 6,
-            Self::AiSession => 7,
+            Self::SiSession => 7,
         }
     }
 }
@@ -112,8 +113,8 @@ mod tests {
     use super::*;
 
     #[rstest::rstest]
-    #[case(RecordTag::AiSession, "ai-session")]
-    fn ai_session_tag_roundtrips(#[case] tag: RecordTag, #[case] s: &str) {
+    #[case(RecordTag::SiSession, "ai-session")]
+    fn si_session_tag_roundtrips(#[case] tag: RecordTag, #[case] s: &str) {
         assert_eq!(tag.as_ref(), s);
         assert_eq!(s.parse::<RecordTag>().unwrap(), tag);
         assert!(!tag.is_plaintext());

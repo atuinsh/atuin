@@ -213,17 +213,17 @@ async fn history_falls_back_to_local_when_daemon_not_running(
     assert!(output(list).lines().any(|line| line == expected), "history was not saved locally");
 }
 
-/// The AI session index with one session no record backs, as a purge leaves it: a replay only
+/// The SI session index with one session no record backs, as a purge leaves it: a replay only
 /// adds, so only a rebuild takes it out.
-async fn stale_ai_session_index(env: &FreshEnv) -> PathBuf {
-    use atuin_client::ai_session::{
-        AiSessionDatabase, HarnessKind, HarnessSession, Message, NativeSessionId, SourceId,
+async fn stale_si_session_index(env: &FreshEnv) -> PathBuf {
+    use atuin_client::si_session::{
+        HarnessKind, HarnessSession, Message, NativeSessionId, SiSessionDatabase, SourceId,
     };
     use atuin_common::harnesstools::session::{Content, Role};
 
     std::fs::create_dir_all(env.data_dir()).unwrap();
     let path = env.data_dir().joined("threads.db");
-    let db = AiSessionDatabase::open(&path).await.unwrap();
+    let db = SiSessionDatabase::open(&path).await.unwrap();
     let msg = Message::builder()
         .id(atuin_domain::record::RecordId(atuin_common::utils::uuid_v7()))
         .session(HarnessSession {
@@ -239,20 +239,20 @@ async fn stale_ai_session_index(env: &FreshEnv) -> PathBuf {
     path
 }
 
-/// How many sessions the AI session index at `path` lists.
+/// How many sessions the SI session index at `path` lists.
 async fn indexed_sessions(path: &Path) -> usize {
-    let db = atuin_client::ai_session::AiSessionDatabase::open_read_only(path).await.unwrap();
-    let filter = atuin_client::ai_session::SessionFilter::default();
+    let db = atuin_client::si_session::SiSessionDatabase::open_read_only(path).await.unwrap();
+    let filter = atuin_client::si_session::SessionFilter::default();
     db.list_sessions(&filter).await.unwrap().len()
 }
 
-/// `atuin store rebuild ai-session` has the daemon rebuild the index, starting it as other AI
+/// `atuin store rebuild ai-session` has the daemon rebuild the index, starting it as other SI
 /// session commands do: the session no record backs leaves it.
 #[rstest]
 #[tokio::test]
-async fn ai_session_rebuild_goes_through_the_daemon(daemon: Daemon) {
+async fn si_session_rebuild_goes_through_the_daemon(daemon: Daemon) {
     daemon.env.write_config("[daemon]\nenabled = true\nautostart = true\n");
-    let index = stale_ai_session_index(&daemon.env).await;
+    let index = stale_si_session_index(&daemon.env).await;
 
     let out = daemon.env.run(&["store", "rebuild", "ai-session"]);
     assert!(out.contains("The daemon is rebuilding"), "{out}");
@@ -270,13 +270,13 @@ async fn ai_session_rebuild_goes_through_the_daemon(daemon: Daemon) {
 /// as it was.
 #[rstest]
 #[tokio::test]
-async fn ai_session_rebuild_without_the_daemon_fails_and_touches_nothing(
+async fn si_session_rebuild_without_the_daemon_fails_and_touches_nothing(
     daemon: Daemon,
     #[values(false, true)] enabled: bool,
     #[values(false, true)] purge: bool,
 ) {
     daemon.env.write_config(&format!("[daemon]\nenabled = {enabled}\nautostart = false\n"));
-    let index = stale_ai_session_index(&daemon.env).await;
+    let index = stale_si_session_index(&daemon.env).await;
     atuin_common::encryption::paseto_v4::Key::generate()
         .try_write_path(&daemon.env.data_dir().joined("key"))
         .unwrap();

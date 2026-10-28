@@ -1,21 +1,21 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
+use atuin_client::si_session::{SiSessionDatabase, SiSessionStore};
 use atuin_common::sync::BlockingPool;
 use atuin_kv::database::Database as KvDatabase;
 use atuin_scripts::database::Database as ScriptsDatabase;
 use eyre::{Context, Result};
 
-use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
+use crate::grpc::si::session::pb::si_session_server::SiSessionServer;
 use crate::service::address::DaemonListener;
-use crate::session_capture::AiHarnessSessionCapture;
+use crate::session_capture::SiHarnessSessionCapture;
 
 pub mod client;
 pub mod components;
@@ -34,7 +34,7 @@ mod sync;
 
 // Re-export core daemon types for convenience
 // Re-export client helpers
-pub use client::{AiClient, HistoryClient};
+pub use client::{HistoryClient, SiClient};
 // Re-export components
 pub use components::SearchComponent;
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
@@ -101,9 +101,9 @@ pub async fn boot(
     let host_id = settings.host_id().await?;
 
     // A rename that failed midway can leave the WAL apart from its database, so open neither.
-    let migrated = atuin_client::ai_session::migrate_sidecar_name(&settings);
-    let ai_session_db_path = atuin_client::ai_session::sidecar_path(&settings);
-    let ai_session_db = match migrated {
+    let migrated = atuin_client::si_session::migrate_sidecar_name(&settings);
+    let si_session_db_path = atuin_client::si_session::sidecar_path(&settings);
+    let si_session_db = match migrated {
         Err(err) => {
             tracing::error!(
                 ?err,
@@ -111,21 +111,21 @@ pub async fn boot(
             );
             None
         }
-        Ok(()) => match AiSessionDatabase::open(&ai_session_db_path).await {
+        Ok(()) => match SiSessionDatabase::open(&si_session_db_path).await {
             Ok(db) => Some(db),
             Err(err) => {
                 tracing::error!(
                     ?err,
-                    path = ?ai_session_db_path,
-                    "failed to open the ai-session sidecar; ai-session capture is disabled"
+                    path = ?si_session_db_path,
+                    "failed to open the si-session sidecar; si-session capture is disabled"
                 );
                 None
             }
         },
     };
-    let ai_session_capture = Arc::new(match &ai_session_db {
+    let si_session_capture = Arc::new(match &si_session_db {
         Some(db) => {
-            let records = AiSessionStore::builder()
+            let records = SiSessionStore::builder()
                 .store(handle.store().clone())
                 .host_id(host_id)
                 .key(handle.encryption_key().clone())
@@ -136,7 +136,7 @@ pub async fn boot(
             // (transient error, crash between the two writes, or a lost db file) is repaired there
             // instead of being stranded until — or re-pushed as duplicate records by — file
             // re-capture. Serving does not wait on it.
-            AiHarnessSessionCapture::open(
+            SiHarnessSessionCapture::open(
                 records,
                 db.clone(),
                 settings.threads.capture,
@@ -145,14 +145,14 @@ pub async fn boot(
                 blocking_pool.clone(),
             )
         }
-        None => AiHarnessSessionCapture::nop().await,
+        None => SiHarnessSessionCapture::nop().await,
     });
 
     let _sync_engine = sync::SyncEngine::spawn(
         handle.clone(),
         search_index.clone(),
-        ai_session_db,
-        ai_session_capture.recovery(),
+        si_session_db,
+        si_session_capture.recovery(),
     );
 
     let history_store =
@@ -171,8 +171,8 @@ pub async fn boot(
         journal.with_octavo(octavo::Octavo::open(&settings, handle.clone(), outputs).await);
     let journal = Arc::new(journal);
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
-    let ai_session_service =
-        AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture.clone()));
+    let si_session_service =
+        SiSessionServer::new(grpc::SiSessionService::new(si_session_capture.clone()));
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
@@ -181,14 +181,14 @@ pub async fn boot(
     if let Ok(watcher) = global_settings_watcher() {
         let mut settings_rx = watcher.subscribe();
         let watcher_handle = handle.clone();
-        let ai_session_capture = ai_session_capture.clone();
+        let si_session_capture = si_session_capture.clone();
         tokio::spawn(async move {
             tracing::info!("config file watcher started");
             while settings_rx.changed().await.is_ok() {
                 // Use the already-loaded settings from the watcher
                 // (avoids parsing the config file twice)
                 let new_settings = (*settings_rx.borrow()).clone();
-                ai_session_capture.set_capture(new_settings.threads.capture);
+                si_session_capture.set_capture(new_settings.threads.capture);
                 watcher_handle.apply_settings(new_settings).await;
             }
             tracing::debug!("config file watcher stopped");
@@ -212,7 +212,7 @@ pub async fn boot(
         listener,
         history_service,
         search_service.build(handle.clone()),
-        ai_session_service,
+        si_session_service,
         handle,
     )?;
 

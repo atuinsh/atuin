@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use atuin_client::ai_session::{Appended, HarnessKind, NativeSessionId};
+use atuin_client::si_session::{Appended, HarnessKind, NativeSessionId};
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::session::any::{AnySession, AnySessions};
 use atuin_common::sync::BlockingPool;
@@ -209,7 +209,7 @@ async fn read(kind: HarnessKind, keeps_patches: bool, session: AnySession) -> Re
 /// One session as an import reads it: its rows, and how many of its lines failed to read.
 struct Read {
     session: NativeSessionId,
-    rows: Vec<atuin_client::ai_session::Message>,
+    rows: Vec<atuin_client::si_session::Message>,
     failed: u64,
 }
 
@@ -219,10 +219,10 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::SeqCst;
 
-    use atuin_client::ai_session::{
-        AiSessionDatabase, AiSessionStore, HarnessSession, NativeSessionId,
-    };
     use atuin_client::record::sqlite_store::SqliteStore;
+    use atuin_client::si_session::{
+        HarnessSession, NativeSessionId, SiSessionDatabase, SiSessionStore,
+    };
     use atuin_common::encryption::paseto_v4::Key;
     use atuin_common::harnesstools::pi::session::PiSessions;
     use atuin_domain::record::HostId;
@@ -231,11 +231,11 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::session_capture::{AiHarnessSessionCapture, hooks};
+    use crate::session_capture::{SiHarnessSessionCapture, hooks};
 
-    async fn mem_store() -> AiSessionStore {
+    async fn mem_store() -> SiSessionStore {
         let store = SqliteStore::in_memory(std::time::Duration::from_secs(5)).await.unwrap();
-        AiSessionStore::builder()
+        SiSessionStore::builder()
             .store(store)
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
@@ -298,7 +298,7 @@ mod tests {
         write_pi_session(root.path(), "s1", &["user:hi", "assistant:yo"]);
 
         let sink =
-            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+            Arc::new(Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap()));
         let handle = HarnessSession {
             harness: HarnessKind::Pi,
             session: NativeSessionId::from("s1".to_owned()),
@@ -332,7 +332,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         write_pi_session(root.path(), "s1", &["user:hi"]);
         let sink =
-            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+            Arc::new(Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap()));
         let import = async || -> Vec<_> {
             SessionImporter::new(sink.clone(), pool())
                 .harness(HarnessKind::Pi, pi_sessions(root.path()))
@@ -384,7 +384,7 @@ mod tests {
         let turns = vec!["user:hi"; BATCH + 1];
         write_pi_session(root.path(), "s1", &turns);
         let pushes = Arc::new(CountPushes::default());
-        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         sink.hooks = Some(pushes.clone());
 
         let counts: Vec<_> = SessionImporter::new(Arc::new(sink), pool())
@@ -424,7 +424,7 @@ mod tests {
         std::fs::write(root.path().join("1700000000_s2.jsonl"), body).unwrap();
 
         let sink =
-            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+            Arc::new(Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap()));
         let _: Vec<_> = SessionImporter::new(sink.clone(), pool())
             .harness(HarnessKind::Pi, pi_sessions(root.path()))
             .collect()
@@ -455,7 +455,7 @@ mod tests {
         }
 
         let sink =
-            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+            Arc::new(Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap()));
         let events: Vec<_> = SessionImporter::new(sink, pool())
             .harness(HarnessKind::Pi, pi_sessions(root.path()))
             .collect()
@@ -476,7 +476,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn nop_facade_import_emits_a_single_empty_summary() {
-        let cap = AiHarnessSessionCapture::nop().await;
+        let cap = SiHarnessSessionCapture::nop().await;
         let events: Vec<_> = cap.import(None).collect().await;
         assert!(matches!(events.as_slice(), [ImportProgress::Finished {
             sessions: 0,

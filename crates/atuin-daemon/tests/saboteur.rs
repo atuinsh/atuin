@@ -33,7 +33,7 @@ async fn record_ids(env: &TestEnv) -> Vec<RecordId> {
 
 #[derive(Debug, Clone, Copy)]
 enum Poison {
-    /// An AI agent ran it; agent history must never surface in interactive search.
+    /// An SI agent ran it; agent history must never surface in interactive search.
     Agent,
     /// Its shell is not in the configured set.
     ForeignShell,

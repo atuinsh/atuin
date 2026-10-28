@@ -35,17 +35,17 @@ bindkey -M vicmd 'k' atuin-up-search-vicmd";
             println!("{BIND_UP_ARROW}");
         }
 
-        #[cfg(feature = "ai")]
-        if options.enable_ai {
-            println!("{}", atuin_ai::shell::ZSH_INIT);
+        #[cfg(feature = "si")]
+        if options.enable_si {
+            println!("{}", atuin_si::shell::ZSH_INIT);
         }
 
-        #[cfg(feature = "ai")]
-        if options.enable_ai_resume {
+        #[cfg(feature = "si")]
+        if options.enable_si_resume {
             println!(
-                r"bindkey -M emacs '^]' atuin-ai-resume
-bindkey -M viins '^]' atuin-ai-resume-viins
-bindkey -M vicmd '^]' atuin-ai-resume-vicmd"
+                r"bindkey -M emacs '^]' atuin-si-resume
+bindkey -M viins '^]' atuin-si-resume-viins
+bindkey -M vicmd '^]' atuin-si-resume-vicmd"
             );
         }
     }

@@ -10,7 +10,7 @@ use super::DiskUsageLimit;
 #[serde(from = "OutputCaptureConfig", into = "OutputCaptureConfig")]
 pub enum OutputCapture {
     /// `enabled = false`: nothing is captured, and the other keys are ignored but for
-    /// `command_filter`, which AI session capture also applies to the commands agents run.
+    /// `command_filter`, which SI session capture also applies to the commands agents run.
     Disabled(CommandFilter),
     /// `enabled = true`, with the limits that govern what is kept.
     Enabled(CaptureLimits),

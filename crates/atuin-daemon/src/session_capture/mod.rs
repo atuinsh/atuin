@@ -14,13 +14,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use atuin_client::ai_session::{
-    AiSessionDatabase, AiSessionStore, Appended, AtuinSessionId, BuildError, CaptureMark, DbError,
-    HarnessKind, HarnessSession, Message, NewRow, PreparedMessage, PushError, ReprojectProgress,
-    SearchTerms, Session, SessionFilter, SessionMatch,
-};
 use atuin_client::record::decode::map_parallel;
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::si_session::{
+    Appended, AtuinSessionId, BuildError, CaptureMark, DbError, HarnessKind, HarnessSession,
+    Message, NewRow, PreparedMessage, PushError, ReprojectProgress, SearchTerms, Session,
+    SessionFilter, SessionMatch, SiSessionDatabase, SiSessionStore,
+};
 use atuin_common::encryption::paseto_v4::Key;
 use atuin_common::harnesstools::session::{Content, Role, ToolCallId};
 use atuin_common::sync::BlockingPool;
@@ -85,8 +85,8 @@ type CaptureLocks =
 /// state.
 #[derive(Clone)]
 pub(crate) struct Sink {
-    records: AiSessionStore,
-    sidecar: AiSessionDatabase,
+    records: SiSessionStore,
+    sidecar: SiSessionDatabase,
     tail: broadcast::Sender<SessionTailEvent>,
     // Serialize the dedup gate + persistence across live capture and import. At most one batch
     // of records can be waiting for projection (or, after a push that failed or panicked, for
@@ -102,7 +102,7 @@ pub(crate) struct Sink {
     /// Calls seen running a command whose output may carry a credential, and not answered yet:
     /// their results' output is never kept (see [`Self::withhold_unsafe_output`]).
     unsafe_calls: Arc<parking_lot::Mutex<UnsafeCalls>>,
-    /// Where capture last moved this host's watermark (see [`AiSessionStore::advance_past_capture`]).
+    /// Where capture last moved this host's watermark (see [`SiSessionStore::advance_past_capture`]).
     capture_mark: Arc<parking_lot::Mutex<Option<CaptureMark>>>,
     #[cfg(test)]
     hooks: Option<Arc<dyn hooks::Hooks>>,
@@ -110,13 +110,13 @@ pub(crate) struct Sink {
 
 impl Sink {
     #[cfg(test)]
-    pub(crate) fn new(records: AiSessionStore, sidecar: AiSessionDatabase) -> Self {
+    pub(crate) fn new(records: SiSessionStore, sidecar: SiSessionDatabase) -> Self {
         Self::with_state(records, sidecar, ToolCapture::Names, watch::channel(StoreState::Ready).1)
     }
 
     fn with_state(
-        records: AiSessionStore,
-        sidecar: AiSessionDatabase,
+        records: SiSessionStore,
+        sidecar: SiSessionDatabase,
         tools: ToolCapture,
         state: watch::Receiver<StoreState>,
     ) -> Self {
@@ -200,7 +200,7 @@ impl Sink {
             // A panic: what it may have pushed is pending (see `append_locked`). Cancelled: the
             // runtime is shutting down, and startup recovery projects whatever it pushed.
             Err(err) => {
-                tracing::error!(?err, "an ai-session capture stopped unexpectedly");
+                tracing::error!(?err, "an si-session capture stopped unexpectedly");
                 Err(AppendError::Aborted)
             }
         }
@@ -463,7 +463,7 @@ impl Sink {
         if let Some(pushed) = pushed {
             let moved = self.records.advance_past_capture(&self.sidecar, known, pushed, count);
             *self.capture_mark.lock() = moved.await.unwrap_or_else(|err| {
-                tracing::warn!(?err, "failed to move the ai-session watermark past a capture");
+                tracing::warn!(?err, "failed to move the si-session watermark past a capture");
                 None
             });
         }
@@ -740,7 +740,7 @@ impl Recovery {
     }
 
     /// Project what a sync downloaded into `sidecar`, beside capture
-    /// ([`AiSessionStore::reproject_beside_capture`]). This never deletes a row of this host,
+    /// ([`SiSessionStore::reproject_beside_capture`]). This never deletes a row of this host,
     /// which capture dedups against, and never sets the store's state: a series whose forgetting
     /// would is handed to the coordinator, which holds capture off first, as for a rebuild. A
     /// reprojection that kept being invalidated is left to the next sync.
@@ -749,7 +749,7 @@ impl Recovery {
     /// (this host's own, coming back from the server) do not. Startup recovery and rebuilds
     /// replay without sending anything, and so does this once a rebuild or a series forgotten
     /// invalidates it.
-    pub async fn project_synced(&self, records: &AiSessionStore, sidecar: &AiSessionDatabase) {
+    pub async fn project_synced(&self, records: &SiSessionStore, sidecar: &SiSessionDatabase) {
         let tail = &self.tail;
         let to_tail = |rows: Vec<NewRow>| async move {
             if tail.receiver_count() == 0 {
@@ -761,7 +761,7 @@ impl Recovery {
                 let handle = &row.message.session;
                 if !sessions.contains_key(handle) {
                     let session = sidecar.get_session(handle).await.unwrap_or_else(|err| {
-                        tracing::warn!(?err, "failed to read a synced ai-session for the tail");
+                        tracing::warn!(?err, "failed to read a synced si-session for the tail");
                         None
                     });
                     sessions.insert(handle.clone(), session);
@@ -777,20 +777,20 @@ impl Recovery {
             Err(BuildError::ForgetHeldOff(host)) => host,
             Err(BuildError::Incomplete) => {
                 tracing::warn!(
-                    "synced ai-session records kept being invalidated while projected; the next \
+                    "synced si-session records kept being invalidated while projected; the next \
                      sync projects the rest"
                 );
                 return;
             }
             Err(err) => {
-                tracing::error!(?err, "failed to project synced ai-session records");
+                tracing::error!(?err, "failed to project synced si-session records");
                 return;
             }
         };
         let Some(coordinator) =
             self.coordinator.as_ref().and_then(mpsc::WeakUnboundedSender::upgrade)
         else {
-            tracing::warn!(%host, "ai-session records rewritten, with nothing to replay them");
+            tracing::warn!(%host, "si-session records rewritten, with nothing to replay them");
             return;
         };
         let (reply, answer) = oneshot::channel();
@@ -804,7 +804,7 @@ impl Recovery {
             Ok(Ok(()) | Err(RebuildError::Unavailable)) | Err(_) => {}
             // The series is found again by the next sync.
             Ok(Err(err)) => {
-                tracing::error!(?err, %host, "failed to forget rewritten ai-session records");
+                tracing::error!(?err, %host, "failed to forget rewritten si-session records");
             }
         }
     }
@@ -817,7 +817,7 @@ async fn follow<T>(mut enabled: watch::Receiver<bool>, mut start: impl FnMut() -
     loop {
         let on = *enabled.borrow_and_update();
         if on != running.is_some() {
-            tracing::info!(enabled = on, "ai-session capture");
+            tracing::info!(enabled = on, "si-session capture");
             running = on.then(&mut start);
         }
         if enabled.changed().await.is_err() {
@@ -826,7 +826,7 @@ async fn follow<T>(mut enabled: watch::Receiver<bool>, mut start: impl FnMut() -
     }
 }
 
-pub struct AiHarnessSessionCapture {
+pub struct SiHarnessSessionCapture {
     sink: Arc<Sink>,
     /// Runs the harness session file reads of capture and import.
     pool: BlockingPool,
@@ -842,7 +842,7 @@ pub struct AiHarnessSessionCapture {
     background: Vec<JoinHandle<()>>,
 }
 
-impl Drop for AiHarnessSessionCapture {
+impl Drop for SiHarnessSessionCapture {
     fn drop(&mut self) {
         for task in &self.background {
             task.abort();
@@ -850,10 +850,10 @@ impl Drop for AiHarnessSessionCapture {
     }
 }
 
-impl AiHarnessSessionCapture {
+impl SiHarnessSessionCapture {
     /// Serve the sidecar immediately and recover it from the record store in the background.
     ///
-    /// Recovery is [`AiSessionStore::reproject`]: only the records past each series' watermark
+    /// Recovery is [`SiSessionStore::reproject`]: only the records past each series' watermark
     /// are replayed, and everything when the sidecar is fresh (a new install, or one deleted)
     /// or its watermarks were cleared (a migration that needs a backfill, a key change).
     ///
@@ -863,8 +863,8 @@ impl AiHarnessSessionCapture {
     /// Failed recovery leaves existing sessions readable but keeps both off until restart.
     #[must_use]
     pub fn open(
-        records: AiSessionStore,
-        sidecar: AiSessionDatabase,
+        records: SiSessionStore,
+        sidecar: SiSessionDatabase,
         capture: bool,
         tools: ToolCapture,
         policy: CapturePolicy,
@@ -883,8 +883,8 @@ impl AiHarnessSessionCapture {
     }
 
     fn open_with(
-        records: AiSessionStore,
-        sidecar: AiSessionDatabase,
+        records: SiSessionStore,
+        sidecar: SiSessionDatabase,
         capture: bool,
         tools: ToolCapture,
         policy: CapturePolicy,
@@ -966,14 +966,14 @@ impl AiHarnessSessionCapture {
     async fn nop_in(state: watch::Receiver<StoreState>) -> Self {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT)
             .await
-            .expect("in-memory sqlite store must open for the nop ai-session capture facade");
-        let records = AiSessionStore::builder()
+            .expect("in-memory sqlite store must open for the nop si-session capture facade");
+        let records = SiSessionStore::builder()
             .store(store)
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sidecar = AiSessionDatabase::in_memory().await.expect(
-            "in-memory ai-session database must open for the nop ai-session capture facade",
+        let sidecar = SiSessionDatabase::in_memory().await.expect(
+            "in-memory si-session database must open for the nop si-session capture facade",
         );
 
         Self {
@@ -1001,7 +1001,7 @@ impl AiHarnessSessionCapture {
     /// a rebuild (`atuin store rebuild ai-session`): a reprojection only adds, so what deleted
     /// records projected would otherwise stay.
     ///
-    /// Everything projected is deleted ([`AiSessionDatabase::reset`]) before this returns, then
+    /// Everything projected is deleted ([`SiSessionDatabase::reset`]) before this returns, then
     /// replayed in the background, recovering as at startup meanwhile: reads are refused as
     /// rebuilding with the replay's progress, and capture and import wait (their dedup gate
     /// trusts the sidecar). During startup recovery, or another rebuild, the replay running
@@ -1038,7 +1038,7 @@ impl AiHarnessSessionCapture {
             recovery.project_synced(&sink.records, &sink.sidecar).await;
         });
         if let Err(err) = projecting.await {
-            tracing::error!(?err, "projecting synced ai-session records failed");
+            tracing::error!(?err, "projecting synced si-session records failed");
         }
     }
 
@@ -1148,7 +1148,7 @@ impl AiHarnessSessionCapture {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use atuin_client::ai_session::{NativeSessionId, SourceId};
+    use atuin_client::si_session::{NativeSessionId, SourceId};
     use atuin_common::harnesstools::session::{
         TitleChange, TitleSource, ToolCallId, ToolResult, ToolUse, Usage,
     };
@@ -1160,9 +1160,9 @@ mod tests {
 
     use super::*;
 
-    async fn mem_store() -> AiSessionStore {
+    async fn mem_store() -> SiSessionStore {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        AiSessionStore::builder()
+        SiSessionStore::builder()
             .store(store)
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
@@ -1225,7 +1225,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn every_row_of_a_session_carries_its_first_rows_id() {
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         let mut sub = sink.subscribe();
         let first = sample_message();
         let mut earlier = sample_message();
@@ -1256,7 +1256,7 @@ mod tests {
     async fn a_continuation_gets_its_own_atuin_id(
         #[case] kind: atuin_common::harnesstools::session::ParentKind,
     ) {
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         let original = sample_message();
         let mut continued = sample_message();
         continued.id = RecordId(atuin_common::utils::uuid_v7());
@@ -1280,7 +1280,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn append_emits_started_then_message_to_subscriber() {
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         let mut sub = sink.subscribe();
 
         sink.append(sample_message()).await.unwrap();
@@ -1294,7 +1294,7 @@ mod tests {
     #[case(Role::Assistant)]
     #[tokio::test]
     async fn capture_sanitizes_records_sidecar_and_tail(#[case] role: Role) {
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         let mut sub = sink.subscribe();
         let mut msg = sample_message();
         msg.role = role;
@@ -1361,7 +1361,7 @@ mod tests {
         assert_eq!(messages.next().await.unwrap().unwrap(), msg);
 
         // Rebuilding from encrypted records must not restore discarded payloads.
-        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        let rebuilt = SiSessionDatabase::in_memory().await.unwrap();
         sink.records.build(&rebuilt).await.unwrap();
         assert_eq!(rebuilt.get_session(&msg.session).await.unwrap().unwrap().title, title);
         let mut messages = Box::pin(rebuilt.messages(&msg.session));
@@ -1387,7 +1387,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn capture_with_tools_keeps_payloads() {
-        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         sink.tools = ToolCapture::Payloads;
         let mut msg = sample_message();
         msg.role = Role::Assistant;
@@ -1406,7 +1406,7 @@ mod tests {
         sink.append(msg.clone()).await.unwrap();
 
         let want_output = serde_json::json!("AWS_SECRET_ACCESS_KEY=****\ntest wibble ... ok");
-        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        let rebuilt = SiSessionDatabase::in_memory().await.unwrap();
         sink.records.build(&rebuilt).await.unwrap();
         for db in [&sink.sidecar, &rebuilt] {
             let mut messages = Box::pin(db.messages(&msg.session));
@@ -1433,7 +1433,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn credential_command_output_is_never_kept() {
-        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         sink.tools = ToolCapture::Payloads;
         let call = |id: &str, command: &str| {
             Content::ToolUse(ToolUse {
@@ -1543,7 +1543,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn an_append_dropped_once_its_output_is_withheld_still_withholds_it() {
-        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         sink.tools = ToolCapture::Payloads;
         let row = |n: u32, role, content| {
             let mut msg = sample_message();
@@ -1584,7 +1584,7 @@ mod tests {
         assert_last_output_withheld(&sink.sidecar, &answer.session).await;
     }
 
-    async fn assert_last_output_withheld(sidecar: &AiSessionDatabase, session: &HarnessSession) {
+    async fn assert_last_output_withheld(sidecar: &SiSessionDatabase, session: &HarnessSession) {
         let mut messages = Box::pin(sidecar.messages(session));
         let mut last = None;
         while let Some(stored) = messages.next().await {
@@ -1605,7 +1605,7 @@ mod tests {
     async fn a_patch_is_kept_out_with_what_its_call_wrote() {
         use atuin_common::harnesstools::session::{Change, FilePatch, Hunk, Patch};
 
-        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         sink.tools = ToolCapture::Payloads;
         sink.policy = Arc::new(policy::tests::policy());
         let call = |id: &str, name: &str, input: serde_json::Value| {
@@ -1702,7 +1702,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn the_users_filters_and_credential_files_are_kept_out() {
-        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         sink.tools = ToolCapture::Payloads;
         sink.policy = Arc::new(policy::tests::policy());
         let call = |id: &str, name: &str, input: serde_json::Value| {
@@ -1858,7 +1858,7 @@ mod tests {
         #[case] rows: Vec<Stored>,
         #[case] want: &[&str],
     ) {
-        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         sink.tools = ToolCapture::Payloads;
         sink.policy = Arc::new(policy::tests::policy());
         for (n, row) in (0..).zip(rows) {
@@ -1897,21 +1897,21 @@ mod tests {
     #[case(Some(0))]
     #[tokio::test]
     async fn reasoning_metadata_survives_storage(#[case] tokens: Option<u64>) {
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         let mut msg = sample_message();
         msg.role = Role::Assistant;
         msg.content = vec![Content::ReasoningSummary { tokens }];
         sink.append(msg.clone()).await.unwrap();
-        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        let rebuilt = SiSessionDatabase::in_memory().await.unwrap();
         sink.records.build(&rebuilt).await.unwrap();
         let mut messages = Box::pin(rebuilt.messages(&msg.session));
         let stored = messages.next().await.unwrap().unwrap();
         assert_eq!(stored.content, msg.content);
-        let block = crate::grpc::ai::agent::pb::ContentBlock::from(stored.content[0].clone());
+        let block = crate::grpc::si::agent::pb::ContentBlock::from(stored.content[0].clone());
         assert_eq!(
             block.block,
-            Some(crate::grpc::ai::agent::pb::content_block::Block::ReasoningSummary(
-                crate::grpc::ai::agent::pb::ReasoningSummary { tokens }
+            Some(crate::grpc::si::agent::pb::content_block::Block::ReasoningSummary(
+                crate::grpc::si::agent::pb::ReasoningSummary { tokens }
             ))
         );
     }
@@ -1932,7 +1932,7 @@ mod tests {
     }
 
     /// Output and reasoning tokens a session is charged.
-    async fn charged(db: &AiSessionDatabase) -> (u64, u64) {
+    async fn charged(db: &SiSessionDatabase) -> (u64, u64) {
         let usage = db.get_session(&sample_handle()).await.unwrap().unwrap().usage;
         (usage.output.unwrap(), usage.reasoning.unwrap())
     }
@@ -1948,12 +1948,12 @@ mod tests {
         let records_path = dir.path().join("records.db");
         let sidecar_path = dir.path().join("sessions.db");
         let store = SqliteStore::new(records_path.as_os_str(), NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(store)
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sidecar = AiSessionDatabase::open(&sidecar_path).await.unwrap();
+        let sidecar = SiSessionDatabase::open(&sidecar_path).await.unwrap();
         let sink = Sink::new(records.clone(), sidecar.clone());
         let mut tail = sink.tail.subscribe();
         let path = if fail_projection {
@@ -2001,7 +2001,7 @@ mod tests {
         // A replay is also harmless.
         sink.append(message("second")).await.unwrap();
         assert_eq!(charged(&sidecar).await, (999, 185));
-        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        let rebuilt = SiSessionDatabase::in_memory().await.unwrap();
         records.build(&rebuilt).await.unwrap();
         assert_eq!(charged(&rebuilt).await, (999, 185));
     }
@@ -2012,7 +2012,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sessions.db");
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::open(&path).await.unwrap();
+        let sidecar = SiSessionDatabase::open(&path).await.unwrap();
         let mut msg = call_message("first", "call", 100, Some(42));
         // Simulate a crash after the record commit but before sidecar projection.
         records.push(&msg).await.unwrap();
@@ -2025,7 +2025,7 @@ mod tests {
         .execute(fault.pool())
         .await
         .unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records.clone(),
             sidecar.clone(),
             false,
@@ -2042,7 +2042,7 @@ mod tests {
         assert!(import.next().await.is_none());
         drop(capture);
         atuin_common::db::query("DROP TRIGGER fail_write").execute(fault.pool()).await.unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records,
             sidecar.clone(),
             false,
@@ -2064,7 +2064,7 @@ mod tests {
     #[case::aborted(None)]
     #[tokio::test]
     async fn recovery_finishes_however_it_ends(#[case] end: Option<StoreState>) {
-        let (capture, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
+        let (capture, state) = SiHarnessSessionCapture::with_state(StoreState::Recovering).await;
         let recovery = capture.recovery();
         let wait = Duration::from_millis(50);
         assert!(tokio::time::timeout(wait, recovery.finished()).await.is_err());
@@ -2082,11 +2082,11 @@ mod tests {
     #[tokio::test]
     async fn ready_waits_for_background_recovery() {
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         let msg = call_message("first", "call", 100, Some(42));
         records.push(&msg).await.unwrap();
 
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records,
             sidecar.clone(),
             false,
@@ -2105,8 +2105,8 @@ mod tests {
     #[tokio::test]
     async fn synced_records_are_projected_though_the_asker_stops_waiting() {
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
+        let capture = SiHarnessSessionCapture::open(
             records.clone(),
             sidecar.clone(),
             false,
@@ -2137,11 +2137,11 @@ mod tests {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
         let key = Key::generate();
         let records_of = |host| {
-            AiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build()
+            SiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build()
         };
         let records = records_of(HostId(atuin_common::utils::uuid_v7()));
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
+        let capture = SiHarnessSessionCapture::open(
             records,
             sidecar.clone(),
             false,
@@ -2192,11 +2192,11 @@ mod tests {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
         let key = Key::generate();
         let records_of = |host| {
-            AiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build()
+            SiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build()
         };
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records_of(HostId(atuin_common::utils::uuid_v7())),
-            AiSessionDatabase::in_memory().await.unwrap(),
+            SiSessionDatabase::in_memory().await.unwrap(),
             false,
             ToolCapture::Names,
             CapturePolicy::default(),
@@ -2239,7 +2239,7 @@ mod tests {
     #[tokio::test]
     async fn capture_moves_the_watermark_past_what_it_projects() {
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         // Startup recovery, before capture starts.
         records.reproject(&sidecar).await.unwrap();
         let sink = Sink::new(records.clone(), sidecar.clone());
@@ -2269,7 +2269,7 @@ mod tests {
     #[tokio::test]
     async fn a_batch_is_appended_whole() {
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         records.reproject(&sidecar).await.unwrap();
         let sink = Sink::new(records.clone(), sidecar.clone());
         sink.append(message_of("s1", "a")).await.unwrap();
@@ -2292,16 +2292,16 @@ mod tests {
     #[tokio::test]
     async fn a_rebuild_replays_only_the_records_left_and_holds_capture() {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(store.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         let (kept, purged) = (message_of("kept", "k1"), message_of("purged", "p1"));
         records.push(&kept).await.unwrap();
         records.push(&purged).await.unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records,
             sidecar.clone(),
             false,
@@ -2337,7 +2337,7 @@ mod tests {
             .map(|s| s.handle)
             .collect();
         assert_eq!(listed, std::slice::from_ref(&kept.session));
-        let stored = store.all_tagged(&atuin_domain::record::RecordTag::AiSession).await.unwrap();
+        let stored = store.all_tagged(&atuin_domain::record::RecordTag::SiSession).await.unwrap();
         assert_eq!(stored.len(), 1, "nothing was pushed twice");
     }
 
@@ -2347,15 +2347,15 @@ mod tests {
     #[tokio::test]
     async fn a_capture_overtaken_by_a_rebuild_waits_for_it() {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(store.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         let kept = message_of("kept", "k1");
         records.push(&kept).await.unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records,
             sidecar.clone(),
             false,
@@ -2380,7 +2380,7 @@ mod tests {
 
         drop(replay);
         assert_eq!(again.await.unwrap(), Appended::Duplicate);
-        let stored = store.all_tagged(&atuin_domain::record::RecordTag::AiSession).await.unwrap();
+        let stored = store.all_tagged(&atuin_domain::record::RecordTag::SiSession).await.unwrap();
         assert_eq!(stored.len(), 1, "nothing was pushed twice");
     }
 
@@ -2390,11 +2390,11 @@ mod tests {
     #[tokio::test]
     async fn a_rebuild_during_recovery_leaves_it_the_replay() {
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         let msg = message_of("kept", "k1");
         records.push(&msg).await.unwrap();
         let recovery = sidecar.lock_reprojection().await;
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records,
             sidecar.clone(),
             false,
@@ -2408,7 +2408,7 @@ mod tests {
         assert!(capture.ready().await);
         assert!(sidecar.contains_message(&msg.session, &msg.source_id).await.unwrap());
 
-        let nop = AiHarnessSessionCapture::nop().await;
+        let nop = SiHarnessSessionCapture::nop().await;
         assert!(matches!(nop.rebuild().await, Err(RebuildError::Unavailable)));
     }
 
@@ -2471,16 +2471,16 @@ mod tests {
         #[values(false, true)] during_a_rebuild: bool,
     ) {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(store.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         let msg = message_of("kept", "k1");
         records.push(&msg).await.unwrap();
         let gate = Arc::new(Gate::default());
-        let capture = AiHarnessSessionCapture::open_with(
+        let capture = SiHarnessSessionCapture::open_with(
             records,
             sidecar.clone(),
             false,
@@ -2515,7 +2515,7 @@ mod tests {
 
         // Capture trusts the sidecar again, rightly: nothing is pushed twice.
         assert_eq!(capture.sink.append(msg).await.unwrap(), Appended::Duplicate);
-        let stored = store.all_tagged(&RecordTag::AiSession).await.unwrap();
+        let stored = store.all_tagged(&RecordTag::SiSession).await.unwrap();
         assert_eq!(stored.len(), 1);
     }
 
@@ -2525,11 +2525,11 @@ mod tests {
     #[tokio::test]
     async fn a_rebuild_after_a_replay_panicked_replays() {
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         let msg = message_of("kept", "k1");
         records.push(&msg).await.unwrap();
         let gate = Arc::new(Gate::default());
-        let capture = AiHarnessSessionCapture::open_with(
+        let capture = SiHarnessSessionCapture::open_with(
             records,
             sidecar.clone(),
             false,
@@ -2569,11 +2569,11 @@ mod tests {
     #[tokio::test]
     async fn a_replay_panicking_after_a_rebuild_replays_again() {
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         let msg = message_of("kept", "k1");
         records.push(&msg).await.unwrap();
         let gate = Arc::new(Gate::default());
-        let capture = AiHarnessSessionCapture::open_with(
+        let capture = SiHarnessSessionCapture::open_with(
             records,
             sidecar.clone(),
             false,
@@ -2603,10 +2603,10 @@ mod tests {
     #[tokio::test]
     async fn a_rebuild_given_up_on_still_ends_ready() {
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         let msg = message_of("kept", "k1");
         records.push(&msg).await.unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records,
             sidecar.clone(),
             false,
@@ -2643,15 +2643,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sessions.db");
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(store.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sidecar = AiSessionDatabase::open(&path).await.unwrap();
+        let sidecar = SiSessionDatabase::open(&path).await.unwrap();
         let msg = message_of("kept", "k1");
         records.push(&msg).await.unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records,
             sidecar.clone(),
             false,
@@ -2660,7 +2660,7 @@ mod tests {
             BlockingPool::new(NonZeroUsize::MIN),
         );
         assert!(capture.ready().await);
-        let stored = async || store.all_tagged(&RecordTag::AiSession).await.unwrap().len();
+        let stored = async || store.all_tagged(&RecordTag::SiSession).await.unwrap().len();
 
         // The rebuild empties the sidecar, then its replay fails.
         let fault =
@@ -2725,11 +2725,11 @@ mod tests {
         assert_eq!(stored().await, 1, "nothing was pushed twice");
     }
 
-    /// Rewrite `host`'s ai-session records in `store`: each comes back at its index under a new
+    /// Rewrite `host`'s si-session records in `store`: each comes back at its index under a new
     /// record id, as when the series is reset and pushed again. A reprojection finds it rewritten
     /// under its watermark.
     async fn rewrite_series(store: &SqliteStore, key: &Key, host: HostId) {
-        for record in store.all_tagged(&RecordTag::AiSession).await.unwrap() {
+        for record in store.all_tagged(&RecordTag::SiSession).await.unwrap() {
             if record.host.id != host {
                 continue;
             }
@@ -2746,7 +2746,7 @@ mod tests {
     /// takes capture's lock; then holds the coordinator after the wipe until released.
     #[derive(Debug)]
     struct HoldAfterWipe {
-        watched: std::sync::OnceLock<(watch::Receiver<StoreState>, AiSessionDatabase, Message)>,
+        watched: std::sync::OnceLock<(watch::Receiver<StoreState>, SiSessionDatabase, Message)>,
         /// What the wipe saw under capture's lock: the state, and whether the line was there.
         seen: parking_lot::Mutex<Vec<(StoreState, bool)>>,
         reached: tokio::sync::Semaphore,
@@ -2796,12 +2796,12 @@ mod tests {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
         let (key, host) = (Key::generate(), HostId(atuin_common::utils::uuid_v7()));
         let records =
-            AiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build();
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+            SiSessionStore::builder().store(store.clone()).host_id(host).key(key.clone()).build();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         let msg = message_of("kept", "k1");
         records.push(&msg).await.unwrap();
         let hooks = Arc::new(HoldAfterWipe::default());
-        let capture = AiHarnessSessionCapture::open_with(
+        let capture = SiHarnessSessionCapture::open_with(
             records.clone(),
             sidecar.clone(),
             false,
@@ -2816,7 +2816,7 @@ mod tests {
 
         rewrite_series(&store, &key, host).await;
         let projector =
-            crate::sync::spawn_ai_session_projector(records, sidecar.clone(), capture.recovery());
+            crate::sync::spawn_si_session_projector(records, sidecar.clone(), capture.recovery());
         projector.send(()).unwrap();
         let reached = tokio::time::timeout(Duration::from_secs(10), hooks.reached.acquire());
         reached.await.expect("the sync worker never had it forgotten").unwrap().forget();
@@ -2840,7 +2840,7 @@ mod tests {
         assert_eq!(again.expect("capture never resumed").unwrap(), Appended::Duplicate);
         assert!(capture.ready().await);
         assert!(projected().await.unwrap());
-        let stored = store.all_tagged(&RecordTag::AiSession).await.unwrap();
+        let stored = store.all_tagged(&RecordTag::SiSession).await.unwrap();
         assert_eq!(stored.len(), 1, "nothing was pushed twice");
     }
 
@@ -2880,12 +2880,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sessions.db");
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(store.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sidecar = AiSessionDatabase::open(&path).await.unwrap();
+        let sidecar = SiSessionDatabase::open(&path).await.unwrap();
         let msg = message_of("kept", "k1");
         records.push(&msg).await.unwrap();
         // Every watermark move fails, as when an invalidation lands in the middle of each pass.
@@ -2904,7 +2904,7 @@ mod tests {
             invalidate().await;
         }
         let hooks = Arc::new(CountIncomplete::default());
-        let capture = AiHarnessSessionCapture::open_with(
+        let capture = SiHarnessSessionCapture::open_with(
             records,
             sidecar.clone(),
             false,
@@ -2946,7 +2946,7 @@ mod tests {
         assert!(ready.await.expect("never settled"), "ready once the storm is over");
         let again = tokio::time::timeout(Duration::from_secs(10), again).await;
         assert_eq!(again.expect("capture never resumed").unwrap(), Appended::Duplicate);
-        let stored = store.all_tagged(&RecordTag::AiSession).await.unwrap();
+        let stored = store.all_tagged(&RecordTag::SiSession).await.unwrap();
         assert_eq!(stored.len(), 1, "nothing was pushed twice");
     }
 
@@ -2958,7 +2958,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sessions.db");
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::open(&path).await.unwrap();
+        let sidecar = SiSessionDatabase::open(&path).await.unwrap();
         let msg = message_of("kept", "k1");
         records.push(&msg).await.unwrap();
         let fault =
@@ -2970,7 +2970,7 @@ mod tests {
         .execute(fault.pool())
         .await
         .unwrap();
-        let capture = AiHarnessSessionCapture::open(
+        let capture = SiHarnessSessionCapture::open(
             records,
             sidecar,
             false,
@@ -2989,12 +2989,12 @@ mod tests {
     #[tokio::test]
     async fn recovery_is_incremental_and_reports_progress() {
         let records = mem_store().await;
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
         for source in ["a", "b", "c"] {
             records.push(&call_message(source, source, 1, None)).await.unwrap();
         }
         let open = || {
-            AiHarnessSessionCapture::open(
+            SiHarnessSessionCapture::open(
                 records.clone(),
                 sidecar.clone(),
                 false,
@@ -3018,13 +3018,13 @@ mod tests {
     #[tokio::test]
     async fn concurrent_rows_of_one_call_count_usage_once() {
         let records = mem_store().await;
-        let sink = Sink::new(records.clone(), AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(records.clone(), SiSessionDatabase::in_memory().await.unwrap());
         let first = call_message("first", "call", 100, Some(42));
         let second = call_message("second", "call", 100, Some(42));
         let (a, b) = tokio::join!(sink.append(first), sink.append(second));
         a.unwrap();
         b.unwrap();
-        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        let rebuilt = SiSessionDatabase::in_memory().await.unwrap();
         records.build(&rebuilt).await.unwrap();
         assert_eq!(charged(&rebuilt).await, (100, 42));
     }
@@ -3037,7 +3037,7 @@ mod tests {
     #[tokio::test]
     async fn split_and_interleaved_calls_count_reasoning_once() {
         use futures::TryStreamExt;
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         for (index, (turn, marker, output, reasoning)) in [
             ("a", true, 10, None),
             ("b", true, 50, Some(42)),
@@ -3131,7 +3131,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn append_returns_new_then_duplicate() {
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         let msg = sample_message();
 
         assert_eq!(sink.append(msg.clone()).await.unwrap(), Appended::New);
@@ -3148,7 +3148,7 @@ mod tests {
         #[case] timestamp: OffsetDateTime,
         #[case] want: OffsetDateTime,
     ) {
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
         let mut sub = sink.subscribe();
         let mut msg = sample_message();
         msg.timestamp = timestamp;
@@ -3168,12 +3168,12 @@ mod tests {
     #[tokio::test]
     async fn a_row_back_with_other_content_is_a_duplicate() {
         let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(raw.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sink = Sink::new(records, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(records, SiSessionDatabase::in_memory().await.unwrap());
         let mut synced = sample_message();
         synced.role = Role::Assistant;
         synced.content = vec![Content::ToolUse(ToolUse {
@@ -3187,7 +3187,7 @@ mod tests {
 
         assert_eq!(sink.append(synced).await.unwrap(), Appended::New);
         assert_eq!(sink.append(restored).await.unwrap(), Appended::Duplicate);
-        assert_eq!(raw.all_tagged(&RecordTag::AiSession).await.unwrap().len(), 1);
+        assert_eq!(raw.all_tagged(&RecordTag::SiSession).await.unwrap().len(), 1);
         let messages: Vec<Message> =
             sink.sidecar.messages(&sample_handle()).map(Result::unwrap).collect().await;
         assert_eq!(messages.len(), 1);
@@ -3199,7 +3199,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn append_without_subscriber_does_not_error() {
-        let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(mem_store().await, SiSessionDatabase::in_memory().await.unwrap());
 
         sink.append(sample_message()).await.unwrap();
 
@@ -3211,12 +3211,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_appends_of_one_message_write_a_single_record() {
         let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(raw.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sink = Arc::new(Sink::new(records, AiSessionDatabase::in_memory().await.unwrap()));
+        let sink = Arc::new(Sink::new(records, SiSessionDatabase::in_memory().await.unwrap()));
 
         let outcomes = futures::future::join_all((0..8).map(|_| {
             let sink = Arc::clone(&sink);
@@ -3226,7 +3226,7 @@ mod tests {
         .await;
 
         assert_eq!(outcomes.iter().filter(|a| matches!(a, Appended::New)).count(), 1);
-        assert_eq!(raw.all_tagged(&RecordTag::AiSession).await.unwrap().len(), 1);
+        assert_eq!(raw.all_tagged(&RecordTag::SiSession).await.unwrap().len(), 1);
         assert_eq!(
             sink.sidecar.get_session(&sample_handle()).await.unwrap().unwrap().message_count,
             1
@@ -3261,12 +3261,12 @@ mod tests {
 
         const ITERATIONS: usize = 50;
         let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(raw.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sink = Sink::new(records, AiSessionDatabase::in_memory().await.unwrap());
+        let sink = Sink::new(records, SiSessionDatabase::in_memory().await.unwrap());
         let seen = raw.clone();
 
         let mut dropped = 0;
@@ -3293,7 +3293,7 @@ mod tests {
             let mut again = msg.clone();
             again.id = RecordId(atuin_common::utils::uuid_v7());
             assert_eq!(sink.append(again).await.unwrap(), Appended::Duplicate, "iteration {i}");
-            let stored = raw.all_tagged(&RecordTag::AiSession).await.unwrap();
+            let stored = raw.all_tagged(&RecordTag::SiSession).await.unwrap();
             assert_eq!(stored.len(), i + 1, "iteration {i}: the line pushed twice");
         }
         assert!(dropped > ITERATIONS / 2, "only {dropped} appends dropped once pushed");
@@ -3329,12 +3329,12 @@ mod tests {
         #[case] again: Appended,
     ) {
         let raw = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(raw.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let mut sink = Sink::new(records, AiSessionDatabase::in_memory().await.unwrap());
+        let mut sink = Sink::new(records, SiSessionDatabase::in_memory().await.unwrap());
         let msg = message_of("panicked", "m");
         sink.hooks = Some(Arc::new(PanicCapture(at)));
         assert!(matches!(sink.append(msg.clone()).await, Err(AppendError::Aborted)));
@@ -3344,7 +3344,7 @@ mod tests {
         retry.id = RecordId(atuin_common::utils::uuid_v7());
         let appended = tokio::time::timeout(Duration::from_secs(10), sink.append(retry));
         assert_eq!(appended.await.expect("capture's locks left held").unwrap(), again);
-        assert_eq!(raw.all_tagged(&RecordTag::AiSession).await.unwrap().len(), 1);
+        assert_eq!(raw.all_tagged(&RecordTag::SiSession).await.unwrap().len(), 1);
         let row = sink.sidecar.get_session(&msg.session).await.unwrap().unwrap();
         assert_eq!(row.message_count, 1);
     }
@@ -3354,7 +3354,7 @@ mod tests {
 /// sidecar, including usage accounting across sessions and daemon restarts.
 #[cfg(test)]
 mod pipeline_tests {
-    use atuin_client::ai_session::HarnessSession;
+    use atuin_client::si_session::HarnessSession;
     use atuin_common::harnesstools::session::{AnyMessage, SessionId};
     use atuin_common::path::PathBufExt as _;
     use rstest::{fixture, rstest};
@@ -3366,12 +3366,12 @@ mod pipeline_tests {
     #[fixture]
     async fn sink() -> Sink {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(store)
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        Sink::new(records, AiSessionDatabase::in_memory().await.unwrap())
+        Sink::new(records, SiSessionDatabase::in_memory().await.unwrap())
     }
 
     fn ccode(raw: serde_json::Value) -> AnyMessage {
@@ -3444,7 +3444,7 @@ mod pipeline_tests {
     fn handle(kind: HarnessKind, session: &str) -> HarnessSession {
         HarnessSession {
             harness: kind,
-            session: atuin_client::ai_session::NativeSessionId::from(session.to_owned()),
+            session: atuin_client::si_session::NativeSessionId::from(session.to_owned()),
         }
     }
 
@@ -3462,7 +3462,7 @@ mod pipeline_tests {
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
         let live = collect(sink.sidecar.list_sessions(&SessionFilter::default()).await.unwrap());
-        let rebuilt = AiSessionDatabase::in_memory().await.unwrap();
+        let rebuilt = SiSessionDatabase::in_memory().await.unwrap();
         sink.records.build(&rebuilt).await.unwrap();
         assert_eq!(
             collect(rebuilt.list_sessions(&SessionFilter::default()).await.unwrap()),
@@ -3602,22 +3602,22 @@ mod pipeline_tests {
 
     /// A facade over a fresh in-memory store, ready, holding a Codex session `s1` of two
     /// identical id-less prompts (ordinals 0 and 1); and its record store.
-    async fn two_prompts() -> (AiHarnessSessionCapture, SqliteStore) {
+    async fn two_prompts() -> (SiHarnessSessionCapture, SqliteStore) {
         two_prompts_with(None).await
     }
 
     /// [`two_prompts`], with test hooks.
     async fn two_prompts_with(
         hooks: Option<Arc<dyn hooks::Hooks>>,
-    ) -> (AiHarnessSessionCapture, SqliteStore) {
+    ) -> (SiHarnessSessionCapture, SqliteStore) {
         let store = SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap();
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(store.clone())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build();
-        let sidecar = AiSessionDatabase::in_memory().await.unwrap();
-        let capture = AiHarnessSessionCapture::open_with(
+        let sidecar = SiSessionDatabase::in_memory().await.unwrap();
+        let capture = SiHarnessSessionCapture::open_with(
             records,
             sidecar,
             false,
@@ -3637,7 +3637,7 @@ mod pipeline_tests {
     /// A third identical prompt, captured with `enricher` (warmed on resuming `s1`), is a third
     /// row: stored once, never dropped as a duplicate of the first two.
     async fn third_prompt_is_stored(
-        capture: &AiHarnessSessionCapture,
+        capture: &SiHarnessSessionCapture,
         store: &SqliteStore,
         mut enricher: MessageEnricher,
     ) {
@@ -3648,7 +3648,7 @@ mod pipeline_tests {
         let handle = handle(HarnessKind::Codex, "s1");
         let row = capture.sink.sidecar.get_session(&handle).await.unwrap().unwrap();
         assert_eq!(row.message_count, 3);
-        let stored = store.all_tagged(&atuin_domain::record::RecordTag::AiSession).await.unwrap();
+        let stored = store.all_tagged(&atuin_domain::record::RecordTag::SiSession).await.unwrap();
         assert_eq!(stored.len(), 3, "each line pushed once");
     }
 
@@ -3777,7 +3777,7 @@ mod pipeline_tests {
         for row in rows.clone() {
             assert_eq!(capture.sink.append(row).await.unwrap(), Appended::New, "dropped");
         }
-        let stored = store.all_tagged(&atuin_domain::record::RecordTag::AiSession).await.unwrap();
+        let stored = store.all_tagged(&atuin_domain::record::RecordTag::SiSession).await.unwrap();
         assert_eq!(stored.len(), 3, "each line pushed once");
         let without_ids = |rows: Vec<Message>| -> Vec<Message> {
             rows.into_iter()
@@ -4004,10 +4004,10 @@ mod pipeline_tests {
         let parent = msg.parent.clone().expect("the marker names the parent");
         assert_eq!(parent.harness, HarnessKind::Pi);
         assert_eq!(parent.session.as_ref(), "0199-orig");
-        let record = atuin_client::ai_session::AiSessionRecord::Message(msg).serialize();
-        let version = atuin_client::ai_session::AiSessionRecord::VERSION;
+        let record = atuin_client::si_session::SiSessionRecord::Message(msg).serialize();
+        let version = atuin_client::si_session::SiSessionRecord::VERSION;
         let back =
-            atuin_client::ai_session::AiSessionRecord::deserialize(&record, &version).unwrap();
+            atuin_client::si_session::SiSessionRecord::deserialize(&record, &version).unwrap();
         assert!(format!("{back:?}").contains("0199-orig"), "the record carries the parent");
     }
 
@@ -4163,7 +4163,7 @@ mod pipeline_tests {
         capture_all(&a, &mut on_a, &sid(id), &started).await;
 
         // Host B restores the session from the synced rows.
-        let records = AiSessionStore::builder()
+        let records = SiSessionStore::builder()
             .store(SqliteStore::in_memory(NOP_STORE_TIMEOUT).await.unwrap())
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())

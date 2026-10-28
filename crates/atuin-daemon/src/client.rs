@@ -1,9 +1,9 @@
 use std::num::NonZeroU32;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::si_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
 use easy_cast::Conv;
@@ -16,13 +16,6 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tracing::{Level, instrument, span, warn};
 
-use crate::grpc::ai::agent::pb::Session as AiSession;
-use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
-use crate::grpc::ai::session::pb::{
-    GetSessionEvent, GetSessionRequest, ImportSessionsEvent, ImportSessionsRequest,
-    ListSessionsRequest, ProjectSyncedRequest, RebuildSessionsRequest, SearchSessionsMatch,
-    SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
-};
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
@@ -31,6 +24,13 @@ use crate::grpc::history::pb::{
     RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest,
     StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
     TailHistoryRequest,
+};
+use crate::grpc::si::agent::pb::Session as SiSession;
+use crate::grpc::si::session::pb::si_session_client::SiSessionClient as SiSessionServiceClient;
+use crate::grpc::si::session::pb::{
+    GetSessionEvent, GetSessionRequest, ImportSessionsEvent, ImportSessionsRequest,
+    ListSessionsRequest, ProjectSyncedRequest, RebuildSessionsRequest, SearchSessionsMatch,
+    SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
 };
 use crate::grpc::versioning::{StrictVersionInterceptor, VersionMatchError, VersionedExt as _};
 use crate::output_capture::OutputMatch;
@@ -402,23 +402,23 @@ impl From<Context> for RpcSearchContext {
     }
 }
 
-/// First and longest waits between [`AiClient::wait_for_sessions`] probes.
+/// First and longest waits between [`SiClient::wait_for_sessions`] probes.
 const REBUILD_POLL_START: std::time::Duration = std::time::Duration::from_millis(250);
 const REBUILD_POLL_MAX: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Client for the daemon's `ai.session.AiSession` service. Wraps the generated tonic stub the same
+/// Client for the daemon's `si.session.SiSession` service. Wraps the generated tonic stub the same
 /// way [`HistoryClient`] and [`SearchClient`] do, returning the raw protobuf messages so callers can
 /// render them however they like.
-pub struct AiClient {
-    client: AiSessionServiceClient<DaemonChannel>,
+pub struct SiClient {
+    client: SiSessionServiceClient<DaemonChannel>,
 }
 
-impl AiClient {
+impl SiClient {
     /// The stub over `channel`, taking messages of any size: a message the daemon streams holds
     /// one captured message, as big as the prompt or reply in it, past tonic's default 4 MiB.
     /// The daemon is local and trusted (the server encodes any size by default).
-    fn service(channel: Channel) -> AiSessionServiceClient<DaemonChannel> {
-        AiSessionServiceClient::with_interceptor(channel, StrictVersionInterceptor)
+    fn service(channel: Channel) -> SiSessionServiceClient<DaemonChannel> {
+        SiSessionServiceClient::with_interceptor(channel, StrictVersionInterceptor)
             .max_decoding_message_size(usize::MAX)
     }
 
@@ -432,12 +432,12 @@ impl AiClient {
         Ok(Self::new(ActiveService::locate(&settings.daemon)?).await?)
     }
 
-    /// Wait while the daemon is still rebuilding AI sessions after starting: until then every
+    /// Wait while the daemon is still rebuilding SI sessions after starting: until then every
     /// session read but a tail is refused rather than answered partially. Calls `on_wait` each
     /// time it finds the daemon rebuilding, with how far it has got (records replayed, and
     /// roughly how many there are to replay), and returns at once when it is not. After this the
     /// daemon serves reads until a store command has it rebuild again (`atuin store rebuild
-    /// ai-session`, a purge or a forced pull), which is rare.
+    /// si-session`, a purge or a forced pull), which is rare.
     pub async fn wait_for_sessions(&mut self, mut on_wait: impl FnMut((u64, u64))) -> Result<()> {
         let mut delay = REBUILD_POLL_START;
         while let Some(progress) = self.rebuild_status().await? {
@@ -448,7 +448,7 @@ impl AiClient {
         Ok(())
     }
 
-    /// Whether the daemon is rebuilding AI sessions right now (see [`Self::wait_for_sessions`]),
+    /// Whether the daemon is rebuilding SI sessions right now (see [`Self::wait_for_sessions`]),
     /// without waiting for it to finish: `Some` while it is, with how far it has got (records
     /// replayed, and roughly how many there are to replay); `None` when it serves reads.
     pub async fn rebuild_status(&mut self) -> Result<Option<(u64, u64)>> {
@@ -464,7 +464,7 @@ impl AiClient {
         };
         match self.client.list_sessions(probe).await {
             Ok(_) => Ok(None),
-            Err(status) => match crate::grpc::ai::session::rebuild_progress(&status) {
+            Err(status) => match crate::grpc::si::session::rebuild_progress(&status) {
                 Some(progress) => Ok(Some(progress)),
                 None => Err(status.into()),
             },
@@ -478,14 +478,14 @@ impl AiClient {
     pub async fn list_sessions(
         &mut self,
         filter: &SessionFilter,
-    ) -> Result<tonic::Streaming<AiSession>> {
+    ) -> Result<tonic::Streaming<SiSession>> {
         let request = ListSessionsRequest {
             filter: Some(filter.into()),
         };
         Ok(self.client.list_sessions(request).await?.into_inner())
     }
 
-    /// Stream one session: the first event carries the [`AiSession`], each event after it a message.
+    /// Stream one session: the first event carries the [`SiSession`], each event after it a message.
     pub async fn get_session(
         &mut self,
         session: HarnessSession,
@@ -601,20 +601,20 @@ mod rebuild_tests {
     use tokio_stream::wrappers::UnixListenerStream;
     use tonic::transport::Server;
 
-    use super::AiClient;
-    use crate::grpc::AiSessionService;
-    use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
-    use crate::session_capture::{AiHarnessSessionCapture, StoreState};
+    use super::SiClient;
+    use crate::grpc::SiSessionService;
+    use crate::grpc::si::session::pb::si_session_server::SiSessionServer;
+    use crate::session_capture::{SiHarnessSessionCapture, StoreState};
 
-    /// A client of an AI-session service over a real socket, in the given recovery state.
-    async fn serve(state: StoreState) -> (AiClient, watch::Sender<StoreState>, tempfile::TempDir) {
+    /// A client of an SI-session service over a real socket, in the given recovery state.
+    async fn serve(state: StoreState) -> (SiClient, watch::Sender<StoreState>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("daemon.sock");
-        let (capture, state) = AiHarnessSessionCapture::with_state(state).await;
-        let service = AiSessionServer::new(AiSessionService::new(Arc::new(capture)));
+        let (capture, state) = SiHarnessSessionCapture::with_state(state).await;
+        let service = SiSessionServer::new(SiSessionService::new(Arc::new(capture)));
         let incoming = UnixListenerStream::new(UnixListener::bind(&path).unwrap());
         tokio::spawn(Server::builder().add_service(service).serve_with_incoming(incoming));
-        (AiClient::new(path).await.unwrap(), state, dir)
+        (SiClient::new(path).await.unwrap(), state, dir)
     }
 
     #[rstest]

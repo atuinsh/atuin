@@ -125,7 +125,7 @@ enum CompactorInner {
 /// process (called "checkpoints" in sqlite docs), so high reader contention can prevent the WAL
 /// from ever getting compacted.
 ///
-/// This seems to be generally present in high parallel uses of AI agents.
+/// This seems to be generally present in high parallel uses of SI agents.
 #[derive(Debug, Clone)]
 pub(super) struct Compactor {
     _inner: CompactorInner,

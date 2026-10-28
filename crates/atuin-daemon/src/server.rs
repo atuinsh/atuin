@@ -3,8 +3,8 @@ use eyre::Result;
 use crate::components::search::SearchGrpcService;
 use crate::daemon::DaemonHandle;
 use crate::grpc;
-use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
+use crate::grpc::si::session::pb::si_session_server::SiSessionServer;
 use crate::grpc::versioning::StrictVersionLayer;
 use crate::search::search_server::SearchServer;
 use crate::service::address::DaemonListener;
@@ -22,7 +22,7 @@ pub fn run_grpc_server(
     listener: DaemonListener,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
-    ai_session_service: AiSessionServer<grpc::AiSessionService>,
+    si_session_service: SiSessionServer<grpc::SiSessionService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tonic::transport::Server;
@@ -50,7 +50,7 @@ pub fn run_grpc_server(
             .layer(STRICT_VERSION_LAYER)
             .add_service(history_service)
             .add_service(search_service)
-            .add_service(ai_session_service)
+            .add_service(si_session_service)
             .serve_with_incoming_shutdown(incoming, shutdown_signal)
             .await
         {

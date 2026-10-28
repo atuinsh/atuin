@@ -21,7 +21,7 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
 - **Hooks** that record each command, its exit code, and its duration. See
   [Shell Integration](../guide/shell-integration.md).
 - **Key bindings** for ++ctrl+r++ and the ++up++ arrow, and ++question++ for
-  [Atuin AI](../ai/introduction.md).
+  [Atuin SI](../si/introduction.md).
 - **Widgets** for `atuin resume` (zsh, bash and fish), unbound unless you ask
   for them: see [Binding `atuin resume`](#binding-atuin-resume).
 
@@ -31,8 +31,8 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
 |------|-------------|
 | `--disable-up-arrow` | Don't bind the ++up++ arrow key |
 | `--disable-ctrl-r` | Don't bind ++ctrl+r++ |
-| `--disable-ai` | Don't bind ++question++ to [Atuin AI](../ai/introduction.md) |
-| `--bind-ai-resume` | Bind ++ctrl+bracket-right++ to `atuin resume` (zsh, bash and fish; off by default) |
+| `--disable-si` | Don't bind ++question++ to [Atuin SI](../si/introduction.md) |
+| `--bind-si-resume` | Bind ++ctrl+bracket-right++ to `atuin resume` (zsh, bash and fish; off by default) |
 
 For example, to keep ++ctrl+r++ but leave the up arrow alone:
 
@@ -42,19 +42,19 @@ eval "$(atuin init zsh --disable-up-arrow)"
 
 ## Binding `atuin resume`
 
-`atuin init` defines widgets that open the [`atuin resume`](../ai/threads.md)
+`atuin init` defines widgets that open the [`atuin resume`](../si/threads.md)
 picker at the prompt and put the command it picks into your shell, but binds no
 key to them by default. To bind ++ctrl+bracket-right++ in the emacs, vi-insert and
-vi-command keymaps, pass `--bind-ai-resume`:
+vi-command keymaps, pass `--bind-si-resume`:
 
 ```shell
-eval "$(atuin init zsh --bind-ai-resume)"
+eval "$(atuin init zsh --bind-si-resume)"
 ```
 
 !!! note "++ctrl+bracket-right++ replaces a shell binding"
     ++ctrl+bracket-right++ is zsh's `vi-find-next-char` (emacs keymap) and bash's
     `character-search`: jump to the next occurrence of the character you type next.
-    `--bind-ai-resume` replaces it. To keep it, bind the widget to another key yourself.
+    `--bind-si-resume` replaces it. To keep it, bind the widget to another key yourself.
 
 To bind a key of your choice instead, add it after the `atuin init` line:
 
@@ -62,18 +62,18 @@ To bind a key of your choice instead, add it after the `atuin init` line:
 
     ```shell
     eval "$(atuin init zsh)"
-    bindkey -M emacs '^x^r' atuin-ai-resume
-    bindkey -M viins '^x^r' atuin-ai-resume-viins
-    bindkey -M vicmd '^x^r' atuin-ai-resume-vicmd
+    bindkey -M emacs '^x^r' atuin-si-resume
+    bindkey -M viins '^x^r' atuin-si-resume-viins
+    bindkey -M vicmd '^x^r' atuin-si-resume-vicmd
     ```
 
 === "bash"
 
     ```shell
     eval "$(atuin init bash)"
-    atuin-bind -m emacs      '\C-x\C-r' atuin-ai-resume-emacs
-    atuin-bind -m vi-insert  '\C-x\C-r' atuin-ai-resume-viins
-    atuin-bind -m vi-command '\C-x\C-r' atuin-ai-resume-vicmd
+    atuin-bind -m emacs      '\C-x\C-r' atuin-si-resume-emacs
+    atuin-bind -m vi-insert  '\C-x\C-r' atuin-si-resume-viins
+    atuin-bind -m vi-command '\C-x\C-r' atuin-si-resume-vicmd
     ```
 
     `atuin-bind` is the helper `atuin init bash` defines (see
@@ -83,8 +83,8 @@ To bind a key of your choice instead, add it after the `atuin init` line:
 
     ```fish
     atuin init fish | source
-    bind ctrl-x,ctrl-r _atuin_ai_resume
-    bind -M insert ctrl-x,ctrl-r _atuin_ai_resume
+    bind ctrl-x,ctrl-r _atuin_si_resume
+    bind -M insert ctrl-x,ctrl-r _atuin_si_resume
     ```
 
     (Fish 3.x spells the key `\cx\cr`.)

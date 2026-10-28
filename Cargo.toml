@@ -13,7 +13,7 @@ repository = "https://github.com/atuinsh/atuin"
 readme = "README.md"
 
 [workspace.dependencies]
-atuin-ai = { path = "crates/atuin-ai", version = "18.24.2", default-features = false }
+atuin-si = { path = "crates/atuin-si", version = "18.24.2", default-features = false }
 atuin-client = { path = "crates/atuin-client", version = "18.24.2" }
 atuin-common = { path = "crates/atuin-common", version = "18.24.2" }
 atuin-daemon = { path = "crates/atuin-daemon", version = "18.24.2", default-features = false }
@@ -130,7 +130,7 @@ rmp-serde = "1"
 rpassword = "7"
 rstest = "0.27"
 runtime-format = "0.1"
-# The AI session sidecar's synchronous writer. Kept on the libsqlite3-sys that sqlx uses (one
+# The SI session sidecar's synchronous writer. Kept on the libsqlite3-sys that sqlx uses (one
 # bundled SQLite), with unlock_notify as sqlx has it, for shared-cache in-memory databases.
 rusqlite = { version = "0.32", features = ["unlock_notify"] }
 rust-embed = "8"

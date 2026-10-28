@@ -428,9 +428,9 @@ __atuin_history() {
     fi
 }
 
-# `atuin threads resume`: pick a captured AI coding-agent session. The result uses
+# `atuin threads resume`: pick a captured SI coding-agent session. The result uses
 # the same protocol as the history search: `__atuin_accept__:` runs it.
-__atuin_ai_resume() {
+__atuin_si_resume() {
     # READLINE_LINE and READLINE_POINT are only supported by bash >= 4.0 or
     # ble.sh.  When it is not supported, we clear them to suppress strange
     # behaviors.
@@ -756,10 +756,10 @@ atuin-bind() {
         atuin-up-search-emacs) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=emacs} ;;
         atuin-up-search-viins) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=vim-insert} ;;
         atuin-up-search-vicmd) command=${2/#"$widget"/__atuin_history --shell-up-key-binding --keymap-mode=vim-normal} ;;
-        atuin-ai-resume)       command=${2/#"$widget"/__atuin_ai_resume} ;;
-        atuin-ai-resume-emacs) command=${2/#"$widget"/__atuin_ai_resume --keymap-mode=emacs} ;;
-        atuin-ai-resume-viins) command=${2/#"$widget"/__atuin_ai_resume --keymap-mode=vim-insert} ;;
-        atuin-ai-resume-vicmd) command=${2/#"$widget"/__atuin_ai_resume --keymap-mode=vim-normal} ;;
+        atuin-si-resume | atuin-ai-resume)       command=${2/#"$widget"/__atuin_si_resume} ;;
+        atuin-si-resume-emacs | atuin-ai-resume-emacs) command=${2/#"$widget"/__atuin_si_resume --keymap-mode=emacs} ;;
+        atuin-si-resume-viins | atuin-ai-resume-viins) command=${2/#"$widget"/__atuin_si_resume --keymap-mode=vim-insert} ;;
+        atuin-si-resume-vicmd | atuin-ai-resume-vicmd) command=${2/#"$widget"/__atuin_si_resume --keymap-mode=vim-normal} ;;
     esac
 
     __atuin_bind_impl "$keymap" "$keyseq" "$command"
@@ -789,10 +789,10 @@ if [[ $__atuin_bind_up_arrow == true ]]; then
 fi
 
 # shellcheck disable=SC2154
-if [[ ${__atuin_bind_ai_resume-} == true ]]; then
-    atuin-bind -m emacs      '\C-]' atuin-ai-resume-emacs
-    atuin-bind -m vi-insert  '\C-]' atuin-ai-resume-viins
-    atuin-bind -m vi-command '\C-]' atuin-ai-resume-vicmd
+if [[ ${__atuin_bind_si_resume-} == true ]]; then
+    atuin-bind -m emacs      '\C-]' atuin-si-resume-emacs
+    atuin-bind -m vi-insert  '\C-]' atuin-si-resume-viins
+    atuin-bind -m vi-command '\C-]' atuin-si-resume-vicmd
 fi
 
 if command -v __atuin_load_builtin_preexec > /dev/null; then

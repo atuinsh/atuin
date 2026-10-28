@@ -16,13 +16,13 @@ fn write_tmux_config<W: Write>(writer: &mut W, tmux: &Tmux) -> io::Result<()> {
 }
 
 fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) -> io::Result<()> {
-    let (bind_ctrl_r, bind_up_arrow, bind_ai_resume) = if env::var("ATUIN_NOBIND").is_ok() {
+    let (bind_ctrl_r, bind_up_arrow, bind_si_resume) = if env::var("ATUIN_NOBIND").is_ok() {
         (false, false, false)
     } else {
         (
             options.enable_ctrl_r,
             options.enable_up_arrow,
-            cfg!(feature = "ai") && options.enable_ai_resume,
+            cfg!(feature = "si") && options.enable_si_resume,
         )
     };
 
@@ -40,12 +40,12 @@ fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) 
     write_tmux_config(writer, options.tmux)?;
     writeln!(writer, "__atuin_bind_ctrl_r={bind_ctrl_r}")?;
     writeln!(writer, "__atuin_bind_up_arrow={bind_up_arrow}")?;
-    writeln!(writer, "__atuin_bind_ai_resume={bind_ai_resume}")?;
+    writeln!(writer, "__atuin_bind_si_resume={bind_si_resume}")?;
     writeln!(writer, "{}", BASH.main)?;
 
-    #[cfg(feature = "ai")]
-    if options.enable_ai {
-        writeln!(writer, "{}", atuin_ai::shell::BASH_INIT)?;
+    #[cfg(feature = "si")]
+    if options.enable_si {
+        writeln!(writer, "{}", atuin_si::shell::BASH_INIT)?;
     }
 
     writeln!(writer, "}}") // end include guard

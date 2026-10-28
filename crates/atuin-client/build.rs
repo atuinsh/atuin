@@ -6,5 +6,5 @@ fn main() {
     println!("cargo:rerun-if-changed=migrations");
     println!("cargo:rerun-if-changed=meta-migrations");
     println!("cargo:rerun-if-changed=record-migrations");
-    println!("cargo:rerun-if-changed=src/ai_session/migrations");
+    println!("cargo:rerun-if-changed=src/si_session/migrations");
 }

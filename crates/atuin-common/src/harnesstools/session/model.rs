@@ -132,7 +132,7 @@ impl ToolResult {
 /// Anthropic counts input this way; OpenAI (and so Codex) counts the cached tokens inside
 /// `input_tokens`, and those readers take them out.
 ///
-/// Also the daemon's `ai.agent.Tokens` wire message, so its prost tags are that message's field
+/// Also the daemon's `si.agent.Tokens` wire message, so its prost tags are that message's field
 /// numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "proto", derive(prost::Message), prost(skip_debug))]

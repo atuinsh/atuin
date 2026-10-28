@@ -264,7 +264,7 @@ fn filter_switching_changes_results(
 /// would hold it open, and the prompt would hang until it exited. Stands in for `atuin` with a
 /// function that leaves one behind, with its standard error elsewhere.
 #[rstest]
-fn ai_resume_widget_returns_while_a_process_it_left_runs(
+fn si_resume_widget_returns_while_a_process_it_left_runs(
     #[files("tests/shells/*.toml")] setup: PathBuf,
 ) {
     let Some(shell) = Shell::start(&setup, None) else {
@@ -272,8 +272,8 @@ fn ai_resume_widget_returns_while_a_process_it_left_runs(
     };
     let pty = &shell.pty;
     let bind = match shell.config.shell.as_str() {
-        "bash" => r"atuin-bind '\C-]' atuin-ai-resume",
-        "zsh" => "bindkey '^]' atuin-ai-resume",
+        "bash" => r"atuin-bind '\C-]' atuin-si-resume",
+        "zsh" => "bindkey '^]' atuin-si-resume",
         // Fish's widget closes the descriptor itself (`3>&-`), and the stand-in below is a
         // POSIX function fish can't run.
         _ => return,

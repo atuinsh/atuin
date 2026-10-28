@@ -1,23 +1,23 @@
 //! `atuin sync` with a daemon running, end to end: the CLI syncs, then has the daemon rebuild its
 //! search index, so what the sync downloaded is in the daemon's search straight away.
 
-#![cfg(all(unix, feature = "daemon", feature = "ai", feature = "sync"))]
+#![cfg(all(unix, feature = "daemon", feature = "si", feature = "sync"))]
 
 mod common;
 
-#[allow(dead_code, reason = "shared with the AI session tests")]
+#[allow(dead_code, reason = "shared with the SI session tests")]
 #[path = "common/agents.rs"]
 mod agents;
-#[allow(dead_code, reason = "shared with the AI session tests")]
-#[path = "common/ai.rs"]
-mod ai;
+#[allow(dead_code, reason = "shared with the SI session tests")]
+#[path = "common/si.rs"]
+mod si;
 
-use ai::{Machine, SyncServer};
 use atuin_client::settings::FilterMode;
 use atuin_common::filter::OrFilter;
 use atuin_daemon::client::{SearchClient, SearchParams};
 use common::{SESSION, marker};
 use rstest::rstest;
+use si::{Machine, SyncServer};
 
 /// How many commands `machine`'s daemon finds for `query`. On a runtime of its own, as the sync
 /// server starts its own and runtimes can't nest.

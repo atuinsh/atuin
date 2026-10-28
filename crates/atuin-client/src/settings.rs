@@ -50,7 +50,7 @@ use output::OutputCaptureConfig;
 pub use output::{CaptureLimits, CommandFilter, OutputCapture};
 pub use security::Security;
 pub use shells::Shells;
-pub use threads::{AiSessionFilterMode, AiSessionResume, Threads};
+pub use threads::{SiSessionFilterMode, SiSessionResume, Threads};
 
 /// Default sync address for Atuin's hosted service, parsed once.
 pub static DEFAULT_SYNC_URL: LazyLock<Url> =
@@ -658,26 +658,26 @@ pub struct Logs {
     #[serde(default)]
     pub daemon: LogConfig,
 
-    /// AI log settings
+    /// SI log settings
     #[serde(default)]
-    pub ai: LogConfig,
+    pub si: LogConfig,
 }
 
-/// Endpoint protocol for Atuin AI.
+/// Endpoint protocol for Atuin SI.
 ///
-/// When set to "auto" (default), the protocol is inferred from `ai.endpoint`:
+/// When set to "auto" (default), the protocol is inferred from `si.endpoint`:
 /// an unset or official Atuin address is treated as Hub, anything else as an
 /// OSS server. Set explicitly to "hub" to keep Hub behavior with a custom
 /// endpoint (useful for local development against a Hub instance).
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum AiEndpointProtocol {
+pub enum SiEndpointProtocol {
     /// Atuin Hub: browser-based login flow, stored Hub session, usage reporting.
     Hub,
-    /// A standalone AI server (e.g. atuin-ai-server): requests go straight to
-    /// the endpoint, authenticated with `ai.api_token` if set.
+    /// A standalone SI server (e.g. atuin-ai-server): requests go straight to
+    /// the endpoint, authenticated with `si.api_token` if set.
     Oss,
-    /// Infer from ai.endpoint (default behavior)
+    /// Infer from si.endpoint (default behavior)
     #[default]
     Auto,
 }
@@ -685,33 +685,33 @@ pub enum AiEndpointProtocol {
 #[allow(deprecated)]
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Ai {
-    /// Whether or not the AI features are enabled.
+pub struct Si {
+    /// Whether or not the SI features are enabled.
     pub enabled: Option<bool>,
 
-    /// The address of the Atuin AI endpoint. Used for AI features like command generation.
-    /// Only necessary for custom AI endpoints.
+    /// The address of the Atuin SI endpoint. Used for SI features like command generation.
+    /// Only necessary for custom SI endpoints.
     pub endpoint: Option<Url>,
 
-    /// How to talk to `endpoint`. See [`AiEndpointProtocol`].
+    /// How to talk to `endpoint`. See [`SiEndpointProtocol`].
     #[serde(default)]
-    pub endpoint_protocol: AiEndpointProtocol,
+    pub endpoint_protocol: SiEndpointProtocol,
 
-    /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
-    /// Only necessary for custom AI endpoints.
+    /// The API token for the Atuin SI endpoint. Used for SI features like command generation.
+    /// Only necessary for custom SI endpoints.
     #[serde(skip_serializing)]
     pub api_token: Option<SecretString>,
 
-    /// Path to the AI sessions database.
+    /// Path to the SI sessions database.
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub db_path: DbLocation,
 
-    /// The maximum time an AI session can be automatically resumed (a bare number is minutes).
+    /// The maximum time an SI session can be automatically resumed (a bare number is minutes).
     /// `0` disables auto-resume.
     #[serde_as(as = "AsDisableableDuration<Minutes>")]
     pub session_continue_minutes: Option<NonZeroDuration>,
 
-    /// The AI model to use for AI chats, based on the Atuin AI model alias.
+    /// The SI model to use for SI chats, based on the Atuin SI model alias.
     pub model: Option<String>,
 
     /// Whether to enable YOLO mode (skips all permission checks)
@@ -722,36 +722,36 @@ pub struct Ai {
     #[serde(default)]
     pub send_cwd: Option<bool>,
 
-    /// Configuration for what context is sent in the opening AI request.
+    /// Configuration for what context is sent in the opening SI request.
     #[serde(default)]
-    pub opening: AiOpening,
+    pub opening: SiOpening,
 
     /// Tool capability flags.
     #[serde(default)]
-    pub capabilities: AiCapabilities,
+    pub capabilities: SiCapabilities,
 
-    /// Whether the AI TUI surfaces feature tips. `None` = enabled.
+    /// Whether the SI TUI surfaces feature tips. `None` = enabled.
     pub tips: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct AiCapabilities {
-    /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled, and the ai will ask for permission).
+pub struct SiCapabilities {
+    /// Whether the SI can request to search Atuin history. `None` = unset (defaults to enabled, and the SI will ask for permission).
     pub enable_history_search: Option<bool>,
-    /// Whether the AI can request to view the stored output, if any, for Atuin history entries. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    /// Whether the SI can request to view the stored output, if any, for Atuin history entries. `None` = unset (defaults to enabled, and the SI will ask for permission).
     pub enable_history_output: Option<bool>,
-    /// Whether the AI can request to read and write files. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    /// Whether the SI can request to read and write files. `None` = unset (defaults to enabled, and the SI will ask for permission).
     pub enable_file_tools: Option<bool>,
-    /// Whether the AI can request to execute bash commands. `None` = unset (defaults to enabled, and the ai will ask for permission).
+    /// Whether the SI can request to execute bash commands. `None` = unset (defaults to enabled, and the SI will ask for permission).
     pub enable_command_execution: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct AiOpening {
-    /// Whether or not to send the current working directory to the AI endpoint.
+pub struct SiOpening {
+    /// Whether or not to send the current working directory to the SI endpoint.
     pub send_cwd: Option<bool>,
 
-    /// Whether or not to send the last command as context in the opening AI request.
+    /// Whether or not to send the last command as context in the opening SI request.
     pub send_last_command: Option<bool>,
 }
 
@@ -1163,7 +1163,7 @@ pub struct Settings {
 
     pub meta: meta::Settings,
 
-    pub ai: Ai,
+    pub si: Si,
 
     #[serde(default)]
     pub threads: Threads,
@@ -1218,7 +1218,7 @@ impl Settings {
     }
 
     /// The threads sidecar database, under the [data dir](Self::data_dir). The daemon owns and
-    /// writes it; other readers open it read-only (`AiSessionDatabase::open_read_only`).
+    /// writes it; other readers open it read-only (`SiSessionDatabase::open_read_only`).
     #[must_use]
     pub fn threads_db_path(&self) -> PathBuf {
         self.data_dir.join("threads.db")
@@ -1318,19 +1318,19 @@ impl Settings {
         }
     }
 
-    /// Returns whether the resolved AI endpoint should be treated as an Atuin
+    /// Returns whether the resolved SI endpoint should be treated as an Atuin
     /// Hub instance (browser login flow, Hub session management, usage
     /// reporting) rather than a standalone OSS server.
     ///
-    /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
-    /// `ai.endpoint` setting, after defaults are applied — which is why it's a
-    /// parameter rather than read from `self.ai.endpoint`.
+    /// `endpoint` is the resolved SI endpoint — the `--api-endpoint` flag or
+    /// `si.endpoint` setting, after defaults are applied — which is why it's a
+    /// parameter rather than read from `self.si.endpoint`.
     #[must_use]
-    pub fn is_hub_ai_endpoint(&self, endpoint: &Url) -> bool {
-        match self.ai.endpoint_protocol {
-            AiEndpointProtocol::Hub => true,
-            AiEndpointProtocol::Oss => false,
-            AiEndpointProtocol::Auto => Self::is_official_address(endpoint),
+    pub fn is_hub_si_endpoint(&self, endpoint: &Url) -> bool {
+        match self.si.endpoint_protocol {
+            SiEndpointProtocol::Hub => true,
+            SiEndpointProtocol::Oss => false,
+            SiEndpointProtocol::Auto => Self::is_official_address(endpoint),
         }
     }
 
@@ -1532,12 +1532,24 @@ impl Settings {
             ("logs.dir", path(&atuin_common::dirs::logs_dir())),
             ("logs.search.file", Some("search.log".to_owned())),
             ("logs.daemon.file", Some("daemon.log".to_owned())),
-            ("logs.ai.file", Some("ai.log".to_owned())),
+            ("logs.si.file", Some("si.log".to_owned())),
             ("kv.db_path", path(&data_dir.join("kv.db"))),
             ("scripts.db_path", path(&data_dir.join("scripts.db"))),
             ("meta.db_path", path(&data_dir.join("meta.db"))),
-            ("ai.db_path", path(&data_dir.join("ai_sessions.db"))),
+            ("si.db_path", path(&Self::si_db_default(data_dir))),
         ]
+    }
+
+    /// `si_sessions.db` in `data_dir`, or the `ai_sessions.db` it used to be while only that
+    /// exists.
+    fn si_db_default(data_dir: &Path) -> PathBuf {
+        let si = data_dir.join("si_sessions.db");
+        let ai = data_dir.join("ai_sessions.db");
+        if !si.exists() && ai.exists() {
+            ai
+        } else {
+            si
+        }
     }
 
     /// `config`, with each path setting in `defaults` that is empty set to its default instead.
@@ -1655,10 +1667,12 @@ impl Settings {
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("search.shells", "auto")?
-            .set_default("ai.session_continue_minutes", 60)?
-            .set_default("ai.send_cwd", false)?
-            .set_default("ai.opening.send_cwd", false)?
-            .set_default("ai.opening.send_last_command", false)?
+            .set_default("threads.capture", false)?
+            .set_default("threads.capture_tools", true)?
+            .set_default("si.session_continue_minutes", 60)?
+            .set_default("si.send_cwd", false)?
+            .set_default("si.opening.send_cwd", false)?
+            .set_default("si.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
             .set_default("search.filters", vec![
                 "global",
@@ -1698,8 +1712,9 @@ impl Settings {
         builder: ConfigBuilder<DefaultState>,
         file: impl config::Source + Send + Sync + 'static,
         env: Environment,
-    ) -> ConfigBuilder<DefaultState> {
-        builder.add_source(file).add_source(env)
+    ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
+        let sources = Config::builder().add_source(file).add_source(env).build()?;
+        Ok(builder.add_source(Self::with_legacy_keys(sources)?))
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
@@ -1764,7 +1779,7 @@ impl Settings {
                 config_builder,
                 ConfigFile::new(config_file_str, FileFormat::Toml),
                 Self::environment(),
-            )
+            )?
         } else {
             // Use `create_new` to avoid overwriting the file if it just got created in between our
             // existence check and now.
@@ -1785,16 +1800,25 @@ impl Settings {
             .set_override("data_dir", effective_data_dir.to_str().map(ShellExpanded::escape))?;
 
         Ok(Self::with_lenient_paths(
-            Self::with_legacy_threads(config_builder.build()?)?,
+            config_builder.build()?,
             Self::path_defaults(&effective_data_dir),
         )?)
     }
 
-    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`: read them
-    /// as `threads.capture`, `threads.capture_tools` and `threads.*`, for any key `[threads]`
-    /// doesn't set itself. The defaults are set here, under them, so they never hide a legacy
-    /// value.
-    fn with_legacy_threads(config: Config) -> Result<Config, config::ConfigError> {
+    /// Each renamed key, and the key it was renamed to: `[threads]` was `ai.capture_sessions`,
+    /// `ai.capture_tools` and `[ai.sessions]`, and `[si]` was `[ai]`.
+    const RENAMED_KEYS: [(&str, &str); 5] = [
+        ("ai.capture_sessions", "threads.capture"),
+        ("ai.capture_tools", "threads.capture_tools"),
+        ("ai.sessions", "threads"),
+        ("ai", "si"),
+        ("logs.ai", "logs.si"),
+    ];
+
+    /// Read each old key in [`Self::RENAMED_KEYS`] as its new one, for any key the new one
+    /// doesn't set itself. `sources` is what the user set, without the defaults, so a default
+    /// never hides a legacy value.
+    fn with_legacy_keys(sources: Config) -> Result<Config, config::ConfigError> {
         fn leaves(prefix: String, value: config::Value, out: &mut Vec<(String, config::Value)>) {
             match value.kind {
                 config::ValueKind::Table(table) => {
@@ -1807,26 +1831,18 @@ impl Settings {
         }
 
         let mut legacy = Vec::new();
-        for (old, new) in [
-            ("ai.capture_sessions", "threads.capture"),
-            ("ai.capture_tools", "threads.capture_tools"),
-            ("ai.sessions", "threads"),
-        ] {
-            if let Ok(value) = config.get::<config::Value>(old) {
+        for (old, new) in Self::RENAMED_KEYS {
+            if let Ok(value) = sources.get::<config::Value>(old) {
                 leaves(new.to_string(), value, &mut legacy);
             }
         }
-        legacy.retain(|(key, _)| config.get::<config::Value>(key).is_err());
+        legacy.retain(|(key, _)| sources.get::<config::Value>(key).is_err());
 
         legacy
             .into_iter()
-            .try_fold(
-                Config::builder()
-                    .set_default("threads.capture", false)?
-                    .set_default("threads.capture_tools", true)?
-                    .add_source(config),
-                |builder, (key, value)| builder.set_override(key, value),
-            )?
+            .try_fold(Config::builder().add_source(sources), |builder, (key, value)| {
+                builder.set_override(key, value)
+            })?
             .build()
     }
 
@@ -1879,11 +1895,11 @@ impl Settings {
             ("logs.dir", self.logs.dir.as_os_str()),
             ("logs.search.file", self.logs.search.file.as_os_str()),
             ("logs.daemon.file", self.logs.daemon.file.as_os_str()),
-            ("logs.ai.file", self.logs.ai.file.as_os_str()),
+            ("logs.si.file", self.logs.si.file.as_os_str()),
             ("kv.db_path", self.kv.db_path.as_os_str()),
             ("scripts.db_path", self.scripts.db_path.as_os_str()),
             ("meta.db_path", self.meta.db_path.as_os_str()),
-            ("ai.db_path", self.ai.db_path.as_os_str()),
+            ("si.db_path", self.si.db_path.as_os_str()),
         ]
     }
 
@@ -1969,11 +1985,13 @@ impl Settings {
     pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
         let data_dir = atuin_common::dirs::unconfigured_data_dir();
         let config = Self::with_lenient_paths(
-            Self::with_legacy_threads(
-                Self::builder_with_data_dir(&data_dir)?
-                    .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
-                    .build()?,
-            )?,
+            Self::builder_with_data_dir(&data_dir)?
+                .add_source(Self::with_legacy_keys(
+                    Config::builder()
+                        .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+                        .build()?,
+                )?)
+                .build()?,
             Self::path_defaults(&data_dir),
         )?;
 
@@ -2031,8 +2049,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        AiEndpointProtocol, ConfigFile, DbLocation, FileFormat, FilterMode, RequestedSearchMode,
-        SearchMode, Settings, UtcOffsetSpec,
+        ConfigFile, DbLocation, FileFormat, FilterMode, RequestedSearchMode, SearchMode, Settings,
+        SiEndpointProtocol, UtcOffsetSpec,
     };
 
     #[rstest]
@@ -2071,22 +2089,22 @@ mod tests {
 
     #[rstest]
     // Auto: official addresses are Hub, anything else is OSS
-    #[case::auto_hub_address(AiEndpointProtocol::Auto, "https://hub.atuin.sh", true)]
-    #[case::auto_api_address(AiEndpointProtocol::Auto, "https://api.atuin.sh", true)]
-    #[case::auto_third_party_address(AiEndpointProtocol::Auto, "https://ai.example.com", false)]
-    #[case::auto_localhost(AiEndpointProtocol::Auto, "http://localhost:4000", false)]
+    #[case::auto_hub_address(SiEndpointProtocol::Auto, "https://hub.atuin.sh", true)]
+    #[case::auto_api_address(SiEndpointProtocol::Auto, "https://api.atuin.sh", true)]
+    #[case::auto_third_party_address(SiEndpointProtocol::Auto, "https://si.example.com", false)]
+    #[case::auto_localhost(SiEndpointProtocol::Auto, "http://localhost:4000", false)]
     // An explicit protocol overrides the address check
-    #[case::explicit_hub_overrides_address(AiEndpointProtocol::Hub, "http://localhost:4000", true)]
-    #[case::explicit_oss_overrides_address(AiEndpointProtocol::Oss, "https://hub.atuin.sh", false)]
-    fn ai_endpoint_protocol_resolution(
-        #[case] protocol: AiEndpointProtocol,
+    #[case::explicit_hub_overrides_address(SiEndpointProtocol::Hub, "http://localhost:4000", true)]
+    #[case::explicit_oss_overrides_address(SiEndpointProtocol::Oss, "https://hub.atuin.sh", false)]
+    fn si_endpoint_protocol_resolution(
+        #[case] protocol: SiEndpointProtocol,
         #[case] endpoint: &str,
         #[case] expected: bool,
     ) {
         let mut settings = Settings::default();
-        settings.ai.endpoint_protocol = protocol;
+        settings.si.endpoint_protocol = protocol;
 
-        assert_eq!(settings.is_hub_ai_endpoint(&Url::parse(endpoint).unwrap()), expected,);
+        assert_eq!(settings.is_hub_si_endpoint(&Url::parse(endpoint).unwrap()), expected,);
     }
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather
@@ -2261,7 +2279,7 @@ mod tests {
         s.scripts.db_path.file().unwrap().to_path_buf()
     })]
     #[case::meta_db_path("meta.db_path", |s: &Settings| s.meta.db_path.file().unwrap().to_path_buf())]
-    #[case::ai_db_path("ai.db_path", |s: &Settings| s.ai.db_path.file().unwrap().to_path_buf())]
+    #[case::si_db_path("si.db_path", |s: &Settings| s.si.db_path.file().unwrap().to_path_buf())]
     fn relative_paths_resolve_next_to_config_toml(
         #[case] key: &str,
         #[case] path: fn(&Settings) -> PathBuf,
@@ -2293,7 +2311,7 @@ mod tests {
     #[case::kv_db_path("kv.db_path", |s: &Settings| s.kv.db_path.clone())]
     #[case::scripts_db_path("scripts.db_path", |s: &Settings| s.scripts.db_path.clone())]
     #[case::meta_db_path("meta.db_path", |s: &Settings| s.meta.db_path.clone())]
-    #[case::ai_db_path("ai.db_path", |s: &Settings| s.ai.db_path.clone())]
+    #[case::si_db_path("si.db_path", |s: &Settings| s.si.db_path.clone())]
     fn database_paths_take_sqlite_urls_as_written(
         #[case] key: &str,
         #[case] location: fn(&Settings) -> DbLocation,
@@ -2349,11 +2367,11 @@ mod tests {
             "logs.dir",
             "logs.search.file",
             "logs.daemon.file",
-            "logs.ai.file",
+            "logs.si.file",
             "kv.db_path",
             "scripts.db_path",
             "meta.db_path",
-            "ai.db_path"
+            "si.db_path"
         )]
         key: &str,
     ) {
@@ -2373,11 +2391,11 @@ mod tests {
     #[case::logs_dir("logs.dir", true)]
     #[case::search_log_file("logs.search.file", false)]
     #[case::daemon_log_file("logs.daemon.file", false)]
-    #[case::ai_log_file("logs.ai.file", false)]
+    #[case::si_log_file("logs.si.file", false)]
     #[case::kv_db_path("kv.db_path", true)]
     #[case::scripts_db_path("scripts.db_path", true)]
     #[case::meta_db_path("meta.db_path", true)]
-    #[case::ai_db_path("ai.db_path", true)]
+    #[case::si_db_path("si.db_path", true)]
     fn a_path_setting_with_an_unset_variable_loads_as_written(
         config_env: MockEnv,
         #[case] key: &str,
@@ -2484,6 +2502,7 @@ mod tests {
             ConfigFile::from_str("enter_accept = false\n", FileFormat::Toml),
             env,
         )
+        .unwrap()
         .build()
         .unwrap()
         .try_deserialize()
@@ -2555,13 +2574,17 @@ mod tests {
 
     /// Deserialize a TOML string into a [`Settings`] object.
     fn parse_settings(toml: &str) -> Settings {
-        let config = Settings::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())
-            .expect("could not build settings builder")
+        let sources = Config::builder()
             .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
             .build()
             .expect("could not build config");
-        Settings::with_legacy_threads(config)
-            .expect("could not read legacy threads settings")
+        Settings::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())
+            .expect("could not build settings builder")
+            .add_source(
+                Settings::with_legacy_keys(sources).expect("could not read legacy settings"),
+            )
+            .build()
+            .expect("could not build config")
             .try_deserialize()
             .expect("could not deserialize config")
     }
@@ -2601,10 +2624,47 @@ mod tests {
         assert_eq!(settings.threads.resume.pi.as_deref(), Some("new"));
     }
 
+    #[rstest]
+    #[case::ai_only("[ai]\nmodel = \"old\"\nsend_cwd = true\n", Some("old"), true)]
+    #[case::si_wins(
+        "[ai]\nmodel = \"old\"\nsend_cwd = true\n\n[si]\nmodel = \"new\"\n",
+        Some("new"),
+        true
+    )]
+    #[case::si_only("[si]\nmodel = \"new\"\n", Some("new"), false)]
+    fn legacy_ai_settings_are_read_as_si(
+        #[case] toml: &str,
+        #[case] model: Option<&str>,
+        #[case] send_cwd: bool,
+    ) {
+        let settings = parse_settings(toml);
+        assert_eq!(settings.si.model.as_deref(), model);
+        assert_eq!(settings.si.send_cwd, Some(send_cwd));
+    }
+
+    #[rstest]
+    fn legacy_ai_log_settings_are_read_as_si() {
+        let settings = parse_settings("[logs.ai]\nfile = \"old.log\"\n");
+        assert_eq!(settings.logs.si.file.as_os_str(), "old.log");
+    }
+
+    #[rstest]
+    #[case::neither(&[], "si_sessions.db")]
+    #[case::ai_only(&["ai_sessions.db"], "ai_sessions.db")]
+    #[case::si_only(&["si_sessions.db"], "si_sessions.db")]
+    #[case::both(&["ai_sessions.db", "si_sessions.db"], "si_sessions.db")]
+    fn si_db_default_falls_back_to_ai(#[case] existing: &[&str], #[case] expected: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        for name in existing {
+            fs_err::write(dir.path().join(name), "").unwrap();
+        }
+        assert_eq!(Settings::si_db_default(dir.path()), dir.path().join(expected));
+    }
+
     /// `atuin config get --resolved` shows the defaults, as it did for `ai.capture_sessions`.
     #[rstest]
     fn threads_defaults_resolve() {
-        let config = Settings::with_legacy_threads(config::Config::default()).unwrap();
+        let config = Settings::builder().unwrap().build().unwrap();
         assert!(!config.get_bool("threads.capture").unwrap());
         assert!(config.get_bool("threads.capture_tools").unwrap());
     }
@@ -2625,11 +2685,11 @@ mod tests {
     #[rstest]
     fn negative_session_continue_minutes_disables_resume() {
         // Legacy clamped a negative value to 0 (disabled); it must load, not error.
-        Settings::validate_str("[ai]\nsession_continue_minutes = -5\n")
+        Settings::validate_str("[si]\nsession_continue_minutes = -5\n")
             .expect("negative session_continue_minutes must load");
 
-        let settings = parse_settings("[ai]\nsession_continue_minutes = -5\n");
-        assert_eq!(settings.ai.session_continue_minutes, None);
+        let settings = parse_settings("[si]\nsession_continue_minutes = -5\n");
+        assert_eq!(settings.si.session_continue_minutes, None);
     }
 
     #[rstest]
@@ -2655,7 +2715,7 @@ mod tests {
         assert!(Settings::validate_str("[output]\ncommand_filter = [\"(\"]\n").is_err());
     }
 
-    /// AI session capture applies `command_filter` to the commands agents run, whether or not
+    /// SI session capture applies `command_filter` to the commands agents run, whether or not
     /// output capture is on.
     #[rstest]
     #[case::enabled("enabled = true\n")]

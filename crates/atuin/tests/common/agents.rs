@@ -1,4 +1,4 @@
-//! AI coding agents as the daemon sees them: their transcripts, written the way each agent writes
+//! SI coding agents as the daemon sees them: their transcripts, written the way each agent writes
 //! its own, and stand-in executables that only say how they were run.
 //!
 //! Every turn written here is a prompt, some reasoning, one shell command with its output, and a

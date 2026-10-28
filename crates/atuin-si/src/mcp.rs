@@ -1,0 +1,508 @@
+//! An MCP (Model Context Protocol) server over stdio, built on the official
+//! `rmcp` SDK.
+//!
+//! This exposes the same history tools the SI assistant uses (`atuin_history`
+//! and `atuin_output`), plus `atuin_output_search`, to external MCP clients
+//! such as Claude Code or Cursor.
+//!
+//! History search reads the sqlite database directly and works without the
+//! daemon; output retrieval and output search talk to the daemon and return a
+//! tool error when it is not running.
+
+use std::sync::{Arc, LazyLock};
+
+use atuin_client::database::Sqlite;
+use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
+use atuin_client::settings::Settings;
+use eyre::Result;
+use rmcp::handler::server::common::schema_for_type;
+use rmcp::model::{
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
+    Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
+    ServerInfo, Tool, ToolAnnotations,
+};
+use rmcp::service::RequestContext;
+use rmcp::{RoleServer, ServerHandler, ServiceExt};
+use serde_json::{Value, json};
+use strum::IntoEnumIterator;
+
+use crate::tools::output::search::AtuinOutputSearchToolCall;
+use crate::tools::session::caller::{Caller, OwnSession};
+use crate::tools::session::list::AtuinThreadsListToolCall;
+use crate::tools::session::read::AtuinThreadsReadToolCall;
+use crate::tools::session::search::AtuinThreadsSearchToolCall;
+use crate::tools::{
+    AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
+    MAX_HISTORY_RESULTS, ToolOutcome,
+};
+
+struct AtuinMcp {
+    db: Sqlite,
+    settings: Arc<Settings>,
+    own_session: OwnSession,
+}
+
+/// Server-level instructions, surfaced by MCP clients (Claude Code injects
+/// them into the model's system prompt). This is the main lever for making
+/// agents reach for Atuin instead of guessing: it frames the history as the
+/// ground truth for "what actually happened in the terminal".
+const SERVER_INSTRUCTIONS: &str =
+    "\
+Atuin is the ground truth for what actually happened in the user's terminal. It records shell \
+     history from every session and machine: each command with its timestamp, working directory, \
+     exit code, and duration — including commands run by SI agents (tagged with the agent's name \
+     and intent) — and, where output capture is enabled, the full terminal output of each command.
+
+Search atuin_history instead of guessing, asking the user, or re-running things whenever past \
+     terminal activity is relevant: how the user last invoked something ('what flags did I use'), \
+     whether and when something ran and if it succeeded, why a command failed (search with \
+     only_failed: true, then read the actual error with atuin_output), or what an SI agent ran. \
+     When debugging, checking recent history early often reveals what the user already tried. \
+     When you know what was printed but not which command printed it — an error message, a \
+     version, a hostname, a path — search the captured output itself with atuin_output_search.
+
+When a question is about the user themselves — 'what do I use', 'how do I connect', 'what's my \
+     setup' — run one atuin_history search BEFORE searching the filesystem. It is a single cheap \
+     call, and 'it is not in the repository' is not an answer: personal habits live in shell \
+     history, not in checked-in config.
+
+Do not use `history`, ~/.bash_history, or ~/.zsh_history: they are typically empty or stale in \
+     non-interactive shells and lack exit codes and output. Atuin is the reliable source. Prefer \
+     atuin_output over re-running an expensive or side-effectful command just to see its output \
+     again.
+
+Atuin also records SI agent sessions as threads. Use atuin_threads_search or atuin_threads_list, \
+     then atuin_threads_read, whenever a task points at earlier work: 'last time', 'again', \
+     'still', 'continue', what was decided, or whether something is a known issue. Otherwise do \
+     one quick search only when earlier threads would clearly help; skip self-contained tasks.";
+
+/// The initialize result, separated from the handler so tests can assert on
+/// it without constructing a database-backed server.
+fn server_info() -> ServerInfo {
+    ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        .with_server_info(Implementation::new("atuin", env!("CARGO_PKG_VERSION")))
+        .with_instructions(SERVER_INSTRUCTIONS)
+}
+
+impl ServerHandler for AtuinMcp {
+    fn get_info(&self) -> ServerInfo {
+        server_info()
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        Ok(ListToolsResult::with_all_items(TOOLS.clone())
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let arguments = request.arguments.unwrap_or_default();
+        // Stateless clients (protocol 2026-07-28, e.g. Claude Code) skip `initialize` and send
+        // their client info in each request's `_meta`.
+        let client = context.client_info();
+        let caller = Caller {
+            client: client.as_ref().map(|c| c.name.as_str()),
+            own: &self.own_session,
+        };
+        // Bad arguments come back as a tool error, not a JSON-RPC one, so the model sees what was
+        // wrong and can retry (MCP SEP-1303); many clients never show protocol errors to it.
+        let outcome = match request.name.as_ref() {
+            "atuin_history" => match AtuinHistoryToolCall::try_from(&Value::Object(arguments)) {
+                Ok(call) => call.execute(&self.db, &self.settings).await,
+                Err(e) => invalid_arguments(e),
+            },
+            "atuin_output" => match AtuinOutputToolCall::try_from(&Value::Object(arguments)) {
+                Ok(call) => call.execute().await,
+                Err(e) => invalid_arguments(e),
+            },
+            "atuin_output_search" => match parse::<AtuinOutputSearchToolCall>(arguments) {
+                Ok(call) => call.execute(&self.db, &self.settings).await,
+                Err(outcome) => outcome,
+            },
+            "atuin_threads_search" | "atuin_si_session_search" => {
+                match parse::<AtuinThreadsSearchToolCall>(arguments) {
+                    Ok(call) => call.execute(&self.settings, &caller).await,
+                    Err(outcome) => outcome,
+                }
+            }
+            "atuin_threads_list" | "atuin_si_session_list" => {
+                match parse::<AtuinThreadsListToolCall>(arguments) {
+                    Ok(call) => call.execute(&self.settings, &caller).await,
+                    Err(outcome) => outcome,
+                }
+            }
+            "atuin_threads_read" | "atuin_si_session_read" => {
+                match parse::<AtuinThreadsReadToolCall>(arguments) {
+                    Ok(call) => call.execute(&self.settings, &caller).await,
+                    Err(outcome) => outcome,
+                }
+            }
+            name => {
+                return Err(ErrorData::invalid_params(format!("unknown tool: {name}"), None));
+            }
+        };
+
+        let result = match outcome {
+            ToolOutcome::Success(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
+            ToolOutcome::Error(text) => CallToolResult::error(vec![ContentBlock::text(text)]),
+            // The atuin tools only produce Success/Error; fall back to the
+            // generic formatting should that ever change.
+            outcome @ ToolOutcome::Structured { .. } => {
+                CallToolResult::success(vec![ContentBlock::text(outcome.format_for_llm(None))])
+            }
+        };
+        Ok(result.into())
+    }
+}
+
+fn parse<T: serde::de::DeserializeOwned>(arguments: JsonObject) -> Result<T, ToolOutcome> {
+    serde_json::from_value(Value::Object(arguments)).map_err(invalid_arguments)
+}
+
+fn invalid_arguments(err: impl std::fmt::Display) -> ToolOutcome {
+    ToolOutcome::Error(format!(
+        "Invalid arguments: {err}. Check the tool's input schema and retry."
+    ))
+}
+
+/// Serve MCP over stdio until the client disconnects.
+///
+/// stdout carries only JSON-RPC messages; anything else (logs, errors) must
+/// go to stderr or it will corrupt the protocol stream.
+pub async fn run(db: &Sqlite, settings: Arc<Settings>) -> Result<()> {
+    let server = AtuinMcp {
+        db: db.clone(),
+        settings,
+        own_session: OwnSession::default(),
+    }
+    .serve(rmcp::transport::stdio())
+    .await?;
+    server.waiting().await?;
+    Ok(())
+}
+
+/// Tool metadata for `tools/list`, built once: the schemas and descriptions
+/// are assembled from consts and the filter-mode enum, none of which change
+/// at runtime. The history and output schemas are written by hand and must
+/// mirror what the `TryFrom<&serde_json::Value>` impls in [`crate::tools`]
+/// accept; the output-search schema is derived from its call struct.
+static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(tool_definitions);
+
+fn tool_definitions() -> Vec<Tool> {
+    let Value::Object(history_schema) = json!({
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query matched against past commands: commands \
+                    containing every term come first, then fuzzy matches (each term's \
+                    letters in order) fill the rest. Prefer a few distinctive terms (e.g. 'ffmpeg av1'), not a \
+                    sentence; terms are AND-ed. An empty string returns the most \
+                    recent commands. Supports fzf-style operators per \
+                    space-separated term: ^prefix, suffix$, 'exact-substring, \
+                    !negate, and r/regex/.",
+            },
+            "filter_modes": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": HistorySearchFilterMode::iter().map(|m| m.as_str()).collect::<Vec<_>>(),
+                },
+                "description": "Optional search scope; the first entry is used and \
+                    the default is 'global' (all history). 'workspace' limits to \
+                    commands run inside the current git repository, 'directory' to \
+                    the exact current working directory, 'host' to this machine, \
+                    'session' to the shell session that launched this server \
+                    (errors when it was not launched from a shell). Start global \
+                    and narrow only if results are noisy.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_HISTORY_RESULTS,
+                "default": DEFAULT_HISTORY_RESULTS,
+                "description": "Maximum number of results.",
+            },
+            "only_failed": {
+                "type": "boolean",
+                "default": false,
+                "description": "Only return commands that recorded a non-zero exit \
+                    code. Commands still running (no exit recorded yet) are excluded.",
+            },
+            "authors": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": format!(
+                    "Filter by who ran the command: '{AUTHOR_FILTER_ALL_USER}' for \
+                     human-run commands, '{AUTHOR_FILTER_ALL_AGENT}' for commands run \
+                     by SI agents, or any literal author name (well-known agents: {}). \
+                     Multiple entries are OR-ed. Omit for everything.",
+                    KNOWN_AGENTS.join(", ")
+                ),
+            },
+        },
+        "required": ["query"],
+    }) else {
+        unreachable!()
+    };
+
+    let Value::Object(output_schema) = json!({
+        "type": "object",
+        "properties": {
+            "history_id": {
+                "type": "string",
+                "description": "The history entry ID (UUID), as returned by \
+                    atuin_history.",
+            },
+            "ranges": {
+                "type": "array",
+                "items": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+                "description": "Optional [start, end] line ranges to fetch \
+                    (0-based, end-inclusive). Negative indices count from the end \
+                    of the output, e.g. [[-80, -1]] is the last 80 lines — fetch \
+                    that first when investigating a failure, since errors usually \
+                    print at the end. Defaults to the full output.",
+            },
+        },
+        "required": ["history_id"],
+    }) else {
+        unreachable!()
+    };
+
+    vec![
+        Tool::new(
+            "atuin_history",
+            format!(
+                "Search the user's shell history, recorded by Atuin across all their terminal \
+                 sessions and machines. Each result includes the command, timestamp, working \
+                 directory, exit code, duration, and a history ID; commands run by SI agents \
+                 carry the agent's name and stated intent. Set only_failed: true when \
+                 investigating failures, and authors: [\"{AUTHOR_FILTER_ALL_AGENT}\"] to see what \
+                 agents ran. Pass a history ID to atuin_output to read what the command printed."
+            ),
+            history_schema,
+        )
+        .annotate(ToolAnnotations::with_title("Search shell history").read_only(true)),
+        Tool::new(
+            "atuin_output",
+            "Read the terminal output that a previously executed command actually printed, \
+             identified by a history ID from atuin_history results. Use it to see an error \
+             exactly as the user saw it, or to re-read the output of an expensive or \
+             side-effectful command without re-running it. Output capture requires the Atuin \
+             daemon; output is only available for recent commands captured while the daemon was \
+             running.",
+            output_schema,
+        )
+        .annotate(ToolAnnotations::with_title("Read past command output").read_only(true)),
+        Tool::new(
+            "atuin_output_search",
+            "Full-text search over the terminal output of every captured command. Use it when you \
+             know what was printed but not which command printed it: an error message, a version \
+             string, a hostname, a file path, a test name. Each result gives the command (with \
+             its history ID, timestamp, directory and exit code) and the numbered output lines \
+             around each match; pass the history ID and line numbers to atuin_output to read \
+             more. Requires the Atuin daemon with output capture enabled.",
+            schema_for_type::<AtuinOutputSearchToolCall>(),
+        )
+        .annotate(ToolAnnotations::with_title("Search past command output").read_only(true)),
+        Tool::new(
+            "atuin_threads_search",
+            "Full-text search across the transcripts of the threads (SI coding-agent sessions) \
+             Atuin has captured (Claude Code, Codex, opencode, pi). Reach for it when a task \
+             points at earlier work ('again', 'still', 'continue', a known issue, what was \
+             decided): a previous agent may already have diagnosed or decided it. Finds which \
+             thread discussed a topic, hit an error, touched a file, or made a decision — it \
+             searches what the user and agent wrote, tool names, and thread titles. Each result \
+             gives the thread id, harness, last-active time, title, directory, and the best \
+             matching message's number and snippet; pass the id to atuin_threads_read to read \
+             around the match. Requires the Atuin daemon with thread capture enabled.",
+            schema_for_type::<AtuinThreadsSearchToolCall>(),
+        )
+        .annotate(ToolAnnotations::with_title("Search agent threads").read_only(true)),
+        Tool::new(
+            "atuin_threads_list",
+            "List captured threads, SI coding-agent sessions (Claude Code, Codex, opencode, pi), \
+             most recently active first, optionally only those in a directory (cwd: '.' for this \
+             project) or active since a time (since: 'today'). Use it to pick up where the \
+             previous thread on this project left off ('continue', 'last time') or to see what \
+             agents worked on recently, when you have no specific words to search for. Each entry \
+             gives the thread id, harness, last-active time, message count, title, and directory. \
+             Requires the Atuin daemon with thread capture enabled.",
+            schema_for_type::<AtuinThreadsListToolCall>(),
+        )
+        .annotate(ToolAnnotations::with_title("List agent threads").read_only(true)),
+        Tool::new(
+            "atuin_threads_read",
+            "Read a captured thread's transcript, a page of messages at a time: what the user \
+             asked, what the agent replied, and which tools it used. Capture keeps the \
+             conversation, not tool arguments or output, so runs of tool calls appear as one line \
+             of tool names. Messages are numbered; page with start (negative counts from the end, \
+             e.g. -10 for how the thread ended) and limit. Pages abridge long messages; read one \
+             message (limit: 1) to see it in full; one over 20,000 characters comes in parts, \
+             each giving the offset to read the next from. To find where something was said in a \
+             long thread, pass query (only messages with every word) or roles (['user'] for what \
+             the person said) instead of paging through it. Takes a thread id or unique prefix \
+             from atuin_threads_list or atuin_threads_search, or 'latest'.",
+            schema_for_type::<AtuinThreadsReadToolCall>(),
+        )
+        .annotate(ToolAnnotations::with_title("Read an agent thread").read_only(true)),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// MCP clients inject the instructions into the model's system prompt on
+    /// every session, so the block must stay small.
+    const MAX_INSTRUCTIONS_LEN: usize = 2_000;
+
+    #[rstest]
+    fn tool_definitions_list_all_tools_as_read_only() {
+        let tools = tool_definitions();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert_eq!(names, [
+            "atuin_history",
+            "atuin_output",
+            "atuin_output_search",
+            "atuin_threads_search",
+            "atuin_threads_list",
+            "atuin_threads_read",
+        ]);
+
+        for tool in &tools {
+            assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
+        }
+
+        // Everything except `query` is optional — see the filter_modes
+        // comment in AtuinHistoryToolCall::try_from for why.
+        let required = tools[0].input_schema.get("required").unwrap();
+        assert_eq!(required, &json!(["query"]));
+    }
+
+    /// A misremembered option (`from_end`, say) is an error naming the real ones, not silently
+    /// dropped so the call runs on defaults; the schema says so too.
+    #[rstest]
+    fn unknown_arguments_are_rejected() {
+        let args = |v: Value| v.as_object().unwrap().clone();
+        let Err(ToolOutcome::Error(err)) = parse::<AtuinThreadsReadToolCall>(args(json!({
+            "session_id": "latest",
+            "from_end": true,
+        }))) else {
+            panic!("from_end was accepted");
+        };
+        assert!(err.contains("`from_end`") && err.contains("`start`"), "{err}");
+        assert!(
+            parse::<AtuinThreadsReadToolCall>(args(json!({"session_id": "x", "start": -10})))
+                .is_ok()
+        );
+        for tool in &tool_definitions()[2..] {
+            assert_eq!(tool.input_schema["additionalProperties"], false, "{}", tool.name);
+        }
+    }
+
+    /// The output-search schema is derived from the call struct, so this pins what the model
+    /// sees rather than how the struct is annotated.
+    #[rstest]
+    fn output_search_schema_is_derived_from_the_call_struct() {
+        let tools = tool_definitions();
+        let schema = &tools[2].input_schema;
+        assert_eq!(schema["required"], json!(["terms"]));
+        let terms = &schema["properties"]["terms"];
+        assert_eq!(terms["type"], "array");
+        assert_eq!(terms["minItems"], 1);
+        assert_eq!(terms["items"]["minLength"], 1);
+        assert!(terms["description"].as_str().unwrap().contains("AND-ed"));
+        let limit = &schema["properties"]["limit"];
+        assert_eq!(limit["type"], "integer");
+        assert_eq!(limit["minimum"], 1);
+        assert_eq!(limit["maximum"], 20);
+        assert_eq!(limit["default"], 5);
+        assert!(limit["description"].as_str().unwrap().contains("most relevant first"));
+    }
+
+    #[rstest]
+    fn si_session_search_schema_matches_the_parser() {
+        // The hand-written schema and the AtuinThreadsSearchToolCall parser are independent
+        // sources of truth; drive the parser at the schema's advertised bounds so the two cannot
+        // drift apart (e.g. widening the Clamped bounds without updating the model-visible schema).
+        let tools = tool_definitions();
+        let schema = &tools[3].input_schema;
+        assert_eq!(schema["required"], json!(["terms"]));
+        assert_eq!(schema["properties"]["terms"]["minItems"], 1);
+        assert_eq!(schema["properties"]["terms"]["items"]["minLength"], 1);
+
+        let limit = &schema["properties"]["limit"];
+        let min = limit["minimum"].as_u64().unwrap();
+        let max = limit["maximum"].as_u64().unwrap();
+        let default = limit["default"].as_u64().unwrap();
+
+        let parse = |v: Value| serde_json::from_value::<AtuinThreadsSearchToolCall>(v);
+        let limit_of = |v: Value| u64::from(parse(v).unwrap().limit.get());
+        assert_eq!(
+            limit_of(json!({"terms": ["x"]})),
+            default,
+            "omitted limit uses the schema default"
+        );
+        assert_eq!(
+            limit_of(json!({"terms": ["x"], "limit": max + 1})),
+            max,
+            "over-max clamps to the schema max"
+        );
+        assert_eq!(
+            limit_of(json!({"terms": ["x"], "limit": 0})),
+            min,
+            "under-min clamps to the schema min"
+        );
+        assert!(
+            parse(json!({"terms": []})).is_err(),
+            "the parser enforces the advertised minItems"
+        );
+        assert!(
+            parse(json!({"terms": ["   "]})).is_err(),
+            "the parser enforces the advertised minLength"
+        );
+
+        // Follow the property's `$ref` rather than naming the type, so a rename cannot hide it.
+        let reference = schema["properties"]["harness"]["anyOf"][0]["$ref"].as_str().unwrap();
+        let name = reference.rsplit('/').next().unwrap();
+        for harness in schema["$defs"][name]["enum"].as_array().unwrap() {
+            let name = harness.as_str().unwrap();
+            assert!(
+                parse(json!({"terms": ["x"], "harness": name})).is_ok(),
+                "advertised {name:?} must parse"
+            );
+        }
+        assert!(
+            parse(json!({"terms": ["x"], "harness": "copilot"})).is_err(),
+            "an unadvertised harness is rejected"
+        );
+    }
+
+    #[rstest]
+    fn server_info_carries_instructions() {
+        let instructions = server_info().instructions.expect("initialize result has instructions");
+        assert!(instructions.contains("atuin_history"));
+        assert!(instructions.contains("atuin_output"));
+        assert!(instructions.contains("atuin_output_search"));
+        assert!(instructions.contains("atuin_threads_search"));
+        assert!(instructions.contains("atuin_threads_list"));
+        assert!(instructions.contains("atuin_threads_read"));
+        assert!(instructions.len() < MAX_INSTRUCTIONS_LEN, "instructions should stay concise");
+    }
+}

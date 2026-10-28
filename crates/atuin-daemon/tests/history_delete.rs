@@ -399,7 +399,7 @@ async fn delete_forgets_captured_output(
     );
 }
 
-/// The same guarantee through the RPCs a shell and the AI tools use: after `delete_history`,
+/// The same guarantee through the RPCs a shell and the SI tools use: after `delete_history`,
 /// `get_command_output` reports the output as not found.
 #[rstest]
 #[tokio::test]

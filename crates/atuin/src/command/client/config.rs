@@ -19,10 +19,10 @@ use eyre::WrapErr;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 use tracing::instrument;
 
-#[cfg(all(feature = "ai", feature = "daemon"))]
-use crate::command::client::ai_sessions;
 #[cfg(feature = "daemon")]
 use crate::command::client::daemon;
+#[cfg(all(feature = "si", feature = "daemon"))]
+use crate::command::client::si_sessions;
 use crate::i18n::fl;
 
 mod path;
@@ -274,16 +274,16 @@ pub enum Feature {
     #[cfg(feature = "octavo")]
     #[value(help = fl!("value-config-feature-octavo"))]
     Octavo,
-    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[cfg(all(feature = "si", feature = "daemon"))]
     #[value(help = fl!("value-config-feature-threads"), alias = "ai-sessions")]
     Threads,
 }
 
 impl EnableCmd {
     pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
-        #[cfg(all(feature = "ai", feature = "daemon"))]
+        #[cfg(all(feature = "si", feature = "daemon"))]
         if self.feature == Feature::Threads {
-            ai_sessions::enable(settings, &mut ai_sessions::Terminal::stdio()).await?;
+            si_sessions::enable(settings, &mut si_sessions::Terminal::stdio()).await?;
             return Ok(());
         }
 
@@ -372,7 +372,7 @@ impl EnableCmd {
             }
             #[cfg(feature = "octavo")]
             Feature::Octavo => changes.push(("octavo.enabled", Value::from(true))),
-            #[cfg(all(feature = "ai", feature = "daemon"))]
+            #[cfg(all(feature = "si", feature = "daemon"))]
             Feature::Threads => changes.push(("threads.capture", Value::from(true))),
         }
 
@@ -499,7 +499,7 @@ impl DisableCmd {
             #[cfg(feature = "octavo")]
             Feature::Octavo => restart_autostarted_daemon(settings).await,
             // The daemon notices the change itself, and the shell doesn't care.
-            #[cfg(feature = "ai")]
+            #[cfg(feature = "si")]
             Feature::Threads => return Ok(()),
         }
 
@@ -523,7 +523,7 @@ impl DisableCmd {
             Feature::OutputCapture => changes.push(("output.enabled", Value::from(false))),
             #[cfg(feature = "octavo")]
             Feature::Octavo => changes.push(("octavo.enabled", Value::from(false))),
-            #[cfg(all(feature = "ai", feature = "daemon"))]
+            #[cfg(all(feature = "si", feature = "daemon"))]
             Feature::Threads => changes.push(("threads.capture", Value::from(false))),
         }
 
@@ -1050,7 +1050,7 @@ mod tests {
          true\n\n[output]\nenabled = true\n"
     )]
     #[cfg_attr(
-        all(feature = "ai", feature = "daemon"),
+        all(feature = "si", feature = "daemon"),
         case::threads(
             Feature::Threads,
             "",
@@ -1059,7 +1059,7 @@ mod tests {
         )
     )]
     #[cfg_attr(
-        all(feature = "ai", feature = "daemon"),
+        all(feature = "si", feature = "daemon"),
         case::threads_with_daemon_already_enabled(
             Feature::Threads,
             "[daemon]\nenabled = true\nautostart = false\n",
@@ -1084,7 +1084,7 @@ mod tests {
     #[case::daemon(Feature::Daemon, "", "[daemon]\nenabled = false\nautostart = false\n")]
     #[case::output_capture(Feature::OutputCapture, "", "[output]\nenabled = false\n")]
     #[cfg_attr(
-        all(feature = "ai", feature = "daemon"),
+        all(feature = "si", feature = "daemon"),
         case::threads(
             Feature::Threads,
             "[daemon]\nenabled = true\n\n[threads]\ncapture = true\n",

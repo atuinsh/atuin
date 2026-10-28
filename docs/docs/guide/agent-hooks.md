@@ -1,6 +1,6 @@
-# AI Agent Hooks
+# SI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by SI coding agents (like Claude Code, Codex, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -22,11 +22,11 @@ atuin hook install pi
 
 That's it. Commands the agent runs will now appear in your Atuin history, tagged with the agent's name.
 
-To let the agent search your history too, connect it to Atuin's [MCP server](../ai/mcp.md) with `atuin mcp install <agent>`.
+To let the agent search your history too, connect it to Atuin's [MCP server](../si/mcp.md) with `atuin mcp install <agent>`.
 
 ## How It Works
 
-AI coding agents support hook systems that notify external tools when they're about to run a shell command and when the command finishes. Atuin uses these hooks to record each command as a history entry, just like commands you type yourself.
+SI coding agents support hook systems that notify external tools when they're about to run a shell command and when the command finishes. Atuin uses these hooks to record each command as a history entry, just like commands you type yourself.
 
 When `atuin hook install` runs, it writes the agent's config file or extension to register Atuin as a hook handler:
 

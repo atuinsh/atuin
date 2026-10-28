@@ -25,7 +25,7 @@ proto = ["dep:prost"]
 vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
-atuin-common = { workspace = true, features = ["ai", "os", "sqlite"] }
+atuin-common = { workspace = true, features = ["si", "os", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
 
@@ -86,7 +86,7 @@ palette = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 
-# packfiles, and ai-session record bodies
+# packfiles, and si-session record bodies
 zstd = { workspace = true }
 
 [dev-dependencies]

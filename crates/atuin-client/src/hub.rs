@@ -1,12 +1,12 @@
 //! Hub authentication support for Atuin
 //!
 //! This module provides programmatic access to the Atuin Hub authentication flow.
-//! It can be used by other crates (like atuin-ai) to authenticate with the Hub
+//! It can be used by other crates (like atuin-si) to authenticate with the Hub
 //! and obtain session tokens.
 //!
 //! Hub authentication is separate from sync authentication - users can have both
 //! a sync session (for history sync) and a hub session (for Hub-specific features
-//! like AI).
+//! like SI).
 
 use std::ops::ControlFlow;
 use std::process::Stdio;

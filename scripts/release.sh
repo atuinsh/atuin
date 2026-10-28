@@ -467,7 +467,7 @@ publish_crates() {
         atuin-common
         atuin-domain
         atuin-client
-        atuin-ai
+        atuin-si
         atuin-dotfiles
         atuin-history
         atuin-octavo

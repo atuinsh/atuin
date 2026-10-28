@@ -34,10 +34,10 @@ macro_rules! internal_errors {
     };
 }
 
-pub mod ai;
 pub mod common;
 pub mod history;
+pub mod si;
 pub mod versioning;
 
-pub use ai::session::Service as AiSessionService;
 pub use history::Service as HistoryService;
+pub use si::session::Service as SiSessionService;
