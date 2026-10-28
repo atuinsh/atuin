@@ -13,6 +13,8 @@ macOS, with Homebrew Bash on macOS.
 - `e2e_fresh_install`: CLI startup, keys, shell init, and doctor.
 - `e2e_pty`: shell hooks, search, selection, quoting, resize, and filters.
 - `e2e_daemon`: startup, concurrent writers, persistence, and restart.
+- `e2e_sync`: `atuin sync` with a running daemon, between two machines on an
+  in-process sync server: what it downloads is in the daemon's search at once.
 - `e2e_ai_sessions`: AI agent sessions captured from each agent's transcripts,
   synced between two machines through an in-process sync server, and resumed:
   restored, caught up, forked, switched, or continued in another agent.

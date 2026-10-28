@@ -36,8 +36,8 @@ use crate::grpc::versioning::{StrictVersionInterceptor, VersionMatchError, Versi
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
-    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchCommandOutputRequest,
-    SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
+    FilterMode as RpcFilterMode, PrepareIndexRequest, RebuildIndexRequest,
+    SearchCommandOutputRequest, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
 use crate::service::address::{ConnectError, DaemonAddress};
 use crate::service::{ActiveService, FindError};
@@ -367,6 +367,12 @@ impl SearchClient {
             },
         };
         self.client.prepare_index(request).await?;
+        Ok(())
+    }
+
+    /// Tell the daemon to rebuild the search index from the history DB.
+    pub async fn rebuild_index(&mut self) -> Result<()> {
+        self.client.rebuild_index(RebuildIndexRequest {}).await?;
         Ok(())
     }
 }

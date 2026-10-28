@@ -42,6 +42,11 @@ message PrepareIndexRequest {
 
 message PrepareIndexResponse {}
 
+/// Tells the daemon to rebuild the search index from the history DB.
+message RebuildIndexRequest {}
+
+message RebuildIndexResponse {}
+
 // Full-text search over all captured command output.
 message SearchCommandOutputRequest {
   // What to find in the command output: every term must appear, and the words of a term
@@ -79,6 +84,7 @@ message OutputSearchMatch {
 service Search {
   rpc Search(stream SearchRequest) returns (stream SearchResponse);
   rpc PrepareIndex(PrepareIndexRequest) returns (PrepareIndexResponse);
+  rpc RebuildIndex(RebuildIndexRequest) returns (RebuildIndexResponse);
 
   // Search the pool of output commands for a matching history request.
   //

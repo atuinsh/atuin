@@ -193,9 +193,21 @@ pub async fn rebuild_ai_sessions(settings: &Settings) -> Result<()> {
     client.rebuild_sessions().await
 }
 
-/// How long to look for a running daemon to project synced AI sessions: a stopped daemon's socket
-/// still accepts connections but never answers.
-const PROJECT_SYNCED_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long to look for a running daemon: a stopped daemon's socket still accepts connections but
+/// never answers.
+const RUNNING_DAEMON_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The running daemon, if one answers within [`RUNNING_DAEMON_PROBE_TIMEOUT`] and is our build.
+///
+/// Never starts or restarts the daemon, though launchd starts its agent for the connection.
+async fn running_daemon_of_our_build(settings: &Settings) -> Option<ActiveService> {
+    let found = tokio::time::timeout(RUNNING_DAEMON_PROBE_TIMEOUT, ActiveService::find(settings));
+    let Ok(Ok(Some(service))) = found.await else {
+        return None;
+    };
+    service.ensure_our_build().ok()?;
+    Some(service)
+}
 
 /// How long a sync waits for the daemon to project the AI sessions it downloaded. A large store
 /// takes longer; the daemon carries on regardless.
@@ -207,11 +219,7 @@ const PROJECT_SYNCED_WAIT: Duration = Duration::from_secs(10);
 /// connection: a daemon started later, or replacing one too old to be asked, projects them as it
 /// starts.
 pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
-    let found = tokio::time::timeout(PROJECT_SYNCED_PROBE_TIMEOUT, ActiveService::find(settings));
-    let Ok(Ok(Some(service))) = found.await else {
-        return Ok(());
-    };
-    if service.ensure_our_build().is_err() {
+    if running_daemon_of_our_build(settings).await.is_none() {
         return Ok(());
     }
     let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
@@ -223,6 +231,26 @@ pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// How long to wait for the daemon to rebuild the search index after a sync.
+///
+/// If the timeout is reached, the daemon will still complete the rebuild; the client will just
+/// return early.
+const SEARCH_INDEX_REBUILD_WAIT: Duration = Duration::from_secs(10);
+
+/// Tell the daemon to rebuild the search index from the history DB.
+pub async fn rebuild_search_index(settings: &Settings) -> Result<()> {
+    if running_daemon_of_our_build(settings).await.is_none() {
+        return Ok(());
+    }
+    let mut client = atuin_daemon::client::SearchClient::from_settings(settings).await?;
+    tokio::time::timeout(SEARCH_INDEX_REBUILD_WAIT, client.rebuild_index()).await.unwrap_or_else(
+        |_| {
+            eprintln!("Rebuilding the daemon's search index in the background");
+            Ok(())
+        },
+    )
 }
 
 pub async fn compact_store(settings: &Settings) -> Result<u64> {
