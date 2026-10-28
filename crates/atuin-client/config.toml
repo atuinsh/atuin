@@ -326,7 +326,7 @@ enter_accept = true
 [threads]
 ## Threads are your SI coding agents' sessions (Claude Code, Codex, opencode and Pi),
 ## captured by the daemon so you can search and resume them, here or on another machine.
-## These were `si.capture_sessions`, `si.capture_tools` and `[si.sessions]`, which are
+## These were `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`, which are
 ## still read when not set here.
 
 ## Capture threads into the encrypted record store, and sync them like your history.

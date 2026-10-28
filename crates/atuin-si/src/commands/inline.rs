@@ -170,26 +170,25 @@ async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
 
 /// The directory where SI snapshots are stored.
 ///
-/// Older versions of Atuin stored snapshots in the [legacy data dir] even when [`data_dir`] was set
-/// in config.toml. If the new snapshot dir doesn't exist, this function will check the legacy path
-/// and return it if it exists, unless `ATUIN_HOME` is set.
+/// Before the SI rename, snapshots were stored in `ai/snapshots`; older versions of Atuin stored
+/// them in the [legacy data dir] even when [`data_dir`] was set in config.toml. If the new
+/// snapshot dir doesn't exist, this function returns the first of those that does, checking the
+/// legacy data dir only if `ATUIN_HOME` isn't set.
 ///
 /// [legacy data dir]: dirs::legacy_data_dir
 /// [`data_dir`]: field@Settings::data_dir
 fn snapshots_dir(settings: &Settings) -> PathBuf {
-    fn join_snapshots(path: impl Into<PathBuf>) -> PathBuf {
-        path.into().joined("si").joined("snapshots")
+    let path = settings.data_dir.join("si").joined("snapshots");
+    if path.exists() {
+        return path;
     }
-
-    let path = join_snapshots(&settings.data_dir);
-    if !path.exists() && !dirs::atuin_home_is_set() {
-        // Check the legacy path, but only if `ATUIN_HOME` isn't set.
-        let legacy = join_snapshots(dirs::legacy_data_dir());
-        if legacy.exists() {
-            return legacy;
-        }
-    }
-    path
+    let legacy = (!dirs::atuin_home_is_set()).then(dirs::legacy_data_dir);
+    [Some(settings.data_dir.clone().into_path_buf()), legacy]
+        .into_iter()
+        .flatten()
+        .map(|dir| dir.joined("ai").joined("snapshots"))
+        .find(|old| old.exists())
+        .unwrap_or(path)
 }
 
 async fn run_inline_tui(
@@ -525,10 +524,11 @@ fn wait_for_login_confirmation() -> Result<bool> {
 
 fn emit_shell_result(outcome: ExitOutcome, output_for_hook: bool) {
     if output_for_hook {
+        // Still `__atuin_ai_*`: a shell opened before an upgrade keeps the widget that reads these.
         match outcome {
-            ExitOutcome::Execute(output) => eprintln!("__atuin_si_execute__:{output}"),
-            ExitOutcome::Insert(output) => eprintln!("__atuin_si_insert__:{output}"),
-            ExitOutcome::Cancel => eprintln!("__atuin_si_cancel__"),
+            ExitOutcome::Execute(output) => eprintln!("__atuin_ai_execute__:{output}"),
+            ExitOutcome::Insert(output) => eprintln!("__atuin_ai_insert__:{output}"),
+            ExitOutcome::Cancel => eprintln!("__atuin_ai_cancel__"),
         }
     } else {
         match outcome {

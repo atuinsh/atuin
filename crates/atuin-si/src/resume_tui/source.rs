@@ -248,9 +248,9 @@ fn tool_label(name: &str) -> &str {
         "atuin_output" => "🐢 atuin output",
         "atuin_output_search" => "🐢 atuin output search",
         // As they were named before threads.
-        "atuin_threads_search" | "atuin_si_session_search" => "🐢 atuin threads search",
-        "atuin_threads_list" | "atuin_si_session_list" => "🐢 atuin threads list",
-        "atuin_threads_read" | "atuin_si_session_read" => "🐢 atuin threads read",
+        "atuin_threads_search" | "atuin_ai_session_search" => "🐢 atuin threads search",
+        "atuin_threads_list" | "atuin_ai_session_list" => "🐢 atuin threads list",
+        "atuin_threads_read" | "atuin_ai_session_read" => "🐢 atuin threads read",
         _ => name,
     }
 }

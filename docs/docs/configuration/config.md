@@ -53,22 +53,24 @@ SQLite opens as written.
     Check whether you have any SI-related files in `~/.atuin`:
 
     ```sh
-    ls ~/.atuin | grep -Fxe permissions.si.toml -e skills -e TERMINAL.md
+    ls ~/.atuin | grep -Fxe permissions.si.toml -e permissions.ai.toml -e skills \
+        -e TERMINAL.md
     ```
 
     If you do, please expand and follow this section:
 
     ??? note "Migrating home-scoped SI config"
 
-        In older installations, `permissions.si.toml`, `skills`, or
-        `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas
+        In older installations, `permissions.si.toml`, `permissions.ai.toml`
+        (its old name), `skills`, or `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas
         in newer installations, they are applied *globally*. The existence of
         `~/.atuin/config.toml` is what determines whether the new or old
         behavior is used; if `~/.atuin/config.toml` exists, these items are
         interpreted as global.
 
         Before you move your `config.toml` to `~/.atuin`, review the existing
-        SI files in `~/.atuin`, especially `permissions.si.toml`. Anything
+        SI files in `~/.atuin`, especially `permissions.si.toml` and
+        `permissions.ai.toml`. Anything
         you're ok with being made global can be left as-is (global is likely
         not too different from applying to your entire home directory anyway);
         anything else should be deleted or moved to subdirectories (meaning
@@ -79,8 +81,8 @@ SQLite opens as written.
         `~/.atuin` and `~/.config/atuin`:
 
         ```sh
-        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.si.toml -e skills \
-            -e TERMINAL.md | sort | uniq -d
+        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.si.toml \
+            -e permissions.ai.toml -e skills -e TERMINAL.md | sort | uniq -d
         ```
 
         If there are any such items, you must merge the items in
@@ -92,7 +94,8 @@ SQLite opens as written.
 
     ```sh
     cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
-        -e themes -e skills -e permissions.si.toml -e TERMINAL.md) ~/.atuin/
+        -e themes -e skills -e permissions.si.toml -e permissions.ai.toml \
+        -e TERMINAL.md) ~/.atuin/
     ```
 
     Then, move your data:

@@ -423,7 +423,7 @@ mod tests {
         t.tool("atuin_atuin_history");
         t.tool("atuin_history");
         t.tool("mcp__atuin__atuin_threads_read");
-        t.tool("mcp__atuin__atuin_si_session_read");
+        t.tool("mcp__atuin__atuin_ai_session_read");
         t.tool("mcp__github__create_issue");
         let transcript = t.finish();
         let TranscriptEntry::Tools(tools) = &transcript.entries[0] else {

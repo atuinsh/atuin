@@ -426,9 +426,9 @@ and `~/` aren't expanded, so give a full path for a program that isn't on
 `PATH`.
 
 Before `[threads]`, these settings were `capture_sessions` and `capture_tools`
-under `[si]`, and the picker's under `[si.sessions]`. Those still work for any
-setting `[threads]` doesn't set, as do the old `atuin si session` and
-`atuin si resume` commands.
+under `[ai]`, and the picker's under `[ai.sessions]`. Those still work for any
+setting `[threads]` doesn't set, as do the old `atuin ai session` and
+`atuin ai resume` commands.
 
 ## Rebuilding the index
 

@@ -129,7 +129,7 @@ send_last_command = true
 
 ## Threads
 
-Settings for capturing your SI coding agents' sessions as [threads](./threads.md). These are specified under `[threads]`. Before `[threads]`, they were `capture_sessions` and `capture_tools` under `[si]`, which still work when the `[threads]` setting isn't set.
+Settings for capturing your SI coding agents' sessions as [threads](./threads.md). These are specified under `[threads]`. Before `[threads]`, they were `capture_sessions` and `capture_tools` under `[ai]`, which still work when the `[threads]` setting isn't set.
 
 ### `capture`
 

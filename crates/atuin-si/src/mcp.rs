@@ -127,19 +127,19 @@ impl ServerHandler for AtuinMcp {
                 Ok(call) => call.execute(&self.db, &self.settings).await,
                 Err(outcome) => outcome,
             },
-            "atuin_threads_search" | "atuin_si_session_search" => {
+            "atuin_threads_search" | "atuin_ai_session_search" => {
                 match parse::<AtuinThreadsSearchToolCall>(arguments) {
                     Ok(call) => call.execute(&self.settings, &caller).await,
                     Err(outcome) => outcome,
                 }
             }
-            "atuin_threads_list" | "atuin_si_session_list" => {
+            "atuin_threads_list" | "atuin_ai_session_list" => {
                 match parse::<AtuinThreadsListToolCall>(arguments) {
                     Ok(call) => call.execute(&self.settings, &caller).await,
                     Err(outcome) => outcome,
                 }
             }
-            "atuin_threads_read" | "atuin_si_session_read" => {
+            "atuin_threads_read" | "atuin_ai_session_read" => {
                 match parse::<AtuinThreadsReadToolCall>(arguments) {
                     Ok(call) => call.execute(&self.settings, &caller).await,
                     Err(outcome) => outcome,

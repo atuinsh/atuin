@@ -483,7 +483,7 @@ mod tests {
         assert!(!format!("{:?}", cli.cmd).contains(SECRET));
     }
 
-    /// `atuin resume`, `atuin threads resume` and (as it was) `atuin si resume` take the same.
+    /// `atuin resume`, `atuin threads resume` and (as it was) `atuin ai resume` take the same.
     #[cfg(feature = "si")]
     #[rstest]
     #[case::short(&["resume"])]

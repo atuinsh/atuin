@@ -97,7 +97,7 @@ const ATUIN_CONFIG_DIR_ITEMS: [&str; 2] = ["config.toml", "server.toml"];
 /// Top-level config items that Atuin SI stores in both project-level `.atuin` directories as well
 /// as the global `~/.atuin`.
 ///
-/// Before the switch to [`atuin_home`], a file like `~/.atuin/permissions.si.toml` was scoped to
+/// Before the switch to [`atuin_home`], a file like `~/.atuin/permissions.ai.toml` was scoped to
 /// `$HOME`, like any other project directory. Now, `~/.atuin/permissions.si.toml` is the new
 /// location for the *global* permissions file. [`config_path`] implements logic to avoid
 /// reinterpreting old `$HOME`-scoped files as global ones; this array contains all the affected
@@ -162,7 +162,7 @@ pub fn config_path(child: impl AsRef<Path>) -> PathBuf {
     // The existence of `~/.atuin/config.toml` distinguishes new installations from old ones. With
     // `ATUIN_HOME` unset, if `~/.atuin/config.toml` is missing (indicating an old installation),
     // continue to use the legacy config dir for SI-related items, to avoid interpreting an existing
-    // `~/.atuin/permissions.si.toml`, which was previously scoped to `$HOME`, as the global file.
+    // `~/.atuin/permissions.ai.toml`, which was previously scoped to `$HOME`, as the global file.
     if SI_ITEMS.iter().any(|name| *name == top)
         && !matches!(&home, Ok(home) if home.join("config.toml").exists())
     {
@@ -728,7 +728,7 @@ mod tests {
         );
     }
 
-    /// Before the switch to `~/.atuin`, `~/.atuin/permissions.si.toml` held approvals for the home
+    /// Before the switch to `~/.atuin`, `~/.atuin/permissions.ai.toml` held approvals for the home
     /// directory only. Until the installation uses `~/.atuin`, it must not become the global file,
     /// even when there's no legacy global file: that would make its approvals apply everywhere.
     #[rstest]

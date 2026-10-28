@@ -28,19 +28,19 @@ self-atuin-si-question-mark() {
         if ! output=$(atuin si inline --hook 3>&1 1>&2 2>&3); then
             [[ -n $output ]] && print -r -- "$output" >/dev/tty
             _atuin_si_reset_prompt
-        elif [[ $output == __atuin_si_print__:* ]]; then
-            echo "${output#__atuin_si_print__:}"
+        elif [[ $output == __atuin_ai_print__:* ]]; then
+            echo "${output#__atuin_ai_print__:}"
             _atuin_si_reset_prompt
-        elif [[ $output == __atuin_si_cancel__ ]]; then
+        elif [[ $output == __atuin_ai_cancel__ ]]; then
             _atuin_si_reset_prompt
-        elif [[ $output == __atuin_si_execute__:* ]]; then
+        elif [[ $output == __atuin_ai_execute__:* ]]; then
             RBUFFER=""
-            LBUFFER=${output#__atuin_si_execute__:}
+            LBUFFER=${output#__atuin_ai_execute__:}
             _atuin_si_reset_prompt
             zle accept-line
-        elif [[ $output == __atuin_si_insert__:* ]]; then
+        elif [[ $output == __atuin_ai_insert__:* ]]; then
             RBUFFER=""
-            LBUFFER=${output#__atuin_si_insert__:}
+            LBUFFER=${output#__atuin_ai_insert__:}
             _atuin_si_reset_prompt
         elif [[ -n $output ]]; then
             RBUFFER=""
@@ -76,16 +76,16 @@ _atuin_si_question_mark() {
         if ! output=$(atuin si inline --hook 3>&1 1>&2 2>&3); then
             [[ $output ]] && printf '%s\n' "$output" >&2
             __atuin_insert_line ""
-        elif [[ $output == __atuin_si_print__:* ]]; then
-            echo "${output#__atuin_si_print__:}"
+        elif [[ $output == __atuin_ai_print__:* ]]; then
+            echo "${output#__atuin_ai_print__:}"
             __atuin_insert_line ""
-        elif [[ $output == __atuin_si_cancel__ ]]; then
+        elif [[ $output == __atuin_ai_cancel__ ]]; then
             __atuin_insert_line ""
-        elif [[ $output == __atuin_si_execute__:* ]]; then
-            __atuin_accept_line "${output#__atuin_si_execute__:}"
-        elif [[ $output == __atuin_si_insert__:* ]]; then
+        elif [[ $output == __atuin_ai_execute__:* ]]; then
+            __atuin_accept_line "${output#__atuin_ai_execute__:}"
+        elif [[ $output == __atuin_ai_insert__:* ]]; then
             # Insert the command for editing
-            __atuin_insert_line "${output#__atuin_si_insert__:}"
+            __atuin_insert_line "${output#__atuin_ai_insert__:}"
         elif [[ -n $output ]]; then
             # Default: insert for editing
             __atuin_insert_line "$output"
@@ -128,20 +128,20 @@ function _atuin_si_question_mark
         if test $atuin_status -ne 0
             test -n "$output"; and printf '%s\n' "$output" >&2
             commandline -f repaint
-        else if string match --quiet '__atuin_si_print__:*' "$output"
-            echo (string replace "__atuin_si_print__:" "" -- "$output" | string collect)
+        else if string match --quiet '__atuin_ai_print__:*' "$output"
+            echo (string replace "__atuin_ai_print__:" "" -- "$output" | string collect)
             commandline -f repaint
-        else if test "$output" = "__atuin_si_cancel__"
+        else if test "$output" = "__atuin_ai_cancel__"
             commandline -f repaint
-        else if string match --quiet '__atuin_si_execute__:*' "$output"
+        else if string match --quiet '__atuin_ai_execute__:*' "$output"
             # Execute the command immediately
-            set -l cmd (string replace "__atuin_si_execute__:" "" -- "$output" | string collect)
+            set -l cmd (string replace "__atuin_ai_execute__:" "" -- "$output" | string collect)
             commandline -r "$cmd"
             commandline -f repaint
             commandline -f execute
-        else if string match --quiet '__atuin_si_insert__:*' "$output"
+        else if string match --quiet '__atuin_ai_insert__:*' "$output"
             # Insert the command for editing
-            set -l cmd (string replace "__atuin_si_insert__:" "" -- "$output" | string collect)
+            set -l cmd (string replace "__atuin_ai_insert__:" "" -- "$output" | string collect)
             commandline -r "$cmd"
             commandline -f repaint
         else if test -n "$output"
@@ -184,10 +184,10 @@ mod tests {
     fn shell_init(#[case] result: &str, #[case] extras: &[&str]) {
         for t in [
             "atuin si inline --hook",
-            "__atuin_si_print__",
-            "__atuin_si_cancel__",
-            "__atuin_si_execute__",
-            "__atuin_si_insert__",
+            "__atuin_ai_print__",
+            "__atuin_ai_cancel__",
+            "__atuin_ai_execute__",
+            "__atuin_ai_insert__",
         ] {
             assert!(result.contains(t), "missing common token {t}");
         }
