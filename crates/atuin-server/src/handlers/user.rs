@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use atuin_common::utils::crypto_random_string;
 use atuin_domain::api::{
-    ChangePasswordRequest, ChangePasswordResponse, DeleteUserResponse, LoginRequest, LoginResponse,
-    RegisterRequest, RegisterResponse, UserResponse,
+    ChangePasswordRequest, ChangePasswordResponse, DeleteUserRequest, DeleteUserResponse,
+    LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, UserResponse,
 };
 use axum::Json;
 use axum::extract::{ConnectInfo, Path, State};
@@ -130,8 +130,15 @@ pub async fn register(
 pub async fn delete(
     UserAuth(user): UserAuth,
     state: State<AppState>,
+    Json(delete): Json<DeleteUserRequest>,
 ) -> Result<Json<DeleteUserResponse>, ErrorResponseStatus<'static>> {
     debug!("request to delete user {}", user.id);
+
+    if !user.password.verify(delete.password).await {
+        return Err(
+            ErrorResponse::reply("password is not correct").with_status(StatusCode::UNAUTHORIZED)
+        );
+    }
 
     let db = &state.0.database;
     if let Err(e) = db.delete_user(&user).await {

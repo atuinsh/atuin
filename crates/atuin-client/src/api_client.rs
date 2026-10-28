@@ -670,21 +670,6 @@ impl Client {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn delete(&self) -> Result<()> {
-        let url = self.sync_addr.append(["account"])?;
-
-        let resp = self.client.delete(url).send().await?;
-
-        if resp.status() == 403 {
-            bail!("invalid login details");
-        } else if resp.status() == 200 {
-            Ok(())
-        } else {
-            bail!("Unknown error");
-        }
-    }
-
-    #[instrument(level = "trace", skip_all, err)]
     pub async fn change_password(
         &self,
         current_password: &SecretString,
