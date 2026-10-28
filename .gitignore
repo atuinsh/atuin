@@ -27,3 +27,5 @@ test-behavior.sh
 /.vale/styles/*
 !/.vale/styles/config/
 test-results/
+
+/crates/atuin/wix/License.rtf

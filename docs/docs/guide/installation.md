@@ -42,6 +42,15 @@ Write-Output 'atuin init powershell | Out-String | Invoke-Expression' >> $PROFIL
 
 Note that the `$PROFILE` path may depend on your PowerShell version.
 
+!!! tip "Installing for every user"
+
+    By default, WinGet installs Atuin for your user only, which doesn't need administrator rights.
+    To install it for every user on the machine, add `--scope machine`:
+
+    ```shell
+    winget install -e Atuinsh.Atuin --scope machine
+    ```
+
 You may also want to try the `default-powershell` [theme](theming.md), which uses the default PowerShell syntax colors.
 
 [**Set up sync** - Move on to the next step.](sync.md)
