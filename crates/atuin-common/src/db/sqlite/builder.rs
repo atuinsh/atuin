@@ -198,7 +198,7 @@ impl<'a> SqliteBuilder<'a> {
             }
         }
 
-        let mut sqlite = Sqlite::connect(opts.clone(), self.timeout).await?;
+        let mut sqlite = Sqlite::connect(opts.clone(), self.timeout, is_memory).await?;
 
         if matches!(self.journal, Some(Journaling::Wal { .. })) && !is_memory && !self.read_only {
             sqlite.compactor = Compactor::spawn_active(opts, sqlite.info.clone()).await;
