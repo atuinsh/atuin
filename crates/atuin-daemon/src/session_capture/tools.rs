@@ -4,6 +4,7 @@ use std::ops::Range;
 use std::sync::LazyLock;
 
 use atuin_common::harnesstools::session::{FilePatch, Patch};
+use atuin_common::num::SaturatingMulDiv as _;
 use regex::Regex;
 use serde_json::{Map, Value};
 
@@ -243,7 +244,7 @@ fn shape_json_text(
         if size <= room || allowance == 0 {
             return Some(shaped);
         }
-        allowance = (allowance * room / size).min(allowance - allowance.div_ceil(8));
+        allowance = allowance.saturating_mul_div(room, size).min(allowance - allowance.div_ceil(8));
     }
     Some(NOT_REDACTED.to_owned())
 }
@@ -280,7 +281,7 @@ fn fit_with(room: usize, clip: impl Fn(usize) -> Option<String>) -> Option<Strin
         if size <= room || keep <= SHORT / 4 {
             return Some(kept);
         }
-        keep = (keep * room / size).min(keep - keep.div_ceil(8));
+        keep = keep.saturating_mul_div(room, size).min(keep - keep.div_ceil(8));
     }
 }
 
@@ -376,7 +377,7 @@ fn redacted_start(text: &str, want: usize, policy: &CapturePolicy) -> Option<(St
         if kept.len() >= want || cut >= limit || attempt == REDACTED_ATTEMPTS {
             return Some((kept.to_owned(), of));
         }
-        let more = (cut * want / kept.len().max(1)).min(want * REDACTED_GROWTH);
+        let more = cut.saturating_mul_div(want, kept.len().max(1)).min(want * REDACTED_GROWTH);
         cut = text.floor_char_boundary(more.min(limit));
     }
     unreachable!("the last attempt returns")
@@ -407,7 +408,9 @@ fn redacted_end(
         if kept.len() >= want || text.len() - cut >= limit || attempt == REDACTED_ATTEMPTS {
             return Some((kept.to_owned(), of));
         }
-        let more = ((text.len() - cut) * want / kept.len().max(1)).min(want * REDACTED_GROWTH);
+        let more = (text.len() - cut)
+            .saturating_mul_div(want, kept.len().max(1))
+            .min(want * REDACTED_GROWTH);
         cut = text.ceil_char_boundary(text.len() - more.min(limit));
     }
     unreachable!("the last attempt returns")

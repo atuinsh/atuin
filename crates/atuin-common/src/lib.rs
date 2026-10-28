@@ -17,6 +17,7 @@ pub mod harnesstools;
 pub mod io;
 pub mod json;
 pub mod logs;
+pub mod num;
 #[cfg(feature = "os")]
 pub mod os;
 pub mod path;
