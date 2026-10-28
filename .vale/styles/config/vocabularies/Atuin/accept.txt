@@ -80,6 +80,7 @@ replxx
 runbooks
 scrollbar
 Shopify
+SI's
 SQLite
 subshells
 sudo
