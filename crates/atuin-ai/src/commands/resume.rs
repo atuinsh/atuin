@@ -146,6 +146,8 @@ pub struct Cmd {
 enum ContinueIn {
     Claude,
     Codex,
+    #[clap(alias = "grok-build")]
+    Grok,
     Opencode,
     Pi,
     Omp,
@@ -156,6 +158,7 @@ impl ContinueIn {
         match self {
             Self::Claude => HarnessKind::ClaudeCode,
             Self::Codex => HarnessKind::Codex,
+            Self::Grok => HarnessKind::Grok,
             Self::Opencode => HarnessKind::Opencode,
             Self::Pi => HarnessKind::Pi,
             Self::Omp => HarnessKind::Omp,

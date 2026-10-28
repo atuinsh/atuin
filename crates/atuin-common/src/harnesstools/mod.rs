@@ -167,7 +167,7 @@ impl AnyHarness {
         match self {
             Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
             Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Grok(_) => None,
+            Self::Grok(h) => Some(h.sessions(pool.clone()).into()),
             Self::Opencode(h) => Some(h.sessions(pool.clone()).into()),
             Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
         }

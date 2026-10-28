@@ -13,9 +13,9 @@ isn't already, and offers to import the sessions your agents already have.
 `atuin config disable threads` turns it off again.
 
 With `capture = true` under `[threads]`, the Atuin daemon records the
-sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) as
-threads into the encrypted record store, and syncs them like your history.
-`atuin threads` lists, shows, searches and follows them.
+sessions of your AI coding agents (Claude Code, Codex, Grok Build, opencode,
+Pi and omp) as threads into the encrypted record store, and syncs them like
+your history. `atuin threads` lists, shows, searches and follows them.
 
 The daemon keeps a local search index of these threads beside the record
 store, and brings it up to date as threads are captured, synced in from your

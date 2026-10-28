@@ -421,6 +421,7 @@ mod tests {
             Just(HarnessKind::Opencode),
             Just(HarnessKind::Pi),
             Just(HarnessKind::Omp),
+            Just(HarnessKind::Grok),
         ]
     }
 

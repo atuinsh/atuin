@@ -360,9 +360,9 @@ fn continue_at(
         rows.push(at, Role::Assistant, vec![note], Some(StopReason::EndTurn));
     }
     let mut rows = rows.rows;
-    // Only Claude Code and Pi keep a tree; opencode reads a row's parent as the message it
-    // answers, which it finds on its own.
-    if !matches!(target, AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_)) {
+    // Only Claude Code, Grok Build and Pi keep a tree; opencode reads a row's parent as the
+    // message it answers, which it finds on its own.
+    if !matches!(target, AnyHarness::ClaudeCode(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_)) {
         for message in &mut rows {
             message.parent_source_id = None;
         }

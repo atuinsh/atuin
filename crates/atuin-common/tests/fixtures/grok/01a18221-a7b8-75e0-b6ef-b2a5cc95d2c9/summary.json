@@ -1,0 +1,19 @@
+{
+  "info": {
+    "id": "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9",
+    "cwd": "/work/proj"
+  },
+  "agent_id": "ag1.01a18221a7b875e0b6efb2a5cc95d2c9",
+  "attempt_id": "at1.01a18221a7b875e0b6efb2a5cc95d2c9",
+  "session_summary": "fix the flaky test",
+  "generated_title": "fix the flaky test",
+  "created_at": "2026-10-28T10:00:00.000000Z",
+  "updated_at": "2026-10-28T10:00:05.000000Z",
+  "last_active_at": "2026-10-28T10:00:05.000000Z",
+  "num_messages": 6,
+  "num_chat_messages": 6,
+  "current_model_id": "grok-4.7",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "sandbox_profile": "off"
+}

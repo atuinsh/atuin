@@ -10,17 +10,20 @@ use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::ccode::session::{CcodeMessage, CcodeSession};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::codex::session::CodexSession;
+use crate::harnesstools::grok::Grok;
+use crate::harnesstools::grok::session::GrokSession;
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
-use crate::harnesstools::{ccode, codex, opencode, pi};
+use crate::harnesstools::{ccode, codex, grok, opencode, pi};
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 pub const CLAUDE: AnyHarness = AnyHarness::ClaudeCode(Ccode);
 pub const CODEX: AnyHarness = AnyHarness::Codex(Codex);
+pub const GROK: AnyHarness = AnyHarness::Grok(Grok);
 pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
 pub const PI: AnyHarness = AnyHarness::Pi(Pi::PI);
 /// The original's atuin id, as the picker passes it.
@@ -149,7 +152,19 @@ async fn read(source: AnyHarness) -> RehydrateSession {
             .unwrap();
             session_of(id, rows_of(&lines))
         }
-        AnyHarness::Grok(_) => unreachable!("Grok sessions are not enabled here"),
+        AnyHarness::Grok(_) => {
+            let id = "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9";
+            let lines: Vec<_> = GrokSession::open(
+                SessionId::from(id.to_owned()),
+                fixture("grok/01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9/chat_history.jsonl"),
+                pool(),
+            )
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
+            session_of(id, rows_of(&lines))
+        }
     }
 }
 
@@ -318,8 +333,8 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_pair_continues_in_the_targets_shape(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, GROK, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, GROK, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -411,7 +426,14 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
             );
             rows
         }
-        AnyHarness::Grok(_) => unreachable!("Grok sessions are not enabled here"),
+        AnyHarness::Grok(_) => {
+            let sessions_dir = root.join("sessions");
+            let path = grok::rehydrate::rehydrate_into(&sessions_dir, root, session).unwrap();
+            assert_eq!(grok::session::locate(&sessions_dir, &session.id), Some(path.clone()));
+            let lines: Vec<_> =
+                GrokSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            rows_of(&lines)
+        }
     }
 }
 
@@ -458,8 +480,8 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_target_reads_back_the_conversation_and_its_parent(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, GROK, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, GROK, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;

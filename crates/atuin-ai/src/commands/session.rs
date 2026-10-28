@@ -110,6 +110,9 @@ pub enum Cmd {
 pub enum HarnessArg {
     ClaudeCode,
     Codex,
+    #[clap(alias = "grok-build")]
+    #[serde(alias = "grok-build")]
+    Grok,
     Opencode,
     Pi,
     Omp,
@@ -120,6 +123,7 @@ impl From<HarnessArg> for HarnessKind {
         match value {
             HarnessArg::ClaudeCode => Self::ClaudeCode,
             HarnessArg::Codex => Self::Codex,
+            HarnessArg::Grok => Self::Grok,
             HarnessArg::Opencode => Self::Opencode,
             HarnessArg::Pi => Self::Pi,
             HarnessArg::Omp => Self::Omp,
@@ -975,7 +979,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
     match harness {
         HarnessKind::ClaudeCode => Ansi::Magenta,
         HarnessKind::Codex => Ansi::Green,
-        HarnessKind::Copilot => Ansi::Blue,
+        HarnessKind::Copilot | HarnessKind::Grok => Ansi::Blue,
         HarnessKind::Opencode => Ansi::Cyan,
         HarnessKind::Pi => Ansi::Yellow,
         HarnessKind::Omp => Ansi::Red,
@@ -1043,11 +1047,12 @@ fn parse_harness(value: &str) -> Result<HarnessKind, String> {
     match value {
         "claude-code" => Ok(HarnessKind::ClaudeCode),
         "codex" => Ok(HarnessKind::Codex),
+        "grok" | "grok-build" => Ok(HarnessKind::Grok),
         "opencode" => Ok(HarnessKind::Opencode),
         "pi" => Ok(HarnessKind::Pi),
         "omp" => Ok(HarnessKind::Omp),
         other => Err(format!(
-            "unknown harness `{other}` (expected claude-code, codex, opencode, pi, or omp)"
+            "unknown harness `{other}` (expected claude-code, codex, grok, opencode, pi, or omp)"
         )),
     }
 }
@@ -1060,6 +1065,7 @@ pub fn harness_name(harness: HarnessKind) -> &'static str {
         HarnessKind::ClaudeCode => "claude-code",
         HarnessKind::Codex => "codex",
         HarnessKind::Copilot => "copilot",
+        HarnessKind::Grok => "grok",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "pi",
         HarnessKind::Omp => "omp",
@@ -1403,6 +1409,8 @@ mod tests {
     #[rstest]
     #[case("claude-code", HarnessKind::ClaudeCode)]
     #[case("codex", HarnessKind::Codex)]
+    #[case("grok", HarnessKind::Grok)]
+    #[case("grok-build", HarnessKind::Grok)]
     #[case("opencode", HarnessKind::Opencode)]
     #[case("pi", HarnessKind::Pi)]
     #[case("omp", HarnessKind::Omp)]

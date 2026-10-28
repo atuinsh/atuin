@@ -69,6 +69,7 @@ pub(crate) fn render(parts: &[Part]) -> String {
 /// | | `update_plan`, `view_image`, `web_search` | as `TodoWrite`, `Read`, `WebSearch` |
 /// | opencode | `bash`, `edit`, `write`, `read`, `grep`, `glob`, `list`, `task`, `webfetch`, `todowrite`, `patch` | as Claude Code's (`filePath`, `patchText`) |
 /// | Pi | `bash`, `edit`, `write`, `read`, `grep`, `find`, `ls` | as Claude Code's (`path`) |
+/// | Grok Build | `run_terminal_command`, `search_replace`, `write_file`, `read_file`, `grep`, `list_dir`, `spawn_subagent`, `todo_write`, `apply_patch` | as Claude Code's (`target_file`, `file_path`) |
 /// | any | anything else | ``called `<name>` <compact arguments>`` |
 ///
 /// Without the input (`threads.capture_tools` off, or withheld), each says only what was done: `ran a
@@ -94,7 +95,7 @@ pub fn tool_note(name: &str, input: &Value) -> String {
             _ => None,
         })
     };
-    let path = || field(&["file_path", "filePath", "path", "notebook_path", "file"]);
+    let path = || field(&["file_path", "filePath", "target_file", "path", "notebook_path", "file"]);
     // What was done, on what when the input says (unless `threads.capture_tools` is off or a policy
     // withheld it), else only what.
     let on = |what: Option<String>, detailed: &dyn Fn(&str) -> String, bare: &str| {
@@ -102,18 +103,32 @@ pub fn tool_note(name: &str, input: &Value) -> String {
     };
     let lower = name.to_ascii_lowercase();
     let note = match lower.as_str() {
-        "bash" | "shell" | "shell_command" | "exec_command" | "local_shell" | "container.exec"
-        | "unified_exec" => on(
+        "bash"
+        | "shell"
+        | "shell_command"
+        | "exec_command"
+        | "local_shell"
+        | "container.exec"
+        | "unified_exec"
+        | "run_terminal_command" => on(
             field(&["command", "cmd"])
                 .or_else(|| input["action"]["command"].as_array().map(|a| command_line(a))),
             &|c| format!("ran {}", code(c)),
             "ran a shell command",
         ),
-        "edit" | "multiedit" | "notebookedit" | "str_replace_based_edit_tool" | "str_replace" => {
-            on(path(), &|p| format!("edited {}", code(p)), "edited a file")
+        "edit"
+        | "multiedit"
+        | "notebookedit"
+        | "str_replace_based_edit_tool"
+        | "str_replace"
+        | "search_replace"
+        | "edit_file" => on(path(), &|p| format!("edited {}", code(p)), "edited a file"),
+        "write" | "create" | "write_file" => {
+            on(path(), &|p| format!("wrote {}", code(p)), "wrote a file")
         }
-        "write" | "create" => on(path(), &|p| format!("wrote {}", code(p)), "wrote a file"),
-        "read" | "view" | "cat" => on(path(), &|p| format!("read {}", code(p)), "read a file"),
+        "read" | "view" | "cat" | "read_file" => {
+            on(path(), &|p| format!("read {}", code(p)), "read a file")
+        }
         "view_image" => {
             on(path(), &|p| format!("looked at the image {}", code(p)), "looked at an image")
         }
@@ -140,7 +155,7 @@ pub fn tool_note(name: &str, input: &Value) -> String {
         "ls" | "list" | "list_dir" => {
             on(path(), &|p| format!("listed {}", code(p)), "listed a directory")
         }
-        "task" | "agent" | "subagent" | "spawn_agent" => on(
+        "task" | "agent" | "subagent" | "spawn_agent" | "spawn_subagent" => on(
             field(&["description", "prompt", "message"]),
             &|d| format!("asked a subagent to {}", clip(d, NOTE_INPUT)),
             "handed work to a subagent",
@@ -261,6 +276,10 @@ mod tests {
     #[case::opencode_patch("patch", json!({"patchText": "*** Begin Patch\n*** Delete File: old.rs\n*** End Patch"}), "[deleted `old.rs`]")]
     #[case::pi_read("read", json!({"path": "README.md"}), "[read `README.md`]")]
     #[case::pi_ls("ls", json!({}), "[listed a directory]")]
+    #[case::grok_terminal("run_terminal_command", json!({"command": "cargo check"}), "[ran `cargo check`]")]
+    #[case::grok_read("read_file", json!({"target_file": "src/main.rs"}), "[read `src/main.rs`]")]
+    #[case::grok_edit("search_replace", json!({"file_path": "src/lib.rs"}), "[edited `src/lib.rs`]")]
+    #[case::grok_subagent("spawn_subagent", json!({"description": "audit tests"}), "[asked a subagent to audit tests]")]
     #[case::captured_bash("Bash", Value::Null, "[ran a shell command]")]
     #[case::captured_exec("exec_command", Value::Null, "[ran a shell command]")]
     #[case::captured_edit("edit", Value::Null, "[edited a file]")]

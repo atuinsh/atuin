@@ -1,0 +1,1455 @@
+//! Grok Build sessions: `$GROK_HOME/sessions/<encoded cwd>/<session>/chat_history.jsonl`, paired
+//! with `summary.json`, `updates.jsonl`, and `.atuin.json` in the same session directory.
+
+use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
+use std::path::{Path, PathBuf};
+
+use futures::{Stream, StreamExt};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use tokio::sync::watch;
+use typed_builder::TypedBuilder;
+
+use super::Grok;
+use crate::fs::tree_watcher::{FileStat, TreeWatcher};
+use crate::harnesstools::resume;
+use crate::harnesstools::session::model::{
+    Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
+    ToolResult, ToolUse, Usage,
+};
+use crate::harnesstools::session::{
+    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
+    Sessions, WatchError, modified_after,
+};
+use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
+use crate::json::jsonl::JsonlExt;
+use crate::path::{AbsPathBuf, PathBufExt as _};
+use crate::sync::BlockingPool;
+
+/// Transcript filename inside each Grok Build session directory.
+pub(crate) const TRANSCRIPT_FILE: &str = "chat_history.jsonl";
+
+/// Summary metadata filename beside [`TRANSCRIPT_FILE`].
+pub(crate) const SUMMARY_FILE: &str = "summary.json";
+
+/// ACP update log beside [`TRANSCRIPT_FILE`], carrying per-event timestamps and TUI scrollback.
+pub(crate) const UPDATES_FILE: &str = "updates.jsonl";
+
+/// Atuin sidecar file inside a session directory, preserving source-id mappings and merged-row
+/// records across Grok Build's in-place rewrites of `chat_history.jsonl`.
+pub(crate) const SIDECAR_FILE: &str = ".atuin.json";
+
+/// Maximum byte length of an encoded workspace directory name before shortening with a hash
+/// suffix, staying safely under the 255-byte component limit on APFS/ext4.
+const MAX_WORKSPACE_SLUG_LEN: usize = 200;
+
+/// Sidecar bookkeeping stored in `<session dir>/.atuin.json` for sessions Atuin wrote or caught
+/// up. Grok Build rewrites `chat_history.jsonl` on `--resume` and strips unknown JSON keys on
+/// transcript lines, while leaving sibling files in the session directory untouched.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AtuinSidecar {
+    /// Deterministic `gk-...` line key -> synced `source_id`, when they differ.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub ids: HashMap<String, String>,
+    /// Synced `source_id` -> `source_id` of the written line it was merged into.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub merged: HashMap<String, String>,
+}
+
+impl AtuinSidecar {
+    pub(crate) fn read_beside(transcript_path: &Path) -> Self {
+        let path = transcript_path.with_file_name(SIDECAR_FILE);
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ids.is_empty() && self.merged.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, TypedBuilder)]
+pub struct GrokSessions {
+    #[builder(default, setter(strip_option, into))]
+    root: Option<PathBuf>,
+    /// Runs every file read of the sessions this finds.
+    pool: BlockingPool,
+}
+
+impl GrokSessions {
+    fn resolve_root(&self) -> PathBuf {
+        self.root.clone().unwrap_or_else(default_root)
+    }
+}
+
+/// Grok Build's sessions directory: `$GROK_HOME/sessions`, else `~/.grok/sessions`.
+pub(crate) fn default_root() -> PathBuf {
+    super::home().joined("sessions")
+}
+
+/// Encode `cwd` into the workspace directory name under `sessions/`.
+///
+/// Uses RFC 3986 unreserved byte encoding (`%2FUsers%2F...`). Paths whose encoded form exceeds
+/// [`MAX_WORKSPACE_SLUG_LEN`] are shortened without splitting a `%XX` escape and suffixed with a
+/// 64-bit hash so directory creation never fails with `ENAMETOOLONG`.
+#[must_use]
+pub(crate) fn encode_cwd(cwd: &Path) -> String {
+    let normalized: PathBuf = cwd.components().collect();
+    let raw = normalized.to_string_lossy();
+    let mut encoded = String::with_capacity(raw.len() + 16);
+    for byte in raw.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(*byte));
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    if encoded.len() <= MAX_WORKSPACE_SLUG_LEN {
+        return encoded;
+    }
+    let mut cut = MAX_WORKSPACE_SLUG_LEN - 17;
+    if encoded.as_bytes().get(cut.saturating_sub(1)) == Some(&b'%') {
+        cut = cut.saturating_sub(1);
+    } else if encoded.as_bytes().get(cut.saturating_sub(2)) == Some(&b'%') {
+        cut = cut.saturating_sub(2);
+    }
+    let digest = xxhash_rust::xxh3::xxh3_64(raw.as_bytes());
+    format!("{}-{digest:016x}", &encoded[..cut])
+}
+
+/// Locate session `id`'s `chat_history.jsonl` under `root`.
+pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
+    if !resume::is_plain_name(id) {
+        return None;
+    }
+    std::fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|ft| ft.is_dir()))
+        .map(|workspace| workspace.path().joined(id).joined(TRANSCRIPT_FILE))
+        .find(|path| path.is_file())
+}
+
+/// Scan `<root>/<workspace>/<session>/chat_history.jsonl` without descending into per-session
+/// artifact subdirectories such as `terminal/` or `images/`.
+fn scan_grok_sessions(root: &Path, pool: &BlockingPool) -> Vec<Result<GrokSession, RuntimeError>> {
+    let mut out = Vec::new();
+    let workspaces = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(err) => {
+            out.push(Err(RuntimeError::Io(err)));
+            return out;
+        }
+    };
+    for workspace in workspaces {
+        let workspace = match workspace {
+            Ok(entry) => entry,
+            Err(err) => {
+                out.push(Err(RuntimeError::Io(err)));
+                continue;
+            }
+        };
+        let ws_type = match workspace.file_type() {
+            Ok(ft) => ft,
+            Err(err) => {
+                out.push(Err(RuntimeError::Io(err)));
+                continue;
+            }
+        };
+        if !ws_type.is_dir() {
+            continue;
+        }
+        let sessions = match std::fs::read_dir(workspace.path()) {
+            Ok(entries) => entries,
+            Err(err) => {
+                out.push(Err(RuntimeError::Io(err)));
+                continue;
+            }
+        };
+        for entry in sessions {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    out.push(Err(RuntimeError::Io(err)));
+                    continue;
+                }
+            };
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(err) => {
+                    out.push(Err(RuntimeError::Io(err)));
+                    continue;
+                }
+            };
+            if !ft.is_dir() {
+                continue;
+            }
+            let transcript = entry.path().joined(TRANSCRIPT_FILE);
+            if let Some(session) =
+                GrokListener::open_session(root, &transcript, transcript.is_file(), pool)
+            {
+                out.push(Ok(session));
+            }
+        }
+    }
+    out
+}
+
+impl Sessions for GrokSessions {
+    type Listener = GrokListener;
+
+    fn listener(&self) -> Result<GrokListener, RuntimeError> {
+        let root = self.resolve_root();
+        if !root.is_dir() {
+            return Err(RuntimeError::NotFound(root));
+        }
+        Ok(GrokListener {
+            root,
+            pool: self.pool.clone(),
+        })
+    }
+
+    fn existing(
+        &self,
+    ) -> Result<impl Stream<Item = Result<GrokSession, RuntimeError>> + Send + 'static, RuntimeError>
+    {
+        let root = self.resolve_root();
+        if !root.is_dir() {
+            return Err(RuntimeError::NotFound(root));
+        }
+        let pool = self.pool.clone();
+        Ok(async_stream::stream! {
+            let sessions_pool = pool.clone();
+            let scan = pool
+                .run(move || scan_grok_sessions(&root, &sessions_pool))
+                .await;
+            match scan {
+                Ok(items) => {
+                    for item in items {
+                        yield item;
+                    }
+                }
+                Err(cancelled) => yield Err(RuntimeError::Io(io::Error::other(cancelled))),
+            }
+        })
+    }
+}
+
+impl Observable for Grok {
+    type Sessions = GrokSessions;
+
+    fn sessions(&self, pool: BlockingPool) -> GrokSessions {
+        GrokSessions::builder().pool(pool).build()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GrokListener {
+    root: PathBuf,
+    pool: BlockingPool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WatchedKind {
+    Transcript,
+    Summary,
+}
+
+/// Classify `path` under `root` as `<workspace>/<session>/{chat_history.jsonl,summary.json}`.
+fn watched_session_file(root: &Path, path: &Path) -> Option<WatchedKind> {
+    let relative = path.strip_prefix(root).ok()?;
+    let mut parts = relative.components();
+    let (Some(workspace), Some(session), Some(file), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return None;
+    };
+    let workspace = workspace.as_os_str().to_str()?;
+    let session = session.as_os_str().to_str()?;
+    if workspace.is_empty() || !resume::is_plain_name(session) {
+        return None;
+    }
+    if file.as_os_str() == TRANSCRIPT_FILE {
+        Some(WatchedKind::Transcript)
+    } else if file.as_os_str() == SUMMARY_FILE {
+        Some(WatchedKind::Summary)
+    } else {
+        None
+    }
+}
+
+impl GrokListener {
+    fn session_id(path: &Path) -> Option<SessionId> {
+        let dir = path.parent()?.file_name()?.to_str()?;
+        resume::is_plain_name(dir).then(|| SessionId::from(dir.to_owned()))
+    }
+
+    fn open_session(
+        root: &Path,
+        path: &Path,
+        is_file: bool,
+        pool: &BlockingPool,
+    ) -> Option<GrokSession> {
+        if !is_file || watched_session_file(root, path) != Some(WatchedKind::Transcript) {
+            return None;
+        }
+        Some(GrokSession::open(Self::session_id(path)?, path.to_path_buf(), pool.clone()))
+    }
+}
+
+#[derive(Default)]
+struct WatchedPair {
+    transcript_path: Option<PathBuf>,
+    transcript_stat: Option<watch::Receiver<FileStat>>,
+    summary_stat: Option<watch::Receiver<FileStat>>,
+}
+
+impl Listener for GrokListener {
+    type Session = GrokSession;
+
+    fn watch(self) -> impl Stream<Item = Result<GrokSession, WatchError>> + Send + 'static {
+        let root = self.root;
+        let pool = self.pool;
+        async_stream::stream! {
+            let sessions_root =
+                AbsPathBuf::canonicalize(&root).map_or_else(|_| root.clone(), PathBuf::from);
+            let filter_root = sessions_root.clone();
+            let files = TreeWatcher::builder()
+                .filter(move |path| watched_session_file(&filter_root, path).is_some())
+                .watch(&root);
+            let files = match files {
+                Ok(files) => files,
+                Err(err) => {
+                    yield Err(WatchError::from(err));
+                    return;
+                }
+            };
+            let mut pairs: HashMap<SessionId, WatchedPair> = HashMap::new();
+            for await file in files {
+                let (path, stat) = file.into_parts();
+                let Some(kind) = watched_session_file(&sessions_root, &path) else { continue };
+                let Some(id) = Self::session_id(&path) else { continue };
+                let entry = pairs.entry(id.clone()).or_default();
+                match kind {
+                    WatchedKind::Transcript => {
+                        entry.transcript_path = Some(path.to_path_buf());
+                        entry.transcript_stat = Some(stat);
+                    }
+                    WatchedKind::Summary => {
+                        entry.summary_stat = Some(stat);
+                    }
+                }
+                if let (Some(transcript_path), Some(changes)) =
+                    (entry.transcript_path.clone(), entry.transcript_stat.clone())
+                {
+                    yield Ok(GrokSession {
+                        id,
+                        path: transcript_path,
+                        changes: Some(changes),
+                        summary_changes: entry.summary_stat.clone(),
+                        pool: pool.clone(),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Session-level metadata read from `summary.json` beside `chat_history.jsonl`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GrokSummary {
+    pub present: bool,
+    pub cwd: Option<PathBuf>,
+    pub created_at: Option<OffsetDateTime>,
+    pub updated_at: Option<OffsetDateTime>,
+    pub title: Option<TitleChange>,
+    pub parent: Option<(SessionId, ParentKind)>,
+}
+
+/// Per-event timestamps extracted from `updates.jsonl` beside `chat_history.jsonl`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct UpdateTimes {
+    pub prompts_by_index: HashMap<u64, OffsetDateTime>,
+    pub prompts_in_order: Vec<OffsetDateTime>,
+    pub call_starts: HashMap<String, OffsetDateTime>,
+    pub call_ends: HashMap<String, OffsetDateTime>,
+    pub turn_replies: Vec<OffsetDateTime>,
+    pub latest: Option<OffsetDateTime>,
+}
+
+fn parse_unix_timestamp(raw: &Value) -> Option<OffsetDateTime> {
+    let n = raw.as_i64()?;
+    if n >= 10_000_000_000 {
+        OffsetDateTime::from_unix_timestamp_nanos(i128::from(n) * 1_000_000).ok()
+    } else {
+        OffsetDateTime::from_unix_timestamp(n).ok()
+    }
+}
+
+fn event_timestamp(entry: &Value) -> Option<OffsetDateTime> {
+    parse_unix_timestamp(&entry["params"]["update"]["_meta"]["agentTimestampMs"])
+        .or_else(|| parse_unix_timestamp(&entry["timestamp"]))
+}
+
+type FileSignature = Option<(std::time::SystemTime, u64)>;
+
+fn file_signature(path: &Path) -> FileSignature {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// Read `updates.jsonl` beside `transcript_path` for per-message timestamps.
+pub(crate) fn read_update_times_beside(transcript_path: &Path) -> UpdateTimes {
+    let updates_path = transcript_path.with_file_name(UPDATES_FILE);
+    let Ok(file) = File::open(updates_path) else {
+        return UpdateTimes::default();
+    };
+    let mut times = UpdateTimes::default();
+    let mut current_turn: Option<usize> = None;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(entry) = crate::json::js::from_slice::<Value>(line.as_bytes()) else {
+            continue;
+        };
+        let Some(ts) = event_timestamp(&entry) else {
+            continue;
+        };
+        times.latest = Some(times.latest.map_or(ts, |prev| prev.max(ts)));
+        let update = &entry["params"]["update"];
+        match update["sessionUpdate"].as_str().unwrap_or_default() {
+            "user_message_chunk" => {
+                if let Some(idx) = update["_meta"]["promptIndex"].as_u64() {
+                    times.prompts_by_index.entry(idx).or_insert(ts);
+                }
+                times.prompts_in_order.push(ts);
+                let turn_idx = times.prompts_in_order.len() - 1;
+                if times.turn_replies.len() <= turn_idx {
+                    times.turn_replies.resize(turn_idx + 1, ts);
+                }
+                current_turn = Some(turn_idx);
+            }
+            "tool_call" => {
+                if let Some(call_id) = update["toolCallId"].as_str().filter(|s| !s.is_empty()) {
+                    times.call_starts.entry(call_id.to_owned()).or_insert(ts);
+                }
+            }
+            "tool_call_update" => {
+                if let Some(call_id) = update["toolCallId"].as_str().filter(|s| !s.is_empty()) {
+                    times.call_starts.entry(call_id.to_owned()).or_insert(ts);
+                    times.call_ends.insert(call_id.to_owned(), ts);
+                }
+            }
+            "agent_message_chunk" | "turn_completed" => {
+                if let Some(turn_idx) = current_turn {
+                    if times.turn_replies.len() <= turn_idx {
+                        times.turn_replies.resize(turn_idx + 1, ts);
+                    } else {
+                        times.turn_replies[turn_idx] = ts;
+                    }
+                } else if times.turn_replies.is_empty() {
+                    times.turn_replies.push(ts);
+                } else if let Some(last) = times.turn_replies.last_mut() {
+                    *last = ts;
+                }
+            }
+            _ => {}
+        }
+    }
+    times
+}
+
+/// Read `summary.json` beside `transcript_path`, returning default metadata when absent or
+/// unreadable.
+pub(crate) fn read_summary_beside(transcript_path: &Path) -> GrokSummary {
+    let summary_path = transcript_path.with_file_name(SUMMARY_FILE);
+    let Ok(bytes) = std::fs::read(summary_path) else {
+        return GrokSummary::default();
+    };
+    let Ok(raw) = serde_json::from_slice::<Value>(&bytes) else {
+        return GrokSummary::default();
+    };
+    let cwd = raw["info"]["cwd"].as_str().filter(|s| !s.is_empty()).map(PathBuf::from);
+    let created_at =
+        raw["created_at"].as_str().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
+    let updated_at = raw["last_active_at"]
+        .as_str()
+        .or_else(|| raw["updated_at"].as_str())
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .or(created_at);
+    let title = raw["generated_title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|t| TitleChange::new(TitleSource::Generated, t))
+        .or_else(|| {
+            raw["session_summary"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|t| TitleChange::new(TitleSource::Summary, t))
+        });
+    let parent = raw["parent_session_id"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(
+        |parent_id| {
+            let kind = if raw["session_kind"].as_str().is_some_and(|k| k.starts_with("subagent")) {
+                ParentKind::Subagent
+            } else {
+                ParentKind::Fork
+            };
+            (SessionId::from(parent_id.to_owned()), kind)
+        },
+    );
+    GrokSummary {
+        present: true,
+        cwd,
+        created_at,
+        updated_at,
+        title,
+        parent,
+    }
+}
+
+/// Deterministic id for session `session_id`'s metadata header row (`atuin-meta-<session>`).
+#[must_use]
+pub(crate) fn meta_id(session_id: &str) -> String {
+    format!("atuin-meta-{session_id}")
+}
+
+/// Deterministic id for a title-change info row (`atuin-title-<digest>`), never embedding the
+/// unredacted title text itself in the synced `source_id`.
+#[must_use]
+pub(crate) fn title_id(session_id: &str, change: &TitleChange) -> String {
+    let payload = json!([session_id, change.source, change.text]);
+    let digest = xxhash_rust::xxh3::xxh3_64(payload.to_string().as_bytes());
+    format!("atuin-title-{digest:016x}")
+}
+
+/// Deterministic prefix-chained content key (`gk-<digest>`) for a conversational line, derived
+/// from `prev_gk` (the previous conversational line's `gk-` key) plus the fields Grok Build
+/// preserves verbatim when rewriting `chat_history.jsonl` on resume.
+///
+/// Chaining `prev_gk` gives repeated prompts (such as `"continue"` or `"ok"`) distinct keys both
+/// within a single transcript and across diverged branches on different machines, while staying
+/// invariant when Grok prepends its `"system"` prompt on `--resume`.
+pub(crate) fn line_key(prev_gk: Option<&str>, role: &Role, content: &[Content]) -> Option<String> {
+    if content.is_empty() {
+        return None;
+    }
+    let canonical = json!([prev_gk, role, content]);
+    let hash = xxhash_rust::xxh3::xxh3_64(canonical.to_string().as_bytes());
+    Some(format!("gk-{hash:016x}"))
+}
+
+/// Per-session state carried across lines without cloning growing maps on each line.
+#[derive(Debug, Default)]
+struct ReaderState {
+    summary: GrokSummary,
+    times: UpdateTimes,
+    sidecar: AtuinSidecar,
+    summary_sig: FileSignature,
+    updates_sig: FileSignature,
+    sidecar_sig: FileSignature,
+    prev_gk: Option<String>,
+    prompt_seq: usize,
+    current_turn: Option<usize>,
+    last_ts: Option<OffsetDateTime>,
+    emitted_title: Option<TitleChange>,
+    last_chain_id: Option<String>,
+}
+
+impl ReaderState {
+    fn load(session_id: &str, transcript_path: &Path, start_offset: u64) -> Self {
+        let summary_sig = file_signature(&transcript_path.with_file_name(SUMMARY_FILE));
+        let updates_sig = file_signature(&transcript_path.with_file_name(UPDATES_FILE));
+        let sidecar_sig = file_signature(&transcript_path.with_file_name(SIDECAR_FILE));
+        let summary = read_summary_beside(transcript_path);
+        let times = read_update_times_beside(transcript_path);
+        let sidecar = AtuinSidecar::read_beside(transcript_path);
+        let fallback_mtime = std::fs::metadata(transcript_path)
+            .and_then(|m| m.modified())
+            .ok()
+            .map(OffsetDateTime::from);
+        let initial_chain = summary.present.then(|| meta_id(session_id));
+        // On a checkpointed restart (`start_offset > 0`) `emitted_header` is skipped, so leave
+        // `emitted_title` unset here and let `take_pending_title()` emit any title generated while
+        // capture was stopped (SQLite deduplicates an unchanged `atuin-title-*` idempotently).
+        let emitted_title = (start_offset == 0).then(|| summary.title.clone()).flatten();
+        let mut state = Self {
+            last_ts: summary.created_at.or(times.latest).or(fallback_mtime),
+            emitted_title,
+            summary,
+            times,
+            sidecar,
+            summary_sig,
+            updates_sig,
+            sidecar_sig,
+            prev_gk: None,
+            prompt_seq: 0,
+            current_turn: None,
+            last_chain_id: initial_chain,
+        };
+        if start_offset > 0
+            && let Ok(file) = File::open(transcript_path)
+        {
+            let mut reader = BufReader::new(file);
+            let mut pos = 0u64;
+            let mut buf = Vec::new();
+            while pos < start_offset {
+                buf.clear();
+                let Ok(n) = reader.read_until(b'\n', &mut buf) else {
+                    break;
+                };
+                if n == 0 {
+                    break;
+                }
+                pos += n as u64;
+                if pos > start_offset {
+                    break;
+                }
+                if let Ok(mut msg) = GrokMessage::decode(&buf) {
+                    let _ = state.enrich(&mut msg);
+                }
+            }
+        }
+        state
+    }
+
+    fn take_pending_title(&mut self) -> Option<TitleChange> {
+        if self.summary.title == self.emitted_title {
+            None
+        } else {
+            self.emitted_title.clone_from(&self.summary.title);
+            self.summary.title.clone()
+        }
+    }
+
+    fn refresh_files(&mut self, transcript_path: &Path) -> Option<TitleChange> {
+        let next_updates = file_signature(&transcript_path.with_file_name(UPDATES_FILE));
+        if next_updates != self.updates_sig {
+            self.updates_sig = next_updates;
+            self.times = read_update_times_beside(transcript_path);
+        }
+        let next_sidecar = file_signature(&transcript_path.with_file_name(SIDECAR_FILE));
+        if next_sidecar != self.sidecar_sig {
+            self.sidecar_sig = next_sidecar;
+            self.sidecar = AtuinSidecar::read_beside(transcript_path);
+        }
+        let next_summary = file_signature(&transcript_path.with_file_name(SUMMARY_FILE));
+        if next_summary == self.summary_sig {
+            return None;
+        }
+        self.summary_sig = next_summary;
+        self.summary = read_summary_beside(transcript_path);
+        self.take_pending_title()
+    }
+
+    fn enrich(&mut self, msg: &mut GrokMessage) -> Option<String> {
+        let role = msg.role();
+        let content = msg.content();
+        let gk = line_key(self.prev_gk.as_deref(), &role, &content)?;
+        self.prev_gk = Some(gk.clone());
+        let resolved_id = self.sidecar.ids.get(&gk).cloned().unwrap_or(gk);
+        let ts = self.timestamp_for(msg, &role);
+        if let Some(ts) = ts {
+            self.last_ts = Some(ts);
+        }
+        msg.computed_id = Some(resolved_id.clone());
+        msg.computed_timestamp = ts.or(self.last_ts);
+        self.last_chain_id = Some(resolved_id.clone());
+        Some(resolved_id)
+    }
+
+    fn timestamp_for(&mut self, msg: &GrokMessage, role: &Role) -> Option<OffsetDateTime> {
+        match role {
+            Role::User => {
+                let seq = self.prompt_seq;
+                self.prompt_seq += 1;
+                self.current_turn = Some(seq);
+                msg.prompt_index
+                    .and_then(|idx| self.times.prompts_by_index.get(&idx).copied())
+                    .or_else(|| self.times.prompts_in_order.get(seq).copied())
+                    .or(self.summary.updated_at)
+            }
+            Role::Assistant => {
+                if let Some(first_call) = msg.tool_calls.first()
+                    && let Some(&ts) = self.times.call_starts.get(&first_call.id)
+                {
+                    return Some(ts);
+                }
+                self.current_turn
+                    .and_then(|turn| self.times.turn_replies.get(turn).copied())
+                    .or(self.times.latest)
+                    .or(self.summary.updated_at)
+            }
+            Role::Tool => msg
+                .tool_call_id
+                .as_deref()
+                .and_then(|id| self.times.call_ends.get(id).copied())
+                .or(self.times.latest)
+                .or(self.summary.updated_at),
+            Role::System | Role::Other(_) => self.last_ts.or(self.summary.created_at),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GrokSession {
+    id: SessionId,
+    path: PathBuf,
+    changes: Option<watch::Receiver<FileStat>>,
+    summary_changes: Option<watch::Receiver<FileStat>>,
+    pool: BlockingPool,
+}
+
+impl GrokSession {
+    #[must_use]
+    pub fn open(id: SessionId, path: PathBuf, pool: BlockingPool) -> Self {
+        Self {
+            id,
+            path,
+            changes: None,
+            summary_changes: None,
+            pool,
+        }
+    }
+
+    async fn load_state(&self, start_offset: u64) -> ReaderState {
+        let id = self.id.to_string();
+        let path = self.path.clone();
+        self.pool.run(move || ReaderState::load(&id, &path, start_offset)).await.unwrap_or_default()
+    }
+
+    async fn start(&self, from: Checkpoint) -> u64 {
+        let path = self.path.clone();
+        let found = self
+            .pool
+            .run(move || File::open(path).and_then(|file| Line::ending_at(&file, from.at)))
+            .await
+            .map_err(io::Error::other)
+            .and_then(|found| found);
+        match found {
+            Ok(Some(line)) if from.names(&line.bytes) => from.at,
+            Ok(_) => {
+                tracing::debug!(
+                    path = %self.path.display(),
+                    "the checkpoint no longer names its line; reading from the start"
+                );
+                0
+            }
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    path = %self.path.display(),
+                    "failed to read the line a checkpoint names; reading from the start"
+                );
+                0
+            }
+        }
+    }
+}
+
+impl Session for GrokSession {
+    type Message = GrokMessage;
+
+    fn id(&self) -> SessionId {
+        self.id.clone()
+    }
+
+    fn messages_from(
+        self,
+        from: Option<Checkpoint>,
+    ) -> impl Stream<Item = Result<(Checkpoint, GrokMessage), MessageError>> + Send + 'static {
+        async_stream::stream! {
+            let probe = self.clone();
+            let start = match from {
+                Some(from) => self.start(from).await,
+                None => 0,
+            };
+            let over = from.is_some() && start == 0;
+            // Synthetic metadata/title events carry `safe_checkpoint` (the last fully stored line's
+            // checkpoint, or `Checkpoint::default()` at start), never the checkpoint of an
+            // unyielded line, so a crash mid-line never skips the line's message on restart.
+            let mut safe_checkpoint = match from {
+                Some(cp) if start > 0 => cp,
+                _ => Checkpoint::new(0, b"").started_over(over),
+            };
+            let mut state = Some(probe.load_state(start).await);
+            let mut need_follows = start > 0;
+            let mut emitted_header = start > 0;
+            let mut last_generation = 0;
+            let live = self.changes.is_some();
+            let mut summary_rx = self.summary_changes;
+
+            if start > 0
+                && let Some(st) = state.as_mut()
+                && let Some(change) = st.take_pending_title()
+            {
+                let ts = st.summary.updated_at.or(st.last_ts);
+                yield Ok((
+                    safe_checkpoint,
+                    GrokMessage::title_info(probe.id.as_ref(), change, ts),
+                ));
+            }
+
+            let lines = FollowLines::new(PooledReadLines::new(
+                PathLineReader::at(&self.path, start),
+                self.pool,
+            ));
+            let mut messages = match self.changes {
+                Some(changes) => lines.follow(changes).left_stream(),
+                None => lines.read_to_end().right_stream(),
+            }
+            .json_with(GrokMessage::decode)
+            .map(|r| r.map_err(MessageError::from))
+            .boxed();
+
+            loop {
+                // `None` means `summary.json` changed while `messages` had no line ready;
+                // `Some(item)` is the next item (or EOF) from `messages`.
+                let event = match summary_rx.as_mut() {
+                    Some(rx) => {
+                        tokio::select! {
+                            biased;
+                            item = messages.next() => Some(item),
+                            changed = rx.changed() => {
+                                if changed.is_err() {
+                                    summary_rx = None;
+                                    Some(messages.next().await)
+                                } else {
+                                    None
+                                }
+                            }
+                        }
+                    }
+                    None => Some(messages.next().await),
+                };
+
+                match event {
+                    None => {
+                        if let Some(mut st) = state.take() {
+                            let path = probe.path.clone();
+                            if let Ok((returned, late_title)) = probe
+                                .pool
+                                .run(move || {
+                                    let t = st.refresh_files(&path);
+                                    (st, t)
+                                })
+                                .await
+                            {
+                                let ts = returned.summary.updated_at.or(returned.last_ts);
+                                state = Some(returned);
+                                if emitted_header
+                                    && let Some(change) = late_title
+                                {
+                                    yield Ok((
+                                        safe_checkpoint,
+                                        GrokMessage::title_info(probe.id.as_ref(), change, ts),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Some(None) => break,
+                    Some(Some(Err(err))) => yield Err(err),
+                    Some(Some(Ok((line, mut message)))) => {
+                        if line.generation != last_generation {
+                            last_generation = line.generation;
+                            state = Some(probe.load_state(0).await);
+                            emitted_header = false;
+                            need_follows = false;
+                            safe_checkpoint = Checkpoint::new(0, b"").started_over(true);
+                        } else if live
+                            && let Some(mut st) = state.take()
+                        {
+                            let path = probe.path.clone();
+                            if let Ok((returned, late_title)) = probe
+                                .pool
+                                .run(move || {
+                                    let t = st.refresh_files(&path);
+                                    (st, t)
+                                })
+                                .await
+                            {
+                                let ts = returned.summary.updated_at.or(returned.last_ts);
+                                state = Some(returned);
+                                if emitted_header
+                                    && let Some(change) = late_title
+                                {
+                                    yield Ok((
+                                        safe_checkpoint,
+                                        GrokMessage::title_info(probe.id.as_ref(), change, ts),
+                                    ));
+                                }
+                            }
+                        }
+
+                        if !emitted_header
+                            && let Some(st) = state.as_ref()
+                        {
+                            emitted_header = true;
+                            if st.summary.present {
+                                yield Ok((
+                                    safe_checkpoint,
+                                    GrokMessage::session_meta(probe.id.as_ref(), &st.summary),
+                                ));
+                                if let Some(change) = st.summary.title.clone() {
+                                    let ts = st.summary.created_at.or(st.summary.updated_at);
+                                    yield Ok((
+                                        safe_checkpoint,
+                                        GrokMessage::title_info(probe.id.as_ref(), change, ts),
+                                    ));
+                                }
+                            }
+                        }
+
+                        if let Some(st) = state.as_mut() {
+                            let prior_chain =
+                                need_follows.then(|| st.last_chain_id.clone()).flatten();
+                            if st.enrich(&mut message).is_some() && need_follows {
+                                message.follows_id = prior_chain;
+                                need_follows = false;
+                            }
+                        }
+                        let checkpoint = Checkpoint::after(&line).started_over(over);
+                        yield Ok((checkpoint, message));
+                        safe_checkpoint = checkpoint;
+                    }
+                }
+            }
+        }
+    }
+
+    fn read(&self) -> impl Stream<Item = Result<GrokMessage, MessageError>> + Send + 'static {
+        let session = self.clone();
+        async_stream::stream! {
+            let mut state = session.load_state(0).await;
+            if state.summary.present {
+                yield Ok(GrokMessage::session_meta(session.id.as_ref(), &state.summary));
+                if let Some(change) = state.summary.title.clone() {
+                    let ts = state.summary.created_at.or(state.summary.updated_at);
+                    yield Ok(GrokMessage::title_info(session.id.as_ref(), change, ts));
+                }
+            }
+            let messages = FollowLines::new(PooledReadLines::new(
+                PathLineReader::new(&session.path),
+                session.pool,
+            ))
+            .read_to_end()
+            .json_with(GrokMessage::decode);
+            for await item in messages {
+                match item {
+                    Ok((_line, mut message)) => {
+                        if state.enrich(&mut message).is_some() {
+                            yield Ok(message);
+                        }
+                    }
+                    Err(err) => yield Err(MessageError::from(err)),
+                }
+            }
+        }
+    }
+
+    async fn changed_after(mut self, since: std::time::SystemTime) -> Option<Self> {
+        let transcript_changed = modified_after(self.changes.as_mut(), since);
+        match self.summary_changes.as_mut() {
+            Some(summary_rx) => {
+                let summary_changed = modified_after(Some(summary_rx), since);
+                tokio::select! {
+                    res = transcript_changed => { res?; }
+                    res = summary_changed => { res?; }
+                }
+            }
+            None => {
+                transcript_changed.await?;
+            }
+        }
+        Some(self)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct GrokToolCall {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Value,
+}
+
+/// One line of a Grok Build `chat_history.jsonl` transcript, or a synthetic session/title
+/// metadata record derived from `summary.json`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GrokMessage {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    content: Value,
+    #[serde(default)]
+    tool_calls: Vec<GrokToolCall>,
+    #[serde(default)]
+    tool_call_id: Option<String>,
+    #[serde(default)]
+    model_id: Option<String>,
+    #[serde(default)]
+    prompt_index: Option<u64>,
+    #[serde(default)]
+    synthetic_reason: Option<String>,
+    #[serde(skip)]
+    computed_id: Option<String>,
+    #[serde(skip)]
+    parent_override: Option<String>,
+    #[serde(skip)]
+    follows_id: Option<String>,
+    #[serde(skip)]
+    computed_timestamp: Option<OffsetDateTime>,
+    #[serde(skip)]
+    meta_cwd: Option<PathBuf>,
+    #[serde(skip)]
+    meta_title: Option<TitleChange>,
+    #[serde(skip)]
+    meta_parent: Option<(SessionId, ParentKind)>,
+}
+
+impl GrokMessage {
+    pub(crate) fn decode(bytes: &[u8]) -> serde_json::Result<Self> {
+        crate::json::js::from_slice(bytes)
+    }
+
+    #[must_use]
+    pub(crate) fn session_meta(session_id: &str, summary: &GrokSummary) -> Self {
+        Self {
+            kind: "system".to_owned(),
+            computed_id: Some(meta_id(session_id)),
+            computed_timestamp: summary.created_at.or(summary.updated_at),
+            meta_cwd: summary.cwd.clone(),
+            meta_parent: summary.parent.clone(),
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn title_info(
+        session_id: &str,
+        change: TitleChange,
+        at: Option<OffsetDateTime>,
+    ) -> Self {
+        let id = title_id(session_id, &change);
+        Self {
+            kind: "system".to_owned(),
+            computed_id: Some(id),
+            parent_override: Some(meta_id(session_id)),
+            computed_timestamp: at,
+            meta_title: Some(change),
+            ..Self::default()
+        }
+    }
+
+    fn text_blocks(&self) -> Vec<String> {
+        match &self.content {
+            Value::String(s) if !s.is_empty() => vec![s.clone()],
+            Value::Array(items) => items
+                .iter()
+                .filter_map(|item| match item {
+                    Value::String(s) if !s.is_empty() => Some(s.clone()),
+                    Value::Object(map) => map
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn is_injected_user(&self, texts: &[String]) -> bool {
+        if self.synthetic_reason.is_some() {
+            return true;
+        }
+        if self.prompt_index.is_some() {
+            return false;
+        }
+        texts.first().is_some_and(|first| {
+            let trimmed = first.trim_start();
+            trimmed.starts_with("<user_info>") || trimmed.starts_with("<system-reminder>")
+        })
+    }
+}
+
+/// Unwrap `<user_query>\n...\n</user_query>` that Grok Build wraps typed prompts in.
+fn unwrap_user_query(text: &str) -> String {
+    if let Some(inner) =
+        text.strip_prefix("<user_query>\n").and_then(|s| s.strip_suffix("\n</user_query>"))
+    {
+        return inner.to_owned();
+    }
+    if let Some(inner) =
+        text.strip_prefix("<user_query>").and_then(|s| s.strip_suffix("</user_query>"))
+    {
+        return inner.to_owned();
+    }
+    text.to_owned()
+}
+
+fn parse_tool_arguments(raw: &Value) -> Value {
+    match raw {
+        Value::String(text) => {
+            serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()))
+        }
+        other => other.clone(),
+    }
+}
+
+fn inferred_tool_error(output: &Value) -> bool {
+    let Some(text) = output.as_str() else {
+        return false;
+    };
+    if let Some(rest) = text.strip_prefix("exit: ") {
+        let code = rest.lines().next().unwrap_or_default().trim();
+        return code.parse::<i64>().is_ok_and(|n| n != 0);
+    }
+    text.starts_with("Error: ") || text.starts_with("Failed to parse arguments")
+}
+
+impl Message for GrokMessage {
+    fn id(&self) -> Option<MessageId> {
+        self.computed_id.as_ref().filter(|s| !s.is_empty()).cloned().map(MessageId::from)
+    }
+
+    fn parent_id(&self) -> Option<MessageId> {
+        self.parent_override.as_ref().filter(|s| !s.is_empty()).cloned().map(MessageId::from)
+    }
+
+    fn follows(&self) -> Option<MessageId> {
+        self.follows_id.as_ref().filter(|s| !s.is_empty()).cloned().map(MessageId::from)
+    }
+
+    fn role(&self) -> Role {
+        match self.kind.as_str() {
+            "system" => Role::System,
+            "user" => {
+                if self.is_injected_user(&self.text_blocks()) {
+                    Role::System
+                } else {
+                    Role::User
+                }
+            }
+            "assistant" | "reasoning" => Role::Assistant,
+            "tool_result" => Role::Tool,
+            other => Role::Other(other.to_owned()),
+        }
+    }
+
+    fn timestamp(&self) -> Option<OffsetDateTime> {
+        self.computed_timestamp
+    }
+
+    fn content(&self) -> Vec<Content> {
+        match self.kind.as_str() {
+            "system" => Vec::new(),
+            "user" => {
+                let texts = self.text_blocks();
+                if self.is_injected_user(&texts) {
+                    texts.into_iter().map(Content::Text).collect()
+                } else {
+                    texts.into_iter().map(|t| Content::Text(unwrap_user_query(&t))).collect()
+                }
+            }
+            "reasoning" => vec![Content::ReasoningSummary { tokens: None }],
+            "assistant" => {
+                let mut out: Vec<Content> =
+                    self.text_blocks().into_iter().map(Content::Text).collect();
+                for call in &self.tool_calls {
+                    out.push(Content::ToolUse(ToolUse {
+                        id: ToolCallId::from(call.id.clone()),
+                        name: call.name.clone(),
+                        input: parse_tool_arguments(&call.arguments),
+                    }));
+                }
+                out
+            }
+            "tool_result" => {
+                let call = ToolCallId::from(self.tool_call_id.clone().unwrap_or_default());
+                let error = inferred_tool_error(&self.content);
+                vec![Content::ToolResult(ToolResult {
+                    call,
+                    output: self.content.clone(),
+                    error,
+                })]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn model(&self) -> Option<String> {
+        self.model_id.clone().filter(|s| !s.is_empty())
+    }
+
+    fn usage(&self) -> Option<Usage> {
+        None
+    }
+
+    fn stop_reason(&self) -> Option<StopReason> {
+        if self.kind != "assistant" {
+            return None;
+        }
+        if !self.tool_calls.is_empty() {
+            Some(StopReason::ToolUse)
+        } else if !self.text_blocks().is_empty() {
+            Some(StopReason::EndTurn)
+        } else {
+            None
+        }
+    }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        self.meta_cwd.clone()
+    }
+
+    fn parent_session(&self) -> Option<SessionId> {
+        self.meta_parent.as_ref().map(|(id, _)| id.clone())
+    }
+
+    fn parent_kind(&self) -> Option<ParentKind> {
+        self.meta_parent.as_ref().map(|(_, kind)| *kind)
+    }
+
+    fn title(&self) -> Option<TitleChange> {
+        self.meta_title.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroUsize;
+
+    use futures::TryStreamExt;
+    use rstest::rstest;
+
+    use super::*;
+
+    fn pool() -> BlockingPool {
+        BlockingPool::new(NonZeroUsize::MIN)
+    }
+
+    #[rstest]
+    #[case("/tmp/work", "%2Ftmp%2Fwork")]
+    #[case("/Users/alice/my repo+1", "%2FUsers%2Falice%2Fmy%20repo%2B1")]
+    #[case("/work/a-b.c_d~e", "%2Fwork%2Fa-b.c_d~e")]
+    fn encode_cwd_matches_grok_workspace_encoding(#[case] raw: &str, #[case] expected: &str) {
+        assert_eq!(encode_cwd(Path::new(raw)), expected);
+    }
+
+    #[rstest]
+    fn encode_cwd_caps_long_paths_under_filesystem_limit() {
+        let deep = format!("/{}/{}/{}", "a".repeat(90), "b".repeat(90), "c".repeat(90));
+        let slug = encode_cwd(Path::new(&deep));
+        assert!(slug.len() <= MAX_WORKSPACE_SLUG_LEN, "len={} slug={slug}", slug.len());
+        assert!(!slug.ends_with('%'), "must never leave a torn percent-escape: {slug}");
+        assert_eq!(slug, encode_cwd(Path::new(&deep)));
+    }
+
+    #[rstest]
+    fn line_key_distinguishes_identical_prompts_across_diverged_branches() {
+        let prompt = vec![Content::Text("continue".to_owned())];
+        let after_branch_a = line_key(Some("gk-aaaa"), &Role::User, &prompt).unwrap();
+        let after_branch_b = line_key(Some("gk-bbbb"), &Role::User, &prompt).unwrap();
+        assert_ne!(after_branch_a, after_branch_b);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn fixture_session_reads_cleanly() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .joined("tests/fixtures/grok/01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9/chat_history.jsonl");
+        let id = SessionId::from("01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9".to_owned());
+        let msgs: Vec<_> =
+            GrokSession::open(id, fixture, pool()).read().try_collect().await.unwrap();
+        assert_eq!(msgs.len(), 8);
+        assert_eq!(msgs[0].cwd(), Some(PathBuf::from("/work/proj")));
+        assert_eq!(
+            msgs[1].title(),
+            Some(TitleChange::new(TitleSource::Generated, "fix the flaky test"))
+        );
+        assert_eq!(msgs[3].role(), Role::User);
+        assert_eq!(msgs[3].content(), vec![Content::Text("Fix the flaky sync test".to_owned())]);
+    }
+
+    #[rstest]
+    #[case::fork(Some("headless"), ParentKind::Fork)]
+    #[case::subagent_fork(Some("subagent_fork"), ParentKind::Subagent)]
+    #[case::subagent_resume(Some("subagent_resume"), ParentKind::Subagent)]
+    #[tokio::test]
+    async fn reads_summary_updates_timestamps_and_transcript_entries(
+        #[case] session_kind: Option<&str>,
+        #[case] expected_parent_kind: ParentKind,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("%2Fwork%2Fproj");
+        let sid = "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9";
+        let sdir = ws.joined(sid);
+        std::fs::create_dir_all(sdir.join("terminal")).unwrap();
+        std::fs::write(sdir.join("terminal").joined("c1.log"), "noise").unwrap();
+
+        let mut summary = json!({
+            "info": {"id": sid, "cwd": "/work/proj"},
+            "session_summary": "Fallback summary",
+            "generated_title": "Fix login bug",
+            "created_at": "2026-10-28T10:00:00Z",
+            "updated_at": "2026-10-28T10:05:00Z",
+            "parent_session_id": "01a18220-0000-7000-8000-000000000000",
+        });
+        if let Some(kind) = session_kind {
+            summary["session_kind"] = json!(kind);
+        }
+        std::fs::write(sdir.join(SUMMARY_FILE), summary.to_string()).unwrap();
+
+        let updates = [
+            json!({"timestamp": 1_761_645_610, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "Run cargo test"}, "_meta": {"promptIndex": 0}}}}),
+            json!({"timestamp": 1_761_645_620, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call", "toolCallId": "c1", "title": "run_terminal_command"}}}),
+            json!({"timestamp": 1_761_645_625, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed"}}}),
+            json!({"timestamp": 1_761_645_630, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "2 tests failed."}}}}),
+        ]
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+            + "\n";
+        std::fs::write(sdir.join(UPDATES_FILE), updates).unwrap();
+
+        let transcript = [
+            json!({"type": "system", "content": "You are Grok."}),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_info>\ncwd\n</user_info>"}]}),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nRun cargo test\n</user_query>"}], "prompt_index": 0}),
+            json!({"type": "reasoning", "summary": [{"type": "summary_text", "text": "thinking"}]}),
+            json!({"type": "assistant", "content": "Running.", "tool_calls": [{"id": "c1", "name": "run_terminal_command", "arguments": "{\"command\":\"cargo test\"}"}], "model_id": "grok-4.7"}),
+            json!({"type": "tool_result", "tool_call_id": "c1", "content": "exit: 2\nfailed\n"}),
+            json!({"type": "assistant", "content": "2 tests failed.", "model_id": "grok-4.7"}),
+        ]
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+            + "\n";
+        let path = sdir.joined(TRANSCRIPT_FILE);
+        std::fs::write(&path, transcript).unwrap();
+
+        assert_eq!(locate(dir.path(), sid), Some(path));
+
+        let sessions = GrokSessions::builder().root(dir.path()).pool(pool()).build();
+        let found: Vec<_> = sessions.existing().unwrap().try_collect().await.unwrap();
+        assert_eq!(found.len(), 1);
+
+        let msgs: Vec<_> = found[0].read().try_collect().await.unwrap();
+        assert_eq!(msgs.len(), 8);
+        assert_eq!(msgs[0].id(), Some(MessageId::from(meta_id(sid))));
+        assert_eq!(msgs[0].cwd(), Some(PathBuf::from("/work/proj")));
+        assert_eq!(
+            msgs[0].parent_session(),
+            Some(SessionId::from("01a18220-0000-7000-8000-000000000000".to_owned()))
+        );
+        assert_eq!(msgs[0].parent_kind(), Some(expected_parent_kind));
+
+        let expected_title = TitleChange::new(TitleSource::Generated, "Fix login bug");
+        assert_eq!(msgs[1].id(), Some(MessageId::from(title_id(sid, &expected_title))));
+        assert_eq!(msgs[1].title(), Some(expected_title));
+        assert!(!msgs[1].id().unwrap().as_ref().contains("Fix login bug"));
+
+        assert_eq!(msgs[3].timestamp().unwrap().unix_timestamp(), 1_761_645_610);
+        assert_eq!(msgs[5].timestamp().unwrap().unix_timestamp(), 1_761_645_620);
+        assert_eq!(msgs[6].timestamp().unwrap().unix_timestamp(), 1_761_645_625);
+        assert_eq!(msgs[7].timestamp().unwrap().unix_timestamp(), 1_761_645_630);
+        assert!(matches!(msgs[6].content().as_slice(), [Content::ToolResult(ToolResult {
+            error: true,
+            ..
+        })]));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn checkpointed_resume_keeps_safe_checkpoints_and_delivers_late_titles_without_new_lines()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9";
+        let sdir = dir.path().join("%2Fw").joined(sid);
+        std::fs::create_dir_all(&sdir).unwrap();
+
+        let summary_path = sdir.join(SUMMARY_FILE);
+        std::fs::write(
+            &summary_path,
+            json!({
+                "info": {"id": sid, "cwd": "/w"},
+                "session_summary": "",
+                "created_at": "2026-10-28T10:00:00Z",
+                "updated_at": "2026-10-28T10:00:01Z",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let path = sdir.joined(TRANSCRIPT_FILE);
+        let first_turn = format!(
+            "{}\n{}\n",
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nok\n</user_query>"}], "prompt_index": 0}),
+            json!({"type": "assistant", "content": "done"}),
+        );
+        std::fs::write(&path, &first_turn).unwrap();
+
+        let session = GrokSession::open(SessionId::from(sid.to_owned()), path.clone(), pool());
+        let initial: Vec<_> = session.clone().messages_from(None).try_collect().await.unwrap();
+        // Synthetic session_meta carries Checkpoint::default() (at == 0), NOT the first line's end!
+        assert_eq!(initial[0].0.at, 0);
+        let last_checkpoint = initial.last().unwrap().0;
+        let first_ok_id = initial[1].1.id().unwrap();
+
+        // Update ONLY summary.json with a late generated title while capture is stopped (`0` new
+        // lines in chat_history.jsonl). Resuming from `last_checkpoint` must still deliver it!
+        std::fs::write(
+            &summary_path,
+            json!({
+                "info": {"id": sid, "cwd": "/w"},
+                "generated_title": "Named later",
+                "created_at": "2026-10-28T10:00:00Z",
+                "updated_at": "2026-10-28T10:00:10Z",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let title_only: Vec<_> =
+            session.clone().messages_from(Some(last_checkpoint)).try_collect().await.unwrap();
+        assert_eq!(title_only.len(), 1);
+        assert_eq!(title_only[0].0, last_checkpoint);
+        assert_eq!(
+            title_only[0].1.title(),
+            Some(TitleChange::new(TitleSource::Generated, "Named later"))
+        );
+
+        // Append a second identical prompt "ok" and verify it gets a distinct prefix-chained key.
+        let second_turn = format!(
+            "{first_turn}{}\n",
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nok\n</user_query>"}], "prompt_index": 1}),
+        );
+        std::fs::write(&path, second_turn).unwrap();
+
+        let resumed: Vec<_> =
+            session.clone().messages_from(Some(last_checkpoint)).try_collect().await.unwrap();
+        let second_ok_id = resumed.last().unwrap().1.id().unwrap();
+        assert_ne!(second_ok_id, first_ok_id);
+
+        let full: Vec<_> = session.read().try_collect().await.unwrap();
+        let user_ids: Vec<_> =
+            full.iter().filter(|m| m.role() == Role::User).map(|m| m.id().unwrap()).collect();
+        assert_eq!(user_ids, vec![first_ok_id, second_ok_id]);
+    }
+}

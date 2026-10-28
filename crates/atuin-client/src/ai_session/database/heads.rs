@@ -107,7 +107,7 @@ impl Model {
             HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp => {
                 Self::Tree { chained: false }
             }
-            HarnessKind::Codex => Self::Tree { chained: true },
+            HarnessKind::Codex | HarnessKind::Grok => Self::Tree { chained: true },
             HarnessKind::Opencode => Self::Interleaving,
             HarnessKind::Copilot | HarnessKind::Unknown => Self::Linear,
         }

@@ -695,8 +695,9 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
     assert_eq!(resumer.continue_targets(&session), [
         HarnessKind::Codex,
+        HarnessKind::Grok,
         HarnessKind::Pi,
-        HarnessKind::Omp
+        HarnessKind::Omp,
     ]);
 
     let err =

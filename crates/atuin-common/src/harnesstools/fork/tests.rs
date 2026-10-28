@@ -8,13 +8,14 @@ use super::*;
 use crate::harnesstools::ccode::session::CcodeSession;
 use crate::harnesstools::codex::session::CodexSession;
 use crate::harnesstools::continuation::tests::{
-    CLAUDE, CODEX, OPENCODE, PI, pool, recorded, rows_of,
+    CLAUDE, CODEX, GROK, OPENCODE, PI, pool, recorded, rows_of,
 };
 use crate::harnesstools::continuation::{fork_marker_text, linked_from_message};
+use crate::harnesstools::grok::session::GrokSession;
 use crate::harnesstools::opencode::rehydrate::tests::{captured, database, opencode_import};
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::session::{Content, Message, ParentKind, Role, Session, SessionId};
-use crate::harnesstools::{ccode, codex, opencode, pi};
+use crate::harnesstools::{ccode, codex, grok, opencode, pi};
 
 /// The original's atuin id, as the picker passes it.
 const ATUIN_ID: &str = "01a0d147e7457ae280000123456789ab";
@@ -111,7 +112,13 @@ async fn written(
                 .collect();
             (rows, links)
         }
-        AnyHarness::Grok(_) => unreachable!("Grok sessions are not enabled here"),
+        AnyHarness::Grok(_) => {
+            let path =
+                grok::rehydrate::rehydrate_into(&root.join("sessions"), root, session).unwrap();
+            let lines: Vec<_> =
+                GrokSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            (rows_of(&lines), links(&session.id, &lines))
+        }
     }
 }
 
@@ -128,7 +135,7 @@ fn said(rows: &[RehydrateMessage]) -> Vec<(Role, Vec<Content>)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fork_reads_back_as_the_original_linked_as_its_fork(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] harness: AnyHarness,
+    #[values(CLAUDE, CODEX, GROK, OPENCODE, PI)] harness: AnyHarness,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let original = recorded(harness).await;

@@ -35,6 +35,7 @@ use crate::harnesstools::session::{Message, SessionId};
 
 mod ccode;
 mod codex;
+mod grok;
 pub mod liveness;
 mod opencode;
 mod pi;
@@ -274,7 +275,7 @@ impl SessionSync for AnyHarness {
         match self {
             Self::ClaudeCode(h) => h.local_tip(id).await,
             Self::Codex(h) => h.local_tip(id).await,
-            Self::Grok(_) => Ok(None),
+            Self::Grok(h) => h.local_tip(id).await,
             Self::Opencode(h) => h.local_tip(id).await,
             Self::Pi(h) => h.local_tip(id).await,
         }
@@ -284,7 +285,7 @@ impl SessionSync for AnyHarness {
         match self {
             Self::ClaudeCode(h) => h.is_live(id, cwd).await,
             Self::Codex(h) => h.is_live(id, cwd).await,
-            Self::Grok(_) => Liveness::NotLive,
+            Self::Grok(h) => h.is_live(id, cwd).await,
             Self::Opencode(h) => h.is_live(id, cwd).await,
             Self::Pi(h) => h.is_live(id, cwd).await,
         }
@@ -300,7 +301,7 @@ impl SessionSync for AnyHarness {
         match self {
             Self::ClaudeCode(h) => h.append(id, base, lines, options).await,
             Self::Codex(h) => h.append(id, base, lines, options).await,
-            Self::Grok(_) => Err(SyncError::Unsupported("Grok Build sessions cannot be synced")),
+            Self::Grok(h) => h.append(id, base, lines, options).await,
             Self::Opencode(h) => h.append(id, base, lines, options).await,
             Self::Pi(h) => h.append(id, base, lines, options).await,
         }
@@ -317,7 +318,7 @@ impl SessionSync for AnyHarness {
         match self {
             Self::ClaudeCode(h) => h.replace(id, base, branch, options, backups).await,
             Self::Codex(h) => h.replace(id, base, branch, options, backups).await,
-            Self::Grok(_) => Err(SyncError::Unsupported("Grok Build sessions cannot be switched")),
+            Self::Grok(h) => h.replace(id, base, branch, options, backups).await,
             Self::Opencode(h) => h.replace(id, base, branch, options, backups).await,
             Self::Pi(h) => h.replace(id, base, branch, options, backups).await,
         }

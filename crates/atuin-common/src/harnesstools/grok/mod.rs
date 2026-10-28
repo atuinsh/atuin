@@ -9,6 +9,9 @@ use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::PathBufExt as _;
 
+pub mod rehydrate;
+pub mod session;
+
 /// Grok Build's home directory: `$GROK_HOME`, else `~/.grok`.
 pub(crate) fn home() -> PathBuf {
     var_nonempty("GROK_HOME").map_or_else(|| home_dir().joined(".grok"), PathBuf::from)
@@ -53,12 +56,13 @@ impl Harness for Grok {
         Ok(resume::plan(target, CwdRequirement::Preferred, "grok", args))
     }
 
-    async fn locate(&self, _id: &str) -> Option<PathBuf> {
-        None
+    async fn locate(&self, id: &str) -> Option<PathBuf> {
+        let (root, id) = (session::default_root(), id.to_owned());
+        resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, _session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        Err(RehydrateError::Unsupported("Grok Build"))
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
+        rehydrate::rehydrate(session).await
     }
 }
 
