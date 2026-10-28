@@ -6,13 +6,15 @@ The server exposes the same history tools that [Atuin AI](./introduction.md) use
 
 ## Quick start
 
-One command connects an agent:
+Connect all your configured agents with one command:
 
 ```shell
-atuin mcp install claude-code   # or: codex, opencode, pi
+atuin mcp install
 ```
 
-Then restart the agent. That's it: it can now search your shell history.
+Atuin checks for existing user config files for Claude Code, Codex, opencode, pi and oh-my-pi (`omp`), lists the agents it found and asks once before registering the MCP server with all of them. Agents without a config file are skipped. You can also target one directly with `atuin mcp install claude-code` (or `codex`, `opencode`, `pi`, `omp`), including when its config file doesn't exist yet.
+
+Then restart the agents you connected. They can now search your shell history.
 
 To let it read and search what your commands printed, and your past [threads](./threads.md) with other agents, turn those on too (each also sets up the [daemon](../reference/daemon.md) they need):
 

@@ -7,7 +7,9 @@ use std::process::Stdio;
 use serde_json::{Value, json};
 
 use super::pi::Flavour;
-use super::{AnyHarness, opencode};
+use super::{AnyHarness, codex, opencode};
+use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 use crate::path::{AbsPathBuf, PathBufExt as _};
 
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +44,27 @@ pub enum InstallMcpError {
     NonUtf8Executable(PathBuf),
 }
 
+/// Whether the user config that the MCP installer edits already exists. This detects agents
+/// with existing configuration without starting their executables; it does not check whether
+/// the atuin server is registered.
+#[must_use]
+pub fn config_exists(harness: AnyHarness) -> bool {
+    config_path(harness).is_file()
+}
+
+/// The user config written by the agent's `mcp add` command, or by us directly.
+fn config_path(harness: AnyHarness) -> PathBuf {
+    match harness {
+        AnyHarness::ClaudeCode(_) => var_nonempty("CLAUDE_CONFIG_DIR").map_or_else(
+            || home_dir().joined(".claude.json"),
+            |dir| PathBuf::from(dir).joined(".claude.json"),
+        ),
+        AnyHarness::Codex(_) => codex::home().joined("config.toml"),
+        AnyHarness::Opencode(_) => opencode::config_dir().joined("opencode.json"),
+        AnyHarness::Pi(pi) => pi.flavour().agent_dir().joined("mcp.json"),
+    }
+}
+
 /// Register `atuin mcp` with `harness` at user scope, replacing any `atuin` server already there,
 /// so a rerun picks up a moved binary.
 pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
@@ -63,14 +86,12 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
         AnyHarness::Codex(_) => run("codex", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
         // Not `opencode mcp add`: 1.x's only prompts, and 2.0's writes `mcp.servers`, which 2.0
         // doesn't load. Both load `mcp.<name>`.
-        AnyHarness::Opencode(_) => {
-            install_opencode(&opencode::config_dir().joined("opencode.json"), atuin).await
-        }
+        AnyHarness::Opencode(_) => install_opencode(&config_path(harness), atuin).await,
         AnyHarness::Pi(pi) => match pi.flavour() {
             Flavour::Pi => run("pi", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
             // omp has no `mcp add`: its own `/mcp add` writes this file.
             Flavour::Omp => {
-                let path = Flavour::Omp.agent_dir().joined("mcp.json");
+                let path = config_path(harness);
                 let server = json!({"command": atuin, "args": ["mcp"]});
                 add_to_config(&path, json!({}), "mcpServers", server).await
             }
@@ -184,6 +205,61 @@ mod tests {
 
     use super::*;
     use crate::env::mock::MockEnv;
+
+    #[rstest::fixture]
+    fn agent_home() -> (tempfile::TempDir, MockEnv) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = MockEnv::install();
+        env.set("HOME", dir.path());
+        (dir, env)
+    }
+
+    #[rstest]
+    #[case("claude-code", ".claude.json")]
+    #[case("codex", ".codex/config.toml")]
+    #[case("opencode", ".config/opencode/opencode.json")]
+    #[case("pi", ".pi/agent/mcp.json")]
+    #[case("omp", ".omp/agent/mcp.json")]
+    fn detects_existing_config_files(
+        agent_home: (tempfile::TempDir, MockEnv),
+        #[case] name: &str,
+        #[case] relative: &str,
+    ) {
+        let (dir, _env) = agent_home;
+        let harness = AnyHarness::from_name(name).unwrap();
+        let path = dir.path().join(relative);
+        assert_eq!(config_path(harness), path);
+        assert!(!config_exists(harness));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Detection needs a file, not just an agent directory.
+        assert!(!config_exists(harness));
+        std::fs::write(&path, "").unwrap();
+        assert!(config_exists(harness));
+    }
+
+    #[rstest]
+    #[case("claude-code", "CLAUDE_CONFIG_DIR", ".claude.json")]
+    #[case("codex", "CODEX_HOME", "config.toml")]
+    #[case("opencode", "XDG_CONFIG_HOME", "opencode/opencode.json")]
+    #[case("pi", "PI_CODING_AGENT_DIR", "mcp.json")]
+    #[case("omp", "PI_CODING_AGENT_DIR", "mcp.json")]
+    fn detection_respects_config_overrides(
+        agent_home: (tempfile::TempDir, MockEnv),
+        #[case] name: &str,
+        #[case] variable: &str,
+        #[case] relative: &str,
+    ) {
+        let (dir, env) = agent_home;
+        let custom = dir.path().join("custom");
+        env.set(variable, &custom);
+        let harness = AnyHarness::from_name(name).unwrap();
+        let path = custom.join(relative);
+        assert_eq!(config_path(harness), path);
+        assert!(!config_exists(harness));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+        assert!(config_exists(harness));
+    }
 
     /// A Homebrew-style install: `bin/atuin` links to the real executable.
     #[cfg(unix)]
