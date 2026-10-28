@@ -1,7 +1,11 @@
 //! Where a message for the user ends up.
 
+mod channel;
+mod nop;
 mod stderr;
 
+pub use channel::Channel;
+pub use nop::Nop;
 pub use stderr::Stderr;
 
 /// A destination for messages the user must see, such as stderr or a TUI's status line.
@@ -16,7 +20,7 @@ pub trait Sink: Send + Sync {
 }
 
 /// A message for the user.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
     pub severity: Severity,
     /// The message without a severity prefix, which each sink renders its own way.

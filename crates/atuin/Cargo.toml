@@ -87,7 +87,7 @@ atuin-ai = { workspace = true, optional = true }
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
 atuin-client = { path = "../atuin-client", version = "18.24.2", optional = true, default-features = false }
-atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
+atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode", "user-layer"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }

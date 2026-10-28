@@ -7,15 +7,21 @@
 //! with the [`Sink`] trait.
 //!
 //! Implementing that trait enables you to figure out how messages get displayed to the user. You
-//! are expected to use the thread-safe `SINK` utility to change the active sink.
+//! are expected to use the thread-safe [`SINK`] utility to change the active sink.
 //!
 //! # Implementation
 //!
 //! Under the hood, this is implemented through [`tracing`] and every wrapped here--[`info!`],
 //! [`warn!`], and [`error!`] in reality emit [`tracing`] events that custom layers handle.
+#[cfg(feature = "user-layer")]
+mod layer;
 mod sink;
+mod stack;
 
-pub use sink::{Message, Severity, Sink, Stderr};
+#[cfg(feature = "user-layer")]
+pub use layer::UserLayer;
+pub use sink::{Channel, Message, Nop, Severity, Sink, Stderr};
+pub use stack::{SINK, SinkGuard, SinkStack};
 
 /// Target for messages meant for the user, as opposed to diagnostics.
 pub const USER: &str = "atuin-user";

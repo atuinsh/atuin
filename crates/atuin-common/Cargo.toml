@@ -34,6 +34,8 @@ sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-u
 test-utils = ["dep:tracing-subscriber"]
 # Enables various items in `atuin_common::string` that require Unicode data.
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
+# Enables `atuin_common::userio::log::UserLayer`.
+user-layer = ["dep:tracing-subscriber"]
 
 [dependencies]
 atuin-vt100 = { workspace = true, optional = true }
