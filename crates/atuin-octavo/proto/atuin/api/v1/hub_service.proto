@@ -28,9 +28,10 @@ service HubService {
   // filter's own field for it: under `host: "devbox"`, `hosts` still names the other hosts.
   rpc TallyHistory(TallyHistoryRequest) returns (TallyHistoryResponse);
 
-  // Stream the calling user's history entries as they are stored, from when the call starts.
+  // Stream the calling user's entries that match the filter as they are stored.
   //
-  // Entries stored before the call, or while no call is open, are not sent.
+  // Sends a heartbeat once subscribed and after every 25 seconds without a message. Entries
+  // stored before the call are not sent.
   rpc WatchHistory(WatchHistoryRequest) returns (stream WatchHistoryResponse);
 
   // Delete the calling user's history entry with this id, and keep it from being stored again.
@@ -109,12 +110,25 @@ message HistoryTally {
   uint64 count = 2;
 }
 
-message WatchHistoryRequest {}
-
-message WatchHistoryResponse {
-  // An entry the user stored.
-  History history = 1 [(buf.validate.field).required = true];
+message WatchHistoryRequest {
+  // Which entries to stream.
+  HistoryFilter filter = 1;
 }
+
+// One message on a `WatchHistory` stream.
+message WatchHistoryResponse {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+
+    // An entry the user stored that matches the filter.
+    History history = 1;
+    // Shows the stream is still open.
+    WatchHistoryHeartbeat heartbeat = 2;
+  }
+}
+
+// Sent to show the stream is still open.
+message WatchHistoryHeartbeat {}
 
 message DeleteHistoryRequest {
   // The id of the entry to delete, as `History.id` gave it.
